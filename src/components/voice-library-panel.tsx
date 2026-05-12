@@ -69,6 +69,15 @@ export function VoiceCard({ voice, draggingVoiceId, setDraggingVoiceId, compact 
           )}
         </div>
         <p className="text-[11px] text-ink/60 truncate">{voice.bookTitle}</p>
+        {voice.ttsVoice && (
+          <p
+            title={`Prebuilt ${voice.ttsVoice.provider} voice — ${voice.ttsVoice.description}`}
+            className="text-[11px] mt-0.5 truncate"
+          >
+            <span className="font-semibold text-ink/70">TTS · {voice.ttsVoice.name}</span>
+            <span className="text-ink/40"> · {voice.ttsVoice.description}</span>
+          </p>
+        )}
         {!compact && (
           <div className="mt-1.5 flex flex-wrap gap-1">
             {voice.attributes.slice(0, 3).map(a => <Pill key={a}>{a}</Pill>)}

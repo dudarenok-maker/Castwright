@@ -19,6 +19,9 @@ export type UploadResponse  = components['schemas']['UploadResponse'];
 export type AnalyseResponse = components['schemas']['AnalyseResponse'];
 export type VoiceMatchResponse = components['schemas']['VoiceMatchResponse'];
 export type RevisionsResponse  = components['schemas']['RevisionsResponse'];
+export type VoiceSample        = components['schemas']['VoiceSample'];
+export type VoiceSampleRequest = components['schemas']['VoiceSampleRequest'];
+export type TtsModelKey        = NonNullable<VoiceSampleRequest['modelKey']>;
 
 /* ── App-domain types not modelled in the OpenAPI spec ────────────────── */
 
@@ -28,17 +31,13 @@ export type RevisionsResponse  = components['schemas']['RevisionsResponse'];
    assignPaletteColors in server/src/routes/analysis.ts. */
 export type CharColor = string;
 
-export interface Voice {
-  id: string;
-  character: string;
-  bookTitle: string;
-  bookId: string;
-  attributes: string[];
+/* The OpenAPI generator widens `gradient` to `string[]`, but our render code
+   relies on the tuple shape `[string, string]`. Override that one field so
+   the type matches reality. */
+export type Voice = Omit<components['schemas']['Voice'], 'gradient'> & {
   gradient: [string, string];
-  usedIn: number;
-  source: 'current' | 'library';
-  reusable?: boolean;
-}
+};
+export type VoiceLibraryResponse = { voices: Voice[] };
 
 export interface Book {
   id: string;
@@ -56,6 +55,131 @@ export interface Book {
   lastWorkedOn: string;
   coverGradient: [string, string];
   pinned?: boolean;
+}
+
+/* ── Import + confirm-metadata flow ───────────────────────────────────── */
+
+export interface ImportCandidate {
+  tempId: string;
+  format: UploadResponse['format'];
+  title: string;
+  author: string | null;
+  series: string | null;
+  seriesPosition: number | null;
+  sourceText: string;
+  wordCount: number;
+  byteSize: number;
+  chapters: Array<{ id: number; title: string }>;
+}
+
+export interface ImportResponse {
+  tempId: string;
+  candidate: Omit<ImportCandidate, 'tempId'>;
+}
+
+export interface ConfirmBookRequest {
+  tempId: string;
+  author: string;
+  series: string;
+  seriesPosition: number | null;
+  title: string;
+  isStandalone: boolean;
+}
+
+export interface ConfirmBookResponse extends UploadResponse {
+  bookId: string;
+  author: string;
+  series: string;
+  seriesPosition: number | null;
+  isStandalone: boolean;
+  paths: { bookDir: string; manuscript: string; dotAudiobook: string };
+}
+
+/* ── Book state (re-hydration on open) ────────────────────────────────── */
+
+export interface BookStateJson {
+  bookId: string;
+  manuscriptId: string;
+  title: string;
+  author: string;
+  series: string;
+  seriesPosition: number | null;
+  isStandalone: boolean;
+  manuscriptFile: string;
+  castConfirmed: boolean;
+  chapters: Array<{ id: number; title: string; slug: string; duration?: string }>;
+  coverGradient: [string, string];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BookStateResponse {
+  state: BookStateJson;
+  cast: { characters: Character[] } | null;
+  /** Lightweight manuscript meta (wordCount, format) pulled from the
+      in-memory ManuscriptRecord. Lets the Analysing screen show a size-aware
+      ETA without loading the full sourceText. */
+  manuscript: { wordCount: number; format: UploadResponse['format'] } | null;
+  manuscriptEdits: { sentences?: Sentence[] } | null;
+  revisions: { pending?: Revision[]; drift?: DriftEvent[] } | null;
+  /** Slugs of chapters that already have an audio file on disk. */
+  completedSlugs: string[];
+}
+
+export type StateSlice = 'cast' | 'manuscript' | 'revisions' | 'state';
+
+export interface PutStateRequest {
+  slice: StateSlice;
+  patch: unknown;
+}
+
+/* ── Library (on-disk workspace) ──────────────────────────────────────── */
+/* These shapes mirror GET /api/library. Source of truth is openapi.yaml
+   under components.schemas.LibraryResponse; until openapi:types regenerates
+   api-types.ts they are also declared here for type-checking. */
+
+export type LibraryBookStatus =
+  | 'not_analysed'
+  | 'analysing'
+  | 'cast_pending'
+  | 'generating'
+  | 'complete'
+  | 'unreadable'
+  | 'orphaned';
+
+export interface LibraryBook {
+  bookId: string;
+  title: string;
+  author: string;
+  series: string;
+  seriesPosition: number | null;
+  isStandalone: boolean;
+  status: LibraryBookStatus;
+  manuscriptId?: string;
+  chapterCount: number;
+  completedChapters: number;
+  characterCount: number;
+  voiceCount: number;
+  matchedFromLibrary?: number;
+  progress?: number;
+  runtime?: string;
+  lastWorkedOn: string;
+  coverGradient: [string, string];
+  pinned?: boolean;
+}
+
+export interface LibrarySeries {
+  name: string;
+  books: LibraryBook[];
+}
+
+export interface LibraryAuthor {
+  name: string;
+  series: LibrarySeries[];
+}
+
+export interface LibraryResponse {
+  authors: LibraryAuthor[];
 }
 
 export type ChangeLogType =
@@ -131,4 +255,6 @@ export type Stage =
   | { kind: 'upload' }
   | { kind: 'analysing'; bookId?: string; manuscriptId?: string | null }
   | { kind: 'confirm';   bookId: string }
-  | { kind: 'ready';     bookId: string; view: View; currentChapterId: number; openProfileId: string | null };
+  | { kind: 'ready';     bookId: string; view: View; currentChapterId: number; openProfileId: string | null }
+  | { kind: 'voices' }
+  | { kind: 'changelog' };

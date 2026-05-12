@@ -17,9 +17,9 @@ const DATE_LABEL: Record<ChangeLogEvent['date'], string> = {
   today: 'Today', yesterday: 'Yesterday', earlier: 'Earlier',
 };
 
-interface Props { events: ChangeLogEvent[]; }
+interface Props { events: ChangeLogEvent[]; title?: string | null; }
 
-export function ChangeLogView({ events }: Props) {
+export function ChangeLogView({ events, title }: Props) {
   const [filter, setFilter] = useState<FilterKey>('all');
   const visible = filter === 'all' ? events : events.filter(e => FILTER_MAP[filter].includes(e.type));
   const groups = visible.reduce<Record<string, ChangeLogEvent[]>>((acc, e) => {
@@ -41,7 +41,7 @@ export function ChangeLogView({ events }: Props) {
         <div>
           <SectionLabel>Activity</SectionLabel>
           <div className="mt-4">
-            <MixedHeading regular="Everything that's happened to" bold="The Northern Star" level="h1"/>
+            <MixedHeading regular="Everything that's happened" bold={title ? `to ${title}` : 'across your library'} level="h1"/>
           </div>
           <p className="mt-3 text-ink/60 max-w-xl">Every regeneration, voice change, and boundary move — recorded so you can audit what changed and roll back if something doesn't sound right.</p>
         </div>

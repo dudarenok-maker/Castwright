@@ -1,18 +1,23 @@
 import { useState } from 'react';
 import {
   IconLink, IconAlertTri, IconChevR, IconSearch, IconFilter, IconCheck,
-  IconRefresh, IconMore,
+  IconRefresh, IconPlay, IconPause, IconSpinner,
 } from '../lib/icons';
 import {
   SectionLabel, MixedHeading, Avatar, Pill, VoiceSwatch,
 } from '../components/primitives';
 import { VoiceLibraryPanel } from '../components/voice-library-panel';
-import type { Character, Voice, DriftEvent, CharColor } from '../lib/types';
+import type { Character, Voice, DriftEvent, CharColor, TtsModelKey } from '../lib/types';
+import { useAppSelector } from '../store';
+import { useSamplePlayback } from '../lib/use-sample-playback';
+import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
+import { api, type VoiceSampleArgs } from '../lib/api';
 
 interface Props {
   characters: Character[];
   setCharacters: (next: Character[] | ((prev: Character[]) => Character[])) => void;
   library: Voice[];
+  title?: string | null;
   onOpenProfile: (id: string | null) => void;
   onShowMatchDetail: (id: string) => void;
   onBatchRegenerate: (ids: string[]) => void;
@@ -21,7 +26,7 @@ interface Props {
 }
 
 export function CastView({
-  characters, setCharacters, library, onOpenProfile,
+  characters, setCharacters, library, title, onOpenProfile,
   onShowMatchDetail, onBatchRegenerate, driftEvents, onShowDrift,
 }: Props) {
   const [query, setQuery] = useState('');
@@ -29,6 +34,19 @@ export function CastView({
   const [draggingVoiceId, setDraggingVoiceId] = useState<string | null>(null);
   const [dropTargetCharId, setDropTargetCharId] = useState<string | null>(null);
   const [selectedCharIds, setSelectedCharIds] = useState<string[]>([]);
+  const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
+  const playback = useSamplePlayback();
+  /* Per-row sample state: { [characterId]: 'loading' | 'error: msg' }. The
+     "playing" indicator is derived from the singleton playback hook by
+     comparing currentUrl, so multiple rows can't show as "playing" at once. */
+  const [rowState, setRowState] = useState<Record<string, { loading?: boolean; error?: string }>>({});
+  const setRow = (id: string, patch: { loading?: boolean; error?: string } | null) =>
+    setRowState(prev => {
+      const next = { ...prev };
+      if (patch === null) delete next[id];
+      else next[id] = { ...next[id], ...patch };
+      return next;
+    });
 
   const filtered = characters.filter(c => c.name.toLowerCase().includes(query.toLowerCase()));
   const toggleSelect = (id: string) =>
@@ -36,6 +54,36 @@ export function CastView({
   const driftByChar = (id: string) => driftEvents.filter(d => d.characterId === id);
   const totalDriftEvents = driftEvents.length;
   const findVoice = (id?: string) => library.find(v => v.id === id);
+
+  async function playSampleFor(c: Character, voice: Voice | undefined) {
+    const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
+    const sampleUrl = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}.wav`;
+    if (playback.isPlaying && playback.currentUrl === sampleUrl) {
+      playback.stop();
+      return;
+    }
+    const subject: Voice = voice ?? {
+      id: sampleVoiceId,
+      character: c.name,
+      bookTitle: '',
+      bookId: '',
+      attributes: c.attributes ?? [],
+      gradient: ['#999999', '#666666'],
+      usedIn: 0,
+      source: 'current',
+      ttsVoice: resolveTtsVoiceForCharacter(c),
+    };
+    const characterHint = buildCharacterHint(c);
+    setRow(c.id, { loading: true, error: undefined });
+    try {
+      const res = await api.getVoiceSample({ voiceId: sampleVoiceId, voice: subject, modelKey: ttsModelKey, characterHint });
+      if (!res.url) throw new Error('Voice samples need the live server (VITE_USE_MOCKS=false).');
+      await playback.play(res.url);
+      setRow(c.id, { loading: false, error: undefined });
+    } catch (err) {
+      setRow(c.id, { loading: false, error: (err as Error).message });
+    }
+  }
 
   function handleDrop(charId: string) {
     if (!draggingVoiceId) return;
@@ -59,7 +107,7 @@ export function CastView({
           <div>
             <SectionLabel>Your cast</SectionLabel>
             <div className="mt-4">
-              <MixedHeading regular="Voices generated from" bold="The Northern Star" level="h1"/>
+              <MixedHeading regular="Voices generated from" bold={title || 'your manuscript'} level="h1"/>
             </div>
             <p className="mt-3 text-ink/60 max-w-xl">Each voice is synthesised from how the character actually speaks in the book. Tune the profile, regenerate, or drop in a voice from your library to keep continuity across a series.</p>
           </div>
@@ -90,22 +138,27 @@ export function CastView({
         </div>
 
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
-          <div className="grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_60px] px-6 py-3 text-[11px] uppercase tracking-wider font-semibold text-ink/50 border-b border-ink/10">
+          <div className="grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] px-6 py-3 text-[11px] uppercase tracking-wider font-semibold text-ink/50 border-b border-ink/10">
             <span></span>
             <span>Character</span><span>Role</span><span>Voice</span>
             <span className="text-right tabular-nums">Lines</span>
-            <span>Tone</span><span>Status</span><span></span>
+            <span>Tone</span><span>Status</span><span>Sample</span>
           </div>
           {filtered.map((c, i) => {
             const voice = findVoice(c.voiceId);
+            const ttsVoice = voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c);
             const isDropTarget = dropTargetCharId === c.id;
+            const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
+            const sampleUrl = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}.wav`;
+            const isPlayingThis = playback.isPlaying && playback.currentUrl === sampleUrl;
+            const row = rowState[c.id];
             return (
               <div key={c.id}
                    onDragOver={(e) => { if (draggingVoiceId) { e.preventDefault(); setDropTargetCharId(c.id); } }}
                    onDragLeave={() => setDropTargetCharId(t => t === c.id ? null : t)}
                    onDrop={(e) => { e.preventDefault(); handleDrop(c.id); }}
                    onClick={() => onOpenProfile(c.id)}
-                   className={`w-full grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_60px] px-6 py-4 items-center text-left text-sm hover:bg-ink/[0.02] transition-colors cursor-pointer ${i < filtered.length - 1 ? 'border-b border-ink/5' : ''} ${isDropTarget ? 'drop-active' : ''} ${selectedCharIds.includes(c.id) ? 'bg-peach/[0.04]' : ''}`}>
+                   className={`w-full grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] px-6 py-4 items-center text-left text-sm hover:bg-ink/[0.02] transition-colors cursor-pointer ${i < filtered.length - 1 ? 'border-b border-ink/5' : ''} ${isDropTarget ? 'drop-active' : ''} ${selectedCharIds.includes(c.id) ? 'bg-peach/[0.04]' : ''}`}>
                 <span onClick={(e) => { e.stopPropagation(); toggleSelect(c.id); }} className="grid place-items-center">
                   <span className={`w-5 h-5 rounded-md grid place-items-center transition-colors ${selectedCharIds.includes(c.id) ? 'bg-peach' : 'bg-white border border-ink/20 hover:border-ink/40'}`}>
                     {selectedCharIds.includes(c.id) && <IconCheck className="w-3 h-3 text-white"/>}
@@ -134,14 +187,21 @@ export function CastView({
                       <VoiceSwatch voice={voice} size="sm" showLabel={false}/>
                       <span className="min-w-0">
                         <span className="block text-ink/80 truncate font-medium">{voice.character}</span>
-                        {c.matchedFrom && (
+                        {c.matchedFrom ? (
                           <button onClick={(e) => { e.stopPropagation(); onShowMatchDetail(c.id); }} className="block text-[11px] text-purple-deep/70 hover:text-purple-deep truncate underline-offset-2 hover:underline">
                             From {c.matchedFrom.bookTitle} · {Math.round((c.matchedFrom.confidence ?? 0) * 100)}%
                           </button>
+                        ) : (
+                          <TtsVoiceLine ttsVoice={ttsVoice}/>
                         )}
                       </span>
                     </>
-                  ) : <span className="text-ink/40 italic">Generating…</span>}
+                  ) : (
+                    <span className="min-w-0">
+                      <span className="block text-ink/60 truncate italic">No library voice</span>
+                      <TtsVoiceLine ttsVoice={ttsVoice}/>
+                    </span>
+                  )}
                 </span>
                 <span className="text-right tabular-nums text-ink/80 font-medium">{c.lines}</span>
                 <span className="flex flex-wrap gap-1">
@@ -153,7 +213,28 @@ export function CastView({
                   {c.voiceState === 'reused'    && <Pill color="library">Reused</Pill>}
                   {c.voiceState === 'locked'    && <Pill>Locked</Pill>}
                 </span>
-                <span className="grid place-items-center text-ink/40"><IconMore className="w-4 h-4"/></span>
+                <span onClick={(e) => e.stopPropagation()} className="flex flex-col items-start gap-0.5">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); void playSampleFor(c, voice); }}
+                    disabled={row?.loading}
+                    title={isPlayingThis ? 'Stop sample' : row?.loading ? 'Generating…' : `Generate & play a 12-second sample via ${ttsLabel(ttsModelKey)}`}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                      row?.loading
+                        ? 'bg-magenta/10 text-magenta cursor-wait'
+                        : isPlayingThis
+                          ? 'bg-magenta text-white hover:bg-magenta/90'
+                          : 'bg-ink/[0.06] text-ink/80 hover:bg-magenta/15 hover:text-magenta'
+                    }`}
+                  >
+                    {row?.loading ? <IconSpinner className="w-3 h-3"/>
+                      : isPlayingThis ? <IconPause className="w-3 h-3"/>
+                      : <IconPlay className="w-3 h-3"/>}
+                    <span>{row?.loading ? 'Generating…' : isPlayingThis ? 'Stop' : 'Play 12s'}</span>
+                  </button>
+                  {row?.error && (
+                    <span className="text-[10px] text-red-600/80 truncate max-w-[130px]" title={row.error}>⚠ {row.error}</span>
+                  )}
+                </span>
               </div>
             );
           })}
@@ -191,5 +272,43 @@ export function CastView({
       )}
 
     </div>
+  );
+}
+
+/* Pack the Character payload into the shape the server's voice-mapping
+   wants. Evidence quotes drive the sample script (so each voice reads a
+   real line from the manuscript); gender/ageRange/tone/description steer
+   the prebuilt-voice picker. Any fields that the analyzer didn't fill in
+   are simply omitted — server handles missing data. */
+function buildCharacterHint(c: Character): VoiceSampleArgs['characterHint'] {
+  const evidence = (c.evidence ?? []).map(e => e.quote).filter((q): q is string => typeof q === 'string' && q.length > 0);
+  const gender = (c as Character & { gender?: 'male' | 'female' | 'neutral' }).gender;
+  const ageRange = (c as Character & { ageRange?: 'child' | 'teen' | 'adult' | 'elderly' }).ageRange;
+  return {
+    description: c.description,
+    role: c.role,
+    gender,
+    ageRange,
+    tone: c.tone,
+    evidence: evidence.length ? evidence : undefined,
+  };
+}
+
+function ttsLabel(key: TtsModelKey): string {
+  if (key === 'gemini-2.5-flash') return 'Gemini 2.5 Flash TTS';
+  if (key === 'gemini-3.1-flash') return 'Gemini 3.1 Flash TTS';
+  return key;
+}
+
+interface TtsVoiceLineProps { ttsVoice: { provider: string; name: string; description: string }; }
+function TtsVoiceLine({ ttsVoice }: TtsVoiceLineProps) {
+  return (
+    <span
+      title={`Prebuilt ${ttsVoice.provider} voice — ${ttsVoice.description}`}
+      className="block text-[11px] text-ink/50 truncate"
+    >
+      <span className="font-semibold text-ink/70">{ttsVoice.name}</span>
+      <span className="text-ink/40"> · {ttsVoice.description}</span>
+    </span>
   );
 }

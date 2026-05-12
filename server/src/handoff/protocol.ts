@@ -1,10 +1,12 @@
 /* Manual cowork handoff protocol.
 
-   writeInbox writes a markdown prompt to server/handoff/inbox/{id}-stage{N}.md.
-   awaitOutbox chokidars server/handoff/outbox/{id}-stage{N}.json, validates
-   the JSON against a zod schema, and resolves with the parsed payload. If the
-   JSON is malformed or fails validation, it writes a .errors.json sibling and
-   keeps watching for a corrected drop. */
+   writeInbox writes a markdown prompt to server/handoff/inbox/{id}-stage{key}.md
+   where `key` is '1' for stage 1, '2' for the legacy whole-manuscript stage 2,
+   or '2-ch{n}' for the per-chapter stage 2 (current default — see
+   server/src/routes/analysis.ts). awaitOutbox chokidars the corresponding
+   outbox file, validates the JSON against a zod schema, and resolves with the
+   parsed payload. If the JSON is malformed or fails validation, it writes a
+   .errors.json sibling and keeps watching for a corrected drop. */
 
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -18,29 +20,33 @@ const HANDOFF_ROOT = resolve(__dirname, '..', '..', 'handoff');
 const INBOX = join(HANDOFF_ROOT, 'inbox');
 const OUTBOX = join(HANDOFF_ROOT, 'outbox');
 
+/* Handoff key identifying the slice of work the inbox/outbox pair carries.
+   Literal types instead of free strings so callers can't typo a key. */
+export type HandoffKey = '1' | '2' | `2-ch${number}`;
+
 async function ensureDirs(): Promise<void> {
   await mkdir(INBOX, { recursive: true });
   await mkdir(OUTBOX, { recursive: true });
 }
 
-export function inboxPath(manuscriptId: string, stage: 1 | 2): string {
-  return join(INBOX, `${manuscriptId}-stage${stage}.md`);
+export function inboxPath(manuscriptId: string, key: HandoffKey): string {
+  return join(INBOX, `${manuscriptId}-stage${key}.md`);
 }
 
-export function outboxPath(manuscriptId: string, stage: 1 | 2): string {
-  return join(OUTBOX, `${manuscriptId}-stage${stage}.json`);
+export function outboxPath(manuscriptId: string, key: HandoffKey): string {
+  return join(OUTBOX, `${manuscriptId}-stage${key}.json`);
 }
 
-export function errorPath(manuscriptId: string, stage: 1 | 2): string {
-  return join(OUTBOX, `${manuscriptId}-stage${stage}.errors.json`);
+export function errorPath(manuscriptId: string, key: HandoffKey): string {
+  return join(OUTBOX, `${manuscriptId}-stage${key}.errors.json`);
 }
 
-export async function writeInbox(manuscriptId: string, stage: 1 | 2, body: string): Promise<string> {
+export async function writeInbox(manuscriptId: string, key: HandoffKey, body: string): Promise<string> {
   await ensureDirs();
-  const path = inboxPath(manuscriptId, stage);
+  const path = inboxPath(manuscriptId, key);
   // Clean any stale outbox so we only resolve on a fresh drop.
-  await rm(outboxPath(manuscriptId, stage), { force: true });
-  await rm(errorPath(manuscriptId, stage), { force: true });
+  await rm(outboxPath(manuscriptId, key), { force: true });
+  await rm(errorPath(manuscriptId, key), { force: true });
   await writeFile(path, body, 'utf8');
   return path;
 }
@@ -54,12 +60,12 @@ export interface AwaitOptions {
 
 export async function awaitOutbox<T>(
   manuscriptId: string,
-  stage: 1 | 2,
+  key: HandoffKey,
   schema: z.ZodType<T>,
   opts: AwaitOptions = {},
 ): Promise<T> {
   await ensureDirs();
-  const target = outboxPath(manuscriptId, stage);
+  const target = outboxPath(manuscriptId, key);
   const timeoutMs = opts.timeoutMs ?? 30 * 60 * 1000;
   const start = Date.now();
 
@@ -84,7 +90,7 @@ export async function awaitOutbox<T>(
         try {
           parsed = JSON.parse(raw);
         } catch (e) {
-          await writeFile(errorPath(manuscriptId, stage), JSON.stringify({
+          await writeFile(errorPath(manuscriptId, key), JSON.stringify({
             kind: 'invalid-json',
             message: (e as Error).message,
           }, null, 2), 'utf8');
@@ -92,7 +98,7 @@ export async function awaitOutbox<T>(
         }
         const result = schema.safeParse(parsed);
         if (!result.success) {
-          await writeFile(errorPath(manuscriptId, stage), JSON.stringify({
+          await writeFile(errorPath(manuscriptId, key), JSON.stringify({
             kind: 'schema-validation',
             issues: result.error.issues,
           }, null, 2), 'utf8');
@@ -102,7 +108,7 @@ export async function awaitOutbox<T>(
         }
         // Success — delete the consumed outbox file so a re-run gets a clean slate.
         await rm(path, { force: true });
-        await rm(errorPath(manuscriptId, stage), { force: true });
+        await rm(errorPath(manuscriptId, key), { force: true });
         cleanup();
         resolvePromise(result.data);
       } catch (e) {

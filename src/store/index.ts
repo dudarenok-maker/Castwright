@@ -8,6 +8,9 @@ import { castSlice } from './cast-slice';
 import { chaptersSlice } from './chapters-slice';
 import { revisionsSlice } from './revisions-slice';
 import { manuscriptSlice } from './manuscript-slice';
+import { librarySlice } from './library-slice';
+import { voicesSlice } from './voices-slice';
+import { persistenceMiddleware } from './persistence-middleware';
 import { installRouter, type RouterStore } from '../lib/router';
 
 export const store = configureStore({
@@ -17,7 +20,10 @@ export const store = configureStore({
     chapters:   chaptersSlice.reducer,
     revisions:  revisionsSlice.reducer,
     manuscript: manuscriptSlice.reducer,
+    library:    librarySlice.reducer,
+    voices:     voicesSlice.reducer,
   },
+  middleware: (getDefault) => getDefault().concat(persistenceMiddleware),
 });
 
 export type RootState   = ReturnType<typeof store.getState>;

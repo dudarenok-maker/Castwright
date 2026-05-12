@@ -4,6 +4,76 @@
  */
 
 export interface paths {
+    "/api/library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List books in the on-disk workspace
+         * @description Walks the workspace `books/<Author>/<Series>/<Book>/` tree and returns
+         *     the grouped library used by the frontend's book-library view. Status
+         *     per book is derived from the presence of `.audiobook/state.json`,
+         *     `cast.json`, and the audio output count.
+         */
+        get: operations["getLibrary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Parse a manuscript and stage it for confirmation
+         * @description Parse-only: returns the parsed text plus best-effort author/series/title
+         *     metadata, and stashes the result in memory under a short tempId. Nothing
+         *     is written to disk. The frontend then renders a confirm-metadata form;
+         *     on submit, POST /api/books drains the staging entry into the workspace.
+         */
+        post: operations["importManuscript"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm metadata and write a book into the workspace
+         * @description Drains the staged import identified by `tempId`, writes
+         *     `manuscript.<ext>` and `.audiobook/state.json` into
+         *     `books/<Author>/<Series>/<Title>/`, and returns the resulting bookId +
+         *     manuscriptId. Returns 409 with a `suggestedTitle` if a book with the
+         *     same slug already exists.
+         */
+        post: operations["confirmBook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/manuscripts": {
         parameters: {
             query?: never;
@@ -42,6 +112,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/voices/{voiceId}/sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Synthesise a ~12-second voice preview
+         * @description Renders a short sample of the voice via the configured TTS provider
+         *     (free-tier Gemini). The server caches the WAV on disk keyed by
+         *     `voiceId` + `modelKey`; subsequent requests with the same key return
+         *     immediately with `cached: true`. The frontend plays the URL with a
+         *     plain `<audio>` element.
+         */
+        post: operations["getVoiceSample"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/voice-match": {
         parameters: {
             query?: never;
@@ -59,7 +153,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/books/{bookId}/generation/start": {
+    "/api/books/{bookId}/generation": {
         parameters: {
             query?: never;
             header?: never;
@@ -68,25 +162,16 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Kick off audiobook generation jobs */
-        post: operations["startGeneration"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/books/{bookId}/generation/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Generation progress stream (SSE / WebSocket) */
-        get: operations["streamGeneration"];
-        put?: never;
-        post?: never;
+        /**
+         * Generate chapter audio with progress streaming
+         * @description Single long-running POST that streams generation progress as SSE
+         *     events. Mirrors the analysis route shape (`POST /api/manuscripts/{id}/
+         *     analysis`). Each `data: <json>` payload follows the GenerationTick
+         *     schema. Synthesises chapters one at a time; per-chapter completion
+         *     writes `audio/<chapterSlug>.wav` + `audio/<chapterSlug>.segments.json`
+         *     into the workspace book directory.
+         */
+        post: operations["streamGeneration"];
         delete?: never;
         options?: never;
         head?: never;
@@ -103,6 +188,53 @@ export interface paths {
         /** Get a chapter's playable audio + waveform metadata */
         get: operations["getChapterAudio"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List voices derived from every confirmed cast in the workspace
+         * @description Walks `books/<Author>/<Series>/<Book>/.audiobook/cast.json` for every
+         *     book where `state.castConfirmed === true` and aggregates the characters
+         *     into a deduplicated voice library. There is no separate voice store —
+         *     a "voice" is the reusable identity of a previously-cast character. The
+         *     `id` matches what the TTS layer hashes for prebuilt-voice picking, so
+         *     cached samples at `/audio/voices/{id}-{modelKey}.wav` line up.
+         */
+        get: operations["getVoices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voices/{voiceId}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Pin or unpin a voice in the workspace library
+         * @description Toggles a workspace-level pin flag persisted to
+         *     `audiobook-workspace/voices.json`. Pinned voices sort to the top of
+         *     the library response so favourites stay at hand across books.
+         */
+        put: operations["setVoicePin"];
         post?: never;
         delete?: never;
         options?: never;
@@ -134,6 +266,81 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        LibraryResponse: {
+            authors: components["schemas"]["LibraryAuthor"][];
+        };
+        LibraryAuthor: {
+            name: string;
+            series: components["schemas"]["LibrarySeries"][];
+        };
+        LibrarySeries: {
+            name: string;
+            books: components["schemas"]["LibraryBook"][];
+        };
+        LibraryBook: {
+            /** @description slug(author)__slug(series)__slug(title) */
+            bookId: string;
+            title: string;
+            author: string;
+            series: string;
+            seriesPosition?: number | null;
+            isStandalone: boolean;
+            /** @enum {string} */
+            status: "not_analysed" | "analysing" | "cast_pending" | "generating" | "complete" | "unreadable" | "orphaned";
+            manuscriptId?: string;
+            chapterCount: number;
+            completedChapters: number;
+            characterCount: number;
+            voiceCount: number;
+            matchedFromLibrary?: number;
+            progress?: number;
+            /** @description human-formatted total runtime, e.g. '4h 38m' */
+            runtime?: string;
+            /** @description human-formatted relative time, e.g. '2 min ago' */
+            lastWorkedOn: string;
+            coverGradient: string[];
+            pinned?: boolean;
+        };
+        ImportCandidate: {
+            /** @enum {string} */
+            format: "markdown" | "plaintext" | "epub" | "pdf";
+            title: string;
+            author?: string | null;
+            series?: string | null;
+            seriesPosition?: number | null;
+            sourceText: string;
+            wordCount: number;
+            byteSize: number;
+            chapters: {
+                id: number;
+                title: string;
+            }[];
+        };
+        ImportResponse: {
+            /** @example imp_abc123 */
+            tempId: string;
+            candidate: components["schemas"]["ImportCandidate"];
+        };
+        ConfirmBookRequest: {
+            tempId: string;
+            author: string;
+            series?: string;
+            seriesPosition?: number | null;
+            title: string;
+            isStandalone: boolean;
+        };
+        ConfirmBookResponse: components["schemas"]["UploadResponse"] & {
+            bookId: string;
+            author: string;
+            series: string;
+            seriesPosition?: number | null;
+            isStandalone: boolean;
+            paths: {
+                bookDir: string;
+                manuscript: string;
+                dotAudiobook: string;
+            };
+        };
         UploadResponse: {
             /** @example mns_abc123 */
             manuscriptId: string;
@@ -215,6 +422,92 @@ export interface components {
             totalLines?: number;
             errorReason?: string | null;
         };
+        VoiceSampleRequest: {
+            /**
+             * @description UI-stable key; server resolves to the actual Gemini TTS model id via env.
+             * @enum {string}
+             */
+            modelKey: "gemini-2.5-flash" | "gemini-3.1-flash";
+            /** @description Frontend Voice payload (attributes drive the prebuilt-voice picker). */
+            voice?: {
+                id?: string;
+                character?: string;
+                attributes?: string[];
+            };
+            /**
+             * @description Extra signals the server uses to pick a sensible prebuilt Gemini
+             *     voice when the library `attributes` only carry personality traits
+             *     (e.g. "sarcastic", "patient") rather than vocal descriptors. The
+             *     description is scanned for he/she pronouns; gender + ageRange take
+             *     precedence when present; tone is used as a tiebreaker. Evidence
+             *     quotes (real manuscript lines) drive the sample script when
+             *     present so every voice actually sounds like that character.
+             */
+            characterHint?: {
+                description?: string;
+                role?: string;
+                /** @enum {string} */
+                gender?: "male" | "female" | "neutral";
+                /** @enum {string} */
+                ageRange?: "child" | "teen" | "adult" | "elderly";
+                /** @description Manuscript lines spoken by or about this character. */
+                evidence?: string[];
+                tone?: {
+                    warmth?: number;
+                    pace?: number;
+                    authority?: number;
+                    emotion?: number;
+                };
+            };
+            /** @description Optional override script. Capped to ~30 words server-side to stay near 12 s. */
+            text?: string;
+        };
+        VoiceSample: {
+            /** @description Path under the server's static /audio mount; play directly with <audio>. */
+            url: string;
+            /** @description Computed from the synthesised PCM length. Null when the response was served from cache. */
+            durationSec?: number | null;
+            cached: boolean;
+            /** @enum {string} */
+            modelKey: "gemini-2.5-flash" | "gemini-3.1-flash";
+        };
+        /**
+         * @description The TTS provider voice this Voice resolves to. Computed server-side by
+         *     the same picker that synthesises samples and chapters, so the value
+         *     previewed in the UI matches what the user actually hears.
+         */
+        TtsVoiceAssignment: {
+            /** @enum {string} */
+            provider: "gemini";
+            /** @description Provider-specific prebuilt voice name, e.g. 'Charon'. */
+            name: string;
+            /** @description Public personality label from the provider's voice table, e.g. 'Informative'. */
+            description: string;
+        };
+        Voice: {
+            /** @description Stable id used to hash a TTS prebuilt voice. Defaults to character.voiceId or character.id. */
+            id: string;
+            character: string;
+            bookTitle: string;
+            bookId: string;
+            attributes: string[];
+            gradient: string[];
+            /** @description Number of distinct books that contain this voiceId. */
+            usedIn: number;
+            /**
+             * @description 'current' when the voice belongs to the currently-open book; 'library' otherwise.
+             * @enum {string}
+             */
+            source: "current" | "library";
+            /** @description Marker for narrator-like voices that span an entire book. */
+            reusable?: boolean;
+            /** @description Workspace-level pin flag from audiobook-workspace/voices.json. */
+            pinned?: boolean;
+            ttsVoice: components["schemas"]["TtsVoiceAssignment"];
+        };
+        VoiceLibraryResponse: {
+            voices: components["schemas"]["Voice"][];
+        };
         ChapterAudio: {
             /** @description Signed MP3/Opus URL; null while still rendering. */
             url?: string | null;
@@ -290,6 +583,18 @@ export interface components {
             voiceId?: string;
             /** @enum {string} */
             voiceState?: "generated" | "tuned" | "reused" | "locked";
+            /**
+             * @description Voice gender inferred during analysis. Drives the prebuilt-voice
+             *     picker so e.g. a young boy gets a male voice instead of a neutral
+             *     default. Optional — older cached analyses won't have it.
+             * @enum {string}
+             */
+            gender?: "male" | "female" | "neutral";
+            /**
+             * @description Coarse age bucket used as a register hint for TTS.
+             * @enum {string}
+             */
+            ageRange?: "child" | "teen" | "adult" | "elderly";
             description?: string;
             evidence?: {
                 quote?: string;
@@ -332,6 +637,115 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getLibrary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Library tree grouped by author and series */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryResponse"];
+                };
+            };
+        };
+    };
+    importManuscript: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+                "application/json": {
+                    text: string;
+                    fileName?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Parsed candidate ready for confirmation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportResponse"];
+                };
+            };
+            /** @description Unsupported manuscript format */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    confirmBook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmBookRequest"];
+            };
+        };
+        responses: {
+            /** @description Book saved */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmBookResponse"];
+                };
+            };
+            /** @description Missing required fields */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A book with this slug already exists on disk */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example slug_collision */
+                        error?: string;
+                        suggestedTitle?: string;
+                    };
+                };
+            };
+            /** @description Import tempId expired or already consumed */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     uploadManuscript: {
         parameters: {
             query?: never;
@@ -396,6 +810,53 @@ export interface operations {
             };
         };
     };
+    getVoiceSample: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voiceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoiceSampleRequest"];
+            };
+        };
+        responses: {
+            /** @description Sample is ready (either cached or freshly synthesised) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceSample"];
+                };
+            };
+            /** @description Invalid model key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream TTS provider is rate-limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream TTS provider failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     matchVoices: {
         parameters: {
             query?: never;
@@ -426,26 +887,6 @@ export interface operations {
             };
         };
     };
-    startGeneration: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                bookId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Generation queued */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     streamGeneration: {
         parameters: {
             query?: never;
@@ -455,7 +896,21 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description TTS model key; resolves to a Gemini model id server-side.
+                     * @enum {string}
+                     */
+                    modelKey: "gemini-2.5-flash" | "gemini-3.1-flash";
+                    /** @description Optional subset of chapters to (re)generate. Defaults to all chapters lacking an audio file. */
+                    chapterIds?: number[];
+                    /** @description Re-synthesise even if an audio file already exists on disk. */
+                    force?: boolean;
+                };
+            };
+        };
         responses: {
             /** @description Tick stream */
             200: {
@@ -488,6 +943,62 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ChapterAudio"];
                 };
+            };
+        };
+    };
+    getVoices: {
+        parameters: {
+            query?: {
+                /** @description When set, voices belonging to that book are tagged source=current. */
+                currentBookId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Derived voice library, pinned first then by usage descending */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceLibraryResponse"];
+                };
+            };
+        };
+    };
+    setVoicePin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voiceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    pinned: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Pin flag updated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or non-boolean `pinned` field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

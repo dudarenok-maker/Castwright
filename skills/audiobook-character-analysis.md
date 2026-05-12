@@ -26,6 +26,14 @@ A JSON object with exactly these two top-level fields:
                                     // OR a fresh kebab token tied to this character.
                                     // The frontend maps unknown colors to a fallback.
       "attributes": ["restrained", "long subordinate clauses", "wry"],
+      "gender": "male",             // "male" | "female" | "neutral". Required for non-narrator
+                                    // characters when the manuscript gives any signal (pronouns,
+                                    // honorifics, gendered relationships). Use "neutral" only when
+                                    // the manuscript is genuinely ambiguous. Drives the TTS voice
+                                    // picker — getting this right is critical for the audiobook.
+      "ageRange": "adult",          // "child" | "teen" | "adult" | "elderly". A boy of ~15 is "teen",
+                                    // an elder ship captain is "elderly", etc. Optional but
+                                    // strongly recommended — coarse age controls vocal register.
       "tone": {                     // each on 0–100, leave any field out if uncertain
         "warmth": 55,
         "pace": 40,
@@ -53,6 +61,8 @@ A JSON object with exactly these two top-level fields:
 - `id` must be **kebab-case**, stable across re-runs, and unique. Use last names or descriptive nicknames (`halloran`, `eliza-gray`, `cook-marcus`).
 - `color`: when uncertain, reuse one of `narrator`, `halloran`, `eliza`, `marcus` (these have hand-tuned palettes). Otherwise emit a fresh kebab token; the UI falls back gracefully.
 - `attributes`: 2–5 short tags. Adjectives or noun phrases describing speech behaviour, not appearance.
+- `gender`: emit for every non-narrator character when the manuscript gives any signal — pronouns ("he"/"she"), honorifics ("Mr."/"Mrs."), gendered relationships ("son"/"daughter"). Use `"neutral"` only when the manuscript is truly ambiguous (mythical beings, AI, etc.). The TTS picker depends on this for voice selection. Narrator gets `"neutral"` unless the prose is in first person and gendered.
+- `ageRange`: `"child"` (≤12), `"teen"` (13–19), `"adult"` (20–60), `"elderly"` (60+). Use the manuscript's stated or strongly implied age. Skip the field if you genuinely don't know.
 - `tone`: integer fields, 0 (low) to 100 (high). Skip a field rather than guess.
 - `evidence`: 1–3 short quotes from the manuscript that justify your reading. Keep quotes under ~120 chars; add a `note` when the link isn't obvious.
 - `chapters[].id` is **1-based and contiguous**. Don't skip numbers. Use the chapter ordering as it appears in the manuscript.

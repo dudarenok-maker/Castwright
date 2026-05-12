@@ -20,7 +20,9 @@ export function parseHash(hash?: string): Stage {
   const params = new URLSearchParams(qs || '');
 
   if (segs.length === 0) return { kind: 'books' };
-  if (segs.length === 1 && segs[0] === 'new') return { kind: 'upload' };
+  if (segs.length === 1 && segs[0] === 'new')    return { kind: 'upload' };
+  if (segs.length === 1 && segs[0] === 'voices') return { kind: 'voices' };
+  if (segs.length === 1 && segs[0] === 'log')    return { kind: 'changelog' };
 
   if (segs[0] === 'books' && segs[1]) {
     const bookId = segs[1];
@@ -42,6 +44,8 @@ export function stageToHash(stage: Stage | null | undefined): string {
   switch (stage.kind) {
     case 'books':     return '#/';
     case 'upload':    return '#/new';
+    case 'voices':    return '#/voices';
+    case 'changelog': return '#/log';
     case 'analysing': return stage.bookId ? `#/books/${stage.bookId}/analysing` : '#/new';
     case 'confirm':   return `#/books/${stage.bookId}/confirm`;
     case 'ready': {

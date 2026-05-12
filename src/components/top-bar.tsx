@@ -14,6 +14,8 @@ interface TopBarProps {
   onTitleClick?: () => void;
   pendingRevisionsCount: number;
   onOpenRevisions: () => void;
+  onOpenVoices: () => void;
+  onOpenChangelog: () => void;
 }
 
 const TABS: Array<{ id: View; label: string }> = [
@@ -25,7 +27,22 @@ const TABS: Array<{ id: View; label: string }> = [
   { id: 'log',        label: 'Log' },
 ];
 
-export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClick, pendingRevisionsCount, onOpenRevisions }: TopBarProps) {
+/* Cross-book destinations available when no book is open (or when the user
+   is browsing a global view). Cast/Manuscript/Generate/Listen are inherently
+   per-book and only appear in the `ready` tab strip. */
+const GLOBAL_NAV: Array<{ id: 'books' | 'voices' | 'changelog'; label: string }> = [
+  { id: 'books',     label: 'Books' },
+  { id: 'voices',    label: 'Voices' },
+  { id: 'changelog', label: 'Change log' },
+];
+
+export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClick, pendingRevisionsCount, onOpenRevisions, onOpenVoices, onOpenChangelog }: TopBarProps) {
+  const showGlobalNav = stage === 'books' || stage === 'voices' || stage === 'changelog';
+  const onGlobal = (id: 'books' | 'voices' | 'changelog') => {
+    if (id === 'books')     onHome();
+    else if (id === 'voices')    onOpenVoices();
+    else                         onOpenChangelog();
+  };
   return (
     <header className="sticky top-0 z-40 bg-canvas/85 backdrop-blur-md border-b border-ink/10">
       <div className="max-w-[1500px] mx-auto px-6 h-16 flex items-center gap-8">
@@ -49,7 +66,17 @@ export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClic
             ))}
           </nav>
         )}
-        <div className={`flex items-center gap-3 ${stage === 'ready' ? '' : 'ml-auto'}`}>
+        {showGlobalNav && (
+          <nav className="ml-auto flex items-center gap-1 bg-ink/[0.04] rounded-full p-1">
+            {GLOBAL_NAV.map(t => (
+              <button key={t.id} onClick={() => onGlobal(t.id)}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${stage === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60 hover:text-ink'}`}>
+                {t.label}
+              </button>
+            ))}
+          </nav>
+        )}
+        <div className={`flex items-center gap-3 ${stage === 'ready' || showGlobalNav ? '' : 'ml-auto'}`}>
           {pendingRevisionsCount > 0 && (
             <button onClick={onOpenRevisions} className="relative inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold transition-colors">
               <span className="relative">

@@ -4,19 +4,15 @@ import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primiti
 import { api } from '../lib/api';
 import type { UploadArgs } from '../lib/api';
 import { SAMPLE_MANUSCRIPT_MD } from '../mocks/canned-data';
-import type { UploadResponse } from '../lib/types';
 import { MODEL_OPTIONS } from '../lib/models';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
-
-interface Props {
-  onUploaded: (res: UploadResponse) => void;
-}
+import { manuscriptActions } from '../store/manuscript-slice';
 
 const TEXT_EXT_RE = /\.(md|markdown|txt|text)$/i;
 const BINARY_EXT_RE = /\.(pdf|epub)$/i;
 
-export function UploadView({ onUploaded }: Props) {
+export function UploadView() {
   const dispatch = useAppDispatch();
   const selectedModel = useAppSelector(s => s.ui.selectedModel);
   const [dragOver, setDragOver] = useState(false);
@@ -30,10 +26,10 @@ export function UploadView({ onUploaded }: Props) {
     setError(null);
     setBusy(true);
     try {
-      const res = await api.uploadManuscript(args);
-      onUploaded(res);
+      const res = await api.importManuscript(args);
+      dispatch(manuscriptActions.setImportCandidate({ tempId: res.tempId, ...res.candidate }));
     } catch (e) {
-      setError((e as Error)?.message || 'Upload failed.');
+      setError((e as Error)?.message || 'Import failed.');
       setBusy(false);
     }
   }

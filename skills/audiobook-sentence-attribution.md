@@ -92,6 +92,46 @@ speaking character, then write the result to
 
   A run of consecutive sentences should NOT all have the same confidence. If your output has every value clustered in a narrow band like 0.95–0.98, you have not actually calibrated — re-grade with the rubric above. Most manuscripts produce a clear spread between ~0.55 and ~0.98 across all sentences.
 
+## Audio delivery cues
+
+The TTS engine respects inline bracketed delivery tags placed at the start of
+spoken text. The parser may have already inserted some — your job is to
+**preserve every existing `[tag]` token verbatim** inside the relevant
+sentence's `text`, and optionally **add tags** when the narrative is explicit
+about delivery.
+
+Canonical vocabulary (use **only** these tokens — others will be ignored):
+
+- `[whispers]` — quiet, breathy speech
+- `[shouting]` — loud, raised voice
+- `[emphatic]` — stressed, pointed delivery
+- `[laughs]` — laughter within or around speech
+- `[sighs]` — exhaled, weary delivery
+
+Rules:
+
+- **Preserve parser tags.** If the source already contains `[shouting] Help!`
+  inside a quote, copy it verbatim into the sentence's `text`. Do not remove
+  or relocate it.
+- **Tags go at the start of the spoken portion only.** When you split a
+  source sentence into quote + narrative tag entries (see "Splitting"), the
+  audio tag belongs on the *spoken* split, not the `narrator` split.
+- **Add a tag when the narrator describes the delivery.**
+  - `"You can't do that," she whispered.` → spoken split becomes
+    `"[whispers] You can't do that,"` (`whispers`).
+  - `"GET DOWN!" he shouted.` → spoken split is `"[shouting] Get down!"`
+    (also case-normalised). The narrator's `he shouted.` stays untagged.
+  - `"Honestly," he sighed, "I don't know."` → both spoken splits get
+    `[sighs]` only if the sigh applies to the line as a whole; otherwise
+    tag only the first.
+  - `"Try me," she laughed.` → spoken split is `"[laughs] Try me,"`.
+- **Don't invent tags from context alone.** A character is angry across a
+  scene? That's not enough — only tag when the *current sentence* gives an
+  explicit delivery signal.
+- **One tag per spoken split is enough.** Don't stack
+  `[shouting][emphatic]` on the same line.
+- **Narrative prose (`narrator` entries) never carry audio tags.**
+
 ## Attribution heuristics
 
 - Narrative prose (no quotes) → `narrator`.
@@ -161,6 +201,7 @@ problem. Fix and re-save the `.json`. Common pitfalls:
 - Skipping sentence ids or restarting at 1 per chapter.
 - Referring to a `characterId` that wasn't in stage 1.
 - Including markdown formatting inside `text` (use the raw text from the manuscript).
+  Inline bracketed audio tags (`[whispers]`, `[shouting]`, etc.) ARE allowed and expected — see "Audio delivery cues" above.
 
 ## Reference
 
