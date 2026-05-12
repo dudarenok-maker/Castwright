@@ -4,7 +4,7 @@
    holding everything. */
 
 import type { ChapterHint, ManuscriptFormat } from '../store/manuscripts.js';
-import { tagMarkdownEmphasis, tagShoutingDialog } from './audio-tags.js';
+import { tagExcitedDialog, tagHesitantDialog, tagMarkdownEmphasis, tagShoutingDialog } from './audio-tags.js';
 
 /* Heading detection — built from three alternatives:
    1) Markdown H1/H2 (`# Foo` or `## Foo`).
@@ -92,7 +92,7 @@ export function parseText(text: string, opts: { fileName?: string; format: 'mark
   function flush() {
     const rawBody = buf.join('\n').trim();
     if (rawBody.length > 0) {
-      const body = tagShoutingDialog(tagMarkdownEmphasis(rawBody));
+      const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(tagMarkdownEmphasis(rawBody))));
       chapters.push({ id: chapters.length + 1, title: currentTitle || `Chapter ${chapters.length + 1}`, body });
     }
     buf = [];
@@ -128,7 +128,7 @@ export function parseText(text: string, opts: { fileName?: string; format: 'mark
 
   if (chapters.length === 0) {
     // No headings at all — treat the whole thing as one chapter.
-    const body = tagShoutingDialog(tagMarkdownEmphasis(text.trim()));
+    const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(tagMarkdownEmphasis(text.trim()))));
     chapters.push({ id: 1, title: title || (opts.fileName ?? 'Chapter 1'), body });
   }
 

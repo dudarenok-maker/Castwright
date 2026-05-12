@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import type { ChapterHint } from '../store/manuscripts.js';
 import type { ParsedManuscript } from './text.js';
 import { parseFilenameMetadata } from './text.js';
-import { tagHtmlEmphasis, tagShoutingDialog } from './audio-tags.js';
+import { tagExcitedDialog, tagHesitantDialog, tagHtmlEmphasis, tagShoutingDialog } from './audio-tags.js';
 
 function stripHtml(html: string): string {
   return tagHtmlEmphasis(html)
@@ -49,7 +49,7 @@ export async function parseEpub(buffer: Buffer, opts: { fileName?: string }): Pr
       const html = await new Promise<string>((resolve, reject) => {
         epub.getChapter(entry.id!, (err: Error | null, text?: string) => err ? reject(err) : resolve(text ?? ''));
       });
-      const body = tagShoutingDialog(stripHtml(html));
+      const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(stripHtml(html))));
       if (!body) continue;
       const chTitle = entry.title?.trim() || `Chapter ${chapters.length + 1}`;
       chapters.push({ id: chapters.length + 1, title: chTitle, body });
