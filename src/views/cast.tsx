@@ -7,7 +7,6 @@ import {
   SectionLabel, MixedHeading, Avatar, Pill, VoiceSwatch,
 } from '../components/primitives';
 import { VoiceLibraryPanel } from '../components/voice-library-panel';
-import { ProfileDrawer } from '../modals/profile-drawer';
 import type { Character, Voice, DriftEvent, CharColor } from '../lib/types';
 
 interface Props {
@@ -15,17 +14,15 @@ interface Props {
   setCharacters: (next: Character[] | ((prev: Character[]) => Character[])) => void;
   library: Voice[];
   onOpenProfile: (id: string | null) => void;
-  openProfileId: string | null;
   onShowMatchDetail: (id: string) => void;
-  onRegenerateCharacter: (id: string) => void;
   onBatchRegenerate: (ids: string[]) => void;
   driftEvents: DriftEvent[];
   onShowDrift: () => void;
 }
 
 export function CastView({
-  characters, setCharacters, library, onOpenProfile, openProfileId,
-  onShowMatchDetail, onRegenerateCharacter, onBatchRegenerate, driftEvents, onShowDrift,
+  characters, setCharacters, library, onOpenProfile,
+  onShowMatchDetail, onBatchRegenerate, driftEvents, onShowDrift,
 }: Props) {
   const [query, setQuery] = useState('');
   const [showLibrary, setShowLibrary] = useState(true);
@@ -54,9 +51,6 @@ export function CastView({
     setDraggingVoiceId(null);
     setDropTargetCharId(null);
   }
-
-  const profileCharacter = openProfileId ? characters.find(c => c.id === openProfileId) : undefined;
-  const profileVoice = findVoice(profileCharacter?.voiceId);
 
   return (
     <div className={`max-w-[1500px] mx-auto px-6 py-10 grid ${showLibrary ? 'grid-cols-[1fr_360px]' : 'grid-cols-1'} gap-6 relative ${draggingVoiceId ? 'dragging-voice' : ''}`}>
@@ -196,19 +190,6 @@ export function CastView({
         </aside>
       )}
 
-      {profileCharacter && (
-        <ProfileDrawer
-          character={profileCharacter}
-          voice={profileVoice}
-          onClose={() => onOpenProfile(null)}
-          onSave={(updated) => {
-            setCharacters(prev => prev.map(c => c.id === updated.id ? updated : c));
-            onOpenProfile(null);
-          }}
-          onShowMatchDetail={onShowMatchDetail}
-          onRegenerateCharacter={onRegenerateCharacter}
-        />
-      )}
     </div>
   );
 }

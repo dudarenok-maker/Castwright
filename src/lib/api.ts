@@ -22,21 +22,38 @@ function wait(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-function inferFormat(fileName?: string): 'markdown' | 'plaintext' | 'epub' | 'docx' | null {
+function inferFormat(fileName?: string): 'markdown' | 'plaintext' | 'epub' | 'pdf' | null {
   if (!fileName) return null;
   const m = fileName.toLowerCase().match(/\.([a-z0-9]+)$/);
   if (!m) return null;
-  const map: Record<string, 'markdown' | 'plaintext' | 'epub' | 'docx'> = {
+  const map: Record<string, 'markdown' | 'plaintext' | 'epub' | 'pdf'> = {
     md: 'markdown', markdown: 'markdown', txt: 'plaintext', text: 'plaintext',
-    epub: 'epub', docx: 'docx',
+    epub: 'epub', pdf: 'pdf',
   };
   return map[m[1]] ?? null;
 }
 
 /* ── argument types ──────────────────────────────────────────────────── */
 
-export interface UploadArgs { text: string; fileName?: string; format?: 'markdown' | 'plaintext' | 'epub' | 'docx'; }
-export interface AnalyseOpts { onPhase?: (e: { phaseId: number; progress: number }) => void; }
+export interface UploadArgs {
+  /** Inline text (used for paste + .md/.txt sample). */
+  text?: string;
+  /** Raw file (used for binary formats like PDF/EPUB). */
+  file?: File;
+  fileName?: string;
+  format?: 'markdown' | 'plaintext' | 'epub' | 'pdf';
+}
+export interface AnalyseOpts {
+  onPhase?: (e: { phaseId: number; progress: number }) => void;
+  /** Narrative log lines streamed from the server. Surface them in the
+      active phase so the user sees real progress (e.g. detected characters,
+      sentence counts) instead of canned snippets. */
+  onLog?: (e: { phaseId: number; message: string }) => void;
+  /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
+      Sent as JSON body to POST /api/manuscripts/:id/analysis. Ignored when
+      the server runs in ANALYZER=manual mode. */
+  model?: string;
+}
 export interface MatchArgs { bookId: string; characters: Character[]; }
 export interface StreamArgs {
   bookId: string;
@@ -48,19 +65,21 @@ export interface PollArgs  { bookId: string; }
 
 /* ── mock implementations ────────────────────────────────────────────── */
 
-async function mockUploadManuscript({ text, fileName, format }: UploadArgs): Promise<UploadResponse> {
+async function mockUploadManuscript({ text, file, fileName, format }: UploadArgs): Promise<UploadResponse> {
   await wait(350);
-  const h1 = text.match(/^#\s+(.+)$/m);
+  const effectiveName = fileName ?? file?.name;
+  const effectiveText = text ?? '';
+  const h1 = effectiveText.match(/^#\s+(.+)$/m);
   const title = (h1 && h1[1].trim())
-              || (fileName ? fileName.replace(/\.[^.]+$/, '') : 'Untitled manuscript');
+              || (effectiveName ? effectiveName.replace(/\.[^.]+$/, '') : 'Untitled manuscript');
   return {
     manuscriptId: 'mns_' + Math.random().toString(36).slice(2, 10),
-    format: format || inferFormat(fileName) || 'markdown',
+    format: format || inferFormat(effectiveName) || 'markdown',
     title,
-    wordCount: text.trim().split(/\s+/).filter(Boolean).length,
-    byteSize: new Blob([text]).size,
+    wordCount: effectiveText.trim().split(/\s+/).filter(Boolean).length,
+    byteSize: file ? file.size : new Blob([effectiveText]).size,
     uploadedAt: new Date().toISOString(),
-    sourceText: text,
+    sourceText: effectiveText,
   };
 }
 
@@ -152,26 +171,114 @@ async function mockPollRevisions(_args: PollArgs): Promise<RevisionsResponse> {
   };
 }
 
-/* ── real fetch-based implementations (placeholders) ─────────────────── */
+/* ── real fetch-based implementations ────────────────────────────────── */
 
+async function realUploadManuscript({ text, file, fileName, format }: UploadArgs): Promise<UploadResponse> {
+  if (file) {
+    const form = new FormData();
+    form.append('file', file, fileName ?? file.name);
+    if (format) form.append('format', format);
+    const res = await fetch('/api/manuscripts', { method: 'POST', body: form });
+    if (!res.ok) throw new Error(`Upload failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    return res.json();
+  }
+  if (text !== undefined) {
+    const res = await fetch('/api/manuscripts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, title: undefined, fileName }),
+    });
+    if (!res.ok) throw new Error(`Upload failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    return res.json();
+  }
+  throw new Error('uploadManuscript requires either `text` or `file`.');
+}
+
+interface AnalysisStreamEvent {
+  kind: 'phase' | 'result' | 'error' | 'log';
+  phaseId?: number;
+  progress?: number;
+  label?: string;
+  response?: AnalyseResponse;
+  message?: string;
+}
+
+async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, model }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+  const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
+    method: 'POST',
+    headers: model ? { 'Content-Type': 'application/json' } : undefined,
+    body: model ? JSON.stringify({ model }) : undefined,
+  });
+  if (!res.ok || !res.body) throw new Error(`Analysis stream failed (${res.status}).`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: AnalyseResponse | null = null;
+
+  const handle = (payload: AnalysisStreamEvent) => {
+    if (payload.kind === 'phase') {
+      if (typeof payload.phaseId === 'number' && typeof payload.progress === 'number') {
+        onPhase?.({ phaseId: payload.phaseId, progress: payload.progress });
+      }
+    } else if (payload.kind === 'log') {
+      if (typeof payload.phaseId === 'number' && typeof payload.message === 'string') {
+        onLog?.({ phaseId: payload.phaseId, message: payload.message });
+      }
+    } else if (payload.kind === 'result' && payload.response) {
+      result = payload.response;
+    } else if (payload.kind === 'error') {
+      throw new Error(payload.message || 'Analysis failed.');
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buffer.indexOf('\n\n')) >= 0) {
+      const raw = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const dataLines = raw
+        .split('\n')
+        .filter(l => l.startsWith('data: '))
+        .map(l => l.slice(6));
+      if (!dataLines.length) continue;
+      const payload = JSON.parse(dataLines.join('\n')) as AnalysisStreamEvent;
+      handle(payload);
+    }
+  }
+
+  if (!result) throw new Error('Analysis stream ended without a result event.');
+  return result;
+}
+
+async function realMatchVoices({ bookId, characters }: MatchArgs): Promise<VoiceMatchResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/voice-match`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ characters }),
+  });
+  if (!res.ok) throw new Error(`Voice match failed (${res.status}).`);
+  return res.json();
+}
+
+/* The remaining three endpoints (generation stream, chapter audio, revisions
+   poll) are out of scope for this slice — keep them as the original
+   not-wired throws so we surface attempts to use them. */
 const real = {
-  uploadManuscript: async (_args: UploadArgs): Promise<UploadResponse> => {
-    throw new Error('Real API not wired yet. Set VITE_USE_MOCKS=true.');
+  uploadManuscript:  realUploadManuscript,
+  analyseManuscript: realAnalyseManuscript,
+  matchVoices:       realMatchVoices,
+  streamGeneration:  (_args: StreamArgs): (() => void) => {
+    throw new Error('Generation stream not wired yet. Set VITE_USE_MOCKS=true.');
   },
-  analyseManuscript: async (_id: string, _opts?: AnalyseOpts): Promise<AnalyseResponse> => {
-    throw new Error('Real API not wired yet. Set VITE_USE_MOCKS=true.');
+  getChapterAudio:   async (_args: AudioArgs): Promise<ChapterAudio> => {
+    throw new Error('Chapter audio not wired yet. Set VITE_USE_MOCKS=true.');
   },
-  matchVoices: async (_args: MatchArgs): Promise<VoiceMatchResponse> => {
-    throw new Error('Real API not wired yet. Set VITE_USE_MOCKS=true.');
-  },
-  streamGeneration: (_args: StreamArgs): (() => void) => {
-    throw new Error('Real API not wired yet. Set VITE_USE_MOCKS=true.');
-  },
-  getChapterAudio: async (_args: AudioArgs): Promise<ChapterAudio> => {
-    throw new Error('Real API not wired yet. Set VITE_USE_MOCKS=true.');
-  },
-  pollRevisions: async (_args: PollArgs): Promise<RevisionsResponse> => {
-    throw new Error('Real API not wired yet. Set VITE_USE_MOCKS=true.');
+  pollRevisions:     async (_args: PollArgs): Promise<RevisionsResponse> => {
+    throw new Error('Revisions poll not wired yet. Set VITE_USE_MOCKS=true.');
   },
 };
 

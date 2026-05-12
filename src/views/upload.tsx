@@ -2,14 +2,23 @@ import { useRef, useState } from 'react';
 import { IconUpload, IconSpinner } from '../lib/icons';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
 import { api } from '../lib/api';
+import type { UploadArgs } from '../lib/api';
 import { SAMPLE_MANUSCRIPT_MD } from '../mocks/canned-data';
 import type { UploadResponse } from '../lib/types';
+import { MODEL_OPTIONS } from '../lib/models';
+import { useAppDispatch, useAppSelector } from '../store';
+import { uiActions } from '../store/ui-slice';
 
 interface Props {
   onUploaded: (res: UploadResponse) => void;
 }
 
+const TEXT_EXT_RE = /\.(md|markdown|txt|text)$/i;
+const BINARY_EXT_RE = /\.(pdf|epub)$/i;
+
 export function UploadView({ onUploaded }: Props) {
+  const dispatch = useAppDispatch();
+  const selectedModel = useAppSelector(s => s.ui.selectedModel);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy]         = useState(false);
   const [error, setError]       = useState<string | null>(null);
@@ -17,7 +26,7 @@ export function UploadView({ onUploaded }: Props) {
   const [pastedText, setPastedText] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  async function processText(args: { text: string; fileName?: string; format?: 'markdown' | 'plaintext' | 'epub' | 'docx' }) {
+  async function processUpload(args: UploadArgs) {
     setError(null);
     setBusy(true);
     try {
@@ -31,17 +40,20 @@ export function UploadView({ onUploaded }: Props) {
 
   async function handleFile(file?: File | null) {
     if (!file) return;
-    const okExt = /\.(md|markdown|txt|text)$/i.test(file.name);
-    if (!okExt) {
-      setError(`${file.name.split('.').pop()?.toUpperCase()} files need server conversion (not wired in this prototype). Try .md or .txt.`);
+    if (TEXT_EXT_RE.test(file.name)) {
+      const text = await file.text();
+      await processUpload({ text, fileName: file.name });
       return;
     }
-    const text = await file.text();
-    await processText({ text, fileName: file.name });
+    if (BINARY_EXT_RE.test(file.name)) {
+      await processUpload({ file, fileName: file.name });
+      return;
+    }
+    setError(`${file.name.split('.').pop()?.toUpperCase()} files aren't supported. Try .md, .txt, .pdf, or .epub.`);
   }
 
   async function handleSample() {
-    await processText({ text: SAMPLE_MANUSCRIPT_MD, fileName: 'the-northern-star.md', format: 'markdown' });
+    await processUpload({ text: SAMPLE_MANUSCRIPT_MD, fileName: 'the-northern-star.md', format: 'markdown' });
   }
 
   return (
@@ -56,6 +68,17 @@ export function UploadView({ onUploaded }: Props) {
           <p className="mt-4 text-lg text-ink/70">We'll read the book, find every speaking character, and synthesise a voice profile for each one — generated from the prose, not picked from a list.</p>
         </div>
 
+        <div className="mb-5 flex items-center justify-center gap-3 text-sm">
+          <label htmlFor="model-select" className="text-ink/60">Analysis model</label>
+          <select id="model-select" value={selectedModel} disabled={busy}
+                  onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
+                  className="px-3 py-1.5 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 focus:outline-none focus:border-peach disabled:opacity-50">
+            {MODEL_OPTIONS.map(m => (
+              <option key={m.id} value={m.id}>{m.label}{m.hint ? ` — ${m.hint}` : ''}</option>
+            ))}
+          </select>
+        </div>
+
         <div onDragEnter={(e) => { e.preventDefault(); setDragOver(true); }}
              onDragLeave={() => setDragOver(false)}
              onDragOver={(e) => e.preventDefault()}
@@ -63,7 +86,7 @@ export function UploadView({ onUploaded }: Props) {
              className={`relative bg-white rounded-3xl border-2 border-dashed transition-all p-12 text-center cursor-pointer ${busy ? 'opacity-60 cursor-wait' : ''} ${dragOver ? 'border-peach bg-peach/5 scale-[1.01]' : 'border-ink/15 hover:border-ink/30'}`}
              onClick={() => !busy && fileInputRef.current?.click()}>
           <input ref={fileInputRef} type="file" hidden
-                 accept=".md,.markdown,.txt,.text"
+                 accept=".md,.markdown,.txt,.text,.pdf,.epub"
                  onChange={(e) => handleFile(e.target.files?.[0])}/>
           <div className="w-16 h-16 mx-auto rounded-full bg-canvas grid place-items-center mb-5">
             {busy ? <IconSpinner className="w-7 h-7 text-magenta"/> : <IconUpload className="w-7 h-7 text-ink"/>}
@@ -71,7 +94,7 @@ export function UploadView({ onUploaded }: Props) {
           <p className="text-lg font-semibold text-ink">{busy ? 'Reading manuscript…' : 'Drop a manuscript here'}</p>
           <p className="text-sm text-ink/60 mt-1">{busy ? 'Hashing and registering with the server.' : 'or click to browse files'}</p>
           <div className="mt-6 flex items-center justify-center gap-4 text-xs text-ink/50">
-            <span>Markdown</span>·<span>Plain text</span>·<span className="opacity-60">EPUB (server-only)</span>·<span className="opacity-60">DOCX (server-only)</span>
+            <span>Markdown</span>·<span>Plain text</span>·<span>EPUB</span>·<span>PDF</span>
           </div>
         </div>
 
@@ -99,7 +122,7 @@ export function UploadView({ onUploaded }: Props) {
                       className="w-full h-44 rounded-xl border border-ink/10 px-4 py-3 text-sm font-mono text-ink/80 focus:outline-none focus:border-peach"/>
             <div className="mt-3 flex justify-end">
               <PrimaryButton variant="dark"
-                             onClick={() => !busy && pastedText.trim() && processText({ text: pastedText, fileName: 'pasted.md', format: 'markdown' })}>
+                             onClick={() => !busy && pastedText.trim() && processUpload({ text: pastedText, fileName: 'pasted.md', format: 'markdown' })}>
                 Upload pasted text
               </PrimaryButton>
             </div>

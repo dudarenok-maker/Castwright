@@ -6,6 +6,7 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { Stage, View } from '../lib/types';
 import type { ListenerApp, Chapter } from '../lib/types';
+import { DEFAULT_MODEL } from '../lib/models';
 import type { RootState } from './index';
 
 const READY_DEFAULTS = { currentChapterId: 3, openProfileId: null as string | null };
@@ -26,6 +27,7 @@ export interface UiState {
   showRevisionPlayer: boolean;
   showDriftReport: boolean;
   previewMode: boolean;
+  selectedModel: string;
 }
 
 const initialState: UiState = {
@@ -39,6 +41,7 @@ const initialState: UiState = {
   showRevisionPlayer: false,
   showDriftReport: false,
   previewMode: false,
+  selectedModel: DEFAULT_MODEL,
 };
 
 export const uiSlice = createSlice({
@@ -109,6 +112,7 @@ export const uiSlice = createSlice({
     setShowRevisionPlayer: (s, a: PayloadAction<boolean>) => { s.showRevisionPlayer = a.payload; },
     setShowDriftReport:    (s, a: PayloadAction<boolean>) => { s.showDriftReport = a.payload; },
     setPreviewMode:        (s, a: PayloadAction<boolean>) => { s.previewMode = a.payload; },
+    setSelectedModel:      (s, a: PayloadAction<string>) => { s.selectedModel = a.payload; },
   },
 });
 

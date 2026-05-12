@@ -76,9 +76,7 @@ export const ANALYSIS_NORTHERN_STAR: AnalysisFixture = {
   ],
   characters: initialCharacters,
   chapters:   initialChapters,
-  // Sentence schema diverges from the spec — see lib/types.ts. Cast to satisfy
-  // the AnalyseResponse parent type.
-  sentences:  initialSentences as unknown as AnalyseResponse['sentences'],
+  sentences:  initialSentences,
   libraryMatches: [
     { characterId: 'narrator', voiceId: 'v_anders', confidence: 0.94 },
   ],

@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev": "concurrently -k -n frontend,server -c blue,magenta \"npm:dev:frontend\" \"npm:dev:server\"",
+    "dev:frontend": "vite",
+    "dev:server": "npm --prefix server run dev",
+    "build": "tsc -b && vite build && npm --prefix server run build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && npm --prefix server run typecheck",
     "lint": "eslint . --ext .ts,.tsx,.js,.jsx",
     "openapi:types": "openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts"
   },
@@ -23,6 +25,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",
     "autoprefixer": "^10.4.20",
+    "concurrently": "^8.2.2",
     "openapi-typescript": "^7.0.0",
     "postcss": "^8.4.45",
     "tailwindcss": "^3.4.10",

@@ -8,52 +8,48 @@ import type { AnalyseResponse } from '../lib/types';
 interface Props {
   manuscriptId: string | null | undefined;
   title?: string | null;
+  model?: string;
   onComplete: (payload: AnalyseResponse) => void;
 }
 
-const SNIPPETS: Record<number, string[]> = {
-  1: ['Resolved attribution: Captain Halloran (88% confidence)', 'New character: Eliza Gray', 'New character: Marcus the Cook', 'Resolved attribution: Narrator'],
-  2: ['Halloran: "thirty winters at sea" → age inference 50–60s', 'Eliza: high frequency of imperatives → defiant', 'Marcus: self-directed speech mode detected', 'Narrator: long subordinate clauses, restrained register'],
-  3: ['Possible match: Narrator ↔ Anders Vale (Solway Bay) — 94%', 'No match: Captain Halloran', 'No match: Eliza Gray'],
-};
-
-export function AnalysingView({ manuscriptId, title, onComplete }: Props) {
+export function AnalysingView({ manuscriptId, title, model, onComplete }: Props) {
   const [phase, setPhase] = useState(0);
   const [phaseProgress, setPhaseProgress] = useState(0);
-  const [snippets, setSnippets] = useState<string[]>([]);
+  const [logs, setLogs] = useState<Record<number, string[]>>({});
+  const [error, setError] = useState<string | null>(null);
   const completedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const id = manuscriptId || 'mns_demo_' + Math.random().toString(36).slice(2, 8);
-      const payload = await api.analyseManuscript(id, {
-        onPhase: ({ phaseId, progress }) => {
-          if (cancelled) return;
-          setPhase(phaseId);
-          setPhaseProgress(progress);
-        },
-      });
-      if (cancelled || completedRef.current) return;
-      completedRef.current = true;
-      onComplete(payload);
+      try {
+        const payload = await api.analyseManuscript(id, {
+          model,
+          onPhase: ({ phaseId, progress }) => {
+            if (cancelled) return;
+            setPhase(phaseId);
+            setPhaseProgress(progress);
+          },
+          onLog: ({ phaseId, message }) => {
+            if (cancelled) return;
+            setLogs(prev => ({ ...prev, [phaseId]: [...(prev[phaseId] ?? []), message] }));
+          },
+        });
+        if (cancelled || completedRef.current) return;
+        completedRef.current = true;
+        onComplete(payload);
+      } catch (e) {
+        if (cancelled) return;
+        setError((e as Error).message || 'Analysis failed.');
+      }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manuscriptId]);
 
-  useEffect(() => {
-    const list = SNIPPETS[phase];
-    if (!list) { setSnippets([]); return; }
-    setSnippets([]);
-    const dur = ANALYSIS_PHASES[phase]?.duration || 2000;
-    const t = setInterval(() => {
-      setSnippets(s => s.length < list.length ? [...s, list[s.length]] : s);
-    }, dur / (list.length + 1));
-    return () => clearInterval(t);
-  }, [phase]);
-
   const overall = (phase + phaseProgress) / ANALYSIS_PHASES.length;
+  const activeLogs = logs[phase] ?? [];
 
   return (
     <div className="relative min-h-[calc(100vh-64px)] flex items-center justify-center px-6 py-16">
@@ -65,6 +61,15 @@ export function AnalysingView({ manuscriptId, title, onComplete }: Props) {
             <MixedHeading level="h1" regular="Reading" bold={title || 'The Northern Star'}/>
           </div>
           <p className="mt-4 text-ink/70">This usually takes 60 to 90 seconds.</p>
+          {error && (
+            <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-left">
+              <p className="text-sm font-semibold text-red-900">Analysis failed</p>
+              <p className="mt-1 text-sm text-red-800 break-words">{error}</p>
+              <p className="mt-2 text-xs text-red-700/80">
+                Check the server terminal and <code>server/handoff/outbox/*.errors.json</code> for details, then reload to retry.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="mb-8">
@@ -97,9 +102,9 @@ export function AnalysingView({ manuscriptId, title, onComplete }: Props) {
                       <div className="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
                         <div className="h-full bg-gradient-progress rounded-full" style={{ width: `${phaseProgress * 100}%` }}/>
                       </div>
-                      {snippets.length > 0 && (
+                      {activeLogs.length > 0 && (
                         <ul className="mt-3 space-y-1.5 text-xs font-mono text-ink/60">
-                          {snippets.map((s, i) => <li key={i} className="tick-up">{s}</li>)}
+                          {activeLogs.map((s, i) => <li key={i} className="tick-up">{s}</li>)}
                         </ul>
                       )}
                     </>

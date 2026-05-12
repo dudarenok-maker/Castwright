@@ -29,6 +29,7 @@ import { RegenerateModal } from './modals/regenerate';
 import { CharacterRegenerateModal } from './modals/character-regenerate';
 import { BatchCharacterRegenerateModal } from './modals/batch-character-regenerate';
 import { DriftReportModal } from './modals/drift-report';
+import { ProfileDrawer } from './modals/profile-drawer';
 import type { Character } from './lib/types';
 
 export function App() {
@@ -50,9 +51,13 @@ export function App() {
 
   const matchCharacter = ui.matchDetailFor ? characters.find(c => c.id === ui.matchDetailFor) ?? null : null;
   const matchVoice     = matchCharacter ? VOICE_LIBRARY.find(v => v.id === matchCharacter.voiceId) ?? null : null;
+  const profileCharacter = openProfileId ? characters.find(c => c.id === openProfileId) ?? null : null;
+  const profileVoice     = profileCharacter ? VOICE_LIBRARY.find(v => v.id === profileCharacter.voiceId) ?? null : null;
   const regenCharacter = ui.regenCharacterCtx ? characters.find(c => c.id === ui.regenCharacterCtx!.characterId) ?? null : null;
   const activeBook     = BOOKS.find(b => b.id === bookId);
-  const projectTitle   = (stageKind === 'upload' || stageKind === 'books') ? null : (activeBook?.title || 'The Northern Star');
+  const projectTitle   = (stageKind === 'upload' || stageKind === 'books')
+    ? null
+    : (manuscript.title || activeBook?.title || null);
   const trackChapter   = ui.currentTrack != null ? chapters.find(c => c.id === ui.currentTrack) ?? null : null;
   const trackIdx       = trackChapter ? chapters.indexOf(trackChapter) : -1;
   const prevTrackAvailable = trackIdx > 0;
@@ -98,6 +103,7 @@ export function App() {
         setView={(v) => dispatch(uiActions.changeView(v))}
         projectTitle={projectTitle}
         onHome={() => dispatch(uiActions.goHome())}
+        onTitleClick={stageKind === 'confirm' ? () => dispatch(uiActions.reanalyse()) : undefined}
         pendingRevisionsCount={pending.length}
         onOpenRevisions={() => dispatch(uiActions.setShowRevisionPlayer(true))}/>
 
@@ -116,6 +122,7 @@ export function App() {
         <AnalysingView
           manuscriptId={stage.kind === 'analysing' ? stage.manuscriptId : null}
           title={manuscript.title}
+          model={ui.selectedModel}
           onComplete={(payload) => {
             dispatch(castActions.hydrateFromAnalysis(payload));
             dispatch(chaptersActions.hydrateFromAnalysis(payload));
@@ -125,6 +132,7 @@ export function App() {
       )}
       {stageKind === 'confirm' && (
         <ConfirmCastView characters={characters} library={VOICE_LIBRARY}
+          title={manuscript.title}
           onConfirm={() => dispatch(uiActions.confirmCast())}
           onReanalyse={() => dispatch(uiActions.reanalyse())}/>
       )}
@@ -136,14 +144,13 @@ export function App() {
               currentChapterId={currentChapterId}
               setCurrentChapterId={(id) => dispatch(uiActions.setCurrentChapterId(id))}
               sentencesFromStore={manuscript.sentences}
+              onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
               onStartGenerating={() => dispatch(uiActions.changeView('generate'))}/>
           )}
           {view === 'cast' && (
             <CastView characters={characters} setCharacters={setCharacters} library={VOICE_LIBRARY}
               onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
-              openProfileId={openProfileId}
               onShowMatchDetail={(id) => dispatch(uiActions.setMatchDetailFor(id))}
-              onRegenerateCharacter={(charId) => dispatch(uiActions.setRegenCharacterCtx({ characterId: charId }))}
               onBatchRegenerate={(ids) => dispatch(uiActions.setBatchRegenIds(ids))}
               driftEvents={drift}
               onShowDrift={() => dispatch(uiActions.setShowDriftReport(true))}/>
@@ -229,6 +236,18 @@ export function App() {
             dispatch(uiActions.setRegenCharacterCtx({ characterId: charId, defaultChapterId: chapterId }));
           }}
           onDismiss={(eventId) => dispatch(revisionsActions.dismissDrift(eventId))}/>
+      )}
+      {profileCharacter && (
+        <ProfileDrawer
+          character={profileCharacter}
+          voice={profileVoice ?? undefined}
+          onClose={() => dispatch(uiActions.setOpenProfileId(null))}
+          onSave={(updated) => {
+            setCharacters(prev => prev.map(c => c.id === updated.id ? updated : c));
+            dispatch(uiActions.setOpenProfileId(null));
+          }}
+          onShowMatchDetail={(id) => dispatch(uiActions.setMatchDetailFor(id))}
+          onRegenerateCharacter={(charId) => dispatch(uiActions.setRegenCharacterCtx({ characterId: charId }))}/>
       )}
       {ui.showRevisionPlayer && pending[0] && (
         <RevisionDiffPlayer revision={pending[0]}

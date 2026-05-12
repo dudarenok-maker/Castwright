@@ -1,11 +1,13 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from 'react';
 import {
   IconChevR, IconChevL, IconPlus, IconCheck, IconClose, IconArrowDn,
-  IconSpinner, IconWarning,
+  IconSpinner, IconWarning, IconEye,
 } from '../lib/icons';
 import { SectionLabel, ColorDot, Pill } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
 import { initialSentences } from '../data/sentences';
+import { useAppDispatch } from '../store';
+import { manuscriptActions } from '../store/manuscript-slice';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 
 interface Props {
@@ -14,15 +16,19 @@ interface Props {
   currentChapterId: number | null;
   setCurrentChapterId: (id: number) => void;
   sentencesFromStore?: Sentence[];
+  onOpenProfile?: (id: string) => void;
   onStartGenerating?: () => void;
 }
 
 interface IndexedSentence extends Sentence { absIdx: number; }
-interface Segment { id: string; charId: string; sentences: IndexedSentence[]; }
+interface Segment { id: string; characterId: string; sentences: IndexedSentence[]; }
 interface Drag { boundaryIdx: number; anchorY: number; candidateSentenceIdx: number | null; }
 
-export function ManuscriptView({ characters, chapters, currentChapterId, setCurrentChapterId, sentencesFromStore, onStartGenerating }: Props) {
-  const [sentences, setSentences] = useState<Sentence[]>(sentencesFromStore || initialSentences);
+export function ManuscriptView({ characters, chapters, currentChapterId, setCurrentChapterId, sentencesFromStore, onOpenProfile, onStartGenerating }: Props) {
+  const dispatch = useAppDispatch();
+  /* Sentences are the single source of truth in Redux. All edits go via
+     dispatch(manuscriptActions.*) — no local copy. */
+  const sentences: Sentence[] = sentencesFromStore ?? initialSentences;
   const [selectedSeg, setSelectedSeg] = useState<string | null>(null);
   const [filterChar, setFilterChar] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -31,21 +37,23 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
   const prevChapter = chapters[currentIdx - 1];
   const nextChapter = chapters[currentIdx + 1];
   const containerRef = useRef<HTMLDivElement>(null);
+  const articleRef = useRef<HTMLElement>(null);
+  const selection = useSentenceSelection(articleRef);
 
   const segments: Segment[] = useMemo(() => {
     const segs: Segment[] = [];
     for (let i = 0; i < sentences.length; i++) {
       const s = sentences[i];
       const last = segs[segs.length - 1];
-      if (last && last.charId === s.charId) last.sentences.push({ ...s, absIdx: i });
-      else segs.push({ id: `seg_${segs.length}`, charId: s.charId, sentences: [{ ...s, absIdx: i }] });
+      if (last && last.characterId === s.characterId) last.sentences.push({ ...s, absIdx: i });
+      else segs.push({ id: `seg_${segs.length}`, characterId: s.characterId, sentences: [{ ...s, absIdx: i }] });
     }
     return segs;
   }, [sentences]);
 
   const counts = useMemo(() => {
     const m: Record<string, number> = {};
-    for (const s of sentences) m[s.charId] = (m[s.charId] || 0) + 1;
+    for (const s of sentences) m[s.characterId] = (m[s.characterId] || 0) + 1;
     return m;
   }, [sentences]);
 
@@ -63,15 +71,16 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
     if (!segAbove || !segBelow || d.candidateSentenceIdx == null) return;
     const anchorIdx = segBelow.sentences[0].absIdx;
     const candIdx = d.candidateSentenceIdx;
-
-    setSentences(prev => prev.map((s, i) => {
-      if (candIdx < anchorIdx) {
-        if (i >= candIdx && i < anchorIdx) return { ...s, charId: segBelow.charId };
-      } else if (candIdx >= anchorIdx) {
-        if (i >= anchorIdx && i <= candIdx) return { ...s, charId: segAbove.charId };
-      }
-      return s;
-    }));
+    const ids: number[] = [];
+    let newCharacterId: string;
+    if (candIdx < anchorIdx) {
+      newCharacterId = segBelow.characterId;
+      for (let i = candIdx; i < anchorIdx; i++) ids.push(sentences[i].id);
+    } else {
+      newCharacterId = segAbove.characterId;
+      for (let i = anchorIdx; i <= candIdx; i++) ids.push(sentences[i].id);
+    }
+    if (ids.length) dispatch(manuscriptActions.setSentencesCharacter({ sentenceIds: ids, characterId: newCharacterId }));
   }
 
   useEffect(() => {
@@ -97,8 +106,31 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drag?.boundaryIdx]);
 
-  function reassignSentence(absIdx: number, newCharId: string) {
-    setSentences(prev => prev.map((s, i) => i === absIdx ? { ...s, charId: newCharId } : s));
+  function reassignSegment(seg: Segment, newCharId: string) {
+    dispatch(manuscriptActions.setSentencesCharacter({
+      sentenceIds: seg.sentences.map(s => s.id),
+      characterId: newCharId,
+    }));
+  }
+
+  function assignSelectionTo(newCharacterId: string) {
+    if (!selection) return;
+    const sentence = sentences.find(s => s.id === selection.sentenceId);
+    if (!sentence) return;
+    const len = sentence.text.length;
+    /* Whole sentence selected → simple reassign. Otherwise split into
+       three pieces with the middle reassigned. The reducer drops empty
+       pieces, so leading/trailing zero-length splits are safe. */
+    if (selection.start <= 0 && selection.end >= len) {
+      dispatch(manuscriptActions.setSentenceCharacter({ sentenceId: selection.sentenceId, characterId: newCharacterId }));
+    } else {
+      dispatch(manuscriptActions.splitSentence({
+        sentenceId: selection.sentenceId,
+        offsets: [selection.start, selection.end],
+        characterIds: [sentence.characterId, newCharacterId, sentence.characterId],
+      }));
+    }
+    window.getSelection()?.removeAllRanges();
   }
 
   return (
@@ -107,7 +139,9 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
         <aside className="bg-white rounded-3xl border border-ink/10 p-5 shadow-card">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-bold text-ink">Chapters</h2>
-            <span className="text-xs text-ink/50">{chapters.length}</span>
+            <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
+              {chapters.length}
+            </span>
           </div>
           <ul className="space-y-0.5">
             {chapters.map(ch => {
@@ -135,22 +169,43 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
         <aside className="bg-white rounded-3xl border border-ink/10 p-5 shadow-card">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-bold text-ink">Detected</h2>
-            <span className="text-xs text-ink/50">{characters.length}</span>
+            <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
+              {characters.length}
+            </span>
           </div>
           <ul className="space-y-1">
             {characters.map(c => {
               const active = filterChar === c.id;
+              const cc = CHAR_COLORS[c.color as CharColor] ?? CHAR_COLORS.narrator;
               return (
                 <li key={c.id}>
-                  <button onClick={() => setFilterChar(active ? null : c.id)}
-                          className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors ${active ? 'bg-ink/[0.05]' : 'hover:bg-ink/[0.03]'}`}>
-                    <ColorDot color={c.color as CharColor} size={10}/>
-                    <span className="flex-1 min-w-0">
-                      <span className="block text-sm font-medium text-ink truncate">{c.name}</span>
-                      <span className="block text-xs text-ink/50 truncate">{c.role}</span>
-                    </span>
-                    <span className="text-xs text-ink/50 tabular-nums">{counts[c.id] || 0}</span>
-                  </button>
+                  <div className={`group/char relative w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
+                       style={active ? { background: cc.tint, boxShadow: `inset 0 0 0 1px ${cc.ring}` } : undefined}>
+                    {active && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full" style={{ background: cc.hex }}/>}
+                    <button onClick={() => setFilterChar(active ? null : c.id)}
+                            className="flex-1 min-w-0 flex items-center gap-3 text-left"
+                            title={active ? 'Clear filter' : 'Filter manuscript to this character'}>
+                      <ColorDot color={c.color as CharColor} size={10}/>
+                      <span className="flex-1 min-w-0">
+                        <span className={`block text-sm truncate ${active ? 'font-bold' : 'font-medium text-ink'}`}
+                              style={active ? { color: cc.hex } : undefined}>
+                          {c.name}
+                        </span>
+                        <span className="block text-xs text-ink/50 truncate">{c.role}</span>
+                      </span>
+                      <span className={`text-xs tabular-nums ${active ? 'font-semibold' : 'text-ink/50'}`}
+                            style={active ? { color: cc.hex } : undefined}>
+                        {counts[c.id] || 0}
+                      </span>
+                    </button>
+                    {onOpenProfile && (
+                      <button onClick={() => onOpenProfile(c.id)}
+                              title={`Open ${c.name} profile`}
+                              className={`p-1.5 rounded-lg text-ink/40 hover:text-ink hover:bg-ink/[0.05] transition-opacity ${active ? 'opacity-100' : 'opacity-0 group-hover/char:opacity-100 focus:opacity-100'}`}>
+                        <IconEye className="w-4 h-4"/>
+                      </button>
+                    )}
+                  </div>
                 </li>
               );
             })}
@@ -162,6 +217,7 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
           <div className="text-xs text-ink/50 leading-relaxed space-y-2">
             <p><span className="font-semibold text-ink/70">Move a boundary:</span> drag the line between paragraphs and drop onto any sentence.</p>
             <p><span className="font-semibold text-ink/70">Reassign:</span> hover any paragraph and use the dropdown.</p>
+            <p><span className="font-semibold text-ink/70">Profile:</span> click a character's name to open their full profile.</p>
           </div>
         </aside>
       </div>
@@ -199,17 +255,18 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
         </div>
 
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10">
-          <article className="font-serif text-[17px] leading-[1.8] text-ink/90">
+          <article ref={articleRef} className="font-serif text-[17px] leading-[1.8] text-ink/90">
             {segments.map((seg, segIdx) => (
               <Fragment key={seg.id}>
                 <SegmentRow
                   seg={seg}
                   characters={characters}
                   selected={selectedSeg === seg.id}
-                  dimmed={!!filterChar && filterChar !== seg.charId}
+                  dimmed={!!filterChar && filterChar !== seg.characterId}
                   drag={drag}
                   onSelect={() => setSelectedSeg(seg.id)}
-                  onReassign={(absIdx, newCharId) => reassignSentence(absIdx, newCharId)}
+                  onReassignSegment={(newCharId) => reassignSegment(seg, newCharId)}
+                  onOpenProfile={onOpenProfile}
                   findChar={findChar}
                 />
                 {segIdx < segments.length - 1 && (
@@ -228,11 +285,17 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
           findChar={findChar}
           onClose={() => setSelectedSeg(null)}
           onReassignSegment={(seg, newCharId) => {
-            setSentences(prev => prev.map((s, i) => seg.sentences.some(ss => ss.absIdx === i) ? { ...s, charId: newCharId } : s));
+            reassignSegment(seg, newCharId);
             setSelectedSeg(null);
           }}
+          onReassignSentence={(sentenceId, newCharId) => {
+            dispatch(manuscriptActions.setSentenceCharacter({ sentenceId, characterId: newCharId }));
+          }}
+          onOpenProfile={onOpenProfile}
         />
       </aside>
+
+      <SelectionPopover sel={selection} characters={characters} onAssign={assignSelectionTo}/>
     </div>
   );
 }
@@ -244,14 +307,16 @@ interface SegmentRowProps {
   dimmed: boolean;
   drag: Drag | null;
   onSelect: () => void;
-  onReassign: (absIdx: number, newCharId: string) => void;
+  onReassignSegment: (newCharId: string) => void;
+  onOpenProfile?: (id: string) => void;
   findChar: (id: string) => Character | undefined;
 }
 
-function SegmentRow({ seg, characters, selected, dimmed, drag, onSelect, onReassign, findChar }: SegmentRowProps) {
+function SegmentRow({ seg, characters, selected, dimmed, drag, onSelect, onReassignSegment, onOpenProfile, findChar }: SegmentRowProps) {
   const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const c = CHAR_COLORS[(findChar(seg.charId)?.color as CharColor) || 'narrator'];
+  const char = findChar(seg.characterId);
+  const c = CHAR_COLORS[(char?.color as CharColor)] ?? CHAR_COLORS.narrator;
 
   return (
     <div className={`group relative -mx-4 px-4 py-2 rounded-xl transition-all cursor-pointer ${dimmed ? 'opacity-40' : ''} ${selected ? 'ring-1 ring-peach/40' : 'hover:bg-ink/[0.02]'}`}
@@ -262,9 +327,18 @@ function SegmentRow({ seg, characters, selected, dimmed, drag, onSelect, onReass
       <span className="absolute inset-0 rounded-xl pointer-events-none" style={{ background: c.tint }}/>
       <div className="relative">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: c.hex }}>
-            {findChar(seg.charId)?.name}
-          </span>
+          {onOpenProfile && char ? (
+            <button onClick={(e) => { e.stopPropagation(); onOpenProfile(char.id); }}
+                    title={`Open ${char.name} profile`}
+                    className="text-[11px] uppercase tracking-wider font-semibold hover:underline underline-offset-2"
+                    style={{ color: c.hex }}>
+              {char.name}
+            </button>
+          ) : (
+            <span className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: c.hex }}>
+              {char?.name}
+            </span>
+          )}
           {seg.sentences.some(s => s.confidence != null && s.confidence < 0.75) && (
             <Pill color="warning">Low confidence</Pill>
           )}
@@ -277,10 +351,10 @@ function SegmentRow({ seg, characters, selected, dimmed, drag, onSelect, onReass
               {menuOpen && (
                 <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-ink/10 rounded-xl shadow-card py-1 z-10" onClick={(e) => e.stopPropagation()}>
                   {characters.map(cc => (
-                    <button key={cc.id} onClick={() => { onReassign(seg.sentences[0].absIdx, cc.id); setMenuOpen(false); }}
+                    <button key={cc.id} onClick={() => { onReassignSegment(cc.id); setMenuOpen(false); }}
                             className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-ink/[0.04] text-left text-sm">
                       <ColorDot color={cc.color as CharColor}/><span className="flex-1">{cc.name}</span>
-                      {cc.id === seg.charId && <IconCheck className="w-3.5 h-3.5 text-ink/60"/>}
+                      {cc.id === seg.characterId && <IconCheck className="w-3.5 h-3.5 text-ink/60"/>}
                     </button>
                   ))}
                 </div>
@@ -289,14 +363,18 @@ function SegmentRow({ seg, characters, selected, dimmed, drag, onSelect, onReass
           </span>
         </div>
         <div>
-          {seg.sentences.map(s => {
+          {seg.sentences.map((s, i) => {
             const isCandidate = drag && drag.candidateSentenceIdx === s.absIdx;
+            const isLast = i === seg.sentences.length - 1;
             return (
-              <span key={s.id}
-                    data-sentence-idx={s.absIdx}
-                    className={`inline transition-colors ${isCandidate ? 'sentence-candidate' : ''}`}>
-                {s.text}{' '}
-              </span>
+              <Fragment key={s.id}>
+                <span data-sentence-id={s.id}
+                      data-sentence-idx={s.absIdx}
+                      className={`inline transition-colors ${isCandidate ? 'sentence-candidate' : ''}`}>
+                  {s.text}
+                </span>
+                {!isLast && ' '}
+              </Fragment>
             );
           })}
         </div>
@@ -324,17 +402,23 @@ interface InspectorProps {
   findChar: (id: string) => Character | undefined;
   onClose: () => void;
   onReassignSegment: (seg: Segment, newCharId: string) => void;
+  onReassignSentence: (sentenceId: number, newCharId: string) => void;
+  onOpenProfile?: (id: string) => void;
 }
 
-function SegmentInspector({ seg, characters, findChar, onClose, onReassignSegment }: InspectorProps) {
+function SegmentInspector({ seg, characters, findChar, onClose, onReassignSegment, onReassignSentence, onOpenProfile }: InspectorProps) {
   if (!seg) return (
     <div className="bg-white rounded-3xl border border-dashed border-ink/15 p-6 text-sm text-ink/50">
-      Select a paragraph to inspect or reassign all of it at once.
+      <p className="font-medium text-ink/70">Select a paragraph to inspect or reassign.</p>
+      <p className="mt-2 leading-relaxed">
+        Or <span className="font-medium text-ink/70">highlight any text</span> inside a sentence to split it off
+        and assign that piece to a different character — useful when a dialogue tag got lumped in with the spoken line.
+      </p>
     </div>
   );
-  const c  = findChar(seg.charId);
+  const c  = findChar(seg.characterId);
   if (!c) return null;
-  const cc = CHAR_COLORS[c.color as CharColor];
+  const cc = CHAR_COLORS[c.color as CharColor] ?? CHAR_COLORS.narrator;
   const minConf = Math.min(...seg.sentences.map(s => s.confidence ?? 1));
   return (
     <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
@@ -344,6 +428,13 @@ function SegmentInspector({ seg, characters, findChar, onClose, onReassignSegmen
           <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">Selected segment</p>
           <h3 className="text-base font-bold text-ink truncate">{c.name}</h3>
         </div>
+        {onOpenProfile && (
+          <button onClick={() => onOpenProfile(c.id)}
+                  title={`Open ${c.name} profile`}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-semibold text-ink/70 hover:text-ink hover:bg-ink/[0.05]">
+            <IconEye className="w-3.5 h-3.5"/> Profile
+          </button>
+        )}
         <button onClick={onClose} className="p-1.5 rounded-full hover:bg-ink/5 text-ink/60"><IconClose className="w-4 h-4"/></button>
       </div>
       <div className="px-5 mt-4">
@@ -358,18 +449,117 @@ function SegmentInspector({ seg, characters, findChar, onClose, onReassignSegmen
       <div className="px-5 mt-5">
         <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">Reassign whole segment to</p>
         <div className="flex flex-col gap-1">
-          {characters.map(cand => (
-            <button key={cand.id} onClick={() => onReassignSegment(seg, cand.id)}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors ${cand.id === seg.charId ? 'bg-ink/[0.04]' : 'hover:bg-ink/[0.03]'}`}>
-              <ColorDot color={cand.color as CharColor}/>
-              <span className="text-sm text-ink flex-1">{cand.name}</span>
-              {cand.id === seg.charId && <IconCheck className="w-4 h-4 text-ink/70"/>}
-            </button>
-          ))}
+          {characters.map(cand => {
+            const active = cand.id === seg.characterId;
+            const candCc = CHAR_COLORS[cand.color as CharColor] ?? CHAR_COLORS.narrator;
+            return (
+              <button key={cand.id} onClick={() => onReassignSegment(seg, cand.id)}
+                      className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
+                      style={active ? { background: candCc.tint, boxShadow: `inset 0 0 0 1px ${candCc.ring}` } : undefined}>
+                {active && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full" style={{ background: candCc.hex }}/>}
+                <ColorDot color={cand.color as CharColor}/>
+                <span className={`text-sm flex-1 ${active ? 'font-bold' : 'text-ink'}`}
+                      style={active ? { color: candCc.hex } : undefined}>
+                  {cand.name}
+                </span>
+                {active && <IconCheck className="w-4 h-4" style={{ color: candCc.hex }}/>}
+              </button>
+            );
+          })}
         </div>
       </div>
-      <div className="p-5 mt-4 border-t border-ink/10 text-xs text-ink/50 leading-relaxed">
-        Tip: to split this segment further, drag the boundary line above or below it onto a sentence inside.
+      {seg.sentences.length > 1 && (
+        <div className="px-5 mt-5">
+          <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">Per-sentence reassign</p>
+          <ul className="space-y-2">
+            {seg.sentences.map(s => (
+              <li key={s.id} className="bg-canvas/60 rounded-xl p-3">
+                <p className="text-xs text-ink/80 leading-snug line-clamp-3 font-serif">{s.text}</p>
+                <details className="mt-2">
+                  <summary className="text-[11px] text-ink/60 cursor-pointer hover:text-ink">Reassign just this one</summary>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {characters.map(cand => (
+                      <button key={cand.id} onClick={() => onReassignSentence(s.id, cand.id)}
+                              className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] ${cand.id === seg.characterId ? 'bg-ink/[0.06] text-ink/60' : 'bg-white border border-ink/10 hover:border-ink/30'}`}>
+                        <ColorDot color={cand.color as CharColor} size={8}/>
+                        <span>{cand.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="p-5 mt-4 border-t border-ink/10 text-xs text-ink/50 leading-relaxed space-y-1">
+        <p><span className="font-semibold text-ink/70">Highlight text</span> inside any sentence to split it and assign that piece elsewhere.</p>
+        <p><span className="font-semibold text-ink/70">Drag a boundary</span> onto a sentence to move the whole-paragraph cut.</p>
+      </div>
+    </div>
+  );
+}
+
+/* ── Selection-based split popover ─────────────────────────────────────── */
+
+interface SelectionInfo {
+  sentenceId: number;
+  start: number;
+  end: number;
+  rect: DOMRect;
+}
+
+function useSentenceSelection(containerRef: RefObject<HTMLElement | null>): SelectionInfo | null {
+  const [sel, setSel] = useState<SelectionInfo | null>(null);
+  useEffect(() => {
+    const handler = () => {
+      const s = window.getSelection();
+      if (!s || s.isCollapsed || s.rangeCount === 0) { setSel(null); return; }
+      const range = s.getRangeAt(0);
+      const startEl = (range.startContainer.parentElement)?.closest('[data-sentence-id]') as HTMLElement | null;
+      const endEl   = (range.endContainer.parentElement)?.closest('[data-sentence-id]')   as HTMLElement | null;
+      if (!startEl || startEl !== endEl) { setSel(null); return; }
+      if (containerRef.current && !containerRef.current.contains(startEl)) { setSel(null); return; }
+      const sentenceId = Number(startEl.getAttribute('data-sentence-id'));
+      if (!Number.isFinite(sentenceId)) { setSel(null); return; }
+      const start = range.startOffset;
+      const end   = range.endOffset;
+      if (start === end) { setSel(null); return; }
+      const rect = range.getBoundingClientRect();
+      setSel({ sentenceId, start: Math.min(start, end), end: Math.max(start, end), rect });
+    };
+    document.addEventListener('selectionchange', handler);
+    return () => document.removeEventListener('selectionchange', handler);
+  }, [containerRef]);
+  return sel;
+}
+
+interface SelectionPopoverProps {
+  sel: SelectionInfo | null;
+  characters: Character[];
+  onAssign: (characterId: string) => void;
+}
+
+function SelectionPopover({ sel, characters, onAssign }: SelectionPopoverProps) {
+  if (!sel) return null;
+  const top  = sel.rect.top - 8;
+  const left = sel.rect.left + sel.rect.width / 2;
+  return (
+    <div style={{ position: 'fixed', top, left, transform: 'translate(-50%, -100%)', zIndex: 60 }}
+         className="bg-white rounded-2xl border border-ink/10 shadow-card p-2 min-w-[200px]"
+         /* preventDefault on mousedown keeps the text selection alive until
+            we read it inside onAssign. */
+         onMouseDown={(e) => e.preventDefault()}>
+      <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold px-2 pt-1">Assign selection to</p>
+      <div className="flex flex-col gap-0.5 mt-1 max-h-64 overflow-y-auto">
+        {characters.map(c => (
+          <button key={c.id}
+                  onMouseDown={(e) => { e.preventDefault(); onAssign(c.id); }}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-ink/[0.04] text-left">
+            <ColorDot color={c.color as CharColor}/>
+            <span className="text-sm text-ink">{c.name}</span>
+          </button>
+        ))}
       </div>
     </div>
   );

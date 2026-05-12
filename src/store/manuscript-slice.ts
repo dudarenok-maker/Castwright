@@ -48,6 +48,52 @@ export const manuscriptSlice = createSlice({
       s.sourceText = null;
       s.sentences = initialSentences;
     },
+
+    /* User edit: reassign a single sentence to a different character. */
+    setSentenceCharacter: (s, a: PayloadAction<{ sentenceId: number; characterId: string }>) => {
+      const sent = s.sentences.find(x => x.id === a.payload.sentenceId);
+      if (sent) sent.characterId = a.payload.characterId;
+    },
+
+    /* User edit: reassign a batch of sentences at once. Used by the
+       boundary-drag handle and the segment inspector. */
+    setSentencesCharacter: (s, a: PayloadAction<{ sentenceIds: number[]; characterId: string }>) => {
+      const ids = new Set(a.payload.sentenceIds);
+      for (const sent of s.sentences) {
+        if (ids.has(sent.id)) sent.characterId = a.payload.characterId;
+      }
+    },
+
+    /* User edit: split a sentence's text at the given offsets, producing
+       N + 1 pieces, each assigned to its own characterId. Offsets are
+       0-based character positions within the original sentence text.
+       characterIds.length must equal offsets.length + 1. The first piece
+       keeps the original sentence's id; subsequent pieces get new ids
+       (max + 1, +2, …) inserted right after it. Empty pieces are skipped. */
+    splitSentence: (s, a: PayloadAction<{ sentenceId: number; offsets: number[]; characterIds: string[] }>) => {
+      const idx = s.sentences.findIndex(x => x.id === a.payload.sentenceId);
+      if (idx < 0) return;
+      const original = s.sentences[idx];
+      const text = original.text;
+      const sorted = [...a.payload.offsets].sort((x, y) => x - y);
+      const bounds = [0, ...sorted, text.length];
+      const maxId = s.sentences.reduce((m, x) => Math.max(m, x.id), 0);
+      const pieces: typeof s.sentences = [];
+      let newIdCounter = maxId;
+      for (let i = 0; i < bounds.length - 1; i++) {
+        const piece = text.slice(bounds[i], bounds[i + 1]);
+        if (!piece) continue;
+        const isFirst = pieces.length === 0;
+        pieces.push({
+          ...original,
+          id: isFirst ? original.id : ++newIdCounter,
+          text: piece,
+          characterId: a.payload.characterIds[i] ?? original.characterId,
+        });
+      }
+      if (pieces.length === 0) return;
+      s.sentences.splice(idx, 1, ...pieces);
+    },
   },
 });
 

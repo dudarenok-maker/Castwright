@@ -9,6 +9,13 @@ without changing component code.
 - `npm run typecheck` — `tsc --noEmit`.
 - `npm run build` — production build into `dist/`.
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
+- `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
+  (Node 20.6+ native `process.loadEnvFile`, no dotenv dep).
+  - `ANALYZER=manual` (default) — writes prompts to `server/handoff/inbox/`, waits
+    for the user to drop JSON into `server/handoff/outbox/` (file-drop cowork flow).
+  - `ANALYZER=gemini` + `GEMINI_API_KEY=…` — calls the free-tier Gemini API
+    directly. Optional `GEMINI_MODEL` (default `gemini-2.5-flash`; flip to
+    `gemini-3-flash` without code changes). See `server/.env.example`.
 
 ## Layout
 - `src/main.tsx` — entry; mounts `<App/>` inside `<Provider>`.
