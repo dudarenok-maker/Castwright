@@ -26,12 +26,5 @@ yarn-error.log*
 # Test output
 coverage/
 
-# Prototype artifacts (not needed in source control once migration starts)
-app/index.html
-app/*.jsx
-# Keep these — they're reference material:
-!app/ARCHITECTURE.md
-!app/openapi.yaml
-
 # Uploads dir (sandbox-only)
 uploads/
