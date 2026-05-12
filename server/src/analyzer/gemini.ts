@@ -10,12 +10,12 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GoogleGenAI } from '@google/genai';
 import type { z } from 'zod';
-import { writeInbox, outboxPath, errorPath } from '../handoff/protocol.js';
+import { writeInbox, outboxPath, errorPath, type HandoffKey } from '../handoff/protocol.js';
 import {
   stage1Schema,
-  stage2Schema,
+  stage2ChapterSchema,
   type Stage1Output,
-  type Stage2Output,
+  type Stage2ChapterOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall } from './index.js';
 
@@ -70,23 +70,30 @@ export class GeminiAnalyzer implements Analyzer {
   }
 
   async runStage1(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage1Output> {
-    return this.runStage(manuscriptId, 1, promptMd, stage1Schema, call);
+    return this.runStage(manuscriptId, '1', 1, promptMd, stage1Schema, call);
   }
 
-  async runStage2(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage2Output> {
-    return this.runStage(manuscriptId, 2, promptMd, stage2Schema, call);
+  async runStage2Chapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<Stage2ChapterOutput> {
+    const key = `2-ch${chapterId}` as const;
+    return this.runStage(manuscriptId, key, 2, promptMd, stage2ChapterSchema, call);
   }
 
   private async runStage<T>(
     manuscriptId: string,
-    stage: 1 | 2,
+    key: HandoffKey,
+    skillStage: 1 | 2,
     promptMd: string,
     schema: z.ZodType<T>,
     call: StageCall,
   ): Promise<T> {
-    await writeInbox(manuscriptId, stage, promptMd);
+    await writeInbox(manuscriptId, key, promptMd);
 
-    const skill = await loadSkill(stage);
+    const skill = await loadSkill(skillStage);
     const fullPrompt = buildGeminiPrompt(skill, promptMd);
 
     const start = Date.now();
@@ -95,25 +102,25 @@ export class GeminiAnalyzer implements Analyzer {
       : null;
 
     try {
-      const firstText = await this.generate([
+      const firstText = await this.generateWithRetry([
         { role: 'user', parts: [{ text: fullPrompt }] },
       ]);
 
       const firstAttempt = parseAndValidate(firstText, schema);
       if (firstAttempt.ok) {
-        await persistResponse(manuscriptId, stage, firstText);
+        await persistResponse(manuscriptId, key, firstText);
         return firstAttempt.value;
       }
 
       // Retry once with the validation errors fed back.
       await writeFile(
-        errorPath(manuscriptId, stage),
+        errorPath(manuscriptId, key),
         JSON.stringify({ kind: firstAttempt.kind, detail: firstAttempt.detail, attempt: 1 }, null, 2),
         'utf8',
       );
 
       const followup = buildRetryMessage(firstAttempt);
-      const secondText = await this.generate([
+      const secondText = await this.generateWithRetry([
         { role: 'user', parts: [{ text: fullPrompt }] },
         { role: 'model', parts: [{ text: firstText }] },
         { role: 'user', parts: [{ text: followup }] },
@@ -121,12 +128,12 @@ export class GeminiAnalyzer implements Analyzer {
 
       const secondAttempt = parseAndValidate(secondText, schema);
       if (secondAttempt.ok) {
-        await persistResponse(manuscriptId, stage, secondText);
+        await persistResponse(manuscriptId, key, secondText);
         return secondAttempt.value;
       }
 
       await writeFile(
-        errorPath(manuscriptId, stage),
+        errorPath(manuscriptId, key),
         JSON.stringify(
           {
             kind: secondAttempt.kind,
@@ -140,10 +147,32 @@ export class GeminiAnalyzer implements Analyzer {
         'utf8',
       );
       throw new Error(
-        `Gemini stage ${stage} failed validation after retry: ${secondAttempt.kind} — ${summariseDetail(secondAttempt.detail)}`,
+        `Gemini ${key} failed validation after retry: ${secondAttempt.kind} — ${summariseDetail(secondAttempt.detail)}`,
       );
     } finally {
       if (tick) clearInterval(tick);
+    }
+  }
+
+  /* Single-retry policy for transient server errors (500/503/504). 429s are
+     deliberately *not* retried — both flavors are counterproductive:
+       • daily-quota 429s won't recover until reset; retries just confirm the
+         block.
+       • per-minute throttle 429s are best handled by letting the analysis
+         loop's natural per-chapter pacing drift past the window, not by
+         hammering with backoff inside one call.
+     The route layer surfaces 429s to the UI with the friendly "switch
+     model or wait" hint; the user retries explicitly when ready. */
+  private async generateWithRetry(
+    contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
+  ): Promise<string> {
+    try {
+      return await this.generate(contents);
+    } catch (err) {
+      if (!isRetryable5xx(err)) throw err;
+      console.warn(`[gemini] transient ${describeStatus(err)} — retrying once in 3s`);
+      await sleep(3000);
+      return await this.generate(contents);
     }
   }
 
@@ -161,6 +190,24 @@ export class GeminiAnalyzer implements Analyzer {
     }
     return text;
   }
+}
+
+function isRetryable5xx(err: unknown): boolean {
+  const status = (err as { status?: number })?.status;
+  return status === 500 || status === 503 || status === 504;
+}
+
+function describeStatus(err: unknown): string {
+  const status = (err as { status?: number })?.status;
+  if (status === 429) return '429 rate-limit';
+  if (status === 503) return '503 unavailable';
+  if (status === 500) return '500 internal';
+  if (status === 504) return '504 timeout';
+  return String(status ?? 'unknown');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
 }
 
 type ParseResult<T> =
@@ -199,6 +246,6 @@ function summariseDetail(detail: unknown): string {
   }
 }
 
-async function persistResponse(manuscriptId: string, stage: 1 | 2, raw: string): Promise<void> {
-  await writeFile(outboxPath(manuscriptId, stage), raw, 'utf8');
+async function persistResponse(manuscriptId: string, key: HandoffKey, raw: string): Promise<void> {
+  await writeFile(outboxPath(manuscriptId, key), raw, 'utf8');
 }

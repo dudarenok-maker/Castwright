@@ -24,6 +24,11 @@ export const characterSchema = z.object({
   scenes:      z.number().int().nonnegative().optional(),
   attributes:  z.array(z.string()).optional(),
   tone:        toneSchema.optional(),
+  /* Optional voice-shaping hints. The skill prompt asks for these so the
+     TTS picker doesn't have to scrape pronouns out of the description. Kept
+     optional so previously cached analyses still validate. */
+  gender:      z.enum(['male', 'female', 'neutral']).optional(),
+  ageRange:    z.enum(['child', 'teen', 'adult', 'elderly']).optional(),
   description: z.string().optional(),
   evidence:    z.array(evidenceSchema).optional(),
   voiceState:  z.enum(['generated', 'tuned', 'reused', 'locked']).optional(),
@@ -55,7 +60,14 @@ export const stage2Schema = z.object({
   sentences: z.array(sentenceSchema).min(1),
 }).strict();
 
+/* Stage 2 now runs per-chapter — same shape, narrower scope. The route loops
+   over chapters and concatenates the per-chapter sentence arrays. Keeping
+   `stage2Schema` for backwards compat with any callers that still want the
+   whole-manuscript shape (none today). */
+export const stage2ChapterSchema = stage2Schema;
+
 export type Stage1Output = z.infer<typeof stage1Schema>;
 export type Stage2Output = z.infer<typeof stage2Schema>;
+export type Stage2ChapterOutput = z.infer<typeof stage2ChapterSchema>;
 export type CharacterOutput = z.infer<typeof characterSchema>;
 export type SentenceOutput = z.infer<typeof sentenceSchema>;

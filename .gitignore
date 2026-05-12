@@ -32,6 +32,15 @@ uploads/
 # Server handoff runtime drops
 server/handoff/inbox/*
 server/handoff/outbox/*
+server/handoff/cache/*
 !server/handoff/inbox/.gitkeep
 !server/handoff/outbox/.gitkeep
+!server/handoff/cache/.gitkeep
 server/dist/
+
+# Server-generated TTS audio cache
+server/audio/
+
+# On-disk book workspace (manuscripts + .audiobook/ state + audio output).
+# Default location is <repo>/audiobook-workspace/; override via WORKSPACE_DIR.
+audiobook-workspace/

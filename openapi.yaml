@@ -25,6 +25,91 @@ servers:
 # Paths
 # ---------------------------------------------------------------------
 paths:
+  /api/library:
+    get:
+      summary: List books in the on-disk workspace
+      operationId: getLibrary
+      description: |
+        Walks the workspace `books/<Author>/<Series>/<Book>/` tree and returns
+        the grouped library used by the frontend's book-library view. Status
+        per book is derived from the presence of `.audiobook/state.json`,
+        `cast.json`, and the audio output count.
+      responses:
+        '200':
+          description: Library tree grouped by author and series
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LibraryResponse' }
+
+  /api/import:
+    post:
+      summary: Parse a manuscript and stage it for confirmation
+      operationId: importManuscript
+      description: |
+        Parse-only: returns the parsed text plus best-effort author/series/title
+        metadata, and stashes the result in memory under a short tempId. Nothing
+        is written to disk. The frontend then renders a confirm-metadata form;
+        on submit, POST /api/books drains the staging entry into the workspace.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:     { type: string }
+                fileName: { type: string }
+      responses:
+        '200':
+          description: Parsed candidate ready for confirmation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportResponse' }
+        '415':
+          description: Unsupported manuscript format
+
+  /api/books:
+    post:
+      summary: Confirm metadata and write a book into the workspace
+      operationId: confirmBook
+      description: |
+        Drains the staged import identified by `tempId`, writes
+        `manuscript.<ext>` and `.audiobook/state.json` into
+        `books/<Author>/<Series>/<Title>/`, and returns the resulting bookId +
+        manuscriptId. Returns 409 with a `suggestedTitle` if a book with the
+        same slug already exists.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmBookRequest' }
+      responses:
+        '201':
+          description: Book saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfirmBookResponse' }
+        '400':
+          description: Missing required fields
+        '409':
+          description: A book with this slug already exists on disk
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:          { type: string, example: 'slug_collision' }
+                  suggestedTitle: { type: string }
+        '410':
+          description: Import tempId expired or already consumed
+
   /api/manuscripts:
     post:
       summary: Upload a manuscript
@@ -76,6 +161,36 @@ paths:
                   - $ref: '#/components/schemas/AnalysePhaseEvent'
                   - $ref: '#/components/schemas/AnalyseResponse'
 
+  /api/voices/{voiceId}/sample:
+    post:
+      summary: Synthesise a ~12-second voice preview
+      operationId: getVoiceSample
+      description: |
+        Renders a short sample of the voice via the configured TTS provider
+        (free-tier Gemini). The server caches the WAV on disk keyed by
+        `voiceId` + `modelKey`; subsequent requests with the same key return
+        immediately with `cached: true`. The frontend plays the URL with a
+        plain `<audio>` element.
+      parameters:
+        - { in: path, name: voiceId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VoiceSampleRequest' }
+      responses:
+        '200':
+          description: Sample is ready (either cached or freshly synthesised)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoiceSample' }
+        '400':
+          description: Invalid model key
+        '429':
+          description: Upstream TTS provider is rate-limited
+        '502':
+          description: Upstream TTS provider failed
+
   /api/books/{bookId}/voice-match:
     post:
       summary: Match characters to existing library voices
@@ -104,21 +219,38 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/VoiceMatchResponse' }
 
-  /api/books/{bookId}/generation/start:
+  /api/books/{bookId}/generation:
     post:
-      summary: Kick off audiobook generation jobs
-      operationId: startGeneration
-      parameters:
-        - { in: path, name: bookId, required: true, schema: { type: string } }
-      responses:
-        '202': { description: Generation queued }
-
-  /api/books/{bookId}/generation/stream:
-    get:
-      summary: Generation progress stream (SSE / WebSocket)
+      summary: Generate chapter audio with progress streaming
       operationId: streamGeneration
+      description: |
+        Single long-running POST that streams generation progress as SSE
+        events. Mirrors the analysis route shape (`POST /api/manuscripts/{id}/
+        analysis`). Each `data: <json>` payload follows the GenerationTick
+        schema. Synthesises chapters one at a time; per-chapter completion
+        writes `audio/<chapterSlug>.wav` + `audio/<chapterSlug>.segments.json`
+        into the workspace book directory.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [modelKey]
+              properties:
+                modelKey:
+                  type: string
+                  enum: [gemini-2.5-flash, gemini-3.1-flash]
+                  description: TTS model key; resolves to a Gemini model id server-side.
+                chapterIds:
+                  type: array
+                  items: { type: integer }
+                  description: Optional subset of chapters to (re)generate. Defaults to all chapters lacking an audio file.
+                force:
+                  type: boolean
+                  description: Re-synthesise even if an audio file already exists on disk.
       responses:
         '200':
           description: Tick stream
@@ -140,6 +272,55 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ChapterAudio' }
 
+  /api/voices:
+    get:
+      summary: List voices derived from every confirmed cast in the workspace
+      operationId: getVoices
+      description: |
+        Walks `books/<Author>/<Series>/<Book>/.audiobook/cast.json` for every
+        book where `state.castConfirmed === true` and aggregates the characters
+        into a deduplicated voice library. There is no separate voice store —
+        a "voice" is the reusable identity of a previously-cast character. The
+        `id` matches what the TTS layer hashes for prebuilt-voice picking, so
+        cached samples at `/audio/voices/{id}-{modelKey}.wav` line up.
+      parameters:
+        - in: query
+          name: currentBookId
+          required: false
+          schema: { type: string }
+          description: "When set, voices belonging to that book are tagged source=current."
+      responses:
+        '200':
+          description: Derived voice library, pinned first then by usage descending
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoiceLibraryResponse' }
+
+  /api/voices/{voiceId}/pin:
+    put:
+      summary: Pin or unpin a voice in the workspace library
+      operationId: setVoicePin
+      description: |
+        Toggles a workspace-level pin flag persisted to
+        `audiobook-workspace/voices.json`. Pinned voices sort to the top of
+        the library response so favourites stay at hand across books.
+      parameters:
+        - { in: path, name: voiceId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pinned]
+              properties:
+                pinned: { type: boolean }
+      responses:
+        '204':
+          description: Pin flag updated
+        '400':
+          description: Missing or non-boolean `pinned` field
+
   /api/books/{bookId}/revisions:
     get:
       summary: Pending A/B revisions + voice-drift events
@@ -159,6 +340,129 @@ paths:
 # ---------------------------------------------------------------------
 components:
   schemas:
+
+    # --- Library ----------------------------------------------------
+    LibraryResponse:
+      type: object
+      required: [authors]
+      properties:
+        authors:
+          type: array
+          items: { $ref: '#/components/schemas/LibraryAuthor' }
+
+    LibraryAuthor:
+      type: object
+      required: [name, series]
+      properties:
+        name: { type: string }
+        series:
+          type: array
+          items: { $ref: '#/components/schemas/LibrarySeries' }
+
+    LibrarySeries:
+      type: object
+      required: [name, books]
+      properties:
+        name: { type: string }
+        books:
+          type: array
+          items: { $ref: '#/components/schemas/LibraryBook' }
+
+    LibraryBook:
+      type: object
+      required: [bookId, title, author, series, status, chapterCount, completedChapters, characterCount, voiceCount, lastWorkedOn, coverGradient, isStandalone]
+      properties:
+        bookId:           { type: string, description: "slug(author)__slug(series)__slug(title)" }
+        title:            { type: string }
+        author:           { type: string }
+        series:           { type: string }
+        seriesPosition:
+          type: integer
+          nullable: true
+        isStandalone:     { type: boolean }
+        status:
+          type: string
+          enum: [not_analysed, analysing, cast_pending, generating, complete, unreadable, orphaned]
+        manuscriptId:     { type: string }
+        chapterCount:     { type: integer }
+        completedChapters: { type: integer }
+        characterCount:   { type: integer }
+        voiceCount:       { type: integer }
+        matchedFromLibrary: { type: integer }
+        progress:         { type: number, minimum: 0, maximum: 1 }
+        runtime:          { type: string, description: "human-formatted total runtime, e.g. '4h 38m'" }
+        lastWorkedOn:     { type: string, description: "human-formatted relative time, e.g. '2 min ago'" }
+        coverGradient:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items: { type: string, description: "CSS color literal" }
+        pinned:           { type: boolean }
+
+    # --- Import + confirm-metadata ---------------------------------
+    ImportCandidate:
+      type: object
+      required: [format, title, sourceText, wordCount, byteSize, chapters]
+      properties:
+        format:         { type: string, enum: [markdown, plaintext, epub, pdf] }
+        title:          { type: string }
+        author:         { type: string, nullable: true }
+        series:         { type: string, nullable: true }
+        seriesPosition:
+          type: integer
+          nullable: true
+        sourceText:     { type: string }
+        wordCount:      { type: integer }
+        byteSize:       { type: integer }
+        chapters:
+          type: array
+          items:
+            type: object
+            required: [id, title]
+            properties:
+              id:    { type: integer }
+              title: { type: string }
+
+    ImportResponse:
+      type: object
+      required: [tempId, candidate]
+      properties:
+        tempId:    { type: string, example: "imp_abc123" }
+        candidate: { $ref: '#/components/schemas/ImportCandidate' }
+
+    ConfirmBookRequest:
+      type: object
+      required: [tempId, author, title, isStandalone]
+      properties:
+        tempId:       { type: string }
+        author:       { type: string }
+        series:       { type: string }
+        seriesPosition:
+          type: integer
+          nullable: true
+        title:        { type: string }
+        isStandalone: { type: boolean }
+
+    ConfirmBookResponse:
+      allOf:
+        - $ref: '#/components/schemas/UploadResponse'
+        - type: object
+          required: [bookId, author, series, isStandalone, paths]
+          properties:
+            bookId:       { type: string }
+            author:       { type: string }
+            series:       { type: string }
+            seriesPosition:
+              type: integer
+              nullable: true
+            isStandalone: { type: boolean }
+            paths:
+              type: object
+              required: [bookDir, manuscript, dotAudiobook]
+              properties:
+                bookDir:      { type: string }
+                manuscript:   { type: string }
+                dotAudiobook: { type: string }
 
     # --- Upload -----------------------------------------------------
     UploadResponse:
@@ -280,6 +584,114 @@ components:
         totalLines:  { type: integer }
         errorReason: { type: string, nullable: true }
 
+    # --- Voice samples ---------------------------------------------
+    VoiceSampleRequest:
+      type: object
+      required: [modelKey]
+      properties:
+        modelKey:
+          type: string
+          enum: [gemini-2.5-flash, gemini-3.1-flash]
+          description: UI-stable key; server resolves to the actual Gemini TTS model id via env.
+        voice:
+          type: object
+          description: Frontend Voice payload (attributes drive the prebuilt-voice picker).
+          properties:
+            id:         { type: string }
+            character:  { type: string }
+            attributes: { type: array, items: { type: string } }
+        characterHint:
+          type: object
+          description: |
+            Extra signals the server uses to pick a sensible prebuilt Gemini
+            voice when the library `attributes` only carry personality traits
+            (e.g. "sarcastic", "patient") rather than vocal descriptors. The
+            description is scanned for he/she pronouns; gender + ageRange take
+            precedence when present; tone is used as a tiebreaker. Evidence
+            quotes (real manuscript lines) drive the sample script when
+            present so every voice actually sounds like that character.
+          properties:
+            description: { type: string }
+            role:        { type: string }
+            gender:      { type: string, enum: [male, female, neutral] }
+            ageRange:    { type: string, enum: [child, teen, adult, elderly] }
+            evidence:
+              type: array
+              items: { type: string }
+              description: Manuscript lines spoken by or about this character.
+            tone:
+              type: object
+              properties:
+                warmth:    { type: integer }
+                pace:      { type: integer }
+                authority: { type: integer }
+                emotion:   { type: integer }
+        text:
+          type: string
+          description: Optional override script. Capped to ~30 words server-side to stay near 12 s.
+
+    VoiceSample:
+      type: object
+      required: [url, cached, modelKey]
+      properties:
+        url:
+          type: string
+          description: Path under the server's static /audio mount; play directly with <audio>.
+        durationSec:
+          type: number
+          nullable: true
+          description: Computed from the synthesised PCM length. Null when the response was served from cache.
+        cached:    { type: boolean }
+        modelKey:
+          type: string
+          enum: [gemini-2.5-flash, gemini-3.1-flash]
+
+    # --- Voice library ---------------------------------------------
+    TtsVoiceAssignment:
+      type: object
+      required: [provider, name, description]
+      description: |
+        The TTS provider voice this Voice resolves to. Computed server-side by
+        the same picker that synthesises samples and chapters, so the value
+        previewed in the UI matches what the user actually hears.
+      properties:
+        provider:    { type: string, enum: [gemini] }
+        name:        { type: string, description: "Provider-specific prebuilt voice name, e.g. 'Charon'." }
+        description: { type: string, description: "Public personality label from the provider's voice table, e.g. 'Informative'." }
+
+    Voice:
+      type: object
+      required: [id, character, bookTitle, bookId, attributes, gradient, usedIn, source, ttsVoice]
+      properties:
+        id:         { type: string, description: "Stable id used to hash a TTS prebuilt voice. Defaults to character.voiceId or character.id." }
+        character:  { type: string }
+        bookTitle:  { type: string }
+        bookId:     { type: string }
+        attributes:
+          type: array
+          items: { type: string }
+        gradient:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items: { type: string, description: "CSS color literal" }
+        usedIn:     { type: integer, minimum: 0, description: "Number of distinct books that contain this voiceId." }
+        source:
+          type: string
+          enum: [current, library]
+          description: "'current' when the voice belongs to the currently-open book; 'library' otherwise."
+        reusable:   { type: boolean, description: "Marker for narrator-like voices that span an entire book." }
+        pinned:     { type: boolean, description: "Workspace-level pin flag from audiobook-workspace/voices.json." }
+        ttsVoice:   { $ref: '#/components/schemas/TtsVoiceAssignment' }
+
+    VoiceLibraryResponse:
+      type: object
+      required: [voices]
+      properties:
+        voices:
+          type: array
+          items: { $ref: '#/components/schemas/Voice' }
+
     # --- Audio ------------------------------------------------------
     ChapterAudio:
       type: object
@@ -377,6 +789,17 @@ components:
             emotion:   { type: integer }
         voiceId:     { type: string }
         voiceState:  { type: string, enum: [generated, tuned, reused, locked] }
+        gender:
+          type: string
+          enum: [male, female, neutral]
+          description: |
+            Voice gender inferred during analysis. Drives the prebuilt-voice
+            picker so e.g. a young boy gets a male voice instead of a neutral
+            default. Optional — older cached analyses won't have it.
+        ageRange:
+          type: string
+          enum: [child, teen, adult, elderly]
+          description: Coarse age bucket used as a register hint for TTS.
         description: { type: string }
         evidence:
           type: array

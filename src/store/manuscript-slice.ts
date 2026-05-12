@@ -4,7 +4,9 @@
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { initialSentences } from '../data/sentences';
-import type { Sentence, UploadResponse, AnalyseResponse } from '../lib/types';
+import type {
+  Sentence, UploadResponse, AnalyseResponse, ImportCandidate, BookStateJson,
+} from '../lib/types';
 
 export interface ManuscriptState {
   manuscriptId: string | null;
@@ -13,6 +15,8 @@ export interface ManuscriptState {
   wordCount: number;
   sourceText: string | null;
   sentences: Sentence[];
+  /** Parsed-but-not-yet-confirmed import (sits between Import and Confirm screens). */
+  importCandidate: ImportCandidate | null;
 }
 
 const initialState: ManuscriptState = {
@@ -22,6 +26,7 @@ const initialState: ManuscriptState = {
   wordCount: 0,
   sourceText: null,
   sentences: initialSentences,
+  importCandidate: null,
 };
 
 export const manuscriptSlice = createSlice({
@@ -35,9 +40,30 @@ export const manuscriptSlice = createSlice({
       s.format = format;
       s.wordCount = wordCount;
       s.sourceText = sourceText;
+      s.importCandidate = null;
+    },
+    setImportCandidate: (s, a: PayloadAction<ImportCandidate | null>) => {
+      s.importCandidate = a.payload;
     },
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
       const sentences = a.payload.sentences as unknown as Sentence[] | undefined;
+      if (sentences?.length) s.sentences = sentences;
+    },
+
+    /* Rehydrate from a disk-resident book state + manuscript-edits.json.
+       Used when opening a previously-analysed book. */
+    hydrateFromBookState: (s, a: PayloadAction<{
+      state: BookStateJson;
+      sentences: Sentence[] | null;
+      wordCount?: number | null;
+      format?: UploadResponse['format'] | null;
+    }>) => {
+      const { state, sentences, wordCount, format } = a.payload;
+      s.manuscriptId = state.manuscriptId;
+      s.title = state.title;
+      s.importCandidate = null;
+      if (typeof wordCount === 'number' && wordCount > 0) s.wordCount = wordCount;
+      if (format) s.format = format;
       if (sentences?.length) s.sentences = sentences;
     },
     reset: (s) => {
@@ -47,6 +73,7 @@ export const manuscriptSlice = createSlice({
       s.wordCount = 0;
       s.sourceText = null;
       s.sentences = initialSentences;
+      s.importCandidate = null;
     },
 
     /* User edit: reassign a single sentence to a different character. */

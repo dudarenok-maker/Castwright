@@ -4,7 +4,7 @@
    calls runStage1 / runStage2; both implementations preserve the SSE
    onWaiting callback so the progress bar animates in either mode. */
 
-import type { Stage1Output, Stage2Output } from '../handoff/schemas.js';
+import type { Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import { ManualAnalyzer } from './manual.js';
 import { GeminiAnalyzer } from './gemini.js';
 
@@ -14,7 +14,11 @@ export interface StageCall {
 
 export interface Analyzer {
   runStage1(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage1Output>;
-  runStage2(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage2Output>;
+  /* Stage 2 runs per chapter so we stay under model context windows and the
+     free-tier rate limit can recover between calls on transient 429/5xx.
+     The route iterates chapters and concatenates the per-chapter sentence
+     arrays. */
+  runStage2Chapter(manuscriptId: string, chapterId: number, promptMd: string, call: StageCall): Promise<Stage2ChapterOutput>;
 }
 
 export interface SelectAnalyzerOptions {
@@ -31,7 +35,7 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): Analyzer {
     if (!apiKey) {
       throw new Error('ANALYZER=gemini requires GEMINI_API_KEY to be set (see server/.env.example).');
     }
-    const model = opts.model ?? process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
+    const model = opts.model ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
     return new GeminiAnalyzer({ apiKey, model });
   }
   if (mode !== 'manual') {

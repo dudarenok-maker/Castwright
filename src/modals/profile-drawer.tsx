@@ -1,8 +1,14 @@
 import { useState } from 'react';
-import { IconClose, IconWaveform, IconRefresh, IconStar, IconLock, IconPlus } from '../lib/icons';
+import { IconClose, IconWaveform, IconRefresh, IconStar, IconLock, IconPlus, IconPause, IconSpinner } from '../lib/icons';
+import { TTS_MODEL_OPTIONS } from '../lib/tts-models';
+import type { TtsModelKey } from '../lib/types';
 import { Avatar, VoiceSwatch, Pill, PrimaryButton } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
 import type { Character, Voice, CharColor } from '../lib/types';
+import { api } from '../lib/api';
+import { useSamplePlayback } from '../lib/use-sample-playback';
+import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
+import { useAppSelector } from '../store';
 
 interface Props {
   character: Character;
@@ -17,10 +23,61 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
   const [tone, setTone] = useState(character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 });
   const [regenerating, setRegenerating] = useState(false);
   const c = CHAR_COLORS[character.color as CharColor] ?? CHAR_COLORS.narrator;
+  const playback = useSamplePlayback();
+  const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
+  const [sampleLoading, setSampleLoading] = useState(false);
+  const [sampleError, setSampleError] = useState<string | null>(null);
+
+  /* Sample subject: a library voice when one is matched, otherwise a
+     character-derived stub so brand-new (unmatched) characters can still
+     preview their attributes. Server file is namespaced `char-<id>` for
+     character samples to keep them separate from library voice samples. */
+  const sampleVoiceId  = voice ? voice.id : `char-${character.id}`;
+  const sampleSubject = voice ?? {
+    id: sampleVoiceId,
+    character: character.name,
+    bookTitle: '',
+    bookId: '',
+    attributes: character.attributes ?? [],
+    gradient: ['#999999', '#666666'] as [string, string],
+    usedIn: 0,
+    source: 'current' as const,
+    ttsVoice: resolveTtsVoiceForCharacter(character),
+  };
+  const sampleUrl = sampleUrlFor(sampleVoiceId, ttsModelKey);
+  const isPlayingThis = playback.isPlaying && playback.currentUrl === sampleUrl;
 
   function regenerate() {
     setRegenerating(true);
     setTimeout(() => setRegenerating(false), 1800);
+  }
+
+  async function playSample() {
+    if (isPlayingThis) { playback.stop(); return; }
+    setSampleError(null);
+    setSampleLoading(true);
+    const evidence = (character.evidence ?? []).map(e => e.quote).filter((q): q is string => typeof q === 'string' && q.length > 0);
+    const characterHint = {
+      description: character.description,
+      role: character.role,
+      gender: (character as Character & { gender?: 'male' | 'female' | 'neutral' }).gender,
+      ageRange: (character as Character & { ageRange?: 'child' | 'teen' | 'adult' | 'elderly' }).ageRange,
+      tone: character.tone,
+      evidence: evidence.length ? evidence : undefined,
+    };
+    // eslint-disable-next-line no-console
+    console.log('[sample] requesting', { voiceId: sampleVoiceId, modelKey: ttsModelKey });
+    try {
+      const res = await api.getVoiceSample({ voiceId: sampleVoiceId, voice: sampleSubject, modelKey: ttsModelKey, characterHint });
+      // eslint-disable-next-line no-console
+      console.log('[sample] server returned', res);
+      if (!res.url) throw new Error('Voice samples need the live server (VITE_USE_MOCKS=false).');
+      await playback.play(res.url);
+    } catch (err) {
+      setSampleError((err as Error).message);
+    } finally {
+      setSampleLoading(false);
+    }
   }
 
   return (
@@ -62,9 +119,42 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
                 ) : (
                   <p className="text-xs text-ink/60 mt-0.5">Synthesised from {character.lines} lines of dialogue</p>
                 )}
-                <button className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-magenta">
-                  <IconWaveform className="w-3.5 h-3.5"/> Play 12s sample
-                </button>
+                <div className="mt-2">
+                  <button
+                    onClick={playSample}
+                    disabled={sampleLoading}
+                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                      sampleLoading
+                        ? 'bg-magenta/10 text-magenta cursor-wait'
+                        : isPlayingThis
+                          ? 'bg-magenta text-white hover:bg-magenta/90'
+                          : 'bg-magenta/10 text-magenta hover:bg-magenta/20'
+                    }`}
+                  >
+                    {sampleLoading ? (
+                      <>
+                        <IconSpinner className="w-3.5 h-3.5"/>
+                        <span>Generating with {ttsModelLabel(ttsModelKey)}… <span className="font-normal text-magenta/70">(5–10s)</span></span>
+                      </>
+                    ) : isPlayingThis ? (
+                      <>
+                        <IconPause className="w-3.5 h-3.5"/>
+                        <span>Stop sample</span>
+                      </>
+                    ) : (
+                      <>
+                        <IconWaveform className="w-3.5 h-3.5"/>
+                        <span>Play 12s sample</span>
+                      </>
+                    )}
+                  </button>
+                  {!voice && (
+                    <p className="mt-1 text-[11px] text-ink/50">No library voice matched yet — sampling directly from {character.name}'s attributes.</p>
+                  )}
+                  {sampleError && (
+                    <p className="mt-1 text-[11px] text-red-600/90 font-medium">⚠ {sampleError}</p>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -125,6 +215,19 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
       </aside>
     </>
   );
+}
+
+/* The server names cached sample files deterministically as
+   /audio/voices/{voiceId}-{modelKey}.wav (see server/src/routes/voice-sample.ts).
+   We mirror that here so the drawer knows whether the global audio singleton
+   is currently playing *this* voice's sample without round-tripping to the
+   server first. */
+function sampleUrlFor(voiceId: string, modelKey: string): string {
+  return `/audio/voices/${encodeURIComponent(voiceId)}-${modelKey}.wav`;
+}
+
+function ttsModelLabel(key: TtsModelKey): string {
+  return TTS_MODEL_OPTIONS.find(o => o.id === key)?.label ?? key;
 }
 
 interface ToneSliderProps { label: string; value: number; onChange: (v: number) => void; leftLabel: string; rightLabel: string; }

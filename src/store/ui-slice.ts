@@ -4,9 +4,10 @@
    at the slice top — they cut across stages and have their own lifecycles. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { Stage, View } from '../lib/types';
+import type { Stage, View, TtsModelKey } from '../lib/types';
 import type { ListenerApp, Chapter } from '../lib/types';
 import { DEFAULT_MODEL } from '../lib/models';
+import { DEFAULT_TTS_MODEL } from '../lib/tts-models';
 import type { RootState } from './index';
 
 const READY_DEFAULTS = { currentChapterId: 3, openProfileId: null as string | null };
@@ -28,6 +29,7 @@ export interface UiState {
   showDriftReport: boolean;
   previewMode: boolean;
   selectedModel: string;
+  ttsModelKey: TtsModelKey;
 }
 
 const initialState: UiState = {
@@ -42,6 +44,7 @@ const initialState: UiState = {
   showDriftReport: false,
   previewMode: false,
   selectedModel: DEFAULT_MODEL,
+  ttsModelKey: DEFAULT_TTS_MODEL,
 };
 
 export const uiSlice = createSlice({
@@ -50,8 +53,9 @@ export const uiSlice = createSlice({
   reducers: {
     /* ── Stage transitions ──────────────────────────────────────────── */
     goHome: (s) => { s.stage = { kind: 'books' }; },
+    openVoices: (s) => { s.stage = { kind: 'voices' }; },
+    openChangelog: (s) => { s.stage = { kind: 'changelog' }; },
     startNewBook: (s) => {
-      if (s.stage.kind !== 'books') return;
       s.stage = { kind: 'upload' };
     },
     manuscriptUploaded: (s, a: PayloadAction<{ bookId?: string; manuscriptId?: string | null }>) => {
@@ -67,13 +71,13 @@ export const uiSlice = createSlice({
       if (s.stage.kind !== 'confirm') return;
       s.stage = { kind: 'ready', bookId: s.stage.bookId, view: 'manuscript', ...READY_DEFAULTS };
     },
-    reanalyse: (s) => {
+    reanalyse: (s, a: PayloadAction<{ manuscriptId?: string | null } | undefined>) => {
       if (s.stage.kind !== 'confirm') return;
-      s.stage = { kind: 'analysing', bookId: s.stage.bookId };
+      s.stage = { kind: 'analysing', bookId: s.stage.bookId, manuscriptId: a.payload?.manuscriptId ?? null };
     },
-    openBook: (s, a: PayloadAction<{ id: string; status: string }>) => {
-      const { id, status } = a.payload;
-      if (status === 'analysing')         s.stage = { kind: 'analysing', bookId: id };
+    openBook: (s, a: PayloadAction<{ id: string; status: string; manuscriptId?: string | null }>) => {
+      const { id, status, manuscriptId } = a.payload;
+      if (status === 'analysing')         s.stage = { kind: 'analysing', bookId: id, manuscriptId: manuscriptId ?? null };
       else if (status === 'cast_pending') s.stage = { kind: 'confirm',   bookId: id };
       else {
         const view: View = status === 'complete' ? 'listen'
@@ -113,6 +117,7 @@ export const uiSlice = createSlice({
     setShowDriftReport:    (s, a: PayloadAction<boolean>) => { s.showDriftReport = a.payload; },
     setPreviewMode:        (s, a: PayloadAction<boolean>) => { s.previewMode = a.payload; },
     setSelectedModel:      (s, a: PayloadAction<string>) => { s.selectedModel = a.payload; },
+    setTtsModelKey:        (s, a: PayloadAction<TtsModelKey>) => { s.ttsModelKey = a.payload; },
   },
 });
 

@@ -2,7 +2,7 @@
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { initialChapters } from '../data/chapters';
-import type { Chapter, GenerationTick, AnalyseResponse } from '../lib/types';
+import type { Chapter, Character, GenerationTick, AnalyseResponse, BookStateJson } from '../lib/types';
 
 export interface ChaptersState { chapters: Chapter[]; paused: boolean; }
 
@@ -18,6 +18,30 @@ export const chaptersSlice = createSlice({
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
       const { chapters } = a.payload;
       if (chapters?.length) s.chapters = chapters;
+    },
+
+    /* Rebuild chapters from a disk-resident state.json + the set of completed
+       audio slugs. Used when opening a previously-analysed book. */
+    hydrateFromBookState: (s, a: PayloadAction<{
+      chapters: BookStateJson['chapters'];
+      completedSlugs: string[];
+      characters: Character[];
+    }>) => {
+      const { chapters, completedSlugs, characters } = a.payload;
+      const done = new Set(completedSlugs);
+      const perCharInitial: Record<string, 'done' | 'queued'> = {};
+      const queuedChar: Record<string, 'queued'> = {};
+      for (const c of characters) queuedChar[c.id] = 'queued';
+      s.chapters = chapters.map(c => ({
+        id: c.id,
+        title: c.title,
+        duration: c.duration ?? '00:00',
+        state: done.has(c.slug) ? 'done' : 'queued',
+        progress: done.has(c.slug) ? 1 : 0,
+        characters: done.has(c.slug)
+          ? Object.fromEntries(characters.map(ch => [ch.id, 'done' as const]))
+          : { ...queuedChar },
+      } as Chapter & { characters: typeof perCharInitial }));
     },
 
     applyGenerationTick: (s, a: PayloadAction<GenerationTick>) => {

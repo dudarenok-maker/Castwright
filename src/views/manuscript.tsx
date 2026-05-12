@@ -5,6 +5,7 @@ import {
 } from '../lib/icons';
 import { SectionLabel, ColorDot, Pill } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
+import { splitAudioTagSpans } from '../lib/audio-tags';
 import { initialSentences } from '../data/sentences';
 import { useAppDispatch } from '../store';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -371,7 +372,7 @@ function SegmentRow({ seg, characters, selected, dimmed, drag, onSelect, onReass
                 <span data-sentence-id={s.id}
                       data-sentence-idx={s.absIdx}
                       className={`inline transition-colors ${isCandidate ? 'sentence-candidate' : ''}`}>
-                  {s.text}
+                  {renderSentenceText(s.text)}
                 </span>
                 {!isLast && ' '}
               </Fragment>
@@ -474,7 +475,7 @@ function SegmentInspector({ seg, characters, findChar, onClose, onReassignSegmen
           <ul className="space-y-2">
             {seg.sentences.map(s => (
               <li key={s.id} className="bg-canvas/60 rounded-xl p-3">
-                <p className="text-xs text-ink/80 leading-snug line-clamp-3 font-serif">{s.text}</p>
+                <p className="text-xs text-ink/80 leading-snug line-clamp-3 font-serif">{renderSentenceText(s.text)}</p>
                 <details className="mt-2">
                   <summary className="text-[11px] text-ink/60 cursor-pointer hover:text-ink">Reassign just this one</summary>
                   <div className="mt-2 flex flex-wrap gap-1">
@@ -500,6 +501,34 @@ function SegmentInspector({ seg, characters, findChar, onClose, onReassignSegmen
   );
 }
 
+/* ── Inline audio-tag chip rendering ──────────────────────────────────────
+   Each rendered span carries `data-text-offset` so the selection hook can
+   reconstruct sentence-relative offsets across chip + text boundaries. */
+
+function renderSentenceText(text: string) {
+  const spans = splitAudioTagSpans(text);
+  if (spans.length === 0) return null;
+  let offset = 0;
+  return spans.map((sp, i) => {
+    const startOffset = offset;
+    const segText = sp.kind === 'tag' ? sp.raw : sp.text;
+    offset += segText.length;
+    if (sp.kind === 'tag') {
+      return (
+        <span key={i}
+              data-text-offset={startOffset}
+              className="inline-block align-baseline mx-[1px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider bg-peach/15 text-magenta border border-peach/30 select-text"
+              title={`Audio cue: ${sp.tag}`}>
+          {sp.raw}
+        </span>
+      );
+    }
+    return (
+      <span key={i} data-text-offset={startOffset}>{sp.text}</span>
+    );
+  });
+}
+
 /* ── Selection-based split popover ─────────────────────────────────────── */
 
 interface SelectionInfo {
@@ -509,6 +538,20 @@ interface SelectionInfo {
   rect: DOMRect;
 }
 
+/* Walks up from a Range endpoint to the nearest span carrying
+   `data-text-offset` and adds the in-node offset, giving the position
+   relative to the full `sentence.text` string. */
+function sentenceOffsetFromRangePoint(node: Node, offsetInNode: number): number | null {
+  const partEl = (node.nodeType === Node.TEXT_NODE
+    ? node.parentElement
+    : (node as HTMLElement)
+  )?.closest('[data-text-offset]') as HTMLElement | null;
+  if (!partEl) return null;
+  const base = Number(partEl.dataset.textOffset);
+  if (!Number.isFinite(base)) return null;
+  return base + offsetInNode;
+}
+
 function useSentenceSelection(containerRef: RefObject<HTMLElement | null>): SelectionInfo | null {
   const [sel, setSel] = useState<SelectionInfo | null>(null);
   useEffect(() => {
@@ -516,15 +559,21 @@ function useSentenceSelection(containerRef: RefObject<HTMLElement | null>): Sele
       const s = window.getSelection();
       if (!s || s.isCollapsed || s.rangeCount === 0) { setSel(null); return; }
       const range = s.getRangeAt(0);
-      const startEl = (range.startContainer.parentElement)?.closest('[data-sentence-id]') as HTMLElement | null;
-      const endEl   = (range.endContainer.parentElement)?.closest('[data-sentence-id]')   as HTMLElement | null;
+      const startParent = range.startContainer.nodeType === Node.TEXT_NODE
+        ? range.startContainer.parentElement
+        : range.startContainer as HTMLElement;
+      const endParent = range.endContainer.nodeType === Node.TEXT_NODE
+        ? range.endContainer.parentElement
+        : range.endContainer as HTMLElement;
+      const startEl = startParent?.closest('[data-sentence-id]') as HTMLElement | null;
+      const endEl   = endParent?.closest('[data-sentence-id]')   as HTMLElement | null;
       if (!startEl || startEl !== endEl) { setSel(null); return; }
       if (containerRef.current && !containerRef.current.contains(startEl)) { setSel(null); return; }
       const sentenceId = Number(startEl.getAttribute('data-sentence-id'));
       if (!Number.isFinite(sentenceId)) { setSel(null); return; }
-      const start = range.startOffset;
-      const end   = range.endOffset;
-      if (start === end) { setSel(null); return; }
+      const start = sentenceOffsetFromRangePoint(range.startContainer, range.startOffset);
+      const end   = sentenceOffsetFromRangePoint(range.endContainer,   range.endOffset);
+      if (start == null || end == null || start === end) { setSel(null); return; }
       const rect = range.getBoundingClientRect();
       setSel({ sentenceId, start: Math.min(start, end), end: Math.max(start, end), rect });
     };

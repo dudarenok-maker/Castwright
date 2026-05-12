@@ -1,0 +1,95 @@
+/* Mock workspace library used when VITE_USE_MOCKS=true.
+
+   The shape matches GET /api/library — the design experience is unchanged
+   from the static BOOKS seed in src/data/books.ts. Book IDs keep their
+   short prototype slugs ('ns', 'sb', etc.) so the existing hash routes and
+   analysis fixtures continue to resolve. */
+
+import type { LibraryResponse } from '../lib/types';
+
+export const MOCK_LIBRARY: LibraryResponse = {
+  authors: [
+    {
+      name: 'Mike Dudarenok',
+      series: [
+        {
+          name: 'Northern Coast Trilogy',
+          books: [
+            {
+              bookId: 'sb',
+              title: 'Solway Bay',
+              author: 'Mike Dudarenok',
+              series: 'Northern Coast Trilogy',
+              seriesPosition: 1,
+              isStandalone: false,
+              status: 'complete',
+              chapterCount: 18,
+              completedChapters: 18,
+              characterCount: 5,
+              voiceCount: 5,
+              progress: 1.0,
+              runtime: '11h 24m',
+              lastWorkedOn: '3 days ago',
+              coverGradient: ['#6B6663', '#1A1A1A'],
+            },
+            {
+              bookId: 'ns',
+              title: 'The Northern Star',
+              author: 'Mike Dudarenok',
+              series: 'Northern Coast Trilogy',
+              seriesPosition: 2,
+              isStandalone: false,
+              status: 'generating',
+              chapterCount: 7,
+              completedChapters: 2,
+              characterCount: 4,
+              voiceCount: 4,
+              progress: 0.42,
+              runtime: '4h 38m',
+              lastWorkedOn: '2 min ago',
+              coverGradient: ['#3C194F', '#0F0E0D'],
+              pinned: true,
+            },
+            {
+              bookId: 'cc',
+              title: "Carrick's Compass",
+              author: 'Mike Dudarenok',
+              series: 'Northern Coast Trilogy',
+              seriesPosition: 3,
+              isStandalone: false,
+              status: 'cast_pending',
+              chapterCount: 22,
+              completedChapters: 0,
+              characterCount: 6,
+              voiceCount: 3,
+              matchedFromLibrary: 3,
+              lastWorkedOn: 'Yesterday',
+              coverGradient: ['#D4A04E', '#7B5A26'],
+            },
+          ],
+        },
+        {
+          name: 'Standalones',
+          books: [
+            {
+              bookId: 'ts',
+              title: 'Twilight Stations',
+              author: 'Mike Dudarenok',
+              series: 'Standalones',
+              seriesPosition: null,
+              isStandalone: true,
+              status: 'analysing',
+              chapterCount: 0,
+              completedChapters: 0,
+              characterCount: 0,
+              voiceCount: 0,
+              progress: 0.34,
+              lastWorkedOn: 'Just now',
+              coverGradient: ['#A43C6C', '#3C194F'],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};

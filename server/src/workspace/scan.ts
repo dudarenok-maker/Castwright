@@ -1,0 +1,274 @@
+/* Walk the books/ tree (three levels: Author/Series/Book), merge each book's
+   .audiobook/state.json with its on-disk audio/ contents, and return a shape
+   matching the GET /api/library response. */
+
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  BOOKS_ROOT,
+  audioDir,
+  bookDirByDisplay,
+  castJsonPath,
+  dotAudiobook,
+  ensureWorkspace,
+  makeBookId,
+  stateJsonPath,
+} from './paths.js';
+import { readJson } from './state-io.js';
+
+export type LibraryBookStatus =
+  | 'not_analysed'
+  | 'analysing'
+  | 'cast_pending'
+  | 'generating'
+  | 'complete'
+  | 'unreadable'
+  | 'orphaned';
+
+export interface BookStateJson {
+  bookId: string;
+  manuscriptId: string;
+  title: string;
+  author: string;
+  series: string;
+  seriesPosition: number | null;
+  isStandalone: boolean;
+  manuscriptFile: string;       // e.g. 'manuscript.epub'
+  castConfirmed: boolean;
+  chapters: Array<{ id: number; title: string; slug: string; duration?: string }>;
+  coverGradient: [string, string];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LibraryBook {
+  bookId: string;
+  title: string;
+  author: string;
+  series: string;
+  seriesPosition: number | null;
+  isStandalone: boolean;
+  status: LibraryBookStatus;
+  manuscriptId?: string;
+  chapterCount: number;
+  completedChapters: number;
+  characterCount: number;
+  voiceCount: number;
+  matchedFromLibrary?: number;
+  progress?: number;
+  runtime?: string;
+  lastWorkedOn: string;
+  coverGradient: [string, string];
+  pinned?: boolean;
+}
+
+export interface LibrarySeries {
+  name: string;
+  books: LibraryBook[];
+}
+
+export interface LibraryAuthor {
+  name: string;
+  series: LibrarySeries[];
+}
+
+export interface LibraryResponse {
+  authors: LibraryAuthor[];
+}
+
+const MANUSCRIPT_EXTS = ['.epub', '.md', '.markdown', '.txt', '.pdf'];
+
+function listDirs(path: string): string[] {
+  if (!existsSync(path)) return [];
+  try {
+    return readdirSync(path, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => d.name);
+  } catch { return []; }
+}
+
+function listFiles(path: string): string[] {
+  if (!existsSync(path)) return [];
+  try {
+    return readdirSync(path, { withFileTypes: true })
+      .filter(d => d.isFile())
+      .map(d => d.name);
+  } catch { return []; }
+}
+
+function findManuscriptFile(bookDir: string): string | null {
+  const files = listFiles(bookDir);
+  for (const f of files) {
+    const lower = f.toLowerCase();
+    if (lower.startsWith('manuscript.') && MANUSCRIPT_EXTS.some(ext => lower.endsWith(ext))) {
+      return f;
+    }
+  }
+  return null;
+}
+
+function deterministicGradient(seed: string): [string, string] {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
+  const palette: Array<[string, string]> = [
+    ['#3C194F', '#0F0E0D'],
+    ['#6B6663', '#1A1A1A'],
+    ['#D4A04E', '#7B5A26'],
+    ['#A43C6C', '#3C194F'],
+    ['#1F3A5F', '#0A1628'],
+    ['#5C3A1E', '#2A1810'],
+    ['#3E5F4A', '#162820'],
+    ['#7A2E3C', '#2A0F14'],
+  ];
+  return palette[Math.abs(h) % palette.length];
+}
+
+function relativeTimeFromMs(then: number): string {
+  const diffMs = Date.now() - then;
+  const m = Math.round(diffMs / 60_000);
+  if (m < 1) return 'Just now';
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d === 1) return 'Yesterday';
+  if (d < 14) return `${d} days ago`;
+  return new Date(then).toLocaleDateString();
+}
+
+function mtimeMs(path: string): number {
+  try { return statSync(path).mtimeMs; } catch { return Date.now(); }
+}
+
+async function scanBook(author: string, series: string, title: string): Promise<LibraryBook | null> {
+  const bookDir = bookDirByDisplay(author, series, title);
+  const manuscriptFile = findManuscriptFile(bookDir);
+  const stateJson = stateJsonPath(bookDir);
+  const castJson = castJsonPath(bookDir);
+  const dotDir = dotAudiobook(bookDir);
+  const hasState = existsSync(stateJson);
+  const hasCast = existsSync(castJson);
+
+  // Folder with neither manuscript nor state — skip as not-a-book.
+  if (!manuscriptFile && !hasState) return null;
+
+  let state: BookStateJson | null = null;
+  let unreadable = false;
+  if (hasState) {
+    try {
+      state = await readJson<BookStateJson>(stateJson);
+    } catch {
+      unreadable = true;
+    }
+  }
+
+  const bookId = state?.bookId ?? makeBookId(author, series, title);
+  const coverGradient = state?.coverGradient ?? deterministicGradient(bookId);
+  const chapterCount = state?.chapters.length ?? 0;
+  const audioFiles = manuscriptFile ? listFiles(audioDir(bookDir)).filter(f => /\.(mp3|m4a|wav|opus)$/i.test(f)) : [];
+  const completedChapters = audioFiles.length;
+  const lastWorkedOn = relativeTimeFromMs(mtimeMs(existsSync(dotDir) ? dotDir : bookDir));
+
+  let status: LibraryBookStatus;
+  if (unreadable) status = 'unreadable';
+  else if (hasState && !manuscriptFile) status = 'orphaned';
+  else if (!hasState && manuscriptFile) status = 'not_analysed';
+  else if (state && !hasCast) status = 'analysing';
+  else if (state && hasCast && !state.castConfirmed) status = 'cast_pending';
+  else if (state && hasCast && state.castConfirmed && completedChapters < chapterCount) status = 'generating';
+  else status = 'complete';
+
+  const progress = chapterCount > 0 ? completedChapters / chapterCount : 0;
+
+  return {
+    bookId,
+    title: state?.title ?? title,
+    author: state?.author ?? author,
+    series: state?.series ?? series,
+    seriesPosition: state?.seriesPosition ?? null,
+    isStandalone: state?.isStandalone ?? false,
+    status,
+    manuscriptId: state?.manuscriptId,
+    chapterCount,
+    completedChapters,
+    characterCount: 0,         // populated from cast.json in a later phase
+    voiceCount: 0,             // ditto
+    progress: status === 'generating' || status === 'analysing' ? progress : undefined,
+    lastWorkedOn,
+    coverGradient,
+  };
+}
+
+export async function scanLibrary(): Promise<LibraryResponse> {
+  ensureWorkspace();
+  const authors: LibraryAuthor[] = [];
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    const seriesList: LibrarySeries[] = [];
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      const books: LibraryBook[] = [];
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        const book = await scanBook(authorName, seriesName, titleName);
+        if (book) books.push(book);
+      }
+      if (books.length) {
+        books.sort((a, b) => (a.seriesPosition ?? 0) - (b.seriesPosition ?? 0) || a.title.localeCompare(b.title));
+        seriesList.push({ name: seriesName, books });
+      }
+    }
+    if (seriesList.length) {
+      seriesList.sort((a, b) => a.name === 'Standalones' ? 1 : b.name === 'Standalones' ? -1 : a.name.localeCompare(b.name));
+      authors.push({ name: authorName, series: seriesList });
+    }
+  }
+  authors.sort((a, b) => a.name.localeCompare(b.name));
+  return { authors };
+}
+
+/** Locate a book on disk by its slug-based bookId. Walks the three-level tree
+    and reads each `.audiobook/state.json` to match. Used by the per-book
+    routes (GET/PUT /api/books/:bookId/state). O(N) in books — fine for a
+    single-user local install; can be replaced with an in-memory index later. */
+export async function findBookByBookId(bookId: string): Promise<{
+  bookDir: string;
+  author: string;
+  series: string;
+  title: string;
+  state: BookStateJson;
+} | null> {
+  return findBookBy(state => state.bookId === bookId);
+}
+
+/** Locate a book by its manuscriptId — used to re-hydrate the in-memory
+    manuscript record after a server restart so the analysis route can
+    resume from cache. */
+export async function findBookByManuscriptId(manuscriptId: string): Promise<{
+  bookDir: string;
+  author: string;
+  series: string;
+  title: string;
+  state: BookStateJson;
+} | null> {
+  return findBookBy(state => state.manuscriptId === manuscriptId);
+}
+
+async function findBookBy(predicate: (state: BookStateJson) => boolean): Promise<{
+  bookDir: string;
+  author: string;
+  series: string;
+  title: string;
+  state: BookStateJson;
+} | null> {
+  ensureWorkspace();
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        const state = await readJson<BookStateJson>(join(dir, '.audiobook', 'state.json')).catch(() => null);
+        if (state && predicate(state)) {
+          return { bookDir: dir, author: authorName, series: seriesName, title: titleName, state };
+        }
+      }
+    }
+  }
+  return null;
+}

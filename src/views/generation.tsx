@@ -9,18 +9,21 @@ import {
 import { useAppDispatch } from '../store';
 import { chaptersActions } from '../store/chapters-slice';
 import { api } from '../lib/api';
-import type { Chapter, Character, CharColor, GenerationTick } from '../lib/types';
+import type { Chapter, Character, CharColor, GenerationTick, TtsModelKey } from '../lib/types';
 
 interface Props {
   chapters: Chapter[];
   characters: Character[];
   paused: boolean;
+  title?: string | null;
+  bookId: string;
+  modelKey: TtsModelKey;
   setPaused: (p: boolean) => void;
   onRegenerate: (ch: Chapter) => void;
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
 }
 
-export function GenerationView({ chapters, characters, paused, setPaused, onRegenerate, onRegenerateCharacterInChapter }: Props) {
+export function GenerationView({ chapters, characters, paused, title, bookId, modelKey, setPaused, onRegenerate, onRegenerateCharacterInChapter }: Props) {
   const dispatch = useAppDispatch();
   const [expanded, setExpanded] = useState<Record<number, boolean>>({ 3: true });
 
@@ -29,12 +32,13 @@ export function GenerationView({ chapters, characters, paused, setPaused, onRege
   useEffect(() => {
     if (paused) return;
     const cancel = api.streamGeneration({
-      bookId: 'ns',
+      bookId,
+      modelKey,
       getChapters: () => chaptersRef.current,
       onTick: (ev: GenerationTick) => dispatch(chaptersActions.applyGenerationTick(ev)),
     });
     return cancel;
-  }, [paused, dispatch]);
+  }, [paused, dispatch, bookId, modelKey]);
 
   const completed = chapters.filter(c => c.state === 'done').length;
   const failed    = chapters.filter(c => c.state === 'failed').length;
@@ -49,7 +53,7 @@ export function GenerationView({ chapters, characters, paused, setPaused, onRege
         <div>
           <SectionLabel>Audiobook generation</SectionLabel>
           <div className="mt-4">
-            <MixedHeading regular="Generating" bold="The Northern Star" level="h1"/>
+            <MixedHeading regular="Generating" bold={title || 'your audiobook'} level="h1"/>
           </div>
           <p className="mt-3 text-ink/60">{completed} of {chapters.length} chapters complete · approx. {minutesLeft} min remaining</p>
         </div>

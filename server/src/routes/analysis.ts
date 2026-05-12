@@ -5,9 +5,29 @@
    The frontend's `real.analyseManuscript` reads this with fetch + ReadableStream. */
 
 import { Router, type Request, type Response } from 'express';
-import { getManuscript } from '../store/manuscripts.js';
+import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { selectAnalyzer } from '../analyzer/index.js';
+import { clearAnalysisCache, loadAnalysisCache, saveAnalysisCache, type AnalysisCache } from '../store/analysis-cache.js';
 import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
+import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../workspace/paths.js';
+import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import type { BookStateJson } from '../workspace/scan.js';
+
+/* Human-readable label for a Gemini model id. Kept in lockstep with
+   src/lib/models.ts MODEL_OPTIONS — the frontend sends the id, we render
+   the friendly name in logs and the SSE event stream. */
+const MODEL_LABELS: Record<string, string> = {
+  'gemini-2.5-flash':         'Gemini 2.5 Flash',
+  'gemini-3-flash-preview':   'Gemini 3 Flash',
+  'gemini-3.1-flash-lite':    'Gemini 3.1 Flash Lite',
+  'gemma-4-31b-it':           'Gemma 4 31B',
+  'gemma-4-26b-a4b-it':       'Gemma 4 26B',
+};
+
+function humanModel(modelId: string | undefined): string {
+  if (!modelId) return 'cowork reviewer';
+  return MODEL_LABELS[modelId] ?? modelId;
+}
 
 /* Front-end palette has 30 character slots (see src/lib/colors.ts
    CHAR_COLORS + CHARACTER_SLOTS). Gemini and humans both like to invent
@@ -121,33 +141,40 @@ ${sourceText}
 `;
 }
 
-function buildStage2Inbox(manuscriptId: string, title: string, stage1: Stage1Output, chapters: { id: number; title: string; body: string }[]): string {
-  const chapterBlocks = chapters.map(ch => `### Chapter ${ch.id} — ${ch.title}\n\n${ch.body}`).join('\n\n');
+function buildStage2ChapterInbox(
+  manuscriptId: string,
+  title: string,
+  stage1: Stage1Output,
+  chapter: { id: number; title: string; body: string },
+): string {
   return `---
 manuscriptId: ${manuscriptId}
 stage: 2
-expectedOutput: ./outbox/${manuscriptId}-stage2.json
+chapterId: ${chapter.id}
+expectedOutput: ./outbox/${manuscriptId}-stage2-ch${chapter.id}.json
 schema: see skills/audiobook-sentence-attribution.md
 ---
 
-# Stage 2 — Sentence attribution
+# Stage 2 — Sentence attribution (Chapter ${chapter.id})
 
-Run the **\`audiobook-sentence-attribution\`** skill. For every sentence in
-every chapter below, return the speaking character (or 'narrator' for
+Run the **\`audiobook-sentence-attribution\`** skill on the single chapter
+below. For every sentence, return the speaking character (or 'narrator' for
 non-dialogue prose). Save to:
 
 \`\`\`
-server/handoff/outbox/${manuscriptId}-stage2.json
+server/handoff/outbox/${manuscriptId}-stage2-ch${chapter.id}.json
 \`\`\`
 
 Schema and rules live in \`skills/audiobook-sentence-attribution.md\`.
 
-Return ONLY a JSON object matching the schema above. No prose, no code fences.
+All \`chapterId\` values in the output MUST be \`${chapter.id}\`. Return ONLY a
+JSON object matching the schema above. No prose, no code fences.
 
 ## Manuscript
 
 - Title: ${title}
 - Manuscript ID: ${manuscriptId}
+- Chapter: ${chapter.id} — ${chapter.title}
 
 ## Characters (from stage 1)
 
@@ -155,15 +182,14 @@ Return ONLY a JSON object matching the schema above. No prose, no code fences.
 ${JSON.stringify(stage1.characters, null, 2)}
 \`\`\`
 
-## Chapters
+## Chapter ${chapter.id} — ${chapter.title}
 
-${chapterBlocks}
+${chapter.body}
 `;
 }
 
 analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   const manuscriptId = req.params.id;
-  const record = getManuscript(manuscriptId);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -178,8 +204,16 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     send({ kind: 'log', phaseId, message });
   };
 
+  /* In-memory lookup with a workspace-disk fallback. Lets the analysis
+     resume after a server restart for any book that lives in the workspace
+     tree (state.json carries the manuscriptId). */
+  const record = await getOrHydrateManuscript(manuscriptId);
   if (!record) {
-    send({ kind: 'error', message: `Unknown manuscriptId: ${manuscriptId}` });
+    send({
+      kind: 'error',
+      code: 'unknown_manuscript',
+      message: `No manuscript found for id "${manuscriptId}". Upload a manuscript or open a workspace book to start analysis.`,
+    });
     return res.end();
   }
 
@@ -197,9 +231,11 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     send({ kind: 'error', message: (e as Error).message });
     return res.end();
   }
-  const analyzerLabel = (process.env.ANALYZER ?? 'manual').toLowerCase() === 'gemini'
-    ? (requestedModel ?? process.env.GEMINI_MODEL ?? 'gemini-2.5-flash')
-    : 'cowork reviewer';
+  const isGemini = (process.env.ANALYZER ?? 'manual').toLowerCase() === 'gemini';
+  const activeModelId = isGemini
+    ? (requestedModel ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it')
+    : undefined;
+  const analyzerLabel = isGemini ? humanModel(activeModelId) : 'cowork reviewer';
   if (requestedModel) {
     console.log(`[analysis] manuscript=${manuscriptId} model=${requestedModel}`);
   }
@@ -213,56 +249,139 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     let stage1EstMs = clampEst(sourceChars / STAGE1_BASELINE_RATE);
     let stage2EstMs = clampEst((sourceChars / STAGE1_BASELINE_RATE) * STAGE2_STRETCH);
 
+    /* Load any partial progress from a previous attempt. Cached stage 1 is
+       reused as-is; cached chapters are skipped in the stage 2 loop. Pass
+       `fresh: true` in the request body to discard the cache and start
+       over — the route's "Start fresh" button uses this. */
+    const requestedFresh = req.body?.fresh === true;
+    if (requestedFresh) {
+      await clearAnalysisCache(manuscriptId);
+      log(0, 'Discarded cached progress — starting from scratch.');
+    }
+    const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
+    const cachedChapters = cache.chapters ?? {};
+    const cachedChapterCount = Object.keys(cachedChapters).length;
+
     /* ── Phase 0: detecting characters (handoff stage 1). */
     markPhase(0);
-    log(0, `Manuscript: ${wordCount.toLocaleString()} words, ${sourceChars.toLocaleString()} characters, ${record.chapterHints.length} chapters`);
+    log(0, `Manuscript: ${wordCount.toLocaleString()} words, ${sourceChars.toLocaleString()} characters, ${record.chapterHints.length} chapter${record.chapterHints.length === 1 ? '' : 's'}`);
     log(0, `Estimated total time: ~${humanSeconds(stage1EstMs + stage2EstMs)} (refined after stage 1)`);
-    send({ kind: 'phase', phaseId: 0, progress: 0.02, label: PHASES[0].label });
-    log(0, `Asking ${analyzerLabel} to identify characters…`);
-    log(0, `Estimated stage time: ~${humanSeconds(stage1EstMs)}`);
-    const stage1Start = Date.now();
-    const stage1: Stage1Output = await analyzer.runStage1(
-      manuscriptId,
-      buildStage1Inbox(manuscriptId, record.title, record.sourceText),
-      {
-        onWaiting: (elapsed) => {
-          /* Linear progress against the estimate, capped at 0.95 until the
-             real result lands. The bar jumps to 1.0 on completion. */
-          const p = Math.min(0.02 + 0.93 * (elapsed / stage1EstMs), 0.95);
-          send({ kind: 'phase', phaseId: 0, progress: p, label: PHASES[0].label });
+    let stage1: Stage1Output;
+    let stage1ActualMs = 0;
+    if (cache.stage1) {
+      const charCount = cache.stage1.characters.length;
+      log(0, `Resuming — stage 1 already complete (${charCount} character${charCount === 1 ? '' : 's'} cached).`);
+      send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
+      stage1 = cache.stage1;
+    } else {
+      send({ kind: 'phase', phaseId: 0, progress: 0.02, label: PHASES[0].label });
+      log(0, `Asking ${analyzerLabel} to identify characters…`);
+      log(0, `Estimated stage time: ~${humanSeconds(stage1EstMs)}`);
+      const stage1Start = Date.now();
+      stage1 = await analyzer.runStage1(
+        manuscriptId,
+        buildStage1Inbox(manuscriptId, record.title, record.sourceText),
+        {
+          onWaiting: (elapsed) => {
+            /* Linear progress against the estimate, capped at 0.95 until the
+               real result lands. The bar jumps to 1.0 on completion. */
+            const p = Math.min(0.02 + 0.93 * (elapsed / stage1EstMs), 0.95);
+            send({ kind: 'phase', phaseId: 0, progress: p, label: PHASES[0].label });
+          },
         },
-      },
-    );
-    const stage1ActualMs = Date.now() - stage1Start;
+      );
+      stage1ActualMs = Date.now() - stage1Start;
+      cache.stage1 = stage1;
+      await saveAnalysisCache(manuscriptId, cache);
+    }
     /* Use the observed rate to refine stage 2's estimate. Stage 2 prompt is
        a similar size to stage 1 plus the small character roster, but its
        output is much larger (one JSON entry per sentence), hence the
        stretch factor. */
-    stage2EstMs = clampEst(stage1ActualMs * STAGE2_STRETCH);
-    log(0, `Detected ${stage1.characters.length} characters: ${stage1.characters.map(c => c.name).join(', ')}`);
-    log(0, `${stage1.chapters.length} chapter${stage1.chapters.length === 1 ? '' : 's'} identified in ${humanSeconds(stage1ActualMs)}`);
+    if (stage1ActualMs > 0) {
+      stage2EstMs = clampEst(stage1ActualMs * STAGE2_STRETCH);
+      log(0, `Detected ${stage1.characters.length} character${stage1.characters.length === 1 ? '' : 's'}: ${stage1.characters.map(c => c.name).join(', ')}`);
+      log(0, `${stage1.chapters.length} chapter${stage1.chapters.length === 1 ? '' : 's'} identified in ${humanSeconds(stage1ActualMs)}`);
+    }
     send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
 
-    /* ── Phase 1: parsing and attribution (handoff stage 2). */
+    /* ── Phase 1: parsing and attribution (handoff stage 2, per chapter).
+       We split stage 2 by chapter so each call fits well inside the model's
+       context window and free-tier rate limits can recover between calls.
+       Overall progress is (chapters_done + current_chapter_local_progress) /
+       total_chapters. */
     markPhase(1);
     send({ kind: 'phase', phaseId: 1, progress: 0.02, label: PHASES[1].label });
-    log(1, `Asking ${analyzerLabel} to attribute every sentence…`);
+    const totalChapters = record.chapterHints.length;
+    log(1, `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${analyzerLabel}, one at a time…`);
     log(1, `Estimated stage time: ~${humanSeconds(stage2EstMs)} (based on stage 1 rate)`);
-    const stage2 = await analyzer.runStage2(
-      manuscriptId,
-      buildStage2Inbox(manuscriptId, record.title, stage1, record.chapterHints),
-      {
-        onWaiting: (elapsed) => {
-          const p = Math.min(0.02 + 0.93 * (elapsed / stage2EstMs), 0.95);
-          send({ kind: 'phase', phaseId: 1, progress: p, label: PHASES[1].label });
+    if (cachedChapterCount > 0) {
+      log(1, `Resuming — ${cachedChapterCount} of ${totalChapters} chapter${cachedChapterCount === 1 ? '' : 's'} already cached.`);
+    }
+    const chapterEstMs = Math.max(2000, Math.round(stage2EstMs / Math.max(1, totalChapters)));
+    const allSentences: SentenceOutput[] = [];
+
+    for (let i = 0; i < totalChapters; i++) {
+      const ch = record.chapterHints[i];
+      const tickOverall = (frac: number) => {
+        const overall = (i + frac) / totalChapters;
+        const p = Math.min(0.02 + 0.93 * overall, 0.95);
+        send({ kind: 'phase', phaseId: 1, progress: p, label: PHASES[1].label });
+      };
+
+      const cached = cachedChapters[ch.id];
+      if (cached && cached.length > 0) {
+        log(1, `Chapter ${i + 1}/${totalChapters} — ${ch.title}: cached (${cached.length.toLocaleString()} sentences), skipping.`);
+        allSentences.push(...cached);
+        tickOverall(1);
+        continue;
+      }
+
+      const chStart = Date.now();
+      log(1, `Chapter ${i + 1}/${totalChapters} — ${ch.title} (${ch.body.length.toLocaleString()} chars) via ${analyzerLabel}…`);
+      const result = await analyzer.runStage2Chapter(
+        manuscriptId,
+        ch.id,
+        buildStage2ChapterInbox(manuscriptId, record.title, stage1, ch),
+        {
+          onWaiting: (elapsed) => tickOverall(Math.min(elapsed / chapterEstMs, 1)),
         },
-      },
-    );
-    log(1, `Attributed ${stage2.sentences.length.toLocaleString()} sentences across ${stage1.chapters.length} chapters`);
+      );
+      /* Force-fix the chapterId in case the model echoed back something
+         different — the route is the source of truth here. */
+      for (const s of result.sentences) s.chapterId = ch.id;
+      allSentences.push(...result.sentences);
+      cachedChapters[ch.id] = result.sentences;
+      cache.chapters = cachedChapters;
+      await saveAnalysisCache(manuscriptId, cache);
+      /* Roll sentences out to manuscript-edits.json after each chapter so a
+         book-state GET sees real per-sentence attributions even when stage 2
+         is only partially done. Lets the manuscript view show actual cast
+         lines instead of the mock initialSentences fallback. */
+      if (record.bookDir) {
+        try {
+          await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: allSentences });
+        } catch (persistErr) {
+          console.warn('[analysis] failed to roll manuscript-edits.json', persistErr);
+        }
+      }
+      log(1, `Chapter ${i + 1}/${totalChapters} done — ${result.sentences.length.toLocaleString()} sentences in ${humanSeconds(Date.now() - chStart)}`);
+    }
+
+    /* Final manuscript-edits.json write. Covers the all-cached resume case
+       where no per-iteration write ran. Idempotent. */
+    if (record.bookDir) {
+      try {
+        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: allSentences });
+      } catch (persistErr) {
+        console.warn('[analysis] failed final manuscript-edits.json write', persistErr);
+      }
+    }
+    log(1, `Attributed ${allSentences.length.toLocaleString()} sentences across ${totalChapters} chapter${totalChapters === 1 ? '' : 's'}`);
     /* Per-character line counts, sorted by lines descending — most prominent first. */
     {
       const lineCounts = new Map<string, number>();
-      for (const s of stage2.sentences) {
+      for (const s of allSentences) {
         lineCounts.set(s.characterId, (lineCounts.get(s.characterId) ?? 0) + 1);
       }
       const top = stage1.characters
@@ -294,26 +413,118 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
 
     const characters = attachLinesAndScenes(
       assignPaletteColors(stage1.characters),
-      stage2.sentences,
+      allSentences,
     );
 
     const totalElapsed = Date.now() - startedAt;
+    const bookId = record.bookId ?? bookIdFromTitle(record.title);
     const response = {
-      bookId: bookIdFromTitle(record.title),
+      bookId,
       manuscriptId,
       title: record.title,
       phaseTimings: PHASES.map(p => ({ id: p.id, label: p.label, duration: endPhase(p.id) || Math.round(totalElapsed / PHASES.length) })),
       characters,
       chapters,
-      sentences: stage2.sentences,
+      sentences: allSentences,
       libraryMatches: [] as Array<{ characterId: string; voiceId: string; confidence: number }>,
     };
+
+    // Persist cast.json + refreshed state.json back into the on-disk book.
+    // Only runs for books that came through POST /api/books (workspace flow);
+    // legacy POST /api/manuscripts uploads have no bookDir and are skipped.
+    if (record.bookDir) {
+      try {
+        await writeJsonAtomic(castJsonPath(record.bookDir), { characters });
+        const statePath = stateJsonPath(record.bookDir);
+        const prev = await readJson<BookStateJson>(statePath);
+        if (prev) {
+          const next: BookStateJson = {
+            ...prev,
+            chapters: chapters.map(c => ({
+              id: c.id,
+              title: c.title,
+              slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+              duration: c.duration,
+            })),
+            updatedAt: new Date().toISOString(),
+          };
+          await writeJsonAtomic(statePath, next);
+        }
+      } catch (persistErr) {
+        console.error('[analysis] failed to persist .audiobook/* for', record.bookDir, persistErr);
+        // Non-fatal — the analysis result still streams back to the client.
+      }
+    }
 
     send({ kind: 'result', response });
     res.end();
   } catch (e) {
     console.error('[analysis] failed', e);
-    send({ kind: 'error', message: (e as Error).message || 'Analysis failed.' });
+    const { code, message } = describeError(e, analyzerLabel);
+    send({ kind: 'error', code, message });
     res.end();
   }
 });
+
+/* The Gemini SDK throws `ApiError` instances whose `.message` is the raw
+   JSON envelope (e.g. `{"error":{"code":503,"message":"...","status":"..."}}`).
+   Surface a friendly, copy-pasteable line for the UI plus a short `code` the
+   client can switch on (rate_limit | unavailable | internal | invalid_key |
+   network | unknown). */
+function describeError(err: unknown, modelLabel: string): { code: string; message: string } {
+  const raw = (err as Error)?.message ?? String(err);
+  const status = (err as { status?: number })?.status;
+
+  const parsed = tryParseApiError(raw);
+  if (parsed) {
+    const code = classifyStatus(parsed.code ?? status, parsed.message);
+    const message = trimQuotaMessage(parsed.message);
+    return { code, message: `${modelLabel} returned ${parsed.code ?? status ?? '???'}: ${message}` };
+  }
+
+  if (status) {
+    return { code: classifyStatus(status, raw), message: `${modelLabel} returned ${status}: ${raw}` };
+  }
+  return { code: 'unknown', message: raw || 'Analysis failed.' };
+}
+
+/* Google's 429 body is wall-of-text — strip everything after the first
+   sentence so the UI alert stays tractable. The full text still lives in
+   the server console for debugging. */
+function trimQuotaMessage(message: string): string {
+  const firstStop = message.search(/[.\n]/);
+  if (firstStop > 0 && firstStop < 240) return message.slice(0, firstStop + 1).trim();
+  return message.slice(0, 240) + (message.length > 240 ? '…' : '');
+}
+
+function tryParseApiError(raw: string): { code?: number; message: string } | null {
+  /* SDK messages often look like 'got status: 503 UNAVAILABLE. {"error":{...}}'.
+     Find the first '{' and try to parse from there. */
+  const start = raw.indexOf('{');
+  if (start < 0) return null;
+  try {
+    const obj = JSON.parse(raw.slice(start)) as { error?: { code?: number; message?: string } };
+    if (obj?.error?.message) {
+      return { code: obj.error.code, message: obj.error.message };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function classifyStatus(status: number | undefined, message?: string): string {
+  if (!status) return 'unknown';
+  if (status === 429) {
+    /* Distinguish per-day "free tier exhausted" from short-term per-minute
+       throttling — the user-facing remedies differ (switch model / wait
+       until quota reset vs. just retry). */
+    if (message && /free[_-]?tier|quotaValue":"\d{1,3}"/i.test(message)) return 'daily_quota';
+    return 'rate_limit';
+  }
+  if (status === 503) return 'unavailable';
+  if (status === 500) return 'internal';
+  if (status === 401 || status === 403) return 'invalid_key';
+  if (status === 400) return 'bad_request';
+  return 'unknown';
+}
