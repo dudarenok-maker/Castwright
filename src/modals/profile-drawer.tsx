@@ -48,6 +48,11 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
   const ttsEngine = engineForModelKey(ttsModelKey);
   const [sampleLoading, setSampleLoading] = useState(false);
   const [sampleError, setSampleError] = useState<string | null>(null);
+  /* Evidence list is collapsed by default to keep the drawer scroll
+     manageable; clicking "Show more evidence" reveals the full list.
+     Hidden entirely when there's nothing extra to show. */
+  const [showAllEvidence, setShowAllEvidence] = useState(false);
+  const EVIDENCE_PREVIEW_LIMIT = 2;
 
   /* Sample subject: a library voice when one is matched, otherwise a
      character-derived stub so brand-new (unmatched) characters can still
@@ -262,7 +267,10 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
           <section>
             <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">Evidence from the manuscript</p>
             <div className="space-y-3">
-              {character.evidence?.map((ev, i) => (
+              {(showAllEvidence
+                ? character.evidence
+                : character.evidence?.slice(0, EVIDENCE_PREVIEW_LIMIT)
+              )?.map((ev, i) => (
                 <div key={i} className="p-4 rounded-2xl bg-canvas border border-ink/10">
                   <blockquote className="font-serif italic text-sm text-ink/85 leading-relaxed border-l-2 pl-3" style={{ borderColor: c.hex }}>
                     {ev.quote}
@@ -271,7 +279,16 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
                 </div>
               ))}
             </div>
-            <button className="mt-3 text-xs font-medium text-ink/70 hover:text-ink underline-offset-4 hover:underline">+ Show more evidence</button>
+            {character.evidence && character.evidence.length > EVIDENCE_PREVIEW_LIMIT && (
+              <button
+                onClick={() => setShowAllEvidence(v => !v)}
+                className="mt-3 text-xs font-medium text-ink/70 hover:text-ink underline-offset-4 hover:underline"
+              >
+                {showAllEvidence
+                  ? '− Show fewer'
+                  : `+ Show ${character.evidence.length - EVIDENCE_PREVIEW_LIMIT} more`}
+              </button>
+            )}
           </section>
 
           <section>
