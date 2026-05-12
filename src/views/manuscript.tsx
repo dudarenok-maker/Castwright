@@ -41,22 +41,41 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
   const articleRef = useRef<HTMLElement>(null);
   const selection = useSentenceSelection(articleRef);
 
+  /* Segments are scoped to the currently-selected chapter so the manuscript
+     view shows only sentences from that chapter — clicking a chapter in
+     the sidebar narrows the middle pane. `absIdx` stays anchored to the
+     full sentences[] array so drag/boundary-move edits still target the
+     correct sentence ids even though the view is filtered. */
   const segments: Segment[] = useMemo(() => {
     const segs: Segment[] = [];
     for (let i = 0; i < sentences.length; i++) {
       const s = sentences[i];
+      if (currentChapterId != null && s.chapterId !== currentChapterId) continue;
       const last = segs[segs.length - 1];
       if (last && last.characterId === s.characterId) last.sentences.push({ ...s, absIdx: i });
       else segs.push({ id: `seg_${segs.length}`, characterId: s.characterId, sentences: [{ ...s, absIdx: i }] });
     }
     return segs;
-  }, [sentences]);
+  }, [sentences, currentChapterId]);
 
+  /* Per-chapter counts so the "X speakers · Y low-confidence" stats above
+     the manuscript reflect what's actually visible. */
   const counts = useMemo(() => {
     const m: Record<string, number> = {};
-    for (const s of sentences) m[s.characterId] = (m[s.characterId] || 0) + 1;
+    for (const s of sentences) {
+      if (currentChapterId != null && s.chapterId !== currentChapterId) continue;
+      m[s.characterId] = (m[s.characterId] || 0) + 1;
+    }
     return m;
-  }, [sentences]);
+  }, [sentences, currentChapterId]);
+
+  /* Sentences scoped to the current chapter — used by the low-confidence
+     stat. Keep separate from the segments loop so memo invalidation is
+     granular. */
+  const chapterSentences = useMemo(() => {
+    if (currentChapterId == null) return sentences;
+    return sentences.filter(s => s.chapterId === currentChapterId);
+  }, [sentences, currentChapterId]);
 
   const findChar = useCallback((id: string) => characters.find(c => c.id === id), [characters]);
 
@@ -241,7 +260,7 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
           <div className="mt-3 flex items-center gap-4 text-sm text-ink/60">
             <span>{segments.length} segments</span><span>·</span>
             <span>{Object.keys(counts).length} speakers</span><span>·</span>
-            <span className="text-amber-700">{sentences.filter(s => s.confidence != null && s.confidence < 0.75).length} low-confidence</span>
+            <span className="text-amber-700">{chapterSentences.filter(s => s.confidence != null && s.confidence < 0.75).length} low-confidence</span>
             <span className="ml-auto flex items-center gap-1">
               <button onClick={() => prevChapter && setCurrentChapterId(prevChapter.id)} disabled={!prevChapter}
                       className="px-2 py-1 rounded-lg border border-ink/10 bg-white text-ink/70 hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center gap-1 text-xs font-medium">

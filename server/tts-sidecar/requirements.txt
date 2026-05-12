@@ -2,8 +2,14 @@
 # in early 2024 and won't install on Python >=3.12). `coqui-tts` keeps the
 # `from TTS.api import TTS` import surface and supports Python 3.10–3.13.
 # Pinned soft-floor to a recent stable; let pip pick the best 3.x compatible
-# wheel.
-coqui-tts>=0.24.0
+# wheel. The `[codec]` extra pulls torchcodec, which PyTorch 2.9+ requires
+# for audio I/O (the symbols `torchaudio.load`/`save` moved out of core).
+coqui-tts[codec]>=0.24.0
+# coqui-tts internals import `isin_mps_friendly` from transformers.pytorch_utils,
+# which is a 4.x-line private util. transformers 5.x removed/renamed it, so
+# pip happily resolves to a too-new wheel and the import explodes at runtime.
+# Pin to the 4.x line until coqui-tts updates its compat layer.
+transformers>=4.45,<5.0
 fastapi>=0.115,<0.116
 uvicorn[standard]>=0.30,<0.32
 numpy>=1.24,<2.0

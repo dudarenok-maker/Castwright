@@ -2,6 +2,9 @@ import { useState, type ReactNode } from 'react';
 import { IconCheck, IconRefresh } from '../lib/icons';
 import { SectionLabel, MixedHeading, Avatar, Pill, PrimaryButton } from '../components/primitives';
 import type { Character, Voice, CharColor } from '../lib/types';
+import { useAppSelector } from '../store';
+import { engineForModelKey } from '../lib/tts-models';
+import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 
 interface Props {
   characters: Character[];
@@ -19,7 +22,9 @@ export function ConfirmCastView({ characters, library, title, onConfirm, onReana
     for (const c of characters) if (c.matchedFrom) d[c.id] = 'match';
     return d;
   });
-
+  /* Same engine the cast view + profile drawer use — keeps the previewed
+     prebuilt-voice label here matching what the user will actually hear. */
+  const ttsEngine = useAppSelector(s => engineForModelKey(s.ui.ttsModelKey));
   const findVoice = (id?: string) => library.find(v => v.id === id);
   const matchedCount = characters.filter(c => c.matchedFrom).length;
   const generatedCount = characters.length - matchedCount;
@@ -46,6 +51,7 @@ export function ConfirmCastView({ characters, library, title, onConfirm, onReana
               key={c.id}
               character={c}
               voice={findVoice(c.voiceId)}
+              ttsEngine={ttsEngine}
               decision={decisions[c.id]}
               onDecision={(d) => setDecisions({ ...decisions, [c.id]: d })}
             />
@@ -68,12 +74,17 @@ export function ConfirmCastView({ characters, library, title, onConfirm, onReana
 interface CardProps {
   character: Character;
   voice: Voice | undefined;
+  ttsEngine: 'coqui' | 'gemini' | 'piper' | 'kokoro';
   decision: Decision | undefined;
   onDecision: (d: Decision) => void;
 }
 
-function ConfirmCharacterCard({ character, voice, decision, onDecision }: CardProps) {
+function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecision }: CardProps) {
   const matched = !!character.matchedFrom;
+  /* Engine-aware prebuilt-voice pick — shown alongside identity so the user
+     can sanity-check before confirming the cast. If the analyzer's gender /
+     age guess is wrong, the user can open the profile drawer and edit. */
+  const ttsVoice = voice?.ttsVoice ?? resolveTtsVoiceForCharacter(character, ttsEngine);
   return (
     <article className={`bg-white rounded-3xl border shadow-card overflow-hidden transition-colors ${matched ? 'border-purple-deep/15' : 'border-ink/10'}`}>
       <div className="p-5 grid grid-cols-[auto_1fr_auto] items-start gap-5">
@@ -91,9 +102,28 @@ function ConfirmCharacterCard({ character, voice, decision, onDecision }: CardPr
             <span>·</span>
             <span className="tabular-nums"><span className="font-semibold text-ink/70">{character.scenes}</span> scenes</span>
           </div>
+          {/* Identity chips — gender + age range. Only show when present, so
+              older cached analyses don't get empty pills. */}
+          {(character.gender || character.ageRange) && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {character.gender && <Pill color="library">{capitalise(character.gender)}</Pill>}
+              {character.ageRange && <Pill color="library">{capitalise(character.ageRange)}</Pill>}
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap gap-1">
             {character.attributes?.slice(0, 3).map(a => <Pill key={a}>{a}</Pill>)}
           </div>
+          {/* TTS voice assignment — what the engine will pick for this
+              character given current identity. Mirrors the cast table's
+              TtsVoiceLine so the same info shows here. */}
+          <p
+            className="mt-2 text-[11px] truncate"
+            title={`${capitalise(ttsVoice.provider)} voice — ${ttsVoice.description}`}
+          >
+            <span className="text-ink/40">{capitalise(ttsVoice.provider)} · </span>
+            <span className="font-semibold text-ink/70">{ttsVoice.name}</span>
+            <span className="text-ink/40"> · {ttsVoice.description}</span>
+          </p>
         </div>
 
         {matched ? (
@@ -147,6 +177,10 @@ interface DecisionTileProps {
   subtitle: string;
   badge: ReactNode;
   readonly?: boolean;
+}
+
+function capitalise(s: string): string {
+  return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
 }
 
 function DecisionTile({ active, onClick, swatch, title, subtitle, badge, readonly }: DecisionTileProps) {

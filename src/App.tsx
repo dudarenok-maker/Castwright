@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from './store';
 import { uiActions } from './store/ui-slice';
 import { castActions } from './store/cast-slice';
@@ -32,6 +32,9 @@ import { CharacterRegenerateModal } from './modals/character-regenerate';
 import { BatchCharacterRegenerateModal } from './modals/batch-character-regenerate';
 import { DriftReportModal } from './modals/drift-report';
 import { ProfileDrawer } from './modals/profile-drawer';
+import { ConfirmDialog } from './modals/confirm-dialog';
+import { IconRefresh, IconWarning } from './lib/icons';
+import { MODEL_OPTIONS } from './lib/models';
 import type { Character } from './lib/types';
 
 export function App() {
@@ -70,6 +73,31 @@ export function App() {
   const setCharacters = (next: Character[] | ((prev: Character[]) => Character[])) =>
     dispatch(castActions.setCharacters(typeof next === 'function' ? next(characters) : next));
 
+  /* App-level styled toast/dialog. Lifted up so any view can surface a
+     post-action message in the same visual language as the regen / confirm
+     dialogs (replaces window.alert calls). Body is ReactNode so callers can
+     embed structured content (tables, lists). primaryLabel + onPrimary turn
+     the info-mode button into a forward-navigation CTA (e.g. "Analyse now"
+     after a re-parse) rather than a plain dismiss. */
+  const [resultDialog, setResultDialog] = useState<{
+    open: boolean;
+    kind: 'info' | 'error';
+    eyebrow?: string;
+    title: string;
+    body: ReactNode;
+    primaryLabel?: string;
+    onPrimary?: () => void;
+  } | null>(null);
+  const showInfo = (args: {
+    title: string;
+    body: ReactNode;
+    eyebrow?: string;
+    primaryLabel?: string;
+    onPrimary?: () => void;
+  }) => setResultDialog({ open: true, kind: 'info', ...args });
+  const showError = (title: string, body: ReactNode, eyebrow?: string) =>
+    setResultDialog({ open: true, kind: 'error', title, body, eyebrow });
+
   /* Library hydration — fetch the on-disk workspace whenever the user
      returns to the books stage, and once at mount. */
   useEffect(() => {
@@ -97,13 +125,17 @@ export function App() {
   }, [bookId, stageKind, ttsEngine]);
 
   /* Per-book hydration. When the user opens a book whose redux state isn't
-     populated (page refresh, library click on a previously analysed book),
-     fetch the on-disk .audiobook/*.json and seed each slice. Skipped while
-     analysis is still running for this book (analysing stage stays purely
-     in-memory until the result lands). */
+     populated (page refresh, library click on a previously analysed book, or
+     library click on a book mid-analysis), fetch the on-disk .audiobook/*.json
+     and seed each slice. Includes 'analysing' so the AnalysingView's size-
+     aware ETA copy gets a real wordCount even when the user arrived via
+     openBook (the upload-and-analyse path already populates the slice). The
+     book-state route 404s for fresh uploads without disk state — the catch
+     below swallows that silently, and hydrateFromBookState only overwrites
+     fields when valid, so this is safe to run during analysis. */
   useEffect(() => {
     if (!bookId) return;
-    if (stageKind !== 'confirm' && stageKind !== 'ready') return;
+    if (stageKind !== 'analysing' && stageKind !== 'confirm' && stageKind !== 'ready') return;
     if (manuscript.manuscriptId && manuscript.title) return; // already populated
     let cancelled = false;
     api.getBookState(bookId)
@@ -183,12 +215,55 @@ export function App() {
             try {
               await api.deleteBook(b.bookId);
             } catch (err) {
-              alert((err as Error).message);
+              showError(`Couldn't delete "${b.title}"`, (err as Error).message, 'Delete');
               return;
             }
             const res = await api.getLibrary().catch(() => null);
             if (res) dispatch(libraryActions.hydrate(res));
             if (bookId === b.bookId) dispatch(uiActions.goHome());
+          }}
+          onReparseBook={async (b) => {
+            let result;
+            try {
+              result = await api.reparseBook(b.bookId);
+            } catch (err) {
+              showError(`Couldn't re-parse "${b.title}"`, (err as Error).message, 'Re-parse');
+              return;
+            }
+            /* Re-fetch the library so chapter counts / status update on the
+               card. The book status flips back to 'cast_pending' on the
+               next library scan (castConfirmed=false in state.json). */
+            const res = await api.getLibrary().catch(() => null);
+            if (res) dispatch(libraryActions.hydrate(res));
+            /* If the user has this book open, drop the in-memory slices that
+               keyed off the old chapter list. Easiest: bounce them home —
+               next open re-hydrates from the fresh state.json. */
+            if (bookId === b.bookId) dispatch(uiActions.goHome());
+
+            const chapters = result.chapterTitles;
+            const body = <ReparseResultBody bookTitle={b.title} chapters={chapters}/>;
+
+            const updatedBook = res?.authors
+              .flatMap(a => a.series.flatMap(s => s.books))
+              .find(book => book.bookId === b.bookId);
+
+            showInfo({
+              eyebrow: 'Re-parse',
+              title: 'Manuscript re-parsed',
+              body,
+              primaryLabel: 'Analyse now',
+              onPrimary: () => {
+                /* Send the user straight into analysis with the freshest
+                   library record so openBook routes to the correct stage
+                   based on the post-reparse status. */
+                const target = updatedBook ?? b;
+                dispatch(uiActions.openBook({
+                  id: target.bookId,
+                  status: 'analysing',
+                  manuscriptId: target.manuscriptId,
+                }));
+              },
+            });
           }}
           onStartNew={() => dispatch(uiActions.startNewBook())}/>
       )}
@@ -343,6 +418,78 @@ export function App() {
           onAccept={() => { dispatch(revisionsActions.acceptAllPending()); dispatch(uiActions.setShowRevisionPlayer(false)); }}
           onReject={() => { dispatch(revisionsActions.rejectAllPending()); dispatch(uiActions.setShowRevisionPlayer(false)); }}/>
       )}
+      {resultDialog && (
+        <ConfirmDialog
+          open={resultDialog.open}
+          eyebrow={resultDialog.eyebrow}
+          title={resultDialog.title}
+          icon={resultDialog.kind === 'error' ? <IconWarning className="w-4 h-4"/> : <IconRefresh className="w-4 h-4"/>}
+          variant={resultDialog.kind === 'error' ? 'danger' : 'default'}
+          body={resultDialog.body}
+          primaryLabel={resultDialog.kind === 'info' ? resultDialog.primaryLabel : undefined}
+          onPrimaryAction={resultDialog.kind === 'info' ? resultDialog.onPrimary : undefined}
+          onClose={() => setResultDialog(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* Body shown inside the re-parse result dialog. Lives outside the parent's
+   stale-closure scope so the model picker reads live redux state — the
+   user's choice here lands in ui.selectedModel and the analysing view
+   picks it up when "Analyse now" routes there. */
+function ReparseResultBody({ bookTitle, chapters }: { bookTitle: string; chapters: string[] }) {
+  const dispatch = useAppDispatch();
+  const selectedModel = useAppSelector(s => s.ui.selectedModel);
+  return (
+    <div className="space-y-3">
+      <p>
+        <span className="font-semibold text-ink">{chapters.length}</span>{' '}
+        chapter{chapters.length === 1 ? '' : 's'} detected in{' '}
+        <span className="font-semibold text-ink">{bookTitle}</span>.
+      </p>
+      <div className="rounded-2xl border border-ink/10 overflow-hidden">
+        <div className="max-h-64 overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-ink/[0.03] text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
+              <tr>
+                <th className="text-right tabular-nums px-3 py-2 w-12">#</th>
+                <th className="text-left px-3 py-2">Chapter title</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink/5">
+              {chapters.map((title, i) => (
+                <tr key={i} className="hover:bg-ink/[0.02]">
+                  <td className="text-right tabular-nums text-ink/50 px-3 py-2 w-12">{i + 1}</td>
+                  <td className="text-ink px-3 py-2 font-medium">{title}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Model picker inline with the dialog. Writes to redux so the
+          analysing view consumes the user's pick when "Analyse now" routes
+          there. Defaults to whatever was last selected — common case is
+          they want to switch off Gemma. */}
+      <label className="flex items-center justify-between gap-3 rounded-2xl bg-canvas border border-ink/10 px-3 py-2.5">
+        <span className="text-sm font-medium text-ink">Analyse with</span>
+        <select
+          value={selectedModel}
+          onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
+          className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+        >
+          {MODEL_OPTIONS.map(m => (
+            <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>
+          ))}
+        </select>
+      </label>
+
+      <p className="text-ink/55 text-xs">
+        Cast and analysis cache were cleared. Hit "Analyse now" to run character detection + sentence attribution against the new chapter list. You can still switch models on the analysing screen if the run goes sideways.
+      </p>
     </div>
   );
 }

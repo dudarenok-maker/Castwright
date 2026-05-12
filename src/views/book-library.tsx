@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   IconPlus, IconStar, IconCheck, IconSpinner, IconCheckCircle, IconWarning,
-  IconMore, IconTrash,
+  IconMore, IconTrash, IconRefresh,
 } from '../lib/icons';
 import {
   SectionLabel, MixedHeading, PrimaryButton, Pill,
@@ -9,6 +9,7 @@ import {
 import { parseRuntime, formatHours } from '../lib/time';
 import { StatTile } from './voices';
 import { Stat } from './generation';
+import { ConfirmDialog } from '../modals/confirm-dialog';
 import type { LibraryAuthor, LibraryBook, LibraryBookStatus } from '../lib/types';
 
 type Filter = 'all' | 'in_progress' | 'complete';
@@ -18,6 +19,7 @@ interface Props {
   activeBookId: string | null;
   onOpenBook: (book: LibraryBook) => void;
   onDeleteBook: (book: LibraryBook) => void;
+  onReparseBook: (book: LibraryBook) => void;
   onStartNew: () => void;
 }
 
@@ -32,7 +34,7 @@ function matchesFilter(book: LibraryBook, filter: Filter): boolean {
   return true;
 }
 
-export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBook, onStartNew }: Props) {
+export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBook, onReparseBook, onStartNew }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
 
   const allBooks = useMemo(
@@ -100,7 +102,7 @@ export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBoo
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                         {series.books.map(b => (
-                          <BookCard key={b.bookId} book={b} active={b.bookId === activeBookId} onOpen={() => onOpenBook(b)} onDelete={() => onDeleteBook(b)}/>
+                          <BookCard key={b.bookId} book={b} active={b.bookId === activeBookId} onOpen={() => onOpenBook(b)} onDelete={() => onDeleteBook(b)} onReparse={() => onReparseBook(b)}/>
                         ))}
                       </div>
                     </div>
@@ -128,7 +130,7 @@ const STATUS_UI: Record<LibraryBookStatus, StatusMeta> = {
   orphaned:     { color: 'danger',  label: 'Manuscript missing',icon: <IconWarning className="w-3.5 h-3.5"/> },
 };
 
-function BookCard({ book, active, onOpen, onDelete }: { book: LibraryBook; active: boolean; onOpen: () => void; onDelete: () => void }) {
+function BookCard({ book, active, onOpen, onDelete, onReparse }: { book: LibraryBook; active: boolean; onOpen: () => void; onDelete: () => void; onReparse: () => void }) {
   const [from, to] = book.coverGradient;
   const grad = `linear-gradient(135deg, ${from}, ${to})`;
   const meta = STATUS_UI[book.status];
@@ -138,6 +140,8 @@ function BookCard({ book, active, onOpen, onDelete }: { book: LibraryBook; activ
       ? `${book.series} · Book ${book.seriesPosition}`
       : book.series;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmReparse, setConfirmReparse] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!menuOpen) return;
@@ -175,14 +179,15 @@ function BookCard({ book, active, onOpen, onDelete }: { book: LibraryBook; activ
             <IconMore className="w-4 h-4"/>
           </button>
           {menuOpen && (
-            <div className="absolute right-0 mt-1.5 w-44 rounded-xl bg-white border border-ink/10 shadow-float overflow-hidden z-10" onClick={(e) => e.stopPropagation()}>
+            <div className="absolute right-0 mt-1.5 w-56 rounded-xl bg-white border border-ink/10 shadow-float overflow-hidden z-10" onClick={(e) => e.stopPropagation()}>
               <button
-                onClick={() => {
-                  setMenuOpen(false);
-                  if (confirm(`Delete "${book.title}"? This removes the book directory from disk and discards any cached analysis. Can't be undone.`)) {
-                    onDelete();
-                  }
-                }}
+                onClick={() => { setMenuOpen(false); setConfirmReparse(true); }}
+                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/[0.04] inline-flex items-center gap-2 border-b border-ink/5"
+              >
+                <IconRefresh className="w-4 h-4"/> Re-parse manuscript
+              </button>
+              <button
+                onClick={() => { setMenuOpen(false); setConfirmDelete(true); }}
                 className="w-full px-3 py-2.5 text-left text-sm font-medium text-red-700 hover:bg-red-50 inline-flex items-center gap-2"
               >
                 <IconTrash className="w-4 h-4"/> Delete book
@@ -250,6 +255,47 @@ function BookCard({ book, active, onOpen, onDelete }: { book: LibraryBook; activ
           <Stat label="Voices"   value={book.voiceCount   || '—'}/>
           <Stat label="Runtime"  value={book.runtime ?? '—'} small/>
         </div>
+      </div>
+
+      {/* Confirmation dialogs — rendered inside the card so click events stay
+          scoped (the card's onClick is the open-book handler; the dialog's
+          backdrop stops propagation by being position:fixed and on a higher
+          z-index). */}
+      <div onClick={(e) => e.stopPropagation()}>
+        <ConfirmDialog
+          open={confirmReparse}
+          eyebrow="Re-parse"
+          title={book.title}
+          icon={<IconRefresh className="w-4 h-4"/>}
+          body={
+            <div className="space-y-2">
+              <p>This re-detects chapters from the manuscript file using the current parser rules.</p>
+              <p className="text-ink/60">
+                The manuscript file on disk stays as-is. Cached analysis, cast, and any generated audio are
+                discarded — you'll need to confirm the cast again before generating.
+              </p>
+            </div>
+          }
+          confirmLabel="Re-parse manuscript"
+          onConfirm={() => { setConfirmReparse(false); onReparse(); }}
+          onClose={() => setConfirmReparse(false)}
+        />
+        <ConfirmDialog
+          open={confirmDelete}
+          eyebrow="Delete"
+          title={book.title}
+          icon={<IconTrash className="w-4 h-4"/>}
+          variant="danger"
+          body={
+            <div className="space-y-2">
+              <p>This removes the book directory from disk and discards any cached analysis.</p>
+              <p className="text-red-700/80 font-medium">Can't be undone.</p>
+            </div>
+          }
+          confirmLabel="Delete book"
+          onConfirm={() => { setConfirmDelete(false); onDelete(); }}
+          onClose={() => setConfirmDelete(false)}
+        />
       </div>
     </article>
   );
