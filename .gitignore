@@ -38,9 +38,31 @@ server/handoff/cache/*
 !server/handoff/cache/.gitkeep
 server/dist/
 
+# Local TTS sidecar — Python venv + downloaded model weights stay local.
+# Source files (main.py, requirements.txt, README.md, start.ps1) are tracked;
+# everything below is build/runtime state only.
+server/tts-sidecar/.venv/
+server/tts-sidecar/models/
+server/tts-sidecar/.coqui/
+server/tts-sidecar/sample.*
+
+# Python build/cache artefacts — match anywhere in the tree since the sidecar
+# is currently the only Python in the repo and these are never wanted.
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+
 # Server-generated TTS audio cache
 server/audio/
 
 # On-disk book workspace (manuscripts + .audiobook/ state + audio output).
-# Default location is <repo>/audiobook-workspace/; override via WORKSPACE_DIR.
+# Lives at <repo>/audiobook-workspace/ by default; override via WORKSPACE_DIR.
+# Belongs-to-the-user data — never sent to GitHub.
 audiobook-workspace/
+/audiobook-workspace/

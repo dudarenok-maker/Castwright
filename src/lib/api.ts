@@ -285,8 +285,11 @@ async function realGetLibrary(): Promise<LibraryResponse> {
   return res.json();
 }
 
-async function realGetVoices(args?: { currentBookId?: string }): Promise<VoiceLibraryResponse> {
-  const qs = args?.currentBookId ? `?currentBookId=${encodeURIComponent(args.currentBookId)}` : '';
+async function realGetVoices(args?: { currentBookId?: string; engine?: string }): Promise<VoiceLibraryResponse> {
+  const params = new URLSearchParams();
+  if (args?.currentBookId) params.set('currentBookId', args.currentBookId);
+  if (args?.engine) params.set('engine', args.engine);
+  const qs = params.toString() ? `?${params.toString()}` : '';
   const res = await fetch(`/api/voices${qs}`);
   if (!res.ok) throw new Error(`Voice library fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();

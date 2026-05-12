@@ -424,10 +424,10 @@ export interface components {
         };
         VoiceSampleRequest: {
             /**
-             * @description UI-stable key; server resolves to the actual Gemini TTS model id via env.
+             * @description UI-stable TTS model key. The engine prefix (coqui-, gemini-) drives provider selection server-side.
              * @enum {string}
              */
-            modelKey: "gemini-2.5-flash" | "gemini-3.1-flash";
+            modelKey: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /** @description Frontend Voice payload (attributes drive the prebuilt-voice picker). */
             voice?: {
                 id?: string;
@@ -469,7 +469,7 @@ export interface components {
             durationSec?: number | null;
             cached: boolean;
             /** @enum {string} */
-            modelKey: "gemini-2.5-flash" | "gemini-3.1-flash";
+            modelKey: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
         };
         /**
          * @description The TTS provider voice this Voice resolves to. Computed server-side by
@@ -478,10 +478,10 @@ export interface components {
          */
         TtsVoiceAssignment: {
             /** @enum {string} */
-            provider: "gemini";
-            /** @description Provider-specific prebuilt voice name, e.g. 'Charon'. */
+            provider: "coqui" | "gemini" | "piper" | "kokoro";
+            /** @description Engine-specific prebuilt voice name, e.g. 'Charon' (Gemini) or 'Claribel Dervla' (Coqui XTTS v2). */
             name: string;
-            /** @description Public personality label from the provider's voice table, e.g. 'Informative'. */
+            /** @description Short label for the picked voice — engine-specific. Empty/placeholder when the engine doesn't publish descriptors. */
             description: string;
         };
         Voice: {
@@ -900,10 +900,10 @@ export interface operations {
             content: {
                 "application/json": {
                     /**
-                     * @description TTS model key; resolves to a Gemini model id server-side.
+                     * @description TTS model key. Local engines (coqui-*) route to the sidecar; gemini-* keys route to Google's TTS API.
                      * @enum {string}
                      */
-                    modelKey: "gemini-2.5-flash" | "gemini-3.1-flash";
+                    modelKey: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
                     /** @description Optional subset of chapters to (re)generate. Defaults to all chapters lacking an audio file. */
                     chapterIds?: number[];
                     /** @description Re-synthesise even if an audio file already exists on disk. */
@@ -951,6 +951,8 @@ export interface operations {
             query?: {
                 /** @description When set, voices belonging to that book are tagged source=current. */
                 currentBookId?: string;
+                /** @description TTS engine whose voice catalog is used to populate each Voice.ttsVoice. Defaults to 'coqui' (the UI's default). */
+                engine?: "coqui" | "gemini" | "piper" | "kokoro";
             };
             header?: never;
             path?: never;

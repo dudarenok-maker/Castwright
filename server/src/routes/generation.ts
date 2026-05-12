@@ -27,7 +27,7 @@ import { audioDir, castJsonPath, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
-import { isTtsModelKey, selectTtsProvider, type TtsModelKey } from '../tts/index.js';
+import { engineForModelKey, isTtsModelKey, selectTtsProvider, type TtsModelKey } from '../tts/index.js';
 import { pcmToWav } from '../tts/wav.js';
 import {
   synthesiseChapter,
@@ -69,10 +69,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   };
 
   if (!isTtsModelKey(body.modelKey)) {
-    send({ type: 'chapter_failed', errorReason: 'modelKey must be gemini-2.5-flash or gemini-3.1-flash.' });
+    send({ type: 'chapter_failed', errorReason: 'modelKey must be a supported TTS model id (e.g. coqui-xtts-v2, gemini-2.5-flash).' });
     return res.end();
   }
   const modelKey: TtsModelKey = body.modelKey;
+  const engine = engineForModelKey(modelKey);
   const force = body.force === true;
   const requestedIds = Array.isArray(body.chapterIds)
     ? (body.chapterIds.filter(n => typeof n === 'number' && Number.isInteger(n)) as number[])
@@ -80,7 +81,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
 
   let provider;
   try {
-    provider = selectTtsProvider();
+    provider = selectTtsProvider(modelKey);
   } catch (e) {
     send({ type: 'chapter_failed', errorReason: (e as Error).message });
     return res.end();
@@ -145,9 +146,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   }
 
   /* Pause = client closes the SSE. We let the chapter in flight finish (its
-     PCM is in memory; killing it would waste the Gemini calls). The flag is
-     checked at the top of the chapter loop, so the queue stops cleanly
-     between chapters. */
+     PCM is in memory; killing it would waste the synth work already done).
+     The flag is checked at the top of the chapter loop, so the queue stops
+     cleanly between chapters. */
   let pauseRequested = false;
   req.on('close', () => { pauseRequested = true; });
 
@@ -180,6 +181,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         cast: cast.characters,
         provider,
         modelKey,
+        engine,
         onGroupComplete: ({ group, totalGroups }) => {
           const progress = Math.min(0.99, (group.index + 1) / totalGroups);
           const lastSentenceId = group.sentenceIds[group.sentenceIds.length - 1];
@@ -269,16 +271,20 @@ function formatDuration(totalSec: number): string {
   return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
-/** Pull a short, user-friendly reason out of a Gemini SDK error, and flag
-    quota-class errors as fatal so we stop the run instead of burning through
-    the remaining chapters with the same 429. */
+/** Pull a short, user-friendly reason out of a synth error and flag
+    unrecoverable classes as fatal so we stop the run instead of burning
+    through the remaining chapters with the same failure. */
 function describeSynthesisError(err: unknown): { errorReason: string; fatal: boolean } {
   const raw = (err as Error)?.message ?? String(err);
   const status = (err as { status?: number })?.status;
+  const isSidecarDown = /sidecar not reachable|ECONNREFUSED|fetch failed/i.test(raw);
   const isQuota = status === 429 || /429|quota|rate/i.test(raw);
   const isAuth = status === 401 || status === 403 || /invalid[_ ]?key|API key/i.test(raw);
+  if (isSidecarDown) {
+    return { errorReason: 'Local TTS sidecar not running — start it and resume.', fatal: true };
+  }
   if (isQuota) {
-    return { errorReason: 'Gemini TTS rate-limited — stopped run; resume later.', fatal: true };
+    return { errorReason: 'Gemini TTS rate-limited — stopped run; resume later or switch to a local engine.', fatal: true };
   }
   if (isAuth) {
     return { errorReason: 'Gemini TTS authentication failed — check GEMINI_API_KEY.', fatal: true };

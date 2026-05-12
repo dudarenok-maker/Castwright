@@ -1,9 +1,14 @@
-/* TTS model options exposed in the voice-library selector. The id matches
-   the server's `modelKey` enum (see openapi.yaml VoiceSampleRequest); the
-   server resolves it to a concrete Gemini model id via env so preview-suffix
-   churn doesn't require a frontend change. */
+/* TTS engines + models exposed in the UI selectors. The `id` matches the
+   server's `modelKey` enum (see openapi.yaml VoiceSampleRequest); the server
+   resolves engine prefix → provider and forwards the rest to the engine.
+
+   Two-tier structure: the UI shows an Engine dropdown (Local / Gemini) and a
+   Model dropdown filtered to that engine's options. When the user switches
+   engine, the consumer should default to the engine group's first model. */
 
 import type { TtsModelKey } from './types';
+
+export type TtsEngineId = 'local' | 'gemini';
 
 export interface TtsModelOption {
   id: TtsModelKey;
@@ -11,9 +16,53 @@ export interface TtsModelOption {
   hint?: string;
 }
 
-export const TTS_MODEL_OPTIONS: TtsModelOption[] = [
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash TTS', hint: 'Default, broadly available' },
-  { id: 'gemini-3.1-flash', label: 'Gemini 3.1 Flash TTS', hint: 'Newer, preview' },
+export interface TtsEngineGroup {
+  id: TtsEngineId;
+  label: string;
+  hint?: string;
+  models: TtsModelOption[];
+}
+
+export const TTS_ENGINES: TtsEngineGroup[] = [
+  {
+    id: 'local',
+    label: 'Local (free)',
+    hint: 'Runs on your machine via the TTS sidecar — no rate limits',
+    models: [
+      { id: 'coqui-xtts-v2', label: 'Coqui XTTS v2', hint: 'Default · 30 baked voices' },
+    ],
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini (cloud)',
+    hint: 'Free tier · rate-limited',
+    models: [
+      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash TTS' },
+      { id: 'gemini-3.1-flash', label: 'Gemini 3.1 Flash TTS', hint: 'Preview' },
+    ],
+  },
 ];
 
-export const DEFAULT_TTS_MODEL: TtsModelKey = 'gemini-2.5-flash';
+/* Flat list for legacy call sites (cast view's ttsLabel lookup etc.). New
+   code should prefer iterating TTS_ENGINES so the engine grouping is
+   visible. */
+export const TTS_MODEL_OPTIONS: TtsModelOption[] = TTS_ENGINES.flatMap(g => g.models);
+
+export const DEFAULT_TTS_MODEL: TtsModelKey = 'coqui-xtts-v2';
+
+/* Mirror of the backend's engineForModelKey — keeps the UI honest about
+   which sidecar/cloud it will hit when a sample is requested. Add new
+   prefixes here in lockstep with server/src/tts/index.ts. */
+export function engineForModelKey(key: TtsModelKey): 'coqui' | 'piper' | 'kokoro' | 'gemini' {
+  if (key.startsWith('coqui-'))  return 'coqui';
+  if (key.startsWith('piper-'))  return 'piper';
+  if (key.startsWith('kokoro-')) return 'kokoro';
+  return 'gemini';
+}
+
+/* Group id (UI-level) for a model key. 'local' for any non-Gemini engine,
+   'gemini' otherwise. Used by the selector to pre-select the engine
+   dropdown when hydrating from a saved modelKey. */
+export function engineGroupForModelKey(key: TtsModelKey): TtsEngineId {
+  return engineForModelKey(key) === 'gemini' ? 'gemini' : 'local';
+}

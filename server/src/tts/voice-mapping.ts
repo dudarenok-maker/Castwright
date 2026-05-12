@@ -1,9 +1,15 @@
-/* Map a frontend Voice (or a character stub) to one of Gemini's 30 prebuilt
-   voice names. Deterministic so the same character always gets the same voice
-   across sessions. The analyzer's character attributes are *personality
-   traits* (e.g. "sarcastic", "patient"), not voice descriptors, so the bulk
-   of the signal comes from the character's prose description (he/she
-   pronouns) and the optional tone metrics. */
+/* Map a frontend Voice (or a character stub) to an engine-specific prebuilt
+   voice name. Deterministic so the same character always gets the same voice
+   across sessions, regardless of engine. The analyzer's character attributes
+   are *personality traits* (e.g. "sarcastic", "patient"), not voice
+   descriptors, so the bulk of the signal comes from the character's prose
+   description (he/she pronouns) and the optional tone metrics.
+
+   Profile inference is engine-agnostic — only the final lookup table changes
+   between engines. To add a new engine, add a PROFILE_VOICES table and a
+   DESCRIPTIONS table and extend pickVoiceForEngine. */
+
+import type { TtsEngine } from './index.js';
 
 export interface VoiceLike {
   id: string;
@@ -40,9 +46,8 @@ type VoiceProfile =
 
 /* Hand-picked from Gemini's published prebuilt voice list. Each profile gets
    two options so close-together voices in the cast don't collide; we pick
-   via a stable hash of the voice id. Narrator gets its own pair of dignified
-   storyteller voices, distinct from any character bucket. */
-const PROFILE_VOICES: Record<VoiceProfile, string[]> = {
+   via a stable hash of the voice id. */
+const GEMINI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
   'male-deep':      ['Charon', 'Algieba'],
   'male-mid':       ['Puck', 'Orus'],
   'male-light':     ['Iapetus', 'Sadachbia'],
@@ -53,65 +58,100 @@ const PROFILE_VOICES: Record<VoiceProfile, string[]> = {
   'narrator-cool':  ['Algenib', 'Achernar'],
 };
 
+/* XTTS v2 baked speaker names — best-effort gender/register fits from the
+   Coqui speaker manifest. Two per profile so the same hash trick spreads
+   neighbouring characters apart. The user can tune this catalog after a
+   listen pass; the profile inference upstream is the load-bearing part. */
+const COQUI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
+  'male-deep':      ['Damien Black', 'Wulf Carlevaro'],
+  'male-mid':       ['Aaron Dreschner', 'Viktor Menelaos'],
+  'male-light':     ['Andrew Chipper', 'Royston Min'],
+  'female-deep':    ['Brenda Stern', 'Tammie Ema'],
+  'female-mid':     ['Daisy Studious', 'Sofia Hellen'],
+  'female-light':   ['Claribel Dervla', 'Alison Dietlinde'],
+  'narrator-warm':  ['Ana Florence', 'Henriette Usha'],
+  'narrator-cool':  ['Asya Anara', 'Gracie Wise'],
+};
+
 /* Public personality labels for Gemini's 30 prebuilt voices, as published in
-   https://ai.google.dev/gemini-api/docs/speech-generation#voices. Used by the
-   voices route and the cast view to surface "which voice is this character
-   going to sound like" without forcing the user to click play first. */
+   https://ai.google.dev/gemini-api/docs/speech-generation#voices. */
 export const GEMINI_VOICE_DESCRIPTIONS: Record<string, string> = {
-  Zephyr: 'Bright',
-  Puck: 'Upbeat',
-  Charon: 'Informative',
-  Kore: 'Firm',
-  Fenrir: 'Excitable',
-  Leda: 'Youthful',
-  Orus: 'Firm',
-  Aoede: 'Breezy',
-  Callirrhoe: 'Easy-going',
-  Autonoe: 'Bright',
-  Enceladus: 'Breathy',
-  Iapetus: 'Clear',
-  Umbriel: 'Easy-going',
-  Algieba: 'Smooth',
-  Despina: 'Smooth',
-  Erinome: 'Clear',
-  Algenib: 'Gravelly',
-  Rasalgethi: 'Informative',
-  Laomedeia: 'Upbeat',
-  Achernar: 'Soft',
-  Alnilam: 'Firm',
-  Schedar: 'Even',
-  Gacrux: 'Mature',
-  Pulcherrima: 'Forward',
-  Achird: 'Friendly',
-  Zubenelgenubi: 'Casual',
-  Vindemiatrix: 'Gentle',
-  Sadachbia: 'Lively',
-  Sadaltager: 'Knowledgeable',
+  Zephyr: 'Bright', Puck: 'Upbeat', Charon: 'Informative', Kore: 'Firm',
+  Fenrir: 'Excitable', Leda: 'Youthful', Orus: 'Firm', Aoede: 'Breezy',
+  Callirrhoe: 'Easy-going', Autonoe: 'Bright', Enceladus: 'Breathy',
+  Iapetus: 'Clear', Umbriel: 'Easy-going', Algieba: 'Smooth',
+  Despina: 'Smooth', Erinome: 'Clear', Algenib: 'Gravelly',
+  Rasalgethi: 'Informative', Laomedeia: 'Upbeat', Achernar: 'Soft',
+  Alnilam: 'Firm', Schedar: 'Even', Gacrux: 'Mature',
+  Pulcherrima: 'Forward', Achird: 'Friendly', Zubenelgenubi: 'Casual',
+  Vindemiatrix: 'Gentle', Sadachbia: 'Lively', Sadaltager: 'Knowledgeable',
   Sulafat: 'Warm',
 };
 
+/* Profile-coded labels for the XTTS catalog. Coqui doesn't publish
+   personality descriptors so we synthesise one from the profile (engine-aware
+   labels keep the cast view honest about what the user will actually hear). */
+export const COQUI_VOICE_DESCRIPTIONS: Record<string, string> = {
+  'Damien Black': 'Deep · Male', 'Wulf Carlevaro': 'Deep · Male',
+  'Aaron Dreschner': 'Mid · Male', 'Viktor Menelaos': 'Mid · Male',
+  'Andrew Chipper': 'Light · Male', 'Royston Min': 'Light · Male',
+  'Brenda Stern': 'Deep · Female', 'Tammie Ema': 'Deep · Female',
+  'Daisy Studious': 'Mid · Female', 'Sofia Hellen': 'Mid · Female',
+  'Claribel Dervla': 'Light · Female', 'Alison Dietlinde': 'Light · Female',
+  'Ana Florence': 'Warm narrator', 'Henriette Usha': 'Warm narrator',
+  'Asya Anara': 'Cool narrator', 'Gracie Wise': 'Cool narrator',
+};
+
 export interface TtsVoiceAssignment {
-  provider: 'gemini';
+  provider: TtsEngine;
   name: string;
   description: string;
 }
 
-/** Convenience wrapper: pick a Gemini voice and wrap it with its public
-    personality label so the UI can render both side-by-side. */
-export function resolveGeminiAssignment(voice: VoiceLike, hint?: CharacterHint): TtsVoiceAssignment {
-  const name = pickGeminiVoice(voice, hint);
+/** Engine-aware: returns the prebuilt voice name (no description). Callers
+    inside the synth pipeline only need the name; the UI-facing
+    resolveVoiceAssignment wraps this with the description. */
+export function pickVoiceForEngine(
+  engine: TtsEngine,
+  voice: VoiceLike,
+  hint?: CharacterHint,
+): string {
+  const profile = inferProfile(voice, hint);
+  const table = catalogForEngine(engine);
+  const options = table[profile];
+  const idx = stableHash(voice.id) % options.length;
+  return options[idx];
+}
+
+/** Convenience wrapper: pick a voice and wrap it with its descriptor for the
+    cast view. Engine is required — there's no single "right" voice without
+    knowing which engine will run the synth. */
+export function resolveVoiceAssignment(
+  engine: TtsEngine,
+  voice: VoiceLike,
+  hint?: CharacterHint,
+): TtsVoiceAssignment {
+  const name = pickVoiceForEngine(engine, voice, hint);
   return {
-    provider: 'gemini',
+    provider: engine,
     name,
-    description: GEMINI_VOICE_DESCRIPTIONS[name] ?? 'Prebuilt voice',
+    description: describeVoice(engine, name),
   };
 }
 
-export function pickGeminiVoice(voice: VoiceLike, hint?: CharacterHint): string {
-  const profile = inferProfile(voice, hint);
-  const options = PROFILE_VOICES[profile];
-  const idx = stableHash(voice.id) % options.length;
-  return options[idx];
+function catalogForEngine(engine: TtsEngine): Record<VoiceProfile, string[]> {
+  if (engine === 'coqui')  return COQUI_PROFILE_VOICES;
+  if (engine === 'gemini') return GEMINI_PROFILE_VOICES;
+  /* Piper/Kokoro fall back to the Coqui catalog until their own tables land
+     — keeps the picker total over the TtsEngine union while we incrementally
+     wire those engines in. */
+  return COQUI_PROFILE_VOICES;
+}
+
+function describeVoice(engine: TtsEngine, name: string): string {
+  if (engine === 'gemini') return GEMINI_VOICE_DESCRIPTIONS[name] ?? 'Prebuilt voice';
+  if (engine === 'coqui')  return COQUI_VOICE_DESCRIPTIONS[name] ?? 'Local voice';
+  return 'Local voice';
 }
 
 function inferProfile(voice: VoiceLike, hint?: CharacterHint): VoiceProfile {

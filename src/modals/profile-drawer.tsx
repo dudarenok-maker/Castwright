@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { IconClose, IconWaveform, IconRefresh, IconStar, IconLock, IconPlus, IconPause, IconSpinner } from '../lib/icons';
-import { TTS_MODEL_OPTIONS } from '../lib/tts-models';
+import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import type { TtsModelKey } from '../lib/types';
 import { Avatar, VoiceSwatch, Pill, PrimaryButton } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
@@ -25,6 +25,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
   const c = CHAR_COLORS[character.color as CharColor] ?? CHAR_COLORS.narrator;
   const playback = useSamplePlayback();
   const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
+  const ttsEngine = engineForModelKey(ttsModelKey);
   const [sampleLoading, setSampleLoading] = useState(false);
   const [sampleError, setSampleError] = useState<string | null>(null);
 
@@ -42,7 +43,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
     gradient: ['#999999', '#666666'] as [string, string],
     usedIn: 0,
     source: 'current' as const,
-    ttsVoice: resolveTtsVoiceForCharacter(character),
+    ttsVoice: resolveTtsVoiceForCharacter(character, ttsEngine),
   };
   const sampleUrl = sampleUrlFor(sampleVoiceId, ttsModelKey);
   const isPlayingThis = playback.isPlaying && playback.currentUrl === sampleUrl;

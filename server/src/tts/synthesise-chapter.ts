@@ -7,8 +7,8 @@
    still giving us per-group timing for the future playback slice. */
 
 import type { SentenceOutput } from '../handoff/schemas.js';
-import { pickGeminiVoice, type VoiceLike } from './voice-mapping.js';
-import type { TtsModelKey, TtsProvider } from './index.js';
+import { pickVoiceForEngine, type VoiceLike } from './voice-mapping.js';
+import type { TtsEngine, TtsModelKey, TtsProvider } from './index.js';
 import { wavDurationSec } from './wav.js';
 
 /** Minimum surface we need from a confirmed-cast character. Matches the
@@ -53,6 +53,10 @@ export interface SynthesiseChapterOpts {
   cast: CastCharacter[];
   provider: TtsProvider;
   modelKey: TtsModelKey;
+  /** Drives engine-specific voice catalog lookup. Must match the engine
+      behind `provider` so each character's name resolves to a voice the
+      engine actually has. */
+  engine: TtsEngine;
   /** Notification on each group completion. Optional. */
   onGroupComplete?: (e: {
     group: SentenceGroup;
@@ -81,7 +85,7 @@ export function buildSentenceGroups(sentences: SentenceOutput[]): SentenceGroup[
   return groups;
 }
 
-/** Build the VoiceLike payload that pickGeminiVoice consumes from a
+/** Build the VoiceLike payload that pickVoiceForEngine consumes from a
     confirmed-cast Character. Uses voiceId when present so the same character
     in the library stays on the same prebuilt voice; falls back to characterId. */
 function toVoiceLike(c: CastCharacter): VoiceLike {
@@ -93,7 +97,7 @@ function toVoiceLike(c: CastCharacter): VoiceLike {
 }
 
 export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<ChapterSynthesisResult> {
-  const { sentences, cast, provider, modelKey, onGroupComplete } = opts;
+  const { sentences, cast, provider, modelKey, engine, onGroupComplete } = opts;
 
   const castById = new Map(cast.map(c => [c.id, c]));
   const groups = buildSentenceGroups(sentences);
@@ -105,7 +109,7 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
 
   for (const group of groups) {
     const character = castById.get(group.characterId) ?? { id: group.characterId };
-    const voiceName = pickGeminiVoice(toVoiceLike(character));
+    const voiceName = pickVoiceForEngine(engine, toVoiceLike(character));
 
     const result = await provider.synthesize({
       text: group.text,

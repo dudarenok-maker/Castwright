@@ -3,7 +3,11 @@ import { IconStar } from '../lib/icons';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import { VoiceCard } from '../components/voice-library-panel';
 import type { TtsModelKey, Voice } from '../lib/types';
-import { TTS_MODEL_OPTIONS } from '../lib/tts-models';
+import {
+  TTS_ENGINES,
+  engineGroupForModelKey,
+  type TtsEngineId,
+} from '../lib/tts-models';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { voicesActions } from '../store/voices-slice';
@@ -47,18 +51,10 @@ export function LibraryView({ library }: Props) {
           <p className="mt-3 text-ink/60 max-w-2xl">Voices come from confirmed casts. Every character in a book you've finished setting up joins your library, ready to be reused in the next one. Drag any voice onto a character on the Cast page to carry it across.</p>
         </div>
         <div className="flex items-center gap-3">
-          <label className="inline-flex items-center gap-2 text-xs text-ink/60">
-            <span className="font-medium">TTS model</span>
-            <select
-              value={ttsModelKey}
-              onChange={(e) => dispatch(uiActions.setTtsModelKey(e.target.value as TtsModelKey))}
-              className="px-3 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink hover:bg-ink/[0.04] focus:outline-none focus:ring-2 focus:ring-magenta/30"
-            >
-              {TTS_MODEL_OPTIONS.map(m => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-            </select>
-          </label>
+          <TtsEngineModelPicker
+            modelKey={ttsModelKey}
+            onChange={(next) => dispatch(uiActions.setTtsModelKey(next))}
+          />
         </div>
       </div>
 
@@ -101,6 +97,51 @@ export function LibraryView({ library }: Props) {
         </div>
       )}
     </div>
+  );
+}
+
+/* Engine + model dropdowns. Switching engine resets the model to the engine
+   group's first option so the selection never lands on a Gemini model while
+   the engine reads "Local" (and vice versa). */
+interface TtsEngineModelPickerProps {
+  modelKey: TtsModelKey;
+  onChange: (next: TtsModelKey) => void;
+}
+function TtsEngineModelPicker({ modelKey, onChange }: TtsEngineModelPickerProps) {
+  const currentEngine = engineGroupForModelKey(modelKey);
+  const engineGroup = TTS_ENGINES.find(g => g.id === currentEngine) ?? TTS_ENGINES[0];
+  return (
+    <>
+      <label className="inline-flex items-center gap-2 text-xs text-ink/60">
+        <span className="font-medium">Engine</span>
+        <select
+          value={currentEngine}
+          onChange={(e) => {
+            const nextGroup = TTS_ENGINES.find(g => g.id === (e.target.value as TtsEngineId));
+            if (!nextGroup) return;
+            onChange(nextGroup.models[0].id);
+          }}
+          className="px-3 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink hover:bg-ink/[0.04] focus:outline-none focus:ring-2 focus:ring-magenta/30"
+          title={engineGroup.hint}
+        >
+          {TTS_ENGINES.map(g => (
+            <option key={g.id} value={g.id}>{g.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="inline-flex items-center gap-2 text-xs text-ink/60">
+        <span className="font-medium">Model</span>
+        <select
+          value={modelKey}
+          onChange={(e) => onChange(e.target.value as TtsModelKey)}
+          className="px-3 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink hover:bg-ink/[0.04] focus:outline-none focus:ring-2 focus:ring-magenta/30"
+        >
+          {engineGroup.models.map(m => (
+            <option key={m.id} value={m.id}>{m.label}</option>
+          ))}
+        </select>
+      </label>
+    </>
   );
 }
 

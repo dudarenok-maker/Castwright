@@ -1,0 +1,9 @@
+# Use the maintained Coqui fork (the original `TTS` package was discontinued
+# in early 2024 and won't install on Python >=3.12). `coqui-tts` keeps the
+# `from TTS.api import TTS` import surface and supports Python 3.10–3.13.
+# Pinned soft-floor to a recent stable; let pip pick the best 3.x compatible
+# wheel.
+coqui-tts>=0.24.0
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30,<0.32
+numpy>=1.24,<2.0

@@ -10,7 +10,7 @@
 
 import { GoogleGenAI } from '@google/genai';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
-import { resolveModelId } from './index.js';
+import { resolveGeminiModelId } from './index.js';
 
 interface GeminiTtsOptions {
   apiKey: string;
@@ -24,7 +24,7 @@ export class GeminiTtsProvider implements TtsProvider {
   }
 
   async synthesize({ text, voiceName, modelKey }: SynthesizeInput): Promise<SynthesizeOutput> {
-    const model = resolveModelId(modelKey);
+    const model = resolveGeminiModelId(modelKey);
 
     const response = await this.client.models.generateContent({
       model,
