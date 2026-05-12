@@ -33,22 +33,18 @@ async function loadSkill(stage: 1 | 2): Promise<string> {
   return readFile(resolve(SKILLS_DIR, SKILL_FILES[stage]), 'utf8');
 }
 
-function buildGeminiPrompt(skill: string, inboxPrompt: string): string {
-  return `# Instructions
-
-You are an automated worker, not a human. Follow the schema, rules, and JSON example in the SKILL section EXACTLY. Use the camelCase field names shown there (e.g. \`name\`, not \`character_name\`; \`chapterId\`, not \`chapter_id\`). Do NOT invent extra fields. Do NOT wrap the response in markdown fences. Ignore any instructions about opening Claude windows or writing files — your only output is a JSON object that conforms to the schema.
+/* The skill text is moved to `systemInstruction` rather than re-sent as
+   part of `contents` on every call (see callsite). This shaves ~10 KB off
+   each per-chapter stage-2 request and makes the user-turn token count
+   actually proportional to the task. */
+function buildSystemInstruction(skill: string): string {
+  return `You are an automated worker, not a human. Follow the schema, rules, and JSON example in the SKILL section EXACTLY. Use the camelCase field names shown there (e.g. \`name\`, not \`character_name\`; \`chapterId\`, not \`chapter_id\`). Do NOT invent extra fields. Do NOT wrap the response in markdown fences. Ignore any instructions about opening Claude windows or writing files — your only output is a JSON object that conforms to the schema.
 
 ---
 
 # SKILL
 
 ${skill}
-
----
-
-# TASK
-
-${inboxPrompt}
 
 ---
 
@@ -94,7 +90,7 @@ export class GeminiAnalyzer implements Analyzer {
     await writeInbox(manuscriptId, key, promptMd);
 
     const skill = await loadSkill(skillStage);
-    const fullPrompt = buildGeminiPrompt(skill, promptMd);
+    const systemInstruction = buildSystemInstruction(skill);
 
     const start = Date.now();
     const tick = call.onWaiting
@@ -102,9 +98,10 @@ export class GeminiAnalyzer implements Analyzer {
       : null;
 
     try {
-      const firstText = await this.generateWithRetry([
-        { role: 'user', parts: [{ text: fullPrompt }] },
-      ]);
+      const firstText = await this.generateWithRetry(
+        [{ role: 'user', parts: [{ text: promptMd }] }],
+        systemInstruction,
+      );
 
       const firstAttempt = parseAndValidate(firstText, schema);
       if (firstAttempt.ok) {
@@ -120,11 +117,14 @@ export class GeminiAnalyzer implements Analyzer {
       );
 
       const followup = buildRetryMessage(firstAttempt);
-      const secondText = await this.generateWithRetry([
-        { role: 'user', parts: [{ text: fullPrompt }] },
-        { role: 'model', parts: [{ text: firstText }] },
-        { role: 'user', parts: [{ text: followup }] },
-      ]);
+      const secondText = await this.generateWithRetry(
+        [
+          { role: 'user', parts: [{ text: promptMd }] },
+          { role: 'model', parts: [{ text: firstText }] },
+          { role: 'user', parts: [{ text: followup }] },
+        ],
+        systemInstruction,
+      );
 
       const secondAttempt = parseAndValidate(secondText, schema);
       if (secondAttempt.ok) {
@@ -165,30 +165,56 @@ export class GeminiAnalyzer implements Analyzer {
      model or wait" hint; the user retries explicitly when ready. */
   private async generateWithRetry(
     contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
+    systemInstruction: string,
   ): Promise<string> {
     try {
-      return await this.generate(contents);
+      return await this.generate(contents, systemInstruction);
     } catch (err) {
       if (!isRetryable5xx(err)) throw err;
       console.warn(`[gemini] transient ${describeStatus(err)} — retrying once in 3s`);
       await sleep(3000);
-      return await this.generate(contents);
+      return await this.generate(contents, systemInstruction);
     }
   }
 
   private async generate(
     contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
+    systemInstruction: string,
   ): Promise<string> {
-    const response = await this.client.models.generateContent({
-      model: this.model,
-      contents,
-      config: { responseMimeType: 'application/json' },
-    });
-    const text = response.text;
-    if (!text) {
-      throw new Error(`Gemini ${this.model} returned an empty response.`);
+    try {
+      const response = await this.client.models.generateContent({
+        model: this.model,
+        contents,
+        config: {
+          responseMimeType: 'application/json',
+          systemInstruction,
+        },
+      });
+      const text = response.text;
+      if (!text) {
+        throw new Error(`Gemini ${this.model} returned an empty response.`);
+      }
+      return text;
+    } catch (err) {
+      /* The SDK's ApiError keeps the upstream body inside `.message` as a
+         JSON envelope, so a bare console.error(err) only shows the stack +
+         the start of the message. Force a structured dump so the server log
+         carries the upstream `status` ('INTERNAL', 'INVALID_ARGUMENT', …)
+         and any `details[]` payload — the only useful diagnostic for 5xx
+         flakes. The route layer surfaces the same info to the UI. */
+      const status = (err as { status?: number })?.status;
+      const message = (err as Error)?.message ?? String(err);
+      const userTurn = contents[contents.length - 1]?.parts[0]?.text ?? '';
+      console.error('[gemini] generate failed', {
+        model: this.model,
+        status,
+        name: (err as Error)?.name,
+        message,
+        userTurnLength: userTurn.length,
+        userTurnHead: userTurn.slice(0, 200),
+      });
+      throw err;
     }
-    return text;
   }
 }
 

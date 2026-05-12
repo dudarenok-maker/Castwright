@@ -18,12 +18,14 @@ import {
   castJsonPath,
   manuscriptEditsJsonPath,
   revisionsJsonPath,
+  slug,
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { putManuscript, getManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { clearAnalysisCache, loadAnalysisCache } from '../store/analysis-cache.js';
+import { parseManuscript } from '../parsers/index.js';
 
 export const bookStateRouter = Router();
 
@@ -139,6 +141,92 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
   } catch (e) {
     console.error('[book-state] PUT failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to write book state.' });
+  }
+});
+
+/* POST /api/books/:bookId/reparse — re-runs the parser against the on-disk
+   manuscript so chapter detection picks up parser-rule updates without
+   forcing the user to delete and re-upload. Destructive in the sense that
+   it discards any analysis cache, cast, and audio output (chapter slugs
+   change when titles change, so old audio files no longer line up). The
+   manuscript file itself is untouched.
+
+   Frontend confirms with the user before calling. Returns the fresh state
+   so the library / open-book flow can re-hydrate without a second round-trip. */
+bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => {
+  try {
+    const located = await findBookByBookId(req.params.bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const { bookDir, state } = located;
+
+    const manuscriptPath = join(bookDir, state.manuscriptFile);
+    if (!existsSync(manuscriptPath)) {
+      return res.status(409).json({ error: `Manuscript file missing on disk: ${state.manuscriptFile}` });
+    }
+
+    /* Read the original file as a Buffer so the parser dispatcher can route
+       binary formats (PDF, EPUB) the same way the upload route does. The
+       text parsers will utf8-decode internally when format calls for it. */
+    const buffer = await readFile(manuscriptPath);
+    const parsed = await parseManuscript({ buffer, fileName: state.manuscriptFile });
+
+    /* Replace the chapter list with whatever the parser produced. Slugs are
+       regenerated from the new titles so the audio dir layout stays in
+       lockstep. Old audio files (if any) become orphaned and get removed
+       below — keeping them would mislead the library into reporting wrong
+       completed counts. */
+    const newChapters: BookStateJson['chapters'] = parsed.chapters.map(c => ({
+      id: c.id,
+      title: c.title,
+      slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+      duration: '00:00',
+    }));
+
+    const nextState: BookStateJson = {
+      ...state,
+      chapters: newChapters,
+      castConfirmed: false,    // cast keys to chapters; force re-confirm.
+      updatedAt: new Date().toISOString(),
+    };
+    await writeJsonAtomic(stateJsonPath(bookDir), nextState);
+
+    /* Wipe the analysis cache and any per-book state that's now stale.
+       Audio dir is removed wholesale; cast.json + manuscript-edits.json are
+       deleted so the cast view re-runs voice matching against the fresh
+       chapter list. revisions.json is kept (workspace-level pinning isn't
+       tied to chapters). */
+    await clearAnalysisCache(state.manuscriptId);
+    for (const p of [castJsonPath(bookDir), manuscriptEditsJsonPath(bookDir), revisionsJsonPath(bookDir)]) {
+      if (existsSync(p)) await rm(p, { force: true });
+    }
+    const ad = audioDir(bookDir);
+    if (existsSync(ad)) await rm(ad, { recursive: true, force: true });
+
+    /* Refresh the in-memory ManuscriptRecord so a follow-up analysis run
+       sees the new chapter bodies, not the cached pre-reparse copy. */
+    const sourceText = parsed.sourceText;
+    const record: ManuscriptRecord = {
+      manuscriptId: state.manuscriptId,
+      format: parsed.format,
+      title: state.title,
+      wordCount: sourceText.trim().split(/\s+/).filter(Boolean).length,
+      byteSize: Buffer.byteLength(sourceText, 'utf8'),
+      uploadedAt: state.createdAt,
+      sourceText,
+      chapterHints: parsed.chapters,
+      bookId: state.bookId,
+      bookDir,
+    };
+    putManuscript(record);
+
+    res.json({
+      state: nextState,
+      chapterCount: newChapters.length,
+      chapterTitles: newChapters.map(c => c.title),
+    });
+  } catch (e) {
+    console.error('[book-state] reparse failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Failed to re-parse manuscript.' });
   }
 });
 

@@ -94,9 +94,36 @@ function durationPlaceholder(): string {
    computed from stage 1's *observed* rate × STAGE2_STRETCH, so big books
    on slow models still get a sensible bar after the first phase. */
 const STAGE1_BASELINE_RATE = 1.0;  // input chars / ms; tuned for gemini-2.5-flash
-const STAGE2_STRETCH = 3.0;         // stage 2 typically takes ~3× stage 1
+/* Stage 2 emits one JSON entry per sentence — output is much heavier than
+   stage 1's small roster. Earlier 3× was optimistic; observed runs on
+   gemini-3-flash land closer to 5–7× the stage 1 time per char. Erring on
+   the side of "we promised more time than it took" beats pegging at 95%. */
+const STAGE2_STRETCH = 5.0;
 const MIN_EST_MS = 3000;
 const MAX_EST_MS = 10 * 60 * 1000;  // 10 minutes — past this the bar caps
+/* When elapsed exceeds the per-chapter estimate, the bar asymptotes toward
+   the cap instead of pegging — overage frac is mapped through 1 - 1/(1+x)
+   so a 2× overage adds half the remaining headroom, a 4× overage adds 80%.
+   Log lines fire at each threshold so the user gets a textual signal too. */
+const OVERAGE_LOG_THRESHOLDS = [1.5, 2.0, 3.0] as const;
+
+/* Wall-clock heartbeat thresholds (ms). Independent of the per-chapter
+   estimate — guarantees the log gets a fresh line at predictable intervals
+   even when the estimate is small (a 22s estimate's 1.5×/2×/3× thresholds
+   are only 33s/44s/66s, so without these the log would stall on a 5-minute
+   chapter). Each threshold fires once per chapter. */
+const HEARTBEAT_MS_THRESHOLDS = [30_000, 60_000, 120_000, 180_000, 300_000, 420_000, 600_000, 900_000] as const;
+
+/* Stage 2 chapter concurrency. Default 2 keeps us well under Gemini's
+   free-tier RPM limits while roughly halving wall-clock time vs sequential.
+   Bump via STAGE2_CONCURRENCY env if your tier (or the model) allows; cap
+   at 6 because narrative-consistency benefits drop off and the per-call
+   overhead dominates beyond that. */
+function readStage2Concurrency(): number {
+  const raw = Number(process.env.STAGE2_CONCURRENCY);
+  if (!Number.isFinite(raw) || raw < 1) return 2;
+  return Math.min(6, Math.floor(raw));
+}
 
 function clampEst(ms: number): number {
   return Math.max(MIN_EST_MS, Math.min(MAX_EST_MS, Math.round(ms)));
@@ -108,7 +135,22 @@ function humanSeconds(ms: number): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
-function buildStage1Inbox(manuscriptId: string, title: string, sourceText: string): string {
+function buildStage1Inbox(
+  manuscriptId: string,
+  title: string,
+  sourceText: string,
+  chapterHints: Array<{ id: number; title: string }>,
+): string {
+  /* Pre-detected chapter list. The local parser already split the
+     manuscript into chapters; pass that list so the analyzer doesn't have
+     to re-detect boundaries from a flat sourceText (the boundaries don't
+     survive the body-stitching that produces sourceText). The analyzer is
+     instructed below to use these ids/titles verbatim. */
+  const chapterListJson = JSON.stringify(
+    chapterHints.map(c => ({ id: c.id, title: c.title })),
+    null,
+    2,
+  );
   return `---
 manuscriptId: ${manuscriptId}
 stage: 1
@@ -134,6 +176,17 @@ Return ONLY a JSON object matching the schema above. No prose, no code fences.
 
 - Title: ${title}
 - Manuscript ID: ${manuscriptId}
+
+## Chapter list (pre-detected by the local parser — use verbatim)
+
+The local parser has already split the manuscript into chapters. Use this
+exact list in your output's \`chapters\` field — preserve every \`id\` and
+\`title\` as given, in the same order. **Do not merge, split, drop, or
+re-title these chapters.** They will be the source of truth for stage 2.
+
+\`\`\`json
+${chapterListJson}
+\`\`\`
 
 ## Manuscript
 
@@ -178,8 +231,18 @@ JSON object matching the schema above. No prose, no code fences.
 
 ## Characters (from stage 1)
 
+Only the \`id\` is load-bearing for stage 2 (you assign sentences by character
+id). Name and role are included for disambiguation when the manuscript
+refers to the same person by multiple forms. The richer tone / evidence /
+description fields from stage 1 are intentionally elided to keep the call
+fast — refer back to them only if you genuinely can't disambiguate.
+
 \`\`\`json
-${JSON.stringify(stage1.characters, null, 2)}
+${JSON.stringify(
+  stage1.characters.map(c => ({ id: c.id, name: c.name, role: c.role })),
+  null,
+  2,
+)}
 \`\`\`
 
 ## Chapter ${chapter.id} — ${chapter.title}
@@ -224,13 +287,18 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   const endPhase = (id: number) => Date.now() - (phaseStarts[id] ?? Date.now());
 
   const requestedModel = typeof req.body?.model === 'string' ? req.body.model : undefined;
-  let analyzer;
+  let analyzerLocal;
   try {
-    analyzer = selectAnalyzer({ model: requestedModel });
+    analyzerLocal = selectAnalyzer({ model: requestedModel });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });
     return res.end();
   }
+  /* Const re-bind so TS keeps the narrowed type inside nested closures
+     (the `let analyzer` was inferred as `Analyzer | undefined` and got
+     widened to `any` when captured by runChapter). */
+  const analyzer = analyzerLocal;
+  const recordRef = record;
   const isGemini = (process.env.ANALYZER ?? 'manual').toLowerCase() === 'gemini';
   const activeModelId = isGemini
     ? (requestedModel ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it')
@@ -280,7 +348,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       const stage1Start = Date.now();
       stage1 = await analyzer.runStage1(
         manuscriptId,
-        buildStage1Inbox(manuscriptId, record.title, record.sourceText),
+        buildStage1Inbox(manuscriptId, record.title, record.sourceText, record.chapterHints),
         {
           onWaiting: (elapsed) => {
             /* Linear progress against the estimate, capped at 0.95 until the
@@ -301,7 +369,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     if (stage1ActualMs > 0) {
       stage2EstMs = clampEst(stage1ActualMs * STAGE2_STRETCH);
       log(0, `Detected ${stage1.characters.length} character${stage1.characters.length === 1 ? '' : 's'}: ${stage1.characters.map(c => c.name).join(', ')}`);
-      log(0, `${stage1.chapters.length} chapter${stage1.chapters.length === 1 ? '' : 's'} identified in ${humanSeconds(stage1ActualMs)}`);
+      /* Report the *parser*'s chapter count — that's what stage 2 actually
+         iterates. The analyzer's own count can occasionally collapse on
+         flaky models even though the chapter list was provided verbatim in
+         the inbox; the parser is the operational source of truth. */
+      const parserChapterCount = record.chapterHints.length;
+      log(0, `${parserChapterCount} chapter${parserChapterCount === 1 ? '' : 's'} identified in ${humanSeconds(stage1ActualMs)}`);
     }
     send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
 
@@ -318,54 +391,231 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     if (cachedChapterCount > 0) {
       log(1, `Resuming — ${cachedChapterCount} of ${totalChapters} chapter${cachedChapterCount === 1 ? '' : 's'} already cached.`);
     }
-    const chapterEstMs = Math.max(2000, Math.round(stage2EstMs / Math.max(1, totalChapters)));
+    /* Per-chapter budget weighted by char count so a fat chapter doesn't get
+       the same budget as a thin one. After each chapter completes we
+       accumulate actual ms + chars so subsequent chapters' estimates use
+       the *observed* pace instead of the stage-1-derived baseline — Gemma
+       on a slow afternoon is materially slower than the same model on
+       stage 1's input, and the user shouldn't be staring at a wrong ETA
+       for the whole stage. Min 2s floor keeps the bar from teleporting on
+       micro-chapters. */
+    const totalStage2Chars = record.chapterHints.reduce((sum, c) => sum + c.body.length, 0);
+    let actualMsTotal = 0;
+    let actualCharsTotal = 0;
+    const chapterEstMsFor = (chars: number): number => {
+      /* Once any chapter has run, prefer the observed rate. One completed
+         chapter is already a better signal than the stage-1 extrapolation
+         because stage-2 output (one JSON entry per sentence) is heavier
+         than stage-1 output (small character roster). */
+      if (actualCharsTotal > 0) {
+        const observedRate = actualMsTotal / actualCharsTotal;
+        return Math.max(2000, Math.round(observedRate * chars));
+      }
+      if (totalStage2Chars > 0) {
+        return Math.max(2000, Math.round(stage2EstMs * (chars / totalStage2Chars)));
+      }
+      return Math.max(2000, Math.round(stage2EstMs / Math.max(1, totalChapters)));
+    };
+    const remainingNonCachedChars = (afterIndex: number): { chars: number; count: number } => {
+      let chars = 0;
+      let count = 0;
+      for (let j = afterIndex + 1; j < record.chapterHints.length; j++) {
+        const next = record.chapterHints[j];
+        if (cachedChapters[next.id]) continue;
+        chars += next.body.length;
+        count += 1;
+      }
+      return { chars, count };
+    };
     const allSentences: SentenceOutput[] = [];
+    /* Per-chapter results keyed by chapter id so we can concatenate in
+       narrative order at the end regardless of which chapter finishes first
+       under concurrency. */
+    const sentencesByChapter = new Map<number, SentenceOutput[]>();
+    const completedSet = new Set<number>();
 
+    /* Replay cached chapters synchronously up front. Cheap, deterministic
+       progress, and avoids racing the concurrent pool against the cache. */
     for (let i = 0; i < totalChapters; i++) {
-      const ch = record.chapterHints[i];
-      const tickOverall = (frac: number) => {
-        const overall = (i + frac) / totalChapters;
-        const p = Math.min(0.02 + 0.93 * overall, 0.95);
-        send({ kind: 'phase', phaseId: 1, progress: p, label: PHASES[1].label });
-      };
-
+      const ch = recordRef.chapterHints[i];
       const cached = cachedChapters[ch.id];
       if (cached && cached.length > 0) {
         log(1, `Chapter ${i + 1}/${totalChapters} — ${ch.title}: cached (${cached.length.toLocaleString()} sentences), skipping.`);
-        allSentences.push(...cached);
-        tickOverall(1);
-        continue;
+        sentencesByChapter.set(ch.id, cached);
+        completedSet.add(i);
       }
+    }
+    /* Reflect cached progress in the bar before any work starts. */
+    {
+      const cachedFrac = completedSet.size / totalChapters;
+      send({
+        kind: 'phase',
+        phaseId: 1,
+        progress: Math.min(0.02 + 0.93 * cachedFrac, 0.95),
+        label: PHASES[1].label,
+      });
+    }
 
-      const chStart = Date.now();
-      log(1, `Chapter ${i + 1}/${totalChapters} — ${ch.title} (${ch.body.length.toLocaleString()} chars) via ${analyzerLabel}…`);
+    /* Tasks that need to actually run. */
+    const taskIndices: number[] = [];
+    for (let i = 0; i < totalChapters; i++) {
+      if (!completedSet.has(i)) taskIndices.push(i);
+    }
+
+    const concurrency = readStage2Concurrency();
+    log(1, `Running ${taskIndices.length} chapter${taskIndices.length === 1 ? '' : 's'} with up to ${concurrency} in parallel.`);
+
+    /* Track which chapters are currently in-flight + their elapsed times so
+       the `live` payload can pick the oldest still-running chapter as the
+       canonical realtime indicator (it's the one with the longest ETA). */
+    interface InFlight {
+      chapterIndex: number;
+      chapterTitle: string;
+      chapterEstMs: number;
+      startedAt: number;
+      elapsedMs: number;
+    }
+    const inFlight = new Map<number, InFlight>();
+
+    const sendLiveTick = () => {
+      const oldest = Array.from(inFlight.values())
+        .sort((a, b) => a.startedAt - b.startedAt)[0];
+      const p = Math.min(0.02 + 0.93 * (completedSet.size / totalChapters), 0.95);
+      send({
+        kind: 'phase',
+        phaseId: 1,
+        progress: p,
+        label: PHASES[1].label,
+        live: oldest ? {
+          chapterIndex: oldest.chapterIndex + 1,
+          totalChapters,
+          chapterTitle: oldest.chapterTitle,
+          elapsedMs: oldest.elapsedMs,
+          estMs: oldest.chapterEstMs,
+        } : undefined,
+      });
+    };
+
+    async function runChapter(i: number): Promise<void> {
+      const ch = recordRef.chapterHints[i];
+      const chapterEstMs = chapterEstMsFor(ch.body.length);
+      const loggedOverages = new Set<number>();
+      const loggedHeartbeats = new Set<number>();
+      const startedAt = Date.now();
+      inFlight.set(i, {
+        chapterIndex: i,
+        chapterTitle: ch.title,
+        chapterEstMs,
+        startedAt,
+        elapsedMs: 0,
+      });
+
+      const tickOverall = (elapsed: number) => {
+        const slot = inFlight.get(i);
+        if (slot) slot.elapsedMs = elapsed;
+        sendLiveTick();
+        /* Over-budget log thresholds — fire once per chapter. */
+        for (const t of OVERAGE_LOG_THRESHOLDS) {
+          if (loggedOverages.has(t)) continue;
+          if (elapsed >= chapterEstMs * t) {
+            loggedOverages.add(t);
+            log(1, `Chapter ${i + 1}/${totalChapters} still running — ${humanSeconds(elapsed)} elapsed (est was ${humanSeconds(chapterEstMs)}, ${t}× exceeded). Continuing.`);
+          }
+        }
+        /* Wall-clock heartbeats. */
+        for (const ms of HEARTBEAT_MS_THRESHOLDS) {
+          if (loggedHeartbeats.has(ms)) continue;
+          if (elapsed >= ms) {
+            loggedHeartbeats.add(ms);
+            const overageRecent = Array.from(loggedOverages).some(t =>
+              Math.abs(chapterEstMs * t - ms) < 5000,
+            );
+            if (!overageRecent) {
+              log(1, `Chapter ${i + 1}/${totalChapters} — ${humanSeconds(elapsed)} elapsed, still waiting on the model.`);
+            }
+          }
+        }
+      };
+
+      log(1, `Chapter ${i + 1}/${totalChapters} — ${ch.title} (${ch.body.length.toLocaleString()} chars, ~${humanSeconds(chapterEstMs)}) via ${analyzerLabel}…`);
       const result = await analyzer.runStage2Chapter(
         manuscriptId,
         ch.id,
-        buildStage2ChapterInbox(manuscriptId, record.title, stage1, ch),
+        buildStage2ChapterInbox(manuscriptId, recordRef.title, stage1, ch),
         {
-          onWaiting: (elapsed) => tickOverall(Math.min(elapsed / chapterEstMs, 1)),
+          onWaiting: (elapsed) => tickOverall(elapsed),
         },
       );
-      /* Force-fix the chapterId in case the model echoed back something
-         different — the route is the source of truth here. */
       for (const s of result.sentences) s.chapterId = ch.id;
-      allSentences.push(...result.sentences);
+      sentencesByChapter.set(ch.id, result.sentences);
       cachedChapters[ch.id] = result.sentences;
       cache.chapters = cachedChapters;
+      /* Cache + edits writes are atomic-rename and JS is single-threaded, so
+         concurrent saves serialise naturally. Worst case is two near-
+         simultaneous writes overlap and the second wins — both contain the
+         same set + the freshly-completed chapter, so the merge is safe. */
       await saveAnalysisCache(manuscriptId, cache);
-      /* Roll sentences out to manuscript-edits.json after each chapter so a
-         book-state GET sees real per-sentence attributions even when stage 2
-         is only partially done. Lets the manuscript view show actual cast
-         lines instead of the mock initialSentences fallback. */
-      if (record.bookDir) {
+      if (recordRef.bookDir) {
         try {
-          await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: allSentences });
+          /* Rebuild the running narrative from the chapter map so order is
+             always correct regardless of which chapter completes first. */
+          const running: SentenceOutput[] = [];
+          for (const order of recordRef.chapterHints) {
+            const arr = sentencesByChapter.get(order.id);
+            if (arr) running.push(...arr);
+          }
+          await writeJsonAtomic(manuscriptEditsJsonPath(recordRef.bookDir), { sentences: running });
         } catch (persistErr) {
           console.warn('[analysis] failed to roll manuscript-edits.json', persistErr);
         }
       }
-      log(1, `Chapter ${i + 1}/${totalChapters} done — ${result.sentences.length.toLocaleString()} sentences in ${humanSeconds(Date.now() - chStart)}`);
+      const chDuration = Date.now() - startedAt;
+      completedSet.add(i);
+      inFlight.delete(i);
+      log(1, `Chapter ${i + 1}/${totalChapters} done — ${result.sentences.length.toLocaleString()} sentences in ${humanSeconds(chDuration)}`);
+
+      /* Update observed-pace tracker. Race-safe because JS is single-threaded
+         — increments interleave but sums are associative. */
+      actualMsTotal += chDuration;
+      actualCharsTotal += ch.body.length;
+      const observedRate = actualMsTotal / actualCharsTotal;
+      const remaining = remainingNonCachedChars(-1); // re-scan whole list against current cache
+      if (remaining.count > 0) {
+        const remainingEstMs = Math.round(observedRate * remaining.chars);
+        const secsPer1k = observedRate;
+        log(1, `Refined pace — ${secsPer1k.toFixed(1)}s per 1,000 chars · ~${humanSeconds(remainingEstMs)} remaining over ${remaining.count} chapter${remaining.count === 1 ? '' : 's'}.`);
+      }
+      sendLiveTick();
+    }
+
+    /* Concurrency pool — keep up to `concurrency` chapters in flight at a
+       time. The first failure aborts new task dispatch, but already-running
+       tasks finish their work and write to the cache, so a resume picks up
+       cleanly from where the run left off. */
+    let nextTask = 0;
+    let aborted = false;
+    const workers: Promise<void>[] = [];
+    const launchNext = async (): Promise<void> => {
+      while (nextTask < taskIndices.length && !aborted) {
+        const i = taskIndices[nextTask++];
+        try {
+          await runChapter(i);
+        } catch (e) {
+          inFlight.delete(i);
+          aborted = true;
+          throw e;
+        }
+      }
+    };
+    for (let w = 0; w < Math.min(concurrency, taskIndices.length); w++) {
+      workers.push(launchNext());
+    }
+    await Promise.all(workers);
+
+    /* Stitch the per-chapter results into narrative order. */
+    for (const ch of record.chapterHints) {
+      const arr = sentencesByChapter.get(ch.id);
+      if (arr) allSentences.push(...arr);
     }
 
     /* Final manuscript-edits.json write. Covers the all-cached resume case
@@ -459,27 +709,56 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     send({ kind: 'result', response });
     res.end();
   } catch (e) {
-    console.error('[analysis] failed', e);
-    const { code, message } = describeError(e, analyzerLabel);
-    send({ kind: 'error', code, message });
+    /* Structured dump — SDK errors don't stringify cleanly with bare
+       console.error, which means the upstream status + details get lost in
+       the log. Match the shape the route surfaces to the UI so debugging
+       reads the same on both sides. */
+    const parsedLog = tryParseApiError((e as Error)?.message ?? String(e));
+    console.error('[analysis] failed', {
+      model: activeModelId,
+      name: (e as Error)?.name,
+      status: (e as { status?: number })?.status,
+      upstreamStatus: parsedLog?.status,
+      upstreamCode: parsedLog?.code,
+      message: (e as Error)?.message,
+      details: parsedLog?.details,
+    });
+    const { code, message, detail } = describeError(e, analyzerLabel);
+    send({ kind: 'error', code, message, detail });
     res.end();
   }
 });
 
 /* The Gemini SDK throws `ApiError` instances whose `.message` is the raw
-   JSON envelope (e.g. `{"error":{"code":503,"message":"...","status":"..."}}`).
+   JSON envelope (e.g. `{"error":{"code":503,"message":"...","status":"...","details":[...]}}`).
    Surface a friendly, copy-pasteable line for the UI plus a short `code` the
    client can switch on (rate_limit | unavailable | internal | invalid_key |
-   network | unknown). */
-function describeError(err: unknown, modelLabel: string): { code: string; message: string } {
+   network | unknown), and a structured `detail` string the UI can show in a
+   collapsible block — preserves the upstream details[] array which usually
+   names the field/quota that triggered the failure. */
+function describeError(
+  err: unknown,
+  modelLabel: string,
+): { code: string; message: string; detail?: string } {
   const raw = (err as Error)?.message ?? String(err);
   const status = (err as { status?: number })?.status;
 
   const parsed = tryParseApiError(raw);
   if (parsed) {
     const code = classifyStatus(parsed.code ?? status, parsed.message);
-    const message = trimQuotaMessage(parsed.message);
-    return { code, message: `${modelLabel} returned ${parsed.code ?? status ?? '???'}: ${message}` };
+    /* Only trim quota messages — 4xx/5xx bodies are usually short and
+       informative (an INVALID_ARGUMENT body names the failed field), so
+       trimming them throws away the only useful diagnostic. */
+    const trimmed = code === 'rate_limit' || code === 'daily_quota'
+      ? trimQuotaMessage(parsed.message)
+      : parsed.message;
+    const statusSuffix = parsed.status ? ` (${parsed.status})` : '';
+    const detail = formatErrorDetail(parsed, raw);
+    return {
+      code,
+      message: `${modelLabel} returned ${parsed.code ?? status ?? '???'}${statusSuffix}: ${trimmed}`,
+      detail,
+    };
   }
 
   if (status) {
@@ -488,24 +767,55 @@ function describeError(err: unknown, modelLabel: string): { code: string; messag
   return { code: 'unknown', message: raw || 'Analysis failed.' };
 }
 
+/* Build the detail blob shown in the UI's collapsible. Prefer the
+   structured details[] from the upstream envelope; fall back to the raw
+   error body so debugging never has to round-trip to the server log. */
+function formatErrorDetail(
+  parsed: { status?: string; details?: unknown[] },
+  raw: string,
+): string | undefined {
+  const lines: string[] = [];
+  if (parsed.status) lines.push(`status: ${parsed.status}`);
+  if (parsed.details && parsed.details.length > 0) {
+    lines.push('details:');
+    lines.push(JSON.stringify(parsed.details, null, 2));
+  }
+  if (lines.length === 0) {
+    /* No structured details — fall back to the raw SDK message, trimmed.
+       Useful when the error wasn't a Google API envelope (e.g. network). */
+    const trimmed = raw.length > 1500 ? `${raw.slice(0, 1500)}…` : raw;
+    return trimmed.trim() || undefined;
+  }
+  return lines.join('\n');
+}
+
 /* Google's 429 body is wall-of-text — strip everything after the first
    sentence so the UI alert stays tractable. The full text still lives in
-   the server console for debugging. */
+   the server console (and the `detail` blob) for debugging. */
 function trimQuotaMessage(message: string): string {
   const firstStop = message.search(/[.\n]/);
   if (firstStop > 0 && firstStop < 240) return message.slice(0, firstStop + 1).trim();
   return message.slice(0, 240) + (message.length > 240 ? '…' : '');
 }
 
-function tryParseApiError(raw: string): { code?: number; message: string } | null {
+function tryParseApiError(
+  raw: string,
+): { code?: number; message: string; status?: string; details?: unknown[] } | null {
   /* SDK messages often look like 'got status: 503 UNAVAILABLE. {"error":{...}}'.
      Find the first '{' and try to parse from there. */
   const start = raw.indexOf('{');
   if (start < 0) return null;
   try {
-    const obj = JSON.parse(raw.slice(start)) as { error?: { code?: number; message?: string } };
+    const obj = JSON.parse(raw.slice(start)) as {
+      error?: { code?: number; message?: string; status?: string; details?: unknown[] };
+    };
     if (obj?.error?.message) {
-      return { code: obj.error.code, message: obj.error.message };
+      return {
+        code: obj.error.code,
+        message: obj.error.message,
+        status: obj.error.status,
+        details: obj.error.details,
+      };
     }
   } catch {
     return null;

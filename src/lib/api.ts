@@ -48,8 +48,19 @@ export interface UploadArgs {
   fileName?: string;
   format?: 'markdown' | 'plaintext' | 'epub' | 'pdf';
 }
+/** Realtime "what's running right now" payload piggybacked on phase ticks.
+    Server emits one of these every 500ms while a stage-2 chapter is in
+    flight; the analysing view renders an elapsed-of-estimate indicator so
+    the user sees liveness even between log entries. */
+export interface AnalysisLiveInfo {
+  chapterIndex: number;
+  totalChapters: number;
+  chapterTitle: string;
+  elapsedMs: number;
+  estMs: number;
+}
 export interface AnalyseOpts {
-  onPhase?: (e: { phaseId: number; progress: number }) => void;
+  onPhase?: (e: { phaseId: number; progress: number; live?: AnalysisLiveInfo }) => void;
   /** Narrative log lines streamed from the server. Surface them in the
       active phase so the user sees real progress (e.g. detected characters,
       sentence counts) instead of canned snippets. */
@@ -391,14 +402,21 @@ interface AnalysisStreamEvent {
   response?: AnalyseResponse;
   message?: string;
   code?: string;
+  /** Structured upstream detail (Google's `status` + `details[]` for ApiError
+      envelopes; falls back to the raw SDK message). Rendered in a collapsible
+      block in the analysing view so the headline stays readable. */
+  detail?: string;
+  live?: AnalysisLiveInfo;
 }
 
 export class AnalysisError extends Error {
   code: string;
-  constructor(message: string, code: string) {
+  detail?: string;
+  constructor(message: string, code: string, detail?: string) {
     super(message);
     this.name = 'AnalysisError';
     this.code = code;
+    this.detail = detail;
   }
 }
 
@@ -419,7 +437,7 @@ async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, mod
   const handle = (payload: AnalysisStreamEvent) => {
     if (payload.kind === 'phase') {
       if (typeof payload.phaseId === 'number' && typeof payload.progress === 'number') {
-        onPhase?.({ phaseId: payload.phaseId, progress: payload.progress });
+        onPhase?.({ phaseId: payload.phaseId, progress: payload.progress, live: payload.live });
       }
     } else if (payload.kind === 'log') {
       if (typeof payload.phaseId === 'number' && typeof payload.message === 'string') {
@@ -428,7 +446,7 @@ async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, mod
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
     } else if (payload.kind === 'error') {
-      throw new AnalysisError(payload.message || 'Analysis failed.', payload.code ?? 'unknown');
+      throw new AnalysisError(payload.message || 'Analysis failed.', payload.code ?? 'unknown', payload.detail);
     }
   };
 
@@ -464,6 +482,21 @@ async function realMatchVoices({ bookId, characters }: MatchArgs): Promise<Voice
   return res.json();
 }
 
+export interface ReparseBookResponse {
+  state: { chapters: Array<{ id: number; title: string; slug: string }> };
+  chapterCount: number;
+  chapterTitles: string[];
+}
+async function realReparseBook(bookId: string): Promise<ReparseBookResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/reparse`, { method: 'POST' });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    throw new Error(detail || `Re-parse failed (${res.status}).`);
+  }
+  return res.json();
+}
+
 async function realDeleteBook(bookId: string): Promise<void> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}`, { method: 'DELETE' });
   if (!res.ok) {
@@ -475,6 +508,11 @@ async function realDeleteBook(bookId: string): Promise<void> {
 
 async function mockDeleteBook(_bookId: string): Promise<void> {
   await wait(80);
+}
+
+async function mockReparseBook(_bookId: string): Promise<ReparseBookResponse> {
+  await wait(120);
+  return { state: { chapters: [] }, chapterCount: 0, chapterTitles: [] };
 }
 
 async function realGetVoiceSample({ voiceId, voice, modelKey, text, characterHint }: VoiceSampleArgs): Promise<VoiceSample> {
@@ -568,6 +606,7 @@ const real = {
   analyseManuscript: realAnalyseManuscript,
   matchVoices:       realMatchVoices,
   deleteBook:        realDeleteBook,
+  reparseBook:       realReparseBook,
   getVoiceSample:    realGetVoiceSample,
   streamGeneration:  realStreamGeneration,
   getChapterAudio:   async (_args: AudioArgs): Promise<ChapterAudio> => {
@@ -592,6 +631,7 @@ const mock = {
   analyseManuscript: mockAnalyseManuscript,
   matchVoices:       mockMatchVoices,
   deleteBook:        mockDeleteBook,
+  reparseBook:       mockReparseBook,
   getVoiceSample:    mockGetVoiceSample,
   streamGeneration:  mockStreamGeneration,
   getChapterAudio:   mockGetChapterAudio,

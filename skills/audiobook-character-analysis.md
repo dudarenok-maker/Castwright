@@ -65,7 +65,34 @@ A JSON object with exactly these two top-level fields:
 - `ageRange`: `"child"` (≤12), `"teen"` (13–19), `"adult"` (20–60), `"elderly"` (60+). Use the manuscript's stated or strongly implied age. Skip the field if you genuinely don't know.
 - `tone`: integer fields, 0 (low) to 100 (high). Skip a field rather than guess.
 - `evidence`: 1–3 short quotes from the manuscript that justify your reading. Keep quotes under ~120 chars; add a `note` when the link isn't obvious.
+- `chapters[]` — **use the pre-detected list from the inbox verbatim.**
+  The local parser has already split the manuscript and supplies a
+  `## Chapter list (pre-detected by the local parser — use verbatim)`
+  section above the manuscript body. Copy every `id` and `title` into your
+  output's `chapters` field in the same order. Do **not** merge, split,
+  drop, or re-title these chapters even if the manuscript prose suggests
+  otherwise — stage 2 keys off this list, and divergence breaks the
+  per-chapter iteration. The bullets below describe the boundary patterns
+  the parser already recognises; you don't need to re-derive them.
 - `chapters[].id` is **1-based and contiguous**. Don't skip numbers. Use the chapter ordering as it appears in the manuscript.
+- `chapters[].title` should reflect the manuscript's own labelling. Chapter
+  boundaries aren't always "Chapter N" — books also use:
+  - **Numbered sections** with non-`chapter` keywords: `Day One`, `Part I`,
+    `Book Two`, `Act III`, `Section 4`, `Scene 7`.
+  - **Standalone markers** that need no number: `Prologue`, `Epilogue`,
+    `Interlude`, `Preface`, `Introduction`, `Afterword`, `Foreword`.
+  - **Markdown headings** (`# Title`, `## Title`) at the start of a section.
+
+  Preserve the heading verbatim as the title (e.g. `"Day One"`, `"Prologue"`,
+  `"Chapter 3: The Reckoning"`). Don't normalise "Day Two" into "Chapter 2".
+  If the manuscript uses days as chapters, the chapter list should read
+  `Day One`, `Day Two`, … in order — one entry per day.
+
+  Plaintext manuscripts often wrap headings in **decoration characters**:
+  `+ DAY ONE +`, `=== Chapter 3 ===`, `*** Prologue ***`, `~~ Part I ~~`.
+  Strip those cosmetic borders when extracting the title — `+ DAY ONE +`
+  becomes `"DAY ONE"`, not `"+ DAY ONE +"`. The keyword + number/standalone
+  marker stays the load-bearing signal regardless of decoration.
 
 ## How to run
 

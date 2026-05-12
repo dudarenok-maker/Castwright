@@ -28,23 +28,17 @@ default `Restricted` execution policy.
 cd server\tts-sidecar
 # Use the Python 3.11 launcher explicitly so the venv binds to 3.11.
 py -3.11 -m venv .venv
-# Install PyTorch first if you want GPU acceleration — see https://pytorch.org/get-started/locally/
-# CPU works without an explicit torch install (coqui-tts will pull a CPU wheel).
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
+# Install PyTorch separately — coqui-tts deliberately excludes it from its
+# dependencies so you choose CPU vs CUDA. The CPU index works everywhere;
+# for GPU, follow https://pytorch.org/get-started/locally/ instead.
+.\.venv\Scripts\python.exe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# Then the rest of the requirements.
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 If the venv was already created against the wrong Python (e.g. 3.14), delete
 the folder first: `Remove-Item -Recurse -Force .venv`.
-
-On macOS / Linux:
-
-```bash
-cd server/tts-sidecar
-python3.11 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
-```
 
 ## Running
 
@@ -68,18 +62,16 @@ time and ~3 GB resident memory for XTTS v2 on CPU.
 
 ```powershell
 # Health check (instant — no model load).
-curl http://localhost:9000/health
+Invoke-RestMethod http://localhost:9000/health
 
-# Synthesize a sentence and save the PCM to a WAV via Node-side conversion,
-# or use the inline helper:
-curl -X POST http://localhost:9000/synthesize `
-     -H "content-type: application/json" `
-     --data '{\"engine\":\"coqui\",\"model\":\"xtts_v2\",\"voice\":\"Claribel Dervla\",\"text\":\"Hello, this is a test of the local TTS sidecar.\"}' `
-     --output sample.raw
+# Synthesize a sentence. The response is raw 16-bit LE mono PCM at the
+# rate in X-Sample-Rate. Node wraps it in WAV; for a standalone test, save
+# the raw bytes and inspect the header.
+$body = @{ engine='coqui'; model='xtts_v2'; voice='Claribel Dervla'; text='Hello, this is a test of the local TTS sidecar.' } | ConvertTo-Json
+$resp = Invoke-WebRequest -Uri http://localhost:9000/synthesize -Method Post -ContentType 'application/json' -Body $body
+$resp.Headers['X-Sample-Rate']
+[IO.File]::WriteAllBytes("$pwd\sample.raw", $resp.Content)
 ```
-
-The `sample.raw` is raw 16-bit signed LE mono PCM at the rate in the
-`X-Sample-Rate` response header — the Node backend wraps this in WAV.
 
 ## Environment
 

@@ -61,16 +61,29 @@ class CoquiEngine(Engine):
     def _ensure_loaded(self, model: str) -> None:
         if self._tts is not None:
             return
+        # Importing lazily so the process can start (and /health respond)
+        # before the heavy ML deps load. Most useful while iterating on
+        # the protocol — the Node side can verify reachability instantly.
+        # Surface the *actual* import error so the Node-side log/UI carries
+        # a useful diagnostic (torch missing vs TTS missing vs a third-party
+        # incompatibility) instead of a one-size-fits-all message.
         try:
-            # Importing lazily so the process can start (and /health respond)
-            # before the heavy ML deps load. Most useful while iterating on
-            # the protocol — the Node side can verify reachability instantly.
             from TTS.api import TTS  # type: ignore
-            import torch  # type: ignore
-        except Exception as e:
+        except ImportError as e:
             raise RuntimeError(
-                "Coqui TTS not installed in this venv. "
-                "Run `pip install -r requirements.txt` in server/tts-sidecar."
+                f"Failed to import coqui-tts ({e}). "
+                "Most common cause: PyTorch isn't installed in this venv — "
+                "coqui-tts excludes it from its deps so you can pick CPU vs CUDA. "
+                "Run `.\\.venv\\Scripts\\python.exe -m pip install torch torchaudio "
+                "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
+            ) from e
+        try:
+            import torch  # type: ignore
+        except ImportError as e:
+            raise RuntimeError(
+                f"PyTorch missing from this venv ({e}). Install with: "
+                "`.\\.venv\\Scripts\\python.exe -m pip install torch torchaudio "
+                "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
             ) from e
 
         model_id = {

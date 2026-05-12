@@ -19,8 +19,28 @@ interface Props {
   onRegenerateCharacter?: (id: string) => void;
 }
 
+type CharGender   = NonNullable<Character['gender']>;
+type CharAgeRange = NonNullable<Character['ageRange']>;
+const GENDER_OPTIONS: Array<{ value: CharGender; label: string }> = [
+  { value: 'male',    label: 'Male' },
+  { value: 'female',  label: 'Female' },
+  { value: 'neutral', label: 'Neutral' },
+];
+const AGE_OPTIONS: Array<{ value: CharAgeRange; label: string }> = [
+  { value: 'child',   label: 'Child' },
+  { value: 'teen',    label: 'Teen' },
+  { value: 'adult',   label: 'Adult' },
+  { value: 'elderly', label: 'Elderly' },
+];
+
 export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDetail, onRegenerateCharacter }: Props) {
   const [tone, setTone] = useState(character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 });
+  /* Editable identity. The analyzer's guess (or the absence of one) seeds
+     these; saving the drawer persists them onto the character. They drive
+     the voice picker server-side, so a wrong inference can be corrected
+     manually without retriggering analysis. */
+  const [gender, setGender]     = useState<CharGender | ''>(character.gender ?? '');
+  const [ageRange, setAgeRange] = useState<CharAgeRange | ''>(character.ageRange ?? '');
   const [regenerating, setRegenerating] = useState(false);
   const c = CHAR_COLORS[character.color as CharColor] ?? CHAR_COLORS.narrator;
   const playback = useSamplePlayback();
@@ -34,6 +54,14 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
      preview their attributes. Server file is namespaced `char-<id>` for
      character samples to keep them separate from library voice samples. */
   const sampleVoiceId  = voice ? voice.id : `char-${character.id}`;
+  /* Recompute against the *edited* identity so the displayed TTS voice
+     updates live as the user changes the dropdowns. Saving the drawer
+     persists these values; until then the recompute is local-only. */
+  const editedCharacter: Character = {
+    ...character,
+    gender: gender || undefined,
+    ageRange: ageRange || undefined,
+  };
   const sampleSubject = voice ?? {
     id: sampleVoiceId,
     character: character.name,
@@ -43,10 +71,38 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
     gradient: ['#999999', '#666666'] as [string, string],
     usedIn: 0,
     source: 'current' as const,
-    ttsVoice: resolveTtsVoiceForCharacter(character, ttsEngine),
+    ttsVoice: resolveTtsVoiceForCharacter(editedCharacter, ttsEngine),
   };
   const sampleUrl = sampleUrlFor(sampleVoiceId, ttsModelKey);
   const isPlayingThis = playback.isPlaying && playback.currentUrl === sampleUrl;
+
+  /* Conflict detection: a matched library voice carries its own gender +
+     age attributes. When the user's edits disagree, keeping the match
+     would produce "UI says female teen, audio sounds male adult".
+     Saving in this state automatically clears the library voiceId so the
+     engine re-picks an appropriate prebuilt voice for the new identity.
+
+     Gender: hard binary; a Female edit on a Male voice has no recovery
+       short of swapping voices.
+     Age:   bucket comparison via the same coarse age tags the library
+       voice carries (e.g. "12", "60s"). A Teen edit on an Elderly voice
+       falls into a different register slot, so the picker would have
+       chosen differently. Tone sliders can nudge but can't bridge a
+       child↔adult-or-deeper gap. */
+  const voiceGender = voiceGenderFromAttributes(voice?.attributes);
+  const voiceAge    = voiceAgeFromAttributes(voice?.attributes);
+  const editedGender = (gender || character.gender) as CharGender | undefined;
+  const editedAge    = (ageRange || character.ageRange) as CharAgeRange | undefined;
+  const hasGenderConflict = !!voice
+    && !!voiceGender
+    && !!editedGender
+    && editedGender !== 'neutral'
+    && editedGender !== voiceGender;
+  const hasAgeConflict = !!voice
+    && !!voiceAge
+    && !!editedAge
+    && editedAge !== voiceAge;
+  const hasConflict = hasGenderConflict || hasAgeConflict;
 
   function regenerate() {
     setRegenerating(true);
@@ -112,7 +168,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
                 <VoiceSwatch voice={voice} size="md" showLabel={false}/>
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-base font-bold text-ink truncate">{voice?.character}</p>
+                <p className="text-base font-bold text-ink truncate">{voice?.character ?? character.name}</p>
                 {character.matchedFrom ? (
                   <button onClick={() => onShowMatchDetail?.(character.id)} className="mt-0.5 text-xs text-purple-deep/70 hover:text-purple-deep underline-offset-2 hover:underline text-left">
                     Matched from <span className="font-semibold">{character.matchedFrom.bookTitle}</span> · {Math.round((character.matchedFrom.confidence ?? 0) * 100)}% confidence — see why
@@ -120,6 +176,17 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
                 ) : (
                   <p className="text-xs text-ink/60 mt-0.5">Synthesised from {character.lines} lines of dialogue</p>
                 )}
+                {/* Engine-aware TTS voice assignment — what the user will
+                    actually hear when they click Play. Mirrors the cast
+                    view's TtsVoiceLine so the drawer stays in sync. */}
+                <p
+                  className="mt-1 text-[11px] truncate"
+                  title={`${capitalise(sampleSubject.ttsVoice.provider)} voice — ${sampleSubject.ttsVoice.description}`}
+                >
+                  <span className="text-ink/40">{capitalise(sampleSubject.ttsVoice.provider)} · </span>
+                  <span className="font-semibold text-ink/70">{sampleSubject.ttsVoice.name}</span>
+                  <span className="text-ink/40"> · {sampleSubject.ttsVoice.description}</span>
+                </p>
                 <div className="mt-2">
                   <button
                     onClick={playSample}
@@ -159,6 +226,23 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
               </div>
             </div>
 
+            {hasConflict && (
+              <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-xs text-amber-900">
+                <p className="font-semibold">⚠ Library voice / identity mismatch</p>
+                <p className="mt-1 leading-relaxed">
+                  <span className="font-semibold">{voice?.character}</span> is {[
+                    voiceGender ? capitalise(voiceGender) : null,
+                    voiceAge ? capitalise(voiceAge) : null,
+                  ].filter(Boolean).join(' · ')}, but you've set this character to {[
+                    hasGenderConflict && editedGender ? capitalise(editedGender) : null,
+                    hasAgeConflict && editedAge ? capitalise(editedAge) : null,
+                  ].filter(Boolean).join(' · ')}.
+                  {' '}
+                  Saving will clear the library match and re-synthesise from {character.name}'s attributes — the prebuilt voice picker will pick the right slot for the new identity.
+                </p>
+              </div>
+            )}
+
             <div className="mt-3 grid grid-cols-3 gap-2">
               <button onClick={regenerate} disabled={regenerating} className="px-3 py-2 rounded-xl border border-ink/10 hover:bg-ink/[0.04] text-xs font-medium text-ink inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
                 <IconRefresh className={`w-3.5 h-3.5 ${regenerating ? 'animate-spin' : ''}`}/> {regenerating ? 'Regenerating…' : 'Regenerate'}
@@ -191,6 +275,41 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
           </section>
 
           <section>
+            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">Identity</p>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1.5">
+                <span className="text-[11px] text-ink/60 font-medium">Gender</span>
+                <select
+                  value={gender}
+                  onChange={(e) => setGender(e.target.value as CharGender | '')}
+                  className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+                >
+                  <option value="">— unset —</option>
+                  {GENDER_OPTIONS.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-[11px] text-ink/60 font-medium">Age range</span>
+                <select
+                  value={ageRange}
+                  onChange={(e) => setAgeRange(e.target.value as CharAgeRange | '')}
+                  className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+                >
+                  <option value="">— unset —</option>
+                  {AGE_OPTIONS.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <p className="mt-2 text-[11px] text-ink/50">
+              Drives the gender + register slot in the voice picker. If the engine picked the wrong voice for this character, correct these and Save — the TTS voice line above updates immediately.
+            </p>
+          </section>
+
+          <section>
             <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">Inferred attributes</p>
             <div className="flex flex-wrap gap-1.5">
               {character.attributes?.map(a => <Pill key={a}>{a}</Pill>)}
@@ -211,7 +330,28 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
 
         <div className="sticky bottom-0 bg-white border-t border-ink/10 px-6 py-4 flex items-center gap-3">
           <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-ink/70 hover:text-ink">Discard</button>
-          <PrimaryButton variant="dark" onClick={() => onSave({ ...character, tone, voiceState: 'tuned' })}>Save changes</PrimaryButton>
+          <PrimaryButton
+            variant="dark"
+            onClick={() => {
+              const next: Character = {
+                ...character,
+                tone,
+                gender: gender || undefined,
+                ageRange: ageRange || undefined,
+                voiceState: 'tuned',
+              };
+              /* Conflict reset: drop the library voiceId + matchedFrom so the
+                 cast view falls back to the engine's prebuilt-voice pick. The
+                 ttsVoice line in the drawer already previewed what that will
+                 sound like for the new identity. Fires on either a gender or
+                 an age-bucket mismatch. */
+              if (hasConflict) {
+                next.voiceId = undefined;
+                next.matchedFrom = undefined;
+              }
+              onSave(next);
+            }}
+          >Save changes</PrimaryButton>
         </div>
       </aside>
     </>
@@ -229,6 +369,51 @@ function sampleUrlFor(voiceId: string, modelKey: string): string {
 
 function ttsModelLabel(key: TtsModelKey): string {
   return TTS_MODEL_OPTIONS.find(o => o.id === key)?.label ?? key;
+}
+
+function capitalise(s: string): string {
+  return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
+}
+
+/* Lift the gender out of a library voice's attribute tags. Library voices
+   carry "Male" / "Female" as the first attribute by convention (see the
+   workspace voices route + mock fixtures). Returns null when neither tag
+   is present, in which case we can't usefully flag a conflict. */
+function voiceGenderFromAttributes(attrs: string[] | undefined): CharGender | null {
+  if (!attrs) return null;
+  for (const raw of attrs) {
+    const lc = raw.toLowerCase();
+    if (lc === 'male')   return 'male';
+    if (lc === 'female') return 'female';
+    if (lc === 'neutral') return 'neutral';
+  }
+  return null;
+}
+
+/* Map a library voice's age attribute to the same coarse bucket the
+   Character.ageRange uses. Attribute tags vary across fixtures — common
+   forms are explicit ("Teen", "Adult"), numeric decades ("60s", "70s"),
+   or a single age like "12". Returns null when no recognisable age tag is
+   present so the conflict check stays silent (false-positive avoidance). */
+function voiceAgeFromAttributes(attrs: string[] | undefined): CharAgeRange | null {
+  if (!attrs) return null;
+  for (const raw of attrs) {
+    const lc = raw.toLowerCase().trim();
+    if (lc === 'child')   return 'child';
+    if (lc === 'teen')    return 'teen';
+    if (lc === 'adult')   return 'adult';
+    if (lc === 'elderly') return 'elderly';
+    /* "60s", "70s", "12", "12yo" — pull leading digits and bucket. */
+    const m = lc.match(/^(\d{1,3})/);
+    if (m) {
+      const age = Number(m[1]);
+      if (age <= 12) return 'child';
+      if (age <= 19) return 'teen';
+      if (age <= 59) return 'adult';
+      return 'elderly';
+    }
+  }
+  return null;
 }
 
 interface ToneSliderProps { label: string; value: number; onChange: (v: number) => void; leftLabel: string; rightLabel: string; }
