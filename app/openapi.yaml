@@ -1,0 +1,422 @@
+# =====================================================================
+# Audiobook generator — backend API contract
+# ---------------------------------------------------------------------
+# Generated from JSDoc shapes in app/lib/api.js. Mocked implementations
+# in that file return the same structures so the front-end can be
+# swapped onto a real backend by replacing the mock* functions with
+# fetch() calls.
+# =====================================================================
+openapi: 3.0.3
+info:
+  title: Audiobook generator API
+  version: 0.1.0
+  description: |
+    Pipeline endpoints for turning a manuscript into a cast-voiced
+    audiobook. Six endpoints span the full flow: upload → analyse →
+    voice-match → generate → playback → revisions/drift.
+
+servers:
+  - url: https://api.example.com
+    description: Production (placeholder)
+  - url: http://localhost:8080
+    description: Local dev
+
+# ---------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------
+paths:
+  /api/manuscripts:
+    post:
+      summary: Upload a manuscript
+      operationId: uploadManuscript
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:        { type: string, format: binary }
+                title:       { type: string, description: "Optional override title." }
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                title: { type: string }
+                text:  { type: string, description: "Inline manuscript text (markdown or plain)." }
+      responses:
+        '200':
+          description: Manuscript accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadResponse' }
+        '415':
+          description: Unsupported manuscript format (e.g. unparseable EPUB/DOCX)
+
+  /api/manuscripts/{manuscriptId}/analysis:
+    post:
+      summary: Run cast + chapter analysis
+      operationId: analyseManuscript
+      description: |
+        Streams phase progress over Server-Sent Events while the analysis
+        runs. The final SSE event carries the full `AnalyseResponse`.
+      parameters:
+        - { in: path, name: manuscriptId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Final analysis payload (also delivered as the terminal SSE event)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyseResponse' }
+            text/event-stream:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/AnalysePhaseEvent'
+                  - $ref: '#/components/schemas/AnalyseResponse'
+
+  /api/books/{bookId}/voice-match:
+    post:
+      summary: Match characters to existing library voices
+      operationId: matchVoices
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [characters]
+              properties:
+                characters:
+                  type: array
+                  items: { $ref: '#/components/schemas/CharacterMatchInput' }
+                libraryVoiceIds:
+                  type: array
+                  items: { type: string }
+                  description: Restrict candidates to a subset of the user's library.
+      responses:
+        '200':
+          description: Match candidates per character
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoiceMatchResponse' }
+
+  /api/books/{bookId}/generation/start:
+    post:
+      summary: Kick off audiobook generation jobs
+      operationId: startGeneration
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '202': { description: Generation queued }
+
+  /api/books/{bookId}/generation/stream:
+    get:
+      summary: Generation progress stream (SSE / WebSocket)
+      operationId: streamGeneration
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Tick stream
+          content:
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/GenerationTick' }
+
+  /api/books/{bookId}/chapters/{chapterId}/audio:
+    get:
+      summary: Get a chapter's playable audio + waveform metadata
+      operationId: getChapterAudio
+      parameters:
+        - { in: path, name: bookId,    required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Chapter audio metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChapterAudio' }
+
+  /api/books/{bookId}/revisions:
+    get:
+      summary: Pending A/B revisions + voice-drift events
+      operationId: pollRevisions
+      description: Polled every 30 s by the client, or pushed via the generation stream.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Outstanding revisions + drift events
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionsResponse' }
+
+# ---------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------
+components:
+  schemas:
+
+    # --- Upload -----------------------------------------------------
+    UploadResponse:
+      type: object
+      required: [manuscriptId, format, title, wordCount, byteSize, uploadedAt, sourceText]
+      properties:
+        manuscriptId: { type: string, example: "mns_abc123" }
+        format:       { type: string, enum: [markdown, plaintext, epub, docx] }
+        title:        { type: string }
+        wordCount:    { type: integer }
+        byteSize:     { type: integer }
+        uploadedAt:   { type: string, format: date-time }
+        sourceText:   { type: string, description: "Normalised plain-text body." }
+
+    # --- Analyse ----------------------------------------------------
+    AnalysePhaseEvent:
+      type: object
+      required: [phaseId, progress]
+      properties:
+        phaseId:  { type: integer, minimum: 0 }
+        progress: { type: number,  minimum: 0, maximum: 1 }
+        label:    { type: string }
+
+    AnalyseResponse:
+      type: object
+      required: [bookId, manuscriptId, title, phaseTimings, characters, chapters, sentences]
+      properties:
+        bookId:        { type: string, example: "ns" }
+        manuscriptId:  { type: string }
+        title:         { type: string }
+        phaseTimings:
+          type: array
+          items:
+            type: object
+            properties:
+              id:       { type: integer }
+              label:    { type: string }
+              duration: { type: integer, description: "milliseconds" }
+        characters:    { type: array, items: { $ref: '#/components/schemas/Character' } }
+        chapters:      { type: array, items: { $ref: '#/components/schemas/Chapter' } }
+        sentences:     { type: array, items: { $ref: '#/components/schemas/Sentence' } }
+        libraryMatches:
+          type: array
+          description: Hints from a pre-pass against the user's voice library.
+          items:
+            type: object
+            properties:
+              characterId: { type: string }
+              voiceId:     { type: string }
+              confidence:  { type: number }
+
+    # --- Voice match ------------------------------------------------
+    CharacterMatchInput:
+      type: object
+      required: [id, attributes]
+      properties:
+        id:             { type: string }
+        attributes:     { type: array, items: { type: string } }
+        tone:
+          type: object
+          properties:
+            warmth:    { type: integer }
+            pace:      { type: integer }
+            authority: { type: integer }
+            emotion:   { type: integer }
+        evidenceQuotes:
+          type: array
+          items: { type: string }
+
+    VoiceMatchResponse:
+      type: object
+      required: [bookId, matches]
+      properties:
+        bookId:  { type: string }
+        matches:
+          type: array
+          items:
+            type: object
+            required: [characterId, candidates]
+            properties:
+              characterId: { type: string }
+              candidates:
+                type: array
+                items:
+                  type: object
+                  required: [voiceId, score]
+                  properties:
+                    voiceId:       { type: string }
+                    fromBookTitle: { type: string }
+                    score:         { type: number, minimum: 0, maximum: 1 }
+                    factors:
+                      type: array
+                      items: { $ref: '#/components/schemas/MatchFactor' }
+
+    MatchFactor:
+      type: object
+      required: [id, label, score]
+      properties:
+        id:     { type: string, example: "register" }
+        label:  { type: string, example: "Vocabulary register" }
+        score:  { type: number, minimum: 0, maximum: 1 }
+        detail: { type: string }
+
+    # --- Generation -------------------------------------------------
+    GenerationTick:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [progress, chapter_complete, chapter_failed, idle]
+        chapterId:   { type: integer }
+        characterId:
+          type: string
+          nullable: true
+          description: null = chapter-wide tick (not character-specific).
+        progress:    { type: number, minimum: 0, maximum: 1 }
+        currentLine: { type: integer }
+        totalLines:  { type: integer }
+        errorReason: { type: string, nullable: true }
+
+    # --- Audio ------------------------------------------------------
+    ChapterAudio:
+      type: object
+      required: [durationSec, peaks]
+      properties:
+        url:
+          type: string
+          nullable: true
+          description: Signed MP3/Opus URL; null while still rendering.
+        durationSec: { type: number }
+        peaks:
+          type: array
+          items: { type: number, minimum: 0, maximum: 1 }
+          description: Pre-computed waveform envelope, typically 240 samples.
+        sampleRate:  { type: integer, example: 44100 }
+        segments:
+          type: array
+          items:
+            type: object
+            properties:
+              start:       { type: number, description: "seconds" }
+              end:         { type: number, description: "seconds" }
+              characterId: { type: string }
+              sentenceId:  { type: integer }
+
+    # --- Revisions + drift -----------------------------------------
+    RevisionsResponse:
+      type: object
+      properties:
+        pending: { type: array, items: { $ref: '#/components/schemas/Revision' } }
+        drift:   { type: array, items: { $ref: '#/components/schemas/DriftEvent' } }
+
+    Revision:
+      type: object
+      required: [id, chapterId, characterId, segments]
+      properties:
+        id:            { type: string }
+        chapterId:     { type: integer }
+        characterId:   { type: string }
+        triggeredBy:   { type: string }
+        triggeredAgo:  { type: string }
+        oldDuration:   { type: string }
+        newDuration:   { type: string }
+        confidence:    { type: number, minimum: 0, maximum: 1 }
+        segments:
+          type: array
+          items:
+            type: object
+            properties:
+              id:           { type: integer }
+              text:         { type: string }
+              oldDuration:  { type: string }
+              newDuration:  { type: string }
+              changed:      { type: boolean }
+              narratorOnly: { type: boolean }
+
+    DriftEvent:
+      type: object
+      required: [id, characterId, chapterId, severity, factor]
+      properties:
+        id:           { type: string }
+        characterId:  { type: string }
+        chapterId:    { type: integer }
+        severity:     { type: string, enum: [mild, moderate, severe] }
+        factor:       { type: string, example: "register" }
+        factorLabel:  { type: string }
+        description:  { type: string }
+        metrics:
+          type: object
+          properties:
+            current:  { type: number }
+            expected: { type: number }
+            unit:     { type: string }
+        detected:         { type: string }
+        suggestedAction:  { type: string, example: "regenerate_chapter" }
+
+    # --- Domain core -----------------------------------------------
+    Character:
+      type: object
+      required: [id, name, role, color]
+      properties:
+        id:          { type: string }
+        name:        { type: string }
+        role:        { type: string }
+        color:       { type: string }
+        lines:       { type: integer }
+        scenes:      { type: integer }
+        attributes:  { type: array, items: { type: string } }
+        tone:
+          type: object
+          properties:
+            warmth:    { type: integer }
+            pace:      { type: integer }
+            authority: { type: integer }
+            emotion:   { type: integer }
+        voiceId:     { type: string }
+        voiceState:  { type: string, enum: [generated, tuned, reused, locked] }
+        description: { type: string }
+        evidence:
+          type: array
+          items:
+            type: object
+            properties:
+              quote: { type: string }
+              note:  { type: string }
+        matchedFrom:
+          type: object
+          nullable: true
+          properties:
+            bookTitle:  { type: string }
+            confidence: { type: number, minimum: 0, maximum: 1 }
+
+    Chapter:
+      type: object
+      required: [id, title, duration, state, progress, characters]
+      properties:
+        id:           { type: integer }
+        title:        { type: string }
+        duration:     { type: string, example: "12:48" }
+        state:        { type: string, enum: [queued, in_progress, done, failed] }
+        progress:     { type: number, minimum: 0, maximum: 1 }
+        currentLine:  { type: integer }
+        totalLines:   { type: integer }
+        characters:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [queued, in_progress, done, skipped, failed]
+        errorReason:  { type: string, nullable: true }
+
+    Sentence:
+      type: object
+      required: [id, chapterId, text, characterId]
+      properties:
+        id:          { type: integer }
+        chapterId:   { type: integer }
+        text:        { type: string }
+        characterId: { type: string }
+        startMs:     { type: integer }
+        endMs:       { type: integer }
