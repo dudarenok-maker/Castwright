@@ -11,8 +11,10 @@
 
 import type { Character } from './types';
 
+export type TtsEngine = 'coqui' | 'gemini' | 'piper' | 'kokoro';
+
 export interface TtsVoiceAssignment {
-  provider: 'gemini';
+  provider: TtsEngine;
   name: string;
   description: string;
 }
@@ -24,7 +26,7 @@ type VoiceProfile =
   | 'female-deep' | 'female-mid' | 'female-light'
   | 'narrator-warm' | 'narrator-cool';
 
-const PROFILE_VOICES: Record<VoiceProfile, string[]> = {
+const GEMINI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
   'male-deep':      ['Charon', 'Algieba'],
   'male-mid':       ['Puck', 'Orus'],
   'male-light':     ['Iapetus', 'Sadachbia'],
@@ -33,6 +35,17 @@ const PROFILE_VOICES: Record<VoiceProfile, string[]> = {
   'female-light':   ['Aoede', 'Callirrhoe'],
   'narrator-warm':  ['Zephyr', 'Sulafat'],
   'narrator-cool':  ['Algenib', 'Achernar'],
+};
+
+const COQUI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
+  'male-deep':      ['Damien Black', 'Wulf Carlevaro'],
+  'male-mid':       ['Aaron Dreschner', 'Viktor Menelaos'],
+  'male-light':     ['Andrew Chipper', 'Royston Min'],
+  'female-deep':    ['Brenda Stern', 'Tammie Ema'],
+  'female-mid':     ['Daisy Studious', 'Sofia Hellen'],
+  'female-light':   ['Claribel Dervla', 'Alison Dietlinde'],
+  'narrator-warm':  ['Ana Florence', 'Henriette Usha'],
+  'narrator-cool':  ['Asya Anara', 'Gracie Wise'],
 };
 
 export const GEMINI_VOICE_DESCRIPTIONS: Record<string, string> = {
@@ -46,6 +59,17 @@ export const GEMINI_VOICE_DESCRIPTIONS: Record<string, string> = {
   Pulcherrima: 'Forward', Achird: 'Friendly', Zubenelgenubi: 'Casual',
   Vindemiatrix: 'Gentle', Sadachbia: 'Lively', Sadaltager: 'Knowledgeable',
   Sulafat: 'Warm',
+};
+
+export const COQUI_VOICE_DESCRIPTIONS: Record<string, string> = {
+  'Damien Black': 'Deep · Male', 'Wulf Carlevaro': 'Deep · Male',
+  'Aaron Dreschner': 'Mid · Male', 'Viktor Menelaos': 'Mid · Male',
+  'Andrew Chipper': 'Light · Male', 'Royston Min': 'Light · Male',
+  'Brenda Stern': 'Deep · Female', 'Tammie Ema': 'Deep · Female',
+  'Daisy Studious': 'Mid · Female', 'Sofia Hellen': 'Mid · Female',
+  'Claribel Dervla': 'Light · Female', 'Alison Dietlinde': 'Light · Female',
+  'Ana Florence': 'Warm narrator', 'Henriette Usha': 'Warm narrator',
+  'Asya Anara': 'Cool narrator', 'Gracie Wise': 'Cool narrator',
 };
 
 const MATCH_MALE_WORD   = /\b(male|man|boy|gentleman|sir|mr|mister)\b/;
@@ -139,7 +163,20 @@ function inferProfile(input: PickInput): VoiceProfile {
   return 'narrator-cool';
 }
 
-export function resolveTtsVoiceForCharacter(c: Character): TtsVoiceAssignment {
+function catalogForEngine(engine: TtsEngine): Record<VoiceProfile, string[]> {
+  if (engine === 'gemini') return GEMINI_PROFILE_VOICES;
+  return COQUI_PROFILE_VOICES;
+}
+
+function describeVoice(engine: TtsEngine, name: string): string {
+  if (engine === 'gemini') return GEMINI_VOICE_DESCRIPTIONS[name] ?? 'Prebuilt voice';
+  return COQUI_VOICE_DESCRIPTIONS[name] ?? 'Local voice';
+}
+
+/* Engine-aware resolver. Defaults to 'coqui' to match the UI's default
+   modelKey — callers that know the selected engine should pass it
+   explicitly so the labels match what the user will actually hear. */
+export function resolveTtsVoiceForCharacter(c: Character, engine: TtsEngine = 'coqui'): TtsVoiceAssignment {
   const id = c.voiceId ?? c.id;
   const profile = inferProfile({
     id,
@@ -151,11 +188,11 @@ export function resolveTtsVoiceForCharacter(c: Character): TtsVoiceAssignment {
     ageRange: c.ageRange,
     tone: c.tone,
   });
-  const options = PROFILE_VOICES[profile];
+  const options = catalogForEngine(engine)[profile];
   const name = options[stableHash(id) % options.length];
   return {
-    provider: 'gemini',
+    provider: engine,
     name,
-    description: GEMINI_VOICE_DESCRIPTIONS[name] ?? 'Prebuilt voice',
+    description: describeVoice(engine, name),
   };
 }

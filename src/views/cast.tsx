@@ -11,6 +11,7 @@ import type { Character, Voice, DriftEvent, CharColor, TtsModelKey } from '../li
 import { useAppSelector } from '../store';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
+import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import { api, type VoiceSampleArgs } from '../lib/api';
 
 interface Props {
@@ -35,6 +36,7 @@ export function CastView({
   const [dropTargetCharId, setDropTargetCharId] = useState<string | null>(null);
   const [selectedCharIds, setSelectedCharIds] = useState<string[]>([]);
   const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
+  const ttsEngine = engineForModelKey(ttsModelKey);
   const playback = useSamplePlayback();
   /* Per-row sample state: { [characterId]: 'loading' | 'error: msg' }. The
      "playing" indicator is derived from the singleton playback hook by
@@ -71,7 +73,7 @@ export function CastView({
       gradient: ['#999999', '#666666'],
       usedIn: 0,
       source: 'current',
-      ttsVoice: resolveTtsVoiceForCharacter(c),
+      ttsVoice: resolveTtsVoiceForCharacter(c, ttsEngine),
     };
     const characterHint = buildCharacterHint(c);
     setRow(c.id, { loading: true, error: undefined });
@@ -146,7 +148,7 @@ export function CastView({
           </div>
           {filtered.map((c, i) => {
             const voice = findVoice(c.voiceId);
-            const ttsVoice = voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c);
+            const ttsVoice = voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
             const sampleUrl = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}.wav`;
@@ -295,9 +297,7 @@ function buildCharacterHint(c: Character): VoiceSampleArgs['characterHint'] {
 }
 
 function ttsLabel(key: TtsModelKey): string {
-  if (key === 'gemini-2.5-flash') return 'Gemini 2.5 Flash TTS';
-  if (key === 'gemini-3.1-flash') return 'Gemini 3.1 Flash TTS';
-  return key;
+  return TTS_MODEL_OPTIONS.find(o => o.id === key)?.label ?? key;
 }
 
 interface TtsVoiceLineProps { ttsVoice: { provider: string; name: string; description: string }; }

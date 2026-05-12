@@ -7,6 +7,7 @@
     "dev": "concurrently -k -n frontend,server -c blue,magenta \"npm:dev:frontend\" \"npm:dev:server\"",
     "dev:frontend": "vite",
     "dev:server": "npm --prefix server run dev",
+    "tts:sidecar": "powershell -ExecutionPolicy Bypass -File server/tts-sidecar/start.ps1",
     "build": "tsc -b && vite build && npm --prefix server run build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && npm --prefix server run typecheck",

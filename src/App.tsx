@@ -8,6 +8,7 @@ import { revisionsActions } from './store/revisions-slice';
 import { libraryActions } from './store/library-slice';
 import { voicesActions } from './store/voices-slice';
 import { api } from './lib/api';
+import { engineForModelKey } from './lib/tts-models';
 import { CHANGE_LOG_EVENTS } from './data/change-log';
 import { TopBar } from './components/top-bar';
 import { MiniPlayer } from './components/mini-player';
@@ -82,16 +83,18 @@ export function App() {
   }, [stageKind]);
 
   /* Voice library hydration — derived from every confirmed cast on disk.
-     Re-fires when the active book changes so `source: 'current'` is
-     recomputed for the newly-opened book. */
+     Re-fires when the active book or selected TTS engine changes so
+     `source: 'current'` and the engine-specific ttsVoice labels are correct
+     for the current UI state. */
+  const ttsEngine = useAppSelector(s => engineForModelKey(s.ui.ttsModelKey));
   useEffect(() => {
     let cancelled = false;
-    api.getVoices({ currentBookId: bookId ?? undefined })
+    api.getVoices({ currentBookId: bookId ?? undefined, engine: ttsEngine })
       .then(res => { if (!cancelled) dispatch(voicesActions.hydrate(res)); })
       .catch(err => { console.error('[voices] hydrate failed', err); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId, stageKind]);
+  }, [bookId, stageKind, ttsEngine]);
 
   /* Per-book hydration. When the user opens a book whose redux state isn't
      populated (page refresh, library click on a previously analysed book),

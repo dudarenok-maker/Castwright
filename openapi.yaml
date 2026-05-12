@@ -242,8 +242,8 @@ paths:
               properties:
                 modelKey:
                   type: string
-                  enum: [gemini-2.5-flash, gemini-3.1-flash]
-                  description: TTS model key; resolves to a Gemini model id server-side.
+                  enum: [coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                  description: TTS model key. Local engines (coqui-*) route to the sidecar; gemini-* keys route to Google's TTS API.
                 chapterIds:
                   type: array
                   items: { type: integer }
@@ -289,6 +289,11 @@ paths:
           required: false
           schema: { type: string }
           description: "When set, voices belonging to that book are tagged source=current."
+        - in: query
+          name: engine
+          required: false
+          schema: { type: string, enum: [coqui, gemini, piper, kokoro] }
+          description: "TTS engine whose voice catalog is used to populate each Voice.ttsVoice. Defaults to 'coqui' (the UI's default)."
       responses:
         '200':
           description: Derived voice library, pinned first then by usage descending
@@ -591,8 +596,8 @@ components:
       properties:
         modelKey:
           type: string
-          enum: [gemini-2.5-flash, gemini-3.1-flash]
-          description: UI-stable key; server resolves to the actual Gemini TTS model id via env.
+          enum: [coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          description: UI-stable TTS model key. The engine prefix (coqui-, gemini-) drives provider selection server-side.
         voice:
           type: object
           description: Frontend Voice payload (attributes drive the prebuilt-voice picker).
@@ -644,7 +649,7 @@ components:
         cached:    { type: boolean }
         modelKey:
           type: string
-          enum: [gemini-2.5-flash, gemini-3.1-flash]
+          enum: [coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
 
     # --- Voice library ---------------------------------------------
     TtsVoiceAssignment:
@@ -655,9 +660,9 @@ components:
         the same picker that synthesises samples and chapters, so the value
         previewed in the UI matches what the user actually hears.
       properties:
-        provider:    { type: string, enum: [gemini] }
-        name:        { type: string, description: "Provider-specific prebuilt voice name, e.g. 'Charon'." }
-        description: { type: string, description: "Public personality label from the provider's voice table, e.g. 'Informative'." }
+        provider:    { type: string, enum: [coqui, gemini, piper, kokoro] }
+        name:        { type: string, description: "Engine-specific prebuilt voice name, e.g. 'Charon' (Gemini) or 'Claribel Dervla' (Coqui XTTS v2)." }
+        description: { type: string, description: "Short label for the picked voice — engine-specific. Empty/placeholder when the engine doesn't publish descriptors." }
 
     Voice:
       type: object

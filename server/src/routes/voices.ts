@@ -4,9 +4,14 @@
    The voice "library" is a derived view of every book's confirmed cast.json
    in the workspace — there's no separate voice store. Each character becomes
    a reusable Voice keyed by `c.voiceId ?? c.id`, which is the same id the TTS
-   layer hashes against (see server/src/tts/synthesise-chapter.ts:91 and
-   voice-mapping.ts:pickGeminiVoice). So cached sample WAVs at
+   layer hashes against (see server/src/tts/synthesise-chapter.ts and
+   voice-mapping.ts:pickVoiceForEngine). So cached sample WAVs at
    /audio/voices/{voiceId}-{modelKey}.wav line up automatically.
+
+   The aggregator stamps each voice with a `ttsVoice` assignment so the cast
+   view can label "what this voice will sound like" without round-tripping.
+   The assignment is engine-specific; the engine is taken from the optional
+   `engine` query param (default 'coqui' to match the UI's default).
 
    Pin flags live in audiobook-workspace/voices.json (workspace-scope, not
    per-book) since they decide where a voice surfaces across every book. */
@@ -24,10 +29,11 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import {
-  resolveGeminiAssignment,
+  resolveVoiceAssignment,
   type CharacterHint,
   type TtsVoiceAssignment,
 } from '../tts/voice-mapping.js';
+import type { TtsEngine } from '../tts/index.js';
 
 export const voicesRouter = Router();
 
@@ -121,7 +127,12 @@ async function loadVoicesMeta(): Promise<VoicesMetaJson> {
   return { pinned: Array.isArray(data.pinned) ? data.pinned : [], updatedAt: data.updatedAt };
 }
 
-async function aggregateVoices(currentBookId: string | undefined): Promise<DerivedVoice[]> {
+function parseEngine(value: unknown): TtsEngine {
+  if (value === 'gemini' || value === 'coqui' || value === 'piper' || value === 'kokoro') return value;
+  return 'coqui';
+}
+
+async function aggregateVoices(currentBookId: string | undefined, engine: TtsEngine): Promise<DerivedVoice[]> {
   ensureWorkspace();
   const meta = await loadVoicesMeta();
   const pinned = new Set(meta.pinned);
@@ -156,7 +167,8 @@ async function aggregateVoices(currentBookId: string | undefined): Promise<Deriv
             continue;
           }
           const isCurrent = !!currentBookId && state.bookId === currentBookId;
-          const ttsVoice = resolveGeminiAssignment(
+          const ttsVoice = resolveVoiceAssignment(
+            engine,
             { id, character: c.name, attributes: c.attributes ?? [] },
             buildHint(c),
           );
@@ -195,7 +207,8 @@ async function aggregateVoices(currentBookId: string | undefined): Promise<Deriv
 voicesRouter.get('/', async (req: Request, res: Response) => {
   try {
     const currentBookId = typeof req.query.currentBookId === 'string' ? req.query.currentBookId : undefined;
-    const voices = await aggregateVoices(currentBookId);
+    const engine = parseEngine(req.query.engine);
+    const voices = await aggregateVoices(currentBookId, engine);
     res.json({ voices });
   } catch (e) {
     console.error('[voices] aggregate failed', e);
