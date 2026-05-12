@@ -107,6 +107,8 @@ Canonical vocabulary (use **only** these tokens — others will be ignored):
 - `[emphatic]` — stressed, pointed delivery
 - `[laughs]` — laughter within or around speech
 - `[sighs]` — exhaled, weary delivery
+- `[excited]` — energetic, urgent delivery (often signalled by `!`)
+- `[hesitant]` — uncertain, halting delivery (often signalled by `…` or `...`)
 
 Rules:
 
@@ -125,9 +127,14 @@ Rules:
     `[sighs]` only if the sigh applies to the line as a whole; otherwise
     tag only the first.
   - `"Try me," she laughed.` → spoken split is `"[laughs] Try me,"`.
-- **Don't invent tags from context alone.** A character is angry across a
-  scene? That's not enough — only tag when the *current sentence* gives an
-  explicit delivery signal.
+- **Tag from the current sentence, not the scene.** The cue must come from
+  the sentence itself — either an explicit narrator descriptor ("she
+  whispered", "he shouted"), the *punctuation pattern* of the spoken
+  text (`!` for `[excited]`, leading/trailing `…` for `[hesitant]`), or
+  the character's described emotional state at that moment ("Marlow's
+  hands shook" + the quote that follows). Scene-level mood is NOT enough
+  — a character being angry across the whole chapter doesn't license
+  tagging an otherwise neutral line.
 - **One tag per spoken split is enough.** Don't stack
   `[shouting][emphatic]` on the same line.
 - **Narrative prose (`narrator` entries) never carry audio tags.**
@@ -160,8 +167,8 @@ whitespace) must reproduce the original sentence with no loss.
 
 Source: `"Look! I'm all better!" Marlow promised, waving his arms.`
 
-Two entries:
-- `"Look! I'm all better!"` → `Marlow`
+The parser pre-tagged the quote because of the exclamation marks. Two entries:
+- `"[excited] Look! I'm all better!"` → `Marlow`
 - `Marlow promised, waving his arms.` → `narrator`
 
 Source: `"Hard to starboard," he said, "before the rocks."`

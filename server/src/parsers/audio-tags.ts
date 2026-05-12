@@ -3,21 +3,35 @@
    the TTS provider. This file is the single source of truth for the parser
    layer; `src/lib/audio-tags.ts` mirrors AUDIO_TAGS for the UI. */
 
-export const AUDIO_TAGS = ['emphatic', 'shouting', 'whispers', 'laughs', 'sighs'] as const;
+export const AUDIO_TAGS = [
+  'emphatic', 'shouting', 'whispers', 'laughs', 'sighs',
+  'excited', 'hesitant',
+] as const;
 export type AudioTag = typeof AUDIO_TAGS[number];
 
 /* Smart and straight quote characters that wrap dialogue. */
 const QUOTE_OPENS = '"“';   // " “
 const QUOTE_CLOSES = '"”';  // " ”
 
-/* A run is "all caps" if it has at least 2 consecutive uppercase letters and is
-   ≥ 4 characters long once spaces and basic punctuation are stripped. Avoids
-   triggering on initials ("J.R.R.") or one-word interjections ("OK"). */
+/* Already-tagged-at-the-start check. Lets every detector be idempotent and
+   keeps later detectors from stacking a second tag onto something an
+   earlier detector already labelled (`[shouting] HELP!` shouldn't also
+   pick up `[excited]`). */
+const LEADING_TAG_RE = /^\s*\[[a-z]+\]/i;
+
+/* A run is "all caps" if it has at least 2 consecutive uppercase letters
+   and either:
+   - ≥ 4 letters total (catches multi-word shouts: "HELP ME!", "GET OUT!"), or
+   - ≥ 2 letters total AND contains a `!` (catches short shouts: "NO!", "GO!").
+   Without the `!` guard, two-letter all-caps words like "OK" or initialisms
+   like "AC" would false-trigger. */
 function isShoutingRun(s: string): boolean {
   const letters = s.replace(/[^A-Za-z]/g, '');
-  if (letters.length < 4) return false;
+  if (letters.length < 2) return false;
   if (letters !== letters.toUpperCase()) return false;
-  return /[A-Z]{2,}/.test(s);
+  if (!/[A-Z]{2,}/.test(s)) return false;
+  if (letters.length >= 4) return true;
+  return s.includes('!');
 }
 
 /* Title-case a shouted run so the TTS engine reads it as words, not letters.
@@ -27,17 +41,18 @@ function denormaliseShouting(s: string): string {
   return s.replace(/([A-Z])([A-Z']+)/g, (_m, head, tail) => head + tail.toLowerCase());
 }
 
-/* Scan a string for dialogue spans (text between matched quote characters)
-   that are entirely uppercase, and prepend `[shouting]` inside the quote.
-   The transform is idempotent — a quote already starting with `[shouting]`
-   is left alone. Returns the rewritten string. */
-export function tagShoutingDialog(text: string): string {
+/* Walk a string and call `transform(inner)` for each quote span. The
+   transform returns the (possibly rewritten) inner contents; everything
+   between quotes — and the quote characters themselves — is preserved
+   verbatim. Used by all three quote-aware detectors so they share the
+   same scanner behaviour (unterminated quotes, smart vs straight quotes,
+   nested punctuation). */
+function rewriteQuoteSpans(text: string, transform: (inner: string) => string): string {
   let out = '';
   let i = 0;
   while (i < text.length) {
     const ch = text[i];
-    const isOpen = QUOTE_OPENS.includes(ch);
-    if (!isOpen) {
+    if (!QUOTE_OPENS.includes(ch)) {
       out += ch;
       i++;
       continue;
@@ -46,14 +61,50 @@ export function tagShoutingDialog(text: string): string {
     while (j < text.length && !QUOTE_CLOSES.includes(text[j])) j++;
     const inner = text.slice(i + 1, j);
     const closer = j < text.length ? text[j] : '';
-    if (inner && isShoutingRun(inner) && !/^\s*\[shouting\]/i.test(inner)) {
-      out += ch + '[shouting] ' + denormaliseShouting(inner) + closer;
-    } else {
-      out += ch + inner + closer;
-    }
+    out += ch + (inner ? transform(inner) : inner) + closer;
     i = j < text.length ? j + 1 : j;
   }
   return out;
+}
+
+/* Scan a string for dialogue spans (text between matched quote characters)
+   that are entirely uppercase, and prepend `[shouting]` inside the quote.
+   The transform is idempotent — a quote already starting with any audio
+   tag is left alone. Returns the rewritten string. */
+export function tagShoutingDialog(text: string): string {
+  return rewriteQuoteSpans(text, (inner) => {
+    if (LEADING_TAG_RE.test(inner)) return inner;
+    if (!isShoutingRun(inner)) return inner;
+    return '[shouting] ' + denormaliseShouting(inner);
+  });
+}
+
+/* Tag quoted dialog with `[excited]` when it contains one or more `!`
+   characters. Skips lines already tagged (idempotent) and skips lines
+   that are shouting (precedence: shouting > excited — a full-caps shout
+   wins over a generic exclamation cue). */
+export function tagExcitedDialog(text: string): string {
+  return rewriteQuoteSpans(text, (inner) => {
+    if (LEADING_TAG_RE.test(inner)) return inner;
+    if (!inner.includes('!')) return inner;
+    if (isShoutingRun(inner)) return inner;
+    return '[excited] ' + inner;
+  });
+}
+
+/* Tag quoted dialog with `[hesitant]` when it starts or ends with an
+   ellipsis (Unicode `…` or 2+ consecutive dots). Skips lines already
+   tagged. Excitement takes precedence — a line with both `!` and `…`
+   stays excited, not hesitant. */
+const HESITATION_LEADING_RE = /^\s*(?:…|\.{2,})/;
+const HESITATION_TRAILING_RE = /(?:…|\.{2,})\s*["”]?\s*$/;
+
+export function tagHesitantDialog(text: string): string {
+  return rewriteQuoteSpans(text, (inner) => {
+    if (LEADING_TAG_RE.test(inner)) return inner;
+    if (!HESITATION_LEADING_RE.test(inner) && !HESITATION_TRAILING_RE.test(inner)) return inner;
+    return '[hesitant] ' + inner;
+  });
 }
 
 /* Convert markdown-style emphasis (`*foo*`, `_foo_`) to `[emphatic] foo`.

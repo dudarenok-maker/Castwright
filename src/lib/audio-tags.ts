@@ -2,7 +2,10 @@
    — the vocabulary changes rarely and a runtime fetch would be heavier than
    the duplication. */
 
-export const AUDIO_TAGS = ['emphatic', 'shouting', 'whispers', 'laughs', 'sighs'] as const;
+export const AUDIO_TAGS = [
+  'emphatic', 'shouting', 'whispers', 'laughs', 'sighs',
+  'excited', 'hesitant',
+] as const;
 export type AudioTag = typeof AUDIO_TAGS[number];
 
 const AUDIO_TAG_SET: ReadonlySet<string> = new Set(AUDIO_TAGS);
