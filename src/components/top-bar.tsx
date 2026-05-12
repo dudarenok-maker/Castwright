@@ -8,6 +8,10 @@ interface TopBarProps {
   setView: (v: View) => void;
   projectTitle?: string | null;
   onHome: () => void;
+  /** Optional override for the project-title click. When omitted, the title
+      acts as a back-to-home shortcut (same as the logo). The cast-confirm
+      stage uses this to wire the title to re-analyse. */
+  onTitleClick?: () => void;
   pendingRevisionsCount: number;
   onOpenRevisions: () => void;
 }
@@ -21,7 +25,7 @@ const TABS: Array<{ id: View; label: string }> = [
   { id: 'log',        label: 'Log' },
 ];
 
-export function TopBar({ stage, view, setView, projectTitle, onHome, pendingRevisionsCount, onOpenRevisions }: TopBarProps) {
+export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClick, pendingRevisionsCount, onOpenRevisions }: TopBarProps) {
   return (
     <header className="sticky top-0 z-40 bg-canvas/85 backdrop-blur-md border-b border-ink/10">
       <div className="max-w-[1500px] mx-auto px-6 h-16 flex items-center gap-8">
@@ -29,7 +33,7 @@ export function TopBar({ stage, view, setView, projectTitle, onHome, pendingRevi
           audiobook<span className="text-peach">.</span>
         </button>
         {projectTitle && (
-          <button onClick={onHome} className="flex items-center gap-2 text-sm text-ink/60 hover:text-ink transition-colors">
+          <button onClick={onTitleClick ?? onHome} className="flex items-center gap-2 text-sm text-ink/60 hover:text-ink transition-colors">
             <span className="text-ink/40">/</span>
             <span className="font-medium text-ink">{projectTitle}</span>
             <IconArrowLeft className="w-3.5 h-3.5 text-ink/40"/>

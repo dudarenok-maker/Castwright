@@ -5,17 +5,11 @@ export type Character = components['schemas']['Character'] & {
 };
 export type Chapter   = components['schemas']['Chapter'];
 
-/* Sentence shape diverges from the OpenAPI spec in the prototype fixtures —
-   spec says `{ id: number, characterId: string, chapterId: number, text }`
-   but the prototype uses `{ id: string, charId: string, text, confidence? }`.
-   Aligning the two is tracked as a follow-up; for now the prototype shape
-   wins because the components index by it. */
-export interface Sentence {
-  id: string;
-  charId: string;
-  text: string;
+/* Sentence follows the OpenAPI spec; the optional `confidence` is a UI-only
+   field used by ManuscriptView to flag low-confidence speaker attributions. */
+export type Sentence = components['schemas']['Sentence'] & {
   confidence?: number;
-}
+};
 export type Revision  = components['schemas']['Revision'];
 export type DriftEvent      = components['schemas']['DriftEvent'];
 export type MatchFactor     = components['schemas']['MatchFactor'];
@@ -28,7 +22,11 @@ export type RevisionsResponse  = components['schemas']['RevisionsResponse'];
 
 /* ── App-domain types not modelled in the OpenAPI spec ────────────────── */
 
-export type CharColor = 'narrator' | 'halloran' | 'eliza' | 'marcus';
+/* Named palette keys live in src/lib/colors.ts (CHAR_COLORS). Widened to
+   string because the analysis backend emits 30 procedural slot names
+   (`slot-4`..`slot-30`) — see colors.ts CHARACTER_SLOTS and the server's
+   assignPaletteColors in server/src/routes/analysis.ts. */
+export type CharColor = string;
 
 export interface Voice {
   id: string;

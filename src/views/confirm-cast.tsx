@@ -6,13 +6,14 @@ import type { Character, Voice, CharColor } from '../lib/types';
 interface Props {
   characters: Character[];
   library: Voice[];
+  title?: string | null;
   onConfirm: () => void;
   onReanalyse: () => void;
 }
 
 type Decision = 'match' | 'generate';
 
-export function ConfirmCastView({ characters, library, onConfirm, onReanalyse }: Props) {
+export function ConfirmCastView({ characters, library, title, onConfirm, onReanalyse }: Props) {
   const [decisions, setDecisions] = useState<Record<string, Decision>>(() => {
     const d: Record<string, Decision> = {};
     for (const c of characters) if (c.matchedFrom) d[c.id] = 'match';
@@ -30,7 +31,7 @@ export function ConfirmCastView({ characters, library, onConfirm, onReanalyse }:
         <div className="text-center mb-10">
           <SectionLabel>Cast confirmation</SectionLabel>
           <div className="mt-5">
-            <MixedHeading level="h1" regular="Meet the cast of" bold="The Northern Star"/>
+            <MixedHeading level="h1" regular="Meet the cast of" bold={title || 'The Northern Star'}/>
           </div>
           <p className="mt-4 text-ink/70 text-lg">
             <span className="font-semibold text-ink">{characters.length} speaking characters</span> detected ·{' '}

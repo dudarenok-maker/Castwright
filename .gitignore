@@ -28,3 +28,10 @@ coverage/
 
 # Uploads dir (sandbox-only)
 uploads/
+
+# Server handoff runtime drops
+server/handoff/inbox/*
+server/handoff/outbox/*
+!server/handoff/inbox/.gitkeep
+!server/handoff/outbox/.gitkeep
+server/dist/

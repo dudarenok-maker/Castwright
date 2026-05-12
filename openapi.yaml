@@ -166,7 +166,7 @@ components:
       required: [manuscriptId, format, title, wordCount, byteSize, uploadedAt, sourceText]
       properties:
         manuscriptId: { type: string, example: "mns_abc123" }
-        format:       { type: string, enum: [markdown, plaintext, epub, docx] }
+        format:       { type: string, enum: [markdown, plaintext, epub, pdf] }
         title:        { type: string }
         wordCount:    { type: integer }
         byteSize:     { type: integer }

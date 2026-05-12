@@ -138,7 +138,7 @@ export interface components {
             /** @example mns_abc123 */
             manuscriptId: string;
             /** @enum {string} */
-            format: "markdown" | "plaintext" | "epub" | "docx";
+            format: "markdown" | "plaintext" | "epub" | "pdf";
             title: string;
             wordCount: number;
             byteSize: number;
