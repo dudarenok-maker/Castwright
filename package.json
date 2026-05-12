@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/start-app.ps1",
+    "stop": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/stop-app.ps1",
     "dev": "concurrently -k -n frontend,server -c blue,magenta \"npm:dev:frontend\" \"npm:dev:server\"",
     "dev:frontend": "vite",
     "dev:server": "npm --prefix server run dev",

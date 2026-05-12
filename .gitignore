@@ -22,6 +22,10 @@ dist/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+logs/
+
+# Background-process PID files written by scripts\start-app.ps1
+.run/
 
 # Test output
 coverage/
