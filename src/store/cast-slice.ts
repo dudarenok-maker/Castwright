@@ -1,0 +1,49 @@
+/* Cast slice — characters + their voice assignments. */
+
+import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { initialCharacters } from '../data/characters';
+import type { Character, AnalyseResponse, VoiceMatchResponse } from '../lib/types';
+
+export interface CastState { characters: Character[]; }
+
+const initialState: CastState = { characters: initialCharacters };
+
+export const castSlice = createSlice({
+  name: 'cast',
+  initialState,
+  reducers: {
+    setCharacters: (s, a: PayloadAction<Character[]>) => { s.characters = a.payload; },
+    declineMatch: (s, a: PayloadAction<string>) => {
+      const c = s.characters.find(x => x.id === a.payload);
+      if (c) { c.matchedFrom = undefined; c.voiceState = 'generated'; }
+    },
+    updateCharacter: (s, a: PayloadAction<Character>) => {
+      const next = a.payload;
+      s.characters = s.characters.map(c => c.id === next.id ? { ...c, ...next } : c);
+    },
+    /* From POST /api/manuscripts/:id/analysis response. */
+    hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
+      const { characters } = a.payload;
+      if (characters?.length) s.characters = characters;
+    },
+    /* From POST /api/books/:bookId/voice-match. */
+    applyVoiceMatches: (s, a: PayloadAction<VoiceMatchResponse>) => {
+      const { matches } = a.payload;
+      const byId = Object.fromEntries((matches || []).map(m => [m.characterId, m]));
+      s.characters = s.characters.map(c => {
+        const m = byId[c.id];
+        if (!m || !m.candidates?.length) return c;
+        const top = m.candidates[0];
+        return {
+          ...c,
+          voiceId: top.voiceId,
+          matchedFrom: { bookTitle: top.fromBookTitle, confidence: top.score },
+          matchFactors: top.factors,
+          voiceState: 'reused',
+        };
+      });
+    },
+  },
+});
+
+export const castActions = castSlice.actions;
