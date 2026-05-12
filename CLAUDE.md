@@ -1,51 +1,58 @@
 # Project context for Claude Code
 
-This repo is a UI/UX prototype of an audiobook-generation tool. It currently
-runs as a static HTML file (`app/index.html`) with in-browser Babel and
-UMD-from-CDN React/Redux. **Your job is to convert it into a real
-production-shaped app using the playbook in `HANDOFF.md`** — do not start
-new design work.
+Frontend for an audiobook-generation tool. Vite + React 18 + TypeScript +
+Redux Toolkit. Mocked API surface today; designed to swap to a real backend
+without changing component code.
 
-## What's in the box
-- `app/` — the prototype source. Read-only reference; do not edit in place.
-  - `app/index.html` — entry HTML, loads everything via `<script>` tags.
-  - `app/app.jsx` — root React component.
-  - `app/lib/*.js` — pure utilities (icons, time, colors, router, **api**).
-  - `app/data/*.js` — design fixtures (characters, chapters, voices, etc).
-  - `app/store/*.js` — Redux Toolkit slices.
-  - `app/components/*`, `app/modals/*`, `app/views/*` — React components.
-  - `app/styles.css` — single stylesheet, design tokens as CSS variables.
-  - `app/openapi.yaml` — **API contract**, source of truth for backend shapes.
-  - `app/mocks/canned-data.js` — composed mock payloads matching the OpenAPI.
-- `app/ARCHITECTURE.md` — module map and state-shape reference.
-- `app/package.json`, `app/vite.config.ts`, `app/tsconfig.json` — scaffolding
-  for the new build. Move these to the root as part of the migration.
-- `HANDOFF.md` — **read this first**. Step-by-step migration plan.
+## Commands
+- `npm run dev` — Vite dev server (HMR) on `http://localhost:5173`.
+- `npm run typecheck` — `tsc --noEmit`.
+- `npm run build` — production build into `dist/`.
+- `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
+
+## Layout
+- `src/main.tsx` — entry; mounts `<App/>` inside `<Provider>`.
+- `src/App.tsx` — root component; selects off the discriminated-union `ui.stage`
+  and renders the matching view + any active modals.
+- `src/lib/` — `icons.tsx`, `time.ts`, `colors.ts`, `router.ts`, `api.ts`,
+  `types.ts`, generated `api-types.ts`.
+- `src/data/` — design fixtures (characters, chapters, voices, books, etc.).
+- `src/store/` — RTK slices (`ui`, `cast`, `chapters`, `revisions`, `manuscript`)
+  + `index.ts` (configureStore, typed `useAppDispatch`/`useAppSelector`, router
+  install).
+- `src/components/`, `src/modals/`, `src/views/` — UI.
+- `src/mocks/canned-data.ts` + `src/mocks/manuscripts/` — mock API payloads.
+- `openapi.yaml` (root) — **API contract**, source of truth for backend shapes.
 
 ## Conventions worth preserving
-- **Discriminated-union `ui.stage`** — see `store/ui-slice.js`. Keep this; it's
-  the right shape.
-- **Hash router grammar** — `lib/router.js` documents the URL ↔ store mapping.
-  Replace the implementation (use `react-router`), keep the grammar identical.
-- **API contract lives in `openapi.yaml`** — generate types from it, don't
-  hand-write `Character`/`Chapter`/`Sentence` interfaces.
-- **Design tokens are CSS custom properties** — `styles.css` declares `--peach`,
-  `--ink`, `--magenta`, etc. and Tailwind references them. Don't reintroduce
-  hex literals in component code.
-- **Mocks behind `USE_MOCKS` flag** — every `mock*` function in `lib/api.js`
-  must keep working in dev. Real `fetch()` lives behind the same `api.*`
-  surface; the components never know which is which.
+- **Discriminated-union `ui.stage`** (`src/store/ui-slice.ts`) — `{ kind: 'books'
+  | 'upload' | 'analysing' | 'confirm' | 'ready' }`, with `view`/`currentChapterId`/
+  `openProfileId` living *inside* the `ready` variant. Don't flatten.
+- **Hash router grammar** (`src/lib/router.ts`) — pure `parseHash`/`stageToHash`,
+  installed against the store via the `RouterStore` adapter so the router stays
+  decoupled. Same URL grammar as the original prototype.
+- **OpenAPI is the type source of truth** — `Character`/`Chapter`/`Sentence` etc.
+  come from `src/lib/api-types.ts` (generated). Don't hand-write them.
+- **Design tokens are CSS custom properties** — `src/styles.css` declares
+  `--peach`, `--ink`, `--magenta`, etc.; `tailwind.config.ts` references those
+  vars. No hex literals in component code.
+- **Mocks behind `VITE_USE_MOCKS`** — `src/lib/api.ts` exports
+  `api = USE_MOCKS ? mock : real`. Components only ever import from `api.*`;
+  they never know which is which. `.env.development` sets the flag on.
+- **RTK immer** — slice reducers mutate via Immer drafts. Don't rewrite to spreads.
 
 ## Out of scope until told otherwise
-- New features. The prototype's surface area is final for v1.
-- Visual redesign. The look is approved; reproduce it pixel-for-pixel.
-- Backend work. You're building the frontend that will call the OpenAPI spec.
+- New features. Surface area is final for v1.
+- Visual redesign. Reproduce the existing look pixel-for-pixel.
+- Backend work. This repo is the frontend that will call the OpenAPI spec.
 
-## Definition of done
-1. `npm run dev` boots a Vite dev server, app loads with HMR.
-2. `npm run typecheck` is clean.
-3. `npm run build` produces a working `dist/`.
-4. All 6 stages from the URL grammar are reachable and styled.
-5. Mocks work end-to-end with `VITE_USE_MOCKS=true`.
-6. No `Object.assign(window, …)` remains. No CDN `<script>` tags.
-7. No in-browser Babel. No `file://` assumption.
+## Suggested follow-ups (not requirements)
+- Swap `src/lib/router.ts` for `react-router` v6 `createHashRouter` keeping the
+  grammar identical.
+- `redux-persist` on `ui` and `manuscript` slices.
+- Real `<audio>` element in `MiniPlayer` once the backend returns URLs.
+- Vitest + slice tests (`applyGenerationTick`, `applyVoiceMatches`).
+- ESLint + Prettier, axe-core a11y pass.
+- Align the `Sentence` shape with the OpenAPI spec (currently the fixtures use
+  `{ id: string, charId, text }` while the spec uses `{ id: number, characterId,
+  chapterId, text }`).
