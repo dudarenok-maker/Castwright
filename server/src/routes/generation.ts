@@ -35,6 +35,7 @@ import {
   type CastCharacter,
   type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
+import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 
 export const generationRouter = Router();
 
@@ -175,6 +176,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      and the user gets faster feedback on Pause.) */
   req.on('close', () => controller.abort());
 
+  /* Cascade detector — if the same non-fatal reason fails two chapters in
+     a row, the failure is deterministic (e.g. sidecar mis-routing every
+     character to an invalid speaker_id) and the rest of the queue will hit
+     the same wall. Escalate to fatal on the second hit so the user gets one
+     clean banner instead of a long stream of identical chapter_failed
+     ticks. See screenshot 2026-05-13 181647 for the cascade we're killing. */
+  const cascade = newCascadeState();
+
   for (const chapter of targetChapters) {
     if (controller.signal.aborted) break;
 
@@ -309,8 +318,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          close). Don't report it as a chapter failure — silently break the
          loop; the outer `idle` + cleanup below handles the rest. */
       if ((e as { name?: string })?.name === 'AbortError') break;
-      const { errorReason, fatal } = describeSynthesisError(e);
+      const initial = describeSynthesisError(e);
+      let { errorReason, fatal } = initial;
       console.error(`[generation] chapter ${chapter.id} (${chapter.slug}) failed:`, e);
+      if (!fatal) {
+        const cascadeResult = recordNonFatal(cascade, errorReason);
+        if (cascadeResult.fatal) {
+          fatal = true;
+          errorReason = `${errorReason} (Stopping run — same failure repeated across chapters; fix the upstream cause before retrying.)`;
+        }
+      }
       send({
         type: 'chapter_failed',
         chapterId: chapter.id,
@@ -340,27 +357,5 @@ function formatDuration(totalSec: number): string {
   const s = total % 60;
   const pad = (n: number) => String(n).padStart(2, '0');
   return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-}
-
-/** Pull a short, user-friendly reason out of a synth error and flag
-    unrecoverable classes as fatal so we stop the run instead of burning
-    through the remaining chapters with the same failure. */
-function describeSynthesisError(err: unknown): { errorReason: string; fatal: boolean } {
-  const raw = (err as Error)?.message ?? String(err);
-  const status = (err as { status?: number })?.status;
-  const isSidecarDown = /sidecar not reachable|ECONNREFUSED|fetch failed/i.test(raw);
-  const isQuota = status === 429 || /429|quota|rate/i.test(raw);
-  const isAuth = status === 401 || status === 403 || /invalid[_ ]?key|API key/i.test(raw);
-  if (isSidecarDown) {
-    return { errorReason: 'Local TTS sidecar not running — start it and resume.', fatal: true };
-  }
-  if (isQuota) {
-    return { errorReason: 'Gemini TTS rate-limited — stopped run; resume later or switch to a local engine.', fatal: true };
-  }
-  if (isAuth) {
-    return { errorReason: 'Gemini TTS authentication failed — check GEMINI_API_KEY.', fatal: true };
-  }
-  const trimmed = raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
-  return { errorReason: trimmed, fatal: false };
 }
 

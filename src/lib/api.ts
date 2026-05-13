@@ -250,7 +250,23 @@ async function mockMatchVoices({ bookId, characters }: MatchArgs): Promise<Voice
   return { bookId, matches };
 }
 
-function mockStreamGeneration({ getChapters, onTick }: StreamArgs): () => void {
+/* Wrap an onTick callback so a thrown reducer (or any downstream listener)
+   doesn't propagate out of the stream wrapper as an unhandled rejection.
+   Without this, a reducer crash from a malformed tick bubbles into React's
+   error path and — with no app-level boundary — looks to the user like a
+   page reload. Logged so regressions are still visible in DevTools. */
+function safeOnTick(onTick: StreamArgs['onTick']): StreamArgs['onTick'] {
+  return (ev) => {
+    try {
+      onTick(ev);
+    } catch (e) {
+      console.error('[api] onTick listener threw, swallowing to avoid app crash:', e);
+    }
+  };
+}
+
+function mockStreamGeneration({ getChapters, onTick: rawOnTick }: StreamArgs): () => void {
+  const onTick = safeOnTick(rawOnTick);
   /* Mock the real server's "one progress tick per same-speaker group" cadence
      well enough that the Generate view's line / character counters tick
      visibly. Two behaviours that matter:
@@ -584,7 +600,8 @@ async function realGetVoiceSample({ voiceId, voice, modelKey, text, characterHin
 /* Real SSE reader for chapter generation. Mirrors the analysis-stream pattern
    above: open a long-running POST, parse `data: <json>` frames, dispatch each
    payload to onTick. Returns a canceller that aborts the fetch. */
-function realStreamGeneration({ bookId, modelKey, chapterIds, force, onTick }: StreamArgs): () => void {
+function realStreamGeneration({ bookId, modelKey, chapterIds, force, onTick: rawOnTick }: StreamArgs): () => void {
+  const onTick = safeOnTick(rawOnTick);
   const controller = new AbortController();
 
   void (async () => {

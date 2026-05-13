@@ -164,6 +164,7 @@ export function Layout() {
           chapters: res.state.chapters,
           completedSlugs: res.completedSlugs ?? [],
           characters: res.cast?.characters ?? [],
+          chapterCharacters: res.chapterCharacters,
         }));
         dispatch(revisionsActions.applyPoll({
           pending: res.revisions?.pending ?? [],
