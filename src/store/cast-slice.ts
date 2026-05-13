@@ -1,12 +1,17 @@
 /* Cast slice — characters + their voice assignments. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import { initialCharacters } from '../data/characters';
 import type { Character, AnalyseResponse, VoiceMatchResponse } from '../lib/types';
 
 export interface CastState { characters: Character[]; }
 
-const initialState: CastState = { characters: initialCharacters };
+/* Empty initial state — the fixture seed (`initialCharacters` from
+   ../data/characters) used to live here so the demo had something to show,
+   but that meant a real book's Cast view briefly displayed fixture
+   characters between click and async hydration. Hydration via
+   `hydrateFromAnalysis` / `setCharacters` (from the layout's getBookState
+   handler) is the only legitimate source for a real book. */
+const initialState: CastState = { characters: [] };
 
 export const castSlice = createSlice({
   name: 'cast',

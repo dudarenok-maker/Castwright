@@ -432,3 +432,16 @@ describe('chaptersSlice — misc reducers', () => {
     expect(next.chapters).toEqual(start.chapters);
   });
 });
+
+describe('chaptersSlice — initial state (mock-leak regression)', () => {
+  it('starts with an empty chapters array so the design fixture never renders for a real book', () => {
+    /* The bug: opening a real book navigated to Generate before the async
+       hydrateFromBookState landed; in that window the view rendered the
+       design fixture (Moby-Dick-flavoured "The Berth at Liverpool" et al.)
+       as if they were the user's book. The fix moves the fixture out of the
+       slice's initial state — hydration is now the only legitimate source
+       of chapter rows. Don't re-seed it. */
+    const initial = chaptersSlice.getInitialState();
+    expect(initial.chapters).toEqual([]);
+  });
+});

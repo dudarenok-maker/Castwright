@@ -6,7 +6,14 @@
    stream-level failures the per-chapter slot can't represent. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import { initialChapters } from '../data/chapters';
+/* `initialChapters` (from ../data/chapters) used to seed `chapters` here so
+   the design fixture was visible in the demo. That was a footgun: between
+   the moment the user clicks a real book and the moment `hydrateFromBookState`
+   lands (async fetch of .audiobook/state.json), the Generate view rendered
+   the fixture's Moby-Dick-flavoured chapter titles as if they were the user's
+   book — a confusing flash of wrong content. Start empty; hydration is the
+   only legitimate source of chapter rows for a real book. The fixture still
+   exists for the drift-report modal and the mock API. */
 import type { Chapter, Character, GenerationTick, AnalyseResponse, BookStateJson } from '../lib/types';
 
 /* When the SSE has produced no tick for this long while a chapter is
@@ -44,7 +51,7 @@ export interface ChaptersState {
 }
 
 const initialState: ChaptersState = {
-  chapters: initialChapters,
+  chapters: [],
   paused: false,
   lastError: null,
   generationStartedAt: null,
