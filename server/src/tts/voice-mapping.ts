@@ -277,3 +277,51 @@ function stableHash(s: string): number {
   }
   return Math.abs(h);
 }
+
+/* Static self-consistency report for an engine's catalog. Catches the
+   "wrong voices used for wrong models" class of bug at its source: the
+   PROFILE_VOICES table and the VOICE_DESCRIPTIONS table for each engine
+   are supposed to stay in lockstep (every routed voice has a description,
+   every described voice is plausibly routable), but nothing enforces it.
+   When they drift, the cast view shows a voice that the picker will
+   never actually choose, or the picker chooses a voice with no
+   description in the UI. Pure function — call it at startup, log the
+   result, or fail tests on it. */
+export interface CatalogConsistency {
+  engine: TtsEngine;
+  /** Names referenced in PROFILE_VOICES but missing from VOICE_DESCRIPTIONS —
+      the picker can choose them but the cast view has no label for them. */
+  missingDescriptions: string[];
+  /** Names described but never routed — orphan entries in the
+      DESCRIPTIONS table that nothing in PROFILE_VOICES points at. Not
+      load-bearing for synthesis, but a signal the table is stale. */
+  unrouted: string[];
+  /** Total names listed by PROFILE_VOICES (deduped across profiles). */
+  routedCount: number;
+}
+
+export function auditEngineCatalog(engine: TtsEngine): CatalogConsistency {
+  const profiles =
+    engine === 'gemini' ? GEMINI_PROFILE_VOICES :
+    engine === 'coqui'  ? COQUI_PROFILE_VOICES  :
+    COQUI_PROFILE_VOICES; // piper/kokoro share Coqui's table (see catalogForEngine)
+  const descriptions =
+    engine === 'gemini' ? GEMINI_VOICE_DESCRIPTIONS :
+    engine === 'coqui'  ? COQUI_VOICE_DESCRIPTIONS  :
+    COQUI_VOICE_DESCRIPTIONS;
+
+  const routed = new Set<string>();
+  for (const opts of Object.values(profiles)) {
+    for (const n of opts) routed.add(n);
+  }
+  const described = new Set(Object.keys(descriptions));
+
+  const missingDescriptions = [...routed].filter(n => !described.has(n)).sort();
+  const unrouted = [...described].filter(n => !routed.has(n)).sort();
+  return {
+    engine,
+    missingDescriptions,
+    unrouted,
+    routedCount: routed.size,
+  };
+}
