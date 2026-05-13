@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { IconStar, IconDrag } from '../lib/icons';
 import { VoiceSwatch, Pill } from './primitives';
-import type { Voice } from '../lib/types';
+import type { Character, Voice } from '../lib/types';
+import { findCharacterForVoice } from '../lib/voice-character-link';
 
 type Tab = 'all' | 'current' | 'library';
 
@@ -10,9 +11,19 @@ interface VoiceLibraryPanelProps {
   draggingVoiceId: string | null;
   setDraggingVoiceId: (id: string | null) => void;
   compact?: boolean;
+  /* Optional Cast-view interactions: when a panel voice is also used by a
+     character in the current book, clicking the card opens that character's
+     profile drawer, and clicking the swatch bubble plays a voice sample.
+     Library/series voices with no matching character stay drag-only. */
+  characters?: Character[];
+  onOpenProfile?: (id: string) => void;
+  onPlaySample?: (character: Character, voice: Voice) => void;
 }
 
-export function VoiceLibraryPanel({ library, draggingVoiceId, setDraggingVoiceId, compact = false }: VoiceLibraryPanelProps) {
+export function VoiceLibraryPanel({
+  library, draggingVoiceId, setDraggingVoiceId, compact = false,
+  characters, onOpenProfile, onPlaySample,
+}: VoiceLibraryPanelProps) {
   const [tab, setTab] = useState<Tab>('all');
   const filtered = library.filter(v => tab === 'all' || v.source === tab);
   const bookCount = new Set(library.map(v => v.bookId)).size;
@@ -21,6 +32,7 @@ export function VoiceLibraryPanel({ library, draggingVoiceId, setDraggingVoiceId
     { id: 'current', label: 'This book' },
     { id: 'library', label: 'Series' },
   ];
+  const findCharacter = (v: Voice) => characters ? findCharacterForVoice(v, characters) : undefined;
   return (
     <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex flex-col max-h-[calc(100vh-120px)]">
       <div className="p-5 pb-0">
@@ -40,7 +52,11 @@ export function VoiceLibraryPanel({ library, draggingVoiceId, setDraggingVoiceId
       </div>
       <div className="p-5 overflow-y-auto space-y-2">
         {filtered.map(v => (
-          <VoiceCard key={v.id} voice={v} draggingVoiceId={draggingVoiceId} setDraggingVoiceId={setDraggingVoiceId} compact={compact}/>
+          <VoiceCard key={v.id} voice={v} draggingVoiceId={draggingVoiceId} setDraggingVoiceId={setDraggingVoiceId}
+            compact={compact}
+            character={findCharacter(v)}
+            onOpenProfile={onOpenProfile}
+            onPlaySample={onPlaySample}/>
         ))}
       </div>
     </div>
@@ -55,6 +71,9 @@ interface VoiceCardProps {
   showBookTitle?: boolean;
   pinned?: boolean;
   onTogglePin?: (voice: Voice) => void;
+  character?: Character;
+  onOpenProfile?: (id: string) => void;
+  onPlaySample?: (character: Character, voice: Voice) => void;
 }
 
 export function VoiceCard({
@@ -65,14 +84,26 @@ export function VoiceCard({
   showBookTitle = true,
   pinned = false,
   onTogglePin,
+  character,
+  onOpenProfile,
+  onPlaySample,
 }: VoiceCardProps) {
   const isDragging = draggingVoiceId === voice.id;
+  const canOpenProfile = !!(character && onOpenProfile);
+  const canPlay = !!(character && onPlaySample);
   return (
     <div draggable
       onDragStart={(e) => { setDraggingVoiceId(voice.id); e.dataTransfer.effectAllowed = 'copy'; }}
       onDragEnd={() => setDraggingVoiceId(null)}
+      onClick={canOpenProfile ? () => onOpenProfile!(character!.id) : undefined}
+      role={canOpenProfile ? 'button' : undefined}
+      tabIndex={canOpenProfile ? 0 : undefined}
+      onKeyDown={canOpenProfile ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenProfile!(character!.id); } } : undefined}
       className={`group flex items-start gap-3 p-3 rounded-2xl border bg-canvas hover:bg-white border-ink/10 cursor-grab active:cursor-grabbing transition-all ${isDragging ? 'opacity-40 scale-[0.98]' : ''}`}>
-      <VoiceSwatch voice={voice} size="sm" showLabel={false}/>
+      <span onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+        <VoiceSwatch voice={voice} size="sm" showLabel={false}
+          onSelect={canPlay ? () => onPlaySample!(character!, voice) : undefined}/>
+      </span>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <p className="text-sm font-bold text-ink truncate">{voice.character}</p>
