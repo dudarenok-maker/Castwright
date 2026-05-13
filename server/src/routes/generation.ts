@@ -58,6 +58,19 @@ interface GenerationRequestBody {
   force?: unknown;
 }
 
+/* Snapshot of a character's voice-relevant attributes captured at the
+   moment a chapter is synthesised. The revisions route diffs this against
+   the live cast.json to surface drift events ("voice swapped after this
+   chapter rendered", "tone.warmth drifted 30 points", etc.). Kept narrow
+   on purpose — only fields the drift detector reads. */
+interface CharacterSnapshot {
+  tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
+  gender?: 'male' | 'female' | 'neutral';
+  ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+  voiceId?: string;
+  voiceEngine?: string;
+}
+
 interface ChapterSegmentsFile {
   bookId: string;
   chapterId: number;
@@ -67,6 +80,12 @@ interface ChapterSegmentsFile {
   modelKey: TtsModelKey;
   synthesizedAt: string;
   segments: ChapterSegment[];
+  /** Snapshot of cast character attributes at synthesis time, keyed by
+      characterId. Used by /api/books/:bookId/revisions to detect drift
+      between the current cast and what was actually rendered. Optional
+      because pre-existing segments files written before this field landed
+      have no snapshots; the revisions route treats them as "no signal". */
+  characterSnapshots?: Record<string, CharacterSnapshot>;
 }
 
 generationRouter.post('/:bookId/generation', async (req: Request, res: Response) => {
@@ -276,6 +295,23 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          half-MP3 that scan.ts would mistake for a completed chapter. */
       const tmpMp3 = `${mp3Path}.tmp-${process.pid}-${Date.now()}`;
       await writeFile(tmpMp3, mp3Buffer);
+      /* Snapshot the cast character attributes for every character that
+         actually spoke in this chapter — narrows the snapshot to the
+         characters the drift detector cares about and avoids bloating the
+         segments file with the full cast on tiny chapters. */
+      const speakingIds = new Set(result.segments.map(s => s.characterId));
+      const characterSnapshots: Record<string, CharacterSnapshot> = {};
+      for (const c of cast.characters) {
+        if (!speakingIds.has(c.id)) continue;
+        characterSnapshots[c.id] = {
+          tone: c.tone,
+          gender: c.gender,
+          ageRange: c.ageRange,
+          voiceId: c.voiceId,
+          voiceEngine: engine,
+        };
+      }
+
       const segmentsFile: ChapterSegmentsFile = {
         bookId,
         chapterId: chapter.id,
@@ -285,6 +321,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         modelKey,
         synthesizedAt: new Date().toISOString(),
         segments: result.segments,
+        characterSnapshots,
       };
       await writeJsonAtomic(segPath, segmentsFile);
       await rename(tmpMp3, mp3Path);

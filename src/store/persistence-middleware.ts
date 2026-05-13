@@ -46,9 +46,14 @@ const PERSIST_RULES: Record<string, { slice: StateSlice; build: (s: PersistableR
   'manuscript/setSentencesCharacter': { slice: 'manuscript', build: (s) => ({ sentences: s.manuscript.sentences }) },
   'manuscript/splitSentence':         { slice: 'manuscript', build: (s) => ({ sentences: s.manuscript.sentences }) },
 
-  'revisions/acceptAllPending': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift }) },
-  'revisions/rejectAllPending': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift }) },
-  'revisions/dismissDrift':     { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift }) },
+  /* dismissed ids ride with every revisions persist so the backend drift
+     detector can filter ids the user has waved off (read in
+     server/src/routes/revisions.ts). Without it, the slice's in-memory
+     dismissals would be lost on reload and previously-dismissed events
+     would resurface on the next poll. */
+  'revisions/acceptAllPending': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
+  'revisions/rejectAllPending': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
+  'revisions/dismissDrift':     { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
 
   /* Editorial audit trail. Persists the whole `events` array on every
      append — the log is small (one entry per user action) and the server

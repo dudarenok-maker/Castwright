@@ -20,4 +20,5 @@ export const LOG_TYPES: Record<ChangeLogType, LogTypeMeta> = {
   analysis_complete:  { icon: <IconSparkle     className="w-3.5 h-3.5"/>, color: '#3C194F', label: 'Analysis complete'  },
   import:             { icon: <IconUpload      className="w-3.5 h-3.5"/>, color: '#0F0E0D', label: 'Imported'           },
   library_add:        { icon: <IconLayers      className="w-3.5 h-3.5"/>, color: '#3C194F', label: 'Library updated'    },
+  reparse:            { icon: <IconRefresh     className="w-3.5 h-3.5"/>, color: '#3C194F', label: 'Re-parsed'          },
 };

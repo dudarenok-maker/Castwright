@@ -10,7 +10,7 @@ type FilterKey = 'all' | 'voice' | 'generation' | 'manuscript' | 'cast';
 const FILTER_MAP: Record<Exclude<FilterKey, 'all'>, ChangeLogType[]> = {
   voice:      ['voice_tune', 'voice_reuse', 'voice_lock', 'library_add'],
   generation: ['regenerate', 'chapter_complete', 'chapter_failed', 'generation_started'],
-  manuscript: ['boundary_move', 'import'],
+  manuscript: ['boundary_move', 'import', 'reparse'],
   cast:       ['cast_confirm', 'analysis_complete'],
 };
 

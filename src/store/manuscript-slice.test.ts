@@ -147,3 +147,112 @@ describe('manuscriptSlice — setSentenceCharacter / setSentencesCharacter', () 
     expect(next.sentences.map(s => s.characterId)).toEqual(['halloran', 'narrator', 'halloran']);
   });
 });
+
+describe('manuscriptSlice — hydrateFromAnalysis merge', () => {
+  /* Minimal payload shape — only the fields the reducer touches. */
+  const analyse = (xs: Array<Partial<Sentence> & { id: number; text: string; characterId: string }>): import('../lib/types').AnalyseResponse =>
+    ({ sentences: sentences(xs) } as unknown as import('../lib/types').AnalyseResponse);
+
+  it('replaces wholesale on first hydrate (manuscriptId null)', () => {
+    const start = baseState(sentences([
+      { id: 1, text: 'demo-fixture', characterId: 'fixture-narrator' },
+    ]));
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.hydrateFromAnalysis(analyse([
+        { id: 1, text: 'real', characterId: 'narrator' },
+        { id: 2, text: 'second', characterId: 'eliza' },
+      ])),
+    );
+    expect(next.sentences).toHaveLength(2);
+    expect(next.sentences[0]).toMatchObject({ id: 1, text: 'real', characterId: 'narrator' });
+    expect(next.sentences[1]).toMatchObject({ id: 2, text: 'second', characterId: 'eliza' });
+  });
+
+  it('preserves user characterId when re-analysing an opened book', () => {
+    const start = { ...baseState(sentences([
+      { id: 1, text: 'old', characterId: 'eliza' },         // user edited
+      { id: 2, text: 'old', characterId: 'narrator' },
+    ])), manuscriptId: 'mns_open' };
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.hydrateFromAnalysis(analyse([
+        { id: 1, text: 'fresh-text-1', characterId: 'narrator' }, // analyzer guesses narrator
+        { id: 2, text: 'fresh-text-2', characterId: 'halloran' },
+      ])),
+    );
+    // id=1 keeps user's eliza; id=2 stays narrator (unedited so accept new value? — no, we preserve characterId regardless once manuscriptId set)
+    expect(next.sentences[0]).toMatchObject({ id: 1, characterId: 'eliza' });
+    expect(next.sentences[1]).toMatchObject({ id: 2, characterId: 'narrator' });
+  });
+
+  it('keeps split-sentence offsprings whose ids the new analysis does not produce', () => {
+    // Start state mirrors what splitSentence would have produced: original id=5 split → 5,42,43.
+    const start = { ...baseState(sentences([
+      { id: 1, text: 'before', characterId: 'narrator' },
+      { id: 5, text: 'first-piece', characterId: 'narrator' },
+      { id: 42, text: 'middle-piece', characterId: 'halloran' },
+      { id: 43, text: 'last-piece', characterId: 'eliza' },
+      { id: 6, text: 'after', characterId: 'narrator' },
+    ])), manuscriptId: 'mns_open' };
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.hydrateFromAnalysis(analyse([
+        { id: 1, text: 'before-fresh', characterId: 'narrator' },
+        { id: 5, text: 'fresh-unsplit', characterId: 'narrator' },
+        { id: 6, text: 'after-fresh', characterId: 'narrator' },
+      ])),
+    );
+    // Splits (42, 43) preserved in narrative order between 5 and 6.
+    expect(next.sentences.map(s => s.id)).toEqual([1, 5, 42, 43, 6]);
+    // Split offsprings kept their edited text + characterId
+    expect(next.sentences[2]).toMatchObject({ id: 42, text: 'middle-piece', characterId: 'halloran' });
+    expect(next.sentences[3]).toMatchObject({ id: 43, text: 'last-piece', characterId: 'eliza' });
+    // Split parent (id=5) kept its text and characterId, didn't get refreshed to 'fresh-unsplit'.
+    expect(next.sentences[1]).toMatchObject({ id: 5, text: 'first-piece', characterId: 'narrator' });
+  });
+
+  it('appends genuinely-new analysis ids at the end', () => {
+    const start = { ...baseState(sentences([
+      { id: 1, text: 'a', characterId: 'narrator' },
+    ])), manuscriptId: 'mns_open' };
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.hydrateFromAnalysis(analyse([
+        { id: 1, text: 'a-fresh', characterId: 'narrator' },
+        { id: 2, text: 'new', characterId: 'halloran' },
+      ])),
+    );
+    expect(next.sentences.map(s => s.id)).toEqual([1, 2]);
+    expect(next.sentences[1]).toMatchObject({ id: 2, text: 'new', characterId: 'halloran' });
+  });
+
+  it('keeps an in-state id the new analysis dropped (treated like a split offspring)', () => {
+    /* Edge case: the analyzer is non-deterministic enough that a sentence
+       present in the prior run is absent in the new one. We keep the slice
+       entry so the user's reassignment isn't silently wiped — the GET-side
+       merge on a fresh reload would filter it as a true orphan. */
+    const start = { ...baseState(sentences([
+      { id: 1, text: 'a', characterId: 'narrator' },
+      { id: 2, text: 'gone-in-new', characterId: 'eliza' },
+    ])), manuscriptId: 'mns_open' };
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.hydrateFromAnalysis(analyse([
+        { id: 1, text: 'a-fresh', characterId: 'narrator' },
+      ])),
+    );
+    expect(next.sentences.map(s => s.id)).toEqual([1, 2]);
+  });
+
+  it('is a no-op when the analysis returned no sentences', () => {
+    const start = { ...baseState(sentences([
+      { id: 1, text: 'a', characterId: 'narrator' },
+    ])), manuscriptId: 'mns_open' };
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.hydrateFromAnalysis({ sentences: [] } as unknown as import('../lib/types').AnalyseResponse),
+    );
+    expect(next.sentences).toEqual(start.sentences);
+  });
+});

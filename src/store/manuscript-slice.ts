@@ -45,9 +45,44 @@ export const manuscriptSlice = createSlice({
     setImportCandidate: (s, a: PayloadAction<ImportCandidate | null>) => {
       s.importCandidate = a.payload;
     },
+    /* Merge incoming analysis sentences with the current slice contents.
+       On first hydrate (manuscriptId still null, state holds the demo
+       fixture) replace wholesale. On re-analysis (manuscriptId already set,
+       state holds the user's edited sentences from disk hydration or live
+       edits) preserve every sentence whose id matches an incoming one —
+       this carries forward setSentenceCharacter / setSentencesCharacter
+       reassignments. Sentences in state but NOT in incoming (typical for
+       splitSentence offsprings, whose ids are assigned above the analyzer's
+       max) are kept in narrative position. Sentences in incoming but NOT
+       in state are appended. Without the merge a confirm → reanalyse cycle
+       would silently stomp the user's manuscript edits. */
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
-      const sentences = a.payload.sentences as unknown as Sentence[] | undefined;
-      if (sentences?.length) s.sentences = sentences;
+      const incoming = a.payload.sentences as unknown as Sentence[] | undefined;
+      if (!incoming?.length) return;
+      if (s.manuscriptId === null) { s.sentences = incoming; return; }
+
+      const incomingById = new Map<number, Sentence>(incoming.map(x => [x.id, x]));
+      const stateIds = new Set<number>(s.sentences.map(x => x.id));
+      const merged: Sentence[] = [];
+      for (const x of s.sentences) {
+        const inc = incomingById.get(x.id);
+        if (inc) {
+          /* Sentence still exists in the new analysis. Refresh fields from
+             incoming but preserve characterId (the user's reassignment) and
+             text (in case the sentence was split — splitSentence rewrites
+             text in place and the analyzer wouldn't know about it). */
+          merged.push({ ...inc, characterId: x.characterId, text: x.text });
+        } else {
+          /* Either a split offspring (id assigned above analyzer max) or a
+             sentence the new analysis dropped. Keep it — the GET-side merge
+             on a reload would filter true orphans against the fresh cache. */
+          merged.push(x);
+        }
+      }
+      for (const inc of incoming) {
+        if (!stateIds.has(inc.id)) merged.push(inc);
+      }
+      s.sentences = merged;
     },
 
     /* Rehydrate from a disk-resident book state + manuscript-edits.json.

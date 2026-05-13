@@ -24,6 +24,7 @@ import { importRouter } from './routes/import.js';
 import { bookStateRouter } from './routes/book-state.js';
 import { generationRouter } from './routes/generation.js';
 import { chapterAudioRouter } from './routes/chapter-audio.js';
+import { revisionsRouter } from './routes/revisions.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { userSettingsRouter } from './routes/user-settings.js';
@@ -64,6 +65,7 @@ app.use('/api/books', bookStateRouter);      // mounts /:bookId/state (GET/PUT)
 app.use('/api/books', voiceMatchRouter);     // mounts /:bookId/voice-match
 app.use('/api/books', generationRouter);     // mounts /:bookId/generation (SSE)
 app.use('/api/books', chapterAudioRouter);   // mounts /:bookId/chapters/:chapterId/audio(.mp3|.wav)
+app.use('/api/books', revisionsRouter);      // mounts /:bookId/revisions (drift diff over segments snapshots)
 app.use('/api/voices', voicesRouter);        // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter);   // mounts POST /:voiceId/sample
 app.use('/api/sidecar', sidecarHealthRouter); // mounts GET /health

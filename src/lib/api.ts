@@ -812,10 +812,13 @@ const real = {
     }
     return res.json();
   },
-  pollRevisions:     async (_args: PollArgs): Promise<RevisionsResponse> => {
-    /* Return a benign empty payload so the polling effect in App.tsx doesn't
-       surface a noisy error every 30s on real backend. */
-    return { pending: [], drift: [] };
+  pollRevisions:     async ({ bookId }: PollArgs): Promise<RevisionsResponse> => {
+    const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/revisions`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Revisions poll failed (${res.status}): ${detail || res.statusText}`);
+    }
+    return res.json();
   },
 };
 

@@ -176,10 +176,7 @@ export function Layout() {
           characters: res.cast?.characters ?? [],
           chapterCharacters: res.chapterCharacters,
         }));
-        dispatch(revisionsActions.applyPoll({
-          pending: res.revisions?.pending ?? [],
-          drift:   res.revisions?.drift   ?? [],
-        }));
+        dispatch(revisionsActions.hydrateFromBookState(res.revisions ?? null));
         dispatch(changeLogActions.hydrateFromBookState(res.changeLog ?? null));
       })
       .catch(err => { console.warn('[book-state] hydrate skipped:', err.message); });
