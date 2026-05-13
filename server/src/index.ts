@@ -24,6 +24,7 @@ import { importRouter } from './routes/import.js';
 import { bookStateRouter } from './routes/book-state.js';
 import { generationRouter } from './routes/generation.js';
 import { chapterAudioRouter } from './routes/chapter-audio.js';
+import { sidecarHealthRouter } from './routes/sidecar-health.js';
 import { WORKSPACE_ROOT, ensureWorkspace } from './workspace/paths.js';
 
 const app = express();
@@ -53,6 +54,7 @@ app.use('/api/books', generationRouter);     // mounts /:bookId/generation (SSE)
 app.use('/api/books', chapterAudioRouter);   // mounts /:bookId/chapters/:chapterId/audio(.mp3|.wav)
 app.use('/api/voices', voicesRouter);        // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter);   // mounts POST /:voiceId/sample
+app.use('/api/sidecar', sidecarHealthRouter); // mounts GET /health
 
 const PORT = Number(process.env.PORT ?? 8080);
 app.listen(PORT, () => {
