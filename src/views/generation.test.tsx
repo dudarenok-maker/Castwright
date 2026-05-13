@@ -122,6 +122,63 @@ describe('GenerationView — chapter & character metadata (regression for screen
   });
 });
 
+describe('GenerationView — early-tick render guards (regression)', () => {
+  it('does not render a stray "0" in the expanded row when currentLine is 0 at the start of a run', () => {
+    /* Regression: `chapter.currentLine && (...)` short-circuits with `0`,
+       and React renders `0` as the literal text "0". When generation
+       has just kicked off (in_progress, no useful currentLine yet),
+       the expanded row briefly shows a stray "0" near the left edge. */
+    const live: Chapter = {
+      id: 1,
+      title: 'Chapter 1',
+      duration: '00:00',
+      state: 'in_progress',
+      progress: 0.01,
+      currentLine: 0,
+      totalLines: 200,
+      characters: { narrator: 'in_progress', Marlow: 'queued' },
+    };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([live]));
+    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
+      bookId: 'b1', characters, chapters: [live], sentences,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any));
+    render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={[live]}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          setPaused={() => {}}
+          onRegenerate={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByText('Chapter 1'));
+    /* The leak is a bare `{0}` rendered as a direct child of the
+       expanded chapter card (a sibling of the per-character rows).
+       Scope the assertion to the chapter card so legitimate "0" Stat
+       counters in the page header (Completed/Failed) don't trip it. */
+    const card = screen.getByText('Chapter 1').closest('.rounded-3xl');
+    expect(card).not.toBeNull();
+    const stray = Array.from(card!.querySelectorAll('*'))
+      .filter(el => el.children.length === 0 && el.textContent === '0');
+    expect(stray).toHaveLength(0);
+  });
+});
+
 describe('GenerationView — Pause/Resume regenerate loop (regression)', () => {
   beforeEach(() => { streamGenerationMock.mockClear(); });
 

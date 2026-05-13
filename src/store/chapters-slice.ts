@@ -59,8 +59,26 @@ export const chaptersSlice = createSlice({
     consumePendingRegen: (s) => { s.pendingRegen = null; },
 
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
-      const { chapters } = a.payload;
-      if (chapters?.length) s.chapters = chapters;
+      const { chapters, sentences } = a.payload;
+      if (!chapters?.length) return;
+      /* Server emits `chapters[i].characters = {}` from analysis; the
+         per-chapter speaker map is recoverable from sentences. Without
+         this seeding the Generate view's expanded chapter row shows no
+         speaker rows until the first SSE tick names a character. */
+      const speakersByChapter: Record<number, Set<string>> = {};
+      for (const sent of sentences ?? []) {
+        (speakersByChapter[sent.chapterId] ??= new Set()).add(sent.characterId);
+      }
+      s.chapters = chapters.map(c => {
+        const known = Object.keys(c.characters ?? {});
+        if (known.length > 0) return c;
+        const speakers = speakersByChapter[c.id];
+        if (!speakers || speakers.size === 0) return c;
+        return {
+          ...c,
+          characters: Object.fromEntries([...speakers].map(id => [id, 'queued' as const])),
+        };
+      });
     },
 
     /* Rebuild chapters from a disk-resident state.json + the set of completed

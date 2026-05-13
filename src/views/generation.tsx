@@ -318,7 +318,7 @@ function ChapterRow({
               Writing chapter file… {chapter.totalLines ? `${chapter.totalLines} lines synthesised` : 'finalising audio'}.
             </div>
           )}
-          {chapter.state === 'in_progress' && !assembling && chapter.currentLine && (
+          {chapter.state === 'in_progress' && !assembling && chapter.currentLine != null && chapter.currentLine > 0 && (
             <div className="mt-4 ml-[100px] flex items-center gap-3 text-xs text-ink/60">
               <span>Active: <span className="font-semibold text-ink">{findChar(Object.entries(chapter.characters).find(([, s]) => s === 'in_progress')?.[0] || '').name}</span> · line {chapter.currentLine.toLocaleString()} of {chapter.totalLines?.toLocaleString()}</span>
             </div>
