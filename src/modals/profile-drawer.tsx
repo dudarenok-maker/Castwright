@@ -48,11 +48,14 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
   const ttsEngine = engineForModelKey(ttsModelKey);
   const [sampleLoading, setSampleLoading] = useState(false);
   const [sampleError, setSampleError] = useState<string | null>(null);
-  /* Evidence list is collapsed by default to keep the drawer scroll
-     manageable; clicking "Show more evidence" reveals the full list.
-     Hidden entirely when there's nothing extra to show. */
+  /* The analyzer ships ≥3 evidence quotes sorted longest-first
+     (server/src/routes/analysis.ts sortEvidence). The drawer shows the
+     first 3 by default — index 0 is also the voice-cloning sample, so
+     showing it on initial render lets the user verify the sample text
+     without expanding. "Show more evidence" reveals any quotes beyond
+     3 and is hidden when there's nothing extra. */
   const [showAllEvidence, setShowAllEvidence] = useState(false);
-  const EVIDENCE_PREVIEW_LIMIT = 2;
+  const EVIDENCE_PREVIEW_LIMIT = 3;
 
   /* Sample subject: a library voice when one is matched, otherwise a
      character-derived stub so brand-new (unmatched) characters can still

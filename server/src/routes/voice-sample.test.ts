@@ -138,6 +138,70 @@ describe('voice-sample router', () => {
     });
   });
 
+  describe('evidence-driven sample text (no text in body)', () => {
+    /* The route's buildSampleText is internal, but we can verify its
+       behaviour through synthesize's call arguments — the route hands
+       the selected text straight to the provider. */
+    it('picks the longest evidence quote when ≥1 quote is long enough', async () => {
+      const short  = 'Cold supper it is, then.'; // 24 chars
+      const medium = '“Hard to starboard,” he said, not loudly, because Halloran had never had to be loud to be obeyed.'; // ~95 chars
+      const long   = '“Mr. Vance, you will reef the topsails before the next bell. You will do it without comment, and you will report back to me when it is done — and not, sir, a moment before.”'; // ~180 chars
+
+      const res = await request(app)
+        .post('/api/voices/v_halloran/sample')
+        .send({
+          modelKey: 'coqui-xtts-v2',
+          voice: { id: 'v_halloran', character: 'Halloran', attributes: ['Male'] },
+          /* Intentionally unsorted to exercise the defensive resort.
+             CharacterHint.evidence is string[] on the wire (see
+             server/src/tts/voice-mapping.ts), not {quote}[]. */
+          characterHint: { evidence: [short, long, medium] },
+        });
+
+      expect(res.status).toBe(200);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+      const args = synthesize.mock.calls[0][0] as { text: string };
+      /* The longest quote (with surrounding quote marks stripped) is what
+         gets synthesized. We strip the same way buildSampleText does. */
+      const expected = long.replace(/^[“”"'‘’\s]+|[“”"'‘’\s]+$/g, '').trim();
+      expect(args.text).toBe(expected);
+    });
+
+    it('pads short quotes with the character-said intro when nothing meets MIN_CHARS', async () => {
+      const res = await request(app)
+        .post('/api/voices/v_marcus/sample')
+        .send({
+          modelKey: 'coqui-xtts-v2',
+          voice: { id: 'v_marcus', character: 'Marcus', attributes: ['Male'] },
+          characterHint: {
+            evidence: [
+              '“Cold supper it is, then, and may the wind take the rest.”', // ~50 chars
+              '“Aye.”',
+            ],
+          },
+        });
+
+      expect(res.status).toBe(200);
+      const args = synthesize.mock.calls[0][0] as { text: string };
+      expect(args.text.startsWith('Marcus said: ')).toBe(true);
+      expect(args.text).toContain('Cold supper it is');
+    });
+
+    it('falls back to the generic "Hello. I\'m …" script when evidence is empty', async () => {
+      const res = await request(app)
+        .post('/api/voices/v_new/sample')
+        .send({
+          modelKey: 'coqui-xtts-v2',
+          voice: { id: 'v_new', character: 'Newcomer', attributes: ['Female', 'Alto'] },
+          characterHint: { evidence: [] },
+        });
+
+      expect(res.status).toBe(200);
+      const args = synthesize.mock.calls[0][0] as { text: string };
+      expect(args.text.startsWith("Hello. I'm Newcomer.")).toBe(true);
+    });
+  });
+
   describe('provider errors', () => {
     it('503 sidecar_down when the sidecar is unreachable', async () => {
       synthesize.mockRejectedValueOnce(new Error('sidecar not reachable at http://localhost:9000'));

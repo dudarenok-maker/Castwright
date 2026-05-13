@@ -30,37 +30,35 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const AUDIO_DIR = process.env.VOICE_SAMPLE_AUDIO_DIR
   ?? resolve(__dirname, '..', '..', 'audio', 'voices');
 
-/* Sample script. When the character has evidence quotes (real manuscript
-   lines from the analyzer), pick the one closest to a target reading
-   length so each voice actually sounds like *that character* — not a
-   generic "Hello, I'm X" recitation. Falls back to a stock intro when
-   no evidence is available (e.g. brand-new library voices). */
-const TARGET_CHARS = 180;   // ≈12 s at typical English narration pace
-const MIN_CHARS    = 80;
-const MAX_CHARS    = 320;
+/* Sample script. The analyzer ships ≥3 evidence quotes per character,
+   sorted longest-first server-side (see analysis.ts sortEvidence), with
+   the first quote intentionally long enough (~180–280 chars) to settle
+   TTS prosody. Voice samples consume the longest quote so each preview
+   actually sounds like *that character* — not a generic "Hello, I'm X"
+   recitation. Falls back to a stock intro when no evidence is available
+   (e.g. brand-new library voices, or legacy cached analyses). */
+const MIN_CHARS = 80;
+const MAX_CHARS = 320;
 
 function buildSampleText(voice: VoiceLike, hint?: CharacterHint): string {
+  /* Defensive re-sort — the route also accepts a characterHint from
+     the client where the array may not have been through sortEvidence
+     (e.g. user edits in the profile drawer that haven't been saved). */
   const cleaned = (hint?.evidence ?? [])
     .map(stripQuoteMarks)
-    .filter(s => s.length >= MIN_CHARS && s.length <= MAX_CHARS);
+    .filter(s => s.length > 0)
+    .sort((a, b) => b.length - a.length);
 
-  if (cleaned.length > 0) {
-    cleaned.sort((a, b) => Math.abs(a.length - TARGET_CHARS) - Math.abs(b.length - TARGET_CHARS));
-    return cleaned[0];
+  const longest = cleaned[0];
+  if (longest && longest.length >= MIN_CHARS) {
+    return longest.slice(0, MAX_CHARS);
   }
 
-  /* No usable evidence — at least use the longest available quote if any. */
-  const anyQuote = (hint?.evidence ?? [])
-    .map(stripQuoteMarks)
-    .sort((a, b) => b.length - a.length)[0];
-  if (anyQuote && anyQuote.length >= 30) {
-    /* Pad short quotes with the character intro so the TTS has enough
+  if (longest && longest.length >= 30) {
+    /* Short quote — pad with the character intro so the TTS has enough
        prosody to settle. */
-    if (anyQuote.length < MIN_CHARS) {
-      const name = voice.character?.trim() ?? '';
-      return name ? `${name} said: ${anyQuote}` : anyQuote;
-    }
-    return anyQuote.slice(0, MAX_CHARS);
+    const name = voice.character?.trim() ?? '';
+    return name ? `${name} said: ${longest}` : longest;
   }
 
   const name = voice.character?.trim() || 'an unnamed character';

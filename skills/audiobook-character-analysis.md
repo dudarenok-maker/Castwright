@@ -42,7 +42,9 @@ A JSON object with exactly these two top-level fields:
       },
       "description": "A measured, period-appropriate narrator. Uses sea-trade vocabulary; rarely interjects opinion.",
       "evidence": [
-        { "quote": "thirty winters at sea had taught him to trust", "note": "Anchors register + age." }
+        { "quote": "He could feel it before he saw it — a pressure shift behind his right ear that thirty winters at sea had taught him to trust more than any instrument the Admiralty could nail to a wall.", "note": "Long-form: drives the voice-cloning sample. Sentence rhythm, restrained register, period vocabulary." },
+        { "quote": "thirty winters at sea had taught him to trust", "note": "Anchors register + age." },
+        { "quote": "She said it under her breath, which is how she said most of the things she meant.", "note": "Dry, observational; understated humour." }
       ]
     }
     // ... one per speaking character. Always include "narrator".
@@ -64,7 +66,16 @@ A JSON object with exactly these two top-level fields:
 - `gender`: emit for every non-narrator character when the manuscript gives any signal — pronouns ("he"/"she"), honorifics ("Mr."/"Mrs."), gendered relationships ("son"/"daughter"). Use `"neutral"` only when the manuscript is truly ambiguous (mythical beings, AI, etc.). The TTS picker depends on this for voice selection. Narrator gets `"neutral"` unless the prose is in first person and gendered.
 - `ageRange`: `"child"` (≤12), `"teen"` (13–19), `"adult"` (20–60), `"elderly"` (60+). Use the manuscript's stated or strongly implied age. Skip the field if you genuinely don't know.
 - `tone`: integer fields, 0 (low) to 100 (high). Skip a field rather than guess.
-- `evidence`: 1–3 short quotes from the manuscript that justify your reading. Keep quotes under ~120 chars; add a `note` when the link isn't obvious.
+- `evidence`: **at least 3 quotes per character**, sorted longest-first.
+  - The **first (longest) quote** is fed verbatim to the TTS engine as the
+    voice-cloning sample — it must be substantial enough to settle prosody.
+    Aim for **~180–280 chars**; a 2-sentence excerpt is fine and often best.
+  - The remaining quotes can stay short (≤120 chars) — they're tonal evidence
+    shown beneath the sample quote in the UI.
+  - Add a `note` when the link to the character's voice/identity isn't
+    obvious. Always note *why* the long-form quote is representative.
+  - The server re-sorts longest-first on ingest, so ordering errors won't
+    break the UI — but emit them sorted so the JSON is human-readable.
 - `chapters[]` — **use the pre-detected list from the inbox verbatim.**
   The local parser has already split the manuscript and supplies a
   `## Chapter list (pre-detected by the local parser — use verbatim)`

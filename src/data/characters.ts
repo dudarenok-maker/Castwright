@@ -10,8 +10,9 @@ export const initialCharacters: Character[] = [
     voiceState: 'reused',
     description: 'Steady, lightly literary, never melodramatic. Establishes mood through cadence.',
     evidence: [
-      { quote: 'He could feel it before he saw it — a pressure shift behind his right ear that thirty winters at sea had taught him to trust more than any instrument the Admiralty could nail to a wall.', note: 'Sentence rhythm: long, layered subordinate clauses. Restrained register.' },
+      { quote: 'He could feel it before he saw it — a pressure shift behind his right ear that thirty winters at sea had taught him to trust more than any instrument the Admiralty could nail to a wall.', note: 'Long-form: drives the voice-cloning sample. Sentence rhythm with layered subordinate clauses, restrained register.' },
       { quote: 'She said it under her breath, which is how she said most of the things she meant.', note: 'Dry, observational; understated humour.' },
+      { quote: 'The fog came in the way fog always came in here — without apology, and without announcement.', note: 'Lightly literary cadence; comma-split parallelism is a hallmark.' },
     ],
     matchedFrom: { bookTitle: 'Solway Bay', confidence: 0.94 },
   },
@@ -24,6 +25,7 @@ export const initialCharacters: Character[] = [
     voiceState: 'generated',
     description: 'Quiet command, never raised. Speaks in clipped, complete sentences.',
     evidence: [
+      { quote: '“Mr. Vance, you will reef the topsails before the next bell. You will do it without comment, and you will report back to me when it is done — and not, sir, a moment before.”', note: 'Long-form: drives the voice-cloning sample. Triple-cadence order, calm authority, period vocabulary.' },
       { quote: '“Hard to starboard,” he said, not loudly, because Halloran had never had to be loud to be obeyed.', note: 'Authority cue: command obeyed without volume.' },
       { quote: '“Possibly,” Halloran allowed, “though not in the next hour, and not by my hand.”', note: 'Speech split by attribution; precise, parsed thinking.' },
       { quote: 'thirty winters at sea', note: 'Age inference: 50s–60s; nautical vernacular.' },
@@ -38,6 +40,7 @@ export const initialCharacters: Character[] = [
     voiceState: 'tuned',
     description: 'Sharp-tongued, sharper-witted. Hides fear behind sarcasm.',
     evidence: [
+      { quote: "“Oh, that's lovely, that is — a captain who can't read his own glass, and a cook who burns the only fish we've got, and me down here in the wet with the both of you. I'd laugh, only my teeth are chattering.”", note: 'Long-form: drives the voice-cloning sample. Working-class London cadence, defiance pinned over fear.' },
       { quote: "“You'll get us all drowned, you old fool.”", note: 'Direct address using diminutive; defiant register.' },
       { quote: 'She said it under her breath, which is how she said most of the things she meant.', note: 'Habitual mode: sotto voce honesty.' },
     ],
@@ -51,8 +54,9 @@ export const initialCharacters: Character[] = [
     voiceState: 'generated',
     description: 'Sees everything. Says little. Talks to himself most of all.',
     evidence: [
-      { quote: '“Cold supper it is, then.”', note: 'Single line; self-directed; resigned warmth.' },
+      { quote: "“Well now, if the captain wants his supper hot, the captain ought to keep his ship out of the wind a quarter-hour, that's all I'm saying — to the pot, mind, not to him. To him I'll say nothing, and the pot won't tell.”", note: 'Long-form: drives the voice-cloning sample. Welsh lilt, self-directed muttering, resigned warmth.' },
       { quote: "He said it to the empty galley, which is the only place a man like Marcus ever truly spoke first.", note: "Narrator profile of Marcus's speech mode." },
+      { quote: '“Cold supper it is, then.”', note: 'Single line; self-directed; resigned warmth.' },
     ],
   },
 ];
