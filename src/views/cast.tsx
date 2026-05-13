@@ -59,8 +59,11 @@ export function CastView({
 
   async function playSampleFor(c: Character, voice: Voice | undefined) {
     const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
-    const sampleUrl = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}.wav`;
-    if (playback.isPlaying && playback.currentUrl === sampleUrl) {
+    /* Server appends a hash of (text, voiceName) to the cached filename so
+       attribute edits don't return stale audio. Match by prefix so we still
+       detect "this character's sample is what's playing". */
+    const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}`;
+    if (playback.isPlaying && playback.currentUrl?.startsWith(samplePrefix)) {
       playback.stop();
       return;
     }
@@ -151,8 +154,8 @@ export function CastView({
             const ttsVoice = voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
-            const sampleUrl = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}.wav`;
-            const isPlayingThis = playback.isPlaying && playback.currentUrl === sampleUrl;
+            const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}`;
+            const isPlayingThis = playback.isPlaying && !!playback.currentUrl?.startsWith(samplePrefix);
             const row = rowState[c.id];
             return (
               <div key={c.id}

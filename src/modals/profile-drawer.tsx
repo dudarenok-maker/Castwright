@@ -78,8 +78,8 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
     source: 'current' as const,
     ttsVoice: resolveTtsVoiceForCharacter(editedCharacter, ttsEngine),
   };
-  const sampleUrl = sampleUrlFor(sampleVoiceId, ttsModelKey);
-  const isPlayingThis = playback.isPlaying && playback.currentUrl === sampleUrl;
+  const samplePrefix = sampleUrlPrefixFor(sampleVoiceId, ttsModelKey);
+  const isPlayingThis = playback.isPlaying && !!playback.currentUrl?.startsWith(samplePrefix);
 
   /* Conflict detection: a matched library voice carries its own gender +
      age attributes. When the user's edits disagree, keeping the match
@@ -119,12 +119,16 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
     setSampleError(null);
     setSampleLoading(true);
     const evidence = (character.evidence ?? []).map(e => e.quote).filter((q): q is string => typeof q === 'string' && q.length > 0);
+    /* Live edits — read from drawer state, not the (stale) character prop,
+       so the user can preview an attribute change before committing it
+       with Save. Server hashes (text, voiceName) into the cache filename,
+       so a different (gender, age, tone) really does produce new audio. */
     const characterHint = {
       description: character.description,
       role: character.role,
-      gender: (character as Character & { gender?: 'male' | 'female' | 'neutral' }).gender,
-      ageRange: (character as Character & { ageRange?: 'child' | 'teen' | 'adult' | 'elderly' }).ageRange,
-      tone: character.tone,
+      gender: (gender || character.gender) as 'male' | 'female' | 'neutral' | undefined,
+      ageRange: (ageRange || character.ageRange) as 'child' | 'teen' | 'adult' | 'elderly' | undefined,
+      tone,
       evidence: evidence.length ? evidence : undefined,
     };
     // eslint-disable-next-line no-console
@@ -375,13 +379,13 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
   );
 }
 
-/* The server names cached sample files deterministically as
-   /audio/voices/{voiceId}-{modelKey}.wav (see server/src/routes/voice-sample.ts).
-   We mirror that here so the drawer knows whether the global audio singleton
-   is currently playing *this* voice's sample without round-tripping to the
-   server first. */
-function sampleUrlFor(voiceId: string, modelKey: string): string {
-  return `/audio/voices/${encodeURIComponent(voiceId)}-${modelKey}.wav`;
+/* The server names cached sample files as
+   /audio/voices/{voiceId}-{modelKey}-{paramHash}.wav (see
+   server/src/routes/voice-sample.ts). We don't know the hash client-side,
+   so detect "this voice's sample is currently playing" by prefix match —
+   that's stable across attribute edits and the cache-busting hash. */
+function sampleUrlPrefixFor(voiceId: string, modelKey: string): string {
+  return `/audio/voices/${encodeURIComponent(voiceId)}-${modelKey}`;
 }
 
 function ttsModelLabel(key: TtsModelKey): string {

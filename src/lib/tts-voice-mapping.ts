@@ -149,7 +149,13 @@ interface PickInput {
 function inferProfile(input: PickInput): VoiceProfile {
   const lid = input.id.toLowerCase();
   const isNarrator = lid === 'narrator' || lid === 'char-narrator' || (input.name ?? '').toLowerCase() === 'narrator';
-  if (isNarrator) {
+  /* Narrator only short-circuits to the warm/cool buckets when the user
+     hasn't explicitly chosen a gender. Once Male or Female is set, fall
+     through to the regular gender×register pipeline so the dropdown
+     actually moves the synthesised voice. Neutral keeps narrator behaviour
+     since the regular pipeline also lands there for unknown gender. */
+  const isExplicitlyGendered = input.gender === 'male' || input.gender === 'female';
+  if (isNarrator && !isExplicitlyGendered) {
     const t = input.tone;
     if (t && (t.warmth ?? 50) >= 55 && (t.authority ?? 50) <= 75) return 'narrator-warm';
     return 'narrator-cool';
