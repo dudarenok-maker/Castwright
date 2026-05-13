@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   IconPlus, IconStar, IconCheck, IconSpinner, IconCheckCircle, IconWarning,
-  IconMore, IconTrash, IconRefresh,
+  IconMore, IconTrash, IconRefresh, IconFolder, IconCopy,
 } from '../lib/icons';
 import {
   SectionLabel, MixedHeading, PrimaryButton, Pill,
@@ -10,6 +10,7 @@ import { parseRuntime, formatHours } from '../lib/time';
 import { StatTile } from './voices';
 import { Stat } from './generation';
 import { ConfirmDialog } from '../modals/confirm-dialog';
+import { api, type WorkspaceInfo } from '../lib/api';
 import type { LibraryAuthor, LibraryBook, LibraryBookStatus } from '../lib/types';
 
 type Filter = 'all' | 'in_progress' | 'complete';
@@ -36,6 +37,19 @@ function matchesFilter(book: LibraryBook, filter: Filter): boolean {
 
 export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBook, onReparseBook, onStartNew }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
+  /* Surface the active workspace root so a stale `WORKSPACE_DIR` override
+     (or worse: silently falling back to the in-repo default) is obvious at
+     a glance. Page-local state — only the Books page needs this; widening
+     to a slice would be overkill. Failures are swallowed silently because
+     the path is informational, not load-bearing. */
+  const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.getWorkspaceInfo()
+      .then(info => { if (!cancelled) setWorkspace(info); })
+      .catch(() => { /* silent — header just hides the path */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const allBooks = useMemo(
     () => authors.flatMap(a => a.series.flatMap(s => s.books)),
@@ -62,6 +76,7 @@ export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBoo
             <MixedHeading regular="Welcome back," bold="Mike" level="h1"/>
           </div>
           <p className="mt-3 text-ink/60 max-w-xl">Pick up where you left off, or start a new book. Voices stay consistent across a series — characters who appear in book one carry through to book seven.</p>
+          {workspace && <WorkspacePathRow info={workspace}/>}
         </div>
         <PrimaryButton variant="dark" onClick={onStartNew}>
           <span className="inline-flex items-center gap-2"><IconPlus className="w-4 h-4"/>Start a new book</span>
@@ -115,6 +130,38 @@ export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBoo
         </div>
       )}
     </div>
+  );
+}
+
+function WorkspacePathRow({ info }: { info: WorkspaceInfo }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = () => {
+    /* navigator.clipboard is async + secure-context-gated. The local dev
+       server runs on http://localhost which Chrome treats as secure, so this
+       resolves; the catch is the safety net for headless tests / iframes. */
+    void navigator.clipboard.writeText(info.root).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  };
+  /* "default" means WORKSPACE_DIR wasn't set, so the path is the in-repo
+     fallback. Surface that in amber — it's not broken but it's almost
+     always not what the user wanted on a Windows + OneDrive workspace. */
+  const fromDefault = info.source === 'default';
+  return (
+    <p
+      title={fromDefault
+        ? `Workspace is using the default \`../audiobook-workspace\` inside the repo. Set WORKSPACE_DIR in server/.env to relocate.`
+        : `Workspace root from WORKSPACE_DIR env var.`}
+      className={`mt-2 inline-flex items-center gap-2 text-xs font-mono ${fromDefault ? 'text-amber-700' : 'text-ink/55'}`}
+    >
+      <IconFolder className={`w-3.5 h-3.5 ${fromDefault ? 'text-amber-600' : 'text-ink/45'}`}/>
+      <span className="truncate max-w-[520px]">{info.root}</span>
+      <button onClick={onCopy}
+              className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] uppercase tracking-wider font-semibold text-ink/55 hover:text-ink hover:bg-ink/[0.05] transition-colors">
+        <IconCopy className="w-3 h-3"/>{copied ? 'copied' : 'copy'}
+      </button>
+    </p>
   );
 }
 
