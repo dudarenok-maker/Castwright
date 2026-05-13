@@ -7,6 +7,12 @@ export default defineConfig({
   plugins: [react()],
   root: '.',
   server: {
+    // Bind to IPv4 loopback. Vite 5 defaults to host:'localhost', and on
+    // Node 18+ that resolves to ::1 (IPv6) only — Chrome on Windows then
+    // burns its Happy-Eyeballs IPv4 timeout before falling back, so the
+    // first paint stalls for several seconds. Pinning to 127.0.0.1 matches
+    // the Node + TTS sidecars (both loopback-only) and removes the stall.
+    host: '127.0.0.1',
     port: 5173,
     open: true,
     proxy: {
