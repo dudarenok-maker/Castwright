@@ -3,7 +3,13 @@ import type { components } from './api-types';
 export type Character = components['schemas']['Character'] & {
   matchFactors?: components['schemas']['MatchFactor'][];
 };
-export type Chapter   = components['schemas']['Chapter'];
+/* `phase` is a UI-only sub-state set from the `chapter_assembling` SSE tick.
+   It lets the Generate view distinguish "synthesising sentences" from the
+   short disk-write phase between the last group and chapter_complete, so
+   the bar doesn't appear stuck at 99 %. Not part of the wire schema. */
+export type Chapter = components['schemas']['Chapter'] & {
+  phase?: 'assembling' | null;
+};
 
 /* Sentence follows the OpenAPI spec; the optional `confidence` is a UI-only
    field used by ManuscriptView to flag low-confidence speaker attributions. */

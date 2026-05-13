@@ -23,6 +23,7 @@ import { libraryRouter } from './routes/library.js';
 import { importRouter } from './routes/import.js';
 import { bookStateRouter } from './routes/book-state.js';
 import { generationRouter } from './routes/generation.js';
+import { chapterAudioRouter } from './routes/chapter-audio.js';
 import { WORKSPACE_ROOT, ensureWorkspace } from './workspace/paths.js';
 
 const app = express();
@@ -49,6 +50,7 @@ app.use('/api/manuscripts', analysisRouter); // analysisRouter mounts /:id/analy
 app.use('/api/books', bookStateRouter);      // mounts /:bookId/state (GET/PUT)
 app.use('/api/books', voiceMatchRouter);     // mounts /:bookId/voice-match
 app.use('/api/books', generationRouter);     // mounts /:bookId/generation (SSE)
+app.use('/api/books', chapterAudioRouter);   // mounts /:bookId/chapters/:chapterId/audio(.wav)
 app.use('/api/voices', voicesRouter);        // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter);   // mounts POST /:voiceId/sample
 

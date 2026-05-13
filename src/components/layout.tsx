@@ -209,8 +209,8 @@ export function Layout() {
 
       <Outlet context={ctx}/>
 
-      {stageKind === 'ready' && (
-        <MiniPlayer chapter={trackChapter}
+      {stageKind === 'ready' && bookId && (
+        <MiniPlayer chapter={trackChapter} bookId={bookId}
           onClose={() => dispatch(uiActions.setCurrentTrack(null))}
           onPrev={() => prevTrackAvailable && dispatch(uiActions.setCurrentTrack(chapters[trackIdx - 1].id))}
           onNext={() => nextTrackAvailable && dispatch(uiActions.setCurrentTrack(chapters[trackIdx + 1].id))}

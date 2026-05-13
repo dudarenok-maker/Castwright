@@ -609,8 +609,13 @@ const real = {
   reparseBook:       realReparseBook,
   getVoiceSample:    realGetVoiceSample,
   streamGeneration:  realStreamGeneration,
-  getChapterAudio:   async (_args: AudioArgs): Promise<ChapterAudio> => {
-    throw new Error('Chapter audio not wired yet. Set VITE_USE_MOCKS=true.');
+  getChapterAudio:   async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
+    const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Chapter audio fetch failed (${res.status}): ${detail || res.statusText}`);
+    }
+    return res.json();
   },
   pollRevisions:     async (_args: PollArgs): Promise<RevisionsResponse> => {
     /* Return a benign empty payload so the polling effect in App.tsx doesn't

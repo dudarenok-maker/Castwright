@@ -199,6 +199,21 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         },
       });
 
+      /* All per-group synthesis is done; the next stretch is disk-write
+         work (build WAV → temp file → segments JSON → atomic rename →
+         state.json update). Tell the client so it stops looking like a
+         frozen 99 %. */
+      send({
+        type: 'chapter_assembling',
+        chapterId: chapter.id,
+        characterId: null,
+        progress: 0.995,
+        currentLine: totalLines,
+        totalLines,
+        totalGroups: result.segments.length,
+        durationSec: result.durationSec,
+      });
+
       const wavBuffer = pcmToWav(result.pcm, result.sampleRate);
       const wavPath = join(audioRoot, `${chapter.slug}.wav`);
       const segPath = join(audioRoot, `${chapter.slug}.segments.json`);
