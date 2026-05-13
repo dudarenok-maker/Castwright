@@ -341,6 +341,60 @@ describe('chaptersSlice — regenerate reducers', () => {
   });
 });
 
+describe('chaptersSlice — hydrateFromAnalysis', () => {
+  it('seeds each chapter.characters from sentences when the server emits an empty map', () => {
+    /* Regression: analysis.ts composes the AnalyseResponse with
+       `chapters[i].characters = {}`. Without seeding here the Generate
+       view's expanded chapter row shows no speakers until the first SSE
+       tick names a character. */
+    const start = baseState([]);
+    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromAnalysis({
+      bookId: 'b',
+      manuscriptId: 'm',
+      title: 'Bonus',
+      phaseTimings: [],
+      characters: [
+        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator', lines: 0, scenes: 0 },
+        { id: 'halloran', name: 'Halloran', role: 'main',     color: 'magenta',  lines: 0, scenes: 0 },
+      ] as never,
+      chapters: [
+        { id: 1, title: 'Chapter 1', duration: '00:00', state: 'queued', progress: 0, characters: {} },
+        { id: 2, title: 'Chapter 2', duration: '00:00', state: 'queued', progress: 0, characters: {} },
+      ],
+      sentences: [
+        { id: 1, chapterId: 1, characterId: 'narrator', text: 'a' },
+        { id: 2, chapterId: 1, characterId: 'narrator', text: 'b' },
+        { id: 3, chapterId: 2, characterId: 'narrator', text: 'c' },
+        { id: 4, chapterId: 2, characterId: 'halloran', text: 'd' },
+      ] as never,
+      libraryMatches: [],
+    }));
+    expect(next.chapters[0].characters).toEqual({ narrator: 'queued' });
+    expect(next.chapters[1].characters).toEqual({ narrator: 'queued', halloran: 'queued' });
+  });
+
+  it('preserves a pre-populated chapter.characters map (does not clobber later state)', () => {
+    const start = baseState([]);
+    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromAnalysis({
+      bookId: 'b',
+      manuscriptId: 'm',
+      title: 'Bonus',
+      phaseTimings: [],
+      characters: [] as never,
+      chapters: [
+        { id: 1, title: 'Chapter 1', duration: '00:00', state: 'in_progress', progress: 0.5,
+          characters: { narrator: 'done', halloran: 'in_progress' } },
+      ],
+      sentences: [
+        { id: 1, chapterId: 1, characterId: 'narrator', text: 'a' },
+        { id: 2, chapterId: 1, characterId: 'eliza',    text: 'b' },
+      ] as never,
+      libraryMatches: [],
+    }));
+    expect(next.chapters[0].characters).toEqual({ narrator: 'done', halloran: 'in_progress' });
+  });
+});
+
 describe('chaptersSlice — misc reducers', () => {
   it('setPaused toggles the paused flag', () => {
     const start = baseState([makeChapter(3)]);
