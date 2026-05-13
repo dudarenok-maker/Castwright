@@ -49,6 +49,15 @@ export const chaptersSlice = createSlice({
     setPaused:   (s, a: PayloadAction<boolean>)   => { s.paused = a.payload; },
     clearLastError: (s) => { s.lastError = null; },
 
+    /* Called by the Generate view the instant it opens an SSE with a regen
+       spec, so a subsequent Pause → Resume cycle re-resumes "naturally"
+       (no chapterIds, no force) instead of replaying force:true and wiping
+       the just-completed audio. Without this, pendingRegen only clears on
+       the server's `idle` tick — but an aborted SSE never delivers that
+       tick, so the spec sticks around forever and every Resume kicks off
+       a fresh force-regen of the whole target set. */
+    consumePendingRegen: (s) => { s.pendingRegen = null; },
+
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
       const { chapters } = a.payload;
       if (chapters?.length) s.chapters = chapters;
@@ -156,14 +165,21 @@ export const chaptersSlice = createSlice({
       if (ev.currentLine != null) ch.currentLine = ev.currentLine;
       if (ev.totalLines != null) ch.totalLines = ev.totalLines;
       if (ev.characterId) {
-        /* Any character previously marked `in_progress` finished their run
-           when the server moved on to the next group. */
-        for (const k of Object.keys(ch.characters)) {
-          if (ch.characters[k] === 'in_progress' && k !== ev.characterId) {
-            ch.characters[k] = 'done';
+        /* Only reconcile per-character state when the tick names a character
+           we can promote. If the live speaker isn't in this chapter's cast
+           (e.g. a quoted-character id that didn't survive cast confirmation,
+           or any stray id the server happens to emit) the previously-active
+           speaker would otherwise get silently flipped to `done` with nobody
+           taking their place — the Generate view then renders every row as
+           "Done" while synthesis quietly continues. Leaving state untouched
+           keeps the active speaker visible. */
+        const liveStatus = ch.characters[ev.characterId];
+        if (liveStatus && liveStatus !== 'skipped') {
+          for (const k of Object.keys(ch.characters)) {
+            if (ch.characters[k] === 'in_progress' && k !== ev.characterId) {
+              ch.characters[k] = 'done';
+            }
           }
-        }
-        if (ch.characters[ev.characterId] && ch.characters[ev.characterId] !== 'skipped') {
           ch.characters[ev.characterId] = 'in_progress';
         }
       }

@@ -137,6 +137,69 @@ describe('synthesiseChapter voice routing', () => {
     expect(new Set([narratorVoice, elwinVoice, roVoice]).size).toBe(3);
   });
 
+  it('honours an abort signal between groups (per-bookId mutex regression)', async () => {
+    /* The per-bookId server mutex aborts the prior handler's controller when a
+       new POST arrives for the same book. The synthesis loop must check the
+       signal between groups so a stale handler stops within seconds instead
+       of running the chapter to completion (each Coqui group can be minutes
+       on CPU). This is what unstuck the pause→resume loop. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+      { id: 'elwin',    name: 'Elwin', gender: 'male',   attributes: ['caring'] },
+      { id: 'ro',       name: 'Ro',    gender: 'female', attributes: ['blunt'] },
+    ];
+    const controller = new AbortController();
+    const provider = makeProvider();
+    const originalSynth = provider.synthesize.bind(provider);
+    provider.synthesize = async (input) => {
+      const out = await originalSynth(input);
+      if (provider.calls.length === 1) controller.abort();
+      return out;
+    };
+
+    await expect(synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'First group.'),
+        sentence(2, 'elwin',    'Second group.'),
+        sentence(3, 'ro',       'Third group.'),
+      ],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      signal: controller.signal,
+    })).rejects.toMatchObject({ name: 'AbortError' });
+
+    /* Group 1 ran (and fired abort); groups 2 and 3 must NOT have run. */
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0].voiceName).toBeTruthy();
+  });
+
+  it('forwards the abort signal into each provider call so a mid-call abort cancels the fetch', async () => {
+    /* The sidecar's /synthesize call can take a minute on CPU; the
+       between-groups check alone isn't enough if we're inside a slow call
+       when the user pauses or a fresh POST displaces us. The provider must
+       receive the same signal so the underlying fetch rejects with
+       AbortError mid-flight. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+    ];
+    const controller = new AbortController();
+    const provider = makeProvider();
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'Line.')],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      signal: controller.signal,
+    });
+
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0].signal).toBe(controller.signal);
+  });
+
   it('falls back to gendered inference from description when explicit gender is absent', async () => {
     /* Belt-and-braces: if the analyzer cached an older shape without
        `gender:`, the prose description still carries enough signal to land

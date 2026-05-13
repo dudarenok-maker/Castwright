@@ -26,7 +26,7 @@ export class SidecarTtsProvider implements TtsProvider {
     this.engine = opts.engine;
   }
 
-  async synthesize({ text, voiceName, modelKey }: SynthesizeInput): Promise<SynthesizeOutput> {
+  async synthesize({ text, voiceName, modelKey, signal }: SynthesizeInput): Promise<SynthesizeOutput> {
     const body = JSON.stringify({
       engine: this.engine,
       model: sidecarModelId(modelKey),
@@ -40,8 +40,13 @@ export class SidecarTtsProvider implements TtsProvider {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body,
+        signal,
       });
     } catch (e) {
+      /* AbortError is the caller cancelling on purpose — let it propagate so
+         the outer handler can shut down cleanly instead of mistaking it for
+         a sidecar-down failure. */
+      if ((e as { name?: string })?.name === 'AbortError') throw e;
       const msg = (e as Error).message || String(e);
       /* Node's fetch surfaces ECONNREFUSED as `fetch failed` with a cause.
          Give the user the one piece of info that actually unblocks them. */

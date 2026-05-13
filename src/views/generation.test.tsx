@@ -10,11 +10,16 @@ import { uiSlice } from '../store/ui-slice';
 import { GenerationView } from './generation';
 import type { Chapter, Character, Sentence } from '../lib/types';
 
+const streamGenerationMock = vi.fn();
+
 vi.mock('../lib/api', () => ({
   /* Never-resolving so the ChapterSegmentStrip useEffect doesn't flush a
      setError state update outside React's `act` after the test asserts. */
   api: {
-    streamGeneration: () => () => {},
+    streamGeneration: (args: unknown) => {
+      streamGenerationMock(args);
+      return () => {};
+    },
     getChapterAudio:  () => new Promise(() => {}),
   },
 }));
@@ -114,5 +119,57 @@ describe('GenerationView — chapter & character metadata (regression for screen
        because both chapters lacked the SSE-supplied totalLines. */
     renderView();
     expect(screen.getByText('75%')).toBeInTheDocument();
+  });
+});
+
+describe('GenerationView — Pause/Resume regenerate loop (regression)', () => {
+  beforeEach(() => { streamGenerationMock.mockClear(); });
+
+  it('clears pendingRegen the instant the SSE opens with it', () => {
+    /* The bug: pause aborts the SSE before the server's idle tick arrives,
+       so pendingRegen sticks. Resume reopens the SSE with the same
+       force:true spec and wipes the in-flight chapter — every Pause→Resume
+       is a fresh force-regen of the original target set. The view-level
+       fix is to dispatch consumePendingRegen immediately after the open. */
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
+    /* Simulate "user clicked Regenerate" — the reducer set this spec and
+       bumped regenEpoch. The view will mount, fire its SSE effect, and
+       should drain the spec. */
+    store.dispatch(chaptersSlice.actions.regenerateChapter({ chapterId: 1, scope: 'this' }));
+    expect(store.getState().chapters.pendingRegen).toEqual({ chapterIds: [1], force: true });
+
+    render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={[chapter1, chapter2]}
+          characters={characters}
+          paused={false}
+          title="Bonus Keefe Story"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          setPaused={() => {}}
+          onRegenerate={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+
+    /* streamGeneration MUST have been called with the spec (otherwise we'd
+       have broken the regenerate path entirely). */
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    const callArgs = streamGenerationMock.mock.calls[0]?.[0] as { chapterIds?: unknown; force?: unknown };
+    expect(callArgs?.chapterIds).toEqual([1]);
+    expect(callArgs?.force).toBe(true);
+
+    /* And after the open, the spec is drained so a later Resume can't replay it. */
+    expect(store.getState().chapters.pendingRegen).toBe(null);
   });
 });

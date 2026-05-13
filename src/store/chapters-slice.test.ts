@@ -93,6 +93,52 @@ describe('chaptersSlice — applyGenerationTick', () => {
       ));
       expect(next.chapters).toEqual(start.chapters);
     });
+
+    it('leaves per-character state alone when the tick names a character not in this chapter', () => {
+      /* Regression: previously the previous-in-progress demotion ran even when
+         the new characterId was unknown, so the active speaker silently went
+         to `done` while synthesis kept running on an invisible speaker. The
+         Generate view then rendered every row as "Done" while the chapter
+         row still said "Generating". */
+      const start = baseState([
+        makeChapter(3, {
+          state: 'in_progress',
+          progress: 0.4,
+          characters: { narrator: 'in_progress', halloran: 'queued', eliza: 'skipped' },
+        }),
+      ]);
+      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
+        tick({ type: 'progress', chapterId: 3, characterId: 'ghost-speaker', progress: 0.6, currentLine: 80, totalLines: 200 }),
+      ));
+      expect(next.chapters[0].characters).toEqual({
+        narrator: 'in_progress',
+        halloran: 'queued',
+        eliza: 'skipped',
+      });
+      /* Chapter-level counters still advance — the unknown speaker isn't a
+         reason to drop the progress signal. */
+      expect(next.chapters[0].progress).toBeCloseTo(0.6);
+      expect(next.chapters[0].currentLine).toBe(80);
+      expect(next.chapters[0].totalLines).toBe(200);
+      expect(next.chapters[0].state).toBe('in_progress');
+    });
+
+    it('does not promote a skipped character even when the tick names them', () => {
+      const start = baseState([
+        makeChapter(3, {
+          state: 'in_progress',
+          characters: { narrator: 'in_progress', halloran: 'queued', eliza: 'skipped' },
+        }),
+      ]);
+      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
+        tick({ type: 'progress', chapterId: 3, characterId: 'eliza', progress: 0.5 }),
+      ));
+      expect(next.chapters[0].characters).toEqual({
+        narrator: 'in_progress',
+        halloran: 'queued',
+        eliza: 'skipped',
+      });
+    });
   });
 
   describe('chapter_assembling', () => {
@@ -306,6 +352,28 @@ describe('chaptersSlice — misc reducers', () => {
     const start: ChaptersState = { ...baseState([makeChapter(3)]), lastError: 'modelKey rejected' };
     const next = chaptersSlice.reducer(start, chaptersActions.clearLastError());
     expect(next.lastError).toBe(null);
+    expect(next.chapters).toEqual(start.chapters);
+  });
+
+  it('consumePendingRegen clears pendingRegen without touching anything else (Pause/Resume loop fix)', () => {
+    /* Regression: pause aborts the SSE, idle tick never lands on the client,
+       pendingRegen stays set, Resume reopens with force:true and wipes the
+       in-flight chapter. The fix is to clear the spec the moment the view
+       forwards it to the server — this reducer is the seam. */
+    const start: ChaptersState = {
+      ...baseState([makeChapter(3, { state: 'in_progress', progress: 0.4 })]),
+      pendingRegen: { chapterIds: [3, 4, 5], force: true },
+      regenEpoch: 7,
+      generationStartedAt: Date.now() - 5_000,
+      lastError: 'something',
+    };
+    const next = chaptersSlice.reducer(start, chaptersActions.consumePendingRegen());
+    expect(next.pendingRegen).toBe(null);
+    /* Everything else is preserved — the spec has been delivered, the run
+       is still alive, the banner (if any) is still relevant. */
+    expect(next.regenEpoch).toBe(7);
+    expect(next.generationStartedAt).toBe(start.generationStartedAt);
+    expect(next.lastError).toBe('something');
     expect(next.chapters).toEqual(start.chapters);
   });
 });
