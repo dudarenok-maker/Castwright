@@ -123,6 +123,26 @@ export function GenerationView({
     return withRecomputedDisplay(filtered).slice(0, 6);
   }, [activityEvents]);
 
+  /* Sub-chapter "lines synthesised" counter so the user has a tangible
+     "something is happening" signal at every tick (real backend emits one
+     `progress` tick per same-speaker group; each group ships ~1-2 lines).
+
+     Lines done = totalLines for chapters in `done`, currentLine for the
+     in-flight chapter, 0 for queued. Total = totalLines from the SSE when
+     available, else the manuscript-derived count (canonical, known before
+     any tick fires). */
+  const linesCounter = useMemo(() => {
+    let done = 0;
+    let total = 0;
+    for (const ch of chapters) {
+      const chTotal = ch.totalLines ?? manuscriptCounts[ch.id] ?? 0;
+      total += chTotal;
+      if (ch.state === 'done') done += chTotal;
+      else if (ch.state === 'in_progress') done += ch.currentLine ?? 0;
+    }
+    return { done, total };
+  }, [chapters, manuscriptCounts]);
+
   return (
     <div className="max-w-[1100px] mx-auto px-6 py-10">
       <div className="mb-8 flex items-end justify-between gap-6 flex-wrap">
@@ -135,6 +155,12 @@ export function GenerationView({
             {completed} of {chapters.length} chapters complete
             {etaSec != null && <> · approx. {formatTime(etaSec)} remaining</>}
           </p>
+          {linesCounter.total > 0 && (
+            <p className="mt-1 text-xs text-ink/55 tabular-nums">
+              <span className="font-semibold text-ink/75">{linesCounter.done.toLocaleString()}</span>
+              {' '}of {linesCounter.total.toLocaleString()} lines synthesised
+            </p>
+          )}
           <p className="mt-1 text-xs text-ink/50">Engine: <span className="font-medium text-ink/70">{engineLabel}</span></p>
         </div>
         <div className="flex items-center gap-3">
@@ -320,6 +346,18 @@ function ChapterRow({
     };
   })();
 
+  /* Live "synthesising X · line N of Y" caption for the in-progress row.
+     Replaces the queued/done static meta so the user has eye-level
+     confirmation each tick that lines are moving. Falls back to the
+     manuscript-derived total when the SSE hasn't shipped a totalLines
+     yet (e.g. the first sub-second after Resume). */
+  const liveSpeakerId = chapter.state === 'in_progress'
+    ? Object.entries(chapter.characters).find(([, s]) => s === 'in_progress')?.[0]
+    : undefined;
+  const liveSpeaker = liveSpeakerId ? findChar(liveSpeakerId) : null;
+  const liveTotal = chapter.totalLines ?? chapterTotals?.lines ?? 0;
+  const liveCurrent = chapter.currentLine ?? 0;
+
   return (
     <div className={`rounded-3xl border border-ink/10 shadow-card overflow-hidden ${stateConfig.tint}`}>
       <button onClick={onToggle} className="w-full grid grid-cols-[32px_52px_minmax(0,1fr)_120px_64px_92px_20px] items-center gap-3 px-5 py-4 text-left">
@@ -327,7 +365,15 @@ function ChapterRow({
         <span className="text-sm font-bold text-ink/50 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
         <span className="min-w-0">
           <span className="block font-semibold text-ink truncate">{chapter.title}</span>
-          {chapterTotals && (
+          {chapter.state === 'in_progress' && liveTotal > 0 ? (
+            /* Live caption — swaps in once a tick has shipped totalLines so
+               the user has a per-tick "moving" signal at eye level.
+               Falls through to the static meta until then. */
+            <span className="block text-[11px] text-magenta tabular-nums mt-0.5 truncate">
+              {liveSpeaker ? `Synthesising ${liveSpeaker.name} · ` : ''}
+              line {liveCurrent.toLocaleString()} of {liveTotal.toLocaleString()}
+            </span>
+          ) : chapterTotals && (
             <span className="block text-[11px] text-ink/50 tabular-nums mt-0.5 truncate">
               {chapterTotals.words.toLocaleString()} {chapterTotals.words === 1 ? 'word' : 'words'}
               {' · '}
@@ -338,7 +384,11 @@ function ChapterRow({
           )}
         </span>
         <ChapterProgressBar progress={chapter.progress} state={chapter.state} paused={paused} assembling={assembling}/>
-        <span className="text-sm tabular-nums text-ink/60 text-right">{chapter.duration}</span>
+        <span className="text-sm tabular-nums text-ink/60 text-right">
+          {chapter.state === 'in_progress' && liveTotal > 0
+            ? <span className="text-magenta">{liveCurrent}/{liveTotal}</span>
+            : chapter.duration}
+        </span>
         <span>{stateConfig.badge}</span>
         <span className={`text-ink/40 transition-transform ${expanded ? 'rotate-180' : ''}`}><IconArrowDn className="w-4 h-4"/></span>
       </button>

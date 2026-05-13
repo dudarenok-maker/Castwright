@@ -242,18 +242,57 @@ async function mockMatchVoices({ bookId, characters }: MatchArgs): Promise<Voice
 }
 
 function mockStreamGeneration({ getChapters, onTick }: StreamArgs): () => void {
+  /* Mock the real server's "one progress tick per same-speaker group" cadence
+     well enough that the Generate view's line / character counters tick
+     visibly. Two behaviours that matter:
+
+     1. Auto-promote: when the active chapter completes, advance the next
+        queued chapter into in_progress on the next tick — the real server
+        does this implicitly by emitting a `progress` tick for chapter N+1
+        right after chapter N's complete. Without this, the mock just
+        emits `idle` forever once chapter 1 is done, the heartbeat goes
+        cold, and the stall banner pops up while the queue still has work.
+     2. Cycle characters: rotate the active character every few ticks so
+        the per-character `in_progress` pill actually moves through the
+        cast, the active-speaker caption updates, and the user gets a
+        steady "something is happening" signal even before chapter %
+        ticks visibly. */
   const tick = () => {
     const chapters = getChapters?.() ?? [];
-    const active = chapters.find(c => c.state === 'in_progress');
-    if (!active) { onTick({ type: 'idle' }); return; }
+    let active = chapters.find(c => c.state === 'in_progress');
+    if (!active) {
+      const nextUp = chapters.find(c => c.state === 'queued');
+      if (!nextUp) { onTick({ type: 'idle' }); return; }
+      /* Bootstrap the next chapter with a tiny non-zero progress so the
+         live `chapter.state` flips to in_progress on the slice and our
+         next tick finds it. */
+      onTick({
+        type: 'progress',
+        chapterId: nextUp.id,
+        characterId: null,
+        progress: 0.01,
+        currentLine: 0,
+        totalLines: nextUp.totalLines || 600,
+      });
+      return;
+    }
+    const totalLines = active.totalLines || 600;
     const nextProgress = Math.min(1, (active.progress || 0) + 0.02);
+    const currentLine = Math.round(totalLines * nextProgress);
+    /* Pick a non-skipped character to surface as the live speaker, cycling
+       proportionally with progress so the per-character pill walks through
+       the cast in roughly the order they appear. */
+    const cast = Object.keys(active.characters).filter(k => active.characters[k] !== 'skipped');
+    const characterId = cast.length > 0
+      ? cast[Math.min(cast.length - 1, Math.floor(nextProgress * cast.length))]
+      : null;
     onTick({
       type: nextProgress >= 1 ? 'chapter_complete' : 'progress',
       chapterId: active.id,
-      characterId: null,
+      characterId,
       progress: nextProgress,
-      currentLine: Math.round((active.totalLines || 600) * nextProgress),
-      totalLines: active.totalLines || 600,
+      currentLine,
+      totalLines,
     });
   };
   const handle = setInterval(tick, 1200);
