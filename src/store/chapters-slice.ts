@@ -9,6 +9,12 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { initialChapters } from '../data/chapters';
 import type { Chapter, Character, GenerationTick, AnalyseResponse, BookStateJson } from '../lib/types';
 
+/* When the SSE has produced no tick for this long while a chapter is
+   in_progress, the Generate view flips that chapter to a "Stalled" amber
+   state. The middleware also surfaces the same threshold via the global
+   header pill so the user knows the worker has gone quiet from any view. */
+export const STALL_THRESHOLD_MS = 30_000;
+
 export interface PendingRegenSpec {
   chapterIds: number[];
   force: true;
@@ -30,6 +36,11 @@ export interface ChaptersState {
   /** Monotonic counter the Generate view watches as a useEffect dep so it
       re-opens the SSE when a regenerate is requested. */
   regenEpoch: number;
+  /** Wall-clock of the last non-idle tick. Combined with STALL_THRESHOLD_MS
+      it drives the "Stalled" amber pill on the in-progress chapter row and
+      the matching variant on the global header pill. Cleared on idle so a
+      drained queue isn't reported as stalled. */
+  lastTickAt: number | null;
 }
 
 const initialState: ChaptersState = {
@@ -39,6 +50,7 @@ const initialState: ChaptersState = {
   generationStartedAt: null,
   pendingRegen: null,
   regenEpoch: 0,
+  lastTickAt: null,
 };
 
 export const chaptersSlice = createSlice({
@@ -105,6 +117,12 @@ export const chaptersSlice = createSlice({
       s.lastError = null;
       s.generationStartedAt = null;
       s.pendingRegen = null;
+      s.lastTickAt = null;
+      /* Always land paused after a hydrate so a page reload doesn't auto-
+         resume a long-running generation behind the user's back. They have
+         to explicitly click Resume — matches the "in-session only"
+         continuation contract documented in plan + this file. */
+      s.paused = true;
     },
 
     applyGenerationTick: (s, a: PayloadAction<GenerationTick>) => {
@@ -116,12 +134,21 @@ export const chaptersSlice = createSlice({
         s.generationStartedAt = Date.now();
       }
 
+      /* Every non-idle tick is a heartbeat — the view derives "stalled" from
+         (now - lastTickAt) > STALL_THRESHOLD_MS while a chapter is in_progress.
+         Set this before any early returns so a stream-level chapter_failed
+         tick (no chapterId) still resets the heartbeat clock. */
+      if (ev.type !== 'idle') s.lastTickAt = Date.now();
+
       if (ev.type === 'idle') {
         /* End-of-run: drop the regen spec so it doesn't auto-replay, and clear
            the elapsed clock so the next run starts a fresh ETA. */
         s.pendingRegen = null;
         const stillBusy = s.chapters.some(c => c.state === 'in_progress' || c.state === 'queued');
-        if (!stillBusy) s.generationStartedAt = null;
+        if (!stillBusy) {
+          s.generationStartedAt = null;
+          s.lastTickAt = null;
+        }
         return;
       }
 

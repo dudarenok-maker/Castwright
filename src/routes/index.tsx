@@ -16,7 +16,6 @@ import { manuscriptActions } from '../store/manuscript-slice';
 import { libraryActions } from '../store/library-slice';
 import { api } from '../lib/api';
 import { stageEqual } from '../lib/router';
-import { CHANGE_LOG_EVENTS } from '../data/change-log';
 import { MODEL_OPTIONS } from '../lib/models';
 import { Layout, type LayoutContext } from '../components/layout';
 import { UploadView } from '../views/upload';
@@ -121,7 +120,8 @@ function VoicesRoute() {
 
 function ChangelogRoute() {
   useHydrateStage({ kind: 'changelog' }, []);
-  return <ChangeLogView events={CHANGE_LOG_EVENTS}/>;
+  const events = useAppSelector(s => s.changeLog.events);
+  return <ChangeLogView events={events}/>;
 }
 
 export function AnalysingRoute() {
@@ -204,6 +204,7 @@ function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookI
   const library    = useAppSelector(s => s.library);
   const voices     = useAppSelector(s => s.voices.voices);
   const ui         = useAppSelector(s => s.ui);
+  const changeLogEvents = useAppSelector(s => s.changeLog.events);
 
   const activeBook   = library.books.find(b => b.bookId === bookId);
   const projectTitle = manuscript.title || activeBook?.title || null;
@@ -256,7 +257,7 @@ function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookI
           onEnterPreview={() => dispatch(uiActions.setPreviewMode(true))}/>
       );
     case 'log':
-      return <ChangeLogView events={CHANGE_LOG_EVENTS} title={projectTitle}/>;
+      return <ChangeLogView events={changeLogEvents} title={projectTitle}/>;
   }
 }
 

@@ -11,7 +11,9 @@ import { revisionsSlice } from './revisions-slice';
 import { manuscriptSlice } from './manuscript-slice';
 import { librarySlice } from './library-slice';
 import { voicesSlice } from './voices-slice';
+import { changeLogSlice } from './change-log-slice';
 import { persistenceMiddleware } from './persistence-middleware';
+import { generationStreamMiddleware } from './generation-stream-middleware';
 
 export const store = configureStore({
   reducer: {
@@ -22,8 +24,9 @@ export const store = configureStore({
     manuscript: manuscriptSlice.reducer,
     library:    librarySlice.reducer,
     voices:     voicesSlice.reducer,
+    changeLog:  changeLogSlice.reducer,
   },
-  middleware: (getDefault) => getDefault().concat(persistenceMiddleware),
+  middleware: (getDefault) => getDefault().concat(persistenceMiddleware, generationStreamMiddleware),
 });
 
 export type RootState   = ReturnType<typeof store.getState>;

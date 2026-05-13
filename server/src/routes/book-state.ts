@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import {
   audioDir,
   castJsonPath,
+  changeLogJsonPath,
   manuscriptEditsJsonPath,
   revisionsJsonPath,
   slug,
@@ -35,9 +36,10 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     if (!located) return res.status(404).json({ error: 'Book not found.' });
 
     const { bookDir, state } = located;
-    const cast    = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
-    let   edits   = await readJson<{ sentences?: unknown[] }>(manuscriptEditsJsonPath(bookDir));
-    const revs    = await readJson<{ pending?: unknown[]; drift?: unknown[] }>(revisionsJsonPath(bookDir));
+    const cast      = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
+    let   edits     = await readJson<{ sentences?: unknown[] }>(manuscriptEditsJsonPath(bookDir));
+    const revs      = await readJson<{ pending?: unknown[]; drift?: unknown[] }>(revisionsJsonPath(bookDir));
+    const changeLog = await readJson<{ events?: unknown[] }>(changeLogJsonPath(bookDir));
 
     /* Fallback for books whose stage 2 ran on older code (or hasn't fully
        finished yet): pull the per-chapter sentences from the analysis cache
@@ -92,7 +94,15 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       ? { wordCount: rec.wordCount, format: rec.format }
       : null;
 
-    res.json({ state, cast, manuscript, manuscriptEdits: edits, revisions: revs, completedSlugs });
+    res.json({
+      state,
+      cast,
+      manuscript,
+      manuscriptEdits: edits,
+      revisions: revs,
+      completedSlugs,
+      changeLog: changeLog?.events ?? null,
+    });
   } catch (e) {
     console.error('[book-state] GET failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to read book state.' });
@@ -104,7 +114,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
 
-    const body = req.body as { slice?: 'cast' | 'manuscript' | 'revisions' | 'state'; patch?: unknown };
+    const body = req.body as { slice?: 'cast' | 'manuscript' | 'revisions' | 'state' | 'changeLog'; patch?: unknown };
     if (!body?.slice || body.patch === undefined) {
       return res.status(400).json({ error: 'slice and patch are required.' });
     }
@@ -119,6 +129,9 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         break;
       case 'revisions':
         await writeJsonAtomic(revisionsJsonPath(bookDir), body.patch);
+        break;
+      case 'changeLog':
+        await writeJsonAtomic(changeLogJsonPath(bookDir), body.patch);
         break;
       case 'state': {
         // Whitelist: only allow updating known editorial fields, not bookId /

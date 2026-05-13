@@ -130,9 +130,14 @@ export interface BookStateResponse {
   revisions: { pending?: Revision[]; drift?: DriftEvent[] } | null;
   /** Slugs of chapters that already have an audio file on disk. */
   completedSlugs: string[];
+  /** Editorial activity trail (regenerate confirms, etc.). Null when no
+      change-log.json has been written yet — the layout falls back to an
+      empty list so the Activity view doesn't replay a stale demo seed for
+      a book that hasn't been touched. */
+  changeLog: ChangeLogEvent[] | null;
 }
 
-export type StateSlice = 'cast' | 'manuscript' | 'revisions' | 'state';
+export type StateSlice = 'cast' | 'manuscript' | 'revisions' | 'state' | 'changeLog';
 
 export interface PutStateRequest {
   slice: StateSlice;
@@ -190,11 +195,16 @@ export interface LibraryResponse {
 
 export type ChangeLogType =
   | 'regenerate' | 'voice_tune' | 'voice_reuse' | 'voice_lock'
-  | 'boundary_move' | 'chapter_complete' | 'generation_started'
+  | 'boundary_move' | 'chapter_complete' | 'chapter_failed' | 'generation_started'
   | 'cast_confirm' | 'analysis_complete' | 'import' | 'library_add';
 
 export interface ChangeLogEvent {
   id: number;
+  /** ISO timestamp for events produced at runtime. The view formats this into
+      a relative `ts` + bucketed `date` at render time, so persisted entries
+      age correctly across reloads. Optional only because the demo fixture
+      pre-fills the display fields without a real clock. */
+  at?: string;
   ts: string;
   date: 'today' | 'yesterday' | 'earlier';
   type: ChangeLogType;

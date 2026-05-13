@@ -21,6 +21,7 @@ const baseState = (chapters: Chapter[]): ChaptersState => ({
   generationStartedAt: null,
   pendingRegen: null,
   regenEpoch: 0,
+  lastTickAt: null,
 });
 
 const tick = (t: Partial<GenerationTick> & { type: GenerationTick['type'] }): GenerationTick =>

@@ -81,6 +81,10 @@ export function revisionsJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'revisions.json');
 }
 
+export function changeLogJsonPath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'change-log.json');
+}
+
 /** Workspace-level voice metadata (pin flags). Spans every book in the
     workspace, so it lives at the workspace root rather than inside any
     one book's .audiobook/ folder. */

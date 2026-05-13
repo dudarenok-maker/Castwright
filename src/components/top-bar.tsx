@@ -1,6 +1,15 @@
-import { IconArrowLeft, IconAB } from '../lib/icons';
+import { IconArrowLeft, IconAB, IconSpinner, IconClock, IconWarning } from '../lib/icons';
 import { Avatar } from './primitives';
 import type { Stage, View } from '../lib/types';
+
+export type GenerationPillState = 'running' | 'stalled' | 'halted';
+export interface GenerationPillData {
+  state: GenerationPillState;
+  done: number;
+  total: number;
+  percent: number;
+  onClick: () => void;
+}
 
 interface TopBarProps {
   stage: Stage['kind'];
@@ -16,6 +25,11 @@ interface TopBarProps {
   onOpenRevisions: () => void;
   onOpenVoices: () => void;
   onOpenChangelog: () => void;
+  /** Globally-visible chip surfacing background generation so the user knows
+      a run is alive (or stalled / halted) even when they're on Cast, Voices,
+      Activity, etc. `null` hides the pill entirely. Clicking routes back to
+      the Generate view of the active book. */
+  generationPill?: GenerationPillData | null;
 }
 
 const TABS: Array<{ id: View; label: string }> = [
@@ -36,7 +50,7 @@ const GLOBAL_NAV: Array<{ id: 'books' | 'voices' | 'changelog'; label: string }>
   { id: 'changelog', label: 'Change log' },
 ];
 
-export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClick, pendingRevisionsCount, onOpenRevisions, onOpenVoices, onOpenChangelog }: TopBarProps) {
+export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClick, pendingRevisionsCount, onOpenRevisions, onOpenVoices, onOpenChangelog, generationPill }: TopBarProps) {
   const showGlobalNav = stage === 'books' || stage === 'voices' || stage === 'changelog';
   const onGlobal = (id: 'books' | 'voices' | 'changelog') => {
     if (id === 'books')     onHome();
@@ -77,6 +91,7 @@ export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClic
           </nav>
         )}
         <div className={`flex items-center gap-3 ${stage === 'ready' || showGlobalNav ? '' : 'ml-auto'}`}>
+          {generationPill && <GenerationPill data={generationPill}/>}
           {pendingRevisionsCount > 0 && (
             <button onClick={onOpenRevisions} className="relative inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold transition-colors">
               <span className="relative">
@@ -90,5 +105,37 @@ export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClic
         </div>
       </div>
     </header>
+  );
+}
+
+function GenerationPill({ data }: { data: GenerationPillData }) {
+  const { state, done, total, percent, onClick } = data;
+  const variants: Record<GenerationPillState, { className: string; icon: React.ReactNode; label: string }> = {
+    running: {
+      className: 'bg-peach/15 hover:bg-peach/25 text-magenta',
+      icon:      <IconSpinner className="w-3.5 h-3.5"/>,
+      label:     'Generating',
+    },
+    stalled: {
+      className: 'bg-amber-100 hover:bg-amber-200 text-amber-800',
+      icon:      <IconClock className="w-3.5 h-3.5"/>,
+      label:     'Stalled',
+    },
+    halted: {
+      className: 'bg-rose-100 hover:bg-rose-200 text-rose-800',
+      icon:      <IconWarning className="w-3.5 h-3.5"/>,
+      label:     'Halted',
+    },
+  };
+  const v = variants[state];
+  return (
+    <button onClick={onClick}
+            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${v.className}`}>
+      {v.icon}
+      <span className="tabular-nums">
+        {v.label} · {done}/{total}
+        {state === 'running' && total > 0 && ` · ${percent}%`}
+      </span>
+    </button>
   );
 }

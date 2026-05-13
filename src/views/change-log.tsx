@@ -1,14 +1,15 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { IconHistory, IconClock, IconUndo } from '../lib/icons';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import { LOG_TYPES } from '../data/log-types';
+import { withRecomputedDisplay } from '../lib/change-log';
 import type { ChangeLogEvent, ChangeLogType } from '../lib/types';
 
 type FilterKey = 'all' | 'voice' | 'generation' | 'manuscript' | 'cast';
 
 const FILTER_MAP: Record<Exclude<FilterKey, 'all'>, ChangeLogType[]> = {
   voice:      ['voice_tune', 'voice_reuse', 'voice_lock', 'library_add'],
-  generation: ['regenerate', 'chapter_complete', 'generation_started'],
+  generation: ['regenerate', 'chapter_complete', 'chapter_failed', 'generation_started'],
   manuscript: ['boundary_move', 'import'],
   cast:       ['cast_confirm', 'analysis_complete'],
 };
@@ -21,7 +22,11 @@ interface Props { events: ChangeLogEvent[]; title?: string | null; }
 
 export function ChangeLogView({ events, title }: Props) {
   const [filter, setFilter] = useState<FilterKey>('all');
-  const visible = filter === 'all' ? events : events.filter(e => FILTER_MAP[filter].includes(e.type));
+  /* Recompute relative timestamps / date buckets so persisted entries age
+     correctly across reloads. Fixture entries (no `at` field) pass through
+     untouched, keeping their hand-authored copy. */
+  const displayEvents = useMemo(() => withRecomputedDisplay(events), [events]);
+  const visible = filter === 'all' ? displayEvents : displayEvents.filter(e => FILTER_MAP[filter].includes(e.type));
   const groups = visible.reduce<Record<string, ChangeLogEvent[]>>((acc, e) => {
     (acc[e.date] ??= []).push(e);
     return acc;
