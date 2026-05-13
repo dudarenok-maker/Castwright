@@ -1,9 +1,9 @@
 # Book state persistence
 
 > Status: KNOWN: scaffolded (manuscript-edits hydration partial)
-> Key files: `src/lib/api.ts` (`getBookState`, `putBookState`), `src/App.tsx` (hydrate effect), `server/src/routes/book-state.ts`, `src/lib/types.ts` (`BookStateResponse`, `PutStateRequest`)
-> URL surface: indirect (any URL that lands on a `ready`/`confirm`/`analysing` stage)
-> OpenAPI ops: `GET /api/books/:bookId/state`, `PUT /api/books/:bookId/state`
+> Key files: `src/lib/api.ts` (`getBookState`, `putBookState`, `getWorkspaceChangelog`), `src/App.tsx` (hydrate effect), `server/src/routes/book-state.ts`, `server/src/routes/workspace.ts`, `src/lib/types.ts` (`BookStateResponse`, `PutStateRequest`, `ChangeLogEvent`)
+> URL surface: indirect (any URL that lands on a `ready`/`confirm`/`analysing` stage); `#/log` for the workspace change log
+> OpenAPI ops: `GET /api/books/:bookId/state`, `PUT /api/books/:bookId/state`, `GET /api/workspace/changelog`
 
 ## What this covers
 
@@ -28,6 +28,18 @@ Run with `VITE_USE_MOCKS=false`, server on `:8080`, with at least one book under
 4. **Reload after confirm** → cast hydrates from disk; user lands in the same `ready` view.
 5. **Reassign a sentence** (per `12-manuscript-view.md`) → PUT `{ slice: 'manuscript', patch: { sentences: [...] } }` fires. CURRENT BEHAVIOR: the file is written but hydration on reload is partial; do not assert end-to-end round-trip until the gap is closed.
 6. **Mock-mode regression** — `getBookState` throws; App.tsx catches and falls back to in-memory defaults (cast from analyser output, no manuscript edits). No crash, no infinite loop.
+
+## Change-log invariants
+
+- Per-book log lives at `<book-dir>/.audiobook/change-log.json` and is hydrated into `s.changeLog.events` on book open. The slice is the source of truth for the in-book Log tab.
+- Workspace log (`#/log`) reads `s.changeLog.workspaceEvents`, populated by `GET /api/workspace/changelog` on every `ChangelogRoute` mount. The server fans out across every book, tags each event with `bookId`/`bookTitle`/`author`, and sorts newest-first.
+- The following editorial actions MUST dispatch a change-log entry (and the persistence middleware MUST persist it):
+  - `cast/setCharacters` for a tune (drawer's Save with `voiceState === 'tuned'`) → `voice_tune` via `buildVoiceTuneEvent`.
+  - `cast/lockVoice` → `voice_lock` via `buildVoiceLockEvent`.
+  - `ui/confirmCast` (paired in `ConfirmRoute.onConfirm`) → `cast_confirm` via `buildCastConfirmEvent`.
+  - Each manuscript boundary edit (`setSentenceCharacter` / `setSentencesCharacter` / `splitSentence`) → `changeLog/bumpBoundaryMove({ chapterId, count })`. The reducer aggregates consecutive edits in the same chapter into a single entry at the list head so a drag gesture is one audit line, not dozens.
+- **Reparse selective wipe**: `ConfirmRoute.onReanalyse` dispatches `changeLog/wipeBookShapeEvents` BEFORE `uiActions.reanalyse`. The wipe drops every event with a defined `chapterId` (regenerate, chapter_complete, chapter_failed, boundary_move). Cast/voice prefs (voice_tune, voice_lock, voice_reuse, cast_confirm) and historical markers (import, analysis_complete, library_add, generation_started) survive — those are either still accurate after a reparse or remain informative.
+- Workspace endpoint MUST skip books that have no `.audiobook/change-log.json` rather than failing the whole response. A freshly imported book without any logged actions is normal state.
 
 ## KNOWN: scaffolded
 

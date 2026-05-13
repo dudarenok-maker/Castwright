@@ -87,6 +87,24 @@ describe('castSlice — declineMatch', () => {
   });
 });
 
+describe('castSlice — lockVoice', () => {
+  it('flips the targeted character voiceState to locked', () => {
+    const start = baseState([
+      makeChar('halloran', { voiceState: 'tuned' }),
+      makeChar('eliza',    { voiceState: 'generated' }),
+    ]);
+    const next = castSlice.reducer(start, castActions.lockVoice('halloran'));
+    expect(next.characters.find(c => c.id === 'halloran')!.voiceState).toBe('locked');
+    expect(next.characters.find(c => c.id === 'eliza')!.voiceState).toBe('generated');
+  });
+
+  it('is a no-op for an unknown characterId', () => {
+    const start = baseState([makeChar('halloran', { voiceState: 'tuned' })]);
+    const next = castSlice.reducer(start, castActions.lockVoice('not-a-character'));
+    expect(next.characters[0].voiceState).toBe('tuned');
+  });
+});
+
 describe('castSlice — initial state (mock-leak regression)', () => {
   it('starts with an empty characters array so the design fixture never renders for a real book', () => {
     /* Same mock-leak bug as chaptersSlice — opening a real book briefly

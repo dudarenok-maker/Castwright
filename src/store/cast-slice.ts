@@ -22,6 +22,13 @@ export const castSlice = createSlice({
       const c = s.characters.find(x => x.id === a.payload);
       if (c) { c.matchedFrom = undefined; c.voiceState = 'generated'; }
     },
+    /* Pin a character's voice so subsequent regenerates preserve it. The
+       Profile Drawer's Lock button dispatches this; the change-log slice
+       records the matching voice_lock event. */
+    lockVoice: (s, a: PayloadAction<string>) => {
+      const c = s.characters.find(x => x.id === a.payload);
+      if (c) c.voiceState = 'locked';
+    },
     updateCharacter: (s, a: PayloadAction<Character>) => {
       const next = a.payload;
       s.characters = s.characters.map(c => c.id === next.id ? { ...c, ...next } : c);

@@ -14,7 +14,10 @@ interface Props {
   character: Character;
   voice: Voice | undefined;
   onClose: () => void;
-  onSave: (next: Character) => void;
+  /** Meta carries the conflict flag so the change-log dispatch in layout.tsx
+      knows whether the save reset the library match. */
+  onSave: (next: Character, meta: { hadConflict: boolean }) => void;
+  onLock: (character: Character) => void;
   onShowMatchDetail?: (id: string) => void;
   onRegenerateCharacter?: (id: string) => void;
 }
@@ -33,7 +36,7 @@ const AGE_OPTIONS: Array<{ value: CharAgeRange; label: string }> = [
   { value: 'elderly', label: 'Elderly' },
 ];
 
-export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDetail, onRegenerateCharacter }: Props) {
+export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onShowMatchDetail, onRegenerateCharacter }: Props) {
   const [tone, setTone] = useState(character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 });
   /* Editable identity. The analyzer's guess (or the absence of one) seeds
      these; saving the drawer persists them onto the character. They drive
@@ -262,8 +265,11 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
               <button className="px-3 py-2 rounded-xl border border-ink/10 hover:bg-ink/[0.04] text-xs font-medium text-ink inline-flex items-center justify-center gap-1.5">
                 <IconStar className="w-3.5 h-3.5"/> Save to library
               </button>
-              <button className="px-3 py-2 rounded-xl border border-ink/10 hover:bg-ink/[0.04] text-xs font-medium text-ink inline-flex items-center justify-center gap-1.5">
-                <IconLock className="w-3.5 h-3.5"/> Lock
+              <button
+                onClick={() => onLock(character)}
+                className={`px-3 py-2 rounded-xl border text-xs font-medium inline-flex items-center justify-center gap-1.5 ${character.voiceState === 'locked' ? 'border-ink/30 bg-ink/[0.06] text-ink' : 'border-ink/10 hover:bg-ink/[0.04] text-ink'}`}
+              >
+                <IconLock className="w-3.5 h-3.5"/> {character.voiceState === 'locked' ? 'Locked' : 'Lock'}
               </button>
             </div>
             <button onClick={() => onRegenerateCharacter?.(character.id)} className="mt-3 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl bg-peach/15 hover:bg-peach/25 text-magenta text-sm font-semibold transition-colors">
@@ -373,7 +379,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
                 next.voiceId = undefined;
                 next.matchedFrom = undefined;
               }
-              onSave(next);
+              onSave(next, { hadConflict: hasConflict });
             }}
           >Save changes</PrimaryButton>
         </div>

@@ -7,7 +7,7 @@ import { changeLogSlice, changeLogActions, type ChangeLogState } from './change-
 import { CHANGE_LOG_EVENTS } from '../data/change-log';
 import type { ChangeLogEvent } from '../lib/types';
 
-const seed: ChangeLogState = { events: CHANGE_LOG_EVENTS };
+const seed: ChangeLogState = { events: CHANGE_LOG_EVENTS, workspaceEvents: [] };
 
 const makeEvent = (id: number, overrides: Partial<ChangeLogEvent> = {}): ChangeLogEvent => ({
   id,
@@ -27,7 +27,7 @@ describe('changeLogSlice', () => {
   });
 
   it('appendLogEvent unshifts (newest first)', () => {
-    const start: ChangeLogState = { events: [makeEvent(2)] };
+    const start: ChangeLogState = { events: [makeEvent(2)], workspaceEvents: [] };
     const next = changeLogSlice.reducer(start, changeLogActions.appendLogEvent(makeEvent(3)));
     expect(next.events.map(e => e.id)).toEqual([3, 2]);
   });
@@ -49,8 +49,69 @@ describe('changeLogSlice', () => {
   });
 
   it('reset clears the slice', () => {
-    const start: ChangeLogState = { events: [makeEvent(1), makeEvent(2)] };
+    const start: ChangeLogState = { events: [makeEvent(1), makeEvent(2)], workspaceEvents: [makeEvent(3)] };
     const next = changeLogSlice.reducer(start, changeLogActions.reset());
     expect(next.events).toEqual([]);
+    expect(next.workspaceEvents).toEqual([]);
+  });
+
+  describe('bumpBoundaryMove', () => {
+    it('appends a fresh boundary_move when the head is not one', () => {
+      const start: ChangeLogState = {
+        events: [makeEvent(1, { type: 'regenerate', chapterId: 1 })],
+        workspaceEvents: [],
+      };
+      const next = changeLogSlice.reducer(start, changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 2 }));
+      expect(next.events).toHaveLength(2);
+      expect(next.events[0].type).toBe('boundary_move');
+      expect(next.events[0].chapterId).toBe(3);
+      expect(next.events[0].note).toContain('2 sentences reassigned');
+    });
+
+    it('rewrites the head in place when consecutive edits hit the same chapter', () => {
+      const start: ChangeLogState = { events: [], workspaceEvents: [] };
+      const after1 = changeLogSlice.reducer(start, changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 1 }));
+      const after2 = changeLogSlice.reducer(after1, changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 4 }));
+      expect(after2.events).toHaveLength(1);
+      expect(after2.events[0].note).toContain('5 sentences reassigned');
+    });
+
+    it('starts a new entry when the chapter switches', () => {
+      const start: ChangeLogState = { events: [], workspaceEvents: [] };
+      const after1 = changeLogSlice.reducer(start, changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 1 }));
+      const after2 = changeLogSlice.reducer(after1, changeLogActions.bumpBoundaryMove({ chapterId: 4, count: 1 }));
+      expect(after2.events).toHaveLength(2);
+      expect(after2.events[0].chapterId).toBe(4);
+      expect(after2.events[1].chapterId).toBe(3);
+    });
+  });
+
+  describe('wipeBookShapeEvents', () => {
+    it('drops events that carry a chapterId — those reference now-stale chapter ids after a reparse', () => {
+      const start: ChangeLogState = {
+        events: [
+          makeEvent(1, { type: 'regenerate', chapterId: 3 }),
+          makeEvent(2, { type: 'voice_tune', chapterId: undefined }),
+          makeEvent(3, { type: 'chapter_complete', chapterId: 4 }),
+          makeEvent(4, { type: 'cast_confirm', chapterId: undefined }),
+          makeEvent(5, { type: 'boundary_move', chapterId: 2 }),
+        ],
+        workspaceEvents: [],
+      };
+      const next = changeLogSlice.reducer(start, changeLogActions.wipeBookShapeEvents());
+      expect(next.events.map(e => e.type)).toEqual(['voice_tune', 'cast_confirm']);
+    });
+  });
+
+  describe('hydrateWorkspaceEvents', () => {
+    it('replaces the workspace cache without touching per-book events', () => {
+      const start: ChangeLogState = { events: [makeEvent(1)], workspaceEvents: [] };
+      const next = changeLogSlice.reducer(start, changeLogActions.hydrateWorkspaceEvents([
+        makeEvent(10, { bookId: 'sb', bookTitle: 'Solway Bay' }),
+      ]));
+      expect(next.events).toHaveLength(1);
+      expect(next.workspaceEvents).toHaveLength(1);
+      expect(next.workspaceEvents[0].bookTitle).toBe('Solway Bay');
+    });
   });
 });

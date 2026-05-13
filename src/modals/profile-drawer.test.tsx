@@ -34,6 +34,7 @@ function renderDrawer(character: Character) {
         voice={undefined}
         onClose={() => {}}
         onSave={() => {}}
+        onLock={() => {}}
       />
     </Provider>,
   );

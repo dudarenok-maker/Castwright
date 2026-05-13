@@ -9,6 +9,7 @@ import {
   audioDir,
   bookDirByDisplay,
   castJsonPath,
+  changeLogJsonPath,
   dotAudiobook,
   ensureWorkspace,
   makeBookId,
@@ -249,6 +250,44 @@ export async function findBookByManuscriptId(manuscriptId: string): Promise<{
   state: BookStateJson;
 } | null> {
   return findBookBy(state => state.manuscriptId === manuscriptId);
+}
+
+/** Each event in `.audiobook/change-log.json` for a single book, paired with
+    the book's identifying info. Used by the workspace changelog aggregator
+    to attach `bookId`/`bookTitle`/`author` to every event so the workspace
+    Change log view can render cross-book context. */
+export interface BookChangeLogEvents {
+  bookId: string;
+  bookTitle: string;
+  author: string;
+  events: unknown[];
+}
+
+/** Walk the books/ tree and yield each book's change-log entries. Books with
+    no `.audiobook/change-log.json` are skipped silently — that's the normal
+    state for a freshly-imported book that hasn't seen a logged action yet. */
+export async function listAllChangeLogs(): Promise<BookChangeLogEvents[]> {
+  ensureWorkspace();
+  const out: BookChangeLogEvents[] = [];
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        const state = await readJson<BookStateJson>(stateJsonPath(dir)).catch(() => null);
+        if (!state) continue;
+        const log = await readJson<{ events?: unknown[] }>(changeLogJsonPath(dir)).catch(() => null);
+        const events = log?.events ?? [];
+        if (events.length === 0) continue;
+        out.push({
+          bookId: state.bookId,
+          bookTitle: state.title,
+          author: state.author,
+          events,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 async function findBookBy(predicate: (state: BookStateJson) => boolean): Promise<{
