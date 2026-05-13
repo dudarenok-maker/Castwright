@@ -71,6 +71,18 @@ export interface SynthesiseChapterOpts {
       behind `provider` so each character's name resolves to a voice the
       engine actually has. */
   engine: TtsEngine;
+  /** Notification fired *before* each group's TTS call starts. Needed because
+      a single group can be a multi-minute call on CPU (e.g. a long narrator
+      block folded into one synth), and without a tick at the start the SSE
+      goes silent and the UI's 30s "Worker has gone quiet" banner fires for
+      what is actually healthy in-progress work. Letting the route handler
+      emit a "synthesising group N" tick here resets the client-side stall
+      timer at each group boundary. */
+  onGroupStart?: (e: {
+    group: SentenceGroup;
+    totalGroups: number;
+    accumulatedSec: number;
+  }) => void;
   /** Notification on each group completion. Optional. */
   onGroupComplete?: (e: {
     group: SentenceGroup;
@@ -135,7 +147,7 @@ export function buildHintFromCast(c: CastCharacter): CharacterHint {
 }
 
 export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<ChapterSynthesisResult> {
-  const { sentences, cast, provider, modelKey, engine, onGroupComplete, signal } = opts;
+  const { sentences, cast, provider, modelKey, engine, onGroupStart, onGroupComplete, signal } = opts;
 
   const castById = new Map(cast.map(c => [c.id, c]));
   const groups = buildSentenceGroups(sentences);
@@ -156,6 +168,19 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
     }
     const character = castById.get(group.characterId) ?? { id: group.characterId };
     const voiceName = pickVoiceForEngine(engine, toVoiceLike(character), buildHintFromCast(character));
+
+    /* Tick BEFORE the synth call. Each TTS call can be minutes on CPU, and
+       the client's stall detector only sees inactivity, not "active work on
+       a long call" — so without this beat the user sees "Worker has gone
+       quiet" for what is actually a healthy in-flight synth. The accumulated
+       time is the running total at the *start* of this group (i.e. the end
+       of the previous group), which is what the UI wants for its "line N of
+       M" caption. */
+    onGroupStart?.({
+      group,
+      totalGroups: groups.length,
+      accumulatedSec: pcmDurationSec(runningBytes, sampleRate),
+    });
 
     const result = await provider.synthesize({
       text: group.text,

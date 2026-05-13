@@ -206,6 +206,27 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         modelKey,
         engine,
         signal: controller.signal,
+        /* Tick AT THE START of each group so the client's 30s "Worker has
+           gone quiet" stall detector resets even when a single group is a
+           multi-minute synth call (long narrator block on CPU XTTS).
+           Without this, group-complete was the only tick and the SSE went
+           silent for the entire duration of each call. */
+        onGroupStart: ({ group, totalGroups }) => {
+          const firstSentenceId = group.sentenceIds[0];
+          const positional = sentences.findIndex(s => s.id === firstSentenceId);
+          /* progress reports the lower bound for this group — group.index/totalGroups
+             rather than (index+1)/total — so the bar doesn't visibly snap forward
+             at start and then sit still while the call runs. */
+          const progress = Math.min(0.99, group.index / Math.max(1, totalGroups));
+          send({
+            type: 'progress',
+            chapterId: chapter.id,
+            characterId: group.characterId,
+            progress,
+            currentLine: positional >= 0 ? positional + 1 : group.index + 1,
+            totalLines,
+          });
+        },
         onGroupComplete: ({ group, totalGroups }) => {
           const progress = Math.min(0.99, (group.index + 1) / totalGroups);
           const lastSentenceId = group.sentenceIds[group.sentenceIds.length - 1];
