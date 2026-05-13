@@ -33,6 +33,47 @@ export function characterStatsByChapter(
   return out;
 }
 
+/** Map of chapterId → characterId → ascending list of 1-indexed line
+   positions within the chapter where that character speaks.
+
+   Why this needs to exist: the slice's per-character status field only
+   tells us who is *currently* speaking, not how many of each character's
+   lines have already been synthesised. By line 13 of an 82-line chapter,
+   four characters had each spoken at least once, the slice had flipped
+   three of them to `done`, and the expanded row showed three full-green
+   "Done" bars while 80 % of the chapter was still ahead — the lie behind
+   the screenshot bug. With these positions the view can derive the real
+   "lines synthesised for this character so far" from `chapter.currentLine`. */
+export function characterLinePositionsByChapter(
+  sentences: Sentence[],
+): Record<number, Record<string, number[]>> {
+  const byChapter: Record<number, Sentence[]> = {};
+  for (const s of sentences) (byChapter[s.chapterId] ??= []).push(s);
+  const out: Record<number, Record<string, number[]>> = {};
+  for (const [chapIdStr, list] of Object.entries(byChapter)) {
+    const chap: Record<string, number[]> = (out[Number(chapIdStr)] = {});
+    list.forEach((s, idx) => {
+      (chap[s.characterId] ??= []).push(idx + 1);
+    });
+  }
+  return out;
+}
+
+/** Count of positions ≤ currentLine. `positions` must be sorted ascending
+   (which `characterLinePositionsByChapter` guarantees because it walks the
+   chapter's sentences in narrative order). Binary search keeps this O(log N)
+   per character per render. */
+export function linesDoneAt(positions: number[] | undefined, currentLine: number): number {
+  if (!positions || positions.length === 0 || currentLine <= 0) return 0;
+  let lo = 0, hi = positions.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (positions[mid] <= currentLine) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 export function countWords(text: string): number {
   const stripped = text.replace(/\[[^\]]*\]/g, ' ');
   const m = stripped.match(/\S+/g);

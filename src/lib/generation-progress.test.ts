@@ -2,7 +2,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  characterStatsByChapter, countWords, overallProgress, sentencesPerChapter,
+  characterLinePositionsByChapter, characterStatsByChapter, countWords,
+  linesDoneAt, overallProgress, sentencesPerChapter,
 } from './generation-progress';
 import type { Chapter, Sentence } from './types';
 
@@ -62,6 +63,73 @@ describe('characterStatsByChapter', () => {
         narrator: { lines: 1, words: 1 },
       },
     });
+  });
+});
+
+describe('characterLinePositionsByChapter + linesDoneAt — the false-Done regression', () => {
+  /* The bug: by line 13 of an 82-line chapter every cast member had spoken
+     at least once. The slice flipped previously-active speakers to `done`,
+     so the expanded chapter row showed three "Done" full-green bars while
+     synthesis was still on line 13. Real per-character completion now
+     derives from manuscript line positions + chapter.currentLine. */
+
+  const screenshotChapter: Sentence[] = [
+    /* Narrator-dominated chapter with the other speakers interleaved early.
+       Narrator speaks 4 of the first 13 lines, then everyone else speaks
+       once before line 13, then narrator carries through. Mirrors the
+       "Day One" chapter from the screenshot enough to pin the bug. */
+    { id: 1,  chapterId: 2, characterId: 'narrator', text: 'opening line' },
+    { id: 2,  chapterId: 2, characterId: 'narrator', text: 'narrator continues' },
+    { id: 3,  chapterId: 2, characterId: 'Marlow',    text: 'Marlow one' },
+    { id: 4,  chapterId: 2, characterId: 'narrator', text: 'narrator three' },
+    { id: 5,  chapterId: 2, characterId: 'ro',       text: 'ro one' },
+    { id: 6,  chapterId: 2, characterId: 'narrator', text: 'narrator four' },
+    { id: 7,  chapterId: 2, characterId: 'Oduvan',    text: 'Oduvan one' },
+    { id: 8,  chapterId: 2, characterId: 'narrator', text: 'narrator five' },
+    { id: 9,  chapterId: 2, characterId: 'narrator', text: 'narrator six' },
+    { id: 10, chapterId: 2, characterId: 'narrator', text: 'narrator seven' },
+    { id: 11, chapterId: 2, characterId: 'narrator', text: 'narrator eight' },
+    { id: 12, chapterId: 2, characterId: 'narrator', text: 'narrator nine' },
+    { id: 13, chapterId: 2, characterId: 'narrator', text: 'narrator ten (current)' },
+    { id: 14, chapterId: 2, characterId: 'narrator', text: 'still to come' },
+  ];
+
+  it('groups 1-indexed line positions per character per chapter in narrative order', () => {
+    const out = characterLinePositionsByChapter(screenshotChapter);
+    expect(out[2].narrator).toEqual([1, 2, 4, 6, 8, 9, 10, 11, 12, 13, 14]);
+    expect(out[2].Marlow).toEqual([3]);
+    expect(out[2].ro).toEqual([5]);
+    expect(out[2].Oduvan).toEqual([7]);
+  });
+
+  it('counts lines ≤ currentLine for each character (no false "Done")', () => {
+    const positions = characterLinePositionsByChapter(screenshotChapter)[2];
+    /* At currentLine=13 (the screenshot moment): narrator has 10 of 11
+       lines done, Marlow/ro/Oduvan have each spoken once, none of them are
+       finished. Pre-fix the slice would have marked Marlow/ro/Oduvan as
+       "done" with a full green bar at this moment. */
+    expect(linesDoneAt(positions.narrator, 13)).toBe(10);
+    expect(linesDoneAt(positions.Marlow,    13)).toBe(1);
+    expect(linesDoneAt(positions.ro,       13)).toBe(1);
+    expect(linesDoneAt(positions.Oduvan,    13)).toBe(1);
+  });
+
+  it('returns 0 when currentLine is 0 or negative (start-of-run / post-regenerate)', () => {
+    const positions = characterLinePositionsByChapter(screenshotChapter)[2];
+    expect(linesDoneAt(positions.narrator, 0)).toBe(0);
+    expect(linesDoneAt(positions.Marlow,    0)).toBe(0);
+    expect(linesDoneAt(positions.narrator, -1)).toBe(0);
+  });
+
+  it('returns positions.length once currentLine reaches the chapter end (chapter_complete)', () => {
+    const positions = characterLinePositionsByChapter(screenshotChapter)[2];
+    expect(linesDoneAt(positions.narrator, 14)).toBe(11);
+    expect(linesDoneAt(positions.Marlow,    14)).toBe(1);
+  });
+
+  it('returns 0 for an unknown character (no positions)', () => {
+    expect(linesDoneAt(undefined, 13)).toBe(0);
+    expect(linesDoneAt([],        13)).toBe(0);
   });
 });
 

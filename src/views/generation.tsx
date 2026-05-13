@@ -14,7 +14,8 @@ import { ttsModelLabel } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
 import {
-  characterStatsByChapter, overallProgress, sentencesPerChapter,
+  characterLinePositionsByChapter, characterStatsByChapter, linesDoneAt,
+  overallProgress, sentencesPerChapter,
 } from '../lib/generation-progress';
 import { withRecomputedDisplay } from '../lib/change-log';
 import { LOG_TYPES } from '../data/log-types';
@@ -55,8 +56,12 @@ export function GenerationView({
      weighting (so 3 hydrated-Done chapters don't collapse the bar to the
      in-flight chapter's progress) and for the per-character lines/words
      readout in the expanded chapter rows. */
-  const manuscriptCounts = useMemo(() => sentencesPerChapter(sentences), [sentences]);
-  const characterStats   = useMemo(() => characterStatsByChapter(sentences), [sentences]);
+  const manuscriptCounts   = useMemo(() => sentencesPerChapter(sentences), [sentences]);
+  const characterStats     = useMemo(() => characterStatsByChapter(sentences), [sentences]);
+  /* Per-character line positions inside each chapter — drives the truthful
+     fractional bar in the expanded row instead of the slice's "active
+     speaker only" status field. See generation-progress.ts. */
+  const characterPositions = useMemo(() => characterLinePositionsByChapter(sentences), [sentences]);
 
   /* SSE ownership lives in src/store/generation-stream-middleware.ts so the
      stream survives navigating away from this view. The view is a pure
@@ -243,6 +248,7 @@ export function GenerationView({
                         expanded={!!expanded[ch.id]} onToggle={() => setExpanded({ ...expanded, [ch.id]: !expanded[ch.id] })}
                         paused={paused} blocked={blocked} stalled={stalled}
                         charStats={characterStats[ch.id]}
+                        charPositions={characterPositions[ch.id]}
                         onRegenerate={onRegenerate}
                         onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
                         onPreview={onPreview}/>
@@ -341,13 +347,14 @@ interface ChapterRowProps {
   blocked: boolean;
   stalled: boolean;
   charStats: Record<string, { lines: number; words: number }> | undefined;
+  charPositions: Record<string, number[]> | undefined;
   onRegenerate: (ch: Chapter) => void;
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
   onPreview: (chapterId: number) => void;
 }
 
 function ChapterRow({
-  chapter, characters, bookId, expanded, onToggle, paused, blocked, stalled, charStats,
+  chapter, characters, bookId, expanded, onToggle, paused, blocked, stalled, charStats, charPositions,
   onRegenerate, onRegenerateCharacterInChapter, onPreview,
 }: ChapterRowProps) {
   const assembling = chapter.phase === 'assembling';
@@ -468,6 +475,26 @@ function ChapterRow({
             {Object.entries(chapter.characters).map(([cid, status]) => {
               const c = findChar(cid);
               const stat = charStats?.[cid];
+              /* Derive real per-character completion from the manuscript line
+                 positions and the chapter's currentLine. The slice's `status`
+                 only tells us who's *currently* speaking, not how much of each
+                 character's share has been synthesised — without this fix, by
+                 line 13 of 82 three characters showed full-green "Done" bars
+                 because they had each spoken once before the narrator took
+                 over. `done`-by-derivation respects the slice when synthesis
+                 is finished (status='done' or chapter.state='done') and
+                 otherwise reflects how many of this character's lines are
+                 already behind us. */
+              const linesTotal = stat?.lines ?? 0;
+              const positions  = charPositions?.[cid];
+              const derivedDone = chapter.state === 'done' || status === 'done'
+                ? linesTotal
+                : status === 'skipped'
+                  ? 0
+                  : linesDoneAt(positions, chapter.currentLine ?? 0);
+              const fraction = linesTotal > 0 ? Math.min(1, derivedDone / linesTotal) : 0;
+              const fullyDone = status === 'done' || chapter.state === 'done'
+                || (linesTotal > 0 && derivedDone >= linesTotal);
               return (
                 <div key={cid} className="grid grid-cols-[20px_1fr_140px_100px_28px] items-center gap-4 py-1.5 text-sm group">
                   <ColorDot color={c.color as CharColor} size={8}/>
@@ -479,13 +506,27 @@ function ChapterRow({
                       </span>
                     )}
                   </span>
-                  <CharStatusBar status={status} paused={paused}/>
-                  <span className="text-xs text-ink/50 capitalize text-right">
-                    {status === 'in_progress' && <span className="text-magenta font-medium">{paused ? 'Paused' : 'Generating…'}</span>}
-                    {status === 'done'        && <span className="text-emerald-700 font-medium">Done</span>}
-                    {status === 'queued'      && 'Queued'}
-                    {status === 'skipped'     && '—'}
-                    {status === 'failed'      && <span className="text-rose-600 font-medium">Failed</span>}
+                  <CharStatusBar status={status} fraction={fraction} fullyDone={fullyDone} paused={paused}/>
+                  <span className="text-xs text-ink/50 capitalize text-right tabular-nums">
+                    {status === 'failed' ? (
+                      <span className="text-rose-600 font-medium">Failed</span>
+                    ) : status === 'skipped' ? (
+                      '—'
+                    ) : fullyDone ? (
+                      <span className="text-emerald-700 font-medium">Done</span>
+                    ) : status === 'in_progress' ? (
+                      <span className="text-magenta font-medium">
+                        {paused ? 'Paused' : 'Generating…'}
+                        {linesTotal > 0 && <span className="text-magenta/60 font-normal"> {derivedDone}/{linesTotal}</span>}
+                      </span>
+                    ) : derivedDone > 0 && linesTotal > 0 ? (
+                      /* Has spoken some lines but the active speaker is now
+                         someone else — show real progress instead of the
+                         old "Done" lie. */
+                      <span className="text-ink/60">{derivedDone}/{linesTotal} done</span>
+                    ) : (
+                      'Queued'
+                    )}
                   </span>
                   {status !== 'skipped' && (
                     <button onClick={(e) => { e.stopPropagation(); onRegenerateCharacterInChapter(cid, chapter.id); }}
@@ -539,19 +580,47 @@ function ChapterProgressBar({ progress, state, paused, assembling }: { progress:
   );
 }
 
-function CharStatusBar({ status, paused }: { status: string; paused: boolean }) {
-  if (status === 'done')        return <div className="h-1 rounded-full bg-emerald-400"/>;
-  if (status === 'skipped')     return <div className="h-1 rounded-full bg-ink/[0.04]"/>;
-  if (status === 'queued')      return <div className="h-1 rounded-full bg-ink/[0.08]"/>;
-  if (status === 'failed')      return <div className="h-1 rounded-full bg-rose-400"/>;
+function CharStatusBar({ status, fraction, fullyDone, paused }: {
+  status: string;
+  /** Lines synthesised for this character ÷ this character's total lines.
+      Clamped to [0,1] by the caller. */
+  fraction: number;
+  /** True when this character has no more lines to come (slice says done
+      OR derived done ≥ total). Pinned full green even if `fraction` is
+      slightly under 1 due to a stale tick. */
+  fullyDone: boolean;
+  paused: boolean;
+}) {
+  if (status === 'failed')  return <div className="h-1 rounded-full bg-rose-400"/>;
+  if (status === 'skipped') return <div className="h-1 rounded-full bg-ink/[0.04]"/>;
+  if (fullyDone)            return <div className="h-1 rounded-full bg-emerald-400"/>;
+
+  const pct = Math.max(0, Math.min(100, fraction * 100));
+
   if (status === 'in_progress') return (
+    /* Currently-speaking character. Bar fills to the real fraction of this
+       character's lines that are behind us, with the peach gradient + stripe
+       animation overlaying so it reads as "still working". Previously the
+       bar was a fixed 60 %-width sliver regardless of how many lines were
+       actually done. */
     <div className="relative h-1 rounded-full bg-ink/[0.06] overflow-hidden">
-      <div className={`absolute inset-y-0 left-0 w-3/5 bg-gradient-progress rounded-full ${paused ? '' : 'pulse-bar'}`}>
+      <div className={`absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all duration-500 ${paused ? '' : 'pulse-bar'}`}
+           style={{ width: `${Math.max(pct, 8)}%` }}>
         {!paused && <div className="absolute inset-0 stripe-travel"/>}
       </div>
     </div>
   );
-  return null;
+
+  if (pct > 0) return (
+    /* Has spoken some lines but isn't the active speaker right now — show
+       the real synthesised fraction in emerald so the user sees "1 of 13
+       done" instead of the previous "Done" lie. */
+    <div className="relative h-1 rounded-full bg-ink/[0.06] overflow-hidden">
+      <div className="absolute inset-y-0 left-0 rounded-full bg-emerald-300" style={{ width: `${pct}%` }}/>
+    </div>
+  );
+
+  return <div className="h-1 rounded-full bg-ink/[0.08]"/>;
 }
 
 /* Visual confirmation that this chapter's audio was assembled in narrative

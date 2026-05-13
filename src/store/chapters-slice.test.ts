@@ -35,7 +35,14 @@ describe('chaptersSlice — applyGenerationTick', () => {
   afterEach(() => { vi.useRealTimers(); });
 
   describe('progress', () => {
-    it('flips the live character to in_progress and demotes the previous one to done', () => {
+    it('flips the live character to in_progress and demotes the previous one back to queued (NOT done)', () => {
+      /* Regression: previously the prior speaker was flipped to `done`, which
+         was a lie when they had more lines later in the chapter. By line 13
+         of an 82-line chapter every cast member had spoken once and the
+         expanded row showed three full-green "Done" bars while 80 % of the
+         work was still ahead. Real per-character completion now lives in
+         the view, derived from manuscript line positions + currentLine. The
+         slice just tracks "who is speaking right now". */
       const start = baseState([
         makeChapter(3, {
           state: 'in_progress',
@@ -47,7 +54,7 @@ describe('chaptersSlice — applyGenerationTick', () => {
         tick({ type: 'progress', chapterId: 3, characterId: 'halloran', progress: 0.55, currentLine: 100, totalLines: 200 }),
       ));
       expect(next.chapters[0].characters).toEqual({
-        narrator: 'done',
+        narrator: 'queued',
         halloran: 'in_progress',
         eliza: 'queued',
       });
@@ -69,8 +76,37 @@ describe('chaptersSlice — applyGenerationTick', () => {
         tick({ type: 'progress', chapterId: 3, characterId: 'eliza', progress: 0.7 }),
       ));
       expect(next.chapters[0].characters.halloran).toBe('skipped');
-      expect(next.chapters[0].characters.narrator).toBe('done');
+      expect(next.chapters[0].characters.narrator).toBe('queued');
       expect(next.chapters[0].characters.eliza).toBe('in_progress');
+    });
+
+    it('a previously-active character cycling back to active flips from queued → in_progress (no false "Done")', () => {
+      /* End-to-end scenario from the bug screenshot: narrator speaks, then
+         halloran, then narrator again. Pre-fix narrator would be "done" by
+         the time halloran started; on the third tick narrator would promote
+         back to in_progress but the expanded row had already flashed "Done"
+         with a full-green bar mid-stream. Post-fix the slice just toggles
+         the single in_progress slot and never lies about completion. */
+      const start = baseState([
+        makeChapter(3, {
+          state: 'in_progress',
+          characters: { narrator: 'in_progress', halloran: 'queued' },
+        }),
+      ]);
+      const afterHalloran = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
+        tick({ type: 'progress', chapterId: 3, characterId: 'halloran', progress: 0.2, currentLine: 5 }),
+      ));
+      expect(afterHalloran.chapters[0].characters).toEqual({
+        narrator: 'queued',
+        halloran: 'in_progress',
+      });
+      const afterNarratorAgain = chaptersSlice.reducer(afterHalloran, chaptersActions.applyGenerationTick(
+        tick({ type: 'progress', chapterId: 3, characterId: 'narrator', progress: 0.3, currentLine: 8 }),
+      ));
+      expect(afterNarratorAgain.chapters[0].characters).toEqual({
+        narrator: 'in_progress',
+        halloran: 'queued',
+      });
     });
 
     it('sets generationStartedAt on the first progress tick and leaves it alone on later ticks', () => {
@@ -274,6 +310,26 @@ describe('chaptersSlice — regenerate reducers', () => {
     expect(next.chapters[1].state).toBe('queued');
   });
 
+  it('regenerateChapter resets currentLine so the derived per-character progress does not flash stale fractions', () => {
+    /* Regression: the expanded chapter row derives "lines synthesised for
+       this character" by counting manuscript line positions ≤
+       chapter.currentLine. After a regenerate (e.g. on the stitching-fails
+       retry path) currentLine kept its old value until the first new tick
+       landed, so the row briefly showed the pre-failure fractional progress
+       on top of a now-Queued chapter. Reset both currentLine to 0 here. */
+    const start = baseState([
+      makeChapter(3, {
+        state: 'in_progress',
+        progress: 0.6,
+        currentLine: 40,
+        totalLines: 82,
+        characters: { narrator: 'in_progress', halloran: 'queued' },
+      }),
+    ]);
+    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapter({ chapterId: 3, scope: 'this' }));
+    expect(next.chapters[0].currentLine).toBe(0);
+  });
+
   it('regenerateChapter (forward) targets the chapter and everything after', () => {
     const start = baseState([
       makeChapter(3, { state: 'done',  progress: 1 }),
@@ -393,6 +449,93 @@ describe('chaptersSlice — hydrateFromAnalysis', () => {
       libraryMatches: [],
     }));
     expect(next.chapters[0].characters).toEqual({ narrator: 'done', halloran: 'in_progress' });
+  });
+});
+
+describe('chaptersSlice — hydrateFromBookState', () => {
+  const cast = [
+    { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator', lines: 0, scenes: 0 },
+    { id: 'halloran', name: 'Halloran', role: 'main',     color: 'magenta',  lines: 0, scenes: 0 },
+    { id: 'eliza',    name: 'Eliza',    role: 'main',     color: 'rose',     lines: 0, scenes: 0 },
+  ] as never;
+
+  const chapters = [
+    { id: 1, title: 'Chapter 1', slug: '01-chapter-one' },
+    { id: 2, title: 'Chapter 2', slug: '02-chapter-two' },
+  ];
+
+  it('seeds each chapter with only its analysed speakers when chapterCharacters is provided (flicker regression)', () => {
+    /* Pre-fix the reducer rebuilt every chapter's character map from the
+       global cast — so the per-chapter filter from hydrateFromAnalysis got
+       clobbered by the next getBookState fetch and the Generate view's
+       pill list flickered from "filtered" to "everyone in the book". */
+    const start = baseState([]);
+    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
+      chapters,
+      completedSlugs: [],
+      characters: cast,
+      chapterCharacters: {
+        1: ['narrator', 'halloran'],
+        2: ['narrator', 'eliza'],
+      },
+    }));
+    expect(next.chapters[0].characters).toEqual({ narrator: 'queued', halloran: 'queued' });
+    expect(next.chapters[1].characters).toEqual({ narrator: 'queued', eliza: 'queued' });
+  });
+
+  it('falls back to all-cast seeding when chapterCharacters is omitted (back-compat for older servers / pre-analysis)', () => {
+    const start = baseState([]);
+    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
+      chapters,
+      completedSlugs: [],
+      characters: cast,
+    }));
+    expect(next.chapters[0].characters).toEqual({
+      narrator: 'queued', halloran: 'queued', eliza: 'queued',
+    });
+  });
+
+  it('marks completed chapters as done with only their analysed speakers (not all-cast)', () => {
+    const start = baseState([]);
+    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
+      chapters,
+      completedSlugs: ['01-chapter-one'],
+      characters: cast,
+      chapterCharacters: {
+        1: ['narrator', 'halloran'],
+        2: ['narrator', 'eliza'],
+      },
+    }));
+    expect(next.chapters[0].state).toBe('done');
+    expect(next.chapters[0].characters).toEqual({ narrator: 'done', halloran: 'done' });
+    expect(next.chapters[1].state).toBe('queued');
+    expect(next.chapters[1].characters).toEqual({ narrator: 'queued', eliza: 'queued' });
+  });
+
+  it('leaves paused=false when no chapters have completed audio on disk (auto-start regression)', () => {
+    /* Before this fix the reducer unconditionally forced paused=true on
+       every hydrate — which meant landing on Generate after confirming
+       cast required an explicit Resume click before anything started. */
+    const start: ChaptersState = { ...baseState([]), paused: false };
+    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
+      chapters,
+      completedSlugs: [],
+      characters: cast,
+    }));
+    expect(next.paused).toBe(false);
+  });
+
+  it('forces paused=true when at least one chapter is already on disk (page-reload safety preserved)', () => {
+    /* The original "in-session only continuation" contract still holds
+       for partially-generated books: reopening such a book mid-run must
+       NOT silently resume generation behind the user's back. */
+    const start: ChaptersState = { ...baseState([]), paused: false };
+    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
+      chapters,
+      completedSlugs: ['01-chapter-one'],
+      characters: cast,
+    }));
+    expect(next.paused).toBe(true);
   });
 });
 
