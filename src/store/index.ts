@@ -5,6 +5,7 @@
 import { configureStore } from '@reduxjs/toolkit';
 import { useDispatch, useSelector, type TypedUseSelectorHook } from 'react-redux';
 import { uiSlice } from './ui-slice';
+import { accountSlice } from './account-slice';
 import { castSlice } from './cast-slice';
 import { chaptersSlice } from './chapters-slice';
 import { revisionsSlice } from './revisions-slice';
@@ -18,6 +19,7 @@ import { generationStreamMiddleware } from './generation-stream-middleware';
 export const store = configureStore({
   reducer: {
     ui:         uiSlice.reducer,
+    account:    accountSlice.reducer,
     cast:       castSlice.reducer,
     chapters:   chaptersSlice.reducer,
     revisions:  revisionsSlice.reducer,

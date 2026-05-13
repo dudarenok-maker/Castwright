@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
+import { fetchAccountSettings } from '../store/account-slice';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { revisionsActions } from '../store/revisions-slice';
@@ -52,6 +53,7 @@ export function Layout() {
   const dispatch = useAppDispatch();
   const stage      = useAppSelector(s => s.ui.stage);
   const ui         = useAppSelector(s => s.ui);
+  const userDisplayName = useAppSelector(s => s.account.displayName);
   const characters = useAppSelector(s => s.cast.characters);
   const chapters   = useAppSelector(s => s.chapters.chapters);
   const paused     = useAppSelector(s => s.chapters.paused);
@@ -112,6 +114,14 @@ export function Layout() {
     if (current !== target) navigate(target, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage]);
+
+  /* Account hydration — fetch user-level account settings once on mount so
+     the avatar can show the persisted display name and book hydration can
+     read defaults from the account slice. Fires once per app boot. */
+  useEffect(() => {
+    void dispatch(fetchAccountSettings());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* Library hydration — fetch the on-disk workspace whenever the user
      returns to the books stage, and once at mount. */
@@ -260,7 +270,9 @@ export function Layout() {
         generationPill={generationPill}
         onOpenRevisions={() => dispatch(uiActions.setShowRevisionPlayer(true))}
         onOpenVoices={() => dispatch(uiActions.openVoices())}
-        onOpenChangelog={() => dispatch(uiActions.openChangelog())}/>
+        onOpenChangelog={() => dispatch(uiActions.openChangelog())}
+        onOpenAccount={() => dispatch(uiActions.openAccount())}
+        userDisplayName={userDisplayName}/>
 
       <Outlet context={ctx}/>
 

@@ -17,6 +17,8 @@ function makeProps(overrides: Partial<Parameters<typeof TopBar>[0]> = {}): Param
     onOpenRevisions: vi.fn(),
     onOpenVoices: vi.fn(),
     onOpenChangelog: vi.fn(),
+    onOpenAccount: vi.fn(),
+    userDisplayName: 'Mike Dudarenok',
     ...overrides,
   };
 }
@@ -46,5 +48,24 @@ describe('TopBar — global nav', () => {
     expect(screen.queryByRole('button', { name: 'Change log' })).not.toBeInTheDocument();
     /* The per-book log tab is the lowercase "Log" instead. */
     expect(screen.getByRole('button', { name: 'Log' })).toBeInTheDocument();
+  });
+});
+
+describe('TopBar — avatar entry to account', () => {
+  it('renders the avatar as a button labelled with the display name', () => {
+    render(<TopBar {...makeProps({ userDisplayName: 'Captain Picard' })}/>);
+    expect(screen.getByRole('button', { name: /account.*captain picard/i })).toBeInTheDocument();
+  });
+
+  it('fires onOpenAccount when the avatar is clicked', () => {
+    const onOpenAccount = vi.fn();
+    render(<TopBar {...makeProps({ onOpenAccount })}/>);
+    fireEvent.click(screen.getByRole('button', { name: /account.*mike dudarenok/i }));
+    expect(onOpenAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to an "unnamed user" label when displayName is empty', () => {
+    render(<TopBar {...makeProps({ userDisplayName: '' })}/>);
+    expect(screen.getByRole('button', { name: /account.*unnamed user/i })).toBeInTheDocument();
   });
 });

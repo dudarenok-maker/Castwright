@@ -10,6 +10,7 @@ import type {
   Voice, VoiceSample, TtsModelKey, LibraryResponse, VoiceLibraryResponse,
   ImportResponse, ConfirmBookRequest, ConfirmBookResponse,
   BookStateResponse, PutStateRequest, WorkspaceChangeLogResponse,
+  UserSettings, UserSettingsPatch,
 } from './types';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
 import { MOCK_LIBRARY } from '../mocks/library';
@@ -722,6 +723,58 @@ async function realGetSidecarHealth(): Promise<SidecarHealth> {
   return res.json();
 }
 
+/* ── User settings ─────────────────────────────────────────────────────
+   Real path round-trips through GET / PUT /api/user/settings. Mock path
+   keeps an in-memory copy seeded from the same defaults the server bakes
+   in, so the Account view is functional under VITE_USE_MOCKS=true. */
+const MOCK_USER_SETTINGS: UserSettings = {
+  displayName:          'Mike Dudarenok',
+  defaultAnalysisModel: 'gemma-4-31b-it',
+  defaultTtsEngine:     'local',
+  defaultTtsModelKey:   'coqui-xtts-v2',
+  analyzerMode:         'manual',
+  sidecarUrl:           'http://localhost:9000',
+  workspaceDirOverride: null,
+  apiKeyStatus:         'unset',
+  workspaceRoot:        '(mock)/audiobook-workspace',
+  workspaceSource:      'default',
+};
+
+async function realGetUserSettings(): Promise<UserSettings> {
+  const res = await fetch('/api/user/settings');
+  if (!res.ok) throw new Error(`User settings fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function realPutUserSettings(patch: UserSettingsPatch): Promise<UserSettings> {
+  const res = await fetch('/api/user/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`User settings save failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function mockGetUserSettings(): Promise<UserSettings> {
+  await wait(50);
+  return { ...MOCK_USER_SETTINGS };
+}
+
+async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettings> {
+  await wait(50);
+  /* Strip read-only fields a misbehaving caller might submit so the mock
+     path enforces the same invariant as the server. */
+  const { displayName, defaultAnalysisModel, defaultTtsEngine, defaultTtsModelKey,
+          analyzerMode, sidecarUrl, workspaceDirOverride } = patch;
+  Object.assign(MOCK_USER_SETTINGS, Object.fromEntries(
+    Object.entries({ displayName, defaultAnalysisModel, defaultTtsEngine,
+                     defaultTtsModelKey, analyzerMode, sidecarUrl, workspaceDirOverride })
+      .filter(([, v]) => v !== undefined),
+  ));
+  return { ...MOCK_USER_SETTINGS };
+}
+
 async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   /* Mocks pretend everything's healthy — generation is local and synchronous
      under VITE_USE_MOCKS=true, so there's no real sidecar to probe. */
@@ -732,6 +785,8 @@ async function mockGetSidecarHealth(): Promise<SidecarHealth> {
 /* Chapter audio + revisions polling stay mocked for now — both belong to the
    playback slice that comes after this one. */
 const real = {
+  getUserSettings:   realGetUserSettings,
+  putUserSettings:   realPutUserSettings,
   getLibrary:        realGetLibrary,
   getVoices:         realGetVoices,
   setVoicePin:       realSetVoicePin,
@@ -765,6 +820,8 @@ const real = {
 };
 
 const mock = {
+  getUserSettings:   mockGetUserSettings,
+  putUserSettings:   mockPutUserSettings,
   getLibrary:        mockGetLibrary,
   getVoices:         mockGetVoices,
   setVoicePin:       mockSetVoicePin,

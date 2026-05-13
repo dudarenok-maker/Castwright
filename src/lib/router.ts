@@ -7,6 +7,7 @@ import type { Stage } from './types';
      #/new                               → { kind: 'upload' }
      #/voices                            → { kind: 'voices' }
      #/log                               → { kind: 'changelog' }
+     #/account                           → { kind: 'account' }
      #/books/:bookId/analysing           → { kind: 'analysing', bookId }
      #/books/:bookId/confirm             → { kind: 'confirm',   bookId }
      #/books/:bookId/:view?chapter=&profile=
@@ -20,6 +21,7 @@ export function stageToHash(stage: Stage | null | undefined): string {
     case 'upload':    return '#/new';
     case 'voices':    return '#/voices';
     case 'changelog': return '#/log';
+    case 'account':   return '#/account';
     case 'analysing': return stage.bookId ? `#/books/${stage.bookId}/analysing` : '#/new';
     case 'confirm':   return `#/books/${stage.bookId}/confirm`;
     case 'ready': {

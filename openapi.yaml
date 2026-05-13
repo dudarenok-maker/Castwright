@@ -25,6 +25,47 @@ servers:
 # Paths
 # ---------------------------------------------------------------------
 paths:
+  /api/user/settings:
+    get:
+      summary: Read the user's account defaults + non-secret server overrides
+      operationId: getUserSettings
+      description: |
+        Returns the merged user-settings document. The server reads
+        `server/user-settings.json` (created on first GET with defaults) and
+        layers in env-derived read-only fields: `apiKeyStatus`,
+        `workspaceRoot`, `workspaceSource`. The Gemini API key itself is
+        never echoed back — only the binary "is something set in .env" flag.
+      responses:
+        '200':
+          description: Merged settings + env-derived status fields
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+    put:
+      summary: Update the user's account defaults + non-secret server overrides
+      operationId: putUserSettings
+      description: |
+        Partial update. Only the writable fields from the request body are
+        persisted; `apiKeyStatus`, `workspaceRoot`, `workspaceSource` are
+        derived and silently ignored if submitted. Any field named
+        `geminiApiKey` (or similar secret-shaped key) is also dropped — the
+        API key never leaves `server/.env`. Changes to `analyzerMode` and
+        `sidecarUrl` take effect on the next request; `workspaceDirOverride`
+        is persisted but requires a server restart to apply.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserSettingsPatch' }
+      responses:
+        '200':
+          description: Updated settings (same shape as GET)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '400':
+          description: Malformed body (failed schema validation)
+
   /api/workspace/changelog:
     get:
       summary: Aggregated change log across every book in the workspace
@@ -371,6 +412,105 @@ paths:
 # ---------------------------------------------------------------------
 components:
   schemas:
+
+    # --- User settings ----------------------------------------------
+    UserSettings:
+      type: object
+      required:
+        - displayName
+        - defaultAnalysisModel
+        - defaultTtsEngine
+        - defaultTtsModelKey
+        - analyzerMode
+        - sidecarUrl
+        - apiKeyStatus
+        - workspaceRoot
+        - workspaceSource
+      properties:
+        displayName:
+          type: string
+          description: |
+            Free-text name shown in the top-bar avatar and used as the
+            author of editorial actions in the change log. Seeded to a
+            placeholder on first run; user can edit any time.
+        defaultAnalysisModel:
+          type: string
+          description: |
+            Analysis model id from src/lib/models.ts MODEL_OPTIONS. Used as
+            the initial value of ui.selectedModel when a book has no
+            persisted analysis-model choice (seed-only; per-book picks win
+            after).
+        defaultTtsEngine:
+          type: string
+          enum: [local, gemini]
+          description: |
+            Frontend engine group from src/lib/tts-models.ts (TtsEngineId).
+            Used to filter the model dropdown's initial state.
+        defaultTtsModelKey:
+          type: string
+          enum: [coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          description: |
+            TTS model key from src/lib/tts-models.ts. Used as the initial
+            value of ui.ttsModelKey when a book has no persisted TTS-model
+            choice (seed-only).
+        analyzerMode:
+          type: string
+          enum: [manual, gemini]
+          description: |
+            Overrides the ANALYZER env var. Re-read by selectAnalyzer() on
+            every request, so changes take effect without a server restart.
+        sidecarUrl:
+          type: string
+          description: |
+            Overrides the LOCAL_TTS_URL env var. Re-read on every request
+            by the sidecar provider + health probe.
+        workspaceDirOverride:
+          type: string
+          nullable: true
+          description: |
+            Optional override for the WORKSPACE_DIR env var. Read once at
+            server startup — changes require a server restart to apply
+            (UI flags this with a "restart required" badge).
+        apiKeyStatus:
+          type: string
+          enum: [set, unset]
+          readOnly: true
+          description: |
+            Whether process.env.GEMINI_API_KEY is non-empty. The key value
+            itself is never returned over the wire — the UI uses this flag
+            to render a "set in server/.env" pill.
+        workspaceRoot:
+          type: string
+          readOnly: true
+          description: Resolved absolute path of the active workspace root.
+        workspaceSource:
+          type: string
+          enum: [env, default, override]
+          readOnly: true
+          description: |
+            Where WORKSPACE_ROOT was resolved from. `override` when
+            user-settings.json's workspaceDirOverride was used at boot,
+            `env` when WORKSPACE_DIR was, `default` when the built-in
+            `../audiobook-workspace` fallback applied.
+
+    UserSettingsPatch:
+      type: object
+      description: |
+        Partial update payload. Read-only fields (apiKeyStatus,
+        workspaceRoot, workspaceSource) are ignored. Any `geminiApiKey`-
+        shaped field is dropped — the API key only lives in server/.env.
+      properties:
+        displayName:          { type: string }
+        defaultAnalysisModel: { type: string }
+        defaultTtsEngine:     { type: string, enum: [local, gemini] }
+        defaultTtsModelKey:
+          type: string
+          enum: [coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+        analyzerMode:         { type: string, enum: [manual, gemini] }
+        sidecarUrl:           { type: string }
+        workspaceDirOverride:
+          type: string
+          nullable: true
 
     # --- Library ----------------------------------------------------
     LibraryResponse:

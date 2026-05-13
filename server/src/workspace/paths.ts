@@ -5,7 +5,7 @@
    always three levels deep: <Author>/<Series>/<Book>. Standalone titles use
    a synthetic series named 'Standalones'. */
 
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,10 +15,41 @@ const SERVER_ROOT = resolve(__dirname, '..', '..');
 /* WORKSPACE_DIR resolves relative to server/ (where .env lives). The default
    lands inside the repo at <repo>/audiobook-workspace/, so opening the
    project in a file browser surfaces the library too. Override to put it
-   anywhere — absolute paths are honoured as-is. */
+   anywhere — absolute paths are honoured as-is.
+
+   Resolution precedence (boot-time only — restart required to change):
+     1. user-settings.json `workspaceDirOverride` (synchronous best-effort read)
+     2. WORKSPACE_DIR env var
+     3. built-in `../audiobook-workspace` default
+   This is read once at module load — `WORKSPACE_ROOT` is a const export
+   the rest of the server caches via destructuring, so mutating it mid-process
+   would corrupt path resolution. The UI flags edits as "restart required". */
 const ENV_DIR = process.env.WORKSPACE_DIR?.trim();
-export const WORKSPACE_ROOT = resolve(SERVER_ROOT, ENV_DIR && ENV_DIR.length > 0 ? ENV_DIR : '../audiobook-workspace');
+const OVERRIDE_DIR = readBootOverride();
+const RESOLVED_DIR = OVERRIDE_DIR ?? (ENV_DIR && ENV_DIR.length > 0 ? ENV_DIR : '../audiobook-workspace');
+export const WORKSPACE_ROOT = resolve(SERVER_ROOT, RESOLVED_DIR);
 export const BOOKS_ROOT = join(WORKSPACE_ROOT, 'books');
+export const WORKSPACE_SOURCE: 'env' | 'default' | 'override' =
+  OVERRIDE_DIR ? 'override' : (ENV_DIR && ENV_DIR.length > 0 ? 'env' : 'default');
+
+/* Sync best-effort read of user-settings.json so the boot-time workspace
+   resolution can honour an override without an async dance. A missing or
+   malformed file falls through to env/default — never blocks startup. */
+function readBootOverride(): string | null {
+  try {
+    /* Synchronous read so this can run inline during module load without
+       blocking ESM hoisting on a top-level await. The file is small
+       (a few hundred bytes); missing or malformed falls through silently. */
+    const path = join(SERVER_ROOT, 'user-settings.json');
+    if (!existsSync(path)) return null;
+    const raw = readFileSync(path, 'utf8');
+    const parsed = JSON.parse(raw) as { workspaceDirOverride?: unknown };
+    const override = parsed?.workspaceDirOverride;
+    return typeof override === 'string' && override.trim().length > 0 ? override.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 export function ensureWorkspace(): void {
   mkdirSync(BOOKS_ROOT, { recursive: true });

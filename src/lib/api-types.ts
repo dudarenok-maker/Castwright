@@ -4,6 +4,63 @@
  */
 
 export interface paths {
+    "/api/user/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the user's account defaults + non-secret server overrides
+         * @description Returns the merged user-settings document. The server reads
+         *     `server/user-settings.json` (created on first GET with defaults) and
+         *     layers in env-derived read-only fields: `apiKeyStatus`,
+         *     `workspaceRoot`, `workspaceSource`. The Gemini API key itself is
+         *     never echoed back — only the binary "is something set in .env" flag.
+         */
+        get: operations["getUserSettings"];
+        /**
+         * Update the user's account defaults + non-secret server overrides
+         * @description Partial update. Only the writable fields from the request body are
+         *     persisted; `apiKeyStatus`, `workspaceRoot`, `workspaceSource` are
+         *     derived and silently ignored if submitted. Any field named
+         *     `geminiApiKey` (or similar secret-shaped key) is also dropped — the
+         *     API key never leaves `server/.env`. Changes to `analyzerMode` and
+         *     `sidecarUrl` take effect on the next request; `workspaceDirOverride`
+         *     is persisted but requires a server restart to apply.
+         */
+        put: operations["putUserSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workspace/changelog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Aggregated change log across every book in the workspace
+         * @description Fans out `.audiobook/change-log.json` from every book in the workspace,
+         *     attaches `bookId`, `bookTitle`, and `author` to each event, and returns
+         *     the flattened list sorted newest-first. Books without an on-disk
+         *     change-log are skipped. Backs the global Change Log view.
+         */
+        get: operations["getWorkspaceChangelog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/library": {
         parameters: {
             query?: never;
@@ -270,6 +327,85 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        UserSettings: {
+            /**
+             * @description Free-text name shown in the top-bar avatar and used as the
+             *     author of editorial actions in the change log. Seeded to a
+             *     placeholder on first run; user can edit any time.
+             */
+            displayName: string;
+            /**
+             * @description Analysis model id from src/lib/models.ts MODEL_OPTIONS. Used as
+             *     the initial value of ui.selectedModel when a book has no
+             *     persisted analysis-model choice (seed-only; per-book picks win
+             *     after).
+             */
+            defaultAnalysisModel: string;
+            /**
+             * @description Frontend engine group from src/lib/tts-models.ts (TtsEngineId).
+             *     Used to filter the model dropdown's initial state.
+             * @enum {string}
+             */
+            defaultTtsEngine: "local" | "gemini";
+            /**
+             * @description TTS model key from src/lib/tts-models.ts. Used as the initial
+             *     value of ui.ttsModelKey when a book has no persisted TTS-model
+             *     choice (seed-only).
+             * @enum {string}
+             */
+            defaultTtsModelKey: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            /**
+             * @description Overrides the ANALYZER env var. Re-read by selectAnalyzer() on
+             *     every request, so changes take effect without a server restart.
+             * @enum {string}
+             */
+            analyzerMode: "manual" | "gemini";
+            /**
+             * @description Overrides the LOCAL_TTS_URL env var. Re-read on every request
+             *     by the sidecar provider + health probe.
+             */
+            sidecarUrl: string;
+            /**
+             * @description Optional override for the WORKSPACE_DIR env var. Read once at
+             *     server startup — changes require a server restart to apply
+             *     (UI flags this with a "restart required" badge).
+             */
+            workspaceDirOverride?: string | null;
+            /**
+             * @description Whether process.env.GEMINI_API_KEY is non-empty. The key value
+             *     itself is never returned over the wire — the UI uses this flag
+             *     to render a "set in server/.env" pill.
+             * @enum {string}
+             */
+            readonly apiKeyStatus: "set" | "unset";
+            /** @description Resolved absolute path of the active workspace root. */
+            readonly workspaceRoot: string;
+            /**
+             * @description Where WORKSPACE_ROOT was resolved from. `override` when
+             *     user-settings.json's workspaceDirOverride was used at boot,
+             *     `env` when WORKSPACE_DIR was, `default` when the built-in
+             *     `../audiobook-workspace` fallback applied.
+             * @enum {string}
+             */
+            readonly workspaceSource: "env" | "default" | "override";
+        };
+        /**
+         * @description Partial update payload. Read-only fields (apiKeyStatus,
+         *     workspaceRoot, workspaceSource) are ignored. Any `geminiApiKey`-
+         *     shaped field is dropped — the API key only lives in server/.env.
+         */
+        UserSettingsPatch: {
+            displayName?: string;
+            defaultAnalysisModel?: string;
+            /** @enum {string} */
+            defaultTtsEngine?: "local" | "gemini";
+            /** @enum {string} */
+            defaultTtsModelKey?: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            /** @enum {string} */
+            analyzerMode?: "manual" | "gemini";
+            sidecarUrl?: string;
+            workspaceDirOverride?: string | null;
+        };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];
         };
@@ -539,6 +675,33 @@ export interface components {
                 sentenceId?: number;
             }[];
         };
+        ChangeLogEvent: {
+            /** @description Monotonic id, usually now.getTime() at write time. */
+            id: number;
+            /**
+             * Format: date-time
+             * @description ISO timestamp; absent on hand-authored fixture entries.
+             */
+            at?: string;
+            /** @description Human-readable relative time ("Just now", "2 min ago"). Recomputed on render. */
+            ts: string;
+            /** @enum {string} */
+            date: "today" | "yesterday" | "earlier";
+            /** @enum {string} */
+            type: "regenerate" | "voice_tune" | "voice_reuse" | "voice_lock" | "boundary_move" | "chapter_complete" | "chapter_failed" | "generation_started" | "cast_confirm" | "analysis_complete" | "import" | "library_add";
+            title: string;
+            note: string;
+            /** @enum {string} */
+            actor: "you" | "system";
+            /** @description Bound to chapter scope when applicable. Reparse drops every event that carries this field. */
+            chapterId?: number;
+            revertible?: boolean;
+        };
+        WorkspaceChangeLogEvent: components["schemas"]["ChangeLogEvent"] & {
+            bookId: string;
+            bookTitle: string;
+            author: string;
+        };
         RevisionsResponse: {
             pending?: components["schemas"]["Revision"][];
             drift?: components["schemas"]["DriftEvent"][];
@@ -651,6 +814,79 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getUserSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Merged settings + env-derived status fields */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+        };
+    };
+    putUserSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserSettingsPatch"];
+            };
+        };
+        responses: {
+            /** @description Updated settings (same shape as GET) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description Malformed body (failed schema validation) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getWorkspaceChangelog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace-wide editorial activity feed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        events: components["schemas"]["WorkspaceChangeLogEvent"][];
+                    };
+                };
+            };
+        };
+    };
     getLibrary: {
         parameters: {
             query?: never;

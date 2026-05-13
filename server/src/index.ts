@@ -26,9 +26,11 @@ import { generationRouter } from './routes/generation.js';
 import { chapterAudioRouter } from './routes/chapter-audio.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
 import { workspaceRouter } from './routes/workspace.js';
+import { userSettingsRouter } from './routes/user-settings.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, ensureWorkspace } from './workspace/paths.js';
+import { readUserSettings, getResolvedSidecarUrl } from './workspace/user-settings.js';
 
 const app = express();
 
@@ -41,6 +43,11 @@ mkdirSync(resolve(AUDIO_DIR, 'voices'), { recursive: true });
 app.use('/audio', express.static(AUDIO_DIR, { fallthrough: true, maxAge: '1h' }));
 
 ensureWorkspace();
+/* Warm the user-settings cache so sync resolvers (getResolvedAnalyzerMode /
+   getResolvedSidecarUrl) see real values from disk before the first request
+   lands. Fire-and-forget: a missing or malformed file falls through to
+   defaults inside readUserSettings(). */
+void readUserSettings();
 app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, maxAge: '1h' }));
 
 app.get('/api/health', (_req, res) => {
@@ -48,6 +55,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.use('/api/workspace', workspaceRouter); // GET / (metadata) + GET /changelog (cross-book aggregator)
+app.use('/api/user/settings', userSettingsRouter); // GET + PUT — account defaults + non-secret env overrides
 app.use('/api/library', libraryRouter);
 app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);
@@ -103,6 +111,6 @@ app.listen(PORT, () => {
 
      Fire-and-forget — we don't block app.listen on the sidecar being
      up, and runCatalogAudit never throws (it logs a warning on timeout). */
-  const sidecarUrl = (process.env.LOCAL_TTS_URL ?? 'http://localhost:9000').replace(/\/+$/, '');
+  const sidecarUrl = getResolvedSidecarUrl();
   void runCatalogAudit({ sidecarUrl });
 });

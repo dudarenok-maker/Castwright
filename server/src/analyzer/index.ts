@@ -7,6 +7,7 @@
 import type { Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import { ManualAnalyzer } from './manual.js';
 import { GeminiAnalyzer } from './gemini.js';
+import { getResolvedAnalyzerMode } from '../workspace/user-settings.js';
 
 export interface StageCall {
   onWaiting?: (elapsedMs: number) => void;
@@ -29,7 +30,10 @@ export interface SelectAnalyzerOptions {
 }
 
 export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): Analyzer {
-  const mode = (process.env.ANALYZER ?? 'manual').toLowerCase();
+  /* Precedence: user-settings.json `analyzerMode` (live-reloaded) →
+     ANALYZER env var → 'manual'. Switching modes in the Account view
+     takes effect on the next request — no server restart needed. */
+  const mode = getResolvedAnalyzerMode();
   if (mode === 'gemini') {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -37,9 +41,6 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): Analyzer {
     }
     const model = opts.model ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
     return new GeminiAnalyzer({ apiKey, model });
-  }
-  if (mode !== 'manual') {
-    throw new Error(`Unknown ANALYZER mode: ${mode}. Expected 'manual' or 'gemini'.`);
   }
   return new ManualAnalyzer();
 }

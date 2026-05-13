@@ -45,6 +45,11 @@ server/handoff/cache/*
 !server/handoff/cache/.gitkeep
 server/dist/
 
+# Per-user account defaults + non-secret env overrides. Auto-created on
+# first GET /api/user/settings; holds display name, default models,
+# analyzer mode, sidecar URL, workspace override. Belongs-to-the-user data.
+server/user-settings.json
+
 # Local TTS sidecar — Python venv + downloaded model weights stay local.
 # Source files (main.py, requirements.txt, README.md, start.ps1) are tracked;
 # everything below is build/runtime state only.
