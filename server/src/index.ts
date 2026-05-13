@@ -2,13 +2,13 @@
    Implements the upload + analysis + voice-match slice of the OpenAPI spec.
    Frontend (Vite, :5173) proxies /api/* to this server (:8080) — see vite.config.ts. */
 
-// Load server/.env (Node 20.6+ native; no dotenv dep). Missing file is fine —
-// fall back to shell env. Logs at info level so absent prod env isn't silent.
-try {
-  process.loadEnvFile('.env');
-} catch {
-  console.info('[server] no .env file; using process env');
-}
+/* MUST be the first import: it runs `process.loadEnvFile('.env')` as a
+   top-level side effect, populating `process.env` before any downstream
+   module in the graph evaluates. Without this, ESM hoisting means imports
+   like `./workspace/paths.js` capture an empty `process.env.WORKSPACE_DIR`
+   even though `.env` sets it — yielding the silent "stale workspace root"
+   bug that recreates `audiobook-workspace/` inside the repo. */
+import './load-env.js';
 
 import express from 'express';
 import { mkdirSync } from 'node:fs';
