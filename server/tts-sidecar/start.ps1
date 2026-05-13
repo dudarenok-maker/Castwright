@@ -22,6 +22,12 @@ Run the one-time setup first (see server\tts-sidecar\README.md):
 $port = if ($env:LOCAL_TTS_PORT) { $env:LOCAL_TTS_PORT } else { "9000" }
 $bindHost = if ($env:LOCAL_TTS_HOST) { $env:LOCAL_TTS_HOST } else { "127.0.0.1" }
 
+# Pre-accept the Coqui Public Model License so the TTS library doesn't try to
+# prompt via input() during the first model download — which raises EOFError
+# the moment we run hidden / non-interactive (the start-app.bat path). The
+# project is local/personal-use only; see the license note in main.py:15-18.
+if (-not $env:COQUI_TOS_AGREED) { $env:COQUI_TOS_AGREED = "1" }
+
 Push-Location $here
 try {
     & $venvPython -m uvicorn main:app --host $bindHost --port $port
