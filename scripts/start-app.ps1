@@ -126,8 +126,10 @@ foreach ($svc in $toStart) {
 
 # --- Health-wait: poll until each port is listening. Test-PortListening
 # (defined above) reads the kernel TCP socket table, so it works regardless
-# of whether the service binds to 127.0.0.1, ::1, or both — Vite 5 binds
-# to ::1 only on Windows, which trips up address-specific TCP-connect probes.
+# of whether the service binds to 127.0.0.1, ::1, or both. Vite is now
+# pinned to 127.0.0.1 in vite.config.ts (host: '127.0.0.1') so Chrome's
+# IPv4-first resolution of "localhost" connects immediately; the IPv6/IPv4
+# probe-agnosticism here is belt-and-braces in case that ever changes.
 
 # XTTS cold-start on first run can take ~60-120s (model load). Be generous.
 $timeoutSec = 240
