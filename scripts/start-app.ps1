@@ -67,23 +67,19 @@ One-time setup (see server\tts-sidecar\README.md):
 "@
 }
 
-# --- Idempotency: which services are already alive? -----------------------
-function Test-PidAlive($pidPath) {
-    if (-not (Test-Path $pidPath)) { return $null }
-    $raw = (Get-Content $pidPath -Raw -ErrorAction SilentlyContinue).Trim()
-    if (-not $raw) { return $null }
-    $procId = 0
-    if (-not [int]::TryParse($raw, [ref]$procId)) { return $null }
-    $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
-    if ($p) { return $procId } else { return $null }
+# --- Idempotency: a service is "alive" iff something is listening on its
+# port. PIDs are unreliable: npm.cmd is a shim that exits after spawning
+# node, so the recorded parent PID dies seconds after launch even though
+# the real Vite/tsx node child keeps listening.
+function Test-PortListening($port) {
+    $null -ne (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
 }
 
 $toStart = @()
 foreach ($svc in $services) {
     $pidPath = Join-Path $runDir "$($svc.Name).pid"
-    $alive   = Test-PidAlive $pidPath
-    if ($alive) {
-        Write-Status "[SKIP] $($svc.Name) already running (pid $alive)"
+    if (Test-PortListening $svc.Port) {
+        Write-Status "[SKIP] $($svc.Name) already listening on :$($svc.Port)"
     } else {
         if (Test-Path $pidPath) { Remove-Item $pidPath -Force }
         $toStart += $svc
@@ -110,26 +106,10 @@ foreach ($svc in $toStart) {
     Write-Status "[START] $($svc.Name) pid=$($proc.Id) -> logs\$($svc.Name).log"
 }
 
-# --- Health-wait: poll ports until listening or timeout ------------------
-# Use a raw TCP connect against both IPv4 and IPv6 loopback. Vite 5 binds
-# to `::1` only by default on Windows, so a 127.0.0.1-only probe would
-# falsely report "not listening" even though the service is up.
-function Test-PortListening($port) {
-    foreach ($addr in @("127.0.0.1", "::1")) {
-        $client = $null
-        try {
-            $client = New-Object System.Net.Sockets.TcpClient
-            $iar = $client.BeginConnect($addr, $port, $null, $null)
-            if ($iar.AsyncWaitHandle.WaitOne(500)) {
-                $client.EndConnect($iar)
-                if ($client.Connected) { return $true }
-            }
-        } catch {} finally {
-            if ($client) { $client.Close() }
-        }
-    }
-    return $false
-}
+# --- Health-wait: poll until each port is listening. Test-PortListening
+# (defined above) reads the kernel TCP socket table, so it works regardless
+# of whether the service binds to 127.0.0.1, ::1, or both — Vite 5 binds
+# to ::1 only on Windows, which trips up address-specific TCP-connect probes.
 
 # XTTS cold-start on first run can take ~60-120s (model load). Be generous.
 $timeoutSec = 240
