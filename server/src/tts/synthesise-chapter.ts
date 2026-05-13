@@ -9,7 +9,7 @@
 import type { SentenceOutput } from '../handoff/schemas.js';
 import { pickVoiceForEngine, type VoiceLike } from './voice-mapping.js';
 import type { TtsEngine, TtsModelKey, TtsProvider } from './index.js';
-import { wavDurationSec } from './wav.js';
+import { pcmDurationSec } from './wav.js';
 
 /** Minimum surface we need from a confirmed-cast character. Matches the
     Character shape from openapi.yaml: id, voiceId, optional attributes. */
@@ -126,11 +126,11 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
       throw new Error(`Sample-rate change mid-chapter (${sampleRate} → ${result.sampleRate}). Resampling not implemented.`);
     }
 
-    const startSec = wavDurationSec(runningBytes, sampleRate);
+    const startSec = pcmDurationSec(runningBytes, sampleRate);
     const groupBytes = result.pcm.length;
     chunks.push(result.pcm);
     runningBytes += groupBytes;
-    const endSec = wavDurationSec(runningBytes, sampleRate);
+    const endSec = pcmDurationSec(runningBytes, sampleRate);
 
     segments.push({
       groupIndex: group.index,
@@ -151,7 +151,7 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
   return {
     pcm,
     sampleRate,
-    durationSec: wavDurationSec(pcm.length, sampleRate),
+    durationSec: pcmDurationSec(pcm.length, sampleRate),
     segments,
   };
 }

@@ -16,7 +16,7 @@ import {
   TTS_MODEL_LABELS,
   type TtsModelKey,
 } from '../tts/index.js';
-import { pcmToWav, wavDurationSec } from '../tts/wav.js';
+import { pcmToWav, pcmDurationSec } from '../tts/wav.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from '../tts/voice-mapping.js';
 
 export const voiceSampleRouter = Router();
@@ -123,7 +123,7 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     const { pcm, sampleRate } = await provider.synthesize({ text, voiceName, modelKey });
     const wav = pcmToWav(pcm, sampleRate);
     await writeFile(filePath, wav);
-    const durationSec = wavDurationSec(pcm.length, sampleRate);
+    const durationSec = pcmDurationSec(pcm.length, sampleRate);
     return res.json({ url: publicUrl, durationSec, cached: false, modelKey });
   } catch (err) {
     const msg = (err as Error).message ?? 'TTS synthesis failed.';
