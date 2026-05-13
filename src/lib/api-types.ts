@@ -209,7 +209,9 @@ export interface paths {
          *     into a deduplicated voice library. There is no separate voice store —
          *     a "voice" is the reusable identity of a previously-cast character. The
          *     `id` matches what the TTS layer hashes for prebuilt-voice picking, so
-         *     cached samples at `/audio/voices/{id}-{modelKey}.wav` line up.
+         *     cached samples at `/audio/voices/{id}-{modelKey}-{paramHash}.wav`
+         *     line up. The trailing hash captures the synthesis inputs so attribute
+         *     edits in the profile drawer correctly bust the cache.
          */
         get: operations["getVoices"];
         put?: never;

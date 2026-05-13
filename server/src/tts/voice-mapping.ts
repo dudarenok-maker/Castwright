@@ -155,13 +155,18 @@ function describeVoice(engine: TtsEngine, name: string): string {
 }
 
 function inferProfile(voice: VoiceLike, hint?: CharacterHint): VoiceProfile {
-  /* Narrator is its own thing — match by id or by name so generated and
-     library voices both land in the narrator bucket. */
+  /* Narrator is its own bucket — *unless* the user explicitly chose Male
+     or Female in the profile drawer, in which case the dropdown wins and
+     we route through the regular gender×register pipeline. Neutral keeps
+     the narrator behaviour (regular pipeline lands there too for unknown
+     gender). Match by id or by name so generated and library voices both
+     resolve here. */
   const isNarrator =
     voice.id === 'narrator' ||
     voice.id === 'char-narrator' ||
     (voice.character ?? '').toLowerCase() === 'narrator';
-  if (isNarrator) {
+  const isExplicitlyGendered = hint?.gender === 'male' || hint?.gender === 'female';
+  if (isNarrator && !isExplicitlyGendered) {
     /* Warm narrator (high warmth + low authority) vs cool narrator
        (high authority + low emotion). */
     const t = hint?.tone;

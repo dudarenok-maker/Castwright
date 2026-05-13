@@ -66,6 +66,15 @@ function stripQuoteMarks(s: string): string {
   return s.replace(/^[“”"'‘’\s]+|[“”"'‘’\s]+$/g, '').trim();
 }
 
+/* DJB2 — short deterministic hash for cache filenames. We don't need crypto
+   strength; we just need the same (text, voiceName) to map to the same file
+   so repeat clicks hit cache, and any change to either bust it. */
+function djb2(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
 voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) => {
   const { voiceId } = req.params;
   const body = (req.body ?? {}) as { modelKey?: unknown; voice?: VoiceLike; text?: string; characterHint?: CharacterHint };
@@ -79,7 +88,16 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
   const modelKey: TtsModelKey = body.modelKey;
   const voice: VoiceLike = body.voice ?? { id: voiceId };
 
-  const fileName = `${voiceId}-${modelKey}.wav`;
+  /* Compute the synthesis inputs up front so the cache filename can include
+     a hash of (text, voiceName). Otherwise an attribute edit (gender, age,
+     tone) that picks a different prebuilt voice or evidence line would
+     silently return the previous run's audio. */
+  const engine = engineForModelKey(modelKey);
+  const text = (body.text && body.text.trim()) || buildSampleText(voice, body.characterHint);
+  const voiceName = pickVoiceForEngine(engine, voice, body.characterHint);
+  const paramHash = djb2(`${text}|${voiceName}`).toString(36).slice(0, 8);
+
+  const fileName = `${voiceId}-${modelKey}-${paramHash}.wav`;
   const filePath = resolve(AUDIO_DIR, fileName);
   const publicUrl = `/audio/voices/${fileName}`;
 
@@ -99,10 +117,7 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     });
   }
 
-  const engine = engineForModelKey(modelKey);
-  const text = (body.text && body.text.trim()) || buildSampleText(voice, body.characterHint);
-  const voiceName = pickVoiceForEngine(engine, voice, body.characterHint);
-  console.info(`[tts] ${voiceId} → ${voiceName} (engine=${engine}, model=${modelKey}, ${text.length} chars)`);
+  console.info(`[tts] ${voiceId} → ${voiceName} (engine=${engine}, model=${modelKey}, ${text.length} chars, hash=${paramHash})`);
 
   try {
     const { pcm, sampleRate } = await provider.synthesize({ text, voiceName, modelKey });
