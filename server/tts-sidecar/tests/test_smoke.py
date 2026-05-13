@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,23 +32,30 @@ import main  # noqa: E402
 class _FakeEngine(main.Engine):
     """Replaces CoquiEngine in tests so we don't load multi-gigabyte models.
     Configurable sleep simulates a slow CPU synth so the responsiveness test
-    is meaningful."""
+    is meaningful. Optional `known_speakers` exercises the
+    speaker-substitution path without requiring the real model."""
 
     name = "coqui"
 
-    def __init__(self, sleep_sec: float = 0.0) -> None:
+    def __init__(self, sleep_sec: float = 0.0, known_speakers: Optional[list[str]] = None) -> None:
         self.sleep_sec = sleep_sec
+        self.known_speakers = known_speakers
         self.calls: list[tuple[str, str, str]] = []
 
-    def synthesize(self, model: str, voice: str, text: str) -> tuple[bytes, int]:
+    def synthesize(self, model: str, voice: str, text: str) -> "main.SynthResult":
         self.calls.append((model, voice, text))
         if self.sleep_sec > 0:
             # time.sleep releases the GIL — but the point of the bug fix is
             # that even if it didn't, the event loop stays free because we
             # offload to a worker thread.
             time.sleep(self.sleep_sec)
+        # Substitution path: if known_speakers is set and `voice` isn't in it,
+        # behave like the real CoquiEngine and substitute.
+        substituted_from = None
+        if self.known_speakers is not None and voice not in self.known_speakers:
+            substituted_from = voice
         # Trivial PCM payload: one int16 zero sample.
-        return b"\x00\x00", 24000
+        return main.SynthResult(pcm=b"\x00\x00", sample_rate=24000, substituted_from=substituted_from)
 
 
 @pytest.fixture
@@ -133,3 +141,42 @@ def test_health_responsive_during_busy_synth(client: TestClient) -> None:
     synth_thread.join(timeout=5.0)
     assert not synth_thread.is_alive(), "synth thread never finished"
     assert len(fake.calls) == 1, "synth fake should have been called exactly once"
+
+
+def test_synthesize_returns_substitution_header_when_voice_unknown(monkeypatch):
+    """The 'index out of range in self' regression. When the Node-side voice
+    catalog drifts ahead of the model's actual speaker manifest, /synthesize
+    must NOT propagate XTTS's cryptic PyTorch error — it should substitute a
+    safe fallback voice, complete the synth, and signal the substitution via
+    a response header so the upstream can warn that its catalog is stale.
+
+    Uses a fake engine that simulates the same substitution logic without
+    requiring the real model. The actual CoquiEngine path (snapshot speakers
+    at load, validate at synth time) is exercised in the production path."""
+    fake = _FakeEngine(known_speakers=["Claribel Dervla", "Ana Florence"])
+    monkeypatch.setitem(main.ENGINES, "coqui", fake)
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/synthesize",
+            json={"engine": "coqui", "model": "xtts_v2", "voice": "Wulf Carlevaro", "text": "Hi."},
+        )
+    assert r.status_code == 200, r.text
+    # The synth completed (so the chapter doesn't fail), and the substitution
+    # is visible in the header so the Node side can log it.
+    assert r.headers.get("X-Voice-Substituted-From") == "Wulf Carlevaro"
+
+
+def test_speakers_endpoint_returns_manifest(monkeypatch):
+    """/speakers exposes the loaded model's speaker list — useful for
+    diagnosing catalog drift without sshing into the box and poking the
+    speaker manager directly."""
+    fake = _FakeEngine()
+    fake_speakers = ["Ana Florence", "Asya Anara", "Claribel Dervla"]
+    # The fake's _speakers attribute mirrors the real CoquiEngine field. We
+    # set it directly so the /speakers route reads back a known list.
+    fake._speakers = fake_speakers  # type: ignore[attr-defined]
+    monkeypatch.setitem(main.ENGINES, "coqui", fake)
+    with TestClient(main.app) as client:
+        r = client.get("/speakers")
+    assert r.status_code == 200
+    assert r.json() == {"coqui": fake_speakers}
