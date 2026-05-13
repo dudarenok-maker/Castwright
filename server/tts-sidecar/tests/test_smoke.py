@@ -29,15 +29,20 @@ if str(SIDECAR_ROOT) not in sys.path:
 import main  # noqa: E402
 
 
-class _FakeEngine(main.Engine):
+class _FakeEngine(main.CoquiEngine):
     """Replaces CoquiEngine in tests so we don't load multi-gigabyte models.
     Configurable sleep simulates a slow CPU synth so the responsiveness test
     is meaningful. Optional `known_speakers` exercises the
-    speaker-substitution path without requiring the real model."""
+    speaker-substitution path without requiring the real model.
+
+    Subclasses CoquiEngine (not just Engine) so the /speakers route's
+    `isinstance(coqui, CoquiEngine)` gate is satisfied and the fake's
+    `_speakers` attribute is reachable from the route handler."""
 
     name = "coqui"
 
     def __init__(self, sleep_sec: float = 0.0, known_speakers: Optional[list[str]] = None) -> None:
+        super().__init__()
         self.sleep_sec = sleep_sec
         self.known_speakers = known_speakers
         self.calls: list[tuple[str, str, str]] = []
@@ -164,6 +169,91 @@ def test_synthesize_returns_substitution_header_when_voice_unknown(monkeypatch):
     # The synth completed (so the chapter doesn't fail), and the substitution
     # is visible in the header so the Node side can log it.
     assert r.headers.get("X-Voice-Substituted-From") == "Wulf Carlevaro"
+
+
+class _FakeTorchCuda:
+    """Minimal stub of torch.cuda exposing only `is_available()`."""
+
+    def __init__(self, available: bool) -> None:
+        self._available = available
+
+    def is_available(self) -> bool:
+        return self._available
+
+
+class _FakeTorch:
+    """Minimal stub of the torch module; only `.cuda.is_available()` is read
+    by `CoquiEngine._resolve_runtime_options`. Lets the resolver tests exercise
+    real env-var → runtime-config logic without loading the ~3 GB XTTS model
+    or requiring PyTorch in the test venv."""
+
+    def __init__(self, cuda_available: bool) -> None:
+        self.cuda = _FakeTorchCuda(cuda_available)
+
+
+def test_resolve_runtime_options_cpu_default(monkeypatch):
+    """CPU box, no env overrides → device=cpu, half/deepspeed both forced off.
+    fp16 ops crash on CPU torch and deepspeed-inference is CUDA-only, so the
+    resolver must never let them through on a CPU device, even if the user
+    set COQUI_HALF=1 by mistake."""
+    monkeypatch.delenv("COQUI_DEVICE", raising=False)
+    monkeypatch.delenv("COQUI_HALF", raising=False)
+    monkeypatch.delenv("COQUI_DEEPSPEED", raising=False)
+    engine = main.CoquiEngine()
+    opts = engine._resolve_runtime_options(_FakeTorch(cuda_available=False))
+    assert opts == {"device": "cpu", "half": False, "deepspeed": False}
+
+
+def test_resolve_runtime_options_cuda_defaults_on(monkeypatch):
+    """CUDA available, no env overrides → device=cuda, half=True, deepspeed=True.
+    The whole point of the GPU install path is that the speedup knobs default
+    on; users shouldn't have to know about them to get the win."""
+    monkeypatch.delenv("COQUI_DEVICE", raising=False)
+    monkeypatch.delenv("COQUI_HALF", raising=False)
+    monkeypatch.delenv("COQUI_DEEPSPEED", raising=False)
+    engine = main.CoquiEngine()
+    opts = engine._resolve_runtime_options(_FakeTorch(cuda_available=True))
+    assert opts == {"device": "cuda", "half": True, "deepspeed": True}
+
+
+def test_resolve_runtime_options_env_overrides_off(monkeypatch):
+    """COQUI_HALF=0 / COQUI_DEEPSPEED=0 force the extras off even on CUDA.
+    Escape hatch for the rare voice that degrades in fp16 or a deepspeed
+    install that misbehaves — flip the env, restart the sidecar, recover."""
+    monkeypatch.setenv("COQUI_DEVICE", "cuda")
+    monkeypatch.setenv("COQUI_HALF", "0")
+    monkeypatch.setenv("COQUI_DEEPSPEED", "0")
+    engine = main.CoquiEngine()
+    opts = engine._resolve_runtime_options(_FakeTorch(cuda_available=True))
+    assert opts == {"device": "cuda", "half": False, "deepspeed": False}
+
+
+def test_resolve_runtime_options_cpu_forced_ignores_extras(monkeypatch):
+    """COQUI_DEVICE=cpu pins device=cpu and forces extras off regardless of
+    their env values. Prevents a CPU user from triggering a runtime crash by
+    leaving COQUI_HALF=1 in their .env after switching machines."""
+    monkeypatch.setenv("COQUI_DEVICE", "cpu")
+    monkeypatch.setenv("COQUI_HALF", "1")
+    monkeypatch.setenv("COQUI_DEEPSPEED", "1")
+    engine = main.CoquiEngine()
+    opts = engine._resolve_runtime_options(_FakeTorch(cuda_available=True))
+    assert opts == {"device": "cpu", "half": False, "deepspeed": False}
+
+
+def test_parse_bool_accepts_common_truthy_falsy_values():
+    """The env-var parser tolerates the obvious variants so a user editing
+    .env doesn't trip on case or whitespace."""
+    assert main._parse_bool("1", default=False) is True
+    assert main._parse_bool("true", default=False) is True
+    assert main._parse_bool("YES", default=False) is True
+    assert main._parse_bool(" On ", default=False) is True
+    assert main._parse_bool("0", default=True) is False
+    assert main._parse_bool("false", default=True) is False
+    assert main._parse_bool("OFF", default=True) is False
+    # Unknown / empty / None → fall back to default.
+    assert main._parse_bool(None, default=True) is True
+    assert main._parse_bool("", default=False) is False
+    assert main._parse_bool("maybe", default=True) is True
 
 
 def test_speakers_endpoint_returns_manifest(monkeypatch):

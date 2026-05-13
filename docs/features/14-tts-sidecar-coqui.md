@@ -19,6 +19,7 @@ Default local TTS provider. A separate process (Python-based Coqui XTTS v2 serve
 - Sidecar abstraction lives in `server/src/tts/sidecar.ts`. Adding a Piper or Kokoro sidecar means adding a new provider class in `server/src/tts/index.ts` that targets a different endpoint; the client interface (`POST /api/voices/.../sample` with `modelKey`) does not change.
 - **`/synthesize` MUST offload to `asyncio.to_thread`** (`server/tts-sidecar/main.py`). XTTS inference is CPU-bound Python and blocks the event loop if run inline — `/health` then can't respond, and the Node-side proxy timeout flips the UI pill to "Sidecar unreachable" the moment generation starts even though the sidecar is healthy. Pinned by `tests/test_smoke.py::test_health_responsive_during_busy_synth`.
 - **Coqui preloads at process startup** (`@app.on_event("startup")`) so the first user `/synthesize` doesn't pay the 30–60s model-load cost on top of the synth. Opt out with `PRELOAD_COQUI=0`. Without preload, the first generate looks like a 120s hang on the Generate screen (stall banner fires at 30s).
+- **Device, fp16, and DeepSpeed are env-driven at first load** (`CoquiEngine._resolve_runtime_options` in `server/tts-sidecar/main.py`). `COQUI_DEVICE` (default `auto`) picks `cuda` vs `cpu`; `COQUI_HALF` and `COQUI_DEEPSPEED` default ON when device resolves to `cuda` and are **forced off on cpu** (fp16 ops crash on CPU torch; deepspeed-inference is CUDA-only). The chosen config is logged on the startup line (`Loading Coqui model=… on device=… half=… deepspeed=…`) so the user can confirm GPU mode from `logs/tts.log`. Pinned by `tests/test_smoke.py::test_resolve_runtime_options_*`.
 
 ## Acceptance walkthrough
 
@@ -32,6 +33,7 @@ Run server with `VITE_USE_MOCKS=false`. Start the sidecar separately (`npm run t
 6. **Disk full** — fill the audio cache disk. Request fails at the cache-write step; the SSE stream surfaces the I/O error.
 7. **Health stays green during synth** — start a long chapter (Bonus Keefe Story Ch 1, 10+ lines on the narrator). The Generate-screen sidecar pill stays green throughout the synth call. If it flips to red the moment generation starts, `/synthesize` is blocking the event loop — check it still uses `asyncio.to_thread`. Pytest pin: `cd server/tts-sidecar && .\.venv\Scripts\python.exe -m pytest`.
 8. **First synth is fast** — after a clean `npm run tts:sidecar`, the first chapter's first group lands a synth response within seconds, not minutes. The preload at startup is what makes this true.
+9. **GPU mode is live (NVIDIA boxes only)** — after the README's "GPU install" + `COQUI_DEVICE=cuda` / `COQUI_HALF=1` / `COQUI_DEEPSPEED=1` in `server/.env`, restart the sidecar. The first startup log line shows `device=cuda half=True deepspeed=True`, followed by `DeepSpeed inference enabled.` and `Model cast to fp16.`. While a chapter synth is in flight, `nvidia-smi` shows the venv's `python.exe` holding ~2–3 GB VRAM with >50% GPU-Util, and `logs/tts.err.log` reports `Real-time factor: 0.1–0.3` per group (down from 2.5–3.7 on CPU). A 30-minute chapter drops from ~90 min wall time to ~5 min.
 
 ## KNOWN: scaffolded behavior
 
@@ -43,5 +45,5 @@ Run server with `VITE_USE_MOCKS=false`. Start the sidecar separately (`npm run t
 ## Out of scope
 
 - Sidecar-internal model swapping (Coqui vs Piper vs Kokoro) — each gets its own model key prefix and provider.
-- GPU vs CPU performance — the sidecar uses whatever it's configured with; the server doesn't care.
+- GPU vs CPU performance tuning beyond the documented env knobs — the sidecar's `COQUI_DEVICE` / `COQUI_HALF` / `COQUI_DEEPSPEED` cover the common path; bespoke kernel tuning is out of scope. The Node side reads no device info.
 - Streaming PCM — the sidecar returns a whole utterance per call.
