@@ -38,12 +38,23 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     const { bookDir, state } = located;
     const cast      = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
     let   edits     = await readJson<{ sentences?: unknown[] }>(manuscriptEditsJsonPath(bookDir));
-    const revs      = await readJson<{ pending?: unknown[]; drift?: unknown[] }>(revisionsJsonPath(bookDir));
+    const revs      = await readJson<{ pending?: unknown[]; drift?: unknown[]; dismissed?: string[] }>(revisionsJsonPath(bookDir));
     const changeLog = await readJson<{ events?: unknown[] }>(changeLogJsonPath(bookDir));
 
     /* Fallback for books whose stage 2 ran on older code (or hasn't fully
        finished yet): pull the per-chapter sentences from the analysis cache
        so the manuscript view shows real text instead of mock fixtures.
+
+       When edits and cache BOTH exist, reconcile: keep edits whose sentence
+       id still appears in the cache (the user's reassignment / split is
+       still valid), and keep edits whose id is greater than the cache's
+       max id (likely a user-created split offspring whose id was assigned
+       above the analyzer's range — see splitSentence's `maxId + 1` rule).
+       Drop edits whose id falls inside the cache-id range but no longer
+       exists — those are orphans from a previous chapter shape (post-reparse
+       or post-reanalyse) and silently keeping them would resurrect zombie
+       sentences in the manuscript view.
+
        Also derive the per-chapter speaker map so the Generate view's chapter
        rows can seed only the characters that actually appear in each chapter
        — without this the reducer falls back to all-cast and the pill list
@@ -51,11 +62,24 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     const chapterCharacters: Record<number, string[]> = {};
     if (state.manuscriptId) {
       const cache = await loadAnalysisCache(state.manuscriptId);
-      if ((!edits || !edits.sentences?.length)) {
-        const cachedSentences = Object.values(cache.chapters ?? {}).flat();
+      const cachedSentences = Object.values(cache.chapters ?? {}).flat();
+      if (edits && Array.isArray(edits.sentences) && edits.sentences.length > 0) {
         if (cachedSentences.length > 0) {
-          edits = { sentences: cachedSentences };
+          const cacheIds = new Set<number>();
+          let maxCacheId = 0;
+          for (const s of cachedSentences) {
+            cacheIds.add(s.id);
+            if (s.id > maxCacheId) maxCacheId = s.id;
+          }
+          const filtered = (edits.sentences as Array<{ id?: number }>).filter(s => {
+            if (typeof s?.id !== 'number') return true;       // malformed entries pass through; toolchain can deal
+            if (cacheIds.has(s.id)) return true;              // still a valid sentence
+            return s.id > maxCacheId;                         // likely a split offspring
+          });
+          edits = { sentences: filtered };
         }
+      } else if (cachedSentences.length > 0) {
+        edits = { sentences: cachedSentences };
       }
       for (const [chapterId, sentences] of Object.entries(cache.chapters ?? {})) {
         const id = Number(chapterId);
@@ -179,6 +203,12 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
    change when titles change, so old audio files no longer line up). The
    manuscript file itself is untouched.
 
+   Manuscript edits ARE preserved: the sentence ids in manuscript-edits.json
+   are reconciled against whatever sentences the next analysis run produces
+   (see the GET handler's merge). Edits whose ids survive the fresh analysis
+   carry their characterId forward; edits whose ids are dropped fall away
+   silently. The reparse logs how many edits were carried forward.
+
    Frontend confirms with the user before calling. Returns the fresh state
    so the library / open-book flow can re-hydrate without a second round-trip. */
 bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => {
@@ -191,6 +221,13 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     if (!existsSync(manuscriptPath)) {
       return res.status(409).json({ error: `Manuscript file missing on disk: ${state.manuscriptFile}` });
     }
+
+    /* Snapshot the edits file count BEFORE we clear analysis cache so the
+       change-log entry below can summarise what's carrying forward. We don't
+       touch the edits file itself — the GET-side merge reconciles ids on the
+       next book-state read once a fresh analysis populates the cache. */
+    const existingEdits = await readJson<{ sentences?: unknown[] }>(manuscriptEditsJsonPath(bookDir));
+    const preservedEditCount = Array.isArray(existingEdits?.sentences) ? existingEdits!.sentences!.length : 0;
 
     /* Read the original file as a Buffer so the parser dispatcher can route
        binary formats (PDF, EPUB) the same way the upload route does. The
@@ -219,16 +256,41 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     await writeJsonAtomic(stateJsonPath(bookDir), nextState);
 
     /* Wipe the analysis cache and any per-book state that's now stale.
-       Audio dir is removed wholesale; cast.json + manuscript-edits.json are
-       deleted so the cast view re-runs voice matching against the fresh
-       chapter list. revisions.json is kept (workspace-level pinning isn't
-       tied to chapters). */
+       Audio dir is removed wholesale; cast.json + revisions.json are deleted
+       so the cast view re-runs voice matching against the fresh chapter list
+       and stale drift events don't survive a reshuffle. manuscript-edits.json
+       is intentionally kept — its sentence ids are filtered against the next
+       analysis cache on GET, so surviving edits carry their characterId to
+       the new sentence list and the rest fall away. */
     await clearAnalysisCache(state.manuscriptId);
-    for (const p of [castJsonPath(bookDir), manuscriptEditsJsonPath(bookDir), revisionsJsonPath(bookDir)]) {
+    for (const p of [castJsonPath(bookDir), revisionsJsonPath(bookDir)]) {
       if (existsSync(p)) await rm(p, { force: true });
     }
     const ad = audioDir(bookDir);
     if (existsSync(ad)) await rm(ad, { recursive: true, force: true });
+
+    /* Append a change-log entry summarising what carried forward. The note
+       reads naturally in the Activity view; entries with no edits to preserve
+       are skipped so a vanilla reparse on a fresh book doesn't clutter the
+       log. */
+    if (preservedEditCount > 0) {
+      const logPath = changeLogJsonPath(bookDir);
+      const existingLog = await readJson<{ events?: Array<{ id?: number }> }>(logPath);
+      const prior = Array.isArray(existingLog?.events) ? existingLog!.events! : [];
+      const nextId = prior.reduce((m, e) => Math.max(m, e?.id ?? 0), 0) + 1;
+      const noun = preservedEditCount === 1 ? 'edit' : 'edits';
+      const newEntry = {
+        id: nextId,
+        at: new Date().toISOString(),
+        ts: 'Just now',
+        date: 'today',
+        type: 'reparse',
+        title: 'Re-parsed manuscript',
+        note: `Preserved ${preservedEditCount} manuscript ${noun}; ids will be reconciled against the next analysis run.`,
+        actor: 'system',
+      };
+      await writeJsonAtomic(logPath, { events: [newEntry, ...prior] });
+    }
 
     /* Refresh the in-memory ManuscriptRecord so a follow-up analysis run
        sees the new chapter bodies, not the cached pre-reparse copy. */

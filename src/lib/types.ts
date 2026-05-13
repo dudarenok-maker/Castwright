@@ -134,7 +134,7 @@ export interface BookStateResponse {
       ETA without loading the full sourceText. */
   manuscript: { wordCount: number; format: UploadResponse['format'] } | null;
   manuscriptEdits: { sentences?: Sentence[] } | null;
-  revisions: { pending?: Revision[]; drift?: DriftEvent[] } | null;
+  revisions: { pending?: Revision[]; drift?: DriftEvent[]; dismissed?: string[] } | null;
   /** Slugs of chapters that already have an audio file on disk. */
   completedSlugs: string[];
   /** chapterId → analysed speaker ids. Derived from the analysis cache and
@@ -209,7 +209,7 @@ export interface LibraryResponse {
 export type ChangeLogType =
   | 'regenerate' | 'voice_tune' | 'voice_reuse' | 'voice_lock'
   | 'boundary_move' | 'chapter_complete' | 'chapter_failed' | 'generation_started'
-  | 'cast_confirm' | 'analysis_complete' | 'import' | 'library_add';
+  | 'cast_confirm' | 'analysis_complete' | 'import' | 'library_add' | 'reparse';
 
 export interface ChangeLogEvent {
   id: number;

@@ -45,6 +45,16 @@ interface ChapterSegmentsFile {
     startSec: number;
     endSec: number;
   }>;
+  /** Per-character voice snapshot captured at synthesis time. Read by the
+      revisions route to surface drift. Older segments files (pre-snapshot
+      field) omit this; the chapter-audio route ignores it either way. */
+  characterSnapshots?: Record<string, {
+    tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
+    gender?: 'male' | 'female' | 'neutral';
+    ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+    voiceId?: string;
+    voiceEngine?: string;
+  }>;
 }
 
 export const chapterAudioRouter = Router();

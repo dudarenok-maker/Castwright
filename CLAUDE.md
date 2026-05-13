@@ -9,7 +9,10 @@ without changing component code.
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
 - `npm run test:server` — Vitest single-run for the server.
-- `npm run test:all` — frontend + server tests (matches the pre-commit hook).
+- `npm run test:scripts` — Pester 5 single-run for `scripts/lib/` PowerShell helpers
+  (log rotation/pruning). Requires Pester >= 5.0; install once with
+  `Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck`.
+- `npm run test:all` — frontend + server + PowerShell-scripts tests (matches the pre-commit hook).
 - `npm run verify` — full battery: typecheck + all tests + build (matches the pre-push hook).
 - `npm run verify:quick` — all tests, no typecheck/build (alias for `test:all`).
 - `npm run build` — production build into `dist/`.
@@ -70,7 +73,8 @@ Harnesses:
 - Frontend: `npm run test` (Vitest + jsdom + React Testing Library). Tests live next to the unit (`*.test.ts(x)`).
 - Server: `cd server && npm run test` (Vitest + node env, real-ffmpeg integration where relevant). Same colocation.
 - Sidecar (`server/tts-sidecar/`): pytest scaffold is the next coverage milestone; any new sidecar code MUST add it.
-- Top-level `npm run test:all` runs both Vitest harnesses.
+- PowerShell helpers (`scripts/lib/`): Pester 5 tests in `scripts/tests/`, invoked via `scripts/tests/run.ps1` or `npm run test:scripts`.
+- Top-level `npm run test:all` runs all three harnesses (Vitest frontend + Vitest server + Pester scripts).
 
 Canonical end-to-end manuscript for full-pipeline regression:
 `C:\Users\dudar\Downloads\the Coalfall Commission.txt` (do not commit — copyrighted).
@@ -105,6 +109,14 @@ Hooks activate automatically after `npm install` via the `prepare` script
 (husky v9 — sets `core.hooksPath` to `.husky/`). On a fresh clone, run
 `npm install` once and you're done.
 
+One additional one-time setup is required for the PowerShell-scripts harness:
+Pester >= 5.0 must be installed (Windows-bundled Pester 3.4 isn't API-compatible).
+Install once per user:
+
+  Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck
+
+`scripts/tests/run.ps1` prints this same hint if it can't find Pester 5+.
+
 Working practice:
 - Before committing anything non-trivial, run `npm run verify` — same battery
   as pre-push. Catching failures in the same turn beats catching them at
@@ -113,5 +125,7 @@ Working practice:
 - **Do not use `--no-verify` to bypass.** If a hook fails, fix the underlying
   issue (or update the regression doc + paired test if behavior intentionally
   changed — see `docs/features/INDEX.md`).
-- pytest scaffold for the Coqui sidecar (currently zero coverage; first test
-  should be a `/synthesize` smoke that mocks the model load).
+- Sidecar pytest coverage exists at `server/tts-sidecar/test_smoke.py` and
+  `server/tts-sidecar/test_synthesize.py` (22 cases). Next milestones:
+  exercise `_float_audio_to_int16_le` edge cases (clipping, mono/stereo)
+  and the DeepSpeed enable/disable lifecycle with mocked `TTS`.
