@@ -12,7 +12,7 @@ Server-sent-events stream rendering for the two-stage analysis pipeline. Phase t
 ## Invariants to preserve
 
 - Stream event union: `{ kind: 'phase' | 'log' | 'result' | 'error', ... }` (`src/lib/api.ts:397-410`). Frontend handlers must accept each kind; unknown kinds are ignored, not thrown.
-- `live` payload shape: `{ chapterIndex, totalChapters, chapterTitle, elapsedMs, estMs }` (`src/lib/api.ts:55-61`). All five fields are required when `live` is present.
+- `live` payload shape: `{ totalChapters, chapters: AnalysisLiveChapter[] }` where each in-flight chapter is `{ chapterIndex, chapterTitle, elapsedMs, estMs }` (`src/lib/api.ts:55-70`). The server emits one entry per chapter currently in flight, sorted by `chapterIndex` ascending; the UI renders one row per chapter so a stuck chapter doesn't visually mask the others making progress.
 - Request body is omitted entirely when neither `model` nor `fresh` is set; included only when one is (`src/lib/api.ts:424-429`). Do not always send a body — manual-mode servers may not parse JSON.
 - `AnalysisError` carries `code` (e.g. `'rate_limit'`, `'auth'`, `'unknown'`) and optional structured `detail` (e.g. Google's `status` + `details[]`) (`src/lib/api.ts:412-421`). UI surfaces the headline message inline and the `detail` in a collapsible block.
 - SSE frame format is `data: <json>\n\n`; multiple `data:` lines per frame join with `\n` (`src/lib/api.ts:458-468`). Do not change the splitter.
@@ -23,7 +23,7 @@ Server-sent-events stream rendering for the two-stage analysis pipeline. Phase t
 Run with `VITE_USE_MOCKS=false` (server on `:8080`, `ANALYZER=manual` or `ANALYZER=gemini`).
 
 1. **Land on `#/books/:bookId/analysing` after upload** → stream opens; phase 1 progress bar starts ticking. Log lines appear under the active phase (e.g. "Detected 23 characters across 14 chapters").
-2. **Live ETA** — during stage-2 chapter processing, the `live` block shows `"Chapter 4 of 14 — Mara at the Cliff · 32s elapsed / ~58s est"`. The progress bar reflects `elapsedMs / estMs`.
+2. **Live ETA** — during stage-2 chapter processing, the `live` block shows one row per in-flight chapter, e.g. `"Chapter 2/7 · DAY ONE · 4:15 of ~0:21 over budget"` on top of `"Chapter 7/7 · DAY SIX · 0:08 of ~2:03"`. Rows are sorted by chapter order so a slow chapter cannot hide concurrent progress.
 3. **Stream ends with a `result` event** → frontend dispatches `analysisComplete({ bookId })`; URL transitions to `#/books/:bookId/confirm`.
 4. **Force a server error** (kill the analyzer mid-stream, or hit Gemini without `GEMINI_API_KEY`) → stream emits `{ kind: 'error', code, message, detail }`; UI shows the message inline with an expandable "Details" block; user can click "Start fresh" to retry.
 5. **Click "Start fresh"** from the re-parse dialog → request body includes `{ fresh: true }`; server discards cached partials and re-runs from phase 1.

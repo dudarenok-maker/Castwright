@@ -49,15 +49,19 @@ export interface UploadArgs {
   format?: 'markdown' | 'plaintext' | 'epub' | 'pdf';
 }
 /** Realtime "what's running right now" payload piggybacked on phase ticks.
-    Server emits one of these every 500ms while a stage-2 chapter is in
-    flight; the analysing view renders an elapsed-of-estimate indicator so
-    the user sees liveness even between log entries. */
-export interface AnalysisLiveInfo {
+    Server emits one of these every 500ms while any stage-2 chapter is in
+    flight; the analysing view renders one elapsed-of-estimate row per
+    in-flight chapter, so a slow chapter doesn't visually hide the chapters
+    progressing alongside it. */
+export interface AnalysisLiveChapter {
   chapterIndex: number;
-  totalChapters: number;
   chapterTitle: string;
   elapsedMs: number;
   estMs: number;
+}
+export interface AnalysisLiveInfo {
+  totalChapters: number;
+  chapters: AnalysisLiveChapter[];
 }
 export interface AnalyseOpts {
   onPhase?: (e: { phaseId: number; progress: number; live?: AnalysisLiveInfo }) => void;
