@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { castSlice, castActions } from './cast-slice';
-import type { Character, VoiceMatchResponse } from '../lib/types';
+import type { AnalyseResponse, Character, VoiceMatchResponse } from '../lib/types';
 
 const makeChar = (id: string, overrides: Partial<Character> = {}): Character => ({
   id,
@@ -102,6 +102,36 @@ describe('castSlice — lockVoice', () => {
     const start = baseState([makeChar('halloran', { voiceState: 'tuned' })]);
     const next = castSlice.reducer(start, castActions.lockVoice('not-a-character'));
     expect(next.characters[0].voiceState).toBe('tuned');
+  });
+});
+
+describe('castSlice — hydrateFromAnalysis', () => {
+  const baseAnalysis = (characters: Character[]): AnalyseResponse => ({
+    bookId: 'ns', manuscriptId: 'ms', title: 'Test', phaseTimings: [],
+    characters, chapters: [], sentences: [],
+  });
+
+  it('defaults missing voiceState to "generated" so the Cast Status column renders a pill', () => {
+    /* Regression: AnalyseResponse leaves voiceState optional, and the
+       file-drop analyser doesn't always fill it in. Without this default,
+       freshly-analysed characters land in the Cast view with the Status
+       column empty even though their voices were just generated. */
+    const { voiceState: _omit, ...narratorNoState } = makeChar('narrator');
+    const next = castSlice.reducer(
+      baseState([]),
+      castActions.hydrateFromAnalysis(baseAnalysis([
+        narratorNoState as Character,
+        makeChar('keefe', { voiceState: 'locked' }),
+      ])),
+    );
+    expect(next.characters.find(c => c.id === 'narrator')!.voiceState).toBe('generated');
+    expect(next.characters.find(c => c.id === 'keefe')!.voiceState).toBe('locked');
+  });
+
+  it('is a no-op when the response has no characters', () => {
+    const start = baseState([makeChar('halloran', { voiceState: 'tuned' })]);
+    const next = castSlice.reducer(start, castActions.hydrateFromAnalysis(baseAnalysis([])));
+    expect(next.characters).toEqual(start.characters);
   });
 });
 

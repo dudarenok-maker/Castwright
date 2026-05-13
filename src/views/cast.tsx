@@ -13,6 +13,7 @@ import { useSamplePlayback } from '../lib/use-sample-playback';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import { api, type VoiceSampleArgs } from '../lib/api';
+import { findVoiceForCharacter } from '../lib/voice-character-link';
 
 interface Props {
   characters: Character[];
@@ -150,7 +151,7 @@ export function CastView({
             <span>Tone</span><span>Status</span><span>Sample</span>
           </div>
           {filtered.map((c, i) => {
-            const voice = findVoice(c.voiceId);
+            const voice = findVoiceForCharacter(c, library);
             const ttsVoice = voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
@@ -272,7 +273,10 @@ export function CastView({
 
       {showLibrary && (
         <aside className="self-start sticky top-24">
-          <VoiceLibraryPanel library={library} draggingVoiceId={draggingVoiceId} setDraggingVoiceId={setDraggingVoiceId} compact/>
+          <VoiceLibraryPanel library={library} draggingVoiceId={draggingVoiceId} setDraggingVoiceId={setDraggingVoiceId} compact
+            characters={characters}
+            onOpenProfile={onOpenProfile}
+            onPlaySample={(c, v) => { void playSampleFor(c, v); }}/>
         </aside>
       )}
 

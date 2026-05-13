@@ -33,10 +33,16 @@ export const castSlice = createSlice({
       const next = a.payload;
       s.characters = s.characters.map(c => c.id === next.id ? { ...c, ...next } : c);
     },
-    /* From POST /api/manuscripts/:id/analysis response. */
+    /* From POST /api/manuscripts/:id/analysis response. The analyser schema
+       leaves voiceState optional, but freshly-analysed characters have, by
+       definition, just had a voice generated for them — default the field
+       so the Cast view's Status column renders the green "Generated" pill
+       instead of nothing. */
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
       const { characters } = a.payload;
-      if (characters?.length) s.characters = characters;
+      if (characters?.length) {
+        s.characters = characters.map(c => c.voiceState ? c : { ...c, voiceState: 'generated' });
+      }
     },
     /* From POST /api/books/:bookId/voice-match. */
     applyVoiceMatches: (s, a: PayloadAction<VoiceMatchResponse>) => {
