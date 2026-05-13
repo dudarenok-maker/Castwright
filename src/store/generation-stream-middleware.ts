@@ -51,8 +51,17 @@ function hasWork(chapters: Chapter[]): boolean {
 }
 
 /* The set of action types that *might* require us to open or close the SSE.
-   Other actions still pass through untouched — we only reconcile on these. */
+   Other actions still pass through untouched — we only reconcile on these.
+
+   `chapters/setChapters` and `chapters/hydrateFromAnalysis` are in here
+   because the chapters slice now starts EMPTY (was: fixture seed, which made
+   reconcile-on-openBook spuriously "see" work). Now the moment chapters
+   actually appear — either via setChapters from analysis, hydrateFromAnalysis
+   landing, or hydrateFromBookState seeding from disk — is the moment work
+   becomes scope-visible, so reconcile has to run then. */
 const TRIGGER_TYPES = new Set<string>([
+  'chapters/setChapters',
+  'chapters/hydrateFromAnalysis',
   'chapters/regenerateChapter',
   'chapters/regenerateCharacter',
   'chapters/batchRegenerateCharacters',

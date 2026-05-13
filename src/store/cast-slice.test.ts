@@ -86,3 +86,12 @@ describe('castSlice — declineMatch', () => {
     expect(next.characters).toEqual(start.characters);
   });
 });
+
+describe('castSlice — initial state (mock-leak regression)', () => {
+  it('starts with an empty characters array so the design fixture never renders for a real book', () => {
+    /* Same mock-leak bug as chaptersSlice — opening a real book briefly
+       showed fixture characters on Cast before hydrateFromAnalysis landed.
+       Keep this empty; hydration is the only legitimate source. */
+    expect(castSlice.getInitialState().characters).toEqual([]);
+  });
+});
