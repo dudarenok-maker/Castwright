@@ -159,18 +159,18 @@ function BookCard({ book, active, onOpen, onDelete, onReparse }: { book: Library
           <circle cx="60" cy="100" r="60" fill="none" stroke="white" strokeWidth="0.5"/>
           <circle cx="60" cy="100" r="40" fill="none" stroke="white" strokeWidth="0.5"/>
         </svg>
-        <div className="absolute top-4 left-4 right-4 flex items-center justify-between">
+        <div className="absolute top-5 left-5 right-5 flex items-center justify-between">
           <p className="text-[9px] uppercase tracking-[0.2em] text-white/70 font-semibold">Audiobook</p>
           {book.pinned && <IconStar className="w-3.5 h-3.5 text-white/80"/>}
         </div>
-        <div className="absolute bottom-4 left-4 right-4">
+        <div className="absolute bottom-5 left-5 right-5">
           <h3 className="font-serif text-2xl font-bold text-white leading-tight">{book.title}</h3>
           <p className="text-[10px] text-white/70 mt-1">{seriesLine}</p>
         </div>
         {active && (
-          <span className="absolute top-3 right-3 px-2 py-0.5 rounded-full bg-peach text-ink text-[10px] font-bold uppercase tracking-wider">Open</span>
+          <span className="absolute top-4 right-4 px-2 py-0.5 rounded-full bg-peach text-ink text-[10px] font-bold uppercase tracking-wider">Open</span>
         )}
-        <div ref={menuRef} className="absolute top-2.5 right-2.5">
+        <div ref={menuRef} className="absolute top-3.5 right-3.5">
           <button
             onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o); }}
             aria-label="Book options"
