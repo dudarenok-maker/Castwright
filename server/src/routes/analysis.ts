@@ -466,8 +466,10 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     log(1, `Running ${taskIndices.length} chapter${taskIndices.length === 1 ? '' : 's'} with up to ${concurrency} in parallel.`);
 
     /* Track which chapters are currently in-flight + their elapsed times so
-       the `live` payload can pick the oldest still-running chapter as the
-       canonical realtime indicator (it's the one with the longest ETA). */
+       the `live` payload can surface every running chapter — concurrency
+       means a slow chapter can be paired with newer ones racing ahead, and
+       showing only the oldest hides that progress. Sorted by chapter order
+       in the manuscript so the UI shows them in book order. */
     interface InFlight {
       chapterIndex: number;
       chapterTitle: string;
@@ -478,20 +480,22 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     const inFlight = new Map<number, InFlight>();
 
     const sendLiveTick = () => {
-      const oldest = Array.from(inFlight.values())
-        .sort((a, b) => a.startedAt - b.startedAt)[0];
+      const running = Array.from(inFlight.values())
+        .sort((a, b) => a.chapterIndex - b.chapterIndex);
       const p = Math.min(0.02 + 0.93 * (completedSet.size / totalChapters), 0.95);
       send({
         kind: 'phase',
         phaseId: 1,
         progress: p,
         label: PHASES[1].label,
-        live: oldest ? {
-          chapterIndex: oldest.chapterIndex + 1,
+        live: running.length > 0 ? {
           totalChapters,
-          chapterTitle: oldest.chapterTitle,
-          elapsedMs: oldest.elapsedMs,
-          estMs: oldest.chapterEstMs,
+          chapters: running.map(r => ({
+            chapterIndex: r.chapterIndex + 1,
+            chapterTitle: r.chapterTitle,
+            elapsedMs: r.elapsedMs,
+            estMs: r.chapterEstMs,
+          })),
         } : undefined,
       });
     };

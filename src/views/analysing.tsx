@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { IconCheck, IconRefresh, IconSpinner } from '../lib/icons';
 import { SectionLabel, MixedHeading } from '../components/primitives';
-import { api, AnalysisError, type AnalysisLiveInfo } from '../lib/api';
+import { api, AnalysisError, type AnalysisLiveInfo, type AnalysisLiveChapter } from '../lib/api';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { MODEL_OPTIONS } from '../lib/models';
 import type { AnalyseResponse } from '../lib/types';
@@ -26,31 +26,40 @@ const COMPLETED_PHASE_TAIL = 6;
 const ACTIVE_PHASE_LOG_MAX_H = 'max-h-48'; // ≈ 12rem; tuned to fit ~12 lines
 
 /* Live "what's running right now" indicator on the active phase header.
-   Server sends a `live` payload every 500ms; the displayed elapsed is
-   advanced locally between server ticks so the seconds counter never
-   visibly stalls. Server's payload is treated as ground truth on every
-   update (re-anchors the local clock). */
-function LiveChapterTicker({ live }: { live: AnalysisLiveInfo }) {
-  const [displayMs, setDisplayMs] = useState(live.elapsedMs);
-  /* Re-anchor on every fresh server tick (live identity changes via the
-     parent's setLive call). Holding our own offset against Date.now means
-     the seconds keep advancing between server ticks instead of jumping. */
+   Server sends a `live` payload every 500ms with every chapter currently
+   in flight; we render one row per chapter so a slow chapter doesn't
+   visually hide the chapters progressing alongside it. The displayed
+   elapsed is advanced locally between server ticks so the seconds counter
+   never visibly stalls — each row re-anchors to the server's elapsedMs on
+   every update. */
+function LiveChapterRow({ chapter, totalChapters }: { chapter: AnalysisLiveChapter; totalChapters: number }) {
+  const [displayMs, setDisplayMs] = useState(chapter.elapsedMs);
   useEffect(() => {
-    const baseline = Date.now() - live.elapsedMs;
+    const baseline = Date.now() - chapter.elapsedMs;
     setDisplayMs(Date.now() - baseline);
     const id = setInterval(() => setDisplayMs(Date.now() - baseline), 1000);
     return () => clearInterval(id);
-  }, [live.elapsedMs, live.chapterIndex]);
+  }, [chapter.elapsedMs, chapter.chapterIndex]);
 
-  const overBudget = displayMs > live.estMs * 1.25;
+  const overBudget = displayMs > chapter.estMs * 1.25;
   return (
-    <div className={`mt-2 inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${overBudget ? 'text-amber-700' : 'text-ink/60'}`}>
-      <span className="font-semibold">Chapter {live.chapterIndex}/{live.totalChapters}</span>
+    <div className={`inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${overBudget ? 'text-amber-700' : 'text-ink/60'}`}>
+      <span className="font-semibold">Chapter {chapter.chapterIndex}/{totalChapters}</span>
       <span className="text-ink/30">·</span>
-      <span className="truncate max-w-[220px]" title={live.chapterTitle}>{live.chapterTitle}</span>
+      <span className="truncate max-w-[220px]" title={chapter.chapterTitle}>{chapter.chapterTitle}</span>
       <span className="text-ink/30">·</span>
-      <span>{humanSecondsCompact(displayMs)} of ~{humanSecondsCompact(live.estMs)}</span>
+      <span>{humanSecondsCompact(displayMs)} of ~{humanSecondsCompact(chapter.estMs)}</span>
       {overBudget && <span className="ml-1 font-semibold">over budget</span>}
+    </div>
+  );
+}
+
+function LiveChapterTicker({ live }: { live: AnalysisLiveInfo }) {
+  return (
+    <div className="mt-2 flex flex-col gap-1">
+      {live.chapters.map(ch => (
+        <LiveChapterRow key={ch.chapterIndex} chapter={ch} totalChapters={live.totalChapters}/>
+      ))}
     </div>
   );
 }
@@ -387,7 +396,7 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
                       <div className="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
                         <div className="h-full bg-gradient-progress rounded-full" style={{ width: `${phaseProgress * 100}%` }}/>
                       </div>
-                      {live && live.chapterIndex && (
+                      {live && live.chapters.length > 0 && (
                         <LiveChapterTicker live={live}/>
                       )}
                     </>
