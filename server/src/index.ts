@@ -25,6 +25,7 @@ import { bookStateRouter } from './routes/book-state.js';
 import { generationRouter } from './routes/generation.js';
 import { chapterAudioRouter } from './routes/chapter-audio.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
+import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { WORKSPACE_ROOT, BOOKS_ROOT, ensureWorkspace } from './workspace/paths.js';
 
 const app = express();
@@ -75,4 +76,17 @@ app.listen(PORT, () => {
   console.log(`[server] listening on http://localhost:${PORT}`);
   // eslint-disable-next-line no-console
   console.log(`[server] workspace root: ${WORKSPACE_ROOT}`);
+
+  /* Background catalog audit: poll the sidecar's /speakers endpoint
+     until the XTTS v2 model has loaded, then diff our hardcoded
+     COQUI_PROFILE_VOICES (server/src/tts/voice-mapping.ts) against the
+     model's actual speaker manifest. Logs a structured summary the
+     moment it completes so any catalog drift is visible at boot
+     instead of silently substituting voices mid-chapter. Result is
+     cached and served by GET /api/sidecar/catalog-audit.
+
+     Fire-and-forget — we don't block app.listen on the sidecar being
+     up, and runCatalogAudit never throws (it logs a warning on timeout). */
+  const sidecarUrl = (process.env.LOCAL_TTS_URL ?? 'http://localhost:9000').replace(/\/+$/, '');
+  void runCatalogAudit({ sidecarUrl });
 });

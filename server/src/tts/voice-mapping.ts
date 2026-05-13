@@ -61,8 +61,14 @@ const GEMINI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
 /* XTTS v2 baked speaker names — best-effort gender/register fits from the
    Coqui speaker manifest. Two per profile so the same hash trick spreads
    neighbouring characters apart. The user can tune this catalog after a
-   listen pass; the profile inference upstream is the load-bearing part. */
-const COQUI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
+   listen pass; the profile inference upstream is the load-bearing part.
+
+   Exported (vs the parallel GEMINI_PROFILE_VOICES which is module-local)
+   so coqui-catalog-audit.ts can diff this against the model's actual
+   speaker manifest at server startup — drift between this table and the
+   model's manifest manifests as mid-chapter "index out of range in self"
+   embedding-lookup errors. The auditor surfaces the drift at boot. */
+export const COQUI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
   'male-deep':      ['Damien Black', 'Wulf Carlevaro'],
   'male-mid':       ['Aaron Dreschner', 'Viktor Menelaos'],
   'male-light':     ['Andrew Chipper', 'Royston Min'],

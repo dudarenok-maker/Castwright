@@ -5,6 +5,7 @@
    lives here. */
 
 import { Router, type Request, type Response } from 'express';
+import { getCachedCatalogAudit, runCatalogAudit } from '../tts/coqui-catalog-audit.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -50,4 +51,34 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
         : err.message || 'Sidecar fetch failed.',
     });
   }
+});
+
+/* Catalog-audit endpoint. Returns the diff between voice-mapping.ts's
+   COQUI_PROFILE_VOICES and the speaker manifest XTTS v2 actually loaded.
+   Auto-runs once at server startup; this route serves the cached result
+   so the UI / curl can read it without re-polling. Triggers a fresh
+   audit on demand if `?refresh=1` is passed or the startup audit hasn't
+   completed yet (sidecar might have been down at boot). */
+sidecarHealthRouter.get('/catalog-audit', async (req: Request, res: Response) => {
+  const url = (process.env.LOCAL_TTS_URL ?? 'http://localhost:9000').replace(/\/+$/, '');
+  const refresh = req.query.refresh === '1';
+  const cached = getCachedCatalogAudit();
+  if (cached && !refresh) {
+    return res.json({ status: 'ready', audit: cached });
+  }
+  /* Tight loop — caller is explicitly asking, so don't poll for 2 min;
+     just take one shot at the sidecar. The user can re-hit the endpoint
+     if the sidecar is still loading. */
+  const audit = await runCatalogAudit({
+    sidecarUrl: url,
+    maxAttempts: 1,
+    attemptDelayMs: 0,
+    probeTimeoutMs: 3_000,
+  });
+  if (audit) return res.json({ status: 'ready', audit });
+  return res.status(503).json({
+    status: 'pending',
+    message: 'Sidecar not responding to /speakers yet (model may still be loading).',
+    sidecarUrl: url,
+  });
 });
