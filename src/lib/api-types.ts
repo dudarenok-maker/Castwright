@@ -168,8 +168,10 @@ export interface paths {
          *     events. Mirrors the analysis route shape (`POST /api/manuscripts/{id}/
          *     analysis`). Each `data: <json>` payload follows the GenerationTick
          *     schema. Synthesises chapters one at a time; per-chapter completion
-         *     writes `audio/<chapterSlug>.wav` + `audio/<chapterSlug>.segments.json`
-         *     into the workspace book directory.
+         *     writes `audio/<chapterSlug>.mp3` + `audio/<chapterSlug>.segments.json`
+         *     into the workspace book directory. Legacy `.wav` files from chapters
+         *     generated before the MP3 switch keep playing — the locator probes
+         *     `.mp3` first, falls back to `.wav` (see plan 28).
          */
         post: operations["streamGeneration"];
         delete?: never;
@@ -209,7 +211,7 @@ export interface paths {
          *     into a deduplicated voice library. There is no separate voice store —
          *     a "voice" is the reusable identity of a previously-cast character. The
          *     `id` matches what the TTS layer hashes for prebuilt-voice picking, so
-         *     cached samples at `/audio/voices/{id}-{modelKey}-{paramHash}.wav`
+         *     cached samples at `/audio/voices/{id}-{modelKey}-{paramHash}.mp3`
          *     line up. The trailing hash captures the synthesis inputs so attribute
          *     edits in the profile drawer correctly bust the cache.
          */

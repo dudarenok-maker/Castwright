@@ -115,6 +115,3 @@ Working practice:
   changed — see `docs/features/INDEX.md`).
 - pytest scaffold for the Coqui sidecar (currently zero coverage; first test
   should be a `/synthesize` smoke that mocks the model load).
-- Move voice-sample generation (`server/src/routes/voice-sample.ts`) to MP3
-  too — currently still writes `.wav`. Same encoder boundary as chapter
-  audio; left as WAV in v1 because samples are short and in-browser only.

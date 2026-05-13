@@ -44,7 +44,7 @@ PRs that change behavior cited in a plan MUST update the relevant plan in the sa
 ### G. Generation
 - [16 — Generation stream](16-generation-stream.md) — Chapter audio SSE stream. Cross-links to plan 28 for the on-disk format.
 - [17 — Regenerate this/forward](17-regenerate-this-or-forward.md) — Per-chapter + per-character regen.
-- [28 — Chapter audio format](28-chapter-audio-format.md) — MP3 VBR V2 via ffmpeg; legacy `.wav` fallback; ffmpeg preflight in `start-app.ps1`.
+- [28 — Audio output format](28-chapter-audio-format.md) — Chapter audio + voice samples both MP3 VBR V2 via ffmpeg; legacy `.wav` fallback for chapters; ffmpeg preflight in `start-app.ps1`.
 
 ### H. Playback & listen
 - [18 — Listen view](18-listen-view.md) — Cover, chapter list, mini-player, handoff queue.

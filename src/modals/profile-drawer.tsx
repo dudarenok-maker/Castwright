@@ -380,7 +380,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onShowMatchDe
 }
 
 /* The server names cached sample files as
-   /audio/voices/{voiceId}-{modelKey}-{paramHash}.wav (see
+   /audio/voices/{voiceId}-{modelKey}-{paramHash}.mp3 (see
    server/src/routes/voice-sample.ts). We don't know the hash client-side,
    so detect "this voice's sample is currently playing" by prefix match —
    that's stable across attribute edits and the cache-busting hash. */

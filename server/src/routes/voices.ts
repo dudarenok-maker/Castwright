@@ -5,8 +5,8 @@
    in the workspace — there's no separate voice store. Each character becomes
    a reusable Voice keyed by `c.voiceId ?? c.id`, which is the same id the TTS
    layer hashes against (see server/src/tts/synthesise-chapter.ts and
-   voice-mapping.ts:pickVoiceForEngine). Cached sample WAVs live at
-   /audio/voices/{voiceId}-{modelKey}-{paramHash}.wav — the trailing hash
+   voice-mapping.ts:pickVoiceForEngine). Cached sample MP3s live at
+   /audio/voices/{voiceId}-{modelKey}-{paramHash}.mp3 — the trailing hash
    captures the synthesis inputs so attribute edits bust the cache.
 
    The aggregator stamps each voice with a `ttsVoice` assignment so the cast
