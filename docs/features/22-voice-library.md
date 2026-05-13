@@ -17,6 +17,9 @@ Cross-book view of every voice the user has confirmed. Indexed by current book (
 - Voice record: `{ id, character, bookTitle, bookId, attributes, gradient, usedIn, source: 'current' | 'library', ttsVoice }`. `source: 'current'` means "this book"; `'library'` means "another book."
 - Pinning is optimistic in the slice: dispatch `setPinned(id, true)` → UI updates immediately; PUT fires in background; on error, slice rolls back and shows a toast.
 - The same voice may appear with both `source: 'current'` and `source: 'library'` if it's been used across books; the renderer must dedupe by `id`.
+- The voices view groups cards by `bookId` — one `<section>` per book with a book-title header; the current-source book renders first, library books follow alphabetically by title. There is no per-card "Used in N book — bookTitle" footer and the bookTitle subtitle is hidden inside cards (it lives only in the section header). Cards remain self-contained — no nested-card chrome around individual voice cards.
+- Inside each section, voices sort by line count descending — `Character.lines` from the analysis when available, otherwise a count of `state.manuscript.sentences` matched by `characterId`. Library-source voices that don't belong to the open book fall back to `usedIn` descending, then character name. Implementation: `src/views/voices.tsx` `linesByVoiceId` + `groups` `useMemo`.
+- The inline pin (star) lives on the voice card itself, next to the character name + reuse pill (`src/components/voice-library-panel.tsx::VoiceCard` `onTogglePin` prop). The sidebar `VoiceLibraryPanel` (cast view) does **not** render the pin.
 
 ## Acceptance walkthrough
 
