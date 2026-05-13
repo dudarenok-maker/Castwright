@@ -7,17 +7,31 @@
    still giving us per-group timing for the future playback slice. */
 
 import type { SentenceOutput } from '../handoff/schemas.js';
-import { pickVoiceForEngine, type VoiceLike } from './voice-mapping.js';
+import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from './voice-mapping.js';
 import type { TtsEngine, TtsModelKey, TtsProvider } from './index.js';
 import { pcmDurationSec } from './wav.js';
 
-/** Minimum surface we need from a confirmed-cast character. Matches the
-    Character shape from openapi.yaml: id, voiceId, optional attributes. */
+/** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`
+    `CastJsonCharacter` and the analyzer's Character output). The hint fields
+    — description/role/gender/ageRange/tone/evidence — are what drives
+    `pickVoiceForEngine` away from the narrator fallback for non-narrator
+    characters. Dropping them here forces every character without a gendered
+    word in its name/attributes to land on narrator-cool, which manifested as
+    Elwin and Ro speaking in the narrator's voice. */
 export interface CastCharacter {
   id: string;
   name?: string;
+  role?: string;
   voiceId?: string;
   attributes?: string[];
+  description?: string;
+  gender?: 'male' | 'female' | 'neutral';
+  ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+  tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
+  /** cast.json stores evidence as `{ quote?, note? }[]`; `pickVoiceForEngine`
+      consumes a `string[]` of bare quotes. `buildHintFromCast` does the
+      flattening. */
+  evidence?: Array<{ quote?: string; note?: string } | string>;
 }
 
 export interface SentenceGroup {
@@ -96,6 +110,25 @@ function toVoiceLike(c: CastCharacter): VoiceLike {
   };
 }
 
+/** Project the cast.json shape onto the CharacterHint the voice picker wants.
+    Without this, `inferGender` falls back to the description/attribute scan
+    and almost always returns 'unknown' (the analyzer's attributes are
+    personality traits, not gendered nouns), which routes every character to
+    narrator-cool. */
+export function buildHintFromCast(c: CastCharacter): CharacterHint {
+  const evidence = (c.evidence ?? [])
+    .map(e => (typeof e === 'string' ? e : e?.quote))
+    .filter((q): q is string => typeof q === 'string' && q.length > 0);
+  return {
+    description: c.description,
+    role: c.role,
+    gender: c.gender,
+    ageRange: c.ageRange,
+    tone: c.tone,
+    evidence: evidence.length ? evidence : undefined,
+  };
+}
+
 export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<ChapterSynthesisResult> {
   const { sentences, cast, provider, modelKey, engine, onGroupComplete } = opts;
 
@@ -109,7 +142,7 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
 
   for (const group of groups) {
     const character = castById.get(group.characterId) ?? { id: group.characterId };
-    const voiceName = pickVoiceForEngine(engine, toVoiceLike(character));
+    const voiceName = pickVoiceForEngine(engine, toVoiceLike(character), buildHintFromCast(character));
 
     const result = await provider.synthesize({
       text: group.text,

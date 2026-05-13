@@ -31,9 +31,9 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import {
   resolveVoiceAssignment,
-  type CharacterHint,
   type TtsVoiceAssignment,
 } from '../tts/voice-mapping.js';
+import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine } from '../tts/index.js';
 
 export const voicesRouter = Router();
@@ -52,35 +52,8 @@ interface DerivedVoice {
   ttsVoice: TtsVoiceAssignment;
 }
 
-interface CastJsonCharacter {
-  id: string;
-  name?: string;
-  role?: string;
-  voiceId?: string;
-  attributes?: string[];
-  description?: string;
-  gender?: 'male' | 'female' | 'neutral';
-  ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
-  tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
-  evidence?: Array<{ quote?: string; note?: string }>;
-}
-
 interface CastJson {
-  characters?: CastJsonCharacter[];
-}
-
-function buildHint(c: CastJsonCharacter): CharacterHint {
-  const evidence = (c.evidence ?? [])
-    .map(e => e.quote)
-    .filter((q): q is string => typeof q === 'string' && q.length > 0);
-  return {
-    description: c.description,
-    role: c.role,
-    gender: c.gender,
-    ageRange: c.ageRange,
-    tone: c.tone,
-    evidence: evidence.length ? evidence : undefined,
-  };
+  characters?: CastCharacter[];
 }
 
 interface VoicesMetaJson {
@@ -171,7 +144,7 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
           const ttsVoice = resolveVoiceAssignment(
             engine,
             { id, character: c.name, attributes: c.attributes ?? [] },
-            buildHint(c),
+            buildHintFromCast(c),
           );
           acc.set(id, {
             id,
