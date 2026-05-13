@@ -1,12 +1,45 @@
-/* Chapters slice — generation state per chapter and per character-in-chapter. */
+/* Chapters slice — generation state per chapter and per character-in-chapter.
+
+   Source of truth for the Generate tab: chapter state, per-character status,
+   the assembling sub-phase, the live `pendingRegen` spec that gets forwarded
+   to the server's force/chapterIds payload, and a `lastError` banner for
+   stream-level failures the per-chapter slot can't represent. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { initialChapters } from '../data/chapters';
 import type { Chapter, Character, GenerationTick, AnalyseResponse, BookStateJson } from '../lib/types';
 
-export interface ChaptersState { chapters: Chapter[]; paused: boolean; }
+export interface PendingRegenSpec {
+  chapterIds: number[];
+  force: true;
+}
 
-const initialState: ChaptersState = { chapters: initialChapters, paused: false };
+export interface ChaptersState {
+  chapters: Chapter[];
+  paused: boolean;
+  /** Stream-level error (e.g. modelKey rejected, cast missing, sidecar down).
+      Surfaced as a banner; cleared on dismiss or on the next successful tick. */
+  lastError: string | null;
+  /** Set on the first progress tick of a run; cleared when the queue drains
+      (idle tick with no in-flight or queued chapters). Drives the real ETA. */
+  generationStartedAt: number | null;
+  /** Forwarded to the next streamGeneration call as `chapterIds + force`.
+      Set by the three regenerate reducers, cleared on `idle` so the spec
+      survives Pause→Resume cycles. */
+  pendingRegen: PendingRegenSpec | null;
+  /** Monotonic counter the Generate view watches as a useEffect dep so it
+      re-opens the SSE when a regenerate is requested. */
+  regenEpoch: number;
+}
+
+const initialState: ChaptersState = {
+  chapters: initialChapters,
+  paused: false,
+  lastError: null,
+  generationStartedAt: null,
+  pendingRegen: null,
+  regenEpoch: 0,
+};
 
 export const chaptersSlice = createSlice({
   name: 'chapters',
@@ -14,6 +47,7 @@ export const chaptersSlice = createSlice({
   reducers: {
     setChapters: (s, a: PayloadAction<Chapter[]>) => { s.chapters = a.payload; },
     setPaused:   (s, a: PayloadAction<boolean>)   => { s.paused = a.payload; },
+    clearLastError: (s) => { s.lastError = null; },
 
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
       const { chapters } = a.payload;
@@ -29,7 +63,6 @@ export const chaptersSlice = createSlice({
     }>) => {
       const { chapters, completedSlugs, characters } = a.payload;
       const done = new Set(completedSlugs);
-      const perCharInitial: Record<string, 'done' | 'queued'> = {};
       const queuedChar: Record<string, 'queued'> = {};
       for (const c of characters) queuedChar[c.id] = 'queued';
       s.chapters = chapters.map(c => ({
@@ -41,88 +74,182 @@ export const chaptersSlice = createSlice({
         characters: done.has(c.slug)
           ? Object.fromEntries(characters.map(ch => [ch.id, 'done' as const]))
           : { ...queuedChar },
-      } as Chapter & { characters: typeof perCharInitial }));
+      } as Chapter));
+      s.lastError = null;
+      s.generationStartedAt = null;
+      s.pendingRegen = null;
     },
 
     applyGenerationTick: (s, a: PayloadAction<GenerationTick>) => {
       const ev = a.payload;
-      if (!ev || ev.type === 'idle') return;
-      s.chapters = s.chapters.map(ch => {
-        if (ch.id !== ev.chapterId) return ch;
-        if (ev.type === 'chapter_failed') {
-          return { ...ch, state: 'failed', errorReason: ev.errorReason };
-        }
-        if (ev.type === 'chapter_complete') {
-          const characters = Object.fromEntries(Object.entries(ch.characters || {}).map(
-            ([k, v]) => [k, v === 'skipped' ? 'skipped' : 'done'])) as Chapter['characters'];
-          return { ...ch, state: 'done', progress: 1, currentLine: ev.totalLines, characters };
-        }
-        // progress
-        const characters: Chapter['characters'] = { ...(ch.characters || {}) };
-        for (const k of Object.keys(characters)) {
-          if (characters[k] === 'queued' && (ev.progress ?? 0) > 0.6) characters[k] = 'in_progress';
-          if (characters[k] === 'in_progress' && (ev.progress ?? 0) > 0.95) characters[k] = 'done';
-        }
-        return { ...ch, progress: ev.progress ?? ch.progress, currentLine: ev.currentLine, characters };
-      });
-      if (ev.type === 'chapter_complete') {
-        const stillBusy = s.chapters.some(c => c.state === 'in_progress');
-        if (!stillBusy) {
-          const nextIdx = s.chapters.findIndex(c => c.state === 'queued');
-          if (nextIdx >= 0) {
-            s.chapters[nextIdx] = { ...s.chapters[nextIdx], state: 'in_progress', progress: 0.02, currentLine: 1 };
+      if (!ev) return;
+
+      /* Start the ETA clock on the first real progress signal of a run. */
+      if (s.generationStartedAt == null && (ev.type === 'progress' || ev.type === 'chapter_assembling')) {
+        s.generationStartedAt = Date.now();
+      }
+
+      if (ev.type === 'idle') {
+        /* End-of-run: drop the regen spec so it doesn't auto-replay, and clear
+           the elapsed clock so the next run starts a fresh ETA. */
+        s.pendingRegen = null;
+        const stillBusy = s.chapters.some(c => c.state === 'in_progress' || c.state === 'queued');
+        if (!stillBusy) s.generationStartedAt = null;
+        return;
+      }
+
+      if (ev.type === 'chapter_failed') {
+        if (ev.chapterId == null) {
+          /* Stream-level setup error (modelKey, cast, sidecar). The whole
+             queue is now blocked — surface as a banner AND flip the
+             currently in-flight chapter to failed so the spinner stops. */
+          s.lastError = ev.errorReason ?? 'Generation halted.';
+          const live = s.chapters.find(c => c.state === 'in_progress');
+          if (live) {
+            live.state = 'failed';
+            live.phase = null;
+            live.errorReason = ev.errorReason ?? 'Generation halted.';
           }
+          return;
+        }
+        const ch = s.chapters.find(c => c.id === ev.chapterId);
+        if (ch) {
+          ch.state = 'failed';
+          ch.phase = null;
+          ch.errorReason = ev.errorReason ?? 'Synthesis failed.';
+        }
+        return;
+      }
+
+      if (ev.chapterId == null) return;
+      const ch = s.chapters.find(c => c.id === ev.chapterId);
+      if (!ch) return;
+
+      if (ev.type === 'chapter_assembling') {
+        ch.phase = 'assembling';
+        ch.state = 'in_progress';
+        ch.progress = ev.progress ?? 0.995;
+        if (ev.currentLine != null) ch.currentLine = ev.currentLine;
+        if (ev.totalLines != null) ch.totalLines = ev.totalLines;
+        return;
+      }
+
+      if (ev.type === 'chapter_complete') {
+        ch.state = 'done';
+        ch.progress = 1;
+        ch.phase = null;
+        if (ev.totalLines != null) ch.currentLine = ev.totalLines;
+        /* Every non-skipped character is done by definition; preserve
+           `skipped` for characters not in this chapter. */
+        for (const k of Object.keys(ch.characters)) {
+          if (ch.characters[k] !== 'skipped') ch.characters[k] = 'done';
+        }
+        return;
+      }
+
+      /* type === 'progress' — flip the live character and advance counters.
+         Use the real `characterId` from the tick rather than progress
+         thresholds; the server emits one per same-speaker group. */
+      ch.state = 'in_progress';
+      ch.phase = null;
+      ch.progress = ev.progress ?? ch.progress;
+      if (ev.currentLine != null) ch.currentLine = ev.currentLine;
+      if (ev.totalLines != null) ch.totalLines = ev.totalLines;
+      if (ev.characterId) {
+        /* Any character previously marked `in_progress` finished their run
+           when the server moved on to the next group. */
+        for (const k of Object.keys(ch.characters)) {
+          if (ch.characters[k] === 'in_progress' && k !== ev.characterId) {
+            ch.characters[k] = 'done';
+          }
+        }
+        if (ch.characters[ev.characterId] && ch.characters[ev.characterId] !== 'skipped') {
+          ch.characters[ev.characterId] = 'in_progress';
         }
       }
     },
 
     regenerateChapter: (s, a: PayloadAction<{ chapterId: number; scope: 'this' | 'forward' }>) => {
       const { chapterId, scope } = a.payload;
+      const targetIds: number[] = [];
       s.chapters = s.chapters.map(c => {
-        if (c.id === chapterId || (scope === 'forward' && c.id > chapterId)) {
-          return {
-            ...c,
-            state:    c.id === chapterId ? 'in_progress' : 'queued',
-            progress: c.id === chapterId ? 0.05 : 0,
-            characters: Object.fromEntries(
-              Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v])
-            ) as Chapter['characters'],
-          };
-        }
-        return c;
+        const inScope = c.id === chapterId || (scope === 'forward' && c.id > chapterId);
+        if (!inScope) return c;
+        targetIds.push(c.id);
+        return {
+          ...c,
+          state:    c.id === chapterId ? 'in_progress' : 'queued',
+          progress: c.id === chapterId ? 0.05 : 0,
+          phase:    null,
+          errorReason: undefined,
+          characters: Object.fromEntries(
+            Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v])
+          ) as Chapter['characters'],
+        };
       });
+      if (targetIds.length) {
+        s.pendingRegen = { chapterIds: targetIds, force: true };
+        s.regenEpoch += 1;
+        s.lastError = null;
+        s.generationStartedAt = null;
+      }
     },
 
     regenerateCharacter: (s, a: PayloadAction<{ characterId: string; chapterIds: number[] }>) => {
       const { characterId, chapterIds } = a.payload;
+      const targetIds: number[] = [];
       s.chapters = s.chapters.map(ch => {
         if (!chapterIds.includes(ch.id)) return ch;
         const cur = ch.characters[characterId];
         if (cur === 'skipped' || !cur) return ch;
+        targetIds.push(ch.id);
         return {
           ...ch,
           characters: { ...ch.characters, [characterId]: 'queued' },
           state:    ch.state === 'done' ? 'in_progress' : ch.state,
-          progress: ch.state === 'done' ? 0.85 : ch.progress,
+          progress: ch.state === 'done' ? 0.05 : ch.progress,
+          phase:    null,
+          errorReason: undefined,
         };
       });
+      if (targetIds.length) {
+        s.pendingRegen = { chapterIds: targetIds, force: true };
+        s.regenEpoch += 1;
+        s.lastError = null;
+        s.generationStartedAt = null;
+      }
     },
 
     batchRegenerateCharacters: (s, a: PayloadAction<{ characterIds: string[]; chapterIds: number[] }>) => {
       const { characterIds, chapterIds } = a.payload;
+      const targetIds: number[] = [];
       s.chapters = s.chapters.map(ch => {
         if (!chapterIds.includes(ch.id)) return ch;
         const newChars: Chapter['characters'] = { ...ch.characters };
+        let touched = false;
         characterIds.forEach(cid => {
-          if (newChars[cid] && newChars[cid] !== 'skipped') newChars[cid] = 'queued';
+          if (newChars[cid] && newChars[cid] !== 'skipped') {
+            newChars[cid] = 'queued';
+            touched = true;
+          }
         });
+        if (!touched) return ch;
+        targetIds.push(ch.id);
         return {
           ...ch,
           characters: newChars,
           state:    ch.state === 'done' ? 'in_progress' : ch.state,
-          progress: ch.state === 'done' ? 0.78 : ch.progress,
+          progress: ch.state === 'done' ? 0.05 : ch.progress,
+          phase:    null,
+          errorReason: undefined,
         };
       });
+      if (targetIds.length) {
+        s.pendingRegen = { chapterIds: targetIds, force: true };
+        s.regenEpoch += 1;
+        s.lastError = null;
+        s.generationStartedAt = null;
+      }
     },
   },
 });

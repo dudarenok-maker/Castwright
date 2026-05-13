@@ -1,15 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   IconPlay, IconPause, IconCheck, IconSpinner, IconWarning,
-  IconArrowDn, IconRefresh,
+  IconArrowDn, IconRefresh, IconClose,
 } from '../lib/icons';
 import {
-  SectionLabel, MixedHeading, PrimaryButton, Pill, ColorDot,
+  SectionLabel, MixedHeading, Pill, ColorDot,
 } from '../components/primitives';
-import { useAppDispatch } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
 import { chaptersActions } from '../store/chapters-slice';
 import { api } from '../lib/api';
-import type { Chapter, Character, CharColor, GenerationTick, TtsModelKey } from '../lib/types';
+import { ttsModelLabel } from '../lib/tts-models';
+import { parseDuration, formatTime } from '../lib/time';
+import { CHAR_COLORS } from '../lib/colors';
+import type {
+  Chapter, Character, CharColor, ChapterAudio, GenerationTick, TtsModelKey,
+} from '../lib/types';
 
 interface Props {
   chapters: Chapter[];
@@ -21,31 +26,77 @@ interface Props {
   setPaused: (p: boolean) => void;
   onRegenerate: (ch: Chapter) => void;
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
+  onPreview: (chapterId: number) => void;
 }
 
-export function GenerationView({ chapters, characters, paused, title, bookId, modelKey, setPaused, onRegenerate, onRegenerateCharacterInChapter }: Props) {
+export function GenerationView({
+  chapters, characters, paused, title, bookId, modelKey,
+  setPaused, onRegenerate, onRegenerateCharacterInChapter, onPreview,
+}: Props) {
   const dispatch = useAppDispatch();
-  const [expanded, setExpanded] = useState<Record<number, boolean>>({ 3: true });
+  const lastError           = useAppSelector(s => s.chapters.lastError);
+  const generationStartedAt = useAppSelector(s => s.chapters.generationStartedAt);
+  const pendingRegen        = useAppSelector(s => s.chapters.pendingRegen);
+  const regenEpoch          = useAppSelector(s => s.chapters.regenEpoch);
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
 
-  const chaptersRef = useRef(chapters);
-  useEffect(() => { chaptersRef.current = chapters; }, [chapters]);
+  /* Open the SSE on mount / model / regen-epoch change. We deliberately do
+     NOT depend on `chapters` here — the slice handles ticks and the server
+     drives the stream. `regenEpoch` is the explicit trigger for a fresh
+     run with `force + chapterIds`; the spec lives in `pendingRegen` and is
+     cleared on `idle`, so a paused → resumed regenerate replays correctly. */
+  const pendingRef = useRef(pendingRegen);
+  useEffect(() => { pendingRef.current = pendingRegen; }, [pendingRegen]);
   useEffect(() => {
     if (paused) return;
+    const spec = pendingRef.current;
     const cancel = api.streamGeneration({
       bookId,
       modelKey,
-      getChapters: () => chaptersRef.current,
+      chapterIds: spec?.chapterIds,
+      force: spec?.force,
       onTick: (ev: GenerationTick) => dispatch(chaptersActions.applyGenerationTick(ev)),
     });
     return cancel;
-  }, [paused, dispatch, bookId, modelKey]);
+  }, [paused, dispatch, bookId, modelKey, regenEpoch]);
 
-  const completed = chapters.filter(c => c.state === 'done').length;
-  const failed    = chapters.filter(c => c.state === 'failed').length;
-  const inProgress = chapters.find(c => c.state === 'in_progress');
-  const queued    = chapters.filter(c => c.state === 'queued').length;
-  const totalProgress = chapters.reduce((s, c) => s + c.progress, 0) / chapters.length;
-  const minutesLeft = Math.max(1, Math.round((1 - totalProgress) * 45));
+  const completed     = chapters.filter(c => c.state === 'done').length;
+  const failed        = chapters.filter(c => c.state === 'failed').length;
+  const inProgressCnt = chapters.filter(c => c.state === 'in_progress').length;
+  const queued        = chapters.filter(c => c.state === 'queued').length;
+
+  /* Sentence-weighted overall progress, with a graceful fallback to
+     equal-weight average for chapters that haven't reported a totalLines
+     yet (server emits it on the first progress tick, but a brand-new run
+     starts with everything at zero). */
+  const totalLinesSum = chapters.reduce((s, c) => s + (c.totalLines || 0), 0);
+  const weightedNum   = chapters.reduce((s, c) => s + c.progress * (c.totalLines || 0), 0);
+  const totalProgress = totalLinesSum > 0
+    ? weightedNum / totalLinesSum
+    : chapters.reduce((s, c) => s + c.progress, 0) / chapters.length;
+
+  /* Real ETA from wall-clock elapsed × (1 - progress) / progress. Only
+     surface when there's enough signal to avoid a wild initial estimate.
+     Disappears entirely when the queue is drained. */
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (!generationStartedAt || paused) return;
+    const id = setInterval(() => forceTick(n => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [generationStartedAt, paused]);
+  const elapsedMs = generationStartedAt ? Date.now() - generationStartedAt : 0;
+  const etaSec = (generationStartedAt && totalProgress > 0.05 && totalProgress < 1)
+    ? (elapsedMs / totalProgress) * (1 - totalProgress) / 1000
+    : null;
+
+  /* Honest "runtime so far" — sum of completed chapter durations. Replaces
+     the hardcoded "4h 38m". */
+  const runtimeSec = chapters
+    .filter(c => c.state === 'done')
+    .reduce((s, c) => s + parseDuration(c.duration), 0);
+
+  const blocked = lastError != null;
+  const engineLabel = ttsModelLabel(modelKey);
 
   return (
     <div className="max-w-[1100px] mx-auto px-6 py-10">
@@ -55,15 +106,32 @@ export function GenerationView({ chapters, characters, paused, title, bookId, mo
           <div className="mt-4">
             <MixedHeading regular="Generating" bold={title || 'your audiobook'} level="h1"/>
           </div>
-          <p className="mt-3 text-ink/60">{completed} of {chapters.length} chapters complete · approx. {minutesLeft} min remaining</p>
+          <p className="mt-3 text-ink/60">
+            {completed} of {chapters.length} chapters complete
+            {etaSec != null && <> · approx. {formatTime(etaSec)} remaining</>}
+          </p>
+          <p className="mt-1 text-xs text-ink/50">Engine: <span className="font-medium text-ink/70">{engineLabel}</span></p>
         </div>
         <div className="flex items-center gap-3">
           <button onClick={() => setPaused(!paused)} className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2">
             {paused ? <><IconPlay className="w-4 h-4"/> Resume</> : <><IconPause className="w-4 h-4"/> Pause</>}
           </button>
-          <PrimaryButton variant="ghost" icon={false}>View partial output</PrimaryButton>
         </div>
       </div>
+
+      {lastError && (
+        <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50/70 px-5 py-4 flex items-start gap-3 fade-in">
+          <IconWarning className="w-5 h-5 text-rose-600 shrink-0 mt-0.5"/>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-rose-900">Generation halted</p>
+            <p className="text-sm text-rose-800/90 mt-0.5">{lastError}</p>
+          </div>
+          <button onClick={() => dispatch(chaptersActions.clearLastError())}
+                  className="p-1.5 rounded-full text-rose-600/70 hover:text-rose-700 hover:bg-rose-100">
+            <IconClose className="w-4 h-4"/>
+          </button>
+        </div>
+      )}
 
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 mb-8">
         <div className="flex items-center justify-between mb-3">
@@ -77,7 +145,7 @@ export function GenerationView({ chapters, characters, paused, title, bookId, mo
         </div>
         <div className="mt-4 grid grid-cols-4 gap-4 pt-4 border-t border-ink/10">
           <Stat label="Completed"   value={completed}/>
-          <Stat label="In progress" value={inProgress ? 1 : 0}/>
+          <Stat label="In progress" value={inProgressCnt}/>
           <Stat label="Queued"      value={queued}/>
           <Stat label="Failed"      value={failed} danger/>
         </div>
@@ -85,18 +153,21 @@ export function GenerationView({ chapters, characters, paused, title, bookId, mo
 
       <div className="space-y-3">
         {chapters.map(ch => (
-          <ChapterRow key={ch.id} chapter={ch} characters={characters}
+          <ChapterRow key={ch.id} chapter={ch} characters={characters} bookId={bookId}
                       expanded={!!expanded[ch.id]} onToggle={() => setExpanded({ ...expanded, [ch.id]: !expanded[ch.id] })}
-                      paused={paused} onRegenerate={onRegenerate}
-                      onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}/>
+                      paused={paused} blocked={blocked}
+                      onRegenerate={onRegenerate}
+                      onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
+                      onPreview={onPreview}/>
         ))}
       </div>
 
-      <div className="mt-10 pt-6 border-t border-ink/10 flex items-center justify-between text-xs text-ink/50">
-        <div className="flex items-center gap-6">
-          <span>Output: 24-bit FLAC + MP3</span><span>·</span><span>Estimated runtime: 4h 38m</span><span>·</span><span>Format: m4b chaptered</span>
+      <div className="mt-10 pt-6 border-t border-ink/10 flex items-center justify-between text-xs text-ink/50 flex-wrap gap-3">
+        <div className="flex items-center gap-6 flex-wrap">
+          <span>Output: WAV (16-bit PCM)</span>
+          <span>·</span>
+          <span>Runtime so far: <span className="tabular-nums text-ink/70">{runtimeSec > 0 ? formatTime(runtimeSec) : '0:00'}</span></span>
         </div>
-        <button className="text-ink/60 font-medium hover:text-ink hover:underline">Cancel generation</button>
       </div>
     </div>
   );
@@ -114,19 +185,30 @@ export function Stat({ label, value, danger, small }: { label: string; value: nu
 interface ChapterRowProps {
   chapter: Chapter;
   characters: Character[];
+  bookId: string;
   expanded: boolean;
   onToggle: () => void;
   paused: boolean;
+  blocked: boolean;
   onRegenerate: (ch: Chapter) => void;
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
+  onPreview: (chapterId: number) => void;
 }
 
-function ChapterRow({ chapter, characters, expanded, onToggle, paused, onRegenerate, onRegenerateCharacterInChapter }: ChapterRowProps) {
+function ChapterRow({
+  chapter, characters, bookId, expanded, onToggle, paused, blocked,
+  onRegenerate, onRegenerateCharacterInChapter, onPreview,
+}: ChapterRowProps) {
+  const assembling = chapter.phase === 'assembling';
+  const inProgressLabel = assembling ? 'Assembling…' : (paused ? 'Paused' : 'Generating');
+  const queuedPill = blocked
+    ? <Pill color="danger">Blocked</Pill>
+    : <Pill>Queued</Pill>;
   const stateConfig = {
-    done:        { tint: 'bg-emerald-50/50',  badge: <Pill color="success">Done</Pill>,                                                icon: <IconCheck   className="w-4 h-4 text-emerald-600"/> },
-    in_progress: { tint: 'bg-peach/[0.06]',   badge: <Pill color="peach">{paused ? 'Paused' : 'Generating'}</Pill>,                  icon: paused ? <IconPause className="w-4 h-4 text-magenta"/> : <IconSpinner className="w-4 h-4 text-magenta"/> },
-    queued:      { tint: 'bg-white',          badge: <Pill>Queued</Pill>,                                                            icon: <span className="w-4 h-4 rounded-full border border-ink/20"/> },
-    failed:      { tint: 'bg-rose-50/50',     badge: <Pill color="danger">Failed</Pill>,                                             icon: <IconWarning className="w-4 h-4 text-rose-600"/> },
+    done:        { tint: 'bg-emerald-50/50', badge: <Pill color="success">Done</Pill>,                                                       icon: <IconCheck   className="w-4 h-4 text-emerald-600"/> },
+    in_progress: { tint: 'bg-peach/[0.06]',  badge: <Pill color="peach">{inProgressLabel}</Pill>,                                            icon: paused ? <IconPause className="w-4 h-4 text-magenta"/> : <IconSpinner className="w-4 h-4 text-magenta"/> },
+    queued:      { tint: blocked ? 'bg-rose-50/30' : 'bg-white', badge: queuedPill,                                                          icon: <span className="w-4 h-4 rounded-full border border-ink/20"/> },
+    failed:      { tint: 'bg-rose-50/50',    badge: <Pill color="danger">Failed</Pill>,                                                     icon: <IconWarning className="w-4 h-4 text-rose-600"/> },
   }[chapter.state];
 
   const findChar = (id: string): Character => characters.find(c => c.id === id) || { id, name: id, role: '', color: 'narrator' };
@@ -140,15 +222,21 @@ function ChapterRow({ chapter, characters, expanded, onToggle, paused, onRegener
           <span className="block font-semibold text-ink truncate">{chapter.title}</span>
           {chapter.errorReason && <span className="block text-xs text-rose-600 truncate mt-0.5">{chapter.errorReason}</span>}
         </span>
-        <ChapterProgressBar progress={chapter.progress} state={chapter.state} paused={paused}/>
+        <ChapterProgressBar progress={chapter.progress} state={chapter.state} paused={paused} assembling={assembling}/>
         <span className="text-sm tabular-nums text-ink/60 text-right">{chapter.duration}</span>
         <span>{stateConfig.badge}</span>
         <span className={`text-ink/40 transition-transform ${expanded ? 'rotate-180' : ''}`}><IconArrowDn className="w-4 h-4"/></span>
       </button>
       {(chapter.state === 'done' || chapter.state === 'failed') && (
-        <div className="px-5 py-2 -mt-2 flex justify-end">
+        <div className="px-5 py-2 -mt-2 flex justify-end items-center gap-3">
+          {chapter.state === 'done' && (
+            <button onClick={(e) => { e.stopPropagation(); onPreview(chapter.id); }}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/70 hover:text-ink transition-colors">
+              <IconPlay className="w-3.5 h-3.5"/> Preview
+            </button>
+          )}
           <button onClick={(e) => { e.stopPropagation(); onRegenerate(chapter); }} className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors">
-            <IconRefresh className="w-3.5 h-3.5"/> Regenerate this chapter
+            <IconRefresh className="w-3.5 h-3.5"/> {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
           </button>
         </div>
       )}
@@ -180,16 +268,18 @@ function ChapterRow({ chapter, characters, expanded, onToggle, paused, onRegener
               );
             })}
           </div>
-          {chapter.state === 'failed' && (
-            <div className="mt-4 ml-[100px] flex items-center gap-3">
-              <PrimaryButton variant="dark" size="sm">Retry chapter</PrimaryButton>
-              <button className="text-sm font-medium text-ink/60 hover:text-ink">View error log</button>
+          {chapter.state === 'in_progress' && assembling && (
+            <div className="mt-4 ml-[100px] text-xs text-ink/60">
+              Writing chapter file… {chapter.totalLines ? `${chapter.totalLines} lines synthesised` : 'finalising audio'}.
             </div>
           )}
-          {chapter.state === 'in_progress' && chapter.currentLine && (
+          {chapter.state === 'in_progress' && !assembling && chapter.currentLine && (
             <div className="mt-4 ml-[100px] flex items-center gap-3 text-xs text-ink/60">
-              <span>Active: <span className="font-semibold text-ink">{Object.entries(chapter.characters).find(([, s]) => s === 'in_progress')?.[0] || '—'}</span> · line {chapter.currentLine.toLocaleString()} of {chapter.totalLines?.toLocaleString()}</span>
+              <span>Active: <span className="font-semibold text-ink">{findChar(Object.entries(chapter.characters).find(([, s]) => s === 'in_progress')?.[0] || '').name}</span> · line {chapter.currentLine.toLocaleString()} of {chapter.totalLines?.toLocaleString()}</span>
             </div>
+          )}
+          {chapter.state === 'done' && (
+            <ChapterSegmentStrip chapter={chapter} bookId={bookId} characters={characters}/>
           )}
         </div>
       )}
@@ -197,10 +287,19 @@ function ChapterRow({ chapter, characters, expanded, onToggle, paused, onRegener
   );
 }
 
-function ChapterProgressBar({ progress, state, paused }: { progress: number; state: Chapter['state']; paused: boolean }) {
+function ChapterProgressBar({ progress, state, paused, assembling }: { progress: number; state: Chapter['state']; paused: boolean; assembling: boolean }) {
   if (state === 'queued') return <div className="h-1.5 rounded-full bg-ink/[0.06]"/>;
   if (state === 'done')   return <div className="h-1.5 rounded-full bg-emerald-200"><div className="h-full w-full rounded-full bg-emerald-500"/></div>;
   if (state === 'failed') return <div className="h-1.5 rounded-full bg-rose-100"><div className="h-full rounded-full bg-rose-500" style={{ width: `${progress * 100}%` }}/></div>;
+  if (assembling) return (
+    /* Disk-write phase — neutral ink-tone bar with stripe motion to read as
+       "near done, busy" rather than the magenta synthesis gradient. */
+    <div className="relative h-1.5 rounded-full bg-ink/[0.06] overflow-hidden">
+      <div className="absolute inset-y-0 left-0 rounded-full bg-ink/40" style={{ width: `${progress * 100}%` }}>
+        {!paused && <div className="absolute inset-0 stripe-travel"/>}
+      </div>
+    </div>
+  );
   return (
     <div className="relative h-1.5 rounded-full bg-ink/[0.06] overflow-hidden">
       <div className={`absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all duration-700 ${paused ? '' : 'pulse-bar'}`} style={{ width: `${progress * 100}%` }}>
@@ -223,4 +322,44 @@ function CharStatusBar({ status, paused }: { status: string; paused: boolean }) 
     </div>
   );
   return null;
+}
+
+/* Visual confirmation that this chapter's audio was assembled in narrative
+   order. Lazy-fetches the same segments JSON we already use for preview
+   playback; renders coloured bands keyed to character palette colours. */
+function ChapterSegmentStrip({ chapter, bookId, characters }: { chapter: Chapter; bookId: string; characters: Character[] }) {
+  const [audio, setAudio] = useState<ChapterAudio | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getChapterAudio({ bookId, chapterId: chapter.id })
+      .then(m => { if (!cancelled) setAudio(m); })
+      .catch(() => { if (!cancelled) setError(true); });
+    return () => { cancelled = true; };
+  }, [bookId, chapter.id]);
+
+  if (error || !audio || !audio.segments?.length || !audio.durationSec) return null;
+  const findChar = (id: string) => characters.find(c => c.id === id);
+
+  return (
+    <div className="mt-4 ml-[100px]">
+      <p className="text-[10px] uppercase tracking-wider text-ink/50 font-semibold mb-1.5">Narrative order</p>
+      <div className="flex h-2 rounded-full overflow-hidden bg-ink/[0.04]">
+        {audio.segments.map((seg, i) => {
+          const start = seg.start ?? 0;
+          const end = seg.end ?? start;
+          const charId = seg.characterId ?? '';
+          const width = ((end - start) / audio.durationSec) * 100;
+          const charColor = findChar(charId)?.color ?? 'narrator';
+          const hex = CHAR_COLORS[charColor]?.hex ?? CHAR_COLORS.narrator.hex;
+          return (
+            <div key={i}
+                 title={`${findChar(charId)?.name ?? (charId || 'unknown')} · ${formatTime(start)}–${formatTime(end)}`}
+                 style={{ width: `${width}%`, background: hex }}/>
+          );
+        })}
+      </div>
+    </div>
+  );
 }

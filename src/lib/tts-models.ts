@@ -48,6 +48,14 @@ export const TTS_ENGINES: TtsEngineGroup[] = [
    visible. */
 export const TTS_MODEL_OPTIONS: TtsModelOption[] = TTS_ENGINES.flatMap(g => g.models);
 
+/** Human-readable label for a model key. Falls back to the raw key when an
+    unknown id appears (e.g. an older saved state pointing at a model we've
+    since removed) so the UI shows *something* identifiable rather than
+    blanking. */
+export function ttsModelLabel(key: TtsModelKey): string {
+  return TTS_MODEL_OPTIONS.find(m => m.id === key)?.label ?? key;
+}
+
 export const DEFAULT_TTS_MODEL: TtsModelKey = 'coqui-xtts-v2';
 
 /* Mirror of the backend's engineForModelKey — keeps the UI honest about

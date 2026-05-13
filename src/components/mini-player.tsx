@@ -6,6 +6,7 @@ import type { Chapter, ChapterAudio } from '../lib/types';
 
 interface MiniPlayerProps {
   chapter: Chapter | null;
+  bookId: string;
   onClose: () => void;
   onPrev: () => void;
   onNext: () => void;
@@ -13,44 +14,68 @@ interface MiniPlayerProps {
   nextAvailable: boolean;
 }
 
-export function MiniPlayer({ chapter, onClose, onPrev, onNext, prevAvailable, nextAvailable }: MiniPlayerProps) {
+export function MiniPlayer({ chapter, bookId, onClose, onPrev, onNext, prevAvailable, nextAvailable }: MiniPlayerProps) {
   const [audio, setAudio] = useState<ChapterAudio>({ durationSec: 0, peaks: [], url: null });
   const [currentSec, setCurrentSec] = useState(0);
   const [playing, setPlaying] = useState(true);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastTickRef = useRef(0);
+  const [error, setError] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  /* Fetch the audio meta (url, durationSec, segments) whenever the chapter
+     changes. We don't store the chapter id on the audio element because the
+     <audio> src swap is driven separately — this effect just owns the
+     metadata for the scrubber + duration display. */
   useEffect(() => {
     if (!chapter) return;
     setCurrentSec(0);
+    setError(null);
     let cancelled = false;
-    api.getChapterAudio({ bookId: 'ns', chapterId: chapter.id, duration: chapter.duration })
-      .then(meta => { if (!cancelled) setAudio(meta); });
+    api.getChapterAudio({ bookId, chapterId: chapter.id, duration: chapter.duration })
+      .then(meta => { if (!cancelled) setAudio(meta); })
+      .catch(e => { if (!cancelled) setError((e as Error).message); });
     return () => { cancelled = true; };
-  }, [chapter?.id, chapter?.duration]);
+  }, [bookId, chapter?.id, chapter?.duration]);
 
+  /* When the URL lands, point the audio element at it. Resetting src + load
+     also clears any prior playback state from the previous chapter. */
   useEffect(() => {
-    if (!playing || !audio.durationSec) return;
-    lastTickRef.current = performance.now();
-    timerRef.current = setInterval(() => {
-      const now = performance.now();
-      const dt = (now - lastTickRef.current) / 1000;
-      lastTickRef.current = now;
-      setCurrentSec(s => Math.min(audio.durationSec, s + dt));
-    }, 100);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [playing, audio.durationSec]);
+    const el = audioRef.current;
+    if (!el) return;
+    if (audio.url) {
+      el.src = audio.url;
+      el.load();
+      el.currentTime = 0;
+      if (playing) void el.play().catch(() => { /* user-gesture errors surface via <audio onerror> */ });
+    } else {
+      el.removeAttribute('src');
+      el.load();
+    }
+  }, [audio.url]);
+
+  /* Reflect the React `playing` flag onto the element. Browsers may also flip
+     `playing` externally (ended → false) — those paths use setPlaying directly
+     so this effect won't trigger spurious play()/pause() calls. */
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el || !audio.url) return;
+    if (playing) {
+      void el.play().catch(() => { /* swallow; <audio onerror> covers real failures */ });
+    } else {
+      el.pause();
+    }
+  }, [playing, audio.url]);
 
   if (!chapter) return null;
   const totalSec = audio.durationSec || parseDuration(chapter.duration);
   const progress = totalSec ? currentSec / totalSec : 0;
 
   const onScrub = (e: MouseEvent<HTMLDivElement>) => {
+    const el = audioRef.current;
     const rect = e.currentTarget.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    setCurrentSec(pct * totalSec);
+    const next = pct * totalSec;
+    setCurrentSec(next);
+    if (el && Number.isFinite(el.duration)) el.currentTime = next;
   };
 
   return (
@@ -63,7 +88,9 @@ export function MiniPlayer({ chapter, onClose, onPrev, onNext, prevAvailable, ne
             </span>
             <div className="min-w-0 hidden md:block">
               <p className="text-sm font-semibold truncate">CH {String(chapter.id).padStart(2, '0')} · {chapter.title}</p>
-              <p className="text-[11px] text-canvas/60 truncate">The Northern Star</p>
+              <p className="text-[11px] text-canvas/60 truncate">
+                {error ? <span className="text-rose-300">{error}</span> : 'Preview'}
+              </p>
             </div>
           </div>
           <span/>
@@ -87,6 +114,18 @@ export function MiniPlayer({ chapter, onClose, onPrev, onNext, prevAvailable, ne
             <button onClick={onClose} className="p-2 rounded-full hover:bg-canvas/10"><IconClose className="w-4 h-4"/></button>
           </div>
         </div>
+        <audio
+          ref={audioRef}
+          preload="metadata"
+          onTimeUpdate={(e) => setCurrentSec(e.currentTarget.currentTime)}
+          onLoadedMetadata={(e) => {
+            const d = e.currentTarget.duration;
+            if (Number.isFinite(d) && d > 0) setAudio(a => ({ ...a, durationSec: d }));
+          }}
+          onEnded={() => setPlaying(false)}
+          onError={() => setError('Audio failed to load.')}
+          className="hidden"
+        />
       </div>
     </div>
   );

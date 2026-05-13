@@ -236,7 +236,8 @@ function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookI
           setPaused={(p) => dispatch(chaptersActions.setPaused(p))}
           onRegenerate={(ch) => dispatch(uiActions.setRegenChapter(ch))}
           onRegenerateCharacterInChapter={(charId, chapterId) =>
-            dispatch(uiActions.setRegenCharacterCtx({ characterId: charId, defaultChapterId: chapterId }))}/>
+            dispatch(uiActions.setRegenCharacterCtx({ characterId: charId, defaultChapterId: chapterId }))}
+          onPreview={(id) => dispatch(uiActions.setCurrentTrack(id))}/>
       );
     case 'listen':
       return (

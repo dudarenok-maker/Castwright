@@ -414,14 +414,24 @@ export interface components {
             detail?: string;
         };
         GenerationTick: {
-            /** @enum {string} */
-            type: "progress" | "chapter_complete" | "chapter_failed" | "idle";
+            /**
+             * @description `chapter_assembling` is emitted between the last per-group synthesis
+             *     tick and `chapter_complete`, while the server concatenates the PCM,
+             *     writes the WAV + segments JSON, and updates state.json. Surfaces
+             *     the disk-write phase so the UI doesn't look stalled at 99 %.
+             * @enum {string}
+             */
+            type: "progress" | "chapter_assembling" | "chapter_complete" | "chapter_failed" | "idle";
             chapterId?: number;
             /** @description null = chapter-wide tick (not character-specific). */
             characterId?: string | null;
             progress?: number;
             currentLine?: number;
             totalLines?: number;
+            /** @description Only on `chapter_assembling` — number of synthesised same-speaker groups about to land on disk. */
+            totalGroups?: number;
+            /** @description Only on `chapter_assembling` — measured audio length about to be written. */
+            durationSec?: number;
             errorReason?: string | null;
         };
         VoiceSampleRequest: {

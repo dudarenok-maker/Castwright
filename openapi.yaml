@@ -580,7 +580,12 @@ components:
       properties:
         type:
           type: string
-          enum: [progress, chapter_complete, chapter_failed, idle]
+          enum: [progress, chapter_assembling, chapter_complete, chapter_failed, idle]
+          description: |
+            `chapter_assembling` is emitted between the last per-group synthesis
+            tick and `chapter_complete`, while the server concatenates the PCM,
+            writes the WAV + segments JSON, and updates state.json. Surfaces
+            the disk-write phase so the UI doesn't look stalled at 99 %.
         chapterId:   { type: integer }
         characterId:
           type: string
@@ -589,6 +594,12 @@ components:
         progress:    { type: number, minimum: 0, maximum: 1 }
         currentLine: { type: integer }
         totalLines:  { type: integer }
+        totalGroups:
+          type: integer
+          description: Only on `chapter_assembling` — number of synthesised same-speaker groups about to land on disk.
+        durationSec:
+          type: number
+          description: Only on `chapter_assembling` — measured audio length about to be written.
         errorReason: { type: string, nullable: true }
 
     # --- Voice samples ---------------------------------------------
