@@ -265,7 +265,7 @@ function ChapterRow({
         <span className={`text-ink/40 transition-transform ${expanded ? 'rotate-180' : ''}`}><IconArrowDn className="w-4 h-4"/></span>
       </button>
       {(chapter.state === 'done' || chapter.state === 'failed') && (
-        <div className="px-5 py-2 -mt-2 flex justify-end items-center gap-3">
+        <div className="px-6 pb-4 -mt-2 flex justify-end items-center gap-3">
           {chapter.state === 'done' && (
             <button onClick={(e) => { e.stopPropagation(); onPreview(chapter.id); }}
                     className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/70 hover:text-ink transition-colors">
