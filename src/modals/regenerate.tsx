@@ -8,13 +8,18 @@ export type RegenScope = 'this' | 'forward';
 
 interface Props {
   chapter: Chapter | null;
+  /** When the modal is opened for "regenerate the whole book" (from the
+      post-generation header button), the caller passes 'forward' so the
+      scope picker starts on "this and all subsequent" — i.e. every chapter
+      from the first one onward. Defaults to 'this' for the per-chapter flow. */
+  defaultScope?: RegenScope;
   onClose: () => void;
   onConfirm: (args: { reason: string; scope: RegenScope; note: string }) => void;
 }
 
-export function RegenerateModal({ chapter, onClose, onConfirm }: Props) {
+export function RegenerateModal({ chapter, defaultScope = 'this', onClose, onConfirm }: Props) {
   const [reason, setReason] = useState('voice');
-  const [scope, setScope]   = useState<RegenScope>('this');
+  const [scope, setScope]   = useState<RegenScope>(defaultScope);
   const [note, setNote]     = useState('');
   if (!chapter) return null;
   const eta = scope === 'this' ? '≈3 min' : '≈14 min for 4 chapters';

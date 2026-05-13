@@ -14,6 +14,7 @@ const baseState = (stage: Stage): UiState => ({
   matchDetailFor: null,
   handoffApp: null,
   regenChapter: null,
+  regenInitialScope: null,
   regenCharacterCtx: null,
   batchRegenIds: null,
   showRevisionPlayer: false,
@@ -182,5 +183,22 @@ describe('uiSlice — overlays do not perturb the stage', () => {
     const next = uiSlice.reducer(start, uiActions.setCurrentTrack(5));
     expect(next.currentTrack).toBe(5);
     expect(next.stage).toEqual(start.stage);
+  });
+});
+
+describe('uiSlice — regenerate-modal scope override', () => {
+  it('setRegenInitialScope stores the scope override', () => {
+    const start = baseState({ kind: 'books' });
+    const next = uiSlice.reducer(start, uiActions.setRegenInitialScope('forward'));
+    expect(next.regenInitialScope).toBe('forward');
+  });
+
+  it('closing the regenerate modal clears the scope override', () => {
+    /* Otherwise a subsequent per-chapter Regenerate would inherit
+       scope='forward' from the previous book-level open. */
+    let s = baseState({ kind: 'books' });
+    s = uiSlice.reducer(s, uiActions.setRegenInitialScope('forward'));
+    s = uiSlice.reducer(s, uiActions.setRegenChapter(null));
+    expect(s.regenInitialScope).toBeNull();
   });
 });
