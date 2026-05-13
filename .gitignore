@@ -30,6 +30,9 @@ logs/
 # Test output
 coverage/
 
+# Husky internals (hook scripts are tracked; staging dir is not)
+.husky/_/
+
 # Uploads dir (sandbox-only)
 uploads/
 

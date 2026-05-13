@@ -6,7 +6,12 @@ without changing component code.
 
 ## Commands
 - `npm run dev` — Vite dev server (HMR) on `http://localhost:5173`.
-- `npm run typecheck` — `tsc --noEmit`.
+- `npm run typecheck` — `tsc --noEmit` (frontend + server).
+- `npm test` — Vitest single-run for the frontend.
+- `npm run test:server` — Vitest single-run for the server.
+- `npm run test:all` — frontend + server tests (matches the pre-commit hook).
+- `npm run verify` — full battery: typecheck + all tests + build (matches the pre-push hook).
+- `npm run verify:quick` — all tests, no typecheck/build (alias for `test:all`).
 - `npm run build` — production build into `dist/`.
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
@@ -48,6 +53,31 @@ without changing component code.
   they never know which is which. `.env.development` sets the flag on.
 - **RTK immer** — slice reducers mutate via Immer drafts. Don't rewrite to spreads.
 
+## Testing discipline (REQUIRED for every change)
+
+Every PR MUST improve automated coverage on top of updating its regression
+plan. Regression plans under `docs/features/*.md` document invariants and
+manual acceptance walkthroughs — they complement automated tests, they do
+not replace them.
+
+- New behaviour → ship paired automated test(s).
+- Bug fix → ship a regression test that fails before the fix and passes after.
+- Refactor → existing tests stay green; add coverage for any previously-uncovered seam you touched.
+- Never delete or `.skip` a test without an explicit replacement or follow-up plan item.
+- If a change lands in untested territory (e.g. the Python sidecar still has no pytest), the test scaffold itself is part of the work — do not ship code without it.
+
+Harnesses:
+- Frontend: `npm run test` (Vitest + jsdom + React Testing Library). Tests live next to the unit (`*.test.ts(x)`).
+- Server: `cd server && npm run test` (Vitest + node env, real-ffmpeg integration where relevant). Same colocation.
+- Sidecar (`server/tts-sidecar/`): pytest scaffold is the next coverage milestone; any new sidecar code MUST add it.
+- Top-level `npm run test:all` runs both Vitest harnesses.
+
+Canonical end-to-end manuscript for full-pipeline regression:
+`C:\Users\dudar\Downloads\Bonus Keefe Story.txt` (do not commit — copyrighted).
+Cite this file from any regression plan that needs an e2e run rather than
+inventing fresh fixtures. See `docs/features/28-chapter-audio-format.md` for
+the canonical recipe.
+
 ## Out of scope until told otherwise
 - New features. Surface area is final for v1.
 - Visual redesign. Reproduce the existing look pixel-for-pixel.
@@ -63,3 +93,28 @@ without changing component code.
 - Align the `Sentence` shape with the OpenAPI spec (currently the fixtures use
   `{ id: string, charId, text }` while the spec uses `{ id: number, characterId,
   chapterId, text }`).
+
+## Commit gate
+Two-tier automated test gate, enforced by husky hooks in `.husky/`:
+- **pre-commit** (`.husky/pre-commit`): runs `npm run verify:quick` —
+  frontend + server tests. Refuses the commit if any Vitest spec is red.
+- **pre-push** (`.husky/pre-push`): runs `npm run verify` — typecheck +
+  all tests + build. Refuses the push if any step fails.
+
+Hooks activate automatically after `npm install` via the `prepare` script
+(husky v9 — sets `core.hooksPath` to `.husky/`). On a fresh clone, run
+`npm install` once and you're done.
+
+Working practice:
+- Before committing anything non-trivial, run `npm run verify` — same battery
+  as pre-push. Catching failures in the same turn beats catching them at
+  push time.
+- `npm run verify:quick` runs just the tests, matching pre-commit.
+- **Do not use `--no-verify` to bypass.** If a hook fails, fix the underlying
+  issue (or update the regression doc + paired test if behavior intentionally
+  changed — see `docs/features/INDEX.md`).
+- pytest scaffold for the Coqui sidecar (currently zero coverage; first test
+  should be a `/synthesize` smoke that mocks the model load).
+- Move voice-sample generation (`server/src/routes/voice-sample.ts`) to MP3
+  too — currently still writes `.wav`. Same encoder boundary as chapter
+  audio; left as WAV in v1 because samples are short and in-browser only.
