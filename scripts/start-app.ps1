@@ -6,6 +6,8 @@
 
 $ErrorActionPreference = "Stop"
 
+Import-Module (Join-Path $PSScriptRoot "lib\log-utils.psm1") -Force
+
 # --- Layout ---------------------------------------------------------------
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $repoRoot
@@ -105,12 +107,22 @@ foreach ($svc in $services) {
 }
 
 # --- Spawn missing services ----------------------------------------------
+# Track actual log paths per service — New-FreshLog may rotate to a
+# timestamped sibling when OneDrive/AV still hold the canonical name open,
+# and the failure-tail block below needs to read the path we actually used.
+$logPaths = @{}
 foreach ($svc in $toStart) {
-    $outLog = Join-Path $logDir "$($svc.Name).log"
-    $errLog = Join-Path $logDir "$($svc.Name).err.log"
-    # Truncate previous logs so tails are meaningful for *this* run.
-    Set-Content -Path $outLog -Value "" -Encoding utf8
-    Set-Content -Path $errLog -Value "" -Encoding utf8
+    $outRequested = Join-Path $logDir "$($svc.Name).log"
+    $errRequested = Join-Path $logDir "$($svc.Name).err.log"
+    $outLog = New-FreshLog -Path $outRequested
+    $errLog = New-FreshLog -Path $errRequested
+    if ($outLog -ne $outRequested) {
+        Write-Status "[ROTATE] $(Split-Path -Leaf $outRequested) locked; writing to $(Split-Path -Leaf $outLog)"
+    }
+    if ($errLog -ne $errRequested) {
+        Write-Status "[ROTATE] $(Split-Path -Leaf $errRequested) locked; writing to $(Split-Path -Leaf $errLog)"
+    }
+    $logPaths[$svc.Name] = @{ Out = $outLog; Err = $errLog }
 
     $proc = Start-Process -FilePath $svc.FilePath `
         -ArgumentList $svc.ArgList `
@@ -121,7 +133,8 @@ foreach ($svc in $toStart) {
         -PassThru
 
     $proc.Id | Out-File -FilePath (Join-Path $runDir "$($svc.Name).pid") -Encoding ascii
-    Write-Status "[START] $($svc.Name) pid=$($proc.Id) -> logs\$($svc.Name).log"
+    $logName = Split-Path -Leaf $outLog
+    Write-Status "[START] $($svc.Name) pid=$($proc.Id) -> logs\$logName"
 }
 
 # --- Health-wait: poll until each port is listening. Test-PortListening
@@ -151,7 +164,11 @@ while ($pending.Count -gt 0 -and (Get-Date) -lt $deadline) {
 
 if ($pending.Count -gt 0) {
     $detail = foreach ($name in $pending) {
-        $errLog = Join-Path $logDir "$name.err.log"
+        $errLog = if ($logPaths.ContainsKey($name)) {
+            $logPaths[$name].Err
+        } else {
+            Join-Path $logDir "$name.err.log"
+        }
         $tail   = if (Test-Path $errLog) {
             (Get-Content $errLog -Tail 20 -ErrorAction SilentlyContinue) -join "`n"
         } else { "(no err log)" }
@@ -163,4 +180,10 @@ if ($pending.Count -gt 0) {
 # --- Open browser --------------------------------------------------------
 Start-Process "http://localhost:5173/"
 Write-Status "[READY] http://localhost:5173/ (stop with stop-app.bat)"
+
+# Best-effort cleanup of stale rotated logs from past locked-start cycles.
+# Canonical `<name>.log` / `<name>.err.log` are preserved; only timestamped
+# siblings older than 7 days are pruned.
+Remove-OldRotatedLogs -Dir $logDir -MaxAgeDays 7
+
 exit 0
