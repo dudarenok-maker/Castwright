@@ -650,6 +650,27 @@ export interface SidecarHealth {
   error?: string;
 }
 
+export interface WorkspaceInfo {
+  root: string;
+  booksRoot: string;
+  /** `env` when WORKSPACE_DIR is set in server/.env; `default` when the
+      built-in `../audiobook-workspace` relative path is in use. Helps the
+      Books page distinguish "I configured this" from "I'm using the
+      default and didn't know it was inside the repo." */
+  source: 'env' | 'default';
+}
+
+async function realGetWorkspaceInfo(): Promise<WorkspaceInfo> {
+  const res = await fetch('/api/workspace');
+  if (!res.ok) throw new Error(`Workspace info fetch failed (${res.status}).`);
+  return res.json();
+}
+
+async function mockGetWorkspaceInfo(): Promise<WorkspaceInfo> {
+  await wait(40);
+  return { root: '(mock)', booksRoot: '(mock)/books', source: 'default' };
+}
+
 async function realGetSidecarHealth(): Promise<SidecarHealth> {
   const res = await fetch('/api/sidecar/health');
   if (!res.ok) {
@@ -687,6 +708,7 @@ const real = {
   getVoiceSample:    realGetVoiceSample,
   streamGeneration:  realStreamGeneration,
   getSidecarHealth:  realGetSidecarHealth,
+  getWorkspaceInfo:  realGetWorkspaceInfo,
   getChapterAudio:   async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
     if (!res.ok) {
@@ -718,6 +740,7 @@ const mock = {
   getVoiceSample:    mockGetVoiceSample,
   streamGeneration:  mockStreamGeneration,
   getSidecarHealth:  mockGetSidecarHealth,
+  getWorkspaceInfo:  mockGetWorkspaceInfo,
   getChapterAudio:   mockGetChapterAudio,
   pollRevisions:     mockPollRevisions,
 };
