@@ -160,6 +160,8 @@ export function buildChapterCompleteEvent(args: {
 }): ChangeLogEvent {
   const { chapter } = args;
   const now = args.now ?? new Date();
+  const lines = chapter.totalLines ?? null;
+  const lineSuffix = lines ? ` — ${lines.toLocaleString()} line${lines === 1 ? '' : 's'} synthesised.` : '';
   return {
     id: now.getTime(),
     at: now.toISOString(),
@@ -168,8 +170,8 @@ export function buildChapterCompleteEvent(args: {
     type: 'chapter_complete',
     title: `Chapter ${chapter.id} complete`,
     note: chapter.title
-      ? `Finished synthesising "${chapter.title}".`
-      : 'Finished synthesising.',
+      ? `Finished "${chapter.title}".${lineSuffix}`
+      : `Finished synthesising.${lineSuffix}`,
     actor: 'system',
     chapterId: chapter.id,
   };
