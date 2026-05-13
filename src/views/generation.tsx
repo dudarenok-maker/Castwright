@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   IconPlay, IconPause, IconCheck, IconSpinner, IconWarning,
-  IconArrowDn, IconRefresh, IconClose,
+  IconArrowDn, IconRefresh, IconClose, IconHistory, IconClock,
 } from '../lib/icons';
 import {
   SectionLabel, MixedHeading, Pill, ColorDot,
 } from '../components/primitives';
 import { useAppDispatch, useAppSelector } from '../store';
-import { chaptersActions } from '../store/chapters-slice';
+import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { api } from '../lib/api';
 import { ttsModelLabel } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
@@ -15,9 +15,15 @@ import { CHAR_COLORS } from '../lib/colors';
 import {
   characterStatsByChapter, overallProgress, sentencesPerChapter,
 } from '../lib/generation-progress';
+import { withRecomputedDisplay } from '../lib/change-log';
+import { LOG_TYPES } from '../data/log-types';
 import type {
-  Chapter, Character, CharColor, ChapterAudio, GenerationTick, TtsModelKey,
+  Chapter, Character, CharColor, ChapterAudio, ChangeLogEvent, TtsModelKey,
 } from '../lib/types';
+
+const ACTIVITY_FEED_TYPES: ChangeLogEvent['type'][] = [
+  'regenerate', 'chapter_complete', 'chapter_failed', 'generation_started',
+];
 
 interface Props {
   chapters: Chapter[];
@@ -39,9 +45,9 @@ export function GenerationView({
   const dispatch = useAppDispatch();
   const lastError           = useAppSelector(s => s.chapters.lastError);
   const generationStartedAt = useAppSelector(s => s.chapters.generationStartedAt);
-  const pendingRegen        = useAppSelector(s => s.chapters.pendingRegen);
-  const regenEpoch          = useAppSelector(s => s.chapters.regenEpoch);
+  const lastTickAt          = useAppSelector(s => s.chapters.lastTickAt);
   const sentences           = useAppSelector(s => s.manuscript.sentences);
+  const activityEvents      = useAppSelector(s => s.changeLog.events);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
 
   /* Manuscript-derived shape used both for accurate overall-progress
@@ -51,31 +57,9 @@ export function GenerationView({
   const manuscriptCounts = useMemo(() => sentencesPerChapter(sentences), [sentences]);
   const characterStats   = useMemo(() => characterStatsByChapter(sentences), [sentences]);
 
-  /* Open the SSE on mount / model / regen-epoch change. We deliberately do
-     NOT depend on `chapters` here — the slice handles ticks and the server
-     drives the stream. `regenEpoch` is the explicit trigger for a fresh
-     run with `force + chapterIds`; the spec lives in `pendingRegen` and is
-     cleared on `idle`, so a paused → resumed regenerate replays correctly. */
-  const pendingRef = useRef(pendingRegen);
-  useEffect(() => { pendingRef.current = pendingRegen; }, [pendingRegen]);
-  useEffect(() => {
-    if (paused) return;
-    const spec = pendingRef.current;
-    const cancel = api.streamGeneration({
-      bookId,
-      modelKey,
-      chapterIds: spec?.chapterIds,
-      force: spec?.force,
-      onTick: (ev: GenerationTick) => dispatch(chaptersActions.applyGenerationTick(ev)),
-    });
-    /* The spec has been handed to the server; consume it now so a Pause →
-       Resume cycle (which aborts the SSE before any `idle` tick can clear
-       the spec via the slice) doesn't re-forward force:true on Resume and
-       wipe the in-flight chapter. The next regenerate sets a fresh spec
-       and bumps regenEpoch, which is what re-fires this effect. */
-    if (spec) dispatch(chaptersActions.consumePendingRegen());
-    return cancel;
-  }, [paused, dispatch, bookId, modelKey, regenEpoch]);
+  /* SSE ownership lives in src/store/generation-stream-middleware.ts so the
+     stream survives navigating away from this view. The view is a pure
+     renderer of slice state now. */
 
   const completed     = chapters.filter(c => c.state === 'done').length;
   const failed        = chapters.filter(c => c.state === 'failed').length;
@@ -90,13 +74,20 @@ export function GenerationView({
 
   /* Real ETA from wall-clock elapsed × (1 - progress) / progress. Only
      surface when there's enough signal to avoid a wild initial estimate.
-     Disappears entirely when the queue is drained. */
+     Disappears entirely when the queue is drained.
+
+     The same 1s tick also drives the stall detection re-render — without
+     it the derived `stalled` would only flip when the slice mutates, and a
+     truly hung worker (no ticks landing) wouldn't trigger any slice
+     mutation, so the user would never see "Stalled" appear. We trigger
+     while either an in-progress chapter exists OR ETA is live. */
   const [, forceTick] = useState(0);
+  const needsClock = (generationStartedAt != null) || inProgressCnt > 0;
   useEffect(() => {
-    if (!generationStartedAt || paused) return;
+    if (!needsClock || paused) return;
     const id = setInterval(() => forceTick(n => n + 1), 1000);
     return () => clearInterval(id);
-  }, [generationStartedAt, paused]);
+  }, [needsClock, paused]);
   const elapsedMs = generationStartedAt ? Date.now() - generationStartedAt : 0;
   const etaSec = (generationStartedAt && totalProgress > 0.05 && totalProgress < 1)
     ? (elapsedMs / totalProgress) * (1 - totalProgress) / 1000
@@ -110,6 +101,27 @@ export function GenerationView({
 
   const blocked = lastError != null;
   const engineLabel = ttsModelLabel(modelKey);
+
+  /* "Stalled" = there's an in-progress chapter but the SSE has been silent
+     for longer than STALL_THRESHOLD_MS. Reading `Date.now()` directly is fine
+     because the ETA `forceTick` interval re-renders this view every second
+     while a run is active, so the derived value updates without an extra
+     timer. Cleared by every non-idle tick and by the slice on idle. */
+  const stalledMs = lastTickAt && inProgressCnt > 0 && !paused
+    ? Date.now() - lastTickAt
+    : 0;
+  const stalled = stalledMs > STALL_THRESHOLD_MS;
+  const stalledSec = stalled ? Math.floor(stalledMs / 1000) : 0;
+
+  /* `e.at` is the ISO timestamp set on every event the middleware or a
+     user-confirm handler emits at runtime. Hand-authored fixture entries in
+     src/data/change-log.ts omit it, so this filter keeps the sidebar honest
+     — only real, this-session/this-book activity shows up; the demo seed
+     stays out. */
+  const recentActivity = useMemo(() => {
+    const filtered = activityEvents.filter(e => e.at && ACTIVITY_FEED_TYPES.includes(e.type));
+    return withRecomputedDisplay(filtered).slice(0, 6);
+  }, [activityEvents]);
 
   return (
     <div className="max-w-[1100px] mx-auto px-6 py-10">
@@ -146,6 +158,18 @@ export function GenerationView({
         </div>
       )}
 
+      {stalled && !lastError && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/70 px-5 py-4 flex items-start gap-3 fade-in">
+          <IconClock className="w-5 h-5 text-amber-700 shrink-0 mt-0.5"/>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-amber-900">Worker has gone quiet</p>
+            <p className="text-sm text-amber-800/90 mt-0.5">
+              No progress for {stalledSec}s. The TTS engine may be retrying — give it a moment, or pause and resume to reset the stream.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 mb-8">
         <div className="flex items-center justify-between mb-3">
           <p className="text-sm font-semibold text-ink">Overall progress</p>
@@ -164,16 +188,38 @@ export function GenerationView({
         </div>
       </div>
 
-      <div className="space-y-3">
-        {chapters.map(ch => (
-          <ChapterRow key={ch.id} chapter={ch} characters={characters} bookId={bookId}
-                      expanded={!!expanded[ch.id]} onToggle={() => setExpanded({ ...expanded, [ch.id]: !expanded[ch.id] })}
-                      paused={paused} blocked={blocked}
-                      charStats={characterStats[ch.id]}
-                      onRegenerate={onRegenerate}
-                      onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
-                      onPreview={onPreview}/>
-        ))}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+        <div className="space-y-3 min-w-0">
+          {chapters.map(ch => (
+            <ChapterRow key={ch.id} chapter={ch} characters={characters} bookId={bookId}
+                        expanded={!!expanded[ch.id]} onToggle={() => setExpanded({ ...expanded, [ch.id]: !expanded[ch.id] })}
+                        paused={paused} blocked={blocked} stalled={stalled}
+                        charStats={characterStats[ch.id]}
+                        onRegenerate={onRegenerate}
+                        onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
+                        onPreview={onPreview}/>
+          ))}
+        </div>
+        <aside className="lg:sticky lg:top-20 self-start bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
+          <header className="flex items-center justify-between px-5 py-4 border-b border-ink/10">
+            <span className="text-sm font-semibold text-ink inline-flex items-center gap-2">
+              <IconHistory className="w-4 h-4 text-ink/60"/> Activity
+            </span>
+            <a href={`#/books/${bookId}/log`}
+               className="text-xs font-medium text-ink/55 hover:text-ink transition-colors">
+              View all →
+            </a>
+          </header>
+          {recentActivity.length === 0 ? (
+            <p className="px-5 py-6 text-xs text-ink/50">
+              Activity from this generation run will appear here as chapters complete or fail.
+            </p>
+          ) : (
+            <ul className="divide-y divide-ink/5">
+              {recentActivity.map(e => <ActivityRow key={e.id} event={e}/>)}
+            </ul>
+          )}
+        </aside>
       </div>
 
       <div className="mt-10 pt-6 border-t border-ink/10 flex items-center justify-between text-xs text-ink/50 flex-wrap gap-3">
@@ -184,6 +230,25 @@ export function GenerationView({
         </div>
       </div>
     </div>
+  );
+}
+
+function ActivityRow({ event }: { event: ChangeLogEvent }) {
+  const t = LOG_TYPES[event.type] || { icon: <IconHistory className="w-3.5 h-3.5"/>, color: '#6B6663', label: event.type };
+  return (
+    <li className="grid grid-cols-[auto_1fr] gap-3 px-5 py-3">
+      <span className="w-7 h-7 rounded-full grid place-items-center text-white shrink-0 mt-0.5"
+            style={{ background: t.color }}>
+        {t.icon}
+      </span>
+      <div className="min-w-0">
+        <p className="text-xs font-semibold text-ink truncate">{event.title}</p>
+        <p className="text-[11px] text-ink/60 leading-snug line-clamp-2">{event.note}</p>
+        <p className="mt-1 text-[10px] text-ink/45 tabular-nums inline-flex items-center gap-1">
+          <IconClock className="w-2.5 h-2.5"/> {event.ts}
+        </p>
+      </div>
+    </li>
   );
 }
 
@@ -204,6 +269,7 @@ interface ChapterRowProps {
   onToggle: () => void;
   paused: boolean;
   blocked: boolean;
+  stalled: boolean;
   charStats: Record<string, { lines: number; words: number }> | undefined;
   onRegenerate: (ch: Chapter) => void;
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
@@ -211,17 +277,30 @@ interface ChapterRowProps {
 }
 
 function ChapterRow({
-  chapter, characters, bookId, expanded, onToggle, paused, blocked, charStats,
+  chapter, characters, bookId, expanded, onToggle, paused, blocked, stalled, charStats,
   onRegenerate, onRegenerateCharacterInChapter, onPreview,
 }: ChapterRowProps) {
   const assembling = chapter.phase === 'assembling';
-  const inProgressLabel = assembling ? 'Assembling…' : (paused ? 'Paused' : 'Generating');
+  const rowStalled = stalled && chapter.state === 'in_progress';
+  const inProgressLabel = rowStalled
+    ? 'Stalled'
+    : assembling
+      ? 'Assembling…'
+      : paused ? 'Paused' : 'Generating';
+  const inProgressPill = rowStalled
+    ? <Pill color="warning">Stalled</Pill>
+    : <Pill color="peach">{inProgressLabel}</Pill>;
   const queuedPill = blocked
     ? <Pill color="danger">Blocked</Pill>
     : <Pill>Queued</Pill>;
+  const inProgressIcon = rowStalled
+    ? <IconClock   className="w-4 h-4 text-amber-700"/>
+    : paused
+      ? <IconPause className="w-4 h-4 text-magenta"/>
+      : <IconSpinner className="w-4 h-4 text-magenta"/>;
   const stateConfig = {
     done:        { tint: 'bg-emerald-50/50', badge: <Pill color="success">Done</Pill>,                                                       icon: <IconCheck   className="w-4 h-4 text-emerald-600"/> },
-    in_progress: { tint: 'bg-peach/[0.06]',  badge: <Pill color="peach">{inProgressLabel}</Pill>,                                            icon: paused ? <IconPause className="w-4 h-4 text-magenta"/> : <IconSpinner className="w-4 h-4 text-magenta"/> },
+    in_progress: { tint: rowStalled ? 'bg-amber-50/60' : 'bg-peach/[0.06]', badge: inProgressPill, icon: inProgressIcon },
     queued:      { tint: blocked ? 'bg-rose-50/30' : 'bg-white', badge: queuedPill,                                                          icon: <span className="w-4 h-4 rounded-full border border-ink/20"/> },
     failed:      { tint: 'bg-rose-50/50',    badge: <Pill color="danger">Failed</Pill>,                                                     icon: <IconWarning className="w-4 h-4 text-rose-600"/> },
   }[chapter.state];
@@ -243,13 +322,13 @@ function ChapterRow({
 
   return (
     <div className={`rounded-3xl border border-ink/10 shadow-card overflow-hidden ${stateConfig.tint}`}>
-      <button onClick={onToggle} className="w-full grid grid-cols-[40px_60px_1fr_180px_100px_120px_24px] items-center gap-4 px-5 py-4 text-left">
+      <button onClick={onToggle} className="w-full grid grid-cols-[32px_52px_minmax(0,1fr)_120px_64px_92px_20px] items-center gap-3 px-5 py-4 text-left">
         <span className="grid place-items-center">{stateConfig.icon}</span>
         <span className="text-sm font-bold text-ink/50 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
         <span className="min-w-0">
           <span className="block font-semibold text-ink truncate">{chapter.title}</span>
           {chapterTotals && (
-            <span className="block text-[11px] text-ink/50 tabular-nums mt-0.5">
+            <span className="block text-[11px] text-ink/50 tabular-nums mt-0.5 truncate">
               {chapterTotals.words.toLocaleString()} {chapterTotals.words === 1 ? 'word' : 'words'}
               {' · '}
               {chapterTotals.lines.toLocaleString()} {chapterTotals.lines === 1 ? 'line' : 'lines'}
@@ -257,14 +336,26 @@ function ChapterRow({
               {chapterTotals.speakers} {chapterTotals.speakers === 1 ? 'speaker' : 'speakers'}
             </span>
           )}
-          {chapter.errorReason && <span className="block text-xs text-rose-600 truncate mt-0.5">{chapter.errorReason}</span>}
         </span>
         <ChapterProgressBar progress={chapter.progress} state={chapter.state} paused={paused} assembling={assembling}/>
         <span className="text-sm tabular-nums text-ink/60 text-right">{chapter.duration}</span>
         <span>{stateConfig.badge}</span>
         <span className={`text-ink/40 transition-transform ${expanded ? 'rotate-180' : ''}`}><IconArrowDn className="w-4 h-4"/></span>
       </button>
-      {(chapter.state === 'done' || chapter.state === 'failed') && (
+      {chapter.state === 'failed' && chapter.errorReason && (
+        <div className="mx-5 mb-4 -mt-1 rounded-2xl border border-rose-200 bg-rose-50/80 px-4 py-3 flex items-start gap-3">
+          <IconWarning className="w-4 h-4 text-rose-600 shrink-0 mt-0.5"/>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold text-rose-900">Synthesis failed</p>
+            <p className="text-xs text-rose-800/90 mt-0.5 leading-relaxed">{chapter.errorReason}</p>
+          </div>
+          <button onClick={(e) => { e.stopPropagation(); onRegenerate(chapter); }}
+                  className="shrink-0 inline-flex items-center gap-1.5 text-xs font-semibold text-rose-700 hover:text-rose-900 transition-colors">
+            <IconRefresh className="w-3.5 h-3.5"/> Retry
+          </button>
+        </div>
+      )}
+      {(chapter.state === 'done' || (chapter.state === 'failed' && !chapter.errorReason)) && (
         <div className="px-6 pb-4 -mt-2 flex justify-end items-center gap-3">
           {chapter.state === 'done' && (
             <button onClick={(e) => { e.stopPropagation(); onPreview(chapter.id); }}

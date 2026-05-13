@@ -7,6 +7,8 @@ import { Provider } from 'react-redux';
 import { chaptersSlice } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice } from '../store/ui-slice';
+import { changeLogSlice } from '../store/change-log-slice';
+import { generationStreamMiddleware } from '../store/generation-stream-middleware';
 import { GenerationView } from './generation';
 import type { Chapter, Character, Sentence } from '../lib/types';
 
@@ -59,6 +61,7 @@ function makeStore() {
       ui:         uiSlice.reducer,
       chapters:   chaptersSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      changeLog:  changeLogSlice.reducer,
     },
   });
   store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
@@ -143,6 +146,7 @@ describe('GenerationView — early-tick render guards (regression)', () => {
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([live]));
@@ -179,33 +183,53 @@ describe('GenerationView — early-tick render guards (regression)', () => {
   });
 });
 
-describe('GenerationView — Pause/Resume regenerate loop (regression)', () => {
-  beforeEach(() => { streamGenerationMock.mockClear(); });
+describe('GenerationView — heartbeat / stalled state', () => {
+  it('shows the amber Stalled pill and banner when no tick has landed within STALL_THRESHOLD_MS', () => {
+    /* Anchor wall-clock at a known instant so the gap between
+       `lastTickAt` (set by the tick reducer) and the view's `Date.now()` call
+       is deterministic. Fake timers without a setSystemTime would freeze
+       Date.now to the test-runner default, which is also fine — but
+       setSystemTime makes the 60s leap explicit. */
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-13T15:00:00Z'));
 
-  it('clears pendingRegen the instant the SSE opens with it', () => {
-    /* The bug: pause aborts the SSE before the server's idle tick arrives,
-       so pendingRegen sticks. Resume reopens the SSE with the same
-       force:true spec and wipes the in-flight chapter — every Pause→Resume
-       is a fresh force-regen of the original target set. The view-level
-       fix is to dispatch consumePendingRegen immediately after the open. */
+    const live: Chapter = {
+      id: 1,
+      title: 'Chapter 1',
+      duration: '00:00',
+      state: 'in_progress',
+      progress: 0.5,
+      currentLine: 50,
+      totalLines: 100,
+      characters: { narrator: 'in_progress', Marlow: 'queued' },
+    };
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
       },
     });
-    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
-    /* Simulate "user clicked Regenerate" — the reducer set this spec and
-       bumped regenEpoch. The view will mount, fire its SSE effect, and
-       should drain the spec. */
-    store.dispatch(chaptersSlice.actions.regenerateChapter({ chapterId: 1, scope: 'this' }));
-    expect(store.getState().chapters.pendingRegen).toEqual({ chapterIds: [1], force: true });
+    store.dispatch(chaptersSlice.actions.setChapters([live]));
+    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
+      bookId: 'b1', characters, chapters: [live], sentences,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any));
+    /* Drive a real progress tick so the slice writes lastTickAt = Date.now()
+       at the anchored instant. Then advance the clock by 60s and render —
+       the view computes `stalled = Date.now() - lastTickAt > 30_000`. */
+    store.dispatch(chaptersSlice.actions.applyGenerationTick({
+      type: 'progress', chapterId: 1, characterId: 'narrator',
+      progress: 0.5, currentLine: 50, totalLines: 100,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any));
+    vi.setSystemTime(new Date('2026-05-13T15:01:00Z'));
 
     render(
       <Provider store={store}>
         <GenerationView
-          chapters={[chapter1, chapter2]}
+          chapters={[live]}
           characters={characters}
           paused={false}
           title="the Coalfall Commission"
@@ -218,6 +242,94 @@ describe('GenerationView — Pause/Resume regenerate loop (regression)', () => {
         />
       </Provider>,
     );
+
+    /* The stalled banner copy is the load-bearing assertion — it's what
+       answers "is it failed miserably or doing something?". */
+    expect(screen.getByText(/Worker has gone quiet/)).toBeInTheDocument();
+    /* And the in-progress chapter row swaps its peach "Generating" pill for
+       a warning "Stalled" pill. */
+    expect(screen.getAllByText('Stalled').length).toBeGreaterThan(0);
+
+    vi.useRealTimers();
+  });
+});
+
+describe('GenerationView — activity sidebar', () => {
+  it('renders generation-related change-log events in the sidebar', () => {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
+    /* Replace the default seed with a single system event so the assertion
+       is unambiguous. */
+    store.dispatch(changeLogSlice.actions.hydrateFromBookState([{
+      id: 1,
+      at: new Date().toISOString(),
+      ts: 'Just now',
+      date: 'today',
+      type: 'chapter_complete',
+      title: 'Chapter 1 complete',
+      note: 'Finished synthesising "Chapter 1".',
+      actor: 'system',
+      chapterId: 1,
+    }]));
+
+    render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={[chapter1, chapter2]}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          setPaused={() => {}}
+          onRegenerate={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+
+    expect(screen.getByText('Activity')).toBeInTheDocument();
+    /* The event's title is rendered inside the sidebar row. */
+    expect(screen.getByText('Chapter 1 complete')).toBeInTheDocument();
+  });
+});
+
+describe('generationStreamMiddleware — Pause/Resume regenerate loop (regression)', () => {
+  beforeEach(() => { streamGenerationMock.mockClear(); });
+
+  it('opens the SSE on regenerateChapter and drains pendingRegen immediately', () => {
+    /* The bug: pause aborts the SSE before the server's idle tick arrives,
+       so pendingRegen sticks. Resume reopens the SSE with the same
+       force:true spec and wipes the in-flight chapter — every Pause→Resume
+       is a fresh force-regen of the original target set. The fix is to
+       dispatch consumePendingRegen immediately after the middleware opens
+       the SSE. This regression used to live in the Generate view's effect;
+       it now lives in `generationStreamMiddleware`. */
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+      middleware: (gd) => gd().concat(generationStreamMiddleware),
+    });
+    /* Middleware skips opens unless a book is in scope. */
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
+    /* Setup may have opened a stream on the initial chapters; the assertion
+       below cares only about the regenerate-driven reopen. */
+    streamGenerationMock.mockClear();
+
+    store.dispatch(chaptersSlice.actions.regenerateChapter({ chapterId: 1, scope: 'this' }));
 
     /* streamGeneration MUST have been called with the spec (otherwise we'd
        have broken the regenerate path entirely). */

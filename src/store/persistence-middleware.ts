@@ -13,6 +13,7 @@ import type { CastState } from './cast-slice';
 import type { ManuscriptState } from './manuscript-slice';
 import type { RevisionsState } from './revisions-slice';
 import type { UiState } from './ui-slice';
+import type { ChangeLogState } from './change-log-slice';
 import type { StateSlice } from '../lib/types';
 import { api } from '../lib/api';
 
@@ -24,6 +25,7 @@ interface PersistableRootState {
   cast: CastState;
   manuscript: ManuscriptState;
   revisions: RevisionsState;
+  changeLog: ChangeLogState;
 }
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
@@ -46,6 +48,11 @@ const PERSIST_RULES: Record<string, { slice: StateSlice; build: (s: PersistableR
   'revisions/acceptAllPending': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift }) },
   'revisions/rejectAllPending': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift }) },
   'revisions/dismissDrift':     { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift }) },
+
+  /* Editorial audit trail. Persists the whole `events` array on every
+     append — the log is small (one entry per user action) and the server
+     route writes the file atomically, so a full rewrite stays cheap. */
+  'changeLog/appendLogEvent': { slice: 'changeLog', build: (s) => ({ events: s.changeLog.events }) },
 
   'ui/confirmCast': { slice: 'state', build: () => ({ castConfirmed: true }) },
 };

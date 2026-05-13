@@ -3,15 +3,22 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
-import { chaptersActions } from '../store/chapters-slice';
+import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { revisionsActions } from '../store/revisions-slice';
 import { libraryActions } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
+import { changeLogActions } from '../store/change-log-slice';
+import {
+  buildChapterRegenEvent,
+  buildCharacterRegenEvent,
+  buildBatchCharacterRegenEvent,
+} from '../lib/change-log';
+import { overallProgress, sentencesPerChapter } from '../lib/generation-progress';
 import { api } from '../lib/api';
 import { engineForModelKey } from '../lib/tts-models';
 import { stageToHash } from '../lib/router';
-import { TopBar } from './top-bar';
+import { TopBar, type GenerationPillData } from './top-bar';
 import { MiniPlayer } from './mini-player';
 import { PreviewListenerView } from '../views/preview-listener';
 import { MatchDetailDrawer } from '../modals/match-detail';
@@ -45,6 +52,10 @@ export function Layout() {
   const ui         = useAppSelector(s => s.ui);
   const characters = useAppSelector(s => s.cast.characters);
   const chapters   = useAppSelector(s => s.chapters.chapters);
+  const paused     = useAppSelector(s => s.chapters.paused);
+  const lastError  = useAppSelector(s => s.chapters.lastError);
+  const lastTickAt = useAppSelector(s => s.chapters.lastTickAt);
+  const sentences  = useAppSelector(s => s.manuscript.sentences);
   const drift      = useAppSelector(s => s.revisions.drift);
   const pending    = useAppSelector(s => s.revisions.pending);
   const manuscript = useAppSelector(s => s.manuscript);
@@ -156,6 +167,7 @@ export function Layout() {
           pending: res.revisions?.pending ?? [],
           drift:   res.revisions?.drift   ?? [],
         }));
+        dispatch(changeLogActions.hydrateFromBookState(res.changeLog ?? null));
       })
       .catch(err => { console.warn('[book-state] hydrate skipped:', err.message); });
     return () => { cancelled = true; };
@@ -195,6 +207,45 @@ export function Layout() {
 
   const ctx: LayoutContext = { showInfo, showError };
 
+  /* Re-render once per second while a generation run is alive so the global
+     pill's "stalled" computation has a clock to react against. The middleware
+     keeps the SSE open across view navigation; this is purely a UI tick to
+     surface elapsed-since-last-tick. */
+  const [, forceClockTick] = useState(0);
+  const hasGenerationWork = chapters.some(c => c.state === 'in_progress' || c.state === 'queued') || lastError != null;
+  useEffect(() => {
+    if (!hasGenerationWork) return;
+    const id = setInterval(() => forceClockTick(n => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [hasGenerationWork]);
+
+  /* Computed inline (not memoised) because the stalled check reads Date.now();
+     the surrounding component re-renders once per second via forceClockTick
+     while a run is alive, so this stays in sync without manual deps. */
+  const generationPill: GenerationPillData | null = (() => {
+    if (!hasGenerationWork) return null;
+    const bookForPill = bookId ?? null;
+    if (!bookForPill && !lastError) return null;
+
+    const done = chapters.filter(c => c.state === 'done').length;
+    const total = chapters.length;
+    const counts = sentencesPerChapter(sentences);
+    const percent = Math.round(overallProgress(chapters, counts) * 100);
+    const inProgressCount = chapters.filter(c => c.state === 'in_progress').length;
+    const stalled = !paused && inProgressCount > 0 && lastTickAt != null
+      && (Date.now() - lastTickAt) > STALL_THRESHOLD_MS;
+    const state: GenerationPillData['state'] = lastError ? 'halted' : stalled ? 'stalled' : 'running';
+    return {
+      state,
+      done,
+      total,
+      percent,
+      onClick: () => {
+        if (bookForPill) navigate(`/books/${bookForPill}/generate`);
+      },
+    };
+  })();
+
   return (
     <div className={`min-h-screen ${trackChapter ? 'pb-24' : 'pb-20'}`}>
       <TopBar stage={stageKind} view={view}
@@ -203,6 +254,7 @@ export function Layout() {
         onHome={() => dispatch(uiActions.goHome())}
         onTitleClick={stageKind === 'confirm' ? () => dispatch(uiActions.reanalyse()) : undefined}
         pendingRevisionsCount={pending.length}
+        generationPill={generationPill}
         onOpenRevisions={() => dispatch(uiActions.setShowRevisionPlayer(true))}
         onOpenVoices={() => dispatch(uiActions.openVoices())}
         onOpenChangelog={() => dispatch(uiActions.openChangelog())}/>
@@ -234,9 +286,16 @@ export function Layout() {
       {ui.regenChapter && (
         <RegenerateModal chapter={ui.regenChapter}
           onClose={() => dispatch(uiActions.setRegenChapter(null))}
-          onConfirm={({ scope }) => {
-            if (ui.regenChapter) {
-              dispatch(chaptersActions.regenerateChapter({ chapterId: ui.regenChapter.id, scope }));
+          onConfirm={({ reason, scope, note }) => {
+            const chapter = ui.regenChapter;
+            if (chapter) {
+              const affectedCount = scope === 'forward'
+                ? chapters.filter(c => c.id >= chapter.id).length
+                : 1;
+              dispatch(changeLogActions.appendLogEvent(
+                buildChapterRegenEvent({ chapter, scope, reason, note, affectedChapterCount: affectedCount }),
+              ));
+              dispatch(chaptersActions.regenerateChapter({ chapterId: chapter.id, scope }));
             }
             dispatch(uiActions.setRegenChapter(null));
             dispatch(uiActions.changeView('generate'));
@@ -246,7 +305,12 @@ export function Layout() {
         <CharacterRegenerateModal character={regenCharacter} chapters={chapters}
           defaultChapterId={ui.regenCharacterCtx.defaultChapterId}
           onClose={() => dispatch(uiActions.setRegenCharacterCtx(null))}
-          onConfirm={({ characterId, chapterIds }) => {
+          onConfirm={({ characterId, chapterIds, reason, note }) => {
+            if (regenCharacter) {
+              dispatch(changeLogActions.appendLogEvent(
+                buildCharacterRegenEvent({ character: regenCharacter, chapterIds, reason, note }),
+              ));
+            }
             dispatch(chaptersActions.regenerateCharacter({ characterId, chapterIds }));
             dispatch(uiActions.setRegenCharacterCtx(null));
             dispatch(uiActions.changeView('generate'));
@@ -255,7 +319,13 @@ export function Layout() {
       {ui.batchRegenIds && (
         <BatchCharacterRegenerateModal characterIds={ui.batchRegenIds} characters={characters} chapters={chapters}
           onClose={() => dispatch(uiActions.setBatchRegenIds(null))}
-          onConfirm={({ characterIds, chapterIds }) => {
+          onConfirm={({ characterIds, chapterIds, reason, note }) => {
+            const targets = characters.filter(c => characterIds.includes(c.id));
+            if (targets.length) {
+              dispatch(changeLogActions.appendLogEvent(
+                buildBatchCharacterRegenEvent({ characters: targets, chapterIds, reason, note }),
+              ));
+            }
             dispatch(chaptersActions.batchRegenerateCharacters({ characterIds, chapterIds }));
             dispatch(uiActions.setBatchRegenIds(null));
             dispatch(uiActions.changeView('generate'));
