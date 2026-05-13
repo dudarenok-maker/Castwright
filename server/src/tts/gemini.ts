@@ -11,10 +11,18 @@
 import { GoogleGenAI } from '@google/genai';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
 import { resolveGeminiModelId } from './index.js';
+import { GEMINI_VOICE_DESCRIPTIONS } from './voice-mapping.js';
 
 interface GeminiTtsOptions {
   apiKey: string;
 }
+
+/* Conservative default. Used when the requested voice isn't in the
+   documented Gemini prebuilt voice list — likely sign of a cross-engine
+   bleed (a Coqui name like "Aaron Dreschner" arriving at the Gemini
+   provider). Substituting rather than rejecting keeps the chapter
+   generating; the loud warning surfaces the drift. */
+const GEMINI_FALLBACK_VOICE = 'Zephyr';
 
 export class GeminiTtsProvider implements TtsProvider {
   private readonly client: GoogleGenAI;
@@ -26,6 +34,25 @@ export class GeminiTtsProvider implements TtsProvider {
   async synthesize({ text, voiceName, modelKey }: SynthesizeInput): Promise<SynthesizeOutput> {
     const model = resolveGeminiModelId(modelKey);
 
+    /* Guard against cross-engine bleed. If `voiceName` isn't a documented
+       Gemini prebuilt voice, the API would either reject with a confusing
+       error or quietly fall through to a default — both leave the user
+       wondering why their Coqui-flavoured catalog name appeared in a
+       Gemini run. Substitute and log. */
+    let actualVoice = voiceName;
+    if (!(voiceName in GEMINI_VOICE_DESCRIPTIONS)) {
+      const fallback = GEMINI_FALLBACK_VOICE in GEMINI_VOICE_DESCRIPTIONS
+        ? GEMINI_FALLBACK_VOICE
+        : Object.keys(GEMINI_VOICE_DESCRIPTIONS)[0];
+      console.warn(
+        `[tts:gemini] Voice "${voiceName}" is not in the Gemini prebuilt voice list — ` +
+        `substituting "${fallback}". This usually means a non-Gemini voice name was ` +
+        `passed to the Gemini provider (cross-engine bleed). Check that ` +
+        `pickVoiceForEngine was called with engine='gemini' for this character.`,
+      );
+      actualVoice = fallback;
+    }
+
     const response = await this.client.models.generateContent({
       model,
       contents: [{ role: 'user', parts: [{ text }] }],
@@ -33,7 +60,7 @@ export class GeminiTtsProvider implements TtsProvider {
         responseModalities: ['AUDIO'],
         speechConfig: {
           voiceConfig: {
-            prebuiltVoiceConfig: { voiceName },
+            prebuiltVoiceConfig: { voiceName: actualVoice },
           },
         },
       },

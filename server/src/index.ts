@@ -26,6 +26,7 @@ import { generationRouter } from './routes/generation.js';
 import { chapterAudioRouter } from './routes/chapter-audio.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
+import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, BOOKS_ROOT, ensureWorkspace } from './workspace/paths.js';
 
 const app = express();
@@ -77,7 +78,33 @@ app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`[server] workspace root: ${WORKSPACE_ROOT}`);
 
-  /* Background catalog audit: poll the sidecar's /speakers endpoint
+  /* Static catalog self-consistency check (instant, no I/O). Catches
+     "wrong voices used for wrong models" at its source — the per-engine
+     PROFILE_VOICES table and VOICE_DESCRIPTIONS table can drift apart
+     (a picker chooses a voice with no description, or a described voice
+     is never routable). This runs synchronously at boot so any drift
+     prints before the first request lands. */
+  for (const engine of ['gemini', 'coqui'] as const) {
+    const audit = auditEngineCatalog(engine);
+    if (audit.missingDescriptions.length > 0) {
+      console.warn(
+        `[tts:catalog] ${engine}: ${audit.missingDescriptions.length} picker voice(s) ` +
+        `have no description — cast view will show "Prebuilt voice" placeholder for: ` +
+        audit.missingDescriptions.join(', '),
+      );
+    }
+    if (audit.unrouted.length > 0) {
+      console.info(
+        `[tts:catalog] ${engine}: ${audit.unrouted.length} described voice(s) are ` +
+        `never chosen by the picker (orphan entries): ${audit.unrouted.join(', ')}`,
+      );
+    }
+    if (audit.missingDescriptions.length === 0 && audit.unrouted.length === 0) {
+      console.log(`[tts:catalog] ${engine}: ${audit.routedCount} voices, tables in sync.`);
+    }
+  }
+
+  /* Background model-manifest audit: poll the sidecar's /speakers endpoint
      until the XTTS v2 model has loaded, then diff our hardcoded
      COQUI_PROFILE_VOICES (server/src/tts/voice-mapping.ts) against the
      model's actual speaker manifest. Logs a structured summary the
