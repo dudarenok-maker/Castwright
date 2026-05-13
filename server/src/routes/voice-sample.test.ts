@@ -1,0 +1,169 @@
+/* Integration tests for the voice-sample router. Stubs the TTS provider so
+   the encoder boundary (real ffmpeg) is the only system dependency. Forces
+   the on-disk cache root into a tempdir via VOICE_SAMPLE_AUDIO_DIR so a
+   run doesn't leak files into the dev server's audio dir. */
+
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import express, { type Express } from 'express';
+import request from 'supertest';
+
+/* vi.hoisted so the inner factory below can close over the same vi.fn()
+   instance we drive from the tests. selectTtsProvider() returns this stub
+   provider; every test orchestrates synthesize() to choose the path. */
+const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
+
+vi.mock('../tts/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/index.js')>();
+  return {
+    ...actual,
+    selectTtsProvider: vi.fn(() => ({ synthesize })),
+  };
+});
+
+let audioDir: string;
+let app: Express;
+
+beforeAll(async () => {
+  audioDir = mkdtempSync(join(tmpdir(), 'audiobook-voice-sample-test-'));
+  process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
+
+  /* Defer import so the route module reads VOICE_SAMPLE_AUDIO_DIR at load
+     time (it's captured in a module-level const). */
+  const { voiceSampleRouter } = await import('./voice-sample.js');
+
+  app = express();
+  app.use(express.json());
+  app.use('/api/voices', voiceSampleRouter);
+});
+
+afterAll(() => {
+  if (audioDir) rmSync(audioDir, { recursive: true, force: true });
+  delete process.env.VOICE_SAMPLE_AUDIO_DIR;
+});
+
+beforeEach(() => {
+  synthesize.mockReset();
+  /* Default: 0.5 s of silence at 24 kHz mono int16. ffmpeg encodes this in
+     well under a second, so the suite stays fast. */
+  const pcm = Buffer.alloc(24_000 * 2 * 0.5, 0);
+  synthesize.mockResolvedValue({ pcm, sampleRate: 24_000, mimeType: 'audio/L16' });
+  /* Reset disk cache so cache-miss/hit ordering is deterministic. */
+  for (const f of readdirSync(audioDir)) rmSync(join(audioDir, f), { force: true });
+});
+
+function isMp3Magic(buf: Buffer): boolean {
+  if (buf.length < 3) return false;
+  /* ID3v2 tag header. */
+  if (buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) return true;
+  /* Raw MPEG-2 Layer III frame sync: 11 set bits at the start. */
+  if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return true;
+  return false;
+}
+
+describe('voice-sample router', () => {
+  describe('happy path', () => {
+    it('synthesises, encodes to MP3, caches; second call short-circuits', async () => {
+      const body = {
+        modelKey: 'coqui-xtts-v2',
+        voice: { id: 'v_Marlow', character: 'Marlow', attributes: ['Male'] },
+        text: 'Hello world. This is a voice sample.',
+      };
+
+      const res1 = await request(app)
+        .post('/api/voices/v_Marlow/sample')
+        .send(body);
+
+      expect(res1.status).toBe(200);
+      expect(res1.body.modelKey).toBe('coqui-xtts-v2');
+      expect(res1.body.cached).toBe(false);
+      expect(res1.body.url).toMatch(/^\/audio\/voices\/v_Marlow-coqui-xtts-v2-[a-z0-9]+\.mp3$/);
+      expect(typeof res1.body.durationSec).toBe('number');
+      expect(res1.body.durationSec).toBeGreaterThan(0);
+
+      /* File on disk is a real MP3 (not a WAV with a misleading suffix). */
+      const fileName = res1.body.url.split('/').pop() as string;
+      const fileBuf = readFileSync(join(audioDir, fileName));
+      expect(isMp3Magic(fileBuf)).toBe(true);
+      expect(fileBuf.length).toBeGreaterThan(0);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+
+      /* Second identical request — disk cache hit, no re-synth. */
+      const res2 = await request(app)
+        .post('/api/voices/v_Marlow/sample')
+        .send(body);
+
+      expect(res2.status).toBe(200);
+      expect(res2.body.cached).toBe(true);
+      expect(res2.body.url).toBe(res1.body.url);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+    });
+
+    it('different text under the same voice produces a distinct cache entry', async () => {
+      const base = {
+        modelKey: 'coqui-xtts-v2',
+        voice: { id: 'v_Oduvan', character: 'Oduvan', attributes: ['Male'] },
+      };
+      const a = await request(app).post('/api/voices/v_Oduvan/sample').send({ ...base, text: 'First line.' });
+      const b = await request(app).post('/api/voices/v_Oduvan/sample').send({ ...base, text: 'Second different line.' });
+
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(a.body.url).not.toBe(b.body.url);
+      expect(a.body.url).toMatch(/\.mp3$/);
+      expect(b.body.url).toMatch(/\.mp3$/);
+      expect(synthesize).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('validation', () => {
+    it('400 invalid_model when modelKey is unknown', async () => {
+      const res = await request(app)
+        .post('/api/voices/v_Marlow/sample')
+        .send({ modelKey: 'nope', text: 'x' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('invalid_model');
+      expect(synthesize).not.toHaveBeenCalled();
+    });
+
+    it('400 invalid_model when modelKey is missing', async () => {
+      const res = await request(app)
+        .post('/api/voices/v_Marlow/sample')
+        .send({ text: 'x' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('invalid_model');
+      expect(synthesize).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('provider errors', () => {
+    it('503 sidecar_down when the sidecar is unreachable', async () => {
+      synthesize.mockRejectedValueOnce(new Error('sidecar not reachable at http://localhost:9000'));
+      const res = await request(app)
+        .post('/api/voices/v_Marlow/sample')
+        .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('sidecar_down');
+    });
+
+    it('429 rate_limited when the upstream rate-limits', async () => {
+      synthesize.mockRejectedValueOnce(new Error('Gemini returned 429: rate limit exceeded'));
+      const res = await request(app)
+        .post('/api/voices/v_Marlow/sample')
+        .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
+      expect(res.status).toBe(429);
+      expect(res.body.code).toBe('rate_limited');
+    });
+
+    it('502 tts_failed on a generic synthesis failure', async () => {
+      synthesize.mockRejectedValueOnce(new Error('Something else went wrong.'));
+      const res = await request(app)
+        .post('/api/voices/v_Marlow/sample')
+        .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe('tts_failed');
+    });
+  });
+});
