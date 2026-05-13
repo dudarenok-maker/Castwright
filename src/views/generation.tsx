@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   IconPlay, IconPause, IconCheck, IconSpinner, IconWarning,
   IconArrowDn, IconRefresh, IconClose,
@@ -12,6 +12,9 @@ import { api } from '../lib/api';
 import { ttsModelLabel } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
+import {
+  characterStatsByChapter, overallProgress, sentencesPerChapter,
+} from '../lib/generation-progress';
 import type {
   Chapter, Character, CharColor, ChapterAudio, GenerationTick, TtsModelKey,
 } from '../lib/types';
@@ -38,7 +41,15 @@ export function GenerationView({
   const generationStartedAt = useAppSelector(s => s.chapters.generationStartedAt);
   const pendingRegen        = useAppSelector(s => s.chapters.pendingRegen);
   const regenEpoch          = useAppSelector(s => s.chapters.regenEpoch);
+  const sentences           = useAppSelector(s => s.manuscript.sentences);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+
+  /* Manuscript-derived shape used both for accurate overall-progress
+     weighting (so 3 hydrated-Done chapters don't collapse the bar to the
+     in-flight chapter's progress) and for the per-character lines/words
+     readout in the expanded chapter rows. */
+  const manuscriptCounts = useMemo(() => sentencesPerChapter(sentences), [sentences]);
+  const characterStats   = useMemo(() => characterStatsByChapter(sentences), [sentences]);
 
   /* Open the SSE on mount / model / regen-epoch change. We deliberately do
      NOT depend on `chapters` here — the slice handles ticks and the server
@@ -65,15 +76,11 @@ export function GenerationView({
   const inProgressCnt = chapters.filter(c => c.state === 'in_progress').length;
   const queued        = chapters.filter(c => c.state === 'queued').length;
 
-  /* Sentence-weighted overall progress, with a graceful fallback to
-     equal-weight average for chapters that haven't reported a totalLines
-     yet (server emits it on the first progress tick, but a brand-new run
-     starts with everything at zero). */
-  const totalLinesSum = chapters.reduce((s, c) => s + (c.totalLines || 0), 0);
-  const weightedNum   = chapters.reduce((s, c) => s + c.progress * (c.totalLines || 0), 0);
-  const totalProgress = totalLinesSum > 0
-    ? weightedNum / totalLinesSum
-    : chapters.reduce((s, c) => s + c.progress, 0) / chapters.length;
+  /* Sentence-weighted overall progress. Weights come from the manuscript
+     when available (canonical for the whole book), then the live
+     totalLines tick, then average-known, then equal-weight — see
+     `overallProgress` for the precedence chain. */
+  const totalProgress = overallProgress(chapters, manuscriptCounts);
 
   /* Real ETA from wall-clock elapsed × (1 - progress) / progress. Only
      surface when there's enough signal to avoid a wild initial estimate.
@@ -156,6 +163,7 @@ export function GenerationView({
           <ChapterRow key={ch.id} chapter={ch} characters={characters} bookId={bookId}
                       expanded={!!expanded[ch.id]} onToggle={() => setExpanded({ ...expanded, [ch.id]: !expanded[ch.id] })}
                       paused={paused} blocked={blocked}
+                      charStats={characterStats[ch.id]}
                       onRegenerate={onRegenerate}
                       onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
                       onPreview={onPreview}/>
@@ -190,13 +198,14 @@ interface ChapterRowProps {
   onToggle: () => void;
   paused: boolean;
   blocked: boolean;
+  charStats: Record<string, { lines: number; words: number }> | undefined;
   onRegenerate: (ch: Chapter) => void;
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
   onPreview: (chapterId: number) => void;
 }
 
 function ChapterRow({
-  chapter, characters, bookId, expanded, onToggle, paused, blocked,
+  chapter, characters, bookId, expanded, onToggle, paused, blocked, charStats,
   onRegenerate, onRegenerateCharacterInChapter, onPreview,
 }: ChapterRowProps) {
   const assembling = chapter.phase === 'assembling';
@@ -213,6 +222,19 @@ function ChapterRow({
 
   const findChar = (id: string): Character => characters.find(c => c.id === id) || { id, name: id, role: '', color: 'narrator' };
 
+  /* Chapter totals derived from the manuscript so the header can show
+     "X words · Y lines · Z speakers" without waiting on the SSE. */
+  const chapterTotals = (() => {
+    if (!charStats) return null;
+    const entries = Object.values(charStats);
+    if (entries.length === 0) return null;
+    return {
+      lines:    entries.reduce((s, e) => s + e.lines, 0),
+      words:    entries.reduce((s, e) => s + e.words, 0),
+      speakers: entries.length,
+    };
+  })();
+
   return (
     <div className={`rounded-3xl border border-ink/10 shadow-card overflow-hidden ${stateConfig.tint}`}>
       <button onClick={onToggle} className="w-full grid grid-cols-[40px_60px_1fr_180px_100px_120px_24px] items-center gap-4 px-5 py-4 text-left">
@@ -220,6 +242,15 @@ function ChapterRow({
         <span className="text-sm font-bold text-ink/50 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
         <span className="min-w-0">
           <span className="block font-semibold text-ink truncate">{chapter.title}</span>
+          {chapterTotals && (
+            <span className="block text-[11px] text-ink/50 tabular-nums mt-0.5">
+              {chapterTotals.words.toLocaleString()} {chapterTotals.words === 1 ? 'word' : 'words'}
+              {' · '}
+              {chapterTotals.lines.toLocaleString()} {chapterTotals.lines === 1 ? 'line' : 'lines'}
+              {' · '}
+              {chapterTotals.speakers} {chapterTotals.speakers === 1 ? 'speaker' : 'speakers'}
+            </span>
+          )}
           {chapter.errorReason && <span className="block text-xs text-rose-600 truncate mt-0.5">{chapter.errorReason}</span>}
         </span>
         <ChapterProgressBar progress={chapter.progress} state={chapter.state} paused={paused} assembling={assembling}/>
@@ -245,10 +276,18 @@ function ChapterRow({
           <div className="ml-[100px] pl-4 border-l border-ink/10 space-y-2">
             {Object.entries(chapter.characters).map(([cid, status]) => {
               const c = findChar(cid);
+              const stat = charStats?.[cid];
               return (
                 <div key={cid} className="grid grid-cols-[20px_1fr_140px_100px_28px] items-center gap-4 py-1.5 text-sm group">
                   <ColorDot color={c.color as CharColor} size={8}/>
-                  <span className="font-medium text-ink/90">{c.name}</span>
+                  <span className="min-w-0 flex items-baseline gap-2">
+                    <span className="font-medium text-ink/90 truncate">{c.name}</span>
+                    {stat && (
+                      <span className="text-[11px] text-ink/40 tabular-nums shrink-0">
+                        {stat.lines.toLocaleString()} {stat.lines === 1 ? 'line' : 'lines'} · {stat.words.toLocaleString()} {stat.words === 1 ? 'word' : 'words'}
+                      </span>
+                    )}
+                  </span>
                   <CharStatusBar status={status} paused={paused}/>
                   <span className="text-xs text-ink/50 capitalize text-right">
                     {status === 'in_progress' && <span className="text-magenta font-medium">{paused ? 'Paused' : 'Generating…'}</span>}
