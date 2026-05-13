@@ -16,6 +16,7 @@
 - `READY_DEFAULTS` in `ui-slice.ts:13` is `{ currentChapterId: 3, openProfileId: null }`. The hash router's default chapter mirrors this (see `01-hash-router.md`).
 - Transient overlays (`currentTrack`, `matchDetailFor`, `handoffApp`, `regenChapter`, `regenCharacterCtx`, `batchRegenIds`, `showRevisionPlayer`, `showDriftReport`, `previewMode`) stay at the slice top — they do not move inside `stage` variants.
 - `openBook` in `ui-slice.ts:78-88` is the only entry point that picks a `view` from a book's `status`: `analysing → analysing`, `cast_pending → confirm`, `complete → ready/listen`, `generating → ready/generate`, else `ready/cast`. Do not duplicate that mapping elsewhere.
+- `AnalysingRoute` in `src/routes/index.tsx` derives the manuscriptId fed to `AnalysingView` as `stage.manuscriptId ?? manuscript.manuscriptId ?? activeBook.manuscriptId ?? null`. Stage takes precedence so a freshly-uploaded book skips a round-trip, but the fallbacks are load-bearing: `useHydrateStage` resets `stage.manuscriptId` to `null` on page refresh, deep link, or `confirm→reanalyse`, and the manuscript slice / library entry are what carry the id through those paths. Covered by `src/routes/index.test.tsx`.
 
 ## Acceptance walkthrough
 
@@ -30,6 +31,7 @@ Run in mock mode (`VITE_USE_MOCKS=true`). Use the Redux DevTools panel to assert
 7. **Click "Voices" from a `ready` stage** → dispatches `openVoices`; `stage = { kind: 'voices' }`. **Click home** → `goHome` → `{ kind: 'books' }`.
 8. **Open a `cast_pending` book from library** → dispatches `openBook { id, status: 'cast_pending' }`; `stage = { kind: 'confirm', bookId: id }`. Repeat for each status and assert the mapping above.
 9. **Guard check** — dispatch `confirmCast` while `stage.kind === 'books'`. Expected: no change. Assert `stage.kind` is still `'books'`.
+10. **Refresh the page on `#/books/<id>/analysing`** → URL re-hydrate sets `stage.manuscriptId` to `null`, but the analysing screen still streams progress (no "No manuscript loaded" banner). The manuscript slice's `manuscriptId` (seeded by Layout's book-state hydration) is what feeds `api.analyseManuscript`. Regression for #16 May 2026.
 
 ## Out of scope
 
