@@ -14,6 +14,11 @@ export interface SynthesizeInput {
   text: string;
   voiceName: string;
   modelKey: TtsModelKey;
+  /** Optional abort signal — providers that can honour it should pass it
+      through to their underlying HTTP/SDK call so a mid-call cancellation
+      (e.g. server-side per-book mutex aborting a stale generation handler)
+      doesn't leave a slow synth call running to completion. */
+  signal?: AbortSignal;
 }
 
 export interface SynthesizeOutput {

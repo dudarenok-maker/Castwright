@@ -77,6 +77,11 @@ export interface SynthesiseChapterOpts {
     totalGroups: number;
     accumulatedSec: number;
   }) => void;
+  /** Optional abort signal — checked between groups and forwarded to the
+      provider so an in-flight TTS call can be cancelled mid-call. Used by
+      the per-bookId server mutex to stop a stale generation handler when a
+      new POST arrives for the same book. */
+  signal?: AbortSignal;
 }
 
 /** Fold sentences into consecutive same-speaker groups. Order preserved. */
@@ -130,7 +135,7 @@ export function buildHintFromCast(c: CastCharacter): CharacterHint {
 }
 
 export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<ChapterSynthesisResult> {
-  const { sentences, cast, provider, modelKey, engine, onGroupComplete } = opts;
+  const { sentences, cast, provider, modelKey, engine, onGroupComplete, signal } = opts;
 
   const castById = new Map(cast.map(c => [c.id, c]));
   const groups = buildSentenceGroups(sentences);
@@ -141,6 +146,14 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
   let sampleRate = 24000; // first call sets this; default matches Gemini's documented rate.
 
   for (const group of groups) {
+    /* Cheap abort check between groups — covers the common case where the
+       outer handler decides to stop (per-bookId mutex, request close, etc.)
+       and the next TTS call would otherwise burn another minute or two of
+       sidecar time. The provider also receives the signal so a mid-call
+       abort is honoured. */
+    if (signal?.aborted) {
+      throw new DOMException('synthesiseChapter aborted', 'AbortError');
+    }
     const character = castById.get(group.characterId) ?? { id: group.characterId };
     const voiceName = pickVoiceForEngine(engine, toVoiceLike(character), buildHintFromCast(character));
 
@@ -148,6 +161,7 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
       text: group.text,
       voiceName,
       modelKey,
+      signal,
     });
 
     /* All Gemini TTS responses come back at the same rate today, but defend

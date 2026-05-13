@@ -68,6 +68,12 @@ export function GenerationView({
       force: spec?.force,
       onTick: (ev: GenerationTick) => dispatch(chaptersActions.applyGenerationTick(ev)),
     });
+    /* The spec has been handed to the server; consume it now so a Pause →
+       Resume cycle (which aborts the SSE before any `idle` tick can clear
+       the spec via the slice) doesn't re-forward force:true on Resume and
+       wipe the in-flight chapter. The next regenerate sets a fresh spec
+       and bumps regenEpoch, which is what re-fires this effect. */
+    if (spec) dispatch(chaptersActions.consumePendingRegen());
     return cancel;
   }, [paused, dispatch, bookId, modelKey, regenEpoch]);
 

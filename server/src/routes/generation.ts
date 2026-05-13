@@ -38,6 +38,19 @@ import {
 
 export const generationRouter = Router();
 
+/* Per-bookId mutex. A second POST for the same book aborts the first — the
+   in-flight handler's `synthesiseChapter` loop checks `signal.aborted` between
+   groups and the sidecar fetch receives the same signal, so a stale handler
+   stops within seconds rather than running to the end of the chapter.
+
+   Without this, the client's regenerate flow can stack handlers: Pause aborts
+   the client SSE but the server keeps processing; a subsequent Resume opens
+   a fresh handler against the same book, the sidecar serialises both, and the
+   user sits through duplicate work. With the mutex, "newest request wins" —
+   the prior handler shuts down cleanly (emits a final `idle` from the
+   AbortError catch) and the new one runs alone. */
+const inFlightByBook: Map<string, AbortController> = new Map();
+
 interface GenerationRequestBody {
   modelKey?: unknown;
   chapterIds?: unknown;
@@ -145,15 +158,25 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     return res.end();
   }
 
-  /* Pause = client closes the SSE. We let the chapter in flight finish (its
-     PCM is in memory; killing it would waste the synth work already done).
-     The flag is checked at the top of the chapter loop, so the queue stops
-     cleanly between chapters. */
-  let pauseRequested = false;
-  req.on('close', () => { pauseRequested = true; });
+  /* Per-bookId mutex: if a previous handler is still running for this book,
+     abort it. Its synthesiseChapter loop will see signal.aborted between
+     groups (and the sidecar fetch will reject with AbortError mid-call),
+     bail out via the AbortError catch below, and end its response. We then
+     register our own controller for the next caller to displace if needed. */
+  const previousController = inFlightByBook.get(bookId);
+  if (previousController) previousController.abort();
+  const controller = new AbortController();
+  inFlightByBook.set(bookId, controller);
+
+  /* Pause = client closes the SSE. We abort our own controller so the
+     synth loop bails between groups instead of running the chapter to
+     completion. (The pre-mutex behaviour was to let the in-flight chapter
+     finish — but with the mutex we want a "newest request wins" semantics
+     and the user gets faster feedback on Pause.) */
+  req.on('close', () => controller.abort());
 
   for (const chapter of targetChapters) {
-    if (pauseRequested) break;
+    if (controller.signal.aborted) break;
 
     const sentences = analysis.chapters[chapter.id] ?? [];
     if (sentences.length === 0) {
@@ -182,6 +205,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         provider,
         modelKey,
         engine,
+        signal: controller.signal,
         onGroupComplete: ({ group, totalGroups }) => {
           const progress = Math.min(0.99, (group.index + 1) / totalGroups);
           const lastSentenceId = group.sentenceIds[group.sentenceIds.length - 1];
@@ -260,6 +284,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         totalLines,
       });
     } catch (e) {
+      /* AbortError = our own controller fired (mutex displacement or client
+         close). Don't report it as a chapter failure — silently break the
+         loop; the outer `idle` + cleanup below handles the rest. */
+      if ((e as { name?: string })?.name === 'AbortError') break;
       const { errorReason, fatal } = describeSynthesisError(e);
       console.error(`[generation] chapter ${chapter.id} (${chapter.slug}) failed:`, e);
       send({
@@ -269,6 +297,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       });
       if (fatal) break;
     }
+  }
+
+  /* Only deregister if we're still the current controller — a newer request
+     may have already displaced us, and removing its entry would defeat the
+     mutex for a third caller. */
+  if (inFlightByBook.get(bookId) === controller) {
+    inFlightByBook.delete(bookId);
   }
 
   send({ type: 'idle' });
