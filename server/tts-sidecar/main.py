@@ -19,6 +19,7 @@ that's fine. Read the license before redistributing audio you generate.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -130,6 +131,32 @@ ENGINES: dict[str, Engine] = {
 }
 
 
+@app.on_event("startup")
+async def _preload_default_engine() -> None:
+    """Load Coqui XTTS v2 at process start so the user's first /synthesize call
+    doesn't pay the 30–60s model-load tax *on top of* a synth — that one long
+    call was indistinguishable from a hang from the UI's perspective (Generate
+    screen's 30s stall banner fired before the model even finished loading).
+
+    Opt out with PRELOAD_COQUI=0 if you want lazy load (useful when iterating
+    on the wire protocol without burning RAM)."""
+    if os.environ.get("PRELOAD_COQUI", "1") == "0":
+        log.info("PRELOAD_COQUI=0 — skipping eager Coqui model load.")
+        return
+    model = os.environ.get("PRELOAD_COQUI_MODEL", "xtts_v2")
+    coqui = ENGINES.get("coqui")
+    if not isinstance(coqui, CoquiEngine):
+        return
+    try:
+        log.info("Preloading Coqui (model=%s) at startup…", model)
+        await asyncio.to_thread(coqui._ensure_loaded, model)
+        log.info("Coqui preload complete — /synthesize will respond fast on first call.")
+    except Exception as e:
+        # Don't crash the process — the user still gets /health and a
+        # diagnostic on the first real /synthesize call.
+        log.warning("Coqui preload failed (%s). Will retry lazily on first request.", e)
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "engines": sorted(ENGINES.keys())}
@@ -161,7 +188,19 @@ async def synthesize(req: Request) -> Response:
 
     engine = ENGINES[engine_id]
     try:
-        pcm, sample_rate = engine.synthesize(model, voice, text)
+        # CRITICAL: offload to a worker thread.
+        #
+        # XTTS inference is CPU-bound Python (numpy/torch) and takes 30s–3min
+        # per call. Running it inline on the event loop blocks the entire
+        # process from accepting *any* inbound request — including the Node
+        # proxy's /health probe, which then times out at 2s and the UI's
+        # sidecar pill flips to "unreachable" the instant generation starts,
+        # even though the sidecar is busy doing exactly what it should.
+        #
+        # asyncio.to_thread runs the sync call on a worker thread and yields
+        # control back to the event loop, so /health stays sub-50ms during
+        # synthesis. This is the single biggest UX fix in the sidecar.
+        pcm, sample_rate = await asyncio.to_thread(engine.synthesize, model, voice, text)
     except Exception as e:
         log.exception("synth failed (engine=%s model=%s voice=%s)", engine_id, model, voice)
         return JSONResponse({"detail": str(e)}, status_code=500)

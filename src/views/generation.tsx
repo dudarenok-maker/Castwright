@@ -283,12 +283,14 @@ export function GenerationView({
 
 function SidecarStatusPill({ health }: { health: SidecarHealth }) {
   const reachable = health.status === 'reachable';
-  /* Two states; the in-between "slow / loading" is intentionally folded into
-     unreachable for now — both block synthesis from the user's perspective,
-     and the timeout copy in the tooltip explains it. */
+  /* User-facing copy: "Sidecar" is implementation jargon — the user thinks in
+     terms of "is the model up so I can generate". Tooltip keeps the technical
+     URL for diagnostics. Two states; the in-between "slow / loading" is
+     intentionally folded into unavailable for now — both block synthesis from
+     the user's perspective, and the timeout copy in the tooltip explains it. */
   return (
     <span
-      title={health.error || (reachable ? `Sidecar ready at ${health.url}` : 'Sidecar not reachable')}
+      title={health.error || (reachable ? `Local TTS reachable at ${health.url}` : 'Local TTS process not reachable')}
       className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
         reachable
           ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
@@ -296,7 +298,7 @@ function SidecarStatusPill({ health }: { health: SidecarHealth }) {
       }`}
     >
       <span className={`w-1.5 h-1.5 rounded-full ${reachable ? 'bg-emerald-500' : 'bg-rose-500'}`}/>
-      {reachable ? 'Sidecar ready' : 'Sidecar unreachable'}
+      {reachable ? 'Model ready' : 'Model unavailable'}
     </span>
   );
 }

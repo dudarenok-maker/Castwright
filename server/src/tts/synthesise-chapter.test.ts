@@ -200,6 +200,54 @@ describe('synthesiseChapter voice routing', () => {
     expect(provider.calls[0].signal).toBe(controller.signal);
   });
 
+  it('fires onGroupStart BEFORE the provider call for each group (stall-timer reset regression)', async () => {
+    /* The "Worker has gone quiet" bug: a single same-speaker group can be a
+       multi-minute synth call on CPU. The client's 30s stall detector fires
+       if no tick arrives in that window. Without onGroupStart we only ticked
+       at group completion, which made every long call look like a hang.
+
+       This test pins the *ordering*: onGroupStart must run before the
+       provider.synthesize call, so the SSE route can emit a "started" tick
+       that resets the stall timer at the start of each group. Future
+       refactors that move the callback after the synth would silently
+       regress the stall UX. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+      { id: 'elwin',    name: 'Elwin', gender: 'male', attributes: ['caring'] },
+    ];
+    const events: string[] = [];
+    const provider: TtsProvider = {
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        events.push(`synth:${input.voiceName}`);
+        return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+
+    await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'First.'),
+        sentence(2, 'elwin',    'Second.'),
+      ],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      onGroupStart: ({ group }) => events.push(`start:${group.characterId}`),
+      onGroupComplete: ({ group }) => events.push(`complete:${group.characterId}`),
+    });
+
+    /* Strict ordering per group: start → synth → complete. The exact voice
+       name chosen by pickVoiceForEngine isn't load-bearing here — only that
+       a synth event is sandwiched between start and complete for each group. */
+    expect(events).toHaveLength(6);
+    expect(events[0]).toBe('start:narrator');
+    expect(events[1]).toMatch(/^synth:/);
+    expect(events[2]).toBe('complete:narrator');
+    expect(events[3]).toBe('start:elwin');
+    expect(events[4]).toMatch(/^synth:/);
+    expect(events[5]).toBe('complete:elwin');
+  });
+
   it('falls back to gendered inference from description when explicit gender is absent', async () => {
     /* Belt-and-braces: if the analyzer cached an older shape without
        `gender:`, the prose description still carries enough signal to land

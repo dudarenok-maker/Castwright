@@ -1,0 +1,12 @@
+# Test-only dependencies for the local TTS sidecar. Kept out of the
+# production `requirements.txt` so the heavy ML deps (torch, coqui-tts) and
+# the test deps stay independently installable.
+#
+# Install into the same venv as the runtime deps:
+#   .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+#
+# Run tests:
+#   .\.venv\Scripts\python.exe -m pytest
+pytest>=8.0,<9.0
+# FastAPI's TestClient depends on httpx — pin a recent stable line.
+httpx>=0.27,<1.0

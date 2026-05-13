@@ -17,6 +17,8 @@ Default local TTS provider. A separate process (Python-based Coqui XTTS v2 serve
 - Cache key: `voiceId + modelKey`. Re-requesting the same combination returns the cached file with `cached: true` in the `VoiceSample` response (`src/lib/api.ts:276-281, 518-530`).
 - `VoiceSample` shape: `{ url, durationSec, cached, modelKey }` — `durationSec` is computed from PCM byte count, not from the upstream response.
 - Sidecar abstraction lives in `server/src/tts/sidecar.ts`. Adding a Piper or Kokoro sidecar means adding a new provider class in `server/src/tts/index.ts` that targets a different endpoint; the client interface (`POST /api/voices/.../sample` with `modelKey`) does not change.
+- **`/synthesize` MUST offload to `asyncio.to_thread`** (`server/tts-sidecar/main.py`). XTTS inference is CPU-bound Python and blocks the event loop if run inline — `/health` then can't respond, and the Node-side proxy timeout flips the UI pill to "Sidecar unreachable" the moment generation starts even though the sidecar is healthy. Pinned by `tests/test_smoke.py::test_health_responsive_during_busy_synth`.
+- **Coqui preloads at process startup** (`@app.on_event("startup")`) so the first user `/synthesize` doesn't pay the 30–60s model-load cost on top of the synth. Opt out with `PRELOAD_COQUI=0`. Without preload, the first generate looks like a 120s hang on the Generate screen (stall banner fires at 30s).
 
 ## Acceptance walkthrough
 
@@ -28,11 +30,13 @@ Run server with `VITE_USE_MOCKS=false`. Start the sidecar separately (`npm run t
 4. **Sidecar down** — kill the sidecar process. Click Preview. Request fails with a useful error ("Sample synthesis failed: …" surfaced from `src/lib/api.ts:524-529`). UI shows the error; user can restart the sidecar and retry.
 5. **Sidecar mid-flight crash during chapter generation** — kill the sidecar mid-stream. The generation SSE stream surfaces `chapter_failed` ticks with `errorReason` carrying the upstream message. Already-completed chapters keep their WAVs.
 6. **Disk full** — fill the audio cache disk. Request fails at the cache-write step; the SSE stream surfaces the I/O error.
+7. **Health stays green during synth** — start a long chapter (Bonus Keefe Story Ch 1, 10+ lines on the narrator). The Generate-screen sidecar pill stays green throughout the synth call. If it flips to red the moment generation starts, `/synthesize` is blocking the event loop — check it still uses `asyncio.to_thread`. Pytest pin: `cd server/tts-sidecar && .\.venv\Scripts\python.exe -m pytest`.
+8. **First synth is fast** — after a clean `npm run tts:sidecar`, the first chapter's first group lands a synth response within seconds, not minutes. The preload at startup is what makes this true.
 
 ## KNOWN: scaffolded behavior
 
 - No auto-start of the sidecar; user must run it manually before analysis.
-- No health-check endpoint; the only way to know the sidecar is up is to issue a request and see if it succeeds.
+- Health-check endpoint exists at `GET /health` and is proxied as `GET /api/sidecar/health`. The Generate screen polls it for the status pill.
 - No automatic retry; transient failures (e.g. sidecar restart mid-flight) require manual user action (click Retry).
 - Document the failure paths explicitly; do not assert "audio always plays."
 
