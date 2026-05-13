@@ -87,8 +87,16 @@ export interface StreamArgs {
   force?: boolean;
   /** Used by the mock to drive its in-memory progress; ignored by the real
       implementation (the server knows what's on disk). Keep it optional so
-      callers can stop providing it once the mock is gone. */
-  getChapters?: () => Array<{ id: number; state: string; progress?: number; totalLines?: number }>;
+      callers can stop providing it once the mock is gone. The full `Chapter`
+      shape is what the middleware feeds back, including `characters` — the
+      mock uses that to cycle the active speaker pill as progress advances. */
+  getChapters?: () => Array<{
+    id: number;
+    state: string;
+    progress?: number;
+    totalLines?: number;
+    characters: Record<string, string>;
+  }>;
   onTick: (ev: GenerationTick & { type: GenerationTick['type'] }) => void;
 }
 export interface AudioArgs { bookId: string; chapterId: number; duration?: string; }
