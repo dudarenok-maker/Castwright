@@ -1,24 +1,26 @@
-# Chapter audio format (MP3 VBR V2)
+# Audio output format (MP3 VBR V2)
 
 > Status: stable
-> Key files: `server/src/tts/mp3.ts`, `server/src/tts/wav.ts`, `server/src/workspace/chapter-audio-file.ts`, `server/src/routes/generation.ts`, `server/src/routes/chapter-audio.ts`, `scripts/start-app.ps1`
-> URL surface: `GET /api/books/:bookId/chapters/:chapterId/audio`, `GET …/audio.mp3`, `GET …/audio.wav`
-> OpenAPI ops: `ChapterAudio` (`openapi.yaml:714`) — `url` is the format-specific suffix the locator resolved to.
-> Paired tests: `server/src/tts/mp3.test.ts`, `server/src/tts/wav.test.ts`, `server/src/routes/chapter-audio.test.ts`
-> Cross-links: [16 — Generation stream](16-generation-stream.md)
+> Key files: `server/src/tts/mp3.ts`, `server/src/tts/wav.ts`, `server/src/workspace/chapter-audio-file.ts`, `server/src/routes/generation.ts`, `server/src/routes/chapter-audio.ts`, `server/src/routes/voice-sample.ts`, `scripts/start-app.ps1`
+> URL surface: `GET /api/books/:bookId/chapters/:chapterId/audio`, `GET …/audio.mp3`, `GET …/audio.wav`, `POST /api/voices/:voiceId/sample`
+> OpenAPI ops: `ChapterAudio` (`openapi.yaml`) — `url` is the format-specific suffix the locator resolved to; `getVoiceSample` returns a URL under `/audio/voices/`.
+> Paired tests: `server/src/tts/mp3.test.ts`, `server/src/tts/wav.test.ts`, `server/src/routes/chapter-audio.test.ts`, `server/src/routes/voice-sample.test.ts`
+> Cross-links: [16 — Generation stream](16-generation-stream.md), [10 — Profile drawer](10-profile-drawer.md)
 
 ## What this covers
 
-Chapter audio is generated as MP3 (LAME VBR V2 ≈ 140–185 kbps mono at the
-sidecar's native sample rate, typically 24 kHz). PCM concatenation happens
-in Node after per-sentence synthesis returns from the sidecar; the
-concatenated buffer is then piped through system `ffmpeg` once per chapter
-to avoid MP3 frame-alignment issues that per-segment encoding would cause.
+Both writer paths — full chapter audio and short voice-sample previews —
+emit MP3 (LAME VBR V2 ≈ 140–185 kbps mono at the sidecar's native sample
+rate, typically 24 kHz). PCM concatenation happens in Node after per-sentence
+synthesis returns from the sidecar; the concatenated buffer is then piped
+through system `ffmpeg` once per file to avoid MP3 frame-alignment issues
+that per-segment encoding would cause.
 
 Legacy chapters generated as `.wav` before this switch keep playing without
 re-render — the locator probes `.mp3` first, falls back to `.wav`. Voice
-sample previews (`server/src/routes/voice-sample.ts`) deliberately stay WAV
-for now; samples are short and in-browser only.
+sample previews moved to MP3 in the same encoder boundary; orphan `.wav`
+sample files left on disk from before the switch are unreferenced by the
+new cache key (extension changes), so they age out naturally.
 
 ## Why MP3
 
@@ -31,6 +33,8 @@ for now; samples are short and in-browser only.
   with the spec.
 
 ## Invariants to preserve
+
+### Chapter audio
 
 - Every newly-generated chapter lands on disk as `<slug>.mp3`. The MPEG
   frames are MPEG-2 Layer III mono at the sidecar's native sample rate.
@@ -54,6 +58,23 @@ for now; samples are short and in-browser only.
   `winget install Gyan.FFmpeg` hint if it isn't on PATH. The
   `encodePcmToMp3` helper additionally surfaces the same hint on spawn
   ENOENT.
+
+### Voice samples
+
+- Cache filename is `${voiceId}-${modelKey}-${paramHash}.mp3` under
+  `server/audio/voices/`. The `paramHash` covers `(text, voiceName)` so any
+  attribute edit that picks a different prebuilt voice or evidence line
+  busts the cache automatically.
+- Served via `app.use('/audio', express.static(AUDIO_DIR))` in
+  `server/src/index.ts` — no hand-rolled handler. `Content-Type: audio/mpeg`
+  comes from express.static's built-in `.mp3` mapping.
+- No range-request contract. Samples are ~12 seconds; `<audio>` plays them
+  end-to-end without seeking, so the static middleware's defaults are fine.
+- The route honours an `encoder_unavailable` 503 error code when ffmpeg
+  fails to spawn (separate from `sidecar_down` which means the TTS engine
+  is unreachable). The UI can act on the codes independently.
+- `AUDIO_DIR` is overridable via `VOICE_SAMPLE_AUDIO_DIR` so the test suite
+  writes into a tmpdir instead of the dev server's real audio dir.
 
 ## Acceptance walkthrough
 
@@ -100,9 +121,9 @@ rather than inventing new fixtures.
   change needed; left for a future PR with a deliberate codec choice.
 - Batch transcode of historical `.wav` chapters into `.mp3`. Users can
   re-generate the chapter through the UI; no migration script in v1.
-- Voice samples (`server/src/routes/voice-sample.ts`) still write `.wav`.
-  Same encoder boundary, marginal size win because samples are short and
-  in-browser only. Tracked in CLAUDE.md "Suggested follow-ups".
+- Cleanup of orphan `.wav` sample files left in `server/audio/voices/`
+  from before voice-sample moved to MP3. They're tiny, unreferenced by
+  the new cache key, and harmless; they age out with the workspace.
 - Gapless concatenation across chapters. Each chapter is independent;
   inter-chapter playback is the player's concern.
 - Sidecar-side encoding. The PCM wire protocol is intentionally lossless

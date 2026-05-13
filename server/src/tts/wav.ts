@@ -1,12 +1,9 @@
 /* Wrap raw 16-bit signed little-endian mono PCM in a RIFF/WAVE container so
-   browsers can play the file directly via <audio src>. Used today by the
-   voice-sample preview endpoint (`server/src/routes/voice-sample.ts`), which
-   intentionally stays WAV for v1 — samples are short, in-browser only, and
-   the size win from MP3 there is marginal. Chapter audio has moved to MP3
-   (see `./mp3.ts`).
-
-   Gemini and Coqui TTS both return 16-bit PCM at the model's native sample
-   rate; the rate is encoded in the response and passed through. */
+   browsers can play the file directly via <audio src>. No longer used by
+   the live writer paths — both chapter audio and voice samples now go
+   through `./mp3.ts`. Kept around because legacy chapter files on disk
+   are still .wav (the locator falls back gracefully) and `pcmDurationSec`
+   below is still imported by callers that operate on raw PCM. */
 
 const BYTES_PER_SAMPLE = 2; // 16-bit
 const CHANNELS = 1;          // mono
