@@ -6,6 +6,7 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { Stage, View, TtsModelKey } from '../lib/types';
 import type { ListenerApp, Chapter } from '../lib/types';
+import type { RegenScope } from '../modals/regenerate';
 import { DEFAULT_MODEL } from '../lib/models';
 import { DEFAULT_TTS_MODEL, TTS_MODEL_OPTIONS } from '../lib/tts-models';
 import { fetchAccountSettings, saveAccountSettings } from './account-slice';
@@ -24,6 +25,11 @@ export interface UiState {
   matchDetailFor: string | null;
   handoffApp: ListenerApp | null;
   regenChapter: Chapter | null;
+  /** Pre-selected scope for the chapter regenerate modal. Defaults to null so
+      the modal falls back to its built-in default ('this'). Set to 'forward'
+      when the user opens the modal from the post-generation header button so
+      "this and all subsequent" — i.e. the whole book — is pre-selected. */
+  regenInitialScope: RegenScope | null;
   regenCharacterCtx: RegenCharacterCtx | null;
   batchRegenIds: string[] | null;
   showRevisionPlayer: boolean;
@@ -45,6 +51,7 @@ const initialState: UiState = {
   matchDetailFor: null,
   handoffApp: null,
   regenChapter: null,
+  regenInitialScope: null,
   regenCharacterCtx: null,
   batchRegenIds: null,
   showRevisionPlayer: false,
@@ -120,7 +127,13 @@ export const uiSlice = createSlice({
     setCurrentTrack:       (s, a: PayloadAction<number | null>) => { s.currentTrack = a.payload; },
     setMatchDetailFor:     (s, a: PayloadAction<string | null>) => { s.matchDetailFor = a.payload; },
     setHandoffApp:         (s, a: PayloadAction<ListenerApp | null>) => { s.handoffApp = a.payload; },
-    setRegenChapter:       (s, a: PayloadAction<Chapter | null>) => { s.regenChapter = a.payload; },
+    setRegenChapter:       (s, a: PayloadAction<Chapter | null>) => {
+      s.regenChapter = a.payload;
+      /* Closing the modal (payload=null) clears any per-open scope override so
+         the next per-chapter Regenerate falls back to the modal's default. */
+      if (a.payload == null) s.regenInitialScope = null;
+    },
+    setRegenInitialScope:  (s, a: PayloadAction<RegenScope | null>) => { s.regenInitialScope = a.payload; },
     setRegenCharacterCtx:  (s, a: PayloadAction<RegenCharacterCtx | null>) => { s.regenCharacterCtx = a.payload; },
     setBatchRegenIds:      (s, a: PayloadAction<string[] | null>) => { s.batchRegenIds = a.payload; },
     setShowRevisionPlayer: (s, a: PayloadAction<boolean>) => { s.showRevisionPlayer = a.payload; },

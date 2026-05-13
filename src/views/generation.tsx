@@ -36,13 +36,18 @@ interface Props {
   modelKey: TtsModelKey;
   setPaused: (p: boolean) => void;
   onRegenerate: (ch: Chapter) => void;
+  /** Header "Regenerate" entry-point shown when every chapter is done.
+      Defaults the modal to scope='forward' from chapter 1, i.e. the whole
+      book. The view doesn't know which chapter is "current" once the queue
+      is drained, so a single book-level CTA is the right affordance. */
+  onRegenerateBook: () => void;
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
   onPreview: (chapterId: number) => void;
 }
 
 export function GenerationView({
   chapters, characters, paused, title, bookId, modelKey,
-  setPaused, onRegenerate, onRegenerateCharacterInChapter, onPreview,
+  setPaused, onRegenerate, onRegenerateBook, onRegenerateCharacterInChapter, onPreview,
 }: Props) {
   const dispatch = useAppDispatch();
   const lastError           = useAppSelector(s => s.chapters.lastError);
@@ -71,6 +76,11 @@ export function GenerationView({
   const failed        = chapters.filter(c => c.state === 'failed').length;
   const inProgressCnt = chapters.filter(c => c.state === 'in_progress').length;
   const queued        = chapters.filter(c => c.state === 'queued').length;
+  /* Used by the header action: Resume/Pause is meaningless once every chapter
+     has finished synthesising, so the button flips to Regenerate. Failed
+     chapters keep the Pause/Resume affordance because the user might still
+     hit the per-row Retry to drive the queue. */
+  const allComplete = chapters.length > 0 && completed === chapters.length;
 
   /* Sentence-weighted overall progress. Weights come from the manuscript
      when available (canonical for the whole book), then the live
@@ -191,9 +201,20 @@ export function GenerationView({
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={() => setPaused(!paused)} className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2">
-            {paused ? <><IconPlay className="w-4 h-4"/> Resume</> : <><IconPause className="w-4 h-4"/> Pause</>}
-          </button>
+          {/* Once the queue is fully drained the Pause/Resume toggle has
+              nothing to pause or resume. Swap it for a Regenerate entry-point
+              that opens the existing modal targeted at chapter 1 — the user
+              picks scope="This and all subsequent" there to redo the whole
+              book, or sticks to a single chapter. */}
+          {allComplete ? (
+            <button onClick={onRegenerateBook} className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2">
+              <IconRefresh className="w-4 h-4"/> Regenerate
+            </button>
+          ) : (
+            <button onClick={() => setPaused(!paused)} className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2">
+              {paused ? <><IconPlay className="w-4 h-4"/> Resume</> : <><IconPause className="w-4 h-4"/> Pause</>}
+            </button>
+          )}
         </div>
       </div>
 

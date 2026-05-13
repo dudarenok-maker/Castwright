@@ -300,6 +300,7 @@ export function Layout() {
       )}
       {ui.regenChapter && (
         <RegenerateModal chapter={ui.regenChapter}
+          defaultScope={ui.regenInitialScope ?? 'this'}
           onClose={() => dispatch(uiActions.setRegenChapter(null))}
           onConfirm={({ reason, scope, note }) => {
             const chapter = ui.regenChapter;

@@ -92,6 +92,7 @@ function renderView() {
         modelKey="coqui-xtts-v2"
         setPaused={() => {}}
         onRegenerate={() => {}}
+        onRegenerateBook={() => {}}
         onRegenerateCharacterInChapter={() => {}}
         onPreview={() => {}}
       />
@@ -169,6 +170,7 @@ describe('GenerationView — early-tick render guards (regression)', () => {
           modelKey="coqui-xtts-v2"
           setPaused={() => {}}
           onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
         />
@@ -274,6 +276,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
           modelKey="coqui-xtts-v2"
           setPaused={() => {}}
           onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
         />
@@ -358,6 +361,7 @@ describe('GenerationView — heartbeat / stalled state', () => {
           modelKey="coqui-xtts-v2"
           setPaused={() => {}}
           onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
         />
@@ -411,6 +415,7 @@ describe('GenerationView — activity sidebar', () => {
           modelKey="coqui-xtts-v2"
           setPaused={() => {}}
           onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
         />
@@ -420,6 +425,92 @@ describe('GenerationView — activity sidebar', () => {
     expect(screen.getByText('Activity')).toBeInTheDocument();
     /* The event's title is rendered inside the sidebar row. */
     expect(screen.getByText('Chapter 1 complete')).toBeInTheDocument();
+  });
+});
+
+describe('GenerationView — header action once the run is complete', () => {
+  /* Regression for "Resume" sticking around at 7/7 100 %. When every chapter
+     is `done`, Pause/Resume has nothing to act on — the button flips to a
+     Regenerate entry-point that opens the existing modal. */
+  it('replaces Pause/Resume with a book-level Regenerate when every chapter is done', () => {
+    const allDone1: Chapter = { ...chapter1 };
+    const allDone2: Chapter = { ...chapter2, state: 'done', progress: 1, duration: '00:42', characters: { narrator: 'done', keefe: 'done' } };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([allDone1, allDone2]));
+    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
+      bookId: 'b1', characters, chapters: [allDone1, allDone2], sentences,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any));
+
+    const onRegenerateBook = vi.fn();
+    render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={[allDone1, allDone2]}
+          characters={characters}
+          paused={false}
+          title="Bonus Keefe Story"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          setPaused={() => {}}
+          onRegenerate={() => {}}
+          onRegenerateBook={onRegenerateBook}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+
+    expect(screen.queryByRole('button', { name: /Pause|Resume/ })).not.toBeInTheDocument();
+    const regen = screen.getByRole('button', { name: /^Regenerate$/ });
+    fireEvent.click(regen);
+    /* The view never picks a "current" chapter from a fully-drained queue — it
+       delegates to the route, which opens the modal at chapter 1 with
+       scope='forward'. The view's contract is to fire the book-level callback. */
+    expect(onRegenerateBook).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Pause/Resume while any chapter is still queued or in progress', () => {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
+    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
+      bookId: 'b1', characters, chapters: [chapter1, chapter2], sentences,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any));
+
+    render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={[chapter1, chapter2]}
+          characters={characters}
+          paused
+          title="Bonus Keefe Story"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          setPaused={() => {}}
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+
+    expect(screen.getByRole('button', { name: /Resume/ })).toBeInTheDocument();
   });
 });
 

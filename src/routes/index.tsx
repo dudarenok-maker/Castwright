@@ -278,6 +278,14 @@ function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookI
           modelKey={ui.ttsModelKey}
           setPaused={(p) => dispatch(chaptersActions.setPaused(p))}
           onRegenerate={(ch) => dispatch(uiActions.setRegenChapter(ch))}
+          onRegenerateBook={() => {
+            /* Whole-book regenerate: chapter 1 + scope='forward' covers
+               every chapter while reusing the per-chapter modal. The scope
+               override is cleared by setRegenChapter(null) on close. */
+            if (chapters.length === 0) return;
+            dispatch(uiActions.setRegenInitialScope('forward'));
+            dispatch(uiActions.setRegenChapter(chapters[0]));
+          }}
           onRegenerateCharacterInChapter={(charId, chapterId) =>
             dispatch(uiActions.setRegenCharacterCtx({ characterId: charId, defaultChapterId: chapterId }))}
           onPreview={(id) => dispatch(uiActions.setCurrentTrack(id))}/>
