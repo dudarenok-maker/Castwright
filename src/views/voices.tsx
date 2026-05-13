@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { IconStar } from '../lib/icons';
+import { useMemo, useState } from 'react';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import { VoiceCard } from '../components/voice-library-panel';
 import type { TtsModelKey, Voice } from '../lib/types';
@@ -17,13 +16,68 @@ type Tab = 'all' | 'current' | 'library';
 
 interface Props { library: Voice[]; }
 
+interface BookGroup {
+  bookId: string;
+  bookTitle: string;
+  source: Voice['source'];
+  voices: Voice[];
+}
+
 export function LibraryView({ library }: Props) {
   const [tab, setTab] = useState<Tab>('all');
   const [draggingVoiceId, setDraggingVoiceId] = useState<string | null>(null);
   const dispatch = useAppDispatch();
   const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
+  const characters = useAppSelector(s => s.cast.characters);
+  const sentences = useAppSelector(s => s.manuscript.sentences);
   const filtered = library.filter(v => tab === 'all' || v.source === tab);
-  const books = [...new Set(library.map(v => v.bookTitle))];
+  const books = [...new Set(library.map(v => v.bookId))];
+
+  /* Line count per voiceId for the currently-loaded book. Prefer the
+     analysis-supplied `Character.lines`; fall back to counting sentences when
+     the analyser hasn't stamped a count (older cached analyses). Library
+     voices that don't belong to the currently-open book aren't covered here —
+     they sort by `usedIn` instead, since their per-book line counts live on
+     the server and aren't shipped in the voice payload. */
+  const linesByVoiceId = useMemo(() => {
+    const counts = new Map<string, number>();
+    const sentenceCounts = new Map<string, number>();
+    for (const s of sentences) {
+      sentenceCounts.set(s.characterId, (sentenceCounts.get(s.characterId) ?? 0) + 1);
+    }
+    for (const c of characters) {
+      const voiceId = c.voiceId ?? c.id;
+      const fromAnalysis = typeof c.lines === 'number' ? c.lines : undefined;
+      const fromSentences = sentenceCounts.get(c.id) ?? 0;
+      counts.set(voiceId, fromAnalysis ?? fromSentences);
+    }
+    return counts;
+  }, [characters, sentences]);
+
+  const groups: BookGroup[] = useMemo(() => {
+    const byId = new Map<string, BookGroup>();
+    for (const v of filtered) {
+      const existing = byId.get(v.bookId);
+      if (existing) existing.voices.push(v);
+      else byId.set(v.bookId, { bookId: v.bookId, bookTitle: v.bookTitle, source: v.source, voices: [v] });
+    }
+    const ordered = [...byId.values()].sort((a, b) => {
+      if (a.source !== b.source) return a.source === 'current' ? -1 : 1;
+      return a.bookTitle.localeCompare(b.bookTitle);
+    });
+    for (const g of ordered) {
+      g.voices.sort((a, b) => {
+        const al = linesByVoiceId.get(a.id);
+        const bl = linesByVoiceId.get(b.id);
+        if (al !== undefined && bl !== undefined && al !== bl) return bl - al;
+        if (al !== undefined && bl === undefined) return -1;
+        if (al === undefined && bl !== undefined) return 1;
+        if (a.usedIn !== b.usedIn) return b.usedIn - a.usedIn;
+        return a.character.localeCompare(b.character);
+      });
+    }
+    return ordered;
+  }, [filtered, linesByVoiceId]);
 
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: 'all',     label: `All (${library.length})` },
@@ -77,22 +131,35 @@ export function LibraryView({ library }: Props) {
           <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">Finish setting up a book — once you confirm its cast, every character will appear here as a reusable voice.</p>
         </div>
       ) : (
-        <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 ${draggingVoiceId ? 'dragging-voice' : ''}`}>
-          {filtered.map(v => (
-            <div key={v.id} className="bg-white rounded-3xl border border-ink/10 shadow-card p-5 relative">
-              <button
-                onClick={() => togglePin(v)}
-                aria-label={v.pinned ? 'Unpin voice' : 'Pin voice'}
-                className={`absolute top-4 right-4 w-8 h-8 grid place-items-center rounded-full transition-colors ${v.pinned ? 'bg-peach text-ink' : 'bg-ink/[0.04] text-ink/40 hover:text-ink hover:bg-ink/[0.08]'}`}
-              >
-                <IconStar className="w-4 h-4"/>
-              </button>
-              <VoiceCard voice={v} draggingVoiceId={draggingVoiceId} setDraggingVoiceId={setDraggingVoiceId} compact={false}/>
-              <div className="mt-4 pt-4 border-t border-ink/10 flex items-center justify-between text-xs text-ink/60">
-                <span>Used in <span className="font-semibold text-ink">{v.usedIn || 1}</span> {(v.usedIn || 1) === 1 ? 'book' : 'books'}</span>
-                <span className="text-ink/40 truncate ml-3">{v.bookTitle}</span>
+        <div className={`space-y-8 ${draggingVoiceId ? 'dragging-voice' : ''}`}>
+          {groups.map(g => (
+            <section key={g.bookId} aria-label={g.bookTitle}>
+              <header className="mb-3 flex items-baseline justify-between gap-3 flex-wrap">
+                <div className="flex items-baseline gap-3 min-w-0">
+                  <h2 className="text-lg font-bold text-ink truncate">{g.bookTitle}</h2>
+                  <span className="text-xs text-ink/50 shrink-0">
+                    {g.voices.length} {g.voices.length === 1 ? 'voice' : 'voices'}
+                  </span>
+                </div>
+                <span className={`text-[11px] uppercase tracking-wider font-semibold ${g.source === 'current' ? 'text-magenta' : 'text-ink/40'}`}>
+                  {g.source === 'current' ? 'This book' : 'Series & older'}
+                </span>
+              </header>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {g.voices.map(v => (
+                  <VoiceCard
+                    key={v.id}
+                    voice={v}
+                    draggingVoiceId={draggingVoiceId}
+                    setDraggingVoiceId={setDraggingVoiceId}
+                    compact={false}
+                    showBookTitle={false}
+                    pinned={!!v.pinned}
+                    onTogglePin={togglePin}
+                  />
+                ))}
               </div>
-            </div>
+            </section>
           ))}
         </div>
       )}
