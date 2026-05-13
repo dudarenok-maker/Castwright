@@ -1,0 +1,178 @@
+// Pairs with docs/features/06-manuscript-parsing.md (plain text + Markdown layer).
+
+import { describe, expect, it } from 'vitest';
+import { parseText, parseFilenameMetadata } from './text.js';
+
+describe('parseFilenameMetadata', () => {
+  it('extracts author / series / position / title from the conventional pattern', () => {
+    expect(parseFilenameMetadata('Jane Doe - Solway Bay 03 - The Long Tide.txt')).toEqual({
+      author: 'Jane Doe',
+      series: 'Solway Bay',
+      seriesPosition: 3,
+      title: 'The Long Tide',
+    });
+  });
+
+  it('strips the extension before matching', () => {
+    expect(parseFilenameMetadata('Jane Doe - Solway Bay 01 - Open Water.epub').seriesPosition).toBe(1);
+  });
+
+  it('returns all-null when the filename does not match the pattern', () => {
+    expect(parseFilenameMetadata('just-a-title.txt')).toEqual({
+      author: null, series: null, seriesPosition: null, title: null,
+    });
+  });
+
+  it('returns all-null for an undefined filename', () => {
+    expect(parseFilenameMetadata(undefined)).toEqual({
+      author: null, series: null, seriesPosition: null, title: null,
+    });
+  });
+});
+
+describe('parseText — title detection', () => {
+  it('captures the first markdown H1 as the manuscript title', () => {
+    const out = parseText('# The Lighthouse\n\nOnce there was a tower.', { format: 'markdown' });
+    expect(out.title).toBe('The Lighthouse');
+  });
+
+  it('falls back to filename-derived title when no H1 present', () => {
+    const out = parseText('body only', { format: 'plaintext', fileName: 'Jane Doe - Solway Bay 02 - Riptide.txt' });
+    expect(out.title).toBe('Riptide');
+  });
+
+  it('falls back to filename stem when filename has no series pattern', () => {
+    const out = parseText('body only', { format: 'plaintext', fileName: 'rough-draft.txt' });
+    expect(out.title).toBe('rough-draft');
+  });
+
+  it('falls back to "Untitled manuscript" when nothing else identifies it', () => {
+    expect(parseText('body only', { format: 'plaintext' }).title).toBe('Untitled manuscript');
+  });
+});
+
+describe('parseText — chapter splitting', () => {
+  it('splits on markdown H2 headings', () => {
+    const out = parseText('# Book\n\n## One\nfirst chapter body\n\n## Two\nsecond chapter body', { format: 'markdown' });
+    expect(out.chapters.map(c => c.title)).toEqual(['One', 'Two']);
+    expect(out.chapters[0].body).toContain('first chapter body');
+    expect(out.chapters[1].body).toContain('second chapter body');
+  });
+
+  it('splits on Arabic numbered chapter headings', () => {
+    const out = parseText('Chapter 1\nalpha body\n\nChapter 2\nbeta body', { format: 'plaintext' });
+    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 1', 'Chapter 2']);
+  });
+
+  it('splits on Roman-numeral chapter headings', () => {
+    const out = parseText('Chapter IV\nfourth\n\nChapter V\nfifth', { format: 'plaintext' });
+    expect(out.chapters).toHaveLength(2);
+    expect(out.chapters.map(c => c.title)).toEqual(['Chapter IV', 'Chapter V']);
+  });
+
+  it('splits on English-word numbered chapters including compound 21–99', () => {
+    const out = parseText(
+      'Chapter One\nfirst\n\nChapter Twenty-One\ntwenty-first\n\nChapter Forty Two\nforty-second',
+      { format: 'plaintext' },
+    );
+    expect(out.chapters.map(c => c.title)).toEqual(['Chapter One', 'Chapter Twenty-One', 'Chapter Forty Two']);
+  });
+
+  it('recognises other section keywords (Day, Part, Book, Act, Section, Scene)', () => {
+    const out = parseText('Day One\nfirst\n\nPart II\nsecond\n\nAct III\nthird', { format: 'plaintext' });
+    expect(out.chapters.map(c => c.title)).toEqual(['Day One', 'Part II', 'Act III']);
+  });
+
+  it('recognises standalone Prologue / Epilogue / Interlude / Preface markers', () => {
+    const out = parseText('Prologue\np-body\n\nChapter 1\nbody\n\nEpilogue\ne-body', { format: 'plaintext' });
+    expect(out.chapters.map(c => c.title)).toEqual(['Prologue', 'Chapter 1', 'Epilogue']);
+  });
+
+  it('strips cosmetic decoration around chapter markers', () => {
+    const out = parseText('+ DAY ONE +\nbody\n\n=== Chapter 3 ===\nthree', { format: 'plaintext' });
+    expect(out.chapters.map(c => c.title)).toEqual(['DAY ONE', 'Chapter 3']);
+  });
+
+  it('does NOT treat long heading-like lines (>120 chars) as headings', () => {
+    const longLine =
+      'Day after day the keeper climbed those iron stairs, polishing the lens, ' +
+      'checking the wick, and watching the gray light slip across the cold water of Solway Bay forever.';
+    expect(longLine.length).toBeGreaterThan(120);
+    const out = parseText(`Chapter 1\n${longLine}\n\nMore body.`, { format: 'plaintext' });
+    expect(out.chapters).toHaveLength(1);
+    expect(out.chapters[0].body).toContain(longLine);
+  });
+
+  it('falls back to one chapter when no headings are present', () => {
+    const out = parseText('Just a paragraph.\n\nAnd another.', { format: 'plaintext' });
+    expect(out.chapters).toHaveLength(1);
+    expect(out.chapters[0].body).toContain('Just a paragraph.');
+    expect(out.chapters[0].body).toContain('And another.');
+  });
+
+  it('uses 1-based ids on chapters', () => {
+    const out = parseText('## One\na\n\n## Two\nb', { format: 'markdown' });
+    expect(out.chapters.map(c => c.id)).toEqual([1, 2]);
+  });
+});
+
+describe('parseText — filename metadata propagation', () => {
+  it('populates author / series / seriesPosition when filename matches', () => {
+    const out = parseText('# Title from doc\n\nbody', {
+      format: 'markdown',
+      fileName: 'Jane Doe - Solway Bay 05 - Anything.txt',
+    });
+    expect(out.author).toBe('Jane Doe');
+    expect(out.series).toBe('Solway Bay');
+    expect(out.seriesPosition).toBe(5);
+  });
+
+  it('leaves metadata null when filename does not match', () => {
+    const out = parseText('body', { format: 'plaintext', fileName: 'random.txt' });
+    expect(out.author).toBeNull();
+    expect(out.series).toBeNull();
+    expect(out.seriesPosition).toBeNull();
+  });
+
+  it('prefers the in-document H1 title over the filename-derived title', () => {
+    const out = parseText('# Real Title\n\nbody', {
+      format: 'markdown',
+      fileName: 'Jane Doe - Solway Bay 02 - Ignored.txt',
+    });
+    expect(out.title).toBe('Real Title');
+  });
+});
+
+describe('parseText — audio-tag passthrough', () => {
+  it('applies tagShoutingDialog to chapter bodies', () => {
+    const out = parseText('Chapter 1\nShe yelled "GET OUT NOW".', { format: 'plaintext' });
+    expect(out.chapters[0].body).toContain('[shouting] Get Out Now');
+  });
+
+  it('applies tagMarkdownEmphasis to chapter bodies', () => {
+    const out = parseText('Chapter 1\nthis is *important* news.', { format: 'plaintext' });
+    expect(out.chapters[0].body).toContain('[emphatic] important');
+  });
+
+  it('applies audio tags to the single-chapter fallback body', () => {
+    const out = parseText('Just "GO AWAY NOW".', { format: 'plaintext' });
+    expect(out.chapters[0].body).toContain('[shouting] Go Away Now');
+  });
+});
+
+describe('parseText — return shape', () => {
+  it('returns sourceText as the concatenation of chapter bodies joined by \\n\\n', () => {
+    const out = parseText('## One\nfirst\n\n## Two\nsecond', { format: 'markdown' });
+    expect(out.sourceText).toBe(out.chapters.map(c => c.body).join('\n\n'));
+  });
+
+  it('echoes the requested format', () => {
+    expect(parseText('a', { format: 'markdown' }).format).toBe('markdown');
+    expect(parseText('a', { format: 'plaintext' }).format).toBe('plaintext');
+  });
+
+  it('normalises CRLF line endings', () => {
+    const out = parseText('## One\r\nbody one\r\n\r\n## Two\r\nbody two', { format: 'markdown' });
+    expect(out.chapters.map(c => c.title)).toEqual(['One', 'Two']);
+  });
+});
