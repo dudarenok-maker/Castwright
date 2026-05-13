@@ -70,6 +70,22 @@ export class SidecarTtsProvider implements TtsProvider {
     const headerRate = response.headers.get('x-sample-rate');
     const sampleRate = headerRate ? Number(headerRate) : parseRateFromMime(mimeType);
 
+    /* When the sidecar's speaker manifest doesn't contain the voice we
+       asked for, it substitutes a safe fallback and tells us via this
+       header. The synth still completed (so we don't fail the chapter),
+       but the user's chapter ends up speaking in a different voice than
+       the cast view shows. Log loudly so we can fix server/src/tts/
+       voice-mapping.ts when this happens — the catalog and the model's
+       actual speaker list have drifted. */
+    const substitutedFrom = response.headers.get('x-voice-substituted-from');
+    if (substitutedFrom) {
+      console.warn(
+        `[tts] Sidecar substituted voice: requested "${substitutedFrom}" not in XTTS v2 manifest. ` +
+        `Update server/src/tts/voice-mapping.ts to remove this name. ` +
+        `Run \`curl ${this.url}/speakers\` to see the model's actual speaker list.`,
+      );
+    }
+
     return { pcm: buf, sampleRate, mimeType };
   }
 }
