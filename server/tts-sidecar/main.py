@@ -36,6 +36,22 @@ log = logging.getLogger("sidecar")
 app = FastAPI(title="audiobook-generator local TTS sidecar")
 
 
+def _parse_bool(value: Optional[str], default: bool) -> bool:
+    """Parse an env-var string into a bool. `"1"`, `"true"`, `"yes"`, `"on"`
+    (case-insensitive) → True; `"0"`, `"false"`, `"no"`, `"off"` → False;
+    anything else (including None / empty) returns the default. Used so
+    `COQUI_HALF=1` / `COQUI_DEEPSPEED=0` work without changing semantics
+    based on whitespace or case."""
+    if value is None:
+        return default
+    s = value.strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
 class SynthResult:
     """Engine output: PCM bytes + sample rate + the speaker actually used.
     `substituted_from` is non-None when the requested voice wasn't in the
@@ -78,8 +94,20 @@ class CoquiEngine(Engine):
 
     def __init__(self) -> None:
         self._tts: Any = None
+        self._torch: Any = None
         self._language = os.environ.get("COQUI_LANGUAGE", "en")
         self._device = os.environ.get("COQUI_DEVICE", "auto")  # auto | cpu | cuda
+        # fp16 and DeepSpeed-inference are CUDA-only XTTS speedups. Each ~1.5–2×
+        # on top of CUDA itself, no audible quality loss. Defaults flip ON when
+        # device resolves to cuda and OFF on cpu — env-var "1"/"0" overrides.
+        # Resolved in _resolve_runtime_options so the env-var logic stays
+        # unit-testable without loading the real model.
+        self._half_env = os.environ.get("COQUI_HALF")           # "1" | "0" | None
+        self._deepspeed_env = os.environ.get("COQUI_DEEPSPEED") # "1" | "0" | None
+        # Resolved at load time; consumed by `synthesize` to decide whether to
+        # wrap the inference call in a `torch.autocast` context.
+        self._resolved_device = "cpu"
+        self._use_half = False
         # Cached speaker manifest from the loaded model. Populated on first
         # load so /synthesize can validate `voice` BEFORE calling tts() —
         # XTTS's own error path raises a cryptic PyTorch "index out of range
@@ -87,6 +115,26 @@ class CoquiEngine(Engine):
         # user as a 500 with no actionable detail. Validating up front lets
         # us substitute the fallback and tell the caller what happened.
         self._speakers: list[str] = []
+
+    def _resolve_runtime_options(self, torch_module: Any) -> dict[str, Any]:
+        """Resolve device + fp16 + deepspeed knobs into a concrete config dict.
+        Lifted out of `_ensure_loaded` so the env-driven branching is
+        unit-testable without instantiating the real ~3 GB XTTS model — tests
+        inject a torch stub that controls `cuda.is_available()`."""
+        device = self._device
+        if device == "auto":
+            device = "cuda" if torch_module.cuda.is_available() else "cpu"
+        # On CUDA, default both extras ON (the whole point of the GPU path).
+        # On CPU, force them OFF: torch raises on fp16 ops on CPU, and
+        # deepspeed-inference is a CUDA-only runtime. Env override only
+        # applies when device is cuda — there's no useful "fp16 on CPU" mode.
+        if device == "cuda":
+            half = _parse_bool(self._half_env, default=True)
+            deepspeed = _parse_bool(self._deepspeed_env, default=True)
+        else:
+            half = False
+            deepspeed = False
+        return {"device": device, "half": half, "deepspeed": deepspeed}
 
     def _ensure_loaded(self, model: str) -> None:
         if self._tts is not None:
@@ -120,11 +168,54 @@ class CoquiEngine(Engine):
             "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
         }.get(model, model)
 
-        device = self._device
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        log.info("Loading Coqui model=%s on device=%s …", model_id, device)
-        self._tts = TTS(model_id).to(device)
+        opts = self._resolve_runtime_options(torch)
+        device, want_half, want_deepspeed = opts["device"], opts["half"], opts["deepspeed"]
+        # Single startup log line — `npm run tts:sidecar` users can grep
+        # logs/tts.log for this to confirm GPU mode is actually on. If you
+        # set COQUI_DEVICE=cuda but this prints device=cpu, the venv has the
+        # CPU PyTorch wheel installed (see README.md "GPU install" section).
+        log.info(
+            "Loading Coqui model=%s on device=%s half=%s deepspeed=%s …",
+            model_id, device, want_half, want_deepspeed,
+        )
+
+        tts = TTS(model_id)
+
+        # DeepSpeed inference engine. Wires in BEFORE `.to(device)` because
+        # init_gpt_for_inference rebuilds the GPT module against the deepspeed
+        # runtime — moving to GPU afterwards transfers the rebuilt module.
+        # Best-effort: if deepspeed isn't installed or the hook drifts in a
+        # future coqui-tts release, log and continue without it rather than
+        # failing the whole sidecar boot.
+        if want_deepspeed:
+            try:
+                tts.synthesizer.tts_model.gpt.init_gpt_for_inference(
+                    kv_cache=True, use_deepspeed=True,
+                )
+                log.info("DeepSpeed inference enabled.")
+            except Exception as e:
+                log.warning(
+                    "DeepSpeed enable failed (%s) — continuing without it. "
+                    "If you want this speedup, install deepspeed in the sidecar venv.",
+                    e,
+                )
+
+        tts.to(device)
+
+        # fp16 mode. NOTE: we do NOT call `tts_model.half()` here — that
+        # casts every weight including LayerNorm to fp16, but XTTS's inputs
+        # (text tokens, audio conditioning latents) arrive as fp32 and the
+        # LayerNorm forward then dies with `expected Float but found Half`.
+        # Instead we record the intent and use `torch.autocast` around the
+        # `tts()` call in `synthesize()` — autocast keeps LayerNorm in fp32
+        # and only casts the ops where fp16 is safe (matmuls, attention),
+        # which is where the speedup lives anyway.
+        self._tts = tts
+        self._torch = torch
+        self._resolved_device = device
+        self._use_half = bool(want_half and device == "cuda")
+        if self._use_half:
+            log.info("fp16 autocast enabled for /synthesize.")
 
         # Snapshot the speaker manifest so /synthesize can validate inbound
         # `voice` against what the model actually knows. Different coqui-tts
@@ -175,11 +266,26 @@ class CoquiEngine(Engine):
         # XTTS returns a list[float] at the model's sample rate. We convert
         # to int16 LE bytes here so the network payload is half the size of
         # float32 (and Node side already speaks 16-bit PCM).
-        audio = self._tts.tts(
-            text=text,
-            speaker=actual_voice,
-            language=self._language,
-        )
+        #
+        # fp16 path: wrap inference in `torch.autocast`. Unlike a global
+        # `model.half()`, autocast leaves LayerNorm + input tensors in fp32
+        # (where mixed-precision would otherwise hit `expected Float but found
+        # Half`) and casts only the matmul/attention ops that benefit from
+        # tensor cores. This is the supported PyTorch pattern for fp16
+        # inference on a model that wasn't trained mixed-precision.
+        if self._use_half and self._torch is not None:
+            with self._torch.autocast(device_type="cuda", dtype=self._torch.float16):
+                audio = self._tts.tts(
+                    text=text,
+                    speaker=actual_voice,
+                    language=self._language,
+                )
+        else:
+            audio = self._tts.tts(
+                text=text,
+                speaker=actual_voice,
+                language=self._language,
+            )
         sample_rate = int(getattr(self._tts.synthesizer, "output_sample_rate", 24000))
         pcm = _float_audio_to_int16_le(audio)
         return SynthResult(pcm=pcm, sample_rate=sample_rate, substituted_from=substituted_from)
