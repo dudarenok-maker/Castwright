@@ -25,6 +25,28 @@ servers:
 # Paths
 # ---------------------------------------------------------------------
 paths:
+  /api/workspace/changelog:
+    get:
+      summary: Aggregated change log across every book in the workspace
+      operationId: getWorkspaceChangelog
+      description: |
+        Fans out `.audiobook/change-log.json` from every book in the workspace,
+        attaches `bookId`, `bookTitle`, and `author` to each event, and returns
+        the flattened list sorted newest-first. Books without an on-disk
+        change-log are skipped. Backs the global Change Log view.
+      responses:
+        '200':
+          description: Workspace-wide editorial activity feed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/WorkspaceChangeLogEvent' }
+
   /api/library:
     get:
       summary: List books in the on-disk workspace
@@ -736,6 +758,35 @@ components:
               end:         { type: number, description: "seconds" }
               characterId: { type: string }
               sentenceId:  { type: integer }
+
+    # --- Workspace change log ---------------------------------------
+    ChangeLogEvent:
+      type: object
+      required: [id, ts, date, type, title, note, actor]
+      properties:
+        id:       { type: integer, description: "Monotonic id, usually now.getTime() at write time." }
+        at:       { type: string, format: date-time, description: "ISO timestamp; absent on hand-authored fixture entries." }
+        ts:       { type: string, description: "Human-readable relative time (\"Just now\", \"2 min ago\"). Recomputed on render." }
+        date:     { type: string, enum: [today, yesterday, earlier] }
+        type:     { type: string, enum: [regenerate, voice_tune, voice_reuse, voice_lock, boundary_move, chapter_complete, chapter_failed, generation_started, cast_confirm, analysis_complete, import, library_add] }
+        title:    { type: string }
+        note:     { type: string }
+        actor:    { type: string, enum: [you, system] }
+        chapterId:  { type: integer, description: "Bound to chapter scope when applicable. Reparse drops every event that carries this field." }
+        revertible: { type: boolean }
+    WorkspaceChangeLogEvent:
+      allOf:
+        - $ref: '#/components/schemas/ChangeLogEvent'
+        - type: object
+          description: |
+            Returned by GET /api/workspace/changelog. The aggregator tags each
+            per-book event with the originating book's identifying metadata so
+            the workspace view can render cross-book context.
+          required: [bookId, bookTitle, author]
+          properties:
+            bookId:    { type: string }
+            bookTitle: { type: string }
+            author:    { type: string }
 
     # --- Revisions + drift -----------------------------------------
     RevisionsResponse:

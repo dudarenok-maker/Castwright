@@ -40,6 +40,7 @@ const PERSIST_RULES: Record<string, { slice: StateSlice; build: (s: PersistableR
   'cast/declineMatch':        { slice: 'cast',       build: (s) => ({ characters: s.cast.characters }) },
   'cast/updateCharacter':     { slice: 'cast',       build: (s) => ({ characters: s.cast.characters }) },
   'cast/applyVoiceMatches':   { slice: 'cast',       build: (s) => ({ characters: s.cast.characters }) },
+  'cast/lockVoice':           { slice: 'cast',       build: (s) => ({ characters: s.cast.characters }) },
 
   'manuscript/setSentenceCharacter':  { slice: 'manuscript', build: (s) => ({ sentences: s.manuscript.sentences }) },
   'manuscript/setSentencesCharacter': { slice: 'manuscript', build: (s) => ({ sentences: s.manuscript.sentences }) },
@@ -51,8 +52,12 @@ const PERSIST_RULES: Record<string, { slice: StateSlice; build: (s: PersistableR
 
   /* Editorial audit trail. Persists the whole `events` array on every
      append — the log is small (one entry per user action) and the server
-     route writes the file atomically, so a full rewrite stays cheap. */
-  'changeLog/appendLogEvent': { slice: 'changeLog', build: (s) => ({ events: s.changeLog.events }) },
+     route writes the file atomically, so a full rewrite stays cheap. The
+     boundary-move aggregator and the reparse wipe both mutate the same
+     array, so they share the persistence rule. */
+  'changeLog/appendLogEvent':       { slice: 'changeLog', build: (s) => ({ events: s.changeLog.events }) },
+  'changeLog/bumpBoundaryMove':     { slice: 'changeLog', build: (s) => ({ events: s.changeLog.events }) },
+  'changeLog/wipeBookShapeEvents':  { slice: 'changeLog', build: (s) => ({ events: s.changeLog.events }) },
 
   'ui/confirmCast': { slice: 'state', build: () => ({ castConfirmed: true }) },
 };

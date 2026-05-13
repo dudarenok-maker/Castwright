@@ -9,7 +9,7 @@ import type {
   RevisionsResponse, ChapterAudio, GenerationTick, Character,
   Voice, VoiceSample, TtsModelKey, LibraryResponse, VoiceLibraryResponse,
   ImportResponse, ConfirmBookRequest, ConfirmBookResponse,
-  BookStateResponse, PutStateRequest,
+  BookStateResponse, PutStateRequest, WorkspaceChangeLogResponse,
 } from './types';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
 import { MOCK_LIBRARY } from '../mocks/library';
@@ -17,6 +17,7 @@ import { MOCK_VOICE_LIBRARY } from '../mocks/voices';
 import { MATCH_FACTORS } from '../data/match-factors';
 import { PENDING_REVISIONS } from '../data/revisions';
 import { VOICE_DRIFT_EVENTS } from '../data/drift';
+import { CHANGE_LOG_EVENTS } from '../data/change-log';
 import { parseDuration } from './time';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
@@ -671,6 +672,27 @@ async function mockGetWorkspaceInfo(): Promise<WorkspaceInfo> {
   return { root: '(mock)', booksRoot: '(mock)/books', source: 'default' };
 }
 
+async function realGetWorkspaceChangelog(): Promise<WorkspaceChangeLogResponse> {
+  const res = await fetch('/api/workspace/changelog');
+  if (!res.ok) throw new Error(`Workspace changelog fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function mockGetWorkspaceChangelog(): Promise<WorkspaceChangeLogResponse> {
+  /* Surface the demo fixture tagged with a stub book so the workspace view
+     has something to render under VITE_USE_MOCKS=true. The real workspace
+     route fans out across every book's .audiobook/change-log.json. */
+  await wait(60);
+  return {
+    events: CHANGE_LOG_EVENTS.map(e => ({
+      ...e,
+      bookId: 'ns',
+      bookTitle: 'Northern Star',
+      author: 'Demo Author',
+    })),
+  };
+}
+
 async function realGetSidecarHealth(): Promise<SidecarHealth> {
   const res = await fetch('/api/sidecar/health');
   if (!res.ok) {
@@ -709,6 +731,7 @@ const real = {
   streamGeneration:  realStreamGeneration,
   getSidecarHealth:  realGetSidecarHealth,
   getWorkspaceInfo:  realGetWorkspaceInfo,
+  getWorkspaceChangelog: realGetWorkspaceChangelog,
   getChapterAudio:   async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
     if (!res.ok) {
@@ -741,6 +764,7 @@ const mock = {
   streamGeneration:  mockStreamGeneration,
   getSidecarHealth:  mockGetSidecarHealth,
   getWorkspaceInfo:  mockGetWorkspaceInfo,
+  getWorkspaceChangelog: mockGetWorkspaceChangelog,
   getChapterAudio:   mockGetChapterAudio,
   pollRevisions:     mockPollRevisions,
 };

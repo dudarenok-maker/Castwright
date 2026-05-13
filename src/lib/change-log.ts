@@ -200,6 +200,97 @@ export function buildChapterFailedEvent(args: {
   };
 }
 
+/** User-emitted event: cast was confirmed (transition confirm → ready). */
+export function buildCastConfirmEvent(args: {
+  characterCount: number;
+  bookTitle?: string;
+  now?: Date;
+}): ChangeLogEvent {
+  const { characterCount, bookTitle } = args;
+  const now = args.now ?? new Date();
+  const n = characterCount;
+  return {
+    id: now.getTime(),
+    at: now.toISOString(),
+    ts: 'Just now',
+    date: 'today',
+    type: 'cast_confirm',
+    title: 'Confirmed the cast',
+    note: bookTitle
+      ? `${n} character${n === 1 ? '' : 's'} locked in for "${bookTitle}".`
+      : `${n} character${n === 1 ? '' : 's'} locked in.`,
+    actor: 'you',
+  };
+}
+
+/** User-emitted event: a character's voice was tuned via Profile Drawer. The
+    `hadConflict` flag captures the gender/age-mismatch reset where the saved
+    library voiceId is dropped — surfacing it in the note tells the reader why
+    the engine fell back to a prebuilt voice. */
+export function buildVoiceTuneEvent(args: {
+  character: Character;
+  hadConflict?: boolean;
+  now?: Date;
+}): ChangeLogEvent {
+  const { character, hadConflict } = args;
+  const now = args.now ?? new Date();
+  return {
+    id: now.getTime(),
+    at: now.toISOString(),
+    ts: 'Just now',
+    date: 'today',
+    type: 'voice_tune',
+    title: `Tuned ${character.name}'s voice`,
+    note: hadConflict
+      ? 'Identity edit reset the library match — falling back to a prebuilt voice.'
+      : 'Voice tone updated.',
+    actor: 'you',
+  };
+}
+
+/** User-emitted event: a character's voice was locked via Profile Drawer. */
+export function buildVoiceLockEvent(args: {
+  character: Character;
+  now?: Date;
+}): ChangeLogEvent {
+  const { character } = args;
+  const now = args.now ?? new Date();
+  return {
+    id: now.getTime(),
+    at: now.toISOString(),
+    ts: 'Just now',
+    date: 'today',
+    type: 'voice_lock',
+    title: `Locked ${character.name}'s voice`,
+    note: 'Future regenerates will preserve this voice.',
+    actor: 'you',
+  };
+}
+
+/** User-emitted event: a boundary was moved (sentence(s) reassigned). Used by
+    the change-log slice's `bumpBoundaryMove` aggregator — repeated boundary
+    edits on the same chapter rewrite this event in place so a single drag
+    gesture or session of edits doesn't spam the log. */
+export function buildBoundaryMoveEvent(args: {
+  chapterId: number;
+  count: number;
+  now?: Date;
+}): ChangeLogEvent {
+  const { chapterId, count } = args;
+  const now = args.now ?? new Date();
+  return {
+    id: now.getTime(),
+    at: now.toISOString(),
+    ts: 'Just now',
+    date: 'today',
+    type: 'boundary_move',
+    title: `Adjusted boundaries in Chapter ${chapterId}`,
+    note: `${count} sentence${count === 1 ? '' : 's'} reassigned.`,
+    actor: 'you',
+    chapterId,
+  };
+}
+
 /** Build a `regenerate` log event for the batch-character regen. */
 export function buildBatchCharacterRegenEvent(args: {
   characters: Character[];

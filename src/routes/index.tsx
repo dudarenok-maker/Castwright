@@ -14,6 +14,8 @@ import { castActions } from '../store/cast-slice';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { libraryActions } from '../store/library-slice';
+import { changeLogActions } from '../store/change-log-slice';
+import { buildCastConfirmEvent } from '../lib/change-log';
 import { api } from '../lib/api';
 import { stageEqual } from '../lib/router';
 import { MODEL_OPTIONS } from '../lib/models';
@@ -118,9 +120,23 @@ function VoicesRoute() {
   return <LibraryView library={voices}/>;
 }
 
-function ChangelogRoute() {
+export function ChangelogRoute() {
   useHydrateStage({ kind: 'changelog' }, []);
-  const events = useAppSelector(s => s.changeLog.events);
+  const dispatch = useAppDispatch();
+  const events = useAppSelector(s => s.changeLog.workspaceEvents);
+  /* The workspace endpoint fans out across every book's
+     .audiobook/change-log.json and tags each event with bookId/bookTitle.
+     Refetched on every mount so opening a book, taking an action, and
+     coming back here shows the new entry without a page refresh. */
+  useEffect(() => {
+    let cancelled = false;
+    api.getWorkspaceChangelog().then(res => {
+      if (!cancelled) dispatch(changeLogActions.hydrateWorkspaceEvents(res.events));
+    }).catch(err => {
+      console.error('[changelog] workspace fetch failed', err);
+    });
+    return () => { cancelled = true; };
+  }, [dispatch]);
   return <ChangeLogView events={events}/>;
 }
 
@@ -170,8 +186,21 @@ function ConfirmRoute() {
   return (
     <ConfirmCastView characters={characters} library={voices}
       title={manuscript.title}
-      onConfirm={() => dispatch(uiActions.confirmCast())}
-      onReanalyse={() => dispatch(uiActions.reanalyse())}/>
+      onConfirm={() => {
+        dispatch(uiActions.confirmCast());
+        dispatch(changeLogActions.appendLogEvent(buildCastConfirmEvent({
+          characterCount: characters.length,
+          bookTitle: manuscript.title || undefined,
+        })));
+      }}
+      onReanalyse={() => {
+        /* Drop chapter-id-bearing entries (regenerate, chapter_complete,
+           chapter_failed, boundary_move) because the upcoming reparse
+           reshuffles chapter ids. Cast/voice prefs survive — those are
+           still meaningful after a reparse. */
+        dispatch(changeLogActions.wipeBookShapeEvents());
+        dispatch(uiActions.reanalyse());
+      }}/>
   );
 }
 

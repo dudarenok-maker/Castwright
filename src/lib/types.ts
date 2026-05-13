@@ -213,6 +213,17 @@ export interface ChangeLogEvent {
   actor: 'you' | 'system';
   chapterId?: number;
   revertible?: boolean;
+  /** Populated only by GET /api/workspace/changelog so the workspace view can
+      show which book each event came from. Per-book change-log.json files on
+      disk don't carry these fields — the aggregator attaches them at fetch
+      time from the book's state.json. */
+  bookId?: string;
+  bookTitle?: string;
+  author?: string;
+}
+
+export interface WorkspaceChangeLogResponse {
+  events: ChangeLogEvent[];
 }
 
 export interface ListenerApp {

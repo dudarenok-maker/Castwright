@@ -9,6 +9,7 @@ import { splitAudioTagSpans } from '../lib/audio-tags';
 import { initialSentences } from '../data/sentences';
 import { useAppDispatch } from '../store';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { changeLogActions } from '../store/change-log-slice';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 
 interface Props {
@@ -100,7 +101,12 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
       newCharacterId = segAbove.characterId;
       for (let i = anchorIdx; i <= candIdx; i++) ids.push(sentences[i].id);
     }
-    if (ids.length) dispatch(manuscriptActions.setSentencesCharacter({ sentenceIds: ids, characterId: newCharacterId }));
+    if (ids.length) {
+      dispatch(manuscriptActions.setSentencesCharacter({ sentenceIds: ids, characterId: newCharacterId }));
+      if (currentChapterId != null) {
+        dispatch(changeLogActions.bumpBoundaryMove({ chapterId: currentChapterId, count: ids.length }));
+      }
+    }
   }
 
   useEffect(() => {
@@ -127,10 +133,14 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
   }, [drag?.boundaryIdx]);
 
   function reassignSegment(seg: Segment, newCharId: string) {
+    const ids = seg.sentences.map(s => s.id);
     dispatch(manuscriptActions.setSentencesCharacter({
-      sentenceIds: seg.sentences.map(s => s.id),
+      sentenceIds: ids,
       characterId: newCharId,
     }));
+    if (currentChapterId != null) {
+      dispatch(changeLogActions.bumpBoundaryMove({ chapterId: currentChapterId, count: ids.length }));
+    }
   }
 
   function assignSelectionTo(newCharacterId: string) {
@@ -149,6 +159,9 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
         offsets: [selection.start, selection.end],
         characterIds: [sentence.characterId, newCharacterId, sentence.characterId],
       }));
+    }
+    if (currentChapterId != null) {
+      dispatch(changeLogActions.bumpBoundaryMove({ chapterId: currentChapterId, count: 1 }));
     }
     window.getSelection()?.removeAllRanges();
   }
@@ -310,6 +323,9 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
           }}
           onReassignSentence={(sentenceId, newCharId) => {
             dispatch(manuscriptActions.setSentenceCharacter({ sentenceId, characterId: newCharId }));
+            if (currentChapterId != null) {
+              dispatch(changeLogActions.bumpBoundaryMove({ chapterId: currentChapterId, count: 1 }));
+            }
           }}
           onOpenProfile={onOpenProfile}
         />

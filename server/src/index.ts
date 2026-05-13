@@ -25,9 +25,10 @@ import { bookStateRouter } from './routes/book-state.js';
 import { generationRouter } from './routes/generation.js';
 import { chapterAudioRouter } from './routes/chapter-audio.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
+import { workspaceRouter } from './routes/workspace.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
-import { WORKSPACE_ROOT, BOOKS_ROOT, ensureWorkspace } from './workspace/paths.js';
+import { WORKSPACE_ROOT, ensureWorkspace } from './workspace/paths.js';
 
 const app = express();
 
@@ -46,19 +47,7 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-/* Workspace metadata for the Books page header — lets the user see at a
-   glance which folder the library is actually reading from, so a stale
-   WORKSPACE_DIR override doesn't silently empty out the library. The
-   scanner already reads from WORKSPACE_ROOT (paths.ts) so this is the
-   exact same value the library tree is computed from. */
-app.get('/api/workspace', (_req, res) => {
-  res.json({
-    root: WORKSPACE_ROOT,
-    booksRoot: BOOKS_ROOT,
-    source: process.env.WORKSPACE_DIR ? 'env' : 'default',
-  });
-});
-
+app.use('/api/workspace', workspaceRouter); // GET / (metadata) + GET /changelog (cross-book aggregator)
 app.use('/api/library', libraryRouter);
 app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);

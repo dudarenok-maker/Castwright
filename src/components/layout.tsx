@@ -13,6 +13,8 @@ import {
   buildChapterRegenEvent,
   buildCharacterRegenEvent,
   buildBatchCharacterRegenEvent,
+  buildVoiceTuneEvent,
+  buildVoiceLockEvent,
 } from '../lib/change-log';
 import { overallProgress, sentencesPerChapter } from '../lib/generation-progress';
 import { api } from '../lib/api';
@@ -345,9 +347,27 @@ export function Layout() {
           character={profileCharacter}
           voice={profileVoice ?? undefined}
           onClose={() => dispatch(uiActions.setOpenProfileId(null))}
-          onSave={(updated) => {
+          onSave={(updated, meta) => {
             dispatch(castActions.setCharacters(characters.map(c => c.id === updated.id ? updated : c)));
+            /* Only log a tune event when the drawer actually saved a tuned
+               voice — the drawer also fires onSave from the "Discard"-less
+               identity edits via the same path, and we don't want to spam
+               the audit trail when no real tuning happened. */
+            if (updated.voiceState === 'tuned') {
+              dispatch(changeLogActions.appendLogEvent(buildVoiceTuneEvent({
+                character: updated,
+                hadConflict: meta.hadConflict,
+              })));
+            }
             dispatch(uiActions.setOpenProfileId(null));
+          }}
+          onLock={(character) => {
+            /* Idempotent: clicking Lock when already locked is a no-op for
+               the slice but still useful as a manual re-acknowledge — but
+               the change-log entry would be redundant, so skip it. */
+            if (character.voiceState === 'locked') return;
+            dispatch(castActions.lockVoice(character.id));
+            dispatch(changeLogActions.appendLogEvent(buildVoiceLockEvent({ character })));
           }}
           onShowMatchDetail={(id) => dispatch(uiActions.setMatchDetailFor(id))}
           onRegenerateCharacter={(charId) => dispatch(uiActions.setRegenCharacterCtx({ characterId: charId }))}/>

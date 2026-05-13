@@ -93,6 +93,11 @@ function ChangeLogEntry({ event }: { event: ChangeLogEvent }) {
           <span className="text-[10px] uppercase tracking-wider text-ink/50 font-semibold">{t.label}</span>
           {event.actor === 'system' && <span className="text-[10px] uppercase tracking-wider text-purple-deep/70 font-semibold">· auto</span>}
         </div>
+        {event.bookTitle && (
+          /* Only populated by GET /api/workspace/changelog. The per-book Log
+             tab shows raw events and skips this subtitle. */
+          <p className="text-[11px] uppercase tracking-wider text-ink/45 font-semibold mb-1">{event.bookTitle}</p>
+        )}
         <p className="text-xs text-ink/65 leading-relaxed">{event.note}</p>
         {event.chapterId && (
           <p className="mt-1.5 text-[11px] text-ink/45 font-mono">CH {String(event.chapterId).padStart(2, '0')}</p>

@@ -9,6 +9,10 @@ import {
   buildGenerationStartedEvent,
   buildChapterCompleteEvent,
   buildChapterFailedEvent,
+  buildCastConfirmEvent,
+  buildVoiceTuneEvent,
+  buildVoiceLockEvent,
+  buildBoundaryMoveEvent,
   bucketDate,
   relativeTime,
   withRecomputedDisplay,
@@ -163,6 +167,65 @@ describe('buildChapterFailedEvent', () => {
     expect(ev.actor).toBe('system');
     expect(ev.chapterId).toBe(2);
     expect(ev.note).toBe('Voice not found in library');
+  });
+});
+
+describe('buildCastConfirmEvent', () => {
+  it('records the character count and quotes the book title when given', () => {
+    const ev = buildCastConfirmEvent({ characterCount: 7, bookTitle: 'Solway Bay', now: NOW });
+    expect(ev.type).toBe('cast_confirm');
+    expect(ev.actor).toBe('you');
+    expect(ev.chapterId).toBeUndefined();
+    expect(ev.note).toContain('7 characters');
+    expect(ev.note).toContain('Solway Bay');
+  });
+
+  it('handles singular and missing-title cases', () => {
+    const ev = buildCastConfirmEvent({ characterCount: 1, now: NOW });
+    expect(ev.note).toContain('1 character ');
+    expect(ev.note).not.toContain('"');
+  });
+});
+
+describe('buildVoiceTuneEvent', () => {
+  it('names the character and notes a clean tune', () => {
+    const ev = buildVoiceTuneEvent({ character: makeChar('eliza', 'Eliza Gray'), now: NOW });
+    expect(ev.type).toBe('voice_tune');
+    expect(ev.title).toBe("Tuned Eliza Gray's voice");
+    expect(ev.note).toContain('Voice tone updated');
+  });
+
+  it('surfaces the conflict-reset note when the library match was dropped', () => {
+    const ev = buildVoiceTuneEvent({
+      character: makeChar('halloran', 'Captain Halloran'),
+      hadConflict: true,
+      now: NOW,
+    });
+    expect(ev.note).toContain('Identity edit reset the library match');
+  });
+});
+
+describe('buildVoiceLockEvent', () => {
+  it('records the lock action against the character', () => {
+    const ev = buildVoiceLockEvent({ character: makeChar('halloran', 'Captain Halloran'), now: NOW });
+    expect(ev.type).toBe('voice_lock');
+    expect(ev.title).toBe("Locked Captain Halloran's voice");
+    expect(ev.actor).toBe('you');
+  });
+});
+
+describe('buildBoundaryMoveEvent', () => {
+  it('binds the chapterId and stamps the count for the aggregator', () => {
+    const ev = buildBoundaryMoveEvent({ chapterId: 3, count: 4, now: NOW });
+    expect(ev.type).toBe('boundary_move');
+    expect(ev.chapterId).toBe(3);
+    expect(ev.title).toContain('Chapter 3');
+    expect(ev.note).toContain('4 sentences reassigned');
+  });
+
+  it('uses singular phrasing for a single reassigned sentence', () => {
+    const ev = buildBoundaryMoveEvent({ chapterId: 1, count: 1, now: NOW });
+    expect(ev.note).toContain('1 sentence reassigned');
   });
 });
 

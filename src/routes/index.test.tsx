@@ -8,7 +8,7 @@
 // library entry.
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
@@ -19,10 +19,13 @@ import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
 import { librarySlice, libraryActions } from '../store/library-slice';
 import { revisionsSlice } from '../store/revisions-slice';
 import { voicesSlice } from '../store/voices-slice';
-import { AnalysingRoute } from './index';
-import type { LibraryBook } from '../lib/types';
+import { changeLogSlice } from '../store/change-log-slice';
+import { router as appRouter } from './index';
+import { AnalysingRoute, ChangelogRoute } from './index';
+import type { LibraryBook, ChangeLogEvent } from '../lib/types';
 
 const analyseMock = vi.fn();
+const workspaceChangelogMock = vi.fn();
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -32,12 +35,17 @@ vi.mock('../lib/api', () => ({
          loading state without flushing a setState after the test asserts. */
       return new Promise(() => {});
     },
+    getWorkspaceChangelog: () => workspaceChangelogMock(),
   },
   AnalysisError: class extends Error {
     code = 'unknown';
     detail?: string;
   },
 }));
+
+/* Confirm the workspace router actually wires `/log` to ChangelogRoute and the
+   real route table mounts. */
+void appRouter;
 
 function makeStore() {
   return configureStore({
@@ -49,6 +57,7 @@ function makeStore() {
       manuscript: manuscriptSlice.reducer,
       library:    librarySlice.reducer,
       voices:     voicesSlice.reducer,
+      changeLog:  changeLogSlice.reducer,
     },
   });
 }
@@ -88,6 +97,7 @@ function renderAtAnalysing(store: ReturnType<typeof makeStore>) {
 
 beforeEach(() => {
   analyseMock.mockClear();
+  workspaceChangelogMock.mockReset();
 });
 
 describe('AnalysingRoute manuscriptId derivation', () => {
@@ -159,5 +169,48 @@ describe('AnalysingRoute manuscriptId derivation', () => {
 
     expect(screen.getByText(/No manuscript loaded/i)).toBeInTheDocument();
     expect(analyseMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChangelogRoute', () => {
+  it('fetches workspace events and renders them with their book subtitle', async () => {
+    const events: ChangeLogEvent[] = [
+      {
+        id: 1, at: '2026-05-13T15:00:00.000Z', ts: 'Just now', date: 'today',
+        type: 'regenerate', title: 'Regenerated Chapter 3',
+        note: 'Reason: voice tuning updated.', actor: 'you',
+        chapterId: 3, revertible: true,
+        bookId: 'sb', bookTitle: 'Solway Bay', author: 'Demo',
+      },
+      {
+        id: 2, at: '2026-05-13T12:00:00.000Z', ts: 'earlier', date: 'today',
+        type: 'cast_confirm', title: 'Confirmed the cast',
+        note: '6 characters.', actor: 'you',
+        bookId: 'ns', bookTitle: 'Northern Star', author: 'Demo',
+      },
+    ];
+    workspaceChangelogMock.mockResolvedValue({ events });
+
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/log']}>
+          <Routes>
+            <Route path="/log" element={<ChangelogRoute/>}/>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* Wait for the workspace fetch to resolve and the slice to hydrate so the
+       view re-renders with both events. */
+    await waitFor(() => {
+      expect(screen.getByText('Regenerated Chapter 3')).toBeInTheDocument();
+    });
+    expect(workspaceChangelogMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Solway Bay')).toBeInTheDocument();
+    expect(screen.getByText('Northern Star')).toBeInTheDocument();
+    /* The per-book log seed fixture must NOT leak into the workspace view. */
+    expect(screen.queryByText("Tuned Eliza Gray's voice")).toBeNull();
   });
 });
