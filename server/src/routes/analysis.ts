@@ -49,6 +49,24 @@ function assignPaletteColors(characters: CharacterOutput[]): CharacterOutput[] {
   });
 }
 
+/* Normalises evidence ordering longest-first across every consumer:
+   the profile drawer renders index 0 at the top, and voice-sample
+   generation uses index 0 as the cloning sample. Mutates in place so
+   the same object reference flows into the on-disk cache and the SSE
+   payload. Logs a dev warning when a character ships with fewer than
+   3 quotes — the analyzer prompt asks for ≥3, so anything less is a
+   weak pass worth surfacing in the server log. */
+export function sortEvidence(characters: CharacterOutput[]): void {
+  for (const c of characters) {
+    if (c.evidence && c.evidence.length > 1) {
+      c.evidence.sort((a, b) => b.quote.length - a.quote.length);
+    }
+    if (!c.evidence || c.evidence.length < 3) {
+      console.warn(`[analysis] ${c.id} has ${c.evidence?.length ?? 0} evidence quote(s); analyzer prompt asks for ≥3.`);
+    }
+  }
+}
+
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
    and scenes (distinct chapters appeared in) from stage 2 output once we
    have it, and attach to each character. */
@@ -341,6 +359,8 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       log(0, `Resuming — stage 1 already complete (${charCount} character${charCount === 1 ? '' : 's'} cached).`);
       send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
       stage1 = cache.stage1;
+      /* Legacy caches predate longest-first ordering; re-sort on load. */
+      sortEvidence(stage1.characters);
     } else {
       send({ kind: 'phase', phaseId: 0, progress: 0.02, label: PHASES[0].label });
       log(0, `Asking ${analyzerLabel} to identify characters…`);
@@ -359,6 +379,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         },
       );
       stage1ActualMs = Date.now() - stage1Start;
+      sortEvidence(stage1.characters);
       cache.stage1 = stage1;
       await saveAnalysisCache(manuscriptId, cache);
     }
