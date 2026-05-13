@@ -124,7 +124,7 @@ function ChangelogRoute() {
   return <ChangeLogView events={CHANGE_LOG_EVENTS}/>;
 }
 
-function AnalysingRoute() {
+export function AnalysingRoute() {
   const { bookId = '' } = useParams<{ bookId: string }>();
   useHydrateStage({ kind: 'analysing', bookId, manuscriptId: null }, [bookId]);
 
@@ -134,7 +134,14 @@ function AnalysingRoute() {
   const library    = useAppSelector(s => s.library);
   const ui         = useAppSelector(s => s.ui);
   const activeBook = library.books.find(b => b.bookId === bookId);
-  const manuscriptId = stage.kind === 'analysing' ? stage.manuscriptId ?? null : null;
+  /* Stage.manuscriptId is set when the user goes through Upload → Analyse, but
+     it's null on page refresh, deep links, or confirm→reanalyse — none of
+     those carry the id through ui.stage. Layout's book-state hydration always
+     repopulates manuscript.manuscriptId from disk, so prefer that (and fall
+     back to the library entry for the brief window before disk hydrate lands). */
+  const manuscriptId = stage.kind === 'analysing'
+    ? stage.manuscriptId ?? manuscript.manuscriptId ?? activeBook?.manuscriptId ?? null
+    : null;
 
   return (
     <AnalysingView
