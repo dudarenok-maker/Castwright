@@ -187,6 +187,123 @@ describe('GenerationView — early-tick render guards (regression)', () => {
   });
 });
 
+describe('GenerationView — per-character progress is derived from the manuscript (false-Done regression)', () => {
+  /* The bug: by line 13 of an 82-line chapter every cast member had spoken
+     at least once, the slice flipped previously-active speakers to `done`,
+     and the expanded chapter row showed three full-green "Done" bars while
+     synthesis was still 16% through. Fix derives per-character "lines
+     synthesised" from manuscript line positions + chapter.currentLine. */
+
+  const cast: Character[] = [
+    { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+    { id: 'keefe',    name: 'Keefe',    role: 'Empath',   color: 'peach' },
+    { id: 'ro',       name: 'Ro',       role: 'Goblin',   color: 'magenta' },
+    { id: 'elwin',    name: 'Elwin',    role: 'Physician', color: 'violet' },
+  ];
+
+  /* Day-One-shaped chapter: narrator dominates, the other three each speak
+     once before line 13 AND have lines still to come after it — so at
+     currentLine=13 keefe/ro/elwin should each show fractional progress,
+     not "Done". Pre-fix the slice would have marked all three "done" the
+     moment the next speaker took over. */
+  const dayOne: Sentence[] = [
+    { id: 1,  chapterId: 2, characterId: 'narrator', text: 'open' },
+    { id: 2,  chapterId: 2, characterId: 'narrator', text: 'b' },
+    { id: 3,  chapterId: 2, characterId: 'keefe',    text: 'k1' },
+    { id: 4,  chapterId: 2, characterId: 'narrator', text: 'c' },
+    { id: 5,  chapterId: 2, characterId: 'ro',       text: 'r1' },
+    { id: 6,  chapterId: 2, characterId: 'narrator', text: 'd' },
+    { id: 7,  chapterId: 2, characterId: 'elwin',    text: 'e1' },
+    { id: 8,  chapterId: 2, characterId: 'narrator', text: 'e' },
+    { id: 9,  chapterId: 2, characterId: 'narrator', text: 'f' },
+    { id: 10, chapterId: 2, characterId: 'narrator', text: 'g' },
+    { id: 11, chapterId: 2, characterId: 'narrator', text: 'h' },
+    { id: 12, chapterId: 2, characterId: 'narrator', text: 'i' },
+    { id: 13, chapterId: 2, characterId: 'narrator', text: 'j (current)' },
+    /* Each non-narrator has at least one line still ahead of line 13 so
+       they appear as partial progress, not "Done". */
+    { id: 14, chapterId: 2, characterId: 'keefe',    text: 'k2' },
+    { id: 15, chapterId: 2, characterId: 'elwin',    text: 'e2' },
+    { id: 16, chapterId: 2, characterId: 'ro',       text: 'r2' },
+    { id: 17, chapterId: 2, characterId: 'keefe',    text: 'k3' },
+    { id: 18, chapterId: 2, characterId: 'elwin',    text: 'e3' },
+    { id: 19, chapterId: 2, characterId: 'elwin',    text: 'e4' },
+    { id: 20, chapterId: 2, characterId: 'narrator', text: 'closer' },
+  ];
+
+  function renderScenario() {
+    const liveChapter: Chapter = {
+      id: 2,
+      title: 'DAY ONE',
+      duration: '00:00',
+      state: 'in_progress',
+      progress: 13 / 20,
+      currentLine: 13,
+      totalLines: 20,
+      /* Slice state mirrors what applyGenerationTick produces after the fix:
+         narrator is the active speaker, everyone who's spoken before is
+         back at 'queued'. Pre-fix they'd all have been 'done' here. */
+      characters: {
+        narrator: 'in_progress',
+        keefe:    'queued',
+        ro:       'queued',
+        elwin:    'queued',
+      },
+    };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([liveChapter]));
+    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
+      bookId: 'b1', characters: cast, chapters: [liveChapter], sentences: dayOne,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any));
+    return render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={[liveChapter]}
+          characters={cast}
+          paused
+          title="Bonus Keefe Story"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          setPaused={() => {}}
+          onRegenerate={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('shows the active speaker as Generating with their real X/Y count, not a full-green Done bar', () => {
+    renderScenario();
+    fireEvent.click(screen.getByText('DAY ONE'));
+    /* Narrator owns 11 of 20 lines (positions 1, 2, 4, 6, 8, 9, 10, 11, 12,
+       13, 20); at currentLine=13 they've sung 10 of those 11. The label
+       should reflect that, not "Done". */
+    expect(screen.getByText('10/11')).toBeInTheDocument();
+  });
+
+  it('shows partial progress for non-active speakers with lines still ahead, not a false "Done"', () => {
+    renderScenario();
+    fireEvent.click(screen.getByText('DAY ONE'));
+    /* Keefe: positions [3, 14, 17] → 1 of 3 done by line 13. */
+    expect(screen.getByText('1/3 done')).toBeInTheDocument();
+    /* Ro: positions [5, 16] → 1 of 2 done. */
+    expect(screen.getByText('1/2 done')).toBeInTheDocument();
+    /* Elwin: positions [7, 15, 18, 19] → 1 of 4 done. */
+    expect(screen.getByText('1/4 done')).toBeInTheDocument();
+    /* The lie was the full-green "Done" bar for any of these three. */
+    expect(screen.queryByText(/^Done$/)).not.toBeInTheDocument();
+  });
+});
+
 describe('GenerationView — heartbeat / stalled state', () => {
   it('shows the amber Stalled pill and banner when no tick has landed within STALL_THRESHOLD_MS', () => {
     /* Anchor wall-clock at a known instant so the gap between

@@ -106,30 +106,52 @@ export const chaptersSlice = createSlice({
       chapters: BookStateJson['chapters'];
       completedSlugs: string[];
       characters: Character[];
+      /** Per-chapter analysed speaker ids (chapterId → character id list).
+          When present, each chapter row is seeded with ONLY the characters
+          that actually speak in it. Absent (older server, or no analysis
+          cache yet) — fall back to seeding every cast member as queued. */
+      chapterCharacters?: Record<number, string[]>;
     }>) => {
-      const { chapters, completedSlugs, characters } = a.payload;
+      const { chapters, completedSlugs, characters, chapterCharacters } = a.payload;
       const done = new Set(completedSlugs);
-      const queuedChar: Record<string, 'queued'> = {};
-      for (const c of characters) queuedChar[c.id] = 'queued';
+      const allCastQueued: Record<string, 'queued'> = {};
+      for (const c of characters) allCastQueued[c.id] = 'queued';
+      const seedQueued = (chapterId: number): Record<string, 'queued'> => {
+        const ids = chapterCharacters?.[chapterId];
+        if (!ids || ids.length === 0) return { ...allCastQueued };
+        const out: Record<string, 'queued'> = {};
+        for (const id of ids) out[id] = 'queued';
+        return out;
+      };
+      const seedDone = (chapterId: number): Record<string, 'done'> => {
+        const ids = chapterCharacters?.[chapterId];
+        const source = ids && ids.length > 0 ? ids : characters.map(ch => ch.id);
+        const out: Record<string, 'done'> = {};
+        for (const id of source) out[id] = 'done';
+        return out;
+      };
       s.chapters = chapters.map(c => ({
         id: c.id,
         title: c.title,
         duration: c.duration ?? '00:00',
         state: done.has(c.slug) ? 'done' : 'queued',
         progress: done.has(c.slug) ? 1 : 0,
-        characters: done.has(c.slug)
-          ? Object.fromEntries(characters.map(ch => [ch.id, 'done' as const]))
-          : { ...queuedChar },
+        characters: done.has(c.slug) ? seedDone(c.id) : seedQueued(c.id),
       } as Chapter));
       s.lastError = null;
       s.generationStartedAt = null;
       s.pendingRegen = null;
       s.lastTickAt = null;
-      /* Always land paused after a hydrate so a page reload doesn't auto-
-         resume a long-running generation behind the user's back. They have
-         to explicitly click Resume — matches the "in-session only"
-         continuation contract documented in plan + this file. */
-      s.paused = true;
+      /* Land paused only when there's persisted progress to preserve — i.e.
+         at least one chapter already has audio on disk. For a freshly-
+         analysed book where everything is still queued, leaving paused
+         alone (default false) lets the SSE middleware kick off generation
+         the moment the user lands on the Generate view, instead of forcing
+         a redundant click of Resume. The "page reload during a long run"
+         safety still applies because any in-flight book has completed
+         chapters by the time the user reloads — those flip this back to
+         paused=true. */
+      if (done.size > 0) s.paused = true;
     },
 
     applyGenerationTick: (s, a: PayloadAction<GenerationTick>) => {
@@ -221,15 +243,27 @@ export const chaptersSlice = createSlice({
            we can promote. If the live speaker isn't in this chapter's cast
            (e.g. a quoted-character id that didn't survive cast confirmation,
            or any stray id the server happens to emit) the previously-active
-           speaker would otherwise get silently flipped to `done` with nobody
-           taking their place — the Generate view then renders every row as
-           "Done" while synthesis quietly continues. Leaving state untouched
-           keeps the active speaker visible. */
+           speaker would otherwise get silently flipped with nobody taking
+           their place — the Generate view then renders every row as "Done"
+           while synthesis quietly continues. Leaving state untouched keeps
+           the active speaker visible.
+
+           When we DO have a real new speaker, the previously-active one is
+           flipped back to `queued`, NOT `done`. A character can speak many
+           lines spread across a chapter (Narrator dominates, the others
+           interleave); marking them `done` the moment another speaker takes
+           a turn was a lie — by line 13 of 82 every cast member had spoken
+           once and the expanded row showed three "Done" rows with full
+           green bars while 80% of the chapter was still ahead. Real
+           per-character completion is derived in the view from
+           `chapter.currentLine` + manuscript line positions; the slice's
+           status field just tracks "who is speaking right now". `done`
+           still lands on `chapter_complete` for everyone non-skipped. */
         const liveStatus = ch.characters[ev.characterId];
         if (liveStatus && liveStatus !== 'skipped') {
           for (const k of Object.keys(ch.characters)) {
             if (ch.characters[k] === 'in_progress' && k !== ev.characterId) {
-              ch.characters[k] = 'done';
+              ch.characters[k] = 'queued';
             }
           }
           ch.characters[ev.characterId] = 'in_progress';
@@ -250,6 +284,11 @@ export const chaptersSlice = createSlice({
           progress: c.id === chapterId ? 0.05 : 0,
           phase:    null,
           errorReason: undefined,
+          /* Reset line counters so the expanded row's derived per-character
+             progress (which counts manuscript line positions ≤ currentLine)
+             doesn't show stale fractions in the gap between regenerate
+             firing and the first fresh `progress` tick landing. */
+          currentLine: 0,
           characters: Object.fromEntries(
             Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v])
           ) as Chapter['characters'],
@@ -271,13 +310,16 @@ export const chaptersSlice = createSlice({
         const cur = ch.characters[characterId];
         if (cur === 'skipped' || !cur) return ch;
         targetIds.push(ch.id);
+        const wasDone = ch.state === 'done';
         return {
           ...ch,
           characters: { ...ch.characters, [characterId]: 'queued' },
-          state:    ch.state === 'done' ? 'in_progress' : ch.state,
-          progress: ch.state === 'done' ? 0.05 : ch.progress,
+          state:    wasDone ? 'in_progress' : ch.state,
+          progress: wasDone ? 0.05 : ch.progress,
           phase:    null,
           errorReason: undefined,
+          /* Same currentLine reset as regenerateChapter — see comment there. */
+          currentLine: wasDone ? 0 : ch.currentLine,
         };
       });
       if (targetIds.length) {
@@ -303,13 +345,15 @@ export const chaptersSlice = createSlice({
         });
         if (!touched) return ch;
         targetIds.push(ch.id);
+        const wasDone = ch.state === 'done';
         return {
           ...ch,
           characters: newChars,
-          state:    ch.state === 'done' ? 'in_progress' : ch.state,
-          progress: ch.state === 'done' ? 0.05 : ch.progress,
+          state:    wasDone ? 'in_progress' : ch.state,
+          progress: wasDone ? 0.05 : ch.progress,
           phase:    null,
           errorReason: undefined,
+          currentLine: wasDone ? 0 : ch.currentLine,
         };
       });
       if (targetIds.length) {
