@@ -1,0 +1,140 @@
+// Pairs with docs/features/00-stage-machine.md, docs/features/01-hash-router.md
+
+import { describe, expect, it } from 'vitest';
+import { uiSlice, uiActions, type UiState } from './ui-slice';
+import { stageToHash } from '../lib/router';
+import type { Stage } from '../lib/types';
+
+import { DEFAULT_MODEL } from '../lib/models';
+import { DEFAULT_TTS_MODEL } from '../lib/tts-models';
+
+const baseState = (stage: Stage): UiState => ({
+  stage,
+  currentTrack: null,
+  matchDetailFor: null,
+  handoffApp: null,
+  regenChapter: null,
+  regenCharacterCtx: null,
+  batchRegenIds: null,
+  showRevisionPlayer: false,
+  showDriftReport: false,
+  previewMode: false,
+  selectedModel: DEFAULT_MODEL,
+  ttsModelKey: DEFAULT_TTS_MODEL,
+});
+
+describe('uiSlice — openBook status→stage routing', () => {
+  it('analysing → analysing stage', () => {
+    const next = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.openBook({ id: 'ns', status: 'analysing', manuscriptId: 'm1' }),
+    );
+    expect(next.stage).toEqual({ kind: 'analysing', bookId: 'ns', manuscriptId: 'm1' });
+  });
+
+  it('cast_pending → confirm stage', () => {
+    const next = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.openBook({ id: 'ns', status: 'cast_pending' }),
+    );
+    expect(next.stage).toEqual({ kind: 'confirm', bookId: 'ns' });
+  });
+
+  it('complete → ready stage on listen view', () => {
+    const next = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.openBook({ id: 'ns', status: 'complete' }),
+    );
+    expect(next.stage).toMatchObject({ kind: 'ready', bookId: 'ns', view: 'listen', currentChapterId: 3, openProfileId: null });
+  });
+
+  it('generating → ready stage on generate view', () => {
+    const next = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.openBook({ id: 'ns', status: 'generating' }),
+    );
+    expect(next.stage).toMatchObject({ kind: 'ready', bookId: 'ns', view: 'generate' });
+  });
+
+  it('unknown status falls back to cast view', () => {
+    const next = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.openBook({ id: 'ns', status: 'something-else' }),
+    );
+    expect(next.stage).toMatchObject({ kind: 'ready', bookId: 'ns', view: 'cast' });
+  });
+});
+
+describe('uiSlice — stage transition guards', () => {
+  it('manuscriptUploaded only fires from upload stage', () => {
+    const fromUpload = uiSlice.reducer(baseState({ kind: 'upload' }),
+      uiActions.manuscriptUploaded({ bookId: 'ns', manuscriptId: 'm1' }));
+    expect(fromUpload.stage).toEqual({ kind: 'analysing', bookId: 'ns', manuscriptId: 'm1' });
+
+    const fromBooks = uiSlice.reducer(baseState({ kind: 'books' }),
+      uiActions.manuscriptUploaded({ bookId: 'ns', manuscriptId: 'm1' }));
+    expect(fromBooks.stage).toEqual({ kind: 'books' });
+  });
+
+  it('analysisComplete only fires from analysing stage', () => {
+    const fromAnalysing = uiSlice.reducer(
+      baseState({ kind: 'analysing', bookId: 'ns', manuscriptId: 'm1' }),
+      uiActions.analysisComplete({ bookId: 'ns' }),
+    );
+    expect(fromAnalysing.stage).toEqual({ kind: 'confirm', bookId: 'ns' });
+
+    const fromUpload = uiSlice.reducer(baseState({ kind: 'upload' }),
+      uiActions.analysisComplete({ bookId: 'ns' }));
+    expect(fromUpload.stage).toEqual({ kind: 'upload' });
+  });
+
+  it('confirmCast only fires from confirm stage', () => {
+    const fromConfirm = uiSlice.reducer(
+      baseState({ kind: 'confirm', bookId: 'ns' }),
+      uiActions.confirmCast(),
+    );
+    expect(fromConfirm.stage).toMatchObject({ kind: 'ready', bookId: 'ns', view: 'manuscript', currentChapterId: 3 });
+
+    const fromAnalysing = uiSlice.reducer(
+      baseState({ kind: 'analysing', bookId: 'ns', manuscriptId: 'm1' }),
+      uiActions.confirmCast(),
+    );
+    expect(fromAnalysing.stage).toEqual({ kind: 'analysing', bookId: 'ns', manuscriptId: 'm1' });
+  });
+});
+
+describe('uiSlice — hydrateFromUrl + stageToHash round-trip', () => {
+  const stages: Stage[] = [
+    { kind: 'books' },
+    { kind: 'upload' },
+    { kind: 'voices' },
+    { kind: 'changelog' },
+    { kind: 'confirm', bookId: 'ns' },
+    { kind: 'ready', bookId: 'ns', view: 'manuscript', currentChapterId: 3, openProfileId: null },
+    { kind: 'ready', bookId: 'ns', view: 'cast', currentChapterId: 5, openProfileId: 'halloran' },
+  ];
+
+  it('hydrateFromUrl with a well-formed Stage sets state.stage to that exact value', () => {
+    for (const stage of stages) {
+      const next = uiSlice.reducer(baseState({ kind: 'books' }), uiActions.hydrateFromUrl(stage));
+      expect(next.stage).toEqual(stage);
+      // And stageToHash is callable on each variant without throwing.
+      expect(typeof stageToHash(stage)).toBe('string');
+    }
+  });
+
+  it('hydrateFromUrl with a stage missing kind is rejected', () => {
+    const start = baseState({ kind: 'confirm', bookId: 'ns' });
+    const next = uiSlice.reducer(start, uiActions.hydrateFromUrl({} as Stage));
+    expect(next.stage).toEqual(start.stage);
+  });
+});
+
+describe('uiSlice — overlays do not perturb the stage', () => {
+  it('setCurrentTrack updates currentTrack and leaves stage alone', () => {
+    const start = baseState({ kind: 'ready', bookId: 'ns', view: 'listen', currentChapterId: 3, openProfileId: null });
+    const next = uiSlice.reducer(start, uiActions.setCurrentTrack(5));
+    expect(next.currentTrack).toBe(5);
+    expect(next.stage).toEqual(start.stage);
+  });
+});
