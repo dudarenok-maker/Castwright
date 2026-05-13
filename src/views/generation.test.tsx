@@ -23,6 +23,10 @@ vi.mock('../lib/api', () => ({
       return () => {};
     },
     getChapterAudio:  () => new Promise(() => {}),
+    /* Sidecar status pill polls this on mount. Resolve with a happy status
+       so the pill renders the green variant without spamming console
+       warnings during the test render. */
+    getSidecarHealth: () => Promise.resolve({ status: 'reachable', url: '(test)' }),
   },
 }));
 

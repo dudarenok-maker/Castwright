@@ -3,6 +3,7 @@ import {
   IconPlay, IconPause, IconCheck, IconSpinner, IconWarning,
   IconArrowDn, IconRefresh, IconClose, IconHistory, IconClock,
 } from '../lib/icons';
+import type { SidecarHealth } from '../lib/api';
 import {
   SectionLabel, MixedHeading, Pill, ColorDot,
 } from '../components/primitives';
@@ -123,6 +124,24 @@ export function GenerationView({
     return withRecomputedDisplay(filtered).slice(0, 6);
   }, [activityEvents]);
 
+  /* Poll the sidecar /health endpoint so the user can tell "is the local TTS
+     process even up?" without waiting for a chapter to actually fail. Poll
+     every 30s while we're on this view, plus an immediate re-check whenever
+     a stream-level error lands (it's the single most useful diagnostic
+     follow-up after `chapter_failed`). */
+  const [sidecarHealth, setSidecarHealth] = useState<SidecarHealth | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const probe = () => {
+      api.getSidecarHealth()
+        .then(h => { if (!cancelled) setSidecarHealth(h); })
+        .catch(() => { if (!cancelled) setSidecarHealth({ status: 'unreachable', url: '', error: 'Probe failed.' }); });
+    };
+    probe();
+    const id = setInterval(probe, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [lastError]);
+
   /* Sub-chapter "lines synthesised" counter so the user has a tangible
      "something is happening" signal at every tick (real backend emits one
      `progress` tick per same-speaker group; each group ships ~1-2 lines).
@@ -161,7 +180,10 @@ export function GenerationView({
               {' '}of {linesCounter.total.toLocaleString()} lines synthesised
             </p>
           )}
-          <p className="mt-1 text-xs text-ink/50">Engine: <span className="font-medium text-ink/70">{engineLabel}</span></p>
+          <p className="mt-1 text-xs text-ink/50 inline-flex items-center gap-2 flex-wrap">
+            <span>Engine: <span className="font-medium text-ink/70">{engineLabel}</span></span>
+            {sidecarHealth && <SidecarStatusPill health={sidecarHealth}/>}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <button onClick={() => setPaused(!paused)} className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2">
@@ -256,6 +278,26 @@ export function GenerationView({
         </div>
       </div>
     </div>
+  );
+}
+
+function SidecarStatusPill({ health }: { health: SidecarHealth }) {
+  const reachable = health.status === 'reachable';
+  /* Two states; the in-between "slow / loading" is intentionally folded into
+     unreachable for now — both block synthesis from the user's perspective,
+     and the timeout copy in the tooltip explains it. */
+  return (
+    <span
+      title={health.error || (reachable ? `Sidecar ready at ${health.url}` : 'Sidecar not reachable')}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+        reachable
+          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+          : 'bg-rose-50 text-rose-700 border border-rose-200'
+      }`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${reachable ? 'bg-emerald-500' : 'bg-rose-500'}`}/>
+      {reachable ? 'Sidecar ready' : 'Sidecar unreachable'}
+    </span>
   );
 }
 

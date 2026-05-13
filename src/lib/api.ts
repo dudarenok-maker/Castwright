@@ -643,6 +643,32 @@ function realStreamGeneration({ bookId, modelKey, chapterIds, force, onTick }: S
   return () => controller.abort();
 }
 
+export interface SidecarHealth {
+  status: 'reachable' | 'unreachable';
+  url: string;
+  engines?: string[];
+  error?: string;
+}
+
+async function realGetSidecarHealth(): Promise<SidecarHealth> {
+  const res = await fetch('/api/sidecar/health');
+  if (!res.ok) {
+    return {
+      status: 'unreachable',
+      url: '',
+      error: `Sidecar probe HTTP ${res.status}`,
+    };
+  }
+  return res.json();
+}
+
+async function mockGetSidecarHealth(): Promise<SidecarHealth> {
+  /* Mocks pretend everything's healthy — generation is local and synchronous
+     under VITE_USE_MOCKS=true, so there's no real sidecar to probe. */
+  await wait(80);
+  return { status: 'reachable', url: '(mock)', engines: ['coqui', 'gemini'] };
+}
+
 /* Chapter audio + revisions polling stay mocked for now — both belong to the
    playback slice that comes after this one. */
 const real = {
@@ -660,6 +686,7 @@ const real = {
   reparseBook:       realReparseBook,
   getVoiceSample:    realGetVoiceSample,
   streamGeneration:  realStreamGeneration,
+  getSidecarHealth:  realGetSidecarHealth,
   getChapterAudio:   async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
     if (!res.ok) {
@@ -690,6 +717,7 @@ const mock = {
   reparseBook:       mockReparseBook,
   getVoiceSample:    mockGetVoiceSample,
   streamGeneration:  mockStreamGeneration,
+  getSidecarHealth:  mockGetSidecarHealth,
   getChapterAudio:   mockGetChapterAudio,
   pollRevisions:     mockPollRevisions,
 };
