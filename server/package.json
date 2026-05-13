@@ -8,6 +8,7 @@
     "build": "tsc -p .",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p .",
+    "pretest": "node ../scripts/preflight-ffmpeg.cjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
