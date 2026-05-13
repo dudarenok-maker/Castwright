@@ -67,6 +67,24 @@ One-time setup (see server\tts-sidecar\README.md):
 "@
 }
 
+# --- Preflight: ffmpeg required for chapter-audio MP3 encoding ------------
+# generation.ts pipes PCM through `ffmpeg -c:a libmp3lame -q:a 2` at chapter
+# boundaries. Without it, every chapter generation rejects at the encode
+# step. Fail fast at start-up with an actionable install hint rather than
+# surfacing as a cryptic ffmpeg-spawn ENOENT mid-stream.
+if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+    Fail @"
+ffmpeg not found on PATH.
+
+The server encodes chapter audio to MP3 (LAME VBR V2) via the system
+ffmpeg binary. Install it once and restart this shell:
+
+  winget install Gyan.FFmpeg
+
+(Then close + reopen PowerShell so the updated PATH is picked up.)
+"@
+}
+
 # --- Idempotency: a service is "alive" iff something is listening on its
 # port. PIDs are unreliable: npm.cmd is a shim that exits after spawning
 # node, so the recorded parent PID dies seconds after launch even though
