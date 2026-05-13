@@ -72,6 +72,11 @@ const TRIGGER_TYPES = new Set<string>([
   'ui/goHome',
   'ui/hydrateFromUrl',
   'ui/confirmCast',
+  /* changeView is the seam for "user just landed on Generate and there are
+     queued chapters waiting." Without it, navigating Cast → Generate (or
+     Manuscript → Generate post-confirmCast) doesn't trigger reconcile, so
+     the SSE never opens and the page sits there with no auto-start. */
+  'ui/changeView',
 ]);
 
 interface OpenHandle {

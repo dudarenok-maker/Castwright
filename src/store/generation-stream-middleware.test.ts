@@ -87,6 +87,33 @@ describe('generationStreamMiddleware', () => {
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
   });
 
+  it('reacts to ui/changeView without crashing or double-opening (auto-start trigger regression)', () => {
+    /* changeView must be in TRIGGER_TYPES so the middleware re-evaluates
+       when the user navigates to Generate. Without this, a navigation
+       alone won't kick reconcile — the page sits with chapters in queued
+       state and no live SSE handle until the user manually hits Resume.
+
+       We verify three things here:
+        - dispatching changeView before any chapters exist doesn't crash.
+        - the very next setChapters with queued work opens exactly once.
+        - a subsequent changeView while the handle is alive does NOT
+          double-open and does NOT cancel the live stream. */
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(uiSlice.actions.changeView('cast'));
+    expect(streamGenerationMock).not.toHaveBeenCalled();
+    expect(cancelMock).not.toHaveBeenCalled();
+
+    store.dispatch(chaptersSlice.actions.setChapters([ch(1, { state: 'queued' })]));
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+
+    streamGenerationMock.mockClear();
+    cancelMock.mockClear();
+    store.dispatch(uiSlice.actions.changeView('generate'));
+    expect(streamGenerationMock).not.toHaveBeenCalled();
+    expect(cancelMock).not.toHaveBeenCalled();
+  });
+
   it('keeps the SSE alive across changeView (background generation while user navigates)', () => {
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));

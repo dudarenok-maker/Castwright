@@ -130,6 +130,12 @@ export interface BookStateResponse {
   revisions: { pending?: Revision[]; drift?: DriftEvent[] } | null;
   /** Slugs of chapters that already have an audio file on disk. */
   completedSlugs: string[];
+  /** chapterId → analysed speaker ids. Derived from the analysis cache and
+      used by hydrateFromBookState so each chapter row seeds only the
+      characters that actually speak in that chapter; without this the
+      reducer falls back to all-cast and the Generate view's pill list
+      flickers from filtered to everyone on hydrate. */
+  chapterCharacters?: Record<number, string[]>;
   /** Editorial activity trail (regenerate confirms, etc.). Null when no
       change-log.json has been written yet — the layout falls back to an
       empty list so the Activity view doesn't replay a stale demo seed for

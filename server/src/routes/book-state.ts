@@ -43,12 +43,26 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
 
     /* Fallback for books whose stage 2 ran on older code (or hasn't fully
        finished yet): pull the per-chapter sentences from the analysis cache
-       so the manuscript view shows real text instead of mock fixtures. */
-    if ((!edits || !edits.sentences?.length) && state.manuscriptId) {
+       so the manuscript view shows real text instead of mock fixtures.
+       Also derive the per-chapter speaker map so the Generate view's chapter
+       rows can seed only the characters that actually appear in each chapter
+       — without this the reducer falls back to all-cast and the pill list
+       flickers from "filtered" to "everyone" on hydrate. */
+    const chapterCharacters: Record<number, string[]> = {};
+    if (state.manuscriptId) {
       const cache = await loadAnalysisCache(state.manuscriptId);
-      const cachedSentences = Object.values(cache.chapters ?? {}).flat();
-      if (cachedSentences.length > 0) {
-        edits = { sentences: cachedSentences };
+      if ((!edits || !edits.sentences?.length)) {
+        const cachedSentences = Object.values(cache.chapters ?? {}).flat();
+        if (cachedSentences.length > 0) {
+          edits = { sentences: cachedSentences };
+        }
+      }
+      for (const [chapterId, sentences] of Object.entries(cache.chapters ?? {})) {
+        const id = Number(chapterId);
+        if (Number.isNaN(id)) continue;
+        const ids = new Set<string>();
+        for (const sent of sentences) ids.add(sent.characterId);
+        chapterCharacters[id] = [...ids];
       }
     }
 
@@ -101,6 +115,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       manuscriptEdits: edits,
       revisions: revs,
       completedSlugs,
+      chapterCharacters,
       changeLog: changeLog?.events ?? null,
     });
   } catch (e) {
