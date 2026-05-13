@@ -4,7 +4,7 @@
 > Key files: `src/views/generation.tsx`, `src/store/chapters-slice.ts` (`applyGenerationTick`, `regenerateChapter`/`regenerateCharacter`/`batchRegenerateCharacters`), `src/lib/api.ts` (`realStreamGeneration`), `server/src/routes/generation.ts`, `server/src/routes/chapter-audio.ts`, `server/src/tts/synthesise-chapter.ts`, `server/src/tts/mp3.ts`, `server/src/workspace/chapter-audio-file.ts`
 > URL surface: `#/books/:bookId/generate`
 > OpenAPI ops: `POST /api/books/:bookId/generation` (SSE stream), `GET /api/books/:bookId/chapters/:chapterId/audio` (segments JSON), `GET /api/books/:bookId/chapters/:chapterId/audio.mp3` (range-supporting MP3, new generations), `GET /api/books/:bookId/chapters/:chapterId/audio.wav` (range-supporting WAV, legacy)
-> Paired tests: `src/store/chapters-slice.test.ts`, `server/src/routes/chapter-audio.test.ts`, `server/src/tts/mp3.test.ts`
+> Paired tests: `src/store/chapters-slice.test.ts`, `server/src/routes/chapter-audio.test.ts`, `server/src/tts/mp3.test.ts`, `server/src/tts/synthesise-chapter.test.ts`
 > Cross-links: [28 — Chapter audio format](28-chapter-audio-format.md)
 
 ## What this covers
@@ -29,6 +29,7 @@ Streams chapter audio generation via Server-Sent-Events. The client opens a long
 - `pendingRegen: { chapterIds, force: true } | null` is set by the three regenerate reducers (`regenerateChapter`, `regenerateCharacter`, `batchRegenerateCharacters`) and consumed by the Generate view, which forwards it to the next `streamGeneration` call. `regenEpoch` is a monotonic counter the view watches as a `useEffect` dep so a repeat regenerate (same chapter, same character) still re-opens the SSE. `pendingRegen` is cleared on the `idle` tick so it doesn't auto-replay; `regenEpoch` is never reset.
 - `chaptersState.generationStartedAt` is set on the first `progress` or `chapter_assembling` tick of a run and drives the elapsed-based ETA. Cleared on `idle` when no chapter is `in_progress` or `queued`.
 - Malformed ticks are logged and skipped; do not throw.
+- **Per-speaker voice routing uses the full cast.json hint, not just the character id.** `synthesiseChapter` builds a `CharacterHint` (`description`, `role`, `gender`, `ageRange`, `tone`, `evidence`) for every group and passes it to `pickVoiceForEngine` — same shape the voice-sample preview uses. Skipping any of these fields collapses non-narrator speakers onto the narrator-cool bucket (Oduvan/Ro both came out as the narrator before this was fixed); the shared helper is `buildHintFromCast` in `server/src/tts/synthesise-chapter.ts`. `server/src/routes/voices.ts` reuses the same helper so the library aggregator and the synth path can never disagree on how the hint is projected.
 
 ## Acceptance walkthrough
 
