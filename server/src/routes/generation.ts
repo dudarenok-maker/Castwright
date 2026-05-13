@@ -3,13 +3,14 @@
    Replaces the mocked streamGeneration. Loads the confirmed cast + cached
    analysis sentences, walks each target chapter, calls synthesiseChapter,
    then atomically writes:
-     audio/<slug>.wav             — concatenated 16-bit PCM in a WAVE container
+     audio/<slug>.mp3             — concatenated PCM encoded as MP3 (LAME VBR V2)
      audio/<slug>.segments.json   — per-group timing metadata
    and updates the chapter's `duration` in .audiobook/state.json.
 
-   Resumability: a chapter is "complete" iff its .wav file exists. Partial
-   chapters never land on disk because we hold the PCM in memory until the
-   whole chapter is done.
+   Resumability: a chapter is "complete" iff an audio file exists for it on
+   disk — .mp3 (new generations) or .wav (legacy chapters from before the
+   MP3 switch). Partial chapters never land on disk because we hold the PCM
+   in memory until the whole chapter is done.
 
    Pause semantics: when the client closes the SSE (Pause button), we DO NOT
    abort the chapter in flight — it finishes its remaining groups and persists
@@ -20,15 +21,15 @@
    a reconnecting client reconciles state in one round-trip. */
 
 import { Router, type Request, type Response } from 'express';
-import { existsSync } from 'node:fs';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir, castJsonPath, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
+import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { engineForModelKey, isTtsModelKey, selectTtsProvider, type TtsModelKey } from '../tts/index.js';
-import { pcmToWav } from '../tts/wav.js';
+import { encodePcmToMp3 } from '../tts/mp3.js';
 import {
   synthesiseChapter,
   type CastCharacter,
@@ -118,7 +119,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      done chapter. We do this BEFORE deciding the queue so the client sees
      state even when nothing new is queued. */
   for (const ch of state.chapters) {
-    if (existsSync(join(audioRoot, `${ch.slug}.wav`))) {
+    if (chapterAudioExists(audioRoot, ch.slug)) {
       const cachedSentences = analysis.chapters[ch.id] ?? [];
       send({
         type: 'chapter_complete',
@@ -136,8 +137,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const targetChapters = state.chapters.filter(c => {
     if (requestedIds && !requestedIds.includes(c.id)) return false;
     if (force) return true;
-    const wavPath = join(audioRoot, `${c.slug}.wav`);
-    return !existsSync(wavPath);
+    return !chapterAudioExists(audioRoot, c.slug);
   });
 
   if (targetChapters.length === 0) {
@@ -200,7 +200,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       });
 
       /* All per-group synthesis is done; the next stretch is disk-write
-         work (build WAV → temp file → segments JSON → atomic rename →
+         work (encode MP3 → temp file → segments JSON → atomic rename →
          state.json update). Tell the client so it stops looking like a
          frozen 99 %. */
       send({
@@ -214,14 +214,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         durationSec: result.durationSec,
       });
 
-      const wavBuffer = pcmToWav(result.pcm, result.sampleRate);
-      const wavPath = join(audioRoot, `${chapter.slug}.wav`);
+      const mp3Buffer = await encodePcmToMp3(result.pcm, result.sampleRate, { quality: 2 });
+      const mp3Path = join(audioRoot, `${chapter.slug}.mp3`);
       const segPath = join(audioRoot, `${chapter.slug}.segments.json`);
 
       /* Atomic write: temp-then-rename so a crash mid-write doesn't leave a
-         half-WAV that scan.ts would mistake for a completed chapter. */
-      const tmpWav = `${wavPath}.tmp-${process.pid}-${Date.now()}`;
-      await writeFile(tmpWav, wavBuffer);
+         half-MP3 that scan.ts would mistake for a completed chapter. */
+      const tmpMp3 = `${mp3Path}.tmp-${process.pid}-${Date.now()}`;
+      await writeFile(tmpMp3, mp3Buffer);
       const segmentsFile: ChapterSegmentsFile = {
         bookId,
         chapterId: chapter.id,
@@ -233,10 +233,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         segments: result.segments,
       };
       await writeJsonAtomic(segPath, segmentsFile);
-      await rename(tmpWav, wavPath);
+      await rename(tmpMp3, mp3Path);
 
       /* Update state.json with the freshly-measured duration so the library
-         + future playback slice can render it without re-reading the WAV. */
+         + future playback slice can render it without re-reading the audio. */
       const statePath = stateJsonPath(bookDir);
       const prev = await readJson<BookStateJson>(statePath);
       if (prev) {
