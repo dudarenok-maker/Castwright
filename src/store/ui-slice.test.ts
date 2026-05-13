@@ -21,6 +21,8 @@ const baseState = (stage: Stage): UiState => ({
   previewMode: false,
   selectedModel: DEFAULT_MODEL,
   ttsModelKey: DEFAULT_TTS_MODEL,
+  selectedModelExplicit: false,
+  ttsModelKeyExplicit: false,
 });
 
 describe('uiSlice — openBook status→stage routing', () => {
@@ -109,6 +111,7 @@ describe('uiSlice — hydrateFromUrl + stageToHash round-trip', () => {
     { kind: 'upload' },
     { kind: 'voices' },
     { kind: 'changelog' },
+    { kind: 'account' },
     { kind: 'confirm', bookId: 'ns' },
     { kind: 'ready', bookId: 'ns', view: 'manuscript', currentChapterId: 3, openProfileId: null },
     { kind: 'ready', bookId: 'ns', view: 'cast', currentChapterId: 5, openProfileId: 'halloran' },
@@ -127,6 +130,49 @@ describe('uiSlice — hydrateFromUrl + stageToHash round-trip', () => {
     const start = baseState({ kind: 'confirm', bookId: 'ns' });
     const next = uiSlice.reducer(start, uiActions.hydrateFromUrl({} as Stage));
     expect(next.stage).toEqual(start.stage);
+  });
+});
+
+describe('uiSlice — seed defaults from account settings', () => {
+  it('seeds selectedModel + ttsModelKey from fetched account defaults when not yet explicit', () => {
+    const start = baseState({ kind: 'books' });
+    const next = uiSlice.reducer(start, {
+      type: 'account/fetch/fulfilled',
+      payload: {
+        defaultAnalysisModel: 'gemini-3-flash-preview',
+        defaultTtsModelKey:   'gemini-2.5-flash',
+      },
+    });
+    expect(next.selectedModel).toBe('gemini-3-flash-preview');
+    expect(next.ttsModelKey).toBe('gemini-2.5-flash');
+  });
+
+  it('leaves an explicit user pick alone when account hydrates after', () => {
+    let s = baseState({ kind: 'books' });
+    s = uiSlice.reducer(s, uiActions.setSelectedModel('gemini-2.5-flash'));
+    s = uiSlice.reducer(s, uiActions.setTtsModelKey('gemini-2.5-flash'));
+    const next = uiSlice.reducer(s, {
+      type: 'account/fetch/fulfilled',
+      payload: {
+        defaultAnalysisModel: 'gemma-4-31b-it',
+        defaultTtsModelKey:   'coqui-xtts-v2',
+      },
+    });
+    expect(next.selectedModel).toBe('gemini-2.5-flash');
+    expect(next.ttsModelKey).toBe('gemini-2.5-flash');
+  });
+
+  it('also re-seeds when account is updated via save (same code path)', () => {
+    const start = baseState({ kind: 'books' });
+    const next = uiSlice.reducer(start, {
+      type: 'account/save/fulfilled',
+      payload: {
+        defaultAnalysisModel: 'gemini-3.1-flash-lite',
+        defaultTtsModelKey:   'gemini-3.1-flash',
+      },
+    });
+    expect(next.selectedModel).toBe('gemini-3.1-flash-lite');
+    expect(next.ttsModelKey).toBe('gemini-3.1-flash');
   });
 });
 

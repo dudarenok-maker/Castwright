@@ -11,6 +11,7 @@ import { StatTile } from './voices';
 import { Stat } from './generation';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { api, type WorkspaceInfo } from '../lib/api';
+import { useAppSelector } from '../store';
 import type { LibraryAuthor, LibraryBook, LibraryBookStatus } from '../lib/types';
 
 type Filter = 'all' | 'in_progress' | 'complete';
@@ -37,6 +38,10 @@ function matchesFilter(book: LibraryBook, filter: Filter): boolean {
 
 export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBook, onReparseBook, onStartNew }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
+  /* First word of the user's display name → "Welcome back, Mike". Falls back
+     to "back" when the user hasn't set a name (keeps the heading grammatical). */
+  const displayName = useAppSelector(s => s.account.displayName);
+  const firstName = displayName.trim().split(/\s+/)[0] || 'back';
   /* Surface the active workspace root so a stale `WORKSPACE_DIR` override
      (or worse: silently falling back to the in-repo default) is obvious at
      a glance. Page-local state — only the Books page needs this; widening
@@ -73,7 +78,7 @@ export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBoo
         <div>
           <SectionLabel>Your audiobooks</SectionLabel>
           <div className="mt-4">
-            <MixedHeading regular="Welcome back," bold="Mike" level="h1"/>
+            <MixedHeading regular="Welcome back," bold={firstName} level="h1"/>
           </div>
           <p className="mt-3 text-ink/60 max-w-xl">Pick up where you left off, or start a new book. Voices stay consistent across a series — characters who appear in book one carry through to book seven.</p>
           {workspace && <WorkspacePathRow info={workspace}/>}

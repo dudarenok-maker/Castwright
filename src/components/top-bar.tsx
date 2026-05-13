@@ -25,6 +25,14 @@ interface TopBarProps {
   onOpenRevisions: () => void;
   onOpenVoices: () => void;
   onOpenChangelog: () => void;
+  /** Avatar click → Account view. The avatar shows the user's display name
+      (sourced from the account slice in the wrapping component), so it acts
+      as the single discoverable entry-point to account settings. */
+  onOpenAccount: () => void;
+  /** Display name rendered as the avatar's initials. Sourced from the
+      account slice — the persisted user-level value, with a built-in
+      seed default. */
+  userDisplayName: string;
   /** Globally-visible chip surfacing background generation so the user knows
       a run is alive (or stalled / halted) even when they're on Cast, Voices,
       Activity, etc. `null` hides the pill entirely. Clicking routes back to
@@ -50,7 +58,7 @@ const GLOBAL_NAV: Array<{ id: 'books' | 'voices' | 'changelog'; label: string }>
   { id: 'changelog', label: 'Change log' },
 ];
 
-export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClick, pendingRevisionsCount, onOpenRevisions, onOpenVoices, onOpenChangelog, generationPill }: TopBarProps) {
+export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClick, pendingRevisionsCount, onOpenRevisions, onOpenVoices, onOpenChangelog, onOpenAccount, userDisplayName, generationPill }: TopBarProps) {
   const showGlobalNav = stage === 'books' || stage === 'voices' || stage === 'changelog';
   const onGlobal = (id: 'books' | 'voices' | 'changelog') => {
     if (id === 'books')     onHome();
@@ -101,7 +109,11 @@ export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClic
               {pendingRevisionsCount} revision{pendingRevisionsCount === 1 ? '' : 's'}
             </button>
           )}
-          <Avatar name="Mike Dudarenok" color="halloran" size={32}/>
+          <button type="button" onClick={onOpenAccount}
+            aria-label={`Account — ${userDisplayName || 'unnamed user'}`}
+            className={`rounded-full transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-magenta/40 ${stage === 'account' ? 'ring-2 ring-magenta/60' : ''}`}>
+            <Avatar name={userDisplayName || 'You'} color="halloran" size={32}/>
+          </button>
         </div>
       </div>
     </header>

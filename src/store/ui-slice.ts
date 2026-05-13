@@ -7,7 +7,8 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { Stage, View, TtsModelKey } from '../lib/types';
 import type { ListenerApp, Chapter } from '../lib/types';
 import { DEFAULT_MODEL } from '../lib/models';
-import { DEFAULT_TTS_MODEL } from '../lib/tts-models';
+import { DEFAULT_TTS_MODEL, TTS_MODEL_OPTIONS } from '../lib/tts-models';
+import { fetchAccountSettings, saveAccountSettings } from './account-slice';
 import type { RootState } from './index';
 
 const READY_DEFAULTS = { currentChapterId: 3, openProfileId: null as string | null };
@@ -30,6 +31,12 @@ export interface UiState {
   previewMode: boolean;
   selectedModel: string;
   ttsModelKey: TtsModelKey;
+  /** Whether the user has explicitly picked an analysis model this session.
+      Until then, the slice tracks the account-level default and re-seeds
+      from it when the account fetch lands. */
+  selectedModelExplicit: boolean;
+  /** Same as above for the TTS model selector. */
+  ttsModelKeyExplicit: boolean;
 }
 
 const initialState: UiState = {
@@ -45,6 +52,8 @@ const initialState: UiState = {
   previewMode: false,
   selectedModel: DEFAULT_MODEL,
   ttsModelKey: DEFAULT_TTS_MODEL,
+  selectedModelExplicit: false,
+  ttsModelKeyExplicit: false,
 };
 
 export const uiSlice = createSlice({
@@ -55,6 +64,7 @@ export const uiSlice = createSlice({
     goHome: (s) => { s.stage = { kind: 'books' }; },
     openVoices: (s) => { s.stage = { kind: 'voices' }; },
     openChangelog: (s) => { s.stage = { kind: 'changelog' }; },
+    openAccount: (s) => { s.stage = { kind: 'account' }; },
     startNewBook: (s) => {
       s.stage = { kind: 'upload' };
     },
@@ -116,8 +126,31 @@ export const uiSlice = createSlice({
     setShowRevisionPlayer: (s, a: PayloadAction<boolean>) => { s.showRevisionPlayer = a.payload; },
     setShowDriftReport:    (s, a: PayloadAction<boolean>) => { s.showDriftReport = a.payload; },
     setPreviewMode:        (s, a: PayloadAction<boolean>) => { s.previewMode = a.payload; },
-    setSelectedModel:      (s, a: PayloadAction<string>) => { s.selectedModel = a.payload; },
-    setTtsModelKey:        (s, a: PayloadAction<TtsModelKey>) => { s.ttsModelKey = a.payload; },
+    setSelectedModel:      (s, a: PayloadAction<string>) => { s.selectedModel = a.payload; s.selectedModelExplicit = true; },
+    setTtsModelKey:        (s, a: PayloadAction<TtsModelKey>) => { s.ttsModelKey = a.payload; s.ttsModelKeyExplicit = true; },
+  },
+  extraReducers: (builder) => {
+    /* Seed-on-new-book: when the account settings hydrate (boot or save),
+       and the user has not explicitly picked a per-session model, seed
+       the UI's model selectors from the account defaults. Once the user
+       changes a picker, the `…Explicit` flag flips and these reducers
+       leave the value alone for the rest of the session. */
+    const applyAccountDefaults = (s: UiState, payload: { defaultAnalysisModel: string; defaultTtsModelKey: TtsModelKey }) => {
+      if (!s.selectedModelExplicit && payload.defaultAnalysisModel) {
+        s.selectedModel = payload.defaultAnalysisModel;
+      }
+      const validKey = TTS_MODEL_OPTIONS.some(m => m.id === payload.defaultTtsModelKey);
+      if (!s.ttsModelKeyExplicit && validKey) {
+        s.ttsModelKey = payload.defaultTtsModelKey;
+      }
+    };
+    builder
+      .addCase(fetchAccountSettings.fulfilled, (s, a) => {
+        applyAccountDefaults(s, a.payload);
+      })
+      .addCase(saveAccountSettings.fulfilled, (s, a) => {
+        applyAccountDefaults(s, a.payload);
+      });
   },
 });
 

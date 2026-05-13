@@ -9,6 +9,7 @@
 
 import { GeminiTtsProvider } from './gemini.js';
 import { SidecarTtsProvider } from './sidecar.js';
+import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 
 export interface SynthesizeInput {
   text: string;
@@ -105,6 +106,7 @@ export function selectTtsProvider(modelKey: TtsModelKey): TtsProvider {
     }
     return new GeminiTtsProvider({ apiKey });
   }
-  const url = process.env.LOCAL_TTS_URL ?? 'http://localhost:9000';
+  /* Live-resolved from user-settings.json → LOCAL_TTS_URL env → localhost. */
+  const url = getResolvedSidecarUrl();
   return new SidecarTtsProvider({ url, engine });
 }

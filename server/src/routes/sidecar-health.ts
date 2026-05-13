@@ -6,6 +6,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { getCachedCatalogAudit, runCatalogAudit } from '../tts/coqui-catalog-audit.js';
+import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -16,7 +17,7 @@ export const sidecarHealthRouter = Router();
 const PROBE_TIMEOUT_MS = 2_000;
 
 sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
-  const url = (process.env.LOCAL_TTS_URL ?? 'http://localhost:9000').replace(/\/+$/, '');
+  const url = getResolvedSidecarUrl();
   const target = `${url}/health`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
@@ -60,7 +61,7 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
    audit on demand if `?refresh=1` is passed or the startup audit hasn't
    completed yet (sidecar might have been down at boot). */
 sidecarHealthRouter.get('/catalog-audit', async (req: Request, res: Response) => {
-  const url = (process.env.LOCAL_TTS_URL ?? 'http://localhost:9000').replace(/\/+$/, '');
+  const url = getResolvedSidecarUrl();
   const refresh = req.query.refresh === '1';
   const cached = getCachedCatalogAudit();
   if (cached && !refresh) {

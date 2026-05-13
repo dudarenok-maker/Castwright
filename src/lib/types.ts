@@ -45,6 +45,13 @@ export type Voice = Omit<components['schemas']['Voice'], 'gradient'> & {
 };
 export type VoiceLibraryResponse = { voices: Voice[] };
 
+/* User-level account defaults + non-secret server overrides. Mirrors the
+   /api/user/settings response. Read-only fields (apiKeyStatus, workspaceRoot,
+   workspaceSource) come from the server's env layer and can't be edited
+   through the PUT endpoint. */
+export type UserSettings = components['schemas']['UserSettings'];
+export type UserSettingsPatch = components['schemas']['UserSettingsPatch'];
+
 export interface Book {
   id: string;
   title: string;
@@ -290,4 +297,5 @@ export type Stage =
   | { kind: 'confirm';   bookId: string }
   | { kind: 'ready';     bookId: string; view: View; currentChapterId: number; openProfileId: string | null }
   | { kind: 'voices' }
-  | { kind: 'changelog' };
+  | { kind: 'changelog' }
+  | { kind: 'account' };

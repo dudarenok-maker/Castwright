@@ -31,6 +31,7 @@ import { ListenView } from '../views/listen';
 import { BookLibraryView } from '../views/book-library';
 import { ConfirmMetadataView } from '../views/confirm-metadata';
 import { ChangeLogView } from '../views/change-log';
+import { AccountView } from '../views/account';
 import type { Character, Stage, View } from '../lib/types';
 
 const VALID_VIEWS: View[] = ['manuscript', 'cast', 'library', 'generate', 'listen', 'log'];
@@ -118,6 +119,11 @@ function VoicesRoute() {
   useHydrateStage({ kind: 'voices' }, []);
   const voices = useAppSelector(s => s.voices.voices);
   return <LibraryView library={voices}/>;
+}
+
+function AccountRoute() {
+  useHydrateStage({ kind: 'account' }, []);
+  return <AccountView/>;
 }
 
 export function ChangelogRoute() {
@@ -359,6 +365,7 @@ export const router = createHashRouter([
       { path: 'new',                                element: <UploadRoute/> },
       { path: 'voices',                             element: <VoicesRoute/> },
       { path: 'log',                                element: <ChangelogRoute/> },
+      { path: 'account',                            element: <AccountRoute/> },
       { path: 'books/:bookId/analysing',            element: <AnalysingRoute/> },
       { path: 'books/:bookId/confirm',              element: <ConfirmRoute/> },
       { path: 'books/:bookId/:view',                element: <ReadyRoute/> },
