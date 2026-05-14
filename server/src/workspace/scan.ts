@@ -36,7 +36,7 @@ export interface BookStateJson {
   isStandalone: boolean;
   manuscriptFile: string;       // e.g. 'manuscript.epub'
   castConfirmed: boolean;
-  chapters: Array<{ id: number; title: string; slug: string; duration?: string }>;
+  chapters: Array<{ id: number; title: string; slug: string; duration?: string; excluded?: boolean }>;
   coverGradient: [string, string];
   createdAt: string;
   updatedAt: string;
@@ -189,7 +189,11 @@ async function scanBook(author: string, series: string, title: string): Promise<
 
   const bookId = state?.bookId ?? makeBookId(author, series, title);
   const coverGradient = state?.coverGradient ?? deterministicGradient(bookId);
-  const chapterCount = state?.chapters.length ?? 0;
+  /* Excluded chapters (front/back-matter the user opted out of narrating)
+     don't count toward the chapterCount or completion math — otherwise a
+     12-chapter book with 2 excluded would stall at 10/12 forever. */
+  const activeChapters = state?.chapters.filter(c => !c.excluded) ?? [];
+  const chapterCount = activeChapters.length;
   const audioFiles = manuscriptFile ? listFiles(audioDir(bookDir)).filter(f => /\.(mp3|m4a|wav|opus)$/i.test(f)) : [];
   const completedChapters = audioFiles.length;
   const lastWorkedOn = relativeTimeFromMs(mtimeMs(existsSync(dotDir) ? dotDir : bookDir));
@@ -223,7 +227,7 @@ async function scanBook(author: string, series: string, title: string): Promise<
      '0m' for books that haven't generated yet. */
   let totalSec = 0;
   if (state) {
-    for (const ch of state.chapters) {
+    for (const ch of activeChapters) {
       const segPath = join(audioDir(bookDir), `${ch.slug}.segments.json`);
       try {
         const meta = await readJson<SegmentsJsonForScan>(segPath);

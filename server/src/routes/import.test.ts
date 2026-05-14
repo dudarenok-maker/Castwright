@@ -106,3 +106,127 @@ describe('POST /api/books — binary preservation', () => {
     expect(written).toContain('## Chapter One');
   });
 });
+
+describe('POST /api/import → POST /api/books — excluded chapters round-trip', () => {
+  it('exposes per-chapter wordCount on the import candidate', async () => {
+    const md = [
+      '# A Tiny Book',
+      '',
+      '## Dedication',
+      '',
+      'For my readers.',
+      '',
+      '## Chapter One',
+      '',
+      'A long opening that goes on for at least several sentences so the parser registers it as a substantive chapter. The narrator strolls into the room and sets the scene. The reader settles in.',
+      '',
+      '## About the Author',
+      '',
+      'Brief bio.',
+    ].join('\n');
+
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'tiny.md' });
+    expect(importRes.status).toBe(200);
+    const chapters = importRes.body.candidate.chapters;
+    expect(chapters).toBeInstanceOf(Array);
+    /* Every chapter must carry wordCount so the frontend heuristic can
+       run. Short matter (Dedication / About the Author) reads in single
+       digits; the real chapter is materially longer. */
+    for (const c of chapters) {
+      expect(typeof c.wordCount).toBe('number');
+      expect(c.wordCount).toBeGreaterThanOrEqual(0);
+    }
+    const dedication = chapters.find((c: { title: string }) => /dedication/i.test(c.title));
+    const real      = chapters.find((c: { title: string }) => /chapter\s*one/i.test(c.title));
+    expect(dedication).toBeTruthy();
+    expect(real).toBeTruthy();
+    expect(real.wordCount).toBeGreaterThan(dedication.wordCount);
+  });
+
+  it('seeds state.json chapters with excluded=true for the slugs the client sent', async () => {
+    const md = [
+      '# Round Trip Book',
+      '',
+      '## Dedication',
+      '',
+      'For everyone.',
+      '',
+      '## Chapter One',
+      '',
+      'The real story starts here with several sentences of narrative content so the parser is happy.',
+      '',
+      '## About the Author',
+      '',
+      'A short bio.',
+    ].join('\n');
+
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'roundtrip.md' });
+    const tempId = importRes.body.tempId;
+    const chapters = importRes.body.candidate.chapters as Array<{ id: number; title: string }>;
+
+    /* Derive the slugs the same way the server does — id-padded + title slug. */
+    function slugify(title: string): string {
+      return title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60);
+    }
+    const dedicationSlug = (() => {
+      const c = chapters.find(c => /dedication/i.test(c.title))!;
+      return `${String(c.id).padStart(2, '0')}-${slugify(c.title)}`;
+    })();
+    const aboutSlug = (() => {
+      const c = chapters.find(c => /about/i.test(c.title))!;
+      return `${String(c.id).padStart(2, '0')}-${slugify(c.title)}`;
+    })();
+
+    const confirmRes = await request(app)
+      .post('/api/books')
+      .send({
+        tempId,
+        author: 'Roundtrip Author',
+        title:  'Roundtrip Book',
+        seriesPosition: null,
+        isStandalone: true,
+        excludedSlugs: [dedicationSlug, aboutSlug],
+      });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'));
+
+    /* state.json must have excluded=true on the two we flagged and not
+       set on the real chapter. */
+    const stateByTitle = new Map<string, { excluded?: boolean }>();
+    for (const c of stateJson.chapters as Array<{ title: string; excluded?: boolean }>) {
+      stateByTitle.set(c.title.toLowerCase(), c);
+    }
+    expect(stateByTitle.get('dedication')?.excluded).toBe(true);
+    expect(stateByTitle.get('about the author')?.excluded).toBe(true);
+    expect(stateByTitle.get('chapter one')?.excluded).toBeFalsy();
+  });
+
+  it('leaves every chapter included when excludedSlugs is absent', async () => {
+    const md = '# A Book\n\n## Chapter One\n\nLine one. Line two. Line three.';
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'no-exclusions.md' });
+    const confirmRes = await request(app)
+      .post('/api/books')
+      .send({
+        tempId: importRes.body.tempId,
+        author: 'No Excl Author',
+        title:  'No Excl Book',
+        seriesPosition: null,
+        isStandalone: true,
+      });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'));
+    for (const c of stateJson.chapters as Array<{ excluded?: boolean }>) {
+      expect(c.excluded).toBeFalsy();
+    }
+  });
+});

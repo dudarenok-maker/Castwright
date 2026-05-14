@@ -664,6 +664,144 @@ async function mockReparseBook(_bookId: string): Promise<ReparseBookResponse> {
   return { state: { chapters: [] }, chapterCount: 0, chapterTitles: [] };
 }
 
+/* Per-chapter exclude toggle. Used by the Generate view's chapter row to
+   opt a chapter out of (or back into) analysis + audio. The server flips
+   the flag in state.json, propagates to the in-memory ManuscriptRecord,
+   and cleans up stale audio when newly excluded. */
+export interface SetChapterExcludedResponse {
+  id: number;
+  title: string;
+  slug: string;
+  excluded: boolean;
+}
+async function realSetChapterExcluded(
+  bookId: string,
+  chapterId: number,
+  excluded: boolean,
+): Promise<SetChapterExcludedResponse> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/exclude`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ excluded }),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    throw new Error(detail || `Exclude toggle failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockSetChapterExcluded(
+  _bookId: string,
+  chapterId: number,
+  excluded: boolean,
+): Promise<SetChapterExcludedResponse> {
+  await wait(60);
+  return { id: chapterId, title: `Chapter ${chapterId}`, slug: `${String(chapterId).padStart(2, '0')}-mock`, excluded };
+}
+
+/* Subset re-analysis. Re-runs Phase 0a + Phase 1 for just the requested
+   chapters and merges into the existing cache. Used by the un-exclude
+   flow in the Generate view: a chapter that was excluded at confirm
+   time has no analysis on file, so this catches it up before audio
+   generation. Streaming shape is identical to analyseManuscript, so we
+   reuse the same AnalyseOpts callback contract. */
+async function realRunAnalysisForChapters(
+  manuscriptId: string,
+  chapterIds: number[],
+  { onPhase, onLog, onHeartbeat, onCastUpdate, model }: AnalyseOpts = {},
+): Promise<AnalyseResponse> {
+  const res = await fetch(
+    `/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis/chapters`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chapterIds, model }),
+    },
+  );
+  if (!res.ok || !res.body) throw new Error(`Subset analysis failed (${res.status}).`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: AnalyseResponse | null = null;
+
+  /* Same handler as analyseManuscript — the server emits the identical
+     event shapes so the frontend callback contract stays uniform. */
+  const handle = (payload: AnalysisStreamEvent) => {
+    if (payload.kind === 'phase') {
+      if (typeof payload.phaseId === 'number' && typeof payload.progress === 'number') {
+        onPhase?.({ phaseId: payload.phaseId, progress: payload.progress, live: payload.live });
+      }
+    } else if (payload.kind === 'log') {
+      if (typeof payload.phaseId === 'number' && typeof payload.message === 'string') {
+        onLog?.({ phaseId: payload.phaseId, message: payload.message });
+      }
+    } else if (payload.kind === 'heartbeat') {
+      if (
+        typeof payload.phaseId === 'number' &&
+        typeof payload.receivedBytes === 'number' &&
+        typeof payload.charsPerSec === 'number' &&
+        typeof payload.elapsedMs === 'number' &&
+        typeof payload.sinceLastChunkMs === 'number'
+      ) {
+        onHeartbeat?.({
+          phaseId: payload.phaseId,
+          receivedBytes: payload.receivedBytes,
+          charsPerSec: payload.charsPerSec,
+          elapsedMs: payload.elapsedMs,
+          sinceLastChunkMs: payload.sinceLastChunkMs,
+          chapterIndex: payload.chapterIndex,
+        });
+      }
+    } else if (payload.kind === 'cast-update') {
+      if (Array.isArray(payload.characters)) {
+        onCastUpdate?.({ characters: payload.characters });
+      }
+    } else if (payload.kind === 'result' && payload.response) {
+      result = payload.response;
+    } else if (payload.kind === 'error') {
+      throw new AnalysisError(payload.message || 'Subset analysis failed.', payload.code ?? 'unknown', payload.detail);
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buffer.indexOf('\n\n')) >= 0) {
+      const raw = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const dataLines = raw
+        .split('\n')
+        .filter(l => l.startsWith('data: '))
+        .map(l => l.slice(6));
+      if (!dataLines.length) continue;
+      const payload = JSON.parse(dataLines.join('\n')) as AnalysisStreamEvent;
+      handle(payload);
+    }
+  }
+
+  if (!result) throw new Error('Subset analysis stream ended without a result event.');
+  return result;
+}
+
+async function mockRunAnalysisForChapters(
+  _manuscriptId: string,
+  _chapterIds: number[],
+  _opts: AnalyseOpts = {},
+): Promise<AnalyseResponse> {
+  await wait(120);
+  /* Mocks don't have a meaningful subset behaviour — return the canned
+     analysis so callers can wire the call without crashing in dev. */
+  return ANALYSIS_NORTHERN_STAR;
+}
+
 async function realGetVoiceSample({ voiceId, voice, modelKey, text, characterHint }: VoiceSampleArgs): Promise<VoiceSample> {
   const res = await fetch(`/api/voices/${encodeURIComponent(voiceId)}/sample`, {
     method: 'POST',
@@ -880,6 +1018,8 @@ const real = {
   mergeCharacters:   realMergeCharacters,
   deleteBook:        realDeleteBook,
   reparseBook:       realReparseBook,
+  setChapterExcluded:      realSetChapterExcluded,
+  runAnalysisForChapters:  realRunAnalysisForChapters,
   getVoiceSample:    realGetVoiceSample,
   streamGeneration:  realStreamGeneration,
   getSidecarHealth:  realGetSidecarHealth,
@@ -919,6 +1059,8 @@ const mock = {
   mergeCharacters:   mockMergeCharacters,
   deleteBook:        mockDeleteBook,
   reparseBook:       mockReparseBook,
+  setChapterExcluded:      mockSetChapterExcluded,
+  runAnalysisForChapters:  mockRunAnalysisForChapters,
   getVoiceSample:    mockGetVoiceSample,
   streamGeneration:  mockStreamGeneration,
   getSidecarHealth:  mockGetSidecarHealth,

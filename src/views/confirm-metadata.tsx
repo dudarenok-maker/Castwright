@@ -13,6 +13,7 @@ import { api, SlugCollisionError } from '../lib/api';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
 import { IconSpinner } from '../lib/icons';
 import type { ConfirmBookResponse, LibraryBook } from '../lib/types';
+import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 
 export function ConfirmMetadataView() {
   const dispatch = useAppDispatch();
@@ -27,6 +28,26 @@ export function ConfirmMetadataView() {
   const [title, setTitle] = useState(candidate?.title ?? '');
   const [busy, setBusy]   = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /* Auto-suggest front/back-matter exclusion. Pre-tick the chapter's
+     checkbox as "include" by default; we then *un-tick* any chapter
+     whose title or length matches the heuristic. Stored as a Set of
+     server-derived slugs because that's the wire format /api/books
+     accepts. Computed once from the candidate so navigating back +
+     forward doesn't lose the user's overrides — but if they pick a
+     different file the candidate ref changes and we recompute fresh. */
+  const initialExcludedSlugs = useMemo(() => {
+    if (!candidate) return new Set<string>();
+    const out = new Set<string>();
+    for (const ch of candidate.chapters) {
+      if (isLikelyFrontMatter(ch.title, ch.wordCount)) {
+        out.add(chapterSlug(ch.id, ch.title));
+      }
+    }
+    return out;
+  }, [candidate]);
+  const [excludedSlugs, setExcludedSlugs] = useState<Set<string>>(initialExcludedSlugs);
+  const [showChapterList, setShowChapterList] = useState<boolean>(false);
 
   const autoDetected = useMemo(() => {
     if (!candidate) return false;
@@ -75,6 +96,7 @@ export function ConfirmMetadataView() {
         seriesPosition: isStandalone ? null : seriesPosNum,
         title: trimmedTitle,
         isStandalone,
+        excludedSlugs: excludedSlugs.size > 0 ? [...excludedSlugs] : undefined,
       });
       dispatch(manuscriptActions.uploadComplete(res));
       // Optimistically add to library so the books view reflects it immediately.
@@ -87,7 +109,7 @@ export function ConfirmMetadataView() {
         isStandalone: res.isStandalone,
         status: 'analysing',
         manuscriptId: res.manuscriptId,
-        chapterCount: candidate.chapters.length,
+        chapterCount: candidate.chapters.length - excludedSlugs.size,
         completedChapters: 0,
         characterCount: 0,
         voiceCount: 0,
@@ -193,8 +215,30 @@ export function ConfirmMetadataView() {
           <div className="pt-2 grid grid-cols-3 gap-3 text-[11px] text-ink/55">
             <Stat label="Format" value={candidate.format}/>
             <Stat label="Word count" value={candidate.wordCount.toLocaleString()}/>
-            <Stat label="Chapters detected" value={String(candidate.chapters.length)}/>
+            <Stat
+              label={excludedSlugs.size > 0 ? `Chapters (${candidate.chapters.length - excludedSlugs.size} of ${candidate.chapters.length})` : 'Chapters detected'}
+              value={excludedSlugs.size > 0
+                ? `${candidate.chapters.length - excludedSlugs.size}`
+                : String(candidate.chapters.length)}
+            />
           </div>
+
+          <ChapterListCard
+            candidate={candidate}
+            excludedSlugs={excludedSlugs}
+            onToggle={(slug, include) => {
+              setExcludedSlugs(prev => {
+                const next = new Set(prev);
+                if (include) next.delete(slug); else next.add(slug);
+                return next;
+              });
+            }}
+            onSelectAll={() => setExcludedSlugs(new Set())}
+            onResetSuggestions={() => setExcludedSlugs(new Set(initialExcludedSlugs))}
+            expanded={showChapterList}
+            onToggleExpanded={() => setShowChapterList(v => !v)}
+            disabled={busy}
+          />
 
           {error && (
             <div className="px-4 py-3 rounded-2xl bg-rose-50 border border-rose-200 text-sm text-rose-900">
@@ -236,6 +280,105 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div className="rounded-xl bg-canvas px-3 py-2.5">
       <p className="text-[10px] uppercase tracking-[0.12em] text-ink/45 font-medium">{label}</p>
       <p className="mt-0.5 text-[13px] font-semibold text-ink tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+interface ChapterListCardProps {
+  candidate: {
+    chapters: Array<{ id: number; title: string; wordCount?: number }>;
+  };
+  excludedSlugs: Set<string>;
+  onToggle: (slug: string, include: boolean) => void;
+  onSelectAll: () => void;
+  onResetSuggestions: () => void;
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  disabled: boolean;
+}
+
+/* Per-chapter include/exclude UI. Hidden by default behind a disclosure
+   so the form stays compact for short books; expands to a scrollable
+   list with a checkbox per chapter. Pre-suggested exclusions come from
+   isLikelyFrontMatter (title regex + word-count gate); the user can
+   override per row, re-apply the suggestion (Reset suggestions), or
+   wipe all exclusions (Include all). */
+function ChapterListCard({
+  candidate, excludedSlugs, onToggle, onSelectAll, onResetSuggestions,
+  expanded, onToggleExpanded, disabled,
+}: ChapterListCardProps): React.ReactElement | null {
+  if (!candidate.chapters.length) return null;
+  const total = candidate.chapters.length;
+  const excluded = excludedSlugs.size;
+  const banner = excluded > 0
+    ? `We've pre-excluded ${excluded} likely front/back-matter chapter${excluded === 1 ? '' : 's'}.`
+    : null;
+  return (
+    <div className="rounded-2xl border border-ink/10 bg-canvas/60">
+      <button
+        type="button"
+        onClick={onToggleExpanded}
+        disabled={disabled}
+        className="w-full flex items-center justify-between px-4 py-3 text-left disabled:opacity-50"
+      >
+        <div>
+          <p className="text-xs uppercase tracking-[0.12em] text-ink/55 font-semibold">
+            Chapters to include
+          </p>
+          <p className="mt-0.5 text-[12px] text-ink/70">
+            {excluded === 0
+              ? `All ${total} chapters will be analyzed.`
+              : `${total - excluded} of ${total} chapters will be analyzed — ${excluded} excluded.`}
+          </p>
+        </div>
+        <span className="text-ink/40 text-sm">{expanded ? '▲' : '▼'}</span>
+      </button>
+      {expanded && (
+        <div className="border-t border-ink/10 px-4 py-3 space-y-3">
+          {banner && (
+            <p className="text-[11px] text-ink/60 leading-snug">
+              {banner} Untick to override. Excluded chapters skip both analysis (saves model
+              tokens) and audio generation.
+            </p>
+          )}
+          <div className="flex items-center gap-3 text-[11px]">
+            <button type="button" onClick={onSelectAll} disabled={disabled || excluded === 0}
+                    className="px-2 py-1 rounded-lg border border-ink/15 text-ink/70 hover:text-ink hover:border-ink/30 disabled:opacity-40">
+              Include all
+            </button>
+            <button type="button" onClick={onResetSuggestions} disabled={disabled}
+                    className="px-2 py-1 rounded-lg border border-ink/15 text-ink/70 hover:text-ink hover:border-ink/30 disabled:opacity-40">
+              Reset suggestions
+            </button>
+          </div>
+          <div className="max-h-[300px] overflow-y-auto pr-1 space-y-1">
+            {candidate.chapters.map(ch => {
+              const slug = chapterSlug(ch.id, ch.title);
+              const included = !excludedSlugs.has(slug);
+              return (
+                <label key={ch.id}
+                       className="flex items-center gap-3 py-1.5 px-2 rounded-lg hover:bg-ink/[0.03] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={included}
+                    disabled={disabled}
+                    onChange={e => onToggle(slug, e.target.checked)}
+                    className="rounded border-ink/20"
+                  />
+                  <span className={`flex-1 text-[13px] ${included ? 'text-ink' : 'text-ink/40 line-through decoration-1'}`}>
+                    {ch.title}
+                  </span>
+                  {typeof ch.wordCount === 'number' && (
+                    <span className="text-[11px] text-ink/45 tabular-nums">
+                      {ch.wordCount.toLocaleString()} {ch.wordCount === 1 ? 'word' : 'words'}
+                    </span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

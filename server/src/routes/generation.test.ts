@@ -185,6 +185,59 @@ describe('POST /api/books/:bookId/generation', () => {
     expect(ticks[ticks.length - 1].type).toBe('idle');
   });
 
+  it('skips chapters whose excluded flag is true even with force=true / explicit chapterIds', async () => {
+    /* Excluded chapters never get audio — the user opted out of narrating
+       them (typically front/back-matter like Dedication, Copyright). The
+       route must skip them in:
+       - default mode (no requestedIds, chapterAudioExists check)
+       - force=true (which would normally regenerate everything)
+       - explicit chapterIds (defense-in-depth against a frontend bug
+         that lets an excluded id slip into the list)
+       Also: the catch-up replay must not emit a chapter_complete for an
+       excluded chapter even if stale audio is still on disk. */
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const fs = await import('node:fs');
+    const original = fs.readFileSync(statePath, 'utf8');
+    const stateJson = JSON.parse(original) as {
+      chapters: Array<{ id: number; excluded?: boolean }>;
+    };
+    stateJson.chapters = stateJson.chapters.map(c =>
+      c.id === 1 ? { ...c, excluded: true } : c,
+    );
+    writeFileSync(statePath, JSON.stringify(stateJson));
+
+    /* Clear any stale audio left by earlier tests so the assertions are
+       deterministic. */
+    const audioRoot = join(bookDir, 'audio');
+    if (fs.existsSync(audioRoot)) fs.rmSync(audioRoot, { recursive: true, force: true });
+
+    let synthCalls = 0;
+    synthesiseImpl = async () => {
+      synthCalls += 1;
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [{ characterId: 'narrator', voiceName: 'Zephyr', sampleStart: 0, sampleEnd: 1, sentenceIds: [1] }],
+      };
+    };
+
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1, 2] });
+      expect(res.status).toBe(200);
+      const ticks = parseTicks(res.text);
+      const completes = ticks.filter(t => t.type === 'chapter_complete');
+      /* Exactly one chapter_complete — for the non-excluded ch2. */
+      expect(completes.map(t => t.chapterId)).toEqual([2]);
+      /* And synthesiseChapter must have been invoked exactly once. */
+      expect(synthCalls).toBe(1);
+    } finally {
+      writeFileSync(statePath, original);
+    }
+  });
+
   it('classifies XTTS "index out of range in self" as fatal on first hit', async () => {
     synthesiseImpl = async () => {
       throw new Error('Local TTS sidecar returned 500: {"detail":"index out of range in self"}');

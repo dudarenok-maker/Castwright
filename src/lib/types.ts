@@ -82,7 +82,10 @@ export interface ImportCandidate {
   sourceText: string;
   wordCount: number;
   byteSize: number;
-  chapters: Array<{ id: number; title: string }>;
+  /* Per-chapter wordCount is what powers the confirm view's auto-suggest
+     heuristic (front-matter detection by length). Optional because older
+     server builds didn't expose it. */
+  chapters: Array<{ id: number; title: string; wordCount?: number }>;
 }
 
 export interface ImportResponse {
@@ -97,6 +100,10 @@ export interface ConfirmBookRequest {
   seriesPosition: number | null;
   title: string;
   isStandalone: boolean;
+  /* Slugs (server-derived `${id-pad}-${slug(title)}`) for chapters the
+     user pre-excluded from analysis at the confirm stage. The server
+     re-derives the same slug from its parsed chapter list and matches. */
+  excludedSlugs?: string[];
 }
 
 export interface ConfirmBookResponse extends UploadResponse {
@@ -120,7 +127,7 @@ export interface BookStateJson {
   isStandalone: boolean;
   manuscriptFile: string;
   castConfirmed: boolean;
-  chapters: Array<{ id: number; title: string; slug: string; duration?: string }>;
+  chapters: Array<{ id: number; title: string; slug: string; duration?: string; excluded?: boolean }>;
   coverGradient: [string, string];
   createdAt: string;
   updatedAt: string;

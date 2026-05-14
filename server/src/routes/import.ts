@@ -122,7 +122,15 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
         sourceText: entry.sourceText,
         wordCount: countWords(entry.sourceText),
         byteSize: entry.byteSize,
-        chapters: entry.chapters.map(c => ({ id: c.id, title: c.title })),
+        chapters: entry.chapters.map(c => ({
+          id: c.id,
+          title: c.title,
+          /* Per-chapter wordCount lets the confirm view auto-suggest
+             front/back-matter exclusion (short Dedication/Copyright
+             pages stand out). Stripped to int to keep the wire shape
+             simple. */
+          wordCount: countWords(c.body),
+        })),
       },
     });
   } catch (e) {
@@ -144,6 +152,11 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       seriesPosition?: number | null;
       title?: string;
       isStandalone?: boolean;
+      /* Slugs (matching the server-derived `${id-pad}-${slug(title)}`
+         form) for chapters the user pre-excluded from analysis at the
+         confirm stage. The slug is the stable cross-parse key; ids can
+         shift after a re-parse but slug is title-derived. */
+      excludedSlugs?: string[];
     };
 
     if (!body?.tempId || typeof body.tempId !== 'string') {
@@ -194,6 +207,20 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     await writeFile(manuscriptPath, entry.originalBuffer);
 
     const now = new Date().toISOString();
+    const excludedSet = new Set<string>(
+      Array.isArray(body.excludedSlugs) ? body.excludedSlugs.filter(s => typeof s === 'string') : [],
+    );
+    const chaptersWithSlug = entry.chapters.map(c => {
+      const slugStr = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
+      const isExcluded = excludedSet.has(slugStr);
+      return {
+        id: c.id,
+        title: c.title,
+        slug: slugStr,
+        body: c.body,
+        excluded: isExcluded || undefined,
+      };
+    });
     const state: BookStateJson = {
       bookId,
       manuscriptId,
@@ -204,10 +231,11 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       isStandalone,
       manuscriptFile,
       castConfirmed: false,
-      chapters: entry.chapters.map(c => ({
+      chapters: chaptersWithSlug.map(c => ({
         id: c.id,
         title: c.title,
-        slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+        slug: c.slug,
+        excluded: c.excluded,
       })),
       coverGradient: deterministicGradient(bookId),
       createdAt: now,
@@ -223,7 +251,14 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       byteSize: entry.byteSize,
       uploadedAt: now,
       sourceText: entry.sourceText,
-      chapterHints: entry.chapters as ChapterHint[],
+      /* Mirror the excluded flag onto chapterHints so the in-memory
+         analysis route sees it without re-reading state.json. */
+      chapterHints: chaptersWithSlug.map(c => ({
+        id: c.id,
+        title: c.title,
+        body: c.body,
+        excluded: c.excluded,
+      })) as ChapterHint[],
       bookId,
       bookDir,
     };

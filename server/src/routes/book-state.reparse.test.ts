@@ -148,6 +148,52 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
     expect(existsSync(logPath)).toBe(false);
   });
 
+  it('preserves the excluded flag across reparse (id match — typical case)', async () => {
+    /* Re-parsing the same manuscript usually produces the same id-to-
+       chapter map. Seed ch1 as excluded, re-parse, expect the same id
+       to remain excluded. */
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const cur = JSON.parse(readFileSync(statePath, 'utf8'));
+    cur.chapters = [
+      { id: 1, title: 'Chapter One', slug: '01-chapter-one', excluded: true },
+      { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+    ];
+    writeFileSync(statePath, JSON.stringify(cur));
+
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+
+    const after = JSON.parse(readFileSync(statePath, 'utf8'));
+    const ch1 = after.chapters.find((c: { id: number }) => c.id === 1);
+    const ch2 = after.chapters.find((c: { id: number }) => c.id === 2);
+    expect(ch1.excluded).toBe(true);
+    expect(ch2.excluded).toBeFalsy();
+  });
+
+  it('preserves the excluded flag across reparse (slug match — id shifted)', async () => {
+    /* If the parser reshuffles chapter ids but produces a chapter with
+       a slug that matches an old excluded one, carry the flag over.
+       Simulate by seeding ch1's old slug to what the parser will produce
+       for the FIRST chapter after reparse, but under a different id. */
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const cur = JSON.parse(readFileSync(statePath, 'utf8'));
+    cur.chapters = [
+      { id: 7, title: 'Some Old Title', slug: '01-chapter-1', excluded: true }, // matches what parser emits for ch1
+      { id: 8, title: 'Other Old',      slug: '02-chapter-two' },
+    ];
+    writeFileSync(statePath, JSON.stringify(cur));
+
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+
+    const after = JSON.parse(readFileSync(statePath, 'utf8'));
+    /* Parser produces id=1 with slug '01-chapter-1'. id-match misses
+       (no chapter with id=1 in the old list), but slug-match catches
+       it and carries the excluded flag forward. */
+    const newCh1 = after.chapters.find((c: { id: number }) => c.id === 1);
+    expect(newCh1.excluded).toBe(true);
+  });
+
   it('prepends to an existing change-log without dropping prior entries', async () => {
     const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
     writeFileSync(editsPath, JSON.stringify({

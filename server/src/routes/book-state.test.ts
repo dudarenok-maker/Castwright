@@ -178,3 +178,96 @@ describe('book-state router — state slice editable metadata', () => {
     expect(onDisk.manuscriptId).toBe('m_test');
   });
 });
+
+describe('book-state router — POST /chapters/:chapterId/exclude', () => {
+  /* The shared state.json was rewritten by earlier tests in this file
+     (renamed title, narratorCredit changes). The exclude endpoint
+     operates on whatever's currently on disk, so each case here resets
+     state.chapters to a known shape before flipping the toggle. */
+  function seedTwoChapters(): void {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const cur = JSON.parse(readFileSync(statePath, 'utf8'));
+    cur.chapters = [
+      { id: 1, title: 'Dedication',  slug: '01-dedication' },
+      { id: 2, title: 'Chapter One', slug: '02-chapter-one' },
+    ];
+    writeFileSync(statePath, JSON.stringify(cur));
+  }
+
+  it('flips excluded=true and persists it to state.json', async () => {
+    seedTwoChapters();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/1/exclude`)
+      .send({ excluded: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ id: 1, title: 'Dedication', slug: '01-dedication', excluded: true });
+
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.chapters.find((c: { id: number }) => c.id === 1).excluded).toBe(true);
+    expect(onDisk.chapters.find((c: { id: number }) => c.id === 2).excluded).toBeFalsy();
+  });
+
+  it('flips excluded=false (clears the flag) and persists it', async () => {
+    seedTwoChapters();
+    /* Pre-set excluded on ch1 directly. */
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const cur = JSON.parse(readFileSync(statePath, 'utf8'));
+    cur.chapters[0].excluded = true;
+    writeFileSync(statePath, JSON.stringify(cur));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/1/exclude`)
+      .send({ excluded: false });
+    expect(res.status).toBe(200);
+    expect(res.body.excluded).toBe(false);
+
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.chapters[0].excluded).toBeFalsy();
+  });
+
+  it('deletes any stale chapter audio + segments when newly excluded', async () => {
+    seedTwoChapters();
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    /* Drop sentinel files matching the chapter's slug. */
+    writeFileSync(join(audioRoot, '01-dedication.mp3'), Buffer.from([0, 0]));
+    writeFileSync(join(audioRoot, '01-dedication.segments.json'), '{"durationSec":1}');
+    expect(existsSync(join(audioRoot, '01-dedication.mp3'))).toBe(true);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/1/exclude`)
+      .send({ excluded: true });
+    expect(res.status).toBe(200);
+    expect(existsSync(join(audioRoot, '01-dedication.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-dedication.segments.json'))).toBe(false);
+  });
+
+  it('400s on a non-boolean excluded payload', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/1/exclude`)
+      .send({ excluded: 'yes' });
+    expect(res.status).toBe(400);
+  });
+
+  it('400s on a non-integer chapterId', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/abc/exclude`)
+      .send({ excluded: true });
+    expect(res.status).toBe(400);
+  });
+
+  it('404s when the chapter id does not exist on this book', async () => {
+    seedTwoChapters();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/999/exclude`)
+      .send({ excluded: true });
+    expect(res.status).toBe(404);
+  });
+
+  it('404s on an unknown bookId', async () => {
+    const res = await request(app)
+      .post(`/api/books/unknown_book/chapters/1/exclude`)
+      .send({ excluded: true });
+    expect(res.status).toBe(404);
+  });
+});

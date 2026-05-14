@@ -185,4 +185,26 @@ describe('overallProgress — the 3/7-done-shows-4 % regression', () => {
   it('returns 0 for an empty chapter list', () => {
     expect(overallProgress([], {})).toBe(0);
   });
+
+  it('excluded chapters do not count toward either numerator or denominator', () => {
+    /* 4 chapters, 2 excluded. Of the 2 active, both done at progress=1.
+       Bar must hit 100 % — without the filter the excluded chapters
+       (progress=0) would drag it to 50 %. */
+    const chapters = [
+      makeChapter(1, { state: 'done', progress: 1 }),
+      makeChapter(2, { excluded: true, progress: 0 }),
+      makeChapter(3, { state: 'done', progress: 1 }),
+      makeChapter(4, { excluded: true, progress: 0 }),
+    ];
+    const counts = { 1: 100, 2: 100, 3: 100, 4: 100 };
+    expect(overallProgress(chapters, counts)).toBe(1);
+  });
+
+  it('returns 0 when every chapter is excluded', () => {
+    const chapters = [
+      makeChapter(1, { excluded: true, progress: 1 }),
+      makeChapter(2, { excluded: true, progress: 1 }),
+    ];
+    expect(overallProgress(chapters, { 1: 100, 2: 100 })).toBe(0);
+  });
 });
