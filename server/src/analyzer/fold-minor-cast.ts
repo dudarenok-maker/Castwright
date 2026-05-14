@@ -45,7 +45,13 @@ export interface FoldResult {
   /** Old character-id → new character-id for every fold applied. */
   rewrites: Record<string, string>;
   /** Human-readable summary of what was folded, for the analysing-view log. */
-  summary: { foldedCount: number; intoMale: number; intoFemale: number };
+  summary: { foldedCount: number; intoMale: number; intoFemale: number; droppedSilent: number };
+  /** Characters dropped entirely (not folded) because they have zero
+      attributed sentences after stage 2. These are typically pets,
+      animals, or non-speaking entities the per-chapter detection prompt
+      slipped onto the roster. Names are returned so the route layer can
+      log what got pruned. */
+  dropped: string[];
 }
 
 const MIN_LINES_DEFAULT = 3;
@@ -96,12 +102,27 @@ export function foldMinorCast(
     lineCount.set(s.characterId, (lineCount.get(s.characterId) ?? 0) + 1);
   }
 
-  /* Decide who folds and where. Narrator is exempt. */
+  /* Decide who folds, who drops, and where. Narrator is exempt from both.
+     A character with zero attributed sentences in this run is dropped
+     entirely — they never speak, so the narrator covers any narration
+     that references them. This is the backstop against the per-chapter
+     detection prompt slipping pets, animals, or other non-speakers onto
+     the roster. Characters with 1..(minLines-1) lines still fold into
+     the unknown-male/female buckets (existing behaviour) so a single
+     one-off bystander doesn't get its own voice profile. */
   const rewrites: Record<string, string> = {};
   const foldedSources: CharacterOutput[] = [];
+  const droppedIds = new Set<string>();
+  const droppedNames: string[] = [];
   for (const c of characters) {
     if (c.id === NARRATOR_ID) continue;
+    if (c.id === MALE_BUCKET_ID || c.id === FEMALE_BUCKET_ID) continue;
     const lines = lineCount.get(c.id) ?? 0;
+    if (lines === 0 && !isUnknownName(c.name)) {
+      droppedIds.add(c.id);
+      droppedNames.push(c.name);
+      continue;
+    }
     const triggered = isUnknownName(c.name) || lines < minLines;
     if (!triggered) continue;
     const target = pickBucket(c);
@@ -110,13 +131,14 @@ export function foldMinorCast(
     foldedSources.push(c);
   }
 
-  /* No folds → no-op, preserve referential identity. */
-  if (foldedSources.length === 0) {
+  /* No folds and no drops → no-op, preserve referential identity. */
+  if (foldedSources.length === 0 && droppedIds.size === 0) {
     return {
       characters,
       sentences,
       rewrites: {},
-      summary: { foldedCount: 0, intoMale: 0, intoFemale: 0 },
+      summary: { foldedCount: 0, intoMale: 0, intoFemale: 0, droppedSilent: 0 },
+      dropped: [],
     };
   }
 
@@ -130,8 +152,9 @@ export function foldMinorCast(
   const needMale     = targets.has(MALE_BUCKET_ID);
   const needFemale   = targets.has(FEMALE_BUCKET_ID);
 
-  /* Existing characters minus folded ones, narrator preserved in place. */
-  const survivors = characters.filter(c => !(c.id in rewrites));
+  /* Existing characters minus folded ones AND dropped ones, narrator
+     preserved in place. */
+  const survivors = characters.filter(c => !(c.id in rewrites) && !droppedIds.has(c.id));
 
   /* Synthesise missing buckets (or re-use if already present in the input). */
   const survivorById = new Map(survivors.map(c => [c.id, c]));
@@ -198,6 +221,12 @@ export function foldMinorCast(
     characters: withCounts,
     sentences: rewrittenSentences,
     rewrites,
-    summary: { foldedCount: foldedSources.length, intoMale, intoFemale },
+    summary: {
+      foldedCount: foldedSources.length,
+      intoMale,
+      intoFemale,
+      droppedSilent: droppedIds.size,
+    },
+    dropped: droppedNames,
   };
 }
