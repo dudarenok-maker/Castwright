@@ -947,7 +947,7 @@ async function realGetSidecarHealth(): Promise<SidecarHealth> {
    in, so the Account view is functional under VITE_USE_MOCKS=true. */
 const MOCK_USER_SETTINGS: UserSettings = {
   displayName:          'Mike Dudarenok',
-  defaultAnalysisModel: 'gemma-4-31b-it',
+  defaultAnalysisModel: 'qwen3.5:9b',
   defaultTtsEngine:     'local',
   defaultTtsModelKey:   'coqui-xtts-v2',
   sidecarUrl:           'http://localhost:9000',

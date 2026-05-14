@@ -19,7 +19,7 @@ import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/bo
 import { buildCastConfirmEvent } from '../lib/change-log';
 import { api } from '../lib/api';
 import { stageEqual } from '../lib/router';
-import { MODEL_OPTIONS } from '../lib/models';
+import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { Layout, type LayoutContext } from '../components/layout';
 import { UploadView } from '../views/upload';
 import { AnalysingView } from '../views/analysing';
@@ -369,8 +369,12 @@ function ReparseResultBody({ bookTitle, chapters }: { bookTitle: string; chapter
           onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
           className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
         >
-          {MODEL_OPTIONS.map(m => (
-            <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>
+          {MODEL_OPTION_GROUPS.map(g => (
+            <optgroup key={g.engine} label={g.label}>
+              {g.models.map(m => (
+                <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </label>

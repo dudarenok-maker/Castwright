@@ -23,7 +23,7 @@ export interface AccountState extends UserSettings {
 
 const initialState: AccountState = {
   displayName:          'Mike Dudarenok',
-  defaultAnalysisModel: 'gemma-4-31b-it',
+  defaultAnalysisModel: 'qwen3.5:9b',
   defaultTtsEngine:     'local',
   defaultTtsModelKey:   'coqui-xtts-v2',
   sidecarUrl:           'http://localhost:9000',

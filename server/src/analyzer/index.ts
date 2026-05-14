@@ -72,8 +72,18 @@ export interface AnalyzerSelection {
   fallbackModel: string | null;
 }
 
+/* Ollama tags always contain ':' (e.g. `qwen3.5:9b`); Gemini ids never do
+   (`gemma-4-31b-it`, `gemini-2.5-flash`). When the route layer passes a
+   per-request `model` override, we infer the engine from its shape — that
+   way the UI dropdown can offer both engines and the user's pick drives
+   both engine and model in one event. Without an override, fall back to
+   the user-settings/env-default engine. */
+function inferEngineFromModelId(modelId: string): 'local' | 'gemini' {
+  return modelId.includes(':') ? 'local' : 'gemini';
+}
+
 export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelection {
-  const engine = getResolvedAnalysisEngine();
+  const engine = opts.model ? inferEngineFromModelId(opts.model) : getResolvedAnalysisEngine();
   const apiKey = process.env.GEMINI_API_KEY?.trim() || '';
 
   if (engine === 'local') {

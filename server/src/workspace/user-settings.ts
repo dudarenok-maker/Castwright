@@ -57,7 +57,7 @@ export type UserSettings = z.infer<typeof userSettingsSchema>;
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   displayName:          'Mike Dudarenok',
-  defaultAnalysisModel: 'gemma-4-31b-it',
+  defaultAnalysisModel: 'qwen3.5:9b',
   defaultTtsEngine:     'local',
   defaultTtsModelKey:   'coqui-xtts-v2',
   sidecarUrl:           'http://localhost:9000',

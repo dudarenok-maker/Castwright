@@ -3,7 +3,7 @@ import { IconCheck, IconRefresh, IconSpinner } from '../lib/icons';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import { api, AnalysisError, type AnalysisLiveInfo, type AnalysisLiveChapter, type AnalysisHeartbeat } from '../lib/api';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
-import { MODEL_OPTIONS } from '../lib/models';
+import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../lib/models';
 import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -359,8 +359,12 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
                   className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
                   title="Switch the analysis model. Cancels the in-flight request and resumes from the first uncached chapter."
                 >
-                  {MODEL_OPTIONS.map(m => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
+                  {MODEL_OPTION_GROUPS.map(g => (
+                    <optgroup key={g.engine} label={g.label}>
+                      {g.models.map(m => (
+                        <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
               </label>
@@ -427,8 +431,12 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
                     onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
                     className="px-3 py-1.5 rounded-full border border-red-300/60 bg-white text-xs font-medium text-ink focus:outline-none focus:ring-2 focus:ring-red-400/40"
                   >
-                    {MODEL_OPTIONS.map(m => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
+                    {MODEL_OPTION_GROUPS.map(g => (
+                      <optgroup key={g.engine} label={g.label}>
+                        {g.models.map(m => (
+                          <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </label>
