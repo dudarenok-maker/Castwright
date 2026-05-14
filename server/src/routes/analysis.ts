@@ -7,6 +7,7 @@
 import { Router, type Request, type Response } from 'express';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { selectAnalyzer } from '../analyzer/index.js';
+import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import { clearAnalysisCache, loadAnalysisCache, saveAnalysisCache, type AnalysisCache } from '../store/analysis-cache.js';
 import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
 import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../workspace/paths.js';
@@ -1000,15 +1001,11 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       if (arr) allSentences.push(...arr);
     }
 
-    /* Final manuscript-edits.json write. Covers the all-cached resume case
-       where no per-iteration write ran. Idempotent. */
-    if (record.bookDir) {
-      try {
-        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: allSentences });
-      } catch (persistErr) {
-        console.warn('[analysis] failed final manuscript-edits.json write', persistErr);
-      }
-    }
+    /* Final manuscript-edits.json write is deferred until after the fold
+       pass below so on-disk sentences match the folded cast (bucket ids
+       instead of unknown-jogger / one-line bystanders). The per-iteration
+       writes inside runChapter still stream unfolded sentences during
+       analysis for live UI visibility. */
     log(1, `Attributed ${allSentences.length.toLocaleString()} sentences across ${totalChapters} chapter${totalChapters === 1 ? '' : 's'}`);
     /* Per-character line counts, sorted by lines descending — most prominent first. */
     {
@@ -1043,9 +1040,24 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       characters: {} as Record<string, 'queued' | 'in_progress' | 'done' | 'skipped' | 'failed'>,
     }));
 
+    /* Minor-cast fold pass. Rolls "Unknown <descriptor>" characters and
+       anyone with too few attributed lines into generic male/female (or
+       narrator) buckets so the cast roster doesn't accumulate a voice
+       profile per one-off bystander. Runs on stage1 + sentence outputs
+       in-memory only — the cache stays ground truth so the rules can be
+       tuned without invalidating in-flight progress. See
+       server/src/analyzer/fold-minor-cast.ts for the trigger contract. */
+    const folded = foldMinorCast(stage1.characters, allSentences);
+    if (folded.summary.foldedCount > 0) {
+      const parts: string[] = [];
+      if (folded.summary.intoMale)   parts.push(`${folded.summary.intoMale} → Unknown male`);
+      if (folded.summary.intoFemale) parts.push(`${folded.summary.intoFemale} → Unknown female`);
+      log(1, `Folded ${folded.summary.foldedCount} background character${folded.summary.foldedCount === 1 ? '' : 's'} (${parts.join(', ')}) — names rolled into aliases.`);
+    }
+
     const characters = attachLinesAndScenes(
-      assignPaletteColors(stage1.characters),
-      allSentences,
+      assignPaletteColors(folded.characters),
+      folded.sentences,
     );
 
     const totalElapsed = Date.now() - startedAt;
@@ -1057,15 +1069,17 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       phaseTimings: PHASES.map(p => ({ id: p.id, label: p.label, duration: endPhase(p.id) || Math.round(totalElapsed / PHASES.length) })),
       characters,
       chapters,
-      sentences: allSentences,
+      sentences: folded.sentences,
       libraryMatches: [] as Array<{ characterId: string; voiceId: string; confidence: number }>,
     };
 
-    // Persist cast.json + refreshed state.json back into the on-disk book.
-    // Only runs for books that came through POST /api/books (workspace flow);
-    // legacy POST /api/manuscripts uploads have no bookDir and are skipped.
+    // Persist cast.json + refreshed manuscript-edits.json + state.json back
+    // into the on-disk book. Only runs for books that came through POST
+    // /api/books (workspace flow); legacy POST /api/manuscripts uploads
+    // have no bookDir and are skipped.
     if (record.bookDir) {
       try {
+        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: folded.sentences });
         await writeJsonAtomic(castJsonPath(record.bookDir), { characters });
         const statePath = stateJsonPath(record.bookDir);
         const prev = await readJson<BookStateJson>(statePath);
