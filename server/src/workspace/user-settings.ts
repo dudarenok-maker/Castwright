@@ -53,7 +53,13 @@ export type UserSettings = z.infer<typeof userSettingsSchema>;
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   displayName:          'Mike Dudarenok',
-  defaultAnalysisModel: 'qwen3.5:9b',
+  /* Default to the 4B variant — small enough (~3 GB VRAM) to keep
+     resident across the analysis loop (see RESIDENT_MODELS in
+     server/src/analyzer/ollama.ts), leaves headroom for XTTS on an
+     8 GB box, and fast enough to iterate without paying the 9B's
+     ~6.6 GB load tax on every chapter. Users can still pick 9B or
+     Llama explicitly from the dropdown for harder books. */
+  defaultAnalysisModel: 'qwen3.5:4b',
   defaultTtsEngine:     'local',
   defaultTtsModelKey:   'coqui-xtts-v2',
   sidecarUrl:           'http://localhost:9000',
@@ -128,19 +134,22 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
 }
 
 /** Synchronous resolver: returns sidecarUrl from the in-memory user-settings
-    cache, falling back to the LOCAL_TTS_URL env var, then localhost:9000.
-    Strips trailing slashes for consistency with prior call-site behaviour. */
+    cache, falling back to the LOCAL_TTS_URL env var, then
+    DEFAULT_USER_SETTINGS.sidecarUrl. Strips trailing slashes for
+    consistency with prior call-site behaviour. The final fallback comes
+    from the same defaults document that seeds a fresh user-settings.json
+    — one source of truth, no duplicated URL literals. */
 export function getResolvedSidecarUrl(): string {
   const c = cached;
-  const raw = c?.sidecarUrl ?? process.env.LOCAL_TTS_URL ?? 'http://localhost:9000';
+  const raw = c?.sidecarUrl ?? process.env.LOCAL_TTS_URL ?? DEFAULT_USER_SETTINGS.sidecarUrl;
   return raw.replace(/\/+$/, '');
 }
 
 /** Same fallback chain as getResolvedSidecarUrl, but for the local Ollama
-    daemon: cached user-settings → OLLAMA_URL env → localhost:11434. */
+    daemon: cached user-settings → OLLAMA_URL env → DEFAULT_USER_SETTINGS. */
 export function getResolvedOllamaUrl(): string {
   const c = cached;
-  const raw = c?.ollamaUrl ?? process.env.OLLAMA_URL ?? 'http://localhost:11434';
+  const raw = c?.ollamaUrl ?? process.env.OLLAMA_URL ?? DEFAULT_USER_SETTINGS.ollamaUrl;
   return raw.replace(/\/+$/, '');
 }
 
@@ -148,13 +157,14 @@ export function getResolvedOllamaUrl(): string {
     which model the local engine uses is `defaultAnalysisModel` from the
     top "Analysis model" picker — when it has Ollama tag shape (contains
     ':'), use it directly. Otherwise fall back to OLLAMA_MODEL env, then
-    the static default. The per-request `model` override (see
+    DEFAULT_USER_SETTINGS.defaultAnalysisModel (one source of truth — no
+    duplicated literal). The per-request `model` override (see
     selectAnalyzer) trumps both. */
 export function getResolvedOllamaModel(): string {
   const c = cached;
   const fromSettings = c?.defaultAnalysisModel;
   if (fromSettings && fromSettings.includes(':')) return fromSettings;
-  return process.env.OLLAMA_MODEL ?? 'qwen3.5:9b';
+  return process.env.OLLAMA_MODEL ?? DEFAULT_USER_SETTINGS.defaultAnalysisModel;
 }
 
 /** Analyzer engine selector: cached settings → ANALYZER env → 'local'.

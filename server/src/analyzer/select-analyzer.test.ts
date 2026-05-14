@@ -39,7 +39,9 @@ describe('selectAnalyzer dispatch', () => {
     const s = selectAnalyzer();
     expect(s.engine).toBe('local');
     expect(s.analyzer).toBeInstanceOf(FallbackAnalyzer);
-    expect(s.model).toBe('qwen3.5:9b');
+    /* Default analysis model — comes from DEFAULT_USER_SETTINGS via
+       getResolvedOllamaModel. Flip in lockstep with that. */
+    expect(s.model).toBe('qwen3.5:4b');
     expect(s.fallbackModel).toBe('gemma-4-31b-it');
   });
 

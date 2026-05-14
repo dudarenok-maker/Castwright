@@ -8,6 +8,7 @@
 
 import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
 import type { UserSettings, UserSettingsPatch } from '../lib/types';
+import { FRONTEND_ACCOUNT_DEFAULTS } from '../lib/account-defaults';
 import { api } from '../lib/api';
 
 export type AccountStatus = 'idle' | 'loading' | 'saving' | 'error';
@@ -22,15 +23,7 @@ export interface AccountState extends UserSettings {
 }
 
 const initialState: AccountState = {
-  displayName:          'Mike Dudarenok',
-  defaultAnalysisModel: 'qwen3.5:9b',
-  defaultTtsEngine:     'local',
-  defaultTtsModelKey:   'coqui-xtts-v2',
-  sidecarUrl:           'http://localhost:9000',
-  analysisEngine:       'local',
-  ollamaUrl:            'http://localhost:11434',
-  workspaceDirOverride: null,
-  minorCastMinLines:    3,
+  ...FRONTEND_ACCOUNT_DEFAULTS,
   apiKeyStatus:         'unset',
   workspaceRoot:        '',
   workspaceSource:      'default',

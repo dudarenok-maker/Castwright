@@ -28,9 +28,12 @@ afterEach(() => {
 
 describe('GET /api/ollama/health', () => {
   it('returns reachable with the models array when the daemon answers 200', async () => {
+    /* expectedModel mirrors DEFAULT_USER_SETTINGS.defaultAnalysisModel
+       via getResolvedOllamaModel; the mocked /api/tags response must
+       include that tag for modelPulled to come back true. */
     fetchMock.mockResolvedValue(new Response(JSON.stringify({
       models: [
-        { name: 'qwen3.5:9b' },
+        { name: 'qwen3.5:4b' },
         { name: 'mistral:7b' },
       ],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
@@ -38,8 +41,8 @@ describe('GET /api/ollama/health', () => {
     const res = await request(makeApp()).get('/api/ollama/health');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('reachable');
-    expect(res.body.models).toEqual(['qwen3.5:9b', 'mistral:7b']);
-    expect(res.body.expectedModel).toBe('qwen3.5:9b');
+    expect(res.body.models).toEqual(['qwen3.5:4b', 'mistral:7b']);
+    expect(res.body.expectedModel).toBe('qwen3.5:4b');
     expect(res.body.modelPulled).toBe(true);
   });
 

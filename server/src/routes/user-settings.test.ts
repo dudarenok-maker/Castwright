@@ -60,7 +60,7 @@ describe('user-settings router', () => {
     const res = await request(app).get('/api/user/settings');
     expect(res.status).toBe(200);
     expect(res.body.displayName).toBe('Mike Dudarenok');
-    expect(res.body.defaultAnalysisModel).toBe('qwen3.5:9b');
+    expect(res.body.defaultAnalysisModel).toBe('qwen3.5:4b');
     expect(res.body.defaultTtsEngine).toBe('local');
     expect(res.body.defaultTtsModelKey).toBe('coqui-xtts-v2');
     expect(res.body.sidecarUrl).toBe('http://localhost:9000');
