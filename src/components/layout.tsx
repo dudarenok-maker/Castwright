@@ -168,9 +168,12 @@ export function Layout() {
           wordCount: res.manuscript?.wordCount ?? null,
           format: res.manuscript?.format ?? null,
         }));
-        if (res.cast?.characters?.length) {
-          dispatch(castActions.setCharacters(res.cast.characters));
-        }
+        /* Always overwrite the cast slice from disk — including the empty
+           case. A reparse deletes cast.json server-side, and without this
+           the previous run's roster would survive in redux and the
+           Analysing view's "Cast so far" pill would start at 24 instead
+           of 0 as Phase 0a streams in fresh detections. */
+        dispatch(castActions.setCharacters(res.cast?.characters ?? []));
         dispatch(chaptersActions.hydrateFromBookState({
           chapters: res.state.chapters,
           completedSlugs: res.completedSlugs ?? [],

@@ -8,24 +8,31 @@
 // library entry.
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Outlet, Routes, Route } from 'react-router-dom';
 import { uiSlice, uiActions } from '../store/ui-slice';
-import { castSlice } from '../store/cast-slice';
+import { castSlice, castActions } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
 import { librarySlice, libraryActions } from '../store/library-slice';
 import { revisionsSlice } from '../store/revisions-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { changeLogSlice } from '../store/change-log-slice';
+import { accountSlice } from '../store/account-slice';
+import { bookMetaSlice } from '../store/book-meta-slice';
 import { router as appRouter } from './index';
-import { AnalysingRoute, ChangelogRoute } from './index';
-import type { LibraryBook, ChangeLogEvent } from '../lib/types';
+import { AnalysingRoute, BooksRoute, ChangelogRoute } from './index';
+import type { LayoutContext } from '../components/layout';
+import type { Character, LibraryBook, ChangeLogEvent } from '../lib/types';
 
 const analyseMock = vi.fn();
 const workspaceChangelogMock = vi.fn();
+const reparseBookMock = vi.fn();
+const getLibraryMock = vi.fn();
+const deleteBookMock = vi.fn();
+const getWorkspaceInfoMock = vi.fn();
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -36,6 +43,10 @@ vi.mock('../lib/api', () => ({
       return new Promise(() => {});
     },
     getWorkspaceChangelog: () => workspaceChangelogMock(),
+    reparseBook: (bookId: string) => reparseBookMock(bookId),
+    getLibrary: () => getLibraryMock(),
+    deleteBook: (bookId: string) => deleteBookMock(bookId),
+    getWorkspaceInfo: () => getWorkspaceInfoMock(),
   },
   AnalysisError: class extends Error {
     code = 'unknown';
@@ -58,6 +69,8 @@ function makeStore() {
       library:    librarySlice.reducer,
       voices:     voicesSlice.reducer,
       changeLog:  changeLogSlice.reducer,
+      account:    accountSlice.reducer,
+      bookMeta:   bookMetaSlice.reducer,
     },
   });
 }
@@ -98,6 +111,10 @@ function renderAtAnalysing(store: ReturnType<typeof makeStore>) {
 beforeEach(() => {
   analyseMock.mockClear();
   workspaceChangelogMock.mockReset();
+  reparseBookMock.mockReset();
+  getLibraryMock.mockReset();
+  deleteBookMock.mockReset();
+  getWorkspaceInfoMock.mockReset();
 });
 
 describe('AnalysingRoute manuscriptId derivation', () => {
@@ -169,6 +186,125 @@ describe('AnalysingRoute manuscriptId derivation', () => {
 
     expect(screen.getByText(/No manuscript loaded/i)).toBeInTheDocument();
     expect(analyseMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('BooksRoute — re-parse wipes stale redux state', () => {
+  /* Regression: re-parsing a book deletes cast.json + the analysis cache on
+     the server, but the redux cast slice was only refilled by the layout's
+     book-state hydration when the next disk read returned a non-empty
+     character list. When the user opened the just-reparsed book, the
+     layout hydration's `manuscript.manuscriptId && manuscript.title` guard
+     also short-circuited (those fields still held the previous run's
+     values), so the cast slice was never even rewritten. Result: Phase 0a
+     streamed fresh chapter-by-chapter cast detections on top of the prior
+     run's 24-character roster, and the Analysing view's "Cast so far"
+     pill opened at 24 instead of 0.
+
+     The fix dispatches castActions.setCharacters([]) and
+     manuscriptActions.reset() right after a successful reparse RPC. */
+
+  function makePopulatedStore() {
+    const store = makeStore();
+    /* Seed the library with one cast_pending book so the BooksRoute has
+       a card to render and a target for the re-parse menu. */
+    store.dispatch(libraryActions.hydrate({
+      authors: [{
+        name: 'Della Renwick',
+        series: [{
+          name: 'Standalones',
+          books: [makeBook({ status: 'cast_pending', manuscriptId: 'mns-real' })],
+        }],
+      }],
+    }));
+    /* Stale state from a prior open: cast has 24 characters, manuscript
+       slice still pins its manuscriptId+title. This is exactly the state
+       layout.tsx leaves behind after the user navigates back to the books
+       library — nothing resets it on goHome. */
+    const staleChars: Character[] = Array.from({ length: 24 }, (_, i) => ({
+      id: `c${i + 1}`,
+      name: `Stale${i + 1}`,
+      voiceState: 'generated',
+    })) as Character[];
+    store.dispatch(castActions.setCharacters(staleChars));
+    store.dispatch(manuscriptActions.hydrateFromBookState({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      state: { bookId: 'b1', manuscriptId: 'mns-real', title: 'the Coalfall Commission' } as any,
+      sentences: null,
+      wordCount: 100000,
+      format: 'plaintext',
+    }));
+    return store;
+  }
+
+  /* react-router v6 requires Outlet context to flow through a parent route.
+     BooksRoute calls useOutletContext<LayoutContext>() to obtain showInfo /
+     showError. We provide stubs via a tiny shim so the route can mount
+     without the full Layout. */
+  function renderBooks(store: ReturnType<typeof makeStore>) {
+    const showInfo = vi.fn();
+    const showError = vi.fn();
+    const ctx: LayoutContext = { showInfo, showError };
+    function OutletShim() { return <Outlet context={ctx}/>; }
+    const utils = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route element={<OutletShim/>}>
+              <Route path="/" element={<BooksRoute/>}/>
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    return { ...utils, showInfo, showError };
+  }
+
+  it('clears cast.characters and resets the manuscript slice after a successful reparse', async () => {
+    const store = makePopulatedStore();
+    expect(store.getState().cast.characters).toHaveLength(24);
+    expect(store.getState().manuscript.manuscriptId).toBe('mns-real');
+
+    /* Mock the full RPC sequence onReparseBook drives. The reparse
+       resolves with an empty chapter list (server returned the freshly
+       parsed state). The library refresh returns the same book — irrelevant
+       to the regression, just needed so the .then chain doesn't fall over. */
+    reparseBookMock.mockResolvedValue({
+      state: { chapters: [] },
+      chapterCount: 0,
+      chapterTitles: [],
+      chapters: [],
+    });
+    getLibraryMock.mockResolvedValue({
+      authors: [{
+        name: 'Della Renwick',
+        series: [{ name: 'Standalones', books: [makeBook({ status: 'cast_pending', manuscriptId: 'mns-real' })] }],
+      }],
+    });
+    getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+
+    renderBooks(store);
+
+    /* Drive the menu → "Re-parse manuscript" → confirm sequence. The card's
+       menu button is opacity-0 until hover but it's still in the DOM and
+       fireEvent can target it directly. */
+    fireEvent.click(screen.getByLabelText('Book options'));
+    fireEvent.click(screen.getByRole('button', { name: /Re-parse manuscript/i }));
+    /* The confirm dialog also renders a "Re-parse manuscript" button — query
+       all matches and click the dialog's (last) one to confirm. */
+    const reparseButtons = screen.getAllByRole('button', { name: /Re-parse manuscript/i });
+    fireEvent.click(reparseButtons[reparseButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(reparseBookMock).toHaveBeenCalledWith('b1');
+    });
+    await waitFor(() => {
+      expect(store.getState().cast.characters).toHaveLength(0);
+    });
+    /* Manuscript slice reset so the layout's next per-book hydrate guard
+       won't short-circuit when the user clicks "Analyse now". */
+    expect(store.getState().manuscript.manuscriptId).toBeNull();
+    expect(store.getState().manuscript.title).toBeNull();
   });
 });
 

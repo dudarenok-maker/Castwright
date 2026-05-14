@@ -38,7 +38,7 @@ Run with `VITE_USE_MOCKS=false`, server on `:8080` with at least one book per st
 5. **Click a `complete` book** → URL becomes `#/books/<id>/listen`.
 6. **Click a `generating` book** → URL becomes `#/books/<id>/generate`.
 7. **Delete a book** → confirm dialog → DELETE fires → tree refreshes without the book; no broken neighbours; if last book in series, series collapses; if last series for author, author collapses.
-8. **Re-parse a book** → `POST /api/books/<id>/reparse` fires; response carries the new chapter list; UI transitions to analysing (cast preserved, chapters refreshed).
+8. **Re-parse a book** → `POST /api/books/<id>/reparse` fires; response carries the new chapter list. Server wipes cast.json + revisions.json + audio dir + analysis cache; client mirrors by dispatching `castActions.setCharacters([])` + `manuscriptActions.reset()` so the Analysing view's "Cast so far" pill opens at 0 and the layout's per-book hydration guard doesn't short-circuit. UI transitions to analysing on "Analyse now".
 9. **Empty workspace** → tree renders an empty state; "New book" CTA visible.
 10. **Mock mode** → `getLibrary` returns `MOCK_LIBRARY` (`src/lib/api.ts:112-115`) — covers the same statuses; delete + reparse are no-ops.
 
