@@ -14,6 +14,7 @@ import type { ManuscriptState } from './manuscript-slice';
 import type { RevisionsState } from './revisions-slice';
 import type { UiState } from './ui-slice';
 import type { ChangeLogState } from './change-log-slice';
+import type { BookMetaState } from './book-meta-slice';
 import type { StateSlice } from '../lib/types';
 import { api } from '../lib/api';
 
@@ -26,6 +27,7 @@ interface PersistableRootState {
   manuscript: ManuscriptState;
   revisions: RevisionsState;
   changeLog: ChangeLogState;
+  bookMeta: BookMetaState;
 }
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
@@ -65,6 +67,29 @@ const PERSIST_RULES: Record<string, { slice: StateSlice; build: (s: PersistableR
   'changeLog/wipeBookShapeEvents':  { slice: 'changeLog', build: (s) => ({ events: s.changeLog.events }) },
 
   'ui/confirmCast': { slice: 'state', build: () => ({ castConfirmed: true }) },
+
+  /* Listen-view metadata editor. Persists the full editable snapshot for the
+     currently-open book in a single state-slice PUT, so any field the user
+     touched (title / author / series / narratorCredit / genre / publicationDate)
+     round-trips through state.json. The slice's commitDraft folds the draft
+     into saved[bookId] before we run, so this read sees the post-commit
+     values. */
+  'bookMeta/commitDraft': {
+    slice: 'state',
+    build: (s) => {
+      const bookId = bookIdFromState(s);
+      const saved = bookId ? s.bookMeta.saved[bookId] : null;
+      if (!saved) return {};
+      return {
+        title:           saved.title,
+        author:          saved.author,
+        series:          saved.series,
+        narratorCredit:  saved.narratorCredit,
+        genre:           saved.genre,
+        publicationDate: saved.publicationDate,
+      };
+    },
+  },
 };
 
 function bookIdFromState(s: PersistableRootState): string | null {

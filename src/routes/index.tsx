@@ -15,6 +15,7 @@ import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
+import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
 import { api } from '../lib/api';
 import { stageEqual } from '../lib/router';
@@ -291,17 +292,39 @@ function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookI
           onPreview={(id) => dispatch(uiActions.setCurrentTrack(id))}/>
       );
     case 'listen':
-      return (
-        <ListenView chapters={chapters} characters={characters} library={voices}
-          currentTrack={ui.currentTrack}
-          setCurrentTrack={(t) => dispatch(uiActions.setCurrentTrack(t))}
-          onSendApp={(app) => dispatch(uiActions.setHandoffApp(app))}
-          onRegenerate={(ch) => dispatch(uiActions.setRegenChapter(ch))}
-          onEnterPreview={() => dispatch(uiActions.setPreviewMode(true))}/>
-      );
+      return <ListenRoute bookId={bookId}/>;
     case 'log':
       return <ChangeLogView events={changeLogEvents} title={projectTitle}/>;
   }
+}
+
+/* Listen view wrapper. Lives outside ReadyViewSwitch so the bookMeta /
+   library selectors only fire while the user is actually on the listen
+   route — and so the per-view component co-locates with its own state
+   selectors instead of bloating the parent. */
+function ListenRoute({ bookId }: { bookId: string }) {
+  const dispatch = useAppDispatch();
+  const chapters   = useAppSelector(s => s.chapters.chapters);
+  const characters = useAppSelector(s => s.cast.characters);
+  const voices     = useAppSelector(s => s.voices.voices);
+  const currentTrack = useAppSelector(s => s.ui.currentTrack);
+  const bookMeta   = useAppSelector(selectEffectiveMeta(bookId));
+  const isDirty    = useAppSelector(selectIsDirty);
+  const coverGradient = useAppSelector(s => s.library.books.find(b => b.bookId === bookId)?.coverGradient ?? null);
+  return (
+    <ListenView chapters={chapters} characters={characters} library={voices}
+      currentTrack={currentTrack}
+      setCurrentTrack={(t) => dispatch(uiActions.setCurrentTrack(t))}
+      onSendApp={(app) => dispatch(uiActions.setHandoffApp(app))}
+      onRegenerate={(ch) => dispatch(uiActions.setRegenChapter(ch))}
+      onEnterPreview={() => dispatch(uiActions.setPreviewMode(true))}
+      bookMeta={bookMeta}
+      bookCoverGradient={coverGradient}
+      onEditMetaField={(field, value) => dispatch(bookMetaActions.setDraftField({ field, value }))}
+      onCommitMeta={() => dispatch(bookMetaActions.commitDraft({ bookId }))}
+      onCancelMeta={() => dispatch(bookMetaActions.cancelDraft())}
+      isMetaDirty={isDirty}/>
+  );
 }
 
 /* Body shown inside the re-parse result dialog. Lives outside its parent's

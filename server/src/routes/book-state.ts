@@ -176,10 +176,25 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         // Whitelist: only allow updating known editorial fields, not bookId /
         // manuscriptId / paths.
         const patch = body.patch as Partial<BookStateJson>;
+        const pickString = (incoming: unknown, fallback: string): string =>
+          typeof incoming === 'string' && incoming.trim() ? incoming : fallback;
+        const pickNullable = (incoming: unknown, fallback: string | null | undefined): string | null => {
+          if (incoming === undefined) return fallback ?? null;
+          if (incoming === null) return null;
+          if (typeof incoming !== 'string') return fallback ?? null;
+          const trimmed = incoming.trim();
+          return trimmed ? trimmed : null;
+        };
         const next: BookStateJson = {
           ...state,
           castConfirmed: patch.castConfirmed ?? state.castConfirmed,
           chapters: patch.chapters ?? state.chapters,
+          title:           pickString(patch.title,  state.title),
+          author:          pickString(patch.author, state.author),
+          series:          pickString(patch.series, state.series),
+          narratorCredit:  pickNullable(patch.narratorCredit,  state.narratorCredit),
+          genre:           pickNullable(patch.genre,           state.genre),
+          publicationDate: pickNullable(patch.publicationDate, state.publicationDate),
           updatedAt: new Date().toISOString(),
         };
         await writeJsonAtomic(stateJsonPath(bookDir), next);

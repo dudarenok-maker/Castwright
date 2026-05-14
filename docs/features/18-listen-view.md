@@ -1,45 +1,92 @@
 # Listen view
 
-> Status: KNOWN: scaffolded (chapter-audio backend pending)
-> Key files: `src/views/listen.tsx`, `src/components/waveform.tsx`, `src/components/mini-player.tsx`, `src/lib/api.ts` (`getChapterAudio`), `src/data/export-queue.ts`
+> Status: PARTIAL: top section + metadata editor wired; integrations, downloads, and export queue intentionally mocked with "Coming soon" affordances
+> Key files: `src/views/listen.tsx`, `src/views/listen.test.tsx`, `src/store/book-meta-slice.ts`, `src/store/book-meta-slice.test.ts`, `src/components/waveform.tsx`, `src/components/mini-player.tsx`, `src/lib/api.ts` (`getChapterAudio`), `src/data/export-queue.ts`, `src/data/listener-apps.ts`
 > URL surface: `#/books/:bookId/listen`
-> OpenAPI ops: `GET /api/books/:bookId/chapters/:chapterId` (frontend present, real backend stub)
+> OpenAPI ops: `GET /api/books/:bookId/chapters/:chapterId` (frontend present, real backend stub); `PUT /api/books/:bookId/state` slice='state' carries editable metadata
 
 ## What this covers
 
-The "ready to listen" view: shows the cover, audiobook metadata, chapter list with play buttons, a mini-player for the active track, a "Send to app" handoff queue, and an export queue. Today the audio fetch returns `url: null` in mock mode and the real endpoint throws "not wired yet" — the UI is intentionally scaffolded.
+The "ready to listen" view shows the cover, audiobook metadata, chapter list with play buttons, a mini-player for the active track, "Listen on your favourite app" cards, an export queue, three download tiles, and a metadata editor.
+
+**Wired (real backend or store-driven):**
+- The header (cover, title, author, narrator, runtime/chapter/voice stats, action strip).
+- The metadata editor: edits flow through `book-meta-slice` and persist via `PUT /api/books/:bookId/state` slice='state'.
+
+**Intentionally mocked (with "Coming soon" affordances on every interactive surface):**
+- All six listener-app cards (Audiobookshelf, BookPlayer, Smart AudioBook Player, Apple Books, Plex, PocketBook).
+- All three download tiles (m4b chaptered, MP3 ZIP, streaming link).
+- The export queue rows (the table renders from the demo fixture; no row actions fire).
+- Cover replace/regenerate buttons in the metadata editor.
+- The "Download" and "Share" buttons in the header strip.
 
 ## Invariants to preserve
 
-- `mockGetChapterAudio` returns `{ url: null, durationSec, peaks: float[240], sampleRate: 44100, segments: [] }` (`src/lib/api.ts:259-274`). Null `url` is the documented signal for "no live audio."
-- `realGetChapterAudio` currently throws "Chapter audio not wired yet" (`src/lib/api.ts:612-614`). Treat this as the contract until the backend lands.
-- `MiniPlayer` reads `ui.currentTrack` (a chapter index, not chapter id) and renders prev/next/close controls. `setCurrentTrack(null)` closes the player; the value is overlay-flat (not stage-guarded).
-- Waveform peaks array length is fixed at 240 floats in mock mode for consistent rendering across chapters of different durations. Real backend may return any length; renderer scales to the available count.
+### Header / metadata wiring
+- Header title/author/series/narratorCredit/genre/publicationDate read through `selectEffectiveMeta(bookId)` from `book-meta-slice`. The cover gradient comes from `library.books.find(b => b.bookId === bookId)?.coverGradient`. No hardcoded "Northern Star" / "Mike Dudarenok" / "Anders Vale" literals may live in `listen.tsx`.
+- Narrator-credit precedence (`src/views/listen.tsx` and `narratorNameFromCast` in `src/store/book-meta-slice.ts`): explicit `bookMeta.narratorCredit` → cast character with `id === 'narrator'` → first character → null (the "narrated by …" phrase is suppressed).
+- `book-meta-slice` shape: `{ draft: Partial<EditableBookMeta> | null, saved: Record<bookId, EditableBookMeta> }`. The draft is the in-flight edit buffer; `selectEffectiveMeta` overlays it on top of `saved[bookId]` so the header updates live as the user types.
+- Save button: `disabled` until `selectIsDirty` is true. On click, dispatches `bookMeta/commitDraft({ bookId })` which folds the draft into `saved[bookId]` and clears the draft. The persistence-middleware watches that action and fires a debounced `PUT /api/books/:bookId/state` with slice='state'.
+- Cancel button: also disabled until dirty; dispatches `bookMeta/cancelDraft` which discards the draft without persisting.
+- New `BookStateJson` optional fields: `narratorCredit?`, `genre?`, `publicationDate?` (ISO 'YYYY-MM-DD'). State.json files written before these landed continue to load — missing fields fall back to library/cast defaults on the frontend.
+- Server PUT slice='state' whitelist (`server/src/routes/book-state.ts`): widened to accept `title`, `author`, `series`, `narratorCredit`, `genre`, `publicationDate` alongside the existing `castConfirmed` and `chapters`. Identity fields (`bookId`, `manuscriptId`, `manuscriptFile`, paths) remain non-editable and any attempt to overwrite them is ignored.
+- Hydration: `layout.tsx`'s per-book hydrate dispatches `bookMeta/hydrateFromBookState` after the on-disk fetch lands. A separate fallback effect seeds `bookMeta` from the matching `library.books` entry when the on-disk fetch is unavailable (mock mode, fresh import before state.json exists). The on-disk fetch overwrites it on arrival.
+
+### Chapter playback / mini-player (unchanged from v1)
+- `mockGetChapterAudio` returns `{ url: null, durationSec, peaks: float[240], sampleRate: 44100, segments: [] }`. Null `url` is the documented signal for "no live audio."
+- `realGetChapterAudio` currently throws "Chapter audio not wired yet". Treat this as the contract until the backend lands.
+- `MiniPlayer` reads `ui.currentTrack` (a chapter id) and renders prev/next/close controls. `setCurrentTrack(null)` closes the player.
+- Waveform peaks array length is fixed at 240 floats in mock mode for consistent rendering across chapters of different durations.
 - `ChapterAudio` shape: `{ url, durationSec, peaks, sampleRate, segments }`. `url` is `string | null`; UI must handle null without crashing.
-- Listener app handoff modal is opened by `setHandoffApp(app)` and closed by `setHandoffApp(null)` (`src/store/ui-slice.ts:24, 112`). Apps come from `SUPPORTED_APPS` fixture.
-- Export queue items render from `EXPORT_QUEUE` fixture; the queue is read-only today.
+
+### Coming-soon affordances
+- Every still-mocked interactive surface (six listener-app cards + their "Send to …" buttons; three download tiles + their Download buttons; export-queue per-row actions; header "Download" + "Share"; cover Replace + Regenerate) is rendered `disabled` with muted styling and a `<ComingSoonBadge/>` (`src/components/primitives.tsx`).
+- Each mocked section carries a `<MockedPreviewBanner>` (also in primitives) above the cards/rows so a smoke pass can tell the section apart from a shipped one at a glance. Three banners total: listener-apps, export-queue, downloads.
+- PocketBook is present as the sixth listener-app entry (`src/data/listener-apps.ts`) and will be the first to flip from mocked to live when real handoff lands.
+- `setHandoffApp` is no longer dispatched from listener-app card clicks (the button is disabled). The `AppHandoffModal` infrastructure remains in place for the future flip-over but is unreachable from the Listen view today.
 
 ## Acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`, navigate to a complete book.
+Run against the canonical e2e manuscript (`~/Downloads/the Coalfall Commission.txt`, see project CLAUDE.md).
 
-1. **Land on `#/books/<id>/listen`** → cover, metadata, chapter list render. Each chapter row shows title, duration, and a play button.
-2. **Click play on a chapter** → `setCurrentTrack(chapterIndex)`; mini-player slides up showing the chapter title and duration. No audio plays (mock `url: null`); UI does not crash.
-3. **Click mini-player next / prev** → `ui.currentTrack` increments/decrements; mini-player reflects the new chapter.
-4. **Click close on mini-player** → `setCurrentTrack(null)`; mini-player hides.
-5. **Click "Send to app"** → handoff modal opens listing supported apps from the fixture. Each app shows tagline + `sendVerb` (e.g. "Send to Audible"). Closing returns to listen view.
-6. **Export queue** → renders pending/in-progress/done/failed items from fixture; statuses, formats, sizes, timestamps display correctly. Items are not interactive in v1.
-7. **Real-mode regression check** — switch to `VITE_USE_MOCKS=false`. The listen view loads (chapter metadata from book state hydration works) but `getChapterAudio` throws on play. UI must surface this error gracefully, not crash.
+### Top section reads from the store
+1. Open a confirmed book; URL ends in `#/books/<id>/listen`.
+2. The h1 in the header shows the book's *actual* title (the one entered at confirm), not "The Northern Star". The cover-art h2 in the corner shows the same string. The "By X" line shows the actual author. The "narrated by Y" suffix shows the cast's narrator character (or whatever you set in the metadata editor — see below).
+3. The cover-art panel is painted with `library.books.<this book>.coverGradient`, not the fallback peach.
+
+### Metadata editor end-to-end
+4. Scroll to the "Edit the audiobook details" card. Every field is a controlled input pre-filled from the current saved snapshot.
+5. Edit the **Title** field. The h1 at the top of the page updates live as you type (the draft is overlaid via `selectEffectiveMeta`). The Save button enables.
+6. Click **Cancel** → the field reverts to the saved value, the h1 reverts, Save disables.
+7. Re-edit the **Title** plus the **Narrator credit**, **Genre**, and **Publication date** fields. Click **Save changes**.
+8. Refresh the page. All four edits survive — the persistence middleware fired a `PUT /api/books/:bookId/state` with slice='state' and the body included all six editable fields; the server wrote `.audiobook/state.json` and on reload the hydration seeded the slice from disk.
+
+### Coming-soon affordances
+9. The "Listen on your favourite app" section shows a single peach-tinted "Mocked preview" banner. Six cards (incl. PocketBook) each carry a "SOON" badge next to the app name and a disabled "Send to …" button. Hovering the button shows the "— coming soon" tooltip; clicking does **not** open the walkthrough modal.
+10. The "Export queue" section shows its own banner. Per-row action icons (copy, download, retry, remove) are all disabled.
+11. The "Or download a file" section shows the third banner. All three Download buttons are disabled with the SOON badge in the tile header.
+12. In the metadata editor, **Replace cover** and **Regenerate cover** are disabled with SOON badges.
+
+### Chapter playback (unchanged from v1)
+13. Click play on a chapter → `setCurrentTrack(chapterId)`; mini-player slides up showing the chapter title and duration. No audio plays (mock `url: null`); UI does not crash.
+14. Click mini-player next / prev → `ui.currentTrack` increments/decrements.
+15. Click close on mini-player → `setCurrentTrack(null)`; mini-player hides.
+16. Real-mode regression: with `VITE_USE_MOCKS=false`, the listen view loads (chapter metadata from book state hydration works) but `getChapterAudio` throws on play; the mini-player surfaces the error gracefully.
 
 ## KNOWN: scaffolded
 
 - `mockGetChapterAudio` returns `url: null`; no audio plays in mock mode by design.
 - `realGetChapterAudio` throws "Chapter audio not wired yet" — real-backend playback is not yet wired.
-- Export queue is hardcoded fixture; "Download" buttons are visual stubs.
-- "Send to app" handoff is a stub modal; no real deeplink/API/file-write integration.
+- Export queue is hardcoded fixture; row actions are explicitly disabled with "Coming soon" affordances.
+- Listener-app "Send to …" buttons are disabled; the `AppHandoffModal` walkthrough is unreachable from this view until per-app handoff (likely PocketBook first) lands.
+- Download tiles and header Download/Share buttons are non-functional stubs marked "Coming soon".
+- Cover-art Replace and Regenerate in the metadata editor are also non-functional stubs.
 
 ## Out of scope
 
 - Real audio playback wiring (separate backend plan).
+- Real export pipeline / download URL minting.
+- Real listener-app handoff (PocketBook will be first).
 - Skipping silence / variable playback speed / sleep timer.
 - Live transcript sync with playback.
+- Cover-art upload or regeneration.

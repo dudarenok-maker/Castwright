@@ -124,6 +124,14 @@ export interface BookStateJson {
   coverGradient: [string, string];
   createdAt: string;
   updatedAt: string;
+  /* Editable book-level audiobook metadata exposed in the Listen view's
+     metadata editor. All optional so state.json files written before the
+     Listen-meta wiring landed continue to load — the slice falls back to
+     library/cast defaults when these are missing. */
+  narratorCredit?: string | null;
+  genre?: string | null;
+  /** ISO 'YYYY-MM-DD' (no time component — pure calendar date). */
+  publicationDate?: string | null;
 }
 
 export interface BookStateResponse {
