@@ -20,6 +20,15 @@ interface Props {
   onLock: (character: Character) => void;
   onShowMatchDetail?: (id: string) => void;
   onRegenerateCharacter?: (id: string) => void;
+  /** Other characters in the cast that this character could be merged INTO
+      (i.e. the surviving identity). When omitted or empty, the merge
+      affordance hides itself. Layout passes `cast \ this`. */
+  mergeCandidates?: Character[];
+  /** Fold this character (source) into another (target). Surviving target
+      gains `source.name` in its aliases list; all sentences source said are
+      reattributed to target. Returns a promise so the UI can show progress
+      / surface errors. Drawer closes on resolve. */
+  onMerge?: (sourceId: string, targetId: string) => Promise<void>;
 }
 
 type CharGender   = NonNullable<Character['gender']>;
@@ -36,7 +45,7 @@ const AGE_OPTIONS: Array<{ value: CharAgeRange; label: string }> = [
   { value: 'elderly', label: 'Elderly' },
 ];
 
-export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onShowMatchDetail, onRegenerateCharacter }: Props) {
+export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onShowMatchDetail, onRegenerateCharacter, mergeCandidates, onMerge }: Props) {
   const [tone, setTone] = useState(character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 });
   /* Editable identity. The analyzer's guess (or the absence of one) seeds
      these; saving the drawer persists them onto the character. They drive
@@ -59,6 +68,12 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
      3 and is hidden when there's nothing extra. */
   const [showAllEvidence, setShowAllEvidence] = useState(false);
   const EVIDENCE_PREVIEW_LIMIT = 3;
+  /* Merge UI state. The picker is collapsed by default — opening it reveals
+     the list of candidates; selecting one shows a confirm row. */
+  const [mergeTargetId, setMergeTargetId] = useState<string | ''>('');
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [showMergePicker, setShowMergePicker] = useState(false);
 
   /* Sample subject: a library voice when one is matched, otherwise a
      character-derived stub so brand-new (unmatched) characters can still
@@ -345,6 +360,95 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
               {character.attributes?.map(a => <Pill key={a}>{a}</Pill>)}
               <button className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-dashed border-ink/20 text-ink/50 hover:border-peach hover:text-peach"><IconPlus className="w-3 h-3"/>Add</button>
             </div>
+          </section>
+
+          <section>
+            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">Cast roster</p>
+            {character.aliases && character.aliases.length > 0 && (
+              <div className="mb-3">
+                <p className="text-xs text-ink/55 mb-1.5">Also known as</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {character.aliases.map(a => <Pill key={a} color="library">{a}</Pill>)}
+                </div>
+              </div>
+            )}
+            {!onMerge || !mergeCandidates || mergeCandidates.length === 0 ? (
+              <p className="text-[11px] text-ink/50">
+                {character.aliases?.length
+                  ? 'These names were merged into this character. The voice matcher will use them when later books in the series detect the same person.'
+                  : 'Once another character is detected as the same person, you can merge them here — their name joins this character\'s aliases and the matcher learns the link for later books.'}
+              </p>
+            ) : !showMergePicker ? (
+              <button
+                onClick={() => { setShowMergePicker(true); setMergeError(null); }}
+                className="w-full px-3 py-2 rounded-xl border border-dashed border-ink/20 hover:border-peach hover:text-peach text-xs font-medium text-ink/65 inline-flex items-center justify-center gap-1.5"
+              >
+                Merge {character.name.split(' ')[0]} into another character…
+              </button>
+            ) : (
+              <div className="rounded-2xl bg-canvas border border-ink/10 p-3">
+                <label className="block text-[11px] text-ink/60 font-medium mb-1.5" htmlFor="profile-merge-target">
+                  Keep which character as the survivor?
+                </label>
+                <select
+                  id="profile-merge-target"
+                  aria-label="Merge target"
+                  value={mergeTargetId}
+                  disabled={mergeBusy}
+                  onChange={(e) => { setMergeTargetId(e.target.value); setMergeError(null); }}
+                  className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+                >
+                  <option value="">— pick a character —</option>
+                  {mergeCandidates.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+                {mergeTargetId && (
+                  <p className="mt-2 text-[11px] text-ink/65 leading-relaxed">
+                    <span className="font-semibold text-ink">{character.name}</span> will be folded into{' '}
+                    <span className="font-semibold text-ink">{mergeCandidates.find(c => c.id === mergeTargetId)?.name}</span>.
+                    Their name joins the survivor's aliases and every sentence they spoke is reattributed.
+                  </p>
+                )}
+                {mergeError && (
+                  <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {mergeError}</p>
+                )}
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  <button
+                    disabled={mergeBusy}
+                    onClick={() => { setShowMergePicker(false); setMergeTargetId(''); setMergeError(null); }}
+                    className="px-3 py-1.5 text-xs font-medium text-ink/65 hover:text-ink"
+                  >Cancel</button>
+                  <button
+                    disabled={!mergeTargetId || mergeBusy}
+                    onClick={async () => {
+                      if (!mergeTargetId || !onMerge) return;
+                      setMergeBusy(true);
+                      setMergeError(null);
+                      try {
+                        await onMerge(character.id, mergeTargetId);
+                        /* Drawer is closed by the layout's onMerge — but
+                           reset our local state defensively in case the
+                           caller chose not to close. */
+                        setShowMergePicker(false);
+                        setMergeTargetId('');
+                      } catch (e) {
+                        setMergeError((e as Error).message || 'Merge failed.');
+                      } finally {
+                        setMergeBusy(false);
+                      }
+                    }}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
+                      mergeBusy
+                        ? 'bg-magenta/20 text-magenta cursor-wait'
+                        : 'bg-magenta text-white hover:bg-magenta/90 disabled:bg-ink/20 disabled:text-ink/50 disabled:cursor-not-allowed'
+                    }`}
+                  >
+                    {mergeBusy ? 'Merging…' : 'Merge'}
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
 
           <section>

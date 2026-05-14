@@ -106,6 +106,8 @@ export interface AnalyseOpts {
   fresh?: boolean;
 }
 export interface MatchArgs { bookId: string; characters: Character[]; }
+export interface MergeCharactersArgs { bookId: string; sourceId: string; targetId: string; }
+export interface MergeCharactersResponse { characters: Character[]; }
 export interface StreamArgs {
   bookId: string;
   modelKey: TtsModelKey;
@@ -606,6 +608,29 @@ async function realMatchVoices({ bookId, characters }: MatchArgs): Promise<Voice
   return res.json();
 }
 
+async function realMergeCharacters({ bookId, sourceId, targetId }: MergeCharactersArgs): Promise<MergeCharactersResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sourceId, targetId }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    throw new Error(detail || `Character merge failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockMergeCharacters({ sourceId, targetId }: MergeCharactersArgs): Promise<MergeCharactersResponse> {
+  /* Mock mode has no persisted cast — return an empty list so callers in a
+     mocked environment can wire the call without crashing. Real merging is
+     only meaningful against the workspace backend. */
+  await wait(60);
+  void sourceId; void targetId;
+  return { characters: [] };
+}
+
 export interface ReparseBookResponse {
   state: { chapters: Array<{ id: number; title: string; slug: string }> };
   chapterCount: number;
@@ -851,6 +876,7 @@ const real = {
   uploadManuscript:  realUploadManuscript,
   analyseManuscript: realAnalyseManuscript,
   matchVoices:       realMatchVoices,
+  mergeCharacters:   realMergeCharacters,
   deleteBook:        realDeleteBook,
   reparseBook:       realReparseBook,
   getVoiceSample:    realGetVoiceSample,
@@ -889,6 +915,7 @@ const mock = {
   uploadManuscript:  mockUploadManuscript,
   analyseManuscript: mockAnalyseManuscript,
   matchVoices:       mockMatchVoices,
+  mergeCharacters:   mockMergeCharacters,
   deleteBook:        mockDeleteBook,
   reparseBook:       mockReparseBook,
   getVoiceSample:    mockGetVoiceSample,

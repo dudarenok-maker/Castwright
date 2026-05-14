@@ -207,3 +207,51 @@ describe('castSlice — mergeCharacters (Phase 0a live cast snapshots)', () => {
     expect(next.characters).toEqual(start.characters);
   });
 });
+
+describe('castSlice — applyMerge (manual character merge response)', () => {
+  it('replaces the local cast with the server payload while preserving local voice state on survivors', () => {
+    /* User had locked the target's voice in a prior session. The server's
+       merge response is the authoritative character list (with aliases set,
+       lines/scenes recomputed), but it doesn't carry voiceId / voiceState
+       — those are local / library-derived and the reducer must keep them. */
+    const start = baseState([
+      makeChar('Wren',        { voiceState: 'generated' }),
+      makeChar('Wren-foster', {
+        voiceState: 'locked',
+        voiceId: 'v_Wren_from_book1',
+        matchedFrom: { bookTitle: 'KOTC #1', confidence: 0.94 },
+      }),
+      makeChar('Marlow',         { voiceState: 'tuned', voiceId: 'v_Marlow' }),
+    ]);
+    const next = castSlice.reducer(start, castActions.applyMerge({
+      characters: [
+        { id: 'Wren-foster', name: 'Wren Sparrow', role: 'protagonist',
+          color: 'orange', lines: 17, scenes: 6,
+          aliases: ['Wren'], voiceState: undefined as unknown as Character['voiceState'] },
+        { id: 'Marlow', name: 'Marlow Halden', role: 'sidekick', color: 'halloran',
+          lines: 7, scenes: 3 } as Character,
+      ],
+    }));
+    expect(next.characters.map(c => c.id)).toEqual(['Wren-foster', 'Marlow']);
+    const survivor = next.characters.find(c => c.id === 'Wren-foster')!;
+    /* Server-authoritative fields flow through. */
+    expect(survivor.aliases).toEqual(['Wren']);
+    expect(survivor.lines).toBe(17);
+    expect(survivor.scenes).toBe(6);
+    /* Local-only fields preserved on the survivor. */
+    expect(survivor.voiceState).toBe('locked');
+    expect(survivor.voiceId).toBe('v_Wren_from_book1');
+    expect(survivor.matchedFrom).toEqual({ bookTitle: 'KOTC #1', confidence: 0.94 });
+    /* Untouched characters keep their local voice state too. */
+    expect(next.characters.find(c => c.id === 'Marlow')!.voiceId).toBe('v_Marlow');
+    expect(next.characters.find(c => c.id === 'Marlow')!.voiceState).toBe('tuned');
+  });
+
+  it('is a no-op when the payload is missing characters', () => {
+    const start = baseState([makeChar('Wren')]);
+    const next = castSlice.reducer(start, castActions.applyMerge({
+      characters: undefined as unknown as Character[],
+    }));
+    expect(next.characters).toEqual(start.characters);
+  });
+});

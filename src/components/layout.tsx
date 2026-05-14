@@ -394,6 +394,15 @@ export function Layout() {
         <ProfileDrawer
           character={profileCharacter}
           voice={profileVoice ?? undefined}
+          mergeCandidates={bookId ? characters.filter(c => c.id !== profileCharacter.id) : undefined}
+          onMerge={bookId ? async (sourceId, targetId) => {
+            const res = await api.mergeCharacters({ bookId, sourceId, targetId });
+            dispatch(castActions.applyMerge({ characters: res.characters }));
+            /* Source character has just disappeared from the cast — drop the
+               drawer so React doesn't try to render a profile for a missing
+               id on the next pass. */
+            dispatch(uiActions.setOpenProfileId(null));
+          } : undefined}
           onClose={() => dispatch(uiActions.setOpenProfileId(null))}
           onSave={(updated, meta) => {
             dispatch(castActions.setCharacters(characters.map(c => c.id === updated.id ? updated : c)));
