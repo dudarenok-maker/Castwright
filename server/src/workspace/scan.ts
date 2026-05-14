@@ -16,6 +16,7 @@ import {
   stateJsonPath,
 } from './paths.js';
 import { readJson } from './state-io.js';
+import { loadAnalysisCache } from '../store/analysis-cache.js';
 
 export type LibraryBookStatus =
   | 'not_analysed'
@@ -239,16 +240,50 @@ async function scanBook(author: string, series: string, title: string): Promise<
   }
   const runtime = totalSec > 0 ? formatRuntime(totalSec) : undefined;
 
+  /* An empty or malformed cast.json (characters: []) is NOT a confirmable
+     cast — the analysis either didn't finish, was reset, or produced no
+     characters. Treat it as if cast.json weren't there, so the status falls
+     back to 'analysing' instead of stranding the book at the misleading
+     'Cast confirmation' badge with no characters behind it. */
+  const hasUsableCast = hasCast && castCharacterCount > 0;
+
+  /* Per-chapter analysis cache (server/handoff/cache/{manuscriptId}.json)
+     records each chapter as Phase 1 completes. If the analysis aborted
+     halfway — rate limit, crash, the user closed the tab mid-stream and
+     came back — cast.json may already exist with characters even though
+     some chapters never ran. Cross-check the cache against the active
+     (non-excluded) chapter list so the badge surfaces 'analysing' until
+     every chapter is actually analysed; that's the signal the resume
+     button needs to be honest about what's still pending. */
+  let analysedChapterCount = 0;
+  if (state?.manuscriptId) {
+    try {
+      const cache = await loadAnalysisCache(state.manuscriptId);
+      const cachedIds = new Set(Object.keys(cache.chapters ?? {}).map(k => Number(k)));
+      for (const ch of activeChapters) {
+        if (cachedIds.has(ch.id)) analysedChapterCount += 1;
+      }
+    } catch { /* missing/corrupt cache → treat as nothing analysed */ }
+  }
+  const analysisComplete = chapterCount === 0 || analysedChapterCount >= chapterCount;
+
   let status: LibraryBookStatus;
   if (unreadable) status = 'unreadable';
   else if (hasState && !manuscriptFile) status = 'orphaned';
   else if (!hasState && manuscriptFile) status = 'not_analysed';
-  else if (state && !hasCast) status = 'analysing';
-  else if (state && hasCast && !state.castConfirmed) status = 'cast_pending';
-  else if (state && hasCast && state.castConfirmed && completedChapters < chapterCount) status = 'generating';
+  else if (state && (!hasUsableCast || !analysisComplete)) status = 'analysing';
+  else if (state && !state.castConfirmed) status = 'cast_pending';
+  else if (state && state.castConfirmed && completedChapters < chapterCount) status = 'generating';
   else status = 'complete';
 
-  const progress = chapterCount > 0 ? completedChapters / chapterCount : 0;
+  /* Distinct progress signals for the two intermediate states:
+       - 'analysing' shows analysed chapters / total (matches the analysing
+         view's per-chapter ticks),
+       - 'generating' shows synthesised chapters / total (audio files on
+         disk). Mixing them confused users who saw "Reading manuscript…
+         60%" on a book that had 60% of audio files but 0% of analysis. */
+  const analysingProgress = chapterCount > 0 ? analysedChapterCount / chapterCount : 0;
+  const generatingProgress = chapterCount > 0 ? completedChapters / chapterCount : 0;
 
   return {
     bookId,
@@ -263,7 +298,9 @@ async function scanBook(author: string, series: string, title: string): Promise<
     completedChapters,
     characterCount: castCharacterCount,
     voiceCount: castVoiceCount,
-    progress: status === 'generating' || status === 'analysing' ? progress : undefined,
+    progress: status === 'analysing' ? analysingProgress
+            : status === 'generating' ? generatingProgress
+            : undefined,
     runtime,
     lastWorkedOn,
     coverGradient,
