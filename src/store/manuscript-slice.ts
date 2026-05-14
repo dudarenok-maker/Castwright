@@ -49,23 +49,32 @@ export const manuscriptSlice = createSlice({
        On first hydrate (manuscriptId still null, state holds the demo
        fixture) replace wholesale. On re-analysis (manuscriptId already set,
        state holds the user's edited sentences from disk hydration or live
-       edits) preserve every sentence whose id matches an incoming one —
-       this carries forward setSentenceCharacter / setSentencesCharacter
-       reassignments. Sentences in state but NOT in incoming (typical for
-       splitSentence offsprings, whose ids are assigned above the analyzer's
-       max) are kept in narrative position. Sentences in incoming but NOT
-       in state are appended. Without the merge a confirm → reanalyse cycle
-       would silently stomp the user's manuscript edits. */
+       edits) preserve every sentence whose (chapterId, id) matches an
+       incoming one — this carries forward setSentenceCharacter /
+       setSentencesCharacter reassignments. Sentences in state but NOT in
+       incoming (typical for splitSentence offsprings, whose ids are
+       assigned above the analyzer's max) are kept in narrative position.
+       Sentences in incoming but NOT in state are appended. Without the
+       merge a confirm → reanalyse cycle would silently stomp the user's
+       manuscript edits.
+
+       Keying by (chapterId, id) rather than id alone is load-bearing:
+       sentence ids restart at 1 in every chapter, so a single-id key
+       collapsed all sentences with id=N from earlier chapters onto the
+       LAST chapter that owned that id — chapter 1's content vanished
+       and the final chapter accumulated copies of every prior chapter
+       starting at sentence 1. */
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
       const incoming = a.payload.sentences as unknown as Sentence[] | undefined;
       if (!incoming?.length) return;
       if (s.manuscriptId === null) { s.sentences = incoming; return; }
 
-      const incomingById = new Map<number, Sentence>(incoming.map(x => [x.id, x]));
-      const stateIds = new Set<number>(s.sentences.map(x => x.id));
+      const key = (x: Sentence) => `${x.chapterId}:${x.id}`;
+      const incomingByKey = new Map<string, Sentence>(incoming.map(x => [key(x), x]));
+      const stateKeys = new Set<string>(s.sentences.map(key));
       const merged: Sentence[] = [];
       for (const x of s.sentences) {
-        const inc = incomingById.get(x.id);
+        const inc = incomingByKey.get(key(x));
         if (inc) {
           /* Sentence still exists in the new analysis. Refresh fields from
              incoming but preserve characterId (the user's reassignment) and
@@ -80,7 +89,7 @@ export const manuscriptSlice = createSlice({
         }
       }
       for (const inc of incoming) {
-        if (!stateIds.has(inc.id)) merged.push(inc);
+        if (!stateKeys.has(key(inc))) merged.push(inc);
       }
       s.sentences = merged;
     },

@@ -245,6 +245,43 @@ describe('manuscriptSlice — hydrateFromAnalysis merge', () => {
     expect(next.sentences.map(s => s.id)).toEqual([1, 2]);
   });
 
+  it('keeps per-chapter sentence ids distinct when ids repeat across chapters', () => {
+    /* Regression for the "whole book under the last chapter" bug. The
+       analyzer restarts sentence ids at 1 in every chapter, so a merge
+       that dedupes by id alone collapses every id=N onto whichever
+       chapter is iterated last. Symptom: chapter 1 went empty in the
+       manuscript view because all its sentences got reassigned the
+       final chapter's chapterId. */
+    const start = { ...baseState(sentences([
+      { id: 1, chapterId: 1, text: 'ch1-s1-old', characterId: 'narrator' },
+      { id: 2, chapterId: 1, text: 'ch1-s2-old', characterId: 'eliza' },
+      { id: 1, chapterId: 2, text: 'ch2-s1-old', characterId: 'narrator' },
+      { id: 2, chapterId: 2, text: 'ch2-s2-old', characterId: 'halloran' },
+    ])), manuscriptId: 'mns_open' };
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.hydrateFromAnalysis({
+        sentences: sentences([
+          { id: 1, chapterId: 1, text: 'ch1-s1-new', characterId: 'narrator' },
+          { id: 2, chapterId: 1, text: 'ch1-s2-new', characterId: 'narrator' },
+          { id: 1, chapterId: 2, text: 'ch2-s1-new', characterId: 'narrator' },
+          { id: 2, chapterId: 2, text: 'ch2-s2-new', characterId: 'narrator' },
+        ]),
+      } as unknown as import('../lib/types').AnalyseResponse),
+    );
+    expect(next.sentences).toHaveLength(4);
+    expect(next.sentences.map(s => ({ chapterId: s.chapterId, id: s.id }))).toEqual([
+      { chapterId: 1, id: 1 },
+      { chapterId: 1, id: 2 },
+      { chapterId: 2, id: 1 },
+      { chapterId: 2, id: 2 },
+    ]);
+    // User's per-chapter characterId edits all preserved (not stomped by collapse).
+    expect(next.sentences.map(s => s.characterId)).toEqual([
+      'narrator', 'eliza', 'narrator', 'halloran',
+    ]);
+  });
+
   it('is a no-op when the analysis returned no sentences', () => {
     const start = { ...baseState(sentences([
       { id: 1, text: 'a', characterId: 'narrator' },
