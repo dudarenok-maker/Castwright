@@ -7,6 +7,7 @@ import type { SidecarHealth } from '../lib/api';
 import {
   SectionLabel, MixedHeading, Pill, ColorDot,
 } from '../components/primitives';
+import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import { useAppDispatch, useAppSelector } from '../store';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { api } from '../lib/api';
@@ -190,19 +191,89 @@ export function GenerationView({
      process even up?" without waiting for a chapter to actually fail. Poll
      every 30s while we're on this view, plus an immediate re-check whenever
      a stream-level error lands (it's the single most useful diagnostic
-     follow-up after `chapter_failed`). */
+     follow-up after `chapter_failed`). When the user clicks Load/Stop on
+     the pill we re-probe immediately so the state flips visibly. */
   const [sidecarHealth, setSidecarHealth] = useState<SidecarHealth | null>(null);
+  const [healthProbeKey, setHealthProbeKey] = useState(0);
+  /* Pending UI override — set immediately on a Load/Stop click so the pill
+     reports the intended next state while /health catches up. Cleared on the
+     next probe that confirms the transition. */
+  const [pendingPillState, setPendingPillState] = useState<ModelControlState | null>(null);
+  /* Inline banner copy shown when the auto-evict flow fires. Kept local to
+     this view rather than a global toast slice — see CLAUDE.md note about
+     not building scaffolding the user can't see. */
+  const [evictionNotice, setEvictionNotice] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     const probe = () => {
       api.getSidecarHealth()
-        .then(h => { if (!cancelled) setSidecarHealth(h); })
-        .catch(() => { if (!cancelled) setSidecarHealth({ status: 'unreachable', url: '', error: 'Probe failed.' }); });
+        .then(h => {
+          if (cancelled) return;
+          setSidecarHealth(h);
+          setPendingPillState(null);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setSidecarHealth({ status: 'unreachable', url: '', error: 'Probe failed.' });
+          setPendingPillState(null);
+        });
     };
     probe();
     const id = setInterval(probe, 30_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [lastError]);
+  }, [lastError, healthProbeKey]);
+
+  const ttsPillState: ModelControlState = (() => {
+    if (pendingPillState) return pendingPillState;
+    if (!sidecarHealth) return 'idle';
+    if (sidecarHealth.status === 'unreachable') return 'unreachable';
+    if (sidecarHealth.loading) return 'loading';
+    if (sidecarHealth.modelLoaded) return 'ready';
+    return 'idle';
+  })();
+
+  const handleLoadTts = async () => {
+    setPendingPillState('loading');
+    setEvictionNotice(null);
+    /* Auto-evict the analyzer before warming TTS — both models compete for
+       the same VRAM on a single-GPU box. If the analyzer wasn't loaded the
+       call is a cheap no-op on Ollama's side; either way we surface a
+       banner only when the unload actually freed something so we don't
+       lie about state. */
+    let analyzerWasLoaded = false;
+    try {
+      const ollama = await api.getOllamaHealth();
+      analyzerWasLoaded = ollama.status === 'reachable' && (ollama.models?.length ?? 0) > 0;
+    } catch {
+      /* If the analyzer health probe fails we still try to unload — Ollama
+         might be reachable for /api/generate even if /api/tags is flaky. */
+    }
+    try {
+      await api.unloadAnalyzer();
+      if (analyzerWasLoaded) {
+        setEvictionNotice('Analyzer unloaded to free VRAM for TTS.');
+      }
+    } catch {
+      /* Ollama down or no model loaded — proceed with TTS load anyway. */
+    }
+    try {
+      await api.loadSidecar();
+    } catch {
+      /* Surface as unreachable on the next probe cycle. */
+    }
+    setHealthProbeKey(k => k + 1);
+  };
+
+  const handleStopTts = async () => {
+    setPendingPillState('idle');
+    setEvictionNotice(null);
+    try {
+      await api.unloadSidecar();
+    } catch {
+      /* Probe will reconcile. */
+    }
+    setHealthProbeKey(k => k + 1);
+  };
 
   /* Sub-chapter "lines synthesised" counter so the user has a tangible
      "something is happening" signal at every tick (real backend emits one
@@ -244,8 +315,20 @@ export function GenerationView({
           )}
           <p className="mt-1 text-xs text-ink/50 inline-flex items-center gap-2 flex-wrap">
             <span>Engine: <span className="font-medium text-ink/70">{engineLabel}</span></span>
-            {sidecarHealth && <SidecarStatusPill health={sidecarHealth}/>}
+            <ModelControlPill
+              kind="tts"
+              state={ttsPillState}
+              unreachableLabel="Sidecar process not running"
+              onLoad={handleLoadTts}
+              onStop={handleStopTts}
+            />
           </p>
+          {evictionNotice && (
+            <p className="mt-2 inline-flex items-center gap-2 text-[11px] text-emerald-700">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>
+              {evictionNotice}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-3">
           {/* Once the queue is fully drained the Pause/Resume toggle has
@@ -354,28 +437,6 @@ export function GenerationView({
         </div>
       </div>
     </div>
-  );
-}
-
-function SidecarStatusPill({ health }: { health: SidecarHealth }) {
-  const reachable = health.status === 'reachable';
-  /* User-facing copy: "Sidecar" is implementation jargon — the user thinks in
-     terms of "is the model up so I can generate". Tooltip keeps the technical
-     URL for diagnostics. Two states; the in-between "slow / loading" is
-     intentionally folded into unavailable for now — both block synthesis from
-     the user's perspective, and the timeout copy in the tooltip explains it. */
-  return (
-    <span
-      title={health.error || (reachable ? `Local TTS reachable at ${health.url}` : 'Local TTS process not reachable')}
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-        reachable
-          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-          : 'bg-rose-50 text-rose-700 border border-rose-200'
-      }`}
-    >
-      <span className={`w-1.5 h-1.5 rounded-full ${reachable ? 'bg-emerald-500' : 'bg-rose-500'}`}/>
-      {reachable ? 'Model ready' : 'Model unavailable'}
-    </span>
   );
 }
 

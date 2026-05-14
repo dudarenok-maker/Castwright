@@ -915,6 +915,27 @@ export interface SidecarHealth {
   url: string;
   engines?: string[];
   error?: string;
+  /* Load-state surface added when the sidecar grew /load + /unload endpoints
+     (see server/tts-sidecar/main.py). Older sidecars don't ship these, so
+     the proxy defaults them to `false` / `null` and the UI can treat them
+     as authoritative. */
+  modelLoaded?: boolean;
+  loading?: boolean;
+  device?: string | null;
+}
+
+export interface OllamaHealth {
+  status: 'reachable' | 'unreachable';
+  url: string;
+  models?: string[];
+  expectedModel?: string;
+  modelPulled?: boolean;
+  error?: string;
+}
+
+export interface ModelControlResult {
+  status: 'ready' | 'idle' | 'unloaded' | 'error';
+  error?: string;
 }
 
 export interface WorkspaceInfo {
@@ -1022,7 +1043,83 @@ async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   /* Mocks pretend everything's healthy — generation is local and synchronous
      under VITE_USE_MOCKS=true, so there's no real sidecar to probe. */
   await wait(80);
-  return { status: 'reachable', url: '(mock)', engines: ['coqui', 'gemini'] };
+  return {
+    status: 'reachable',
+    url: '(mock)',
+    engines: ['coqui', 'gemini'],
+    modelLoaded: MOCK_SIDECAR_MODEL_LOADED,
+    loading: false,
+    device: MOCK_SIDECAR_MODEL_LOADED ? 'cuda' : null,
+  };
+}
+
+/* In-memory model state for the mock path — flipped by mockLoadSidecar /
+   mockUnloadSidecar so the in-app Load/Stop pill round-trips visibly under
+   VITE_USE_MOCKS=true. */
+let MOCK_SIDECAR_MODEL_LOADED = false;
+let MOCK_OLLAMA_MODEL_LOADED = false;
+
+async function realLoadSidecar(): Promise<ModelControlResult> {
+  const res = await fetch('/api/sidecar/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  return (await res.json().catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
+}
+
+async function realUnloadSidecar(): Promise<ModelControlResult> {
+  const res = await fetch('/api/sidecar/unload', { method: 'POST' });
+  return (await res.json().catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
+}
+
+async function realLoadAnalyzer(): Promise<ModelControlResult> {
+  const res = await fetch('/api/ollama/load', { method: 'POST' });
+  return (await res.json().catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
+}
+
+async function realUnloadAnalyzer(): Promise<ModelControlResult> {
+  const res = await fetch('/api/ollama/unload', { method: 'POST' });
+  return (await res.json().catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
+}
+
+async function realGetOllamaHealth(): Promise<OllamaHealth> {
+  const res = await fetch('/api/ollama/health');
+  if (!res.ok) {
+    return { status: 'unreachable', url: '', error: `Ollama probe HTTP ${res.status}` };
+  }
+  return res.json();
+}
+
+async function mockLoadSidecar(): Promise<ModelControlResult> {
+  await wait(60);
+  MOCK_SIDECAR_MODEL_LOADED = true;
+  return { status: 'ready' };
+}
+
+async function mockUnloadSidecar(): Promise<ModelControlResult> {
+  await wait(40);
+  MOCK_SIDECAR_MODEL_LOADED = false;
+  return { status: 'idle' };
+}
+
+async function mockLoadAnalyzer(): Promise<ModelControlResult> {
+  await wait(60);
+  MOCK_OLLAMA_MODEL_LOADED = true;
+  return { status: 'ready' };
+}
+
+async function mockUnloadAnalyzer(): Promise<ModelControlResult> {
+  await wait(40);
+  MOCK_OLLAMA_MODEL_LOADED = false;
+  return { status: 'unloaded' };
+}
+
+async function mockGetOllamaHealth(): Promise<OllamaHealth> {
+  await wait(60);
+  return {
+    status: 'reachable',
+    url: '(mock)',
+    models: MOCK_OLLAMA_MODEL_LOADED ? ['qwen3.5:4b'] : [],
+    expectedModel: 'qwen3.5:4b',
+    modelPulled: true,
+  };
 }
 
 /* Chapter audio + revisions polling stay mocked for now — both belong to the
@@ -1048,6 +1145,11 @@ const real = {
   getVoiceSample:    realGetVoiceSample,
   streamGeneration:  realStreamGeneration,
   getSidecarHealth:  realGetSidecarHealth,
+  getOllamaHealth:   realGetOllamaHealth,
+  loadSidecar:       realLoadSidecar,
+  unloadSidecar:     realUnloadSidecar,
+  loadAnalyzer:      realLoadAnalyzer,
+  unloadAnalyzer:    realUnloadAnalyzer,
   getWorkspaceInfo:  realGetWorkspaceInfo,
   getWorkspaceChangelog: realGetWorkspaceChangelog,
   getChapterAudio:   async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
@@ -1089,6 +1191,11 @@ const mock = {
   getVoiceSample:    mockGetVoiceSample,
   streamGeneration:  mockStreamGeneration,
   getSidecarHealth:  mockGetSidecarHealth,
+  getOllamaHealth:   mockGetOllamaHealth,
+  loadSidecar:       mockLoadSidecar,
+  unloadSidecar:     mockUnloadSidecar,
+  loadAnalyzer:      mockLoadAnalyzer,
+  unloadAnalyzer:    mockUnloadAnalyzer,
   getWorkspaceInfo:  mockGetWorkspaceInfo,
   getWorkspaceChangelog: mockGetWorkspaceChangelog,
   getChapterAudio:   mockGetChapterAudio,

@@ -97,17 +97,18 @@ the canonical recipe.
 - Align the `Sentence` shape with the OpenAPI spec (currently the fixtures use
   `{ id: string, charId, text }` while the spec uses `{ id: number, characterId,
   chapterId, text }`).
-- **Local analysis model** — today the analyzer pipeline (Phase 0a cast
-  detection + Phase 1 sentence attribution) is wired exclusively to the
-  Gemini API (free tier on Gemma 4 31B / Gemini 2.x/3 Flash). That ties
-  big-book throughput to Google's quota + per-minute rate limits and
-  occasionally to TTFT spikes that make a 100-char chapter take five
-  minutes. Goal: add a local-LLM analyzer (e.g. llama.cpp / Ollama with a
-  capable instruct model, or the same XTTS-style sidecar pattern with a
-  text model loaded on the GPU) so the whole text-analysis path can run
-  offline. Same `Analyzer` interface (`runStage1Chapter`,
-  `runStage2Chapter`) — drop in a new implementation behind
-  `selectAnalyzer()` and remove the `GEMINI_API_KEY` hard requirement.
+- **Model lifecycle is button-driven, not eager** — both local models
+  (TTS sidecar XTTS v2 + analyzer Ollama qwen3.5:4b) are loaded on
+  demand via the in-app Load / Stop pill (`ModelControlPill` in
+  `src/components/`). The TTS sidecar defaults `PRELOAD_COQUI=0`
+  (`server/tts-sidecar/main.py`) so its port comes up in ~2 s with no
+  model loaded; analyzer Ollama always lazy-loaded. Loading either model
+  auto-evicts the other (with an inline "TTS / Analyzer unloaded to
+  free VRAM" banner) so an 8 GB GPU can comfortably hold one model
+  resident at a time. Endpoints: `POST /api/sidecar/{load,unload}`
+  (60 s / 2 s budgets), `POST /api/ollama/{load,unload}` (uses Ollama's
+  `keep_alive` idiom, see `server/src/analyzer/ollama.ts:92` for the
+  equivalent in-band evict on real chat calls).
 
 ## Commit gate
 Two-tier automated test gate, enforced by husky hooks in `.husky/`:

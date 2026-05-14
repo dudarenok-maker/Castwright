@@ -1,0 +1,151 @@
+/* ModelControlPill — state→label and click→handler contract.
+
+   This component is the only path users have to surface the in-app Load /
+   Stop affordances for the TTS sidecar (Generate screen) and the analyzer
+   LLM (Analysing screen). If the action button mis-routes (e.g. Stop wired
+   to the load handler), the user can't free GPU memory without killing
+   processes — which is exactly the failure mode this whole change exists
+   to fix. */
+
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { ModelControlPill, type ModelControlState } from './ModelControlPill';
+
+function makeHandlers() {
+  return { onLoad: vi.fn(), onStop: vi.fn() };
+}
+
+describe('ModelControlPill — label per state', () => {
+  it.each<[ModelControlState, RegExp]>([
+    ['idle',        /TTS model idle/i],
+    ['loading',     /loading tts model/i],
+    ['ready',       /TTS model ready/i],
+    ['unreachable', /TTS model unavailable/i],
+  ])('renders the canonical label for state %s', (state, labelRegex) => {
+    const { onLoad, onStop } = makeHandlers();
+    render(<ModelControlPill kind="tts" state={state} onLoad={onLoad} onStop={onStop}/>);
+    expect(screen.getByText(labelRegex)).toBeInTheDocument();
+  });
+
+  it('uses the analyzer noun when kind="analyzer"', () => {
+    const { onLoad, onStop } = makeHandlers();
+    render(<ModelControlPill kind="analyzer" state="ready" onLoad={onLoad} onStop={onStop}/>);
+    expect(screen.getByText(/Analyzer ready/i)).toBeInTheDocument();
+  });
+
+  it('renders the streaming detail row when state is streaming', () => {
+    /* HeartbeatRow on analysing.tsx feeds the same byte/throughput numbers
+       into this prop — the pill exposes them so a user glancing at the
+       status indicator gets the streaming signal without needing the
+       fuller HeartbeatRow below. */
+    const { onLoad, onStop } = makeHandlers();
+    render(
+      <ModelControlPill
+        kind="analyzer"
+        state="streaming"
+        streamingDetail={{ sizeText: '12.4 KB', charsPerSec: 280, sinceLastSec: 2 }}
+        onLoad={onLoad}
+        onStop={onStop}
+      />
+    );
+    expect(screen.getByText(/streaming live/i)).toBeInTheDocument();
+    expect(screen.getByText(/12\.4 KB/)).toBeInTheDocument();
+    expect(screen.getByText(/280 chars\/s/)).toBeInTheDocument();
+  });
+
+  it('flips the streaming label to "stalled" when sinceLastSec exceeds 8s', () => {
+    /* Stall detection mirrors HeartbeatRow's 8s threshold — they should
+       agree visually so the pill and the row don't disagree about whether
+       the analyzer is hung. */
+    const { onLoad, onStop } = makeHandlers();
+    render(
+      <ModelControlPill
+        kind="analyzer"
+        state="streaming"
+        streamingDetail={{ sizeText: '40 KB', charsPerSec: 0, sinceLastSec: 12 }}
+        onLoad={onLoad}
+        onStop={onStop}
+      />
+    );
+    expect(screen.getByText(/stalled · last chunk 12s ago/i)).toBeInTheDocument();
+  });
+
+  it('honours an explicit unreachableLabel override', () => {
+    /* The Generate screen uses "Sidecar unreachable" (process-level), the
+       Analysing screen uses "Ollama unreachable" (daemon-level). Both should
+       be possible without a kind-aware branch inside the component. */
+    const { onLoad, onStop } = makeHandlers();
+    render(
+      <ModelControlPill
+        kind="tts"
+        state="unreachable"
+        unreachableLabel="Sidecar process not running"
+        onLoad={onLoad}
+        onStop={onStop}
+      />
+    );
+    expect(screen.getByText('Sidecar process not running')).toBeInTheDocument();
+  });
+});
+
+describe('ModelControlPill — action routing', () => {
+  it('fires onLoad when the button reads "Load model"', () => {
+    const { onLoad, onStop } = makeHandlers();
+    render(<ModelControlPill kind="tts" state="idle" onLoad={onLoad} onStop={onStop}/>);
+    fireEvent.click(screen.getByRole('button', { name: /load model/i }));
+    expect(onLoad).toHaveBeenCalledTimes(1);
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it('fires onStop when the model is ready and the user clicks Stop', () => {
+    const { onLoad, onStop } = makeHandlers();
+    render(<ModelControlPill kind="tts" state="ready" onLoad={onLoad} onStop={onStop}/>);
+    fireEvent.click(screen.getByRole('button', { name: /stop/i }));
+    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(onLoad).not.toHaveBeenCalled();
+  });
+
+  it('disables the action while loading is in flight (no double-load)', () => {
+    /* Without this guard, a user clicking Load twice in quick succession
+       would queue two POSTs to /api/sidecar/load — the sidecar serialises
+       them but the second one would still pay the lock wait, surfacing as
+       a "stuck Loading…" pill that doesn't match what the box is doing. */
+    const { onLoad, onStop } = makeHandlers();
+    render(<ModelControlPill kind="tts" state="loading" onLoad={onLoad} onStop={onStop}/>);
+    const btn = screen.getByRole('button', { name: /loading/i });
+    expect(btn).toBeDisabled();
+    fireEvent.click(btn);
+    expect(onLoad).not.toHaveBeenCalled();
+  });
+
+  it('disables Stop while a stream is in flight to prevent orphaning the analysis run', () => {
+    /* Killing the analyzer model mid-stream leaves Ollama with a dangling
+       generate call. Worse, the SSE on the frontend hits its keepalive
+       timeout and lands in `chapter_failed` with no useful message. We
+       hide that footgun by disabling the button while the stream is live. */
+    const { onLoad, onStop } = makeHandlers();
+    render(
+      <ModelControlPill
+        kind="analyzer"
+        state="streaming"
+        streamingDetail={{ sizeText: '4 KB', charsPerSec: 200, sinceLastSec: 1 }}
+        onLoad={onLoad}
+        onStop={onStop}
+      />
+    );
+    const btn = screen.getByRole('button', { name: /stop/i });
+    expect(btn).toBeDisabled();
+    fireEvent.click(btn);
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it('re-runs onLoad when the user clicks Retry from unreachable', () => {
+    /* Unreachable should not be a dead end — the user lifts the sidecar
+       back up (or starts Ollama) and clicks Retry, which is the same
+       semantics as Load: warm the model. */
+    const { onLoad, onStop } = makeHandlers();
+    render(<ModelControlPill kind="tts" state="unreachable" onLoad={onLoad} onStop={onStop}/>);
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    expect(onLoad).toHaveBeenCalledTimes(1);
+  });
+});

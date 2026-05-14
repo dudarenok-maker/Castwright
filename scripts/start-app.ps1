@@ -144,8 +144,12 @@ foreach ($svc in $toStart) {
 # IPv4-first resolution of "localhost" connects immediately; the IPv6/IPv4
 # probe-agnosticism here is belt-and-braces in case that ever changes.
 
-# XTTS cold-start on first run can take ~60-120s (model load). Be generous.
-$timeoutSec = 240
+# Port-readiness no longer includes the XTTS model load. The sidecar now
+# defaults PRELOAD_COQUI=0 (see server/tts-sidecar/main.py) — uvicorn
+# binds :9000 in ~2s with the model unloaded, and the in-app Load button
+# warms XTTS on demand. 60s is generous for fresh npm install + tsx
+# warm-up; anyone who flips PRELOAD_COQUI=1 should bump this back up.
+$timeoutSec = 60
 $deadline   = (Get-Date).AddSeconds($timeoutSec)
 $pending    = @($services | ForEach-Object { $_.Name })
 $ready      = @{}

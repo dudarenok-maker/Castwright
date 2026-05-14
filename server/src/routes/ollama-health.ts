@@ -21,6 +21,11 @@ interface OllamaTagsResponse {
   models?: Array<{ name?: string; model?: string }>;
 }
 
+/* Warming a cold Ollama model (e.g. qwen3.5:4b ~3 GB) into VRAM takes
+   ~5-15s depending on disk + GPU; unloading is near-instant. Give /load a
+   30s ceiling, but keep /unload on the 2s probe budget. */
+const LOAD_TIMEOUT_MS = 30_000;
+
 ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
   const url = getResolvedOllamaUrl();
   const expectedModel = getResolvedOllamaModel();
@@ -72,4 +77,84 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
         : err.message || 'Ollama fetch failed.',
     });
   }
+});
+
+/* Ollama doesn't expose a dedicated load/unload pair — instead it interprets
+   `keep_alive` on /api/generate as the eviction TTL for the loaded model.
+   - `keep_alive: "5m"` + empty prompt = warm the model into VRAM and hold it.
+   - `keep_alive: 0` + empty prompt = unload immediately.
+   This is exactly the idiom keepAliveFor() at analyzer/ollama.ts:92 already
+   uses on real analyzer calls; these endpoints just expose it as explicit
+   manual control for the in-app Load/Stop pill. */
+
+async function callOllamaGenerate(
+  url: string,
+  body: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<{ ok: boolean; status: number; error?: string }> {
+  const target = `${url}/api/generate`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const upstream = await fetch(target, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    clearTimeout(timer);
+    if (!upstream.ok) {
+      const text = await upstream.text().catch(() => '');
+      return { ok: false, status: upstream.status, error: `Ollama returned ${upstream.status} ${upstream.statusText}: ${text}`.trim() };
+    }
+    /* Drain the body — Ollama streams an NDJSON tail even for empty-prompt
+       requests, and leaving it unread keeps the socket half-open. */
+    await upstream.text().catch(() => '');
+    return { ok: true, status: upstream.status };
+  } catch (e) {
+    clearTimeout(timer);
+    const err = e as { name?: string; message?: string };
+    const isTimeout = err.name === 'AbortError';
+    return {
+      ok: false,
+      status: 503,
+      error: isTimeout
+        ? `Ollama did not respond within ${timeoutMs}ms.`
+        : err.message || 'Ollama request failed.',
+    };
+  }
+}
+
+/* POST /api/ollama/load — warm the configured analyzer model into VRAM so
+   the next analysis run skips the cold-load tax. Used by the Analysing
+   screen's Load button. */
+ollamaHealthRouter.post('/load', async (_req: Request, res: Response) => {
+  const url = getResolvedOllamaUrl();
+  const model = getResolvedOllamaModel();
+  const result = await callOllamaGenerate(
+    url,
+    { model, prompt: '', keep_alive: '5m', stream: false },
+    LOAD_TIMEOUT_MS,
+  );
+  if (!result.ok) {
+    return res.status(result.status).json({ status: 'error', error: result.error });
+  }
+  return res.json({ status: 'ready' });
+});
+
+/* POST /api/ollama/unload — evict the configured analyzer model from VRAM.
+   Used by both the Analysing-screen Stop button and the Generate-screen
+   auto-evict flow (loading TTS calls this first to free GPU memory). */
+ollamaHealthRouter.post('/unload', async (_req: Request, res: Response) => {
+  const url = getResolvedOllamaUrl();
+  const model = getResolvedOllamaModel();
+  const result = await callOllamaGenerate(
+    url,
+    { model, prompt: '', keep_alive: 0, stream: false },
+    PROBE_TIMEOUT_MS,
+  );
+  if (!result.ok) {
+    return res.status(result.status).json({ status: 'error', error: result.error });
+  }
+  return res.json({ status: 'unloaded' });
 });

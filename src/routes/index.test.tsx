@@ -47,6 +47,17 @@ vi.mock('../lib/api', () => ({
     getLibrary: () => getLibraryMock(),
     deleteBook: (bookId: string) => deleteBookMock(bookId),
     getWorkspaceInfo: () => getWorkspaceInfoMock(),
+    /* Local-model lifecycle stubs — AnalysingView polls /api/ollama/health
+       when the selected analyzer is a local Ollama model (which is the
+       default — MODEL_OPTIONS[0] is qwen3.5:4b). These tests only care
+       about manuscriptId derivation, so resolve the probe to a benign
+       reachable shape and no-op the load/unload calls. */
+    getOllamaHealth:   () => Promise.resolve({ status: 'reachable', url: '(test)', models: [], expectedModel: 'qwen3.5:4b', modelPulled: false }),
+    getSidecarHealth:  () => Promise.resolve({ status: 'unreachable', url: '(test)' }),
+    loadSidecar:       () => Promise.resolve({ status: 'idle' }),
+    unloadSidecar:     () => Promise.resolve({ status: 'idle' }),
+    loadAnalyzer:      () => Promise.resolve({ status: 'ready' }),
+    unloadAnalyzer:    () => Promise.resolve({ status: 'unloaded' }),
   },
   AnalysisError: class extends Error {
     code = 'unknown';

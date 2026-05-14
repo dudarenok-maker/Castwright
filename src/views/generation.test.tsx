@@ -13,6 +13,11 @@ import { GenerationView } from './generation';
 import type { Chapter, Character, Sentence } from '../lib/types';
 
 const streamGenerationMock = vi.fn();
+const unloadAnalyzerSpy = vi.fn();
+const loadSidecarSpy = vi.fn();
+const unloadSidecarSpy = vi.fn();
+const getOllamaHealthSpy = vi.fn();
+const getSidecarHealthSpy = vi.fn();
 
 vi.mock('../lib/api', () => ({
   /* Never-resolving so the ChapterSegmentStrip useEffect doesn't flush a
@@ -26,9 +31,27 @@ vi.mock('../lib/api', () => ({
     /* Sidecar status pill polls this on mount. Resolve with a happy status
        so the pill renders the green variant without spamming console
        warnings during the test render. */
-    getSidecarHealth: () => Promise.resolve({ status: 'reachable', url: '(test)' }),
+    getSidecarHealth: () => getSidecarHealthSpy(),
+    /* The Generate-screen Load TTS button checks analyzer health to decide
+       whether to surface the auto-evict banner — wire a controllable stub
+       so each test can simulate "analyzer loaded" vs "nothing to evict". */
+    getOllamaHealth:  () => getOllamaHealthSpy(),
+    loadSidecar:      () => { loadSidecarSpy(); return Promise.resolve({ status: 'ready' }); },
+    unloadSidecar:    () => { unloadSidecarSpy(); return Promise.resolve({ status: 'idle' }); },
+    loadAnalyzer:     () => Promise.resolve({ status: 'ready' }),
+    unloadAnalyzer:   () => { unloadAnalyzerSpy(); return Promise.resolve({ status: 'unloaded' }); },
   },
 }));
+
+beforeEach(() => {
+  unloadAnalyzerSpy.mockReset();
+  loadSidecarSpy.mockReset();
+  unloadSidecarSpy.mockReset();
+  getOllamaHealthSpy.mockReset();
+  getSidecarHealthSpy.mockReset();
+  getOllamaHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', models: [] });
+  getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
+});
 
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
@@ -552,5 +575,65 @@ describe('generationStreamMiddleware — Pause/Resume regenerate loop (regressio
 
     /* And after the open, the spec is drained so a later Resume can't replay it. */
     expect(store.getState().chapters.pendingRegen).toBe(null);
+  });
+});
+
+describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
+  /* This is the headline UX guarantee of the button-driven model lifecycle:
+     loading TTS frees VRAM from the analyzer first, with a banner so the
+     user knows the swap happened. Without it, on an 8 GB GPU the analyzer
+     (qwen3.5:4b ~3 GB) + XTTS (~3 GB) + headroom would OOM. */
+
+  async function findLoadTtsButton() {
+    /* Initial /api/sidecar/health probe runs on mount; once it resolves
+       to modelLoaded:false the pill flips from "loading" to "idle" and
+       the button label becomes "Load model". */
+    return screen.findByRole('button', { name: /load model \(tts model\)/i });
+  }
+
+  it('calls unloadAnalyzer before loadSidecar and surfaces the eviction banner when the analyzer was loaded', async () => {
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'], expectedModel: 'qwen3.5:4b', modelPulled: true,
+    });
+
+    renderView();
+    const loadBtn = await findLoadTtsButton();
+    fireEvent.click(loadBtn);
+
+    /* unloadAnalyzer must run before loadSidecar — otherwise both models
+       briefly share VRAM and the GPU OOMs on a tight box. */
+    await new Promise(r => setTimeout(r, 0));
+    expect(unloadAnalyzerSpy).toHaveBeenCalled();
+    expect(loadSidecarSpy).toHaveBeenCalled();
+    expect(unloadAnalyzerSpy.mock.invocationCallOrder[0])
+      .toBeLessThan(loadSidecarSpy.mock.invocationCallOrder[0]);
+
+    expect(await screen.findByText(/Analyzer unloaded to free VRAM/i)).toBeInTheDocument();
+  });
+
+  it('does not surface the banner when the analyzer had no model loaded', async () => {
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'reachable', url: '(test)', models: [], expectedModel: 'qwen3.5:4b', modelPulled: false,
+    });
+
+    renderView();
+    const loadBtn = await findLoadTtsButton();
+    fireEvent.click(loadBtn);
+
+    await new Promise(r => setTimeout(r, 0));
+    expect(loadSidecarSpy).toHaveBeenCalled();
+    expect(screen.queryByText(/Analyzer unloaded to free VRAM/i)).not.toBeInTheDocument();
+  });
+
+  it('calls unloadSidecar when the user clicks Stop', async () => {
+    getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: true });
+
+    renderView();
+    /* Pill state should be "ready" → button reads "Stop". */
+    const stopBtn = await screen.findByRole('button', { name: /stop \(tts model\)/i });
+    fireEvent.click(stopBtn);
+
+    await new Promise(r => setTimeout(r, 0));
+    expect(unloadSidecarSpy).toHaveBeenCalledTimes(1);
   });
 });
