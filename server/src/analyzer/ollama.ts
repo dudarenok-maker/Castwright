@@ -12,7 +12,8 @@
 
 import { writeFile } from 'node:fs/promises';
 import type { z } from 'zod';
-import { writeInbox, errorPath, type HandoffKey } from '../handoff/protocol.js';
+import { zodToJsonSchema } from 'zod-to-json-schema';
+import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../handoff/protocol.js';
 import {
   stage1Schema,
   stage1ChapterSchema,
@@ -56,6 +57,19 @@ interface OllamaOptions {
    fallback to Gemini. Anything else (HTTP 5xx, malformed body, validation
    failure) means the daemon is reachable but misbehaving — hard-fail. */
 const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'UND_ERR_SOCKET']);
+
+/* Default sampling temperature for /api/chat. Low enough that the model
+   sticks close to the schema and the system prompt's structural rules, but
+   not zero — pure-greedy decoding makes the validation-retry loop a no-op
+   because attempt 2 is just attempt 1 again. */
+export const DEFAULT_TEMPERATURE = 0.2;
+/* Retry temperature used exclusively when the first attempt failed with
+   `invalid-json` (vs. structural schema-validation). The replay-and-correct
+   pattern doesn't help there: at low temperature the model regenerates
+   near-identical bytes from the same prompt. Bumping to 0.6 + dropping the
+   broken assistant turn from the message list gives the sampler real room
+   to escape the failure path — see the kind-aware branch in runStage. */
+export const INVALID_JSON_RETRY_TEMPERATURE = 0.6;
 
 /* Models we want Ollama to hold in VRAM between back-to-back analysis
    calls. Stage 1 → Stage 2 → next chapter happens on a tight loop, and
@@ -124,6 +138,14 @@ export class OllamaAnalyzer implements Analyzer {
 
     const skill = await loadSkill(skillName);
     const systemInstruction = buildSystemInstruction(skill);
+    /* Convert the per-stage Zod schema into a JSON Schema for Ollama 0.5+
+       structured-output (constrained decoding). $refStrategy:'none' inlines
+       nested schemas (characterSchema inside stage1ChapterSchema, etc.) so
+       Ollama doesn't have to resolve $ref — safer across engine versions.
+       The resulting schema preserves .strict() as additionalProperties:false
+       and .min(1) as minItems:1, which is the whole point: the model can't
+       emit malformed JSON or extra fields by construction. */
+    const responseFormat = zodToJsonSchema(schema, { $refStrategy: 'none' });
 
     const start = Date.now();
     const tick = call.onWaiting
@@ -136,39 +158,73 @@ export class OllamaAnalyzer implements Analyzer {
           { role: 'system', content: systemInstruction },
           { role: 'user',   content: promptMd },
         ],
+        responseFormat,
+        DEFAULT_TEMPERATURE,
         call.onChunk,
       );
 
       const firstAttempt = parseAndValidate(firstText, schema);
       if (firstAttempt.ok) {
+        if (firstAttempt.repaired) {
+          console.warn(`[ollama] ${this.model} ${key} required JSON repair (unescaped quotes inside string value)`);
+        }
         await persistResponse(manuscriptId, key, firstText);
         return firstAttempt.value;
       }
 
-      // Retry once with the validation errors fed back as a follow-up turn.
+      /* First attempt failed. Preserve the raw text alongside the structured
+         error so a developer can inspect the exact bytes (e.g. byte 1365 in
+         a JSON parse failure) — schema-constrained decoding is supposed to
+         make this impossible, so when it happens we want forensics. */
+      await writeFile(rawAttemptPath(manuscriptId, key, 1), firstText, 'utf8');
       await writeFile(
         errorPath(manuscriptId, key),
         JSON.stringify({ kind: firstAttempt.kind, detail: firstAttempt.detail, attempt: 1 }, null, 2),
         'utf8',
       );
 
-      const followup = buildRetryMessage(firstAttempt);
+      /* Retry strategy depends on the failure mode:
+         - `schema-validation`: replay-and-correct works well. The model sees
+           its own structurally-near-miss output and a list of the offending
+           fields, and patches them in place at low temperature.
+         - `invalid-json`: replay-and-correct is counterproductive. Showing
+           the model its own broken bytes at temperature 0.2 nudges it to
+           regenerate near-identical bytes (we've observed both attempts
+           failing at the *same* byte position). Drop the assistant turn and
+           bump temperature so the sampler can escape the failure path. */
+      const isInvalidJson = firstAttempt.kind === 'invalid-json';
+      const retryMessages = isInvalidJson
+        ? [
+            { role: 'system' as const, content: systemInstruction },
+            { role: 'user'   as const, content: promptMd },
+          ]
+        : [
+            { role: 'system'    as const, content: systemInstruction },
+            { role: 'user'      as const, content: promptMd },
+            { role: 'assistant' as const, content: firstText },
+            { role: 'user'      as const, content: buildRetryMessage(firstAttempt) },
+          ];
+      const retryTemperature = isInvalidJson
+        ? INVALID_JSON_RETRY_TEMPERATURE
+        : DEFAULT_TEMPERATURE;
+
       const secondText = await this.chat(
-        [
-          { role: 'system',    content: systemInstruction },
-          { role: 'user',      content: promptMd },
-          { role: 'assistant', content: firstText },
-          { role: 'user',      content: followup },
-        ],
+        retryMessages,
+        responseFormat,
+        retryTemperature,
         call.onChunk,
       );
 
       const secondAttempt = parseAndValidate(secondText, schema);
       if (secondAttempt.ok) {
+        if (secondAttempt.repaired) {
+          console.warn(`[ollama] ${this.model} ${key} required JSON repair on retry (unescaped quotes inside string value)`);
+        }
         await persistResponse(manuscriptId, key, secondText);
         return secondAttempt.value;
       }
 
+      await writeFile(rawAttemptPath(manuscriptId, key, 2), secondText, 'utf8');
       await writeFile(
         errorPath(manuscriptId, key),
         JSON.stringify(
@@ -196,18 +252,23 @@ export class OllamaAnalyzer implements Analyzer {
      each NDJSON line fires onChunk with the assembled buffer. */
   private async chat(
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+    responseFormat: unknown,
+    temperature: number,
     onChunk?: (info: StageChunkInfo) => void,
   ): Promise<string> {
     const body = {
       model: this.model,
       messages,
       stream: true,
-      /* Constrain output to valid JSON. Ollama 0.5+ also supports a JSON
-         schema object here for stricter structured output, but `format:'json'`
-         + our existing validation-retry loop is enough for v1 with no new
-         deps. Upgrade path: pass the per-stage Zod schema through
-         zod-to-json-schema if first-attempt validation rates ever sag. */
-      format: 'json',
+      /* Strict structured output via Ollama 0.5+ constrained decoding. The
+         schema is derived from the per-stage Zod schema (see runStage); the
+         sampler can only emit tokens that keep the output a valid prefix of
+         a value matching this schema. This eliminates the "malformed JSON
+         at byte N" failure mode on smaller models (qwen3.5:4b in
+         particular) — the model literally cannot produce invalid JSON or
+         extra fields. The existing validation-retry loop below still guards
+         against semantic violations the schema can't express. */
+      format: responseFormat,
       /* Per-model keep_alive — see keepAliveFor + RESIDENT_MODELS above.
          Small models (4B) stay resident across the analysis loop; larger
          ones (9B, Llama-8B) unload immediately so they don't squat on
@@ -218,7 +279,10 @@ export class OllamaAnalyzer implements Analyzer {
          silently ignores this flag on non-thinking models. */
       think: false,
       options: {
-        temperature: 0.2,
+        /* Caller-controlled temperature — DEFAULT_TEMPERATURE for the first
+           attempt and schema-validation retries, INVALID_JSON_RETRY_TEMPERATURE
+           for invalid-json retries. See runStage for the kind-aware branch. */
+        temperature,
         /* 8K is plenty for chapter prompts (~3–4K typical) and keeps the
            KV cache well within the ~1.4 GB VRAM headroom on an 8 GB box
            after the 6.6 GB qwen3.5:9b weight load. Bump only if chapter

@@ -92,12 +92,21 @@ describe('OllamaAnalyzer — happy path streaming', () => {
     const body = JSON.parse((init as { body: string }).body);
     expect(body.model).toBe('qwen3.5:9b');
     expect(body.stream).toBe(true);
-    expect(body.format).toBe('json');
+    /* Schema-constrained decoding: `format` is now the JSON Schema derived
+     * from the per-stage Zod schema, not the legacy 'json' string. See
+     * ollama.ts:runStage. The schema-shape contract is asserted in a
+     * dedicated test below; here we only sanity-check that we moved off
+     * the string sentinel. */
+    expect(body.format).not.toBe('json');
+    expect(typeof body.format).toBe('object');
     /* 9B is too heavy to leave resident — see RESIDENT_MODELS in ollama.ts.
        Only the 4B holds the keep_alive: '5m' slot; everything else gets
        unloaded immediately with keep_alive: 0. */
     expect(body.keep_alive).toBe(0);
     expect(body.options.num_ctx).toBe(8192);
+    /* DEFAULT_TEMPERATURE on the first attempt — invalid-json retries bump
+       to INVALID_JSON_RETRY_TEMPERATURE (covered in its own test below). */
+    expect(body.options.temperature).toBe(0.2);
     /* System + user turn shape. */
     expect(body.messages).toHaveLength(2);
     expect(body.messages[0].role).toBe('system');
@@ -147,6 +156,57 @@ describe('OllamaAnalyzer — keep_alive policy (per-model VRAM residency)', () =
     await analyzer.runStage1Chapter('m_ollama_keepalive_llama', 1, '# prompt', {});
     const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
     expect(body.keep_alive).toBe(0);
+  });
+});
+
+describe('OllamaAnalyzer — schema-constrained `format`', () => {
+  /* The wire-level contract for Ollama 0.5+ structured output. The exact
+     conversion is owned by zod-to-json-schema; we assert just enough that
+     a regression to `format: 'json'` (the old soft-hint) or to a $ref-using
+     shape (which some Ollama builds can't follow) would fail this test. */
+  it('sends the per-stage Zod schema as a strict JSON Schema in `format` for stage1Chapter', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+    await analyzer.runStage1Chapter('m_ollama_format_shape_s1c', 1, '# prompt', {});
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.format).toBeTypeOf('object');
+    /* stage1ChapterSchema = { characters: [...] }, .strict(). */
+    expect(body.format.type).toBe('object');
+    expect(body.format.additionalProperties).toBe(false);
+    expect(body.format.required).toContain('characters');
+    expect(body.format.properties?.characters?.type).toBe('array');
+    /* characterSchema is also .strict() — confirm $refStrategy:'none' inlined
+       it (so Ollama doesn't have to follow $ref/definitions). */
+    const charItems = body.format.properties.characters.items;
+    expect(charItems.type).toBe('object');
+    expect(charItems.additionalProperties).toBe(false);
+    expect(charItems.required).toEqual(expect.arrayContaining(['id', 'name', 'role', 'color']));
+    expect(JSON.stringify(body.format)).not.toContain('$ref');
+  });
+
+  it('sends a *different* JSON Schema for stage2 (sentences[]) than stage1Chapter (characters[])', async () => {
+    /* Same-shape valid payload for stage 2 so the per-chapter loop validates. */
+    const stage2Payload = JSON.stringify({
+      sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }],
+    });
+    fetchMock
+      .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))))
+      .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(stage2Payload, 32))));
+
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+    await analyzer.runStage1Chapter('m_ollama_format_shape_diff', 1, '# stage1 prompt', {});
+    await analyzer.runStage2Chapter('m_ollama_format_shape_diff', 1, '# stage2 prompt', {});
+
+    const s1 = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body).format;
+    const s2 = JSON.parse((fetchMock.mock.calls[1][1] as { body: string }).body).format;
+    expect(s1.required).toContain('characters');
+    expect(s2.required).toContain('sentences');
+    expect(s2.properties.sentences.items.required).toEqual(
+      expect.arrayContaining(['id', 'chapterId', 'characterId', 'text']),
+    );
   });
 });
 
@@ -245,14 +305,57 @@ describe('OllamaAnalyzer — validation-retry', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.characters).toHaveLength(2);
 
-    /* The retry message includes the prior assistant turn so the model sees
-       its own bad output. Inspect the second request body. */
+    /* Schema-validation retry keeps the replay-and-correct pattern: the
+       prior assistant turn is included so the model sees its own
+       structurally-near-miss output, and the followup user turn enumerates
+       the offending fields. Temperature stays at DEFAULT_TEMPERATURE — at
+       low temperature the model patches the named fields in place rather
+       than rewriting from scratch, which is what we want here. */
     const secondBody = JSON.parse((fetchMock.mock.calls[1][1] as { body: string }).body);
     expect(secondBody.messages.find((m: { role: string }) => m.role === 'assistant')).toBeTruthy();
     expect(secondBody.messages.filter((m: { role: string }) => m.role === 'user')).toHaveLength(2);
+    expect(secondBody.options.temperature).toBe(0.2);
 
     /* Sanity-check we used the invalid arg in the first call. */
     void invalid;
+  });
+
+  /* The bug this guards against: qwen3.5:4b hitting a sampling trap and
+     emitting malformed JSON, then the retry — replaying the broken bytes
+     at temperature 0.2 — regenerating near-identical bytes that fail at
+     the same byte position. Fix: invalid-json retries drop the assistant
+     turn and bump temperature, giving the sampler real room to escape. */
+  it('on an invalid-json first attempt, retries WITHOUT replaying the assistant turn and at INVALID_JSON_RETRY_TEMPERATURE', async () => {
+    const malformed = '{ "characters": [ { "id": "narrator"';  // truncated → JSON.parse fails
+    fetchMock
+      .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(malformed, 16))))
+      .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+
+    const { OllamaAnalyzer, INVALID_JSON_RETRY_TEMPERATURE } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+
+    const result = await analyzer.runStage1Chapter('m_ollama_invalid_json_retry', 1, '# prompt', {});
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.characters).toHaveLength(2);
+
+    const firstBody = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    const secondBody = JSON.parse((fetchMock.mock.calls[1][1] as { body: string }).body);
+
+    /* First attempt is unchanged: system + user, temperature 0.2. */
+    expect(firstBody.messages).toHaveLength(2);
+    expect(firstBody.options.temperature).toBe(0.2);
+
+    /* Retry: system + user only — no assistant replay of the broken bytes,
+       no corrective followup user turn (those help schema-validation
+       failures but only entrench invalid-json failures). */
+    expect(secondBody.messages).toHaveLength(2);
+    expect(secondBody.messages[0].role).toBe('system');
+    expect(secondBody.messages[1].role).toBe('user');
+    expect(secondBody.messages.find((m: { role: string }) => m.role === 'assistant')).toBeUndefined();
+
+    /* Bumped temperature so the sampler can drift away from the broken path. */
+    expect(secondBody.options.temperature).toBe(INVALID_JSON_RETRY_TEMPERATURE);
+    expect(INVALID_JSON_RETRY_TEMPERATURE).toBeGreaterThan(firstBody.options.temperature);
   });
 
   it('hard-fails after the second attempt also fails validation', async () => {
@@ -278,16 +381,75 @@ describe('OllamaAnalyzer — validation-retry', () => {
   });
 });
 
+describe('OllamaAnalyzer — forensic raw-response persistence on failure', () => {
+  /* When schema-constrained decoding fails (which should be impossible by
+     construction — see the format-shape test above), we want to be able to
+     open the actual bytes the model emitted and see what tripped the
+     parser. Both attempts get their own .raw.txt; on a partial-success run
+     the first attempt's text is preserved for comparison. */
+  it('writes attempt1.raw.txt when the first attempt fails (even when the retry succeeds)', async () => {
+    const malformed = '{ "characters": [ { "id": "narrator", "name": "Nar';  // truncated
+    fetchMock
+      .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(malformed, 16))))
+      .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const { readFile } = await import('node:fs/promises');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+
+    await analyzer.runStage1Chapter('m_ollama_raw_attempt1', 1, '# prompt', {});
+
+    const rawPath = resolve(HANDOFF_ROOT, 'outbox', 'm_ollama_raw_attempt1-stage1-ch1.attempt1.raw.txt');
+    const raw = await readFile(rawPath, 'utf8');
+    expect(raw).toBe(malformed);
+  });
+
+  it('writes BOTH attempt1.raw.txt and attempt2.raw.txt when both attempts fail', async () => {
+    const malformedA = '{ "characters": [ { "id": "a"';
+    const malformedB = '{ "characters": [ { "id": "b"';
+    fetchMock
+      .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(malformedA, 16))))
+      .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(malformedB, 16))));
+
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const { readFile } = await import('node:fs/promises');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+
+    await expect(analyzer.runStage1Chapter('m_ollama_raw_both', 1, '# prompt', {}))
+      .rejects.toThrow(/validation after retry/);
+
+    const raw1 = await readFile(
+      resolve(HANDOFF_ROOT, 'outbox', 'm_ollama_raw_both-stage1-ch1.attempt1.raw.txt'),
+      'utf8',
+    );
+    const raw2 = await readFile(
+      resolve(HANDOFF_ROOT, 'outbox', 'm_ollama_raw_both-stage1-ch1.attempt2.raw.txt'),
+      'utf8',
+    );
+    expect(raw1).toBe(malformedA);
+    expect(raw2).toBe(malformedB);
+  });
+});
+
 afterAll(async () => {
   /* Tidy test inbox/outbox files. */
   for (const id of [
     'm_ollama_ok', 'm_ollama_down', 'm_ollama_bare_fetchfail', 'm_ollama_abort',
     'm_ollama_404', 'm_ollama_404_again', 'm_ollama_500', 'm_ollama_empty',
-    'm_ollama_retry', 'm_ollama_retry_fail',
+    'm_ollama_retry', 'm_ollama_retry_fail', 'm_ollama_invalid_json_retry',
     'm_ollama_keepalive_4b', 'm_ollama_keepalive_llama',
+    'm_ollama_format_shape_s1c', 'm_ollama_format_shape_diff',
+    'm_ollama_raw_attempt1', 'm_ollama_raw_both',
   ]) {
     await rm(resolve(HANDOFF_ROOT, 'inbox',  `${id}-stage1-ch1.md`),    { force: true });
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.json`),   { force: true });
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.errors.json`), { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.attempt1.raw.txt`), { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.attempt2.raw.txt`), { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'inbox',  `${id}-stage2-ch1.md`),    { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage2-ch1.json`),   { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage2-ch1.errors.json`), { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage2-ch1.attempt1.raw.txt`), { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage2-ch1.attempt2.raw.txt`), { force: true });
   }
 });

@@ -278,22 +278,101 @@ function sleep(ms: number): Promise<void> {
 }
 
 export type ParseResult<T> =
-  | { ok: true; value: T }
+  | { ok: true; value: T; repaired: boolean }
   | { ok: false; kind: 'invalid-json'; detail: string }
   | { ok: false; kind: 'schema-validation'; detail: z.ZodIssue[] };
 
 export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseResult<T> {
+  /* First attempt: parse the raw text as-is. The common case on well-behaved
+     models (Gemini, qwen3.5:9b, qwen3.5:4b on most chapters) lands here and
+     returns immediately. */
   let parsed: unknown;
+  let repaired = false;
   try {
     parsed = JSON.parse(raw);
-  } catch (e) {
-    return { ok: false, kind: 'invalid-json', detail: (e as Error).message };
+  } catch {
+    /* Targeted recovery for qwen3.5:4b's signature failure mode: unescaped
+       double-quote inside a string value when transcribing dialogue from the
+       manuscript, e.g. `"quote": "Wren, let the dog go," Mr. Casper
+       ordered.",`. Ollama's `format:<schema>` enforces JSON Schema shape but
+       not string-content escaping — once the model is inside a JSON string,
+       the constrained decoder still lets a raw `"` token close it. The
+       repair pass walks the text, finds each `"` inside a string, and
+       escapes it iff the next non-whitespace char isn't a valid post-value
+       token (`,` `}` `]` `:` EOF). Verified against the real failing raws
+       (ch8 byte 2363, ch10 byte 1432). */
+    const repairedRaw = repairUnescapedQuotes(raw);
+    try {
+      parsed = JSON.parse(repairedRaw);
+      repaired = true;
+    } catch (e2) {
+      /* Repair didn't help — return the post-repair error message so the
+         operator can see which attempt actually failed. */
+      return { ok: false, kind: 'invalid-json', detail: (e2 as Error).message };
+    }
   }
   const result = schema.safeParse(parsed);
   if (!result.success) {
     return { ok: false, kind: 'schema-validation', detail: result.error.issues };
   }
-  return { ok: true, value: result.data };
+  return { ok: true, value: result.data, repaired };
+}
+
+/* Walks the text character by character. Tracks whether we're currently
+   inside a JSON string value. When we hit a `"` inside a string, peek the
+   next non-whitespace char: if it's `,` `}` `]` `:` or EOF the `"` is a
+   real string close; otherwise treat it as an unescaped inner quote and
+   replace with `\"`. Existing `\"` and other `\X` escape sequences are
+   passed through verbatim.
+
+   This is intentionally narrow: it handles the dialogue-quote pattern that
+   accounts for ~all of our observed failures, and is a no-op on already-
+   valid JSON (every real close quote is followed by `,`/`}`/`]`/`:`/EOF).
+   It is NOT a general JSON repair — for unrelated structural breakage
+   (missing braces, trailing commas, etc.) the caller's `invalid-json`
+   retry path still fires. */
+export function repairUnescapedQuotes(raw: string): string {
+  let out = '';
+  let inString = false;
+  let i = 0;
+  while (i < raw.length) {
+    const c = raw[i];
+    if (!inString) {
+      out += c;
+      if (c === '"') inString = true;
+      i += 1;
+      continue;
+    }
+    if (c === '\\') {
+      /* Pass through the escape and its target byte unchanged. Covers `\"`,
+         `\\`, `\n`, `\uXXXX` (the first two chars suffice — the four hex
+         digits are normal string content from this walker's POV). */
+      out += c;
+      if (i + 1 < raw.length) { out += raw[i + 1]; i += 2; }
+      else { i += 1; }
+      continue;
+    }
+    if (c === '"') {
+      /* Peek the next non-whitespace char to decide if this `"` is a real
+         string close or an unescaped inner quote. */
+      let j = i + 1;
+      while (j < raw.length && (raw[j] === ' ' || raw[j] === '\t' || raw[j] === '\n' || raw[j] === '\r')) {
+        j += 1;
+      }
+      const next = j < raw.length ? raw[j] : '';
+      if (next === ',' || next === '}' || next === ']' || next === ':' || next === '') {
+        out += c;
+        inString = false;
+      } else {
+        out += '\\"';
+      }
+      i += 1;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
 }
 
 export function buildRetryMessage(failure: Extract<ParseResult<unknown>, { ok: false }>): string {
