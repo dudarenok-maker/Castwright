@@ -17,6 +17,11 @@ export interface ChapterHint {
   title: string;
   /** Normalised plain text body, with paragraph breaks preserved as \n\n. */
   body: string;
+  /** User-controlled "skip from analysis + audio" flag. Front- or back-
+      matter like Dedication, Copyright, About the Author. Mirrors the
+      same field on BookStateJson.chapters[] and is rehydrated from there
+      after a server restart. */
+  excluded?: boolean;
 }
 
 export interface ManuscriptRecord {
@@ -70,6 +75,18 @@ export async function getOrHydrateManuscript(manuscriptId: string): Promise<Manu
   }).catch(() => null);
   if (!parsed) return undefined;
 
+  /* Re-parse loses the excluded flag (it's set by the user, not the
+     parser). Carry it forward from the on-disk state.json by matching
+     on chapter id — that's the canonical key in both places. */
+  const excludedById = new Map<number, boolean>();
+  for (const c of book.state.chapters) {
+    if (c.excluded) excludedById.set(c.id, true);
+  }
+  const chapterHints: ChapterHint[] = parsed.chapters.map(c => ({
+    ...c,
+    excluded: excludedById.get(c.id) || undefined,
+  }));
+
   const record: ManuscriptRecord = {
     manuscriptId,
     format: parsed.format,
@@ -78,7 +95,7 @@ export async function getOrHydrateManuscript(manuscriptId: string): Promise<Manu
     byteSize: buffer.length,
     uploadedAt: book.state.createdAt,
     sourceText: parsed.sourceText,
-    chapterHints: parsed.chapters as ChapterHint[],
+    chapterHints,
     bookId: book.state.bookId,
     bookDir: book.bookDir,
   };

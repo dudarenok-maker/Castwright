@@ -92,7 +92,12 @@ export function overallProgress(
   chapters: Chapter[],
   manuscriptCounts: Record<number, number> = {},
 ): number {
-  if (chapters.length === 0) return 0;
+  /* Excluded chapters never generate audio, so they contribute neither
+     numerator nor denominator. Without this filter a 10-chapter book
+     with 2 excluded would stall the bar at 80 % when 8/8 active
+     chapters finish. */
+  const active = chapters.filter(c => !c.excluded);
+  if (active.length === 0) return 0;
 
   const knownWeights: number[] = [];
   const baseWeight = (c: Chapter): number | null => {
@@ -102,7 +107,7 @@ export function overallProgress(
     return null;
   };
 
-  for (const c of chapters) {
+  for (const c of active) {
     const w = baseWeight(c);
     if (w != null) knownWeights.push(w);
   }
@@ -114,7 +119,7 @@ export function overallProgress(
 
   let totalWeight = 0;
   let weightedNum = 0;
-  for (const c of chapters) {
+  for (const c of active) {
     const w = weightOf(c);
     totalWeight += w;
     weightedNum += c.progress * w;

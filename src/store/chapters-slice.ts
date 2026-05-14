@@ -137,6 +137,10 @@ export const chaptersSlice = createSlice({
         state: done.has(c.slug) ? 'done' : 'queued',
         progress: done.has(c.slug) ? 1 : 0,
         characters: done.has(c.slug) ? seedDone(c.id) : seedQueued(c.id),
+        /* Persist the user's per-chapter exclude choice across hydrate so
+           the Generate view greys excluded chapters out without waiting
+           on a separate fetch. */
+        excluded: c.excluded || undefined,
       } as Chapter));
       s.lastError = null;
       s.generationStartedAt = null;
@@ -327,6 +331,54 @@ export const chaptersSlice = createSlice({
         s.regenEpoch += 1;
         s.lastError = null;
         s.generationStartedAt = null;
+      }
+    },
+
+    /* Merge a subset-analysis response into the slice without wiping
+       per-chapter state for chapters that weren't part of the subset.
+       Used after a chapter is un-excluded and re-analyzed: the response
+       contains the full chapter list, but only the subset's chapters
+       have meaningful character maps. We update characters for chapters
+       in `chapterIds` and leave the rest of the row (state/progress/
+       phase/etc.) untouched. */
+    mergeSubsetAnalysis: (s, a: PayloadAction<{ response: AnalyseResponse; chapterIds: number[] }>) => {
+      const { response, chapterIds } = a.payload;
+      const idSet = new Set(chapterIds);
+      const speakersByChapter: Record<number, Set<string>> = {};
+      for (const sent of response.sentences ?? []) {
+        if (!idSet.has(sent.chapterId)) continue;
+        (speakersByChapter[sent.chapterId] ??= new Set()).add(sent.characterId);
+      }
+      for (const ch of s.chapters) {
+        if (!idSet.has(ch.id)) continue;
+        const speakers = speakersByChapter[ch.id];
+        if (!speakers) continue;
+        ch.characters = Object.fromEntries(
+          [...speakers].map(id => [id, 'queued' as const]),
+        );
+      }
+    },
+
+    /* Reflect a successful POST /chapters/:chapterId/exclude on the
+       slice. The server is the source of truth (state.json + audio
+       cleanup), this just keeps the UI consistent without waiting on a
+       refetch. When un-excluding, the caller is responsible for kicking
+       off subset analysis if the chapter has no cached attribution. */
+    setChapterExcluded: (s, a: PayloadAction<{ chapterId: number; excluded: boolean }>) => {
+      const { chapterId, excluded } = a.payload;
+      const ch = s.chapters.find(c => c.id === chapterId);
+      if (!ch) return;
+      ch.excluded = excluded ? true : undefined;
+      /* When newly excluded, reset transient generation state so the
+         row doesn't leave behind a half-progress bar or in_progress
+         spinner from before the exclude was applied. */
+      if (excluded) {
+        ch.state = 'queued';
+        ch.progress = 0;
+        ch.phase = null;
+        ch.currentLine = undefined;
+        ch.totalLines = undefined;
+        ch.errorReason = undefined;
       }
     },
 

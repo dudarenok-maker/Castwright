@@ -116,7 +116,15 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
           byteSize: Buffer.byteLength(sourceText, 'utf8'),
           uploadedAt: state.createdAt,
           sourceText,
-          chapterHints: state.chapters.map(c => ({ id: c.id, title: c.title, body: '' })),
+          /* Carry the excluded flag forward so analysis/generation that
+             happens after this rehydrate honours the user's choices.
+             Body is intentionally empty here — this path is the lightweight
+             "page loaded, no analysis run yet" hydrate; the full re-parse
+             with bodies happens in store/manuscripts.ts. */
+          chapterHints: state.chapters.map(c => ({
+            id: c.id, title: c.title, body: '',
+            excluded: c.excluded || undefined,
+          })),
           bookId: state.bookId,
           bookDir,
         };
@@ -281,13 +289,32 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
        regenerated from the new titles so the audio dir layout stays in
        lockstep. Old audio files (if any) become orphaned and get removed
        below — keeping them would mislead the library into reporting wrong
-       completed counts. */
-    const newChapters: BookStateJson['chapters'] = parsed.chapters.map(c => ({
-      id: c.id,
-      title: c.title,
-      slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
-      duration: '00:00',
-    }));
+       completed counts.
+
+       Preserve the user's per-chapter excluded flag across re-parse.
+       Re-parsing the same manuscript usually produces the same id-to-
+       chapter mapping (the parser is deterministic), so id-match is
+       the primary key. Slug-match acts as a tie-breaker when the
+       parser changed numbering (e.g. a heading rule update merged two
+       sections) but the new side still has a chapter whose title-derived
+       slug matches an old excluded one. New chapters default to included. */
+    const prevExcludedIds = new Set<number>(
+      state.chapters.filter(c => c.excluded).map(c => c.id),
+    );
+    const prevExcludedSlugs = new Set<string>(
+      state.chapters.filter(c => c.excluded).map(c => c.slug),
+    );
+    const newChapters: BookStateJson['chapters'] = parsed.chapters.map(c => {
+      const newSlug = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
+      const carryover = prevExcludedIds.has(c.id) || prevExcludedSlugs.has(newSlug);
+      return {
+        id: c.id,
+        title: c.title,
+        slug: newSlug,
+        duration: '00:00',
+        excluded: carryover ? true : undefined,
+      };
+    });
 
     const nextState: BookStateJson = {
       ...state,
@@ -335,7 +362,14 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     }
 
     /* Refresh the in-memory ManuscriptRecord so a follow-up analysis run
-       sees the new chapter bodies, not the cached pre-reparse copy. */
+       sees the new chapter bodies, not the cached pre-reparse copy.
+       Carry the (preserved) excluded flag from the new state so the
+       analysis route's skip path fires correctly without a separate
+       hydrate. */
+    const newExcludedById = new Map<number, boolean>();
+    for (const c of newChapters) {
+      if (c.excluded) newExcludedById.set(c.id, true);
+    }
     const sourceText = parsed.sourceText;
     const record: ManuscriptRecord = {
       manuscriptId: state.manuscriptId,
@@ -345,7 +379,10 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
       byteSize: Buffer.byteLength(sourceText, 'utf8'),
       uploadedAt: state.createdAt,
       sourceText,
-      chapterHints: parsed.chapters,
+      chapterHints: parsed.chapters.map(c => ({
+        ...c,
+        excluded: newExcludedById.get(c.id) || undefined,
+      })),
       bookId: state.bookId,
       bookDir,
     };
@@ -359,6 +396,95 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
   } catch (e) {
     console.error('[book-state] reparse failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to re-parse manuscript.' });
+  }
+});
+
+/* POST /api/books/:bookId/chapters/:chapterId/exclude — toggle the
+   excluded flag on a single chapter. Used by the Generate-view toggle
+   so the user can opt out of (or back into) narrating front/back-matter
+   without re-running anything.
+
+   Side effects:
+   - Updates state.json atomically.
+   - Propagates the flag into the in-memory ManuscriptRecord so the
+     next analysis / generation request honours it without a hydrate
+     round-trip.
+   - When excluded becomes true: deletes the chapter's audio file +
+     segments.json so the library card's completed-chapters count
+     reconciles immediately and a future un-exclude can re-synthesize
+     cleanly.
+
+   Idempotent — calling with the same value twice is a no-op (still
+   returns 200 with the current chapter entry). */
+bookStateRouter.post('/:bookId/chapters/:chapterId/exclude', async (req: Request, res: Response) => {
+  try {
+    const chapterId = Number(req.params.chapterId);
+    if (!Number.isInteger(chapterId)) {
+      return res.status(400).json({ error: 'chapterId must be an integer.' });
+    }
+    const rawExcluded = (req.body as { excluded?: unknown })?.excluded;
+    if (typeof rawExcluded !== 'boolean') {
+      return res.status(400).json({ error: '`excluded` is required and must be a boolean.' });
+    }
+    const excluded: boolean = rawExcluded;
+
+    const located = await findBookByBookId(req.params.bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const { bookDir, state } = located;
+
+    const idx = state.chapters.findIndex(c => c.id === chapterId);
+    if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
+
+    const current = state.chapters[idx];
+    const updated = { ...current, excluded: excluded ? true : undefined };
+    const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
+
+    /* Write state.json first so a crash mid-call leaves the user's
+       choice on disk; audio cleanup is best-effort below. */
+    const nextState: BookStateJson = {
+      ...state,
+      chapters: nextChapters,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeJsonAtomic(stateJsonPath(bookDir), nextState);
+
+    /* Propagate to the live ManuscriptRecord if it's loaded. The
+       analysis route reads chapterHints directly from this; without
+       the propagation we'd have to wait for a server restart or a
+       book-state GET to pick up the change. */
+    if (state.manuscriptId) {
+      const rec = getManuscript(state.manuscriptId);
+      if (rec) {
+        rec.chapterHints = rec.chapterHints.map(h =>
+          h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
+        );
+      }
+    }
+
+    /* When newly excluded, delete the chapter's audio + segments so the
+       library / chapter list don't keep counting it as "done". The user
+       can re-include later; audio regenerates from the (still-cached)
+       sentence attribution. */
+    if (excluded) {
+      const audioRoot = audioDir(bookDir);
+      const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
+      const audioCandidates = ['mp3', 'm4a', 'wav', 'opus'].map(ext => join(audioRoot, `${current.slug}.${ext}`));
+      for (const p of [segmentsPath, ...audioCandidates]) {
+        if (existsSync(p)) {
+          await rm(p, { force: true }).catch(() => { /* best effort */ });
+        }
+      }
+    }
+
+    res.json({
+      id: updated.id,
+      title: updated.title,
+      slug: updated.slug,
+      excluded: !!updated.excluded,
+    });
+  } catch (e) {
+    console.error('[book-state] exclude toggle failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Failed to toggle exclude.' });
   }
 });
 

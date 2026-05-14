@@ -54,8 +54,50 @@ export function GenerationView({
   const generationStartedAt = useAppSelector(s => s.chapters.generationStartedAt);
   const lastTickAt          = useAppSelector(s => s.chapters.lastTickAt);
   const sentences           = useAppSelector(s => s.manuscript.sentences);
+  const manuscriptId        = useAppSelector(s => s.manuscript.manuscriptId);
   const activityEvents      = useAppSelector(s => s.changeLog.events);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  /* Per-chapter busy state for the exclude/include toggle. The toggle is
+     a multi-step async (POST exclude → optionally POST subset analysis),
+     so we surface a spinner on the row until both land. */
+  const [excludeBusy, setExcludeBusy] = useState<Set<number>>(new Set());
+
+  async function handleToggleExcluded(chapterId: number, excluded: boolean): Promise<void> {
+    const ch = chapters.find(c => c.id === chapterId);
+    if (!ch) return;
+    setExcludeBusy(prev => {
+      const next = new Set(prev);
+      next.add(chapterId);
+      return next;
+    });
+    try {
+      await api.setChapterExcluded(bookId, chapterId, excluded);
+      dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded }));
+      /* When un-excluding a chapter that has no analysis on file, run
+         Phase 0a + Phase 1 just for that chapter so it can be generated.
+         Detect "no analysis" by an empty characters map — chapters that
+         went through analysis always have at least the narrator. */
+      if (!excluded && manuscriptId) {
+        const hasAnalysis = ch.characters && Object.keys(ch.characters).length > 0;
+        if (!hasAnalysis) {
+          const res = await api.runAnalysisForChapters(manuscriptId, [chapterId]);
+          dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
+        }
+      }
+    } catch (e) {
+      console.error('[generation] exclude toggle failed', e);
+      /* The slice change wasn't dispatched if the network call failed, so
+         the UI stays in its prior state. A toast/banner would be the next
+         improvement here; for now the console error + reverted UI is the
+         signal. */
+    } finally {
+      setExcludeBusy(prev => {
+        const next = new Set(prev);
+        next.delete(chapterId);
+        return next;
+      });
+    }
+  }
 
   /* Manuscript-derived shape used both for accurate overall-progress
      weighting (so 3 hydrated-Done chapters don't collapse the bar to the
@@ -72,15 +114,20 @@ export function GenerationView({
      stream survives navigating away from this view. The view is a pure
      renderer of slice state now. */
 
-  const completed     = chapters.filter(c => c.state === 'done').length;
-  const failed        = chapters.filter(c => c.state === 'failed').length;
-  const inProgressCnt = chapters.filter(c => c.state === 'in_progress').length;
-  const queued        = chapters.filter(c => c.state === 'queued').length;
+  /* Counters and "all complete" math operate on the active subset —
+     excluded chapters don't queue, don't generate, and shouldn't count
+     against (or for) completion. Without this an 8-of-10-completed book
+     with 2 excluded would never reach allComplete. */
+  const activeChapters = useMemo(() => chapters.filter(c => !c.excluded), [chapters]);
+  const completed     = activeChapters.filter(c => c.state === 'done').length;
+  const failed        = activeChapters.filter(c => c.state === 'failed').length;
+  const inProgressCnt = activeChapters.filter(c => c.state === 'in_progress').length;
+  const queued        = activeChapters.filter(c => c.state === 'queued').length;
   /* Used by the header action: Resume/Pause is meaningless once every chapter
      has finished synthesising, so the button flips to Regenerate. Failed
      chapters keep the Pause/Resume affordance because the user might still
      hit the per-row Retry to drive the queue. */
-  const allComplete = chapters.length > 0 && completed === chapters.length;
+  const allComplete = activeChapters.length > 0 && completed === activeChapters.length;
 
   /* Sentence-weighted overall progress. Weights come from the manuscript
      when available (canonical for the whole book), then the live
@@ -272,7 +319,9 @@ export function GenerationView({
                         charPositions={characterPositions[ch.id]}
                         onRegenerate={onRegenerate}
                         onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
-                        onPreview={onPreview}/>
+                        onPreview={onPreview}
+                        onToggleExcluded={handleToggleExcluded}
+                        excludeBusy={excludeBusy.has(ch.id)}/>
           ))}
         </div>
         <aside className="lg:sticky lg:top-20 self-start bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
@@ -372,12 +421,47 @@ interface ChapterRowProps {
   onRegenerate: (ch: Chapter) => void;
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
   onPreview: (chapterId: number) => void;
+  onToggleExcluded: (chapterId: number, excluded: boolean) => void;
+  excludeBusy: boolean;
 }
 
 function ChapterRow({
   chapter, characters, bookId, expanded, onToggle, paused, blocked, stalled, charStats, charPositions,
-  onRegenerate, onRegenerateCharacterInChapter, onPreview,
+  onRegenerate, onRegenerateCharacterInChapter, onPreview, onToggleExcluded, excludeBusy,
 }: ChapterRowProps) {
+  /* Excluded chapters get a compact, greyed-out row with a single
+     "Include in book" action. Skip the full state-machine rendering
+     below — these chapters don't have analysis or audio. */
+  if (chapter.excluded) {
+    return (
+      <div className="rounded-3xl border border-ink/10 bg-ink/[0.03] overflow-hidden">
+        <div className="grid grid-cols-[32px_52px_minmax(0,1fr)_auto] items-center gap-3 px-5 py-3">
+          <span className="grid place-items-center text-ink/30">
+            <span className="w-4 h-4 rounded-full border border-ink/15"/>
+          </span>
+          <span className="text-sm font-bold text-ink/35 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
+          <span className="min-w-0">
+            <span className="block font-medium text-ink/40 truncate line-through decoration-1">
+              {chapter.title}
+            </span>
+            <span className="block text-[11px] text-ink/45 mt-0.5">
+              Excluded — not analyzed, no audio will be generated.
+            </span>
+          </span>
+          <button
+            onClick={() => onToggleExcluded(chapter.id, false)}
+            disabled={excludeBusy}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta disabled:opacity-50 transition-colors"
+          >
+            {excludeBusy
+              ? <><IconSpinner className="w-3.5 h-3.5"/> Re-analyzing…</>
+              : <>+ Include in book</>}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const assembling = chapter.phase === 'assembling';
   const rowStalled = stalled && chapter.state === 'in_progress';
   const inProgressLabel = rowStalled
@@ -487,6 +571,32 @@ function ChapterRow({
           )}
           <button onClick={(e) => { e.stopPropagation(); onRegenerate(chapter); }} className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors">
             <IconRefresh className="w-3.5 h-3.5"/> {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleExcluded(chapter.id, true); }}
+            disabled={excludeBusy}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/45 hover:text-ink/70 disabled:opacity-50 transition-colors"
+            title="Skip this chapter — no audio will be generated for it."
+          >
+            {excludeBusy ? <IconSpinner className="w-3.5 h-3.5"/> : <IconClose className="w-3.5 h-3.5"/>} Exclude
+          </button>
+        </div>
+      )}
+      {/* For queued chapters (no other action row visible), surface a
+          subtle Exclude link in the expanded panel below. The expand
+          arrow already invites interaction; putting the link in the
+          expanded view keeps the collapsed row visually clean. */}
+      {expanded && (chapter.state === 'queued' || chapter.state === 'in_progress') && (
+        <div className="px-6 -mt-3 flex justify-end">
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleExcluded(chapter.id, true); }}
+            disabled={excludeBusy || chapter.state === 'in_progress'}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/45 hover:text-ink/70 disabled:opacity-40 transition-colors"
+            title={chapter.state === 'in_progress'
+              ? 'Pause first, then you can exclude this chapter.'
+              : 'Skip this chapter — no audio will be generated for it.'}
+          >
+            {excludeBusy ? <IconSpinner className="w-3.5 h-3.5"/> : <IconClose className="w-3.5 h-3.5"/>} Exclude
           </button>
         </div>
       )}

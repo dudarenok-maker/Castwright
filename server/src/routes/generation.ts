@@ -150,8 +150,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      disk so a reconnecting client (post-pause, page refresh, etc.) snaps to
      the latest state without needing a separate GET. Cheap — one tick per
      done chapter. We do this BEFORE deciding the queue so the client sees
-     state even when nothing new is queued. */
+     state even when nothing new is queued.
+
+     Excluded chapters are skipped — even if stale audio is still on disk
+     from before they were excluded, we don't want to tell the frontend
+     the chapter is "complete" when the user opted out of narrating it. */
   for (const ch of state.chapters) {
+    if (ch.excluded) continue;
     if (chapterAudioExists(audioRoot, ch.slug)) {
       const cachedSentences = analysis.chapters[ch.id] ?? [];
       send({
@@ -166,8 +171,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   }
 
   /* Decide which chapters to (re)generate. Default: every chapter that does
-     not already have an audio file on disk. `force` overrides existence. */
+     not already have an audio file on disk. `force` overrides existence.
+     Excluded chapters (front/back-matter the user opted out of narrating)
+     are always skipped — even an explicit requestedIds=[...] that lists an
+     excluded chapter is filtered out, since generating audio for an
+     excluded chapter would silently undo the user's choice. */
   const targetChapters = state.chapters.filter(c => {
+    if (c.excluded) return false;
     if (requestedIds && !requestedIds.includes(c.id)) return false;
     if (force) return true;
     return !chapterAudioExists(audioRoot, c.slug);
