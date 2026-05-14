@@ -249,13 +249,33 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
        text parsers will utf8-decode internally when format calls for it.
        Also pass sourcePath so the EPUB parser can read directly from the
        workspace location — bypasses the %TEMP%-roundtrip that races
-       against AV/OneDrive on Windows ("Invalid/missing file" errors). */
+       against AV/OneDrive on Windows ("Invalid/missing file" errors).
+
+       Legacy fallback: pre-fix versions of the import route wrote the
+       extracted *sourceText* to manuscript.epub instead of the original
+       binary. Detect that here by sniffing the magic bytes and route to
+       parseText when the file is actually plain UTF-8 text — avoids
+       crashing those books and still gives the user a fresh chapter
+       split from the persisted text. */
     const buffer = await readFile(manuscriptPath);
-    const parsed = await parseManuscript({
-      buffer,
-      fileName: state.manuscriptFile,
-      sourcePath: manuscriptPath,
-    });
+    const looksLikeEpub = buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04;
+    const looksLikePdf  = buffer.length >= 5 && buffer.slice(0, 5).toString('ascii') === '%PDF-';
+    const claimsBinary  = state.manuscriptFile.endsWith('.epub') || state.manuscriptFile.endsWith('.pdf');
+    const isLegacyTextMasqueradingAsBinary = claimsBinary && !looksLikeEpub && !looksLikePdf;
+    let parsed;
+    if (isLegacyTextMasqueradingAsBinary) {
+      console.warn(`[book-state] reparse: ${state.manuscriptFile} is plain text on disk (pre-fix import). Routing through parseText.`);
+      parsed = await parseManuscript({
+        text: buffer.toString('utf8'),
+        fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt'),
+      });
+    } else {
+      parsed = await parseManuscript({
+        buffer,
+        fileName: state.manuscriptFile,
+        sourcePath: manuscriptPath,
+      });
+    }
 
     /* Replace the chapter list with whatever the parser produced. Slugs are
        regenerated from the new titles so the audio dir layout stays in
