@@ -4,7 +4,7 @@ import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primiti
 import { api } from '../lib/api';
 import type { UploadArgs } from '../lib/api';
 import { SAMPLE_MANUSCRIPT_MD } from '../mocks/canned-data';
-import { MODEL_OPTIONS } from '../lib/models';
+import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -69,8 +69,12 @@ export function UploadView() {
           <select id="model-select" value={selectedModel} disabled={busy}
                   onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
                   className="px-3 py-1.5 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 focus:outline-none focus:border-peach disabled:opacity-50">
-            {MODEL_OPTIONS.map(m => (
-              <option key={m.id} value={m.id}>{m.label}{m.hint ? ` — ${m.hint}` : ''}</option>
+            {MODEL_OPTION_GROUPS.map(g => (
+              <optgroup key={g.engine} label={g.label}>
+                {g.models.map(m => (
+                  <option key={m.id} value={m.id}>{m.label}{m.hint ? ` — ${m.hint}` : ''}</option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </div>

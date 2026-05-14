@@ -58,6 +58,31 @@ describe('selectAnalyzer dispatch', () => {
     expect(s.model).toBe('llama3.1:8b');
   });
 
+  it('per-request model override of Gemini shape (no colon) routes to Gemini even when engine=local', () => {
+    /* The model-picker dropdown groups local + Gemini options. When the user
+       picks a Gemini option mid-run, the override must route to Gemini —
+       otherwise we'd hand a Gemini id to Ollama, which 404s. */
+    process.env.ANALYZER = 'local';
+    process.env.GEMINI_API_KEY = 'test-key';
+    const s = selectAnalyzer({ model: 'gemini-2.5-flash' });
+    expect(s.engine).toBe('gemini');
+    expect(s.model).toBe('gemini-2.5-flash');
+    /* No fallback wrap when routing directly to Gemini via override. */
+    expect(s.fallbackModel).toBeNull();
+  });
+
+  it('per-request model override of Ollama shape (contains colon) routes to local even when engine=gemini', () => {
+    /* Symmetric: a user on engine=gemini who picks qwen3.5:9b from the
+       dropdown should get the local engine for that run. */
+    process.env.ANALYZER = 'gemini';
+    process.env.GEMINI_API_KEY = 'test-key';
+    const s = selectAnalyzer({ model: 'qwen3.5:9b' });
+    expect(s.engine).toBe('local');
+    expect(s.model).toBe('qwen3.5:9b');
+    /* Fallback wired because we still have a Gemini key in env. */
+    expect(s.fallbackModel).toBe('gemma-4-31b-it');
+  });
+
   it('OLLAMA_MODEL env beats the static default', () => {
     process.env.ANALYZER = 'local';
     process.env.OLLAMA_MODEL = 'mistral:7b';
