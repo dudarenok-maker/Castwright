@@ -56,7 +56,11 @@ export function ttsModelLabel(key: TtsModelKey): string {
   return TTS_MODEL_OPTIONS.find(m => m.id === key)?.label ?? key;
 }
 
-export const DEFAULT_TTS_MODEL: TtsModelKey = 'coqui-xtts-v2';
+import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
+
+/* Single source of truth for the frontend's TTS default — mirrors server's
+   DEFAULT_USER_SETTINGS.defaultTtsModelKey via FRONTEND_ACCOUNT_DEFAULTS. */
+export const DEFAULT_TTS_MODEL: TtsModelKey = FRONTEND_ACCOUNT_DEFAULTS.defaultTtsModelKey;
 
 /* Mirror of the backend's engineForModelKey — keeps the UI honest about
    which sidecar/cloud it will hit when a sample is requested. Add new

@@ -12,6 +12,7 @@ import type {
   BookStateResponse, PutStateRequest, WorkspaceChangeLogResponse,
   UserSettings, UserSettingsPatch,
 } from './types';
+import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
 import { MOCK_LIBRARY } from '../mocks/library';
 import { MOCK_VOICE_LIBRARY } from '../mocks/voices';
@@ -955,18 +956,11 @@ async function realGetSidecarHealth(): Promise<SidecarHealth> {
 
 /* ── User settings ─────────────────────────────────────────────────────
    Real path round-trips through GET / PUT /api/user/settings. Mock path
-   keeps an in-memory copy seeded from the same defaults the server bakes
-   in, so the Account view is functional under VITE_USE_MOCKS=true. */
+   keeps an in-memory copy seeded from the same FRONTEND_ACCOUNT_DEFAULTS
+   that mirrors the server's DEFAULT_USER_SETTINGS, so the Account view
+   stays consistent under VITE_USE_MOCKS=true. */
 const MOCK_USER_SETTINGS: UserSettings = {
-  displayName:          'Mike Dudarenok',
-  defaultAnalysisModel: 'qwen3.5:9b',
-  defaultTtsEngine:     'local',
-  defaultTtsModelKey:   'coqui-xtts-v2',
-  sidecarUrl:           'http://localhost:9000',
-  analysisEngine:       'local',
-  ollamaUrl:            'http://localhost:11434',
-  workspaceDirOverride: null,
-  minorCastMinLines:    3,
+  ...FRONTEND_ACCOUNT_DEFAULTS,
   apiKeyStatus:         'unset',
   workspaceRoot:        '(mock)/audiobook-workspace',
   workspaceSource:      'default',
