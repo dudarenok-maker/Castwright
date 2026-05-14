@@ -24,14 +24,12 @@ export const TTS_MODEL_KEY_VALUES = [
   'gemini-2.5-flash',
   'gemini-3.1-flash',
 ] as const;
-export const ANALYZER_MODE_VALUES = ['manual', 'gemini'] as const;
 
 export const userSettingsSchema = z.object({
   displayName:          z.string().max(120),
   defaultAnalysisModel: z.string().min(1).max(120),
   defaultTtsEngine:     z.enum(TTS_ENGINE_VALUES),
   defaultTtsModelKey:   z.enum(TTS_MODEL_KEY_VALUES),
-  analyzerMode:         z.enum(ANALYZER_MODE_VALUES),
   sidecarUrl:           z.string().min(1).max(2000),
   workspaceDirOverride: z.string().max(2000).nullable(),
 });
@@ -43,7 +41,6 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   defaultAnalysisModel: 'gemma-4-31b-it',
   defaultTtsEngine:     'local',
   defaultTtsModelKey:   'coqui-xtts-v2',
-  analyzerMode:         'manual',
   sidecarUrl:           'http://localhost:9000',
   workspaceDirOverride: null,
 };
@@ -110,17 +107,6 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
     out[k] = v;
   }
   return out;
-}
-
-/** Synchronous resolver: returns analyzerMode from the in-memory user-settings
-    cache, falling back to the ANALYZER env var, then 'manual'. Hot-path
-    helper for `selectAnalyzer()` — must stay sync. */
-export function getResolvedAnalyzerMode(): 'manual' | 'gemini' {
-  const c = cached;
-  if (c?.analyzerMode) return c.analyzerMode;
-  const env = (process.env.ANALYZER ?? '').trim().toLowerCase();
-  if (env === 'gemini') return 'gemini';
-  return 'manual';
 }
 
 /** Synchronous resolver: returns sidecarUrl from the in-memory user-settings

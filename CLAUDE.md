@@ -97,6 +97,17 @@ the canonical recipe.
 - Align the `Sentence` shape with the OpenAPI spec (currently the fixtures use
   `{ id: string, charId, text }` while the spec uses `{ id: number, characterId,
   chapterId, text }`).
+- **Local analysis model** — today the analyzer pipeline (Phase 0a cast
+  detection + Phase 1 sentence attribution) is wired exclusively to the
+  Gemini API (free tier on Gemma 4 31B / Gemini 2.x/3 Flash). That ties
+  big-book throughput to Google's quota + per-minute rate limits and
+  occasionally to TTFT spikes that make a 100-char chapter take five
+  minutes. Goal: add a local-LLM analyzer (e.g. llama.cpp / Ollama with a
+  capable instruct model, or the same XTTS-style sidecar pattern with a
+  text model loaded on the GPU) so the whole text-analysis path can run
+  offline. Same `Analyzer` interface (`runStage1Chapter`,
+  `runStage2Chapter`) — drop in a new implementation behind
+  `selectAnalyzer()` and remove the `GEMINI_API_KEY` hard requirement.
 
 ## Commit gate
 Two-tier automated test gate, enforced by husky hooks in `.husky/`:

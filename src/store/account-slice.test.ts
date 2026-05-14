@@ -26,7 +26,6 @@ const SERVER_FIXTURE: UserSettings = {
   defaultAnalysisModel: 'gemini-2.5-flash',
   defaultTtsEngine:     'gemini',
   defaultTtsModelKey:   'gemini-2.5-flash',
-  analyzerMode:         'gemini',
   sidecarUrl:           'http://localhost:9001',
   workspaceDirOverride: null,
   apiKeyStatus:         'set',
@@ -48,13 +47,6 @@ describe('accountSlice — granular setters', () => {
   it('setDisplayName updates the displayName field', () => {
     const next = accountSlice.reducer(undefined, accountActions.setDisplayName('Captain Picard'));
     expect(next.displayName).toBe('Captain Picard');
-  });
-
-  it('setAnalyzerMode flips between manual and gemini', () => {
-    const a = accountSlice.reducer(undefined, accountActions.setAnalyzerMode('gemini'));
-    expect(a.analyzerMode).toBe('gemini');
-    const b = accountSlice.reducer(a, accountActions.setAnalyzerMode('manual'));
-    expect(b.analyzerMode).toBe('manual');
   });
 
   it('setWorkspaceDirOverride accepts null to clear the override', () => {

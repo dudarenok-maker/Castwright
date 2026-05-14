@@ -26,9 +26,9 @@ export interface paths {
          *     persisted; `apiKeyStatus`, `workspaceRoot`, `workspaceSource` are
          *     derived and silently ignored if submitted. Any field named
          *     `geminiApiKey` (or similar secret-shaped key) is also dropped — the
-         *     API key never leaves `server/.env`. Changes to `analyzerMode` and
-         *     `sidecarUrl` take effect on the next request; `workspaceDirOverride`
-         *     is persisted but requires a server restart to apply.
+         *     API key never leaves `server/.env`. Changes to `sidecarUrl` take
+         *     effect on the next request; `workspaceDirOverride` is persisted
+         *     but requires a server restart to apply.
          */
         put: operations["putUserSettings"];
         post?: never;
@@ -355,12 +355,6 @@ export interface components {
              */
             defaultTtsModelKey: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /**
-             * @description Overrides the ANALYZER env var. Re-read by selectAnalyzer() on
-             *     every request, so changes take effect without a server restart.
-             * @enum {string}
-             */
-            analyzerMode: "manual" | "gemini";
-            /**
              * @description Overrides the LOCAL_TTS_URL env var. Re-read on every request
              *     by the sidecar provider + health probe.
              */
@@ -401,8 +395,6 @@ export interface components {
             defaultTtsEngine?: "local" | "gemini";
             /** @enum {string} */
             defaultTtsModelKey?: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
-            /** @enum {string} */
-            analyzerMode?: "manual" | "gemini";
             sidecarUrl?: string;
             workspaceDirOverride?: string | null;
         };

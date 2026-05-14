@@ -49,9 +49,9 @@ paths:
         persisted; `apiKeyStatus`, `workspaceRoot`, `workspaceSource` are
         derived and silently ignored if submitted. Any field named
         `geminiApiKey` (or similar secret-shaped key) is also dropped — the
-        API key never leaves `server/.env`. Changes to `analyzerMode` and
-        `sidecarUrl` take effect on the next request; `workspaceDirOverride`
-        is persisted but requires a server restart to apply.
+        API key never leaves `server/.env`. Changes to `sidecarUrl` take
+        effect on the next request; `workspaceDirOverride` is persisted
+        but requires a server restart to apply.
       requestBody:
         required: true
         content:
@@ -421,7 +421,6 @@ components:
         - defaultAnalysisModel
         - defaultTtsEngine
         - defaultTtsModelKey
-        - analyzerMode
         - sidecarUrl
         - apiKeyStatus
         - workspaceRoot
@@ -453,12 +452,6 @@ components:
             TTS model key from src/lib/tts-models.ts. Used as the initial
             value of ui.ttsModelKey when a book has no persisted TTS-model
             choice (seed-only).
-        analyzerMode:
-          type: string
-          enum: [manual, gemini]
-          description: |
-            Overrides the ANALYZER env var. Re-read by selectAnalyzer() on
-            every request, so changes take effect without a server restart.
         sidecarUrl:
           type: string
           description: |
@@ -506,7 +499,6 @@ components:
         defaultTtsModelKey:
           type: string
           enum: [coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
-        analyzerMode:         { type: string, enum: [manual, gemini] }
         sidecarUrl:           { type: string }
         workspaceDirOverride:
           type: string
