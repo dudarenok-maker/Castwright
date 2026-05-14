@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { IconCheck, IconRefresh, IconSpinner } from '../lib/icons';
 import { SectionLabel, MixedHeading } from '../components/primitives';
-import { api, AnalysisError, type AnalysisLiveInfo, type AnalysisLiveChapter } from '../lib/api';
+import { api, AnalysisError, type AnalysisLiveInfo, type AnalysisLiveChapter, type AnalysisHeartbeat } from '../lib/api';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { MODEL_OPTIONS } from '../lib/models';
 import type { AnalyseResponse } from '../lib/types';
@@ -120,6 +120,39 @@ function ActivePhaseLog({ lines }: { lines: string[] }) {
   );
 }
 
+/* Live indicator that the analyzer's LLM call is actively returning bytes.
+   Displays size received, throughput, and seconds since the last chunk —
+   the third value is the most reassuring during long runs because it ticks
+   forward even between server heartbeats (we re-anchor on each event). */
+function HeartbeatRow({ hb, receivedAt }: { hb: AnalysisHeartbeat; receivedAt: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const sinceLast = Math.max(hb.sinceLastChunkMs, now - receivedAt);
+  const sinceLastSec = Math.round(sinceLast / 1000);
+  const sizeKb = hb.receivedBytes / 1024;
+  const sizeText = sizeKb >= 10 ? `${Math.round(sizeKb)} KB` : `${sizeKb.toFixed(1)} KB`;
+  const stalled = sinceLastSec > 8;
+  return (
+    <div className={`mt-2 inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${stalled ? 'text-amber-700' : 'text-emerald-700'}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${stalled ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`}/>
+      <span className="font-semibold">{stalled ? 'Stalled' : 'Receiving response'}</span>
+      <span className="text-ink/30">·</span>
+      <span>{sizeText}</span>
+      {hb.charsPerSec > 0 && (
+        <>
+          <span className="text-ink/30">·</span>
+          <span>{hb.charsPerSec.toLocaleString()} chars/s</span>
+        </>
+      )}
+      <span className="text-ink/30">·</span>
+      <span>last chunk {sinceLastSec}s ago</span>
+    </div>
+  );
+}
+
 function ConnPill({ state, sinceLastSec }: { state: ConnState; sinceLastSec: number | null }) {
   const meta = (() => {
     if (state === 'idle')       return { label: 'Idle',                tone: 'text-ink/50',    dot: 'bg-ink/30' };
@@ -169,6 +202,12 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
   const [conn, setConn] = useState<ConnState>('idle');
   const [lastEventAt, setLastEventAt] = useState<number | null>(null);
   const [live, setLive] = useState<AnalysisLiveInfo | null>(null);
+  /* Per-phase live "Receiving response" indicator. Cleared whenever the
+     active phase changes so a stale heartbeat never bleeds into the next
+     phase's UI. Heartbeat events arrive throttled (~one per 2s); the local
+     re-render every second between events advances the "last chunk Ns ago"
+     counter so the indicator never visibly stalls. */
+  const [heartbeatByPhase, setHeartbeatByPhase] = useState<Record<number, { hb: AnalysisHeartbeat; receivedAt: number }>>({});
   const [, setNow] = useState(Date.now());
   const completedRef = useRef(false);
 
@@ -182,6 +221,7 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
     setConn('connecting');
     setLastEventAt(null);
     setLive(null);
+    setHeartbeatByPhase({});
     const markEvent = () => setLastEventAt(Date.now());
     (async () => {
       try {
@@ -192,7 +232,19 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
             if (cancelled) return;
             setConn('streaming');
             markEvent();
-            setPhase(phaseId);
+            setPhase(prev => {
+              /* Drop heartbeat for the previous phase the moment the active
+                 phase advances — completed phases shouldn't keep a "still
+                 receiving" hint. */
+              if (prev !== phaseId) {
+                setHeartbeatByPhase(hbs => {
+                  if (!(prev in hbs)) return hbs;
+                  const { [prev]: _drop, ...rest } = hbs;
+                  return rest;
+                });
+              }
+              return phaseId;
+            });
             setPhaseProgress(progress);
             /* Carry the realtime "what's running right now" payload so the
                active phase header can render a ticking elapsed indicator.
@@ -204,6 +256,12 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
             setConn('streaming');
             markEvent();
             setLogs(prev => ({ ...prev, [phaseId]: [...(prev[phaseId] ?? []), message] }));
+          },
+          onHeartbeat: (hb) => {
+            if (cancelled) return;
+            setConn('streaming');
+            markEvent();
+            setHeartbeatByPhase(prev => ({ ...prev, [hb.phaseId]: { hb, receivedAt: Date.now() } }));
           },
         });
         if (cancelled || completedRef.current) return;
@@ -396,6 +454,12 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
                       <div className="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
                         <div className="h-full bg-gradient-progress rounded-full" style={{ width: `${phaseProgress * 100}%` }}/>
                       </div>
+                      {heartbeatByPhase[p.id] && (
+                        <HeartbeatRow
+                          hb={heartbeatByPhase[p.id].hb}
+                          receivedAt={heartbeatByPhase[p.id].receivedAt}
+                        />
+                      )}
                       {live && live.chapters.length > 0 && (
                         <LiveChapterTicker live={live}/>
                       )}

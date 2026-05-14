@@ -85,3 +85,63 @@ describe('AnalysingView — live ticker (regression for stuck-chapter screenshot
     expect(screen.queryByText(/Chapter \d+\/7/)).not.toBeInTheDocument();
   });
 });
+
+describe('AnalysingView — streaming heartbeat indicator', () => {
+  it('renders a "Receiving response" line under the active phase when a heartbeat arrives', () => {
+    renderView();
+
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.4 });
+      capturedOpts?.onHeartbeat?.({
+        phaseId: 0,
+        receivedBytes: 18_432, // ≈ 18 KB
+        charsPerSec: 340,
+        elapsedMs: 12_500,
+        sinceLastChunkMs: 1_200,
+      });
+    });
+
+    expect(screen.getByText(/Receiving response/i)).toBeInTheDocument();
+    expect(screen.getByText(/18 KB/)).toBeInTheDocument();
+    expect(screen.getByText(/340 chars\/s/)).toBeInTheDocument();
+    expect(screen.getByText(/last chunk 1s ago/)).toBeInTheDocument();
+  });
+
+  it('clears the previous phase\'s heartbeat the moment the active phase advances', () => {
+    renderView();
+
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.4 });
+      capturedOpts?.onHeartbeat?.({
+        phaseId: 0, receivedBytes: 4096, charsPerSec: 100,
+        elapsedMs: 5_000, sinceLastChunkMs: 800,
+      });
+    });
+    expect(screen.getByText(/Receiving response/i)).toBeInTheDocument();
+
+    /* Phase advances to 1 — stage 0's heartbeat should disappear, no new
+       heartbeat for stage 1 yet so nothing renders. */
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 1, progress: 0.05 });
+    });
+    expect(screen.queryByText(/Receiving response/i)).not.toBeInTheDocument();
+  });
+
+  it('flags as Stalled when the most recent chunk is older than the freshness threshold', () => {
+    renderView();
+
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.6 });
+      capturedOpts?.onHeartbeat?.({
+        phaseId: 0,
+        receivedBytes: 12_000,
+        charsPerSec: 200,
+        elapsedMs: 30_000,
+        sinceLastChunkMs: 12_000, // 12s — over the 8s threshold
+      });
+    });
+
+    expect(screen.getByText(/Stalled/)).toBeInTheDocument();
+    expect(screen.queryByText(/Receiving response/)).not.toBeInTheDocument();
+  });
+});
