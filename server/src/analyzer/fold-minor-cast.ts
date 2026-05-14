@@ -1,0 +1,203 @@
+/* Post-stage-2 normalisation: fold "background-only" characters into
+   two generic buckets — `unknown-male` and `unknown-female` — so the
+   cast roster doesn't accumulate a one-off voice profile per
+   "Unknown Jogger" / "Unknown Intruder" / throwaway named bystander.
+
+   Two trigger conditions, OR-combined:
+     - Name starts with "unknown" (case-insensitive). The Stage-1 prompt
+       tells the model to use "Unknown <descriptor>" for nameless speakers,
+       so this catches the contract.
+     - Attributed line count is below `minLines`. Even a named character
+       who speaks once or twice doesn't warrant its own voice profile —
+       bake them into a generic bucket so library matching and voice-clone
+       budget go to characters who actually carry the book.
+
+   Bucket selection by `gender`:
+     - 'female' → `unknown-female`
+     - anything else (male / neutral / missing) → `unknown-male`
+   Folded characters are NEVER rolled into the narrator — the user wants
+   background speakers to keep their own (shared) voice, not be read as
+   prose. Gender-ambiguous folds default to `unknown-male`; the user can
+   re-merge to the female bucket manually if the gender call was wrong.
+
+   Narrator itself is NEVER folded regardless of line count.
+
+   The function is pure: it returns the rewritten character list +
+   sentence list. The analysis route runs it on the assembled
+   stage-1 + sentence outputs just before composing the AnalyseResponse,
+   so the cache (which holds the unfolded ground truth) is untouched and
+   the fold rules can be tuned without invalidating in-flight progress. */
+
+import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
+
+export interface FoldOptions {
+  /** A character whose attributed line count is strictly below this
+      number is folded. Default 3 — i.e. anyone with 0, 1, or 2 lines
+      becomes part of the bucket. The user's framing in CLAUDE.md was
+      "no point creating a voice profile for someone who may only say 2
+      things in the whole book". */
+  minLines?: number;
+}
+
+export interface FoldResult {
+  characters: CharacterOutput[];
+  sentences: SentenceOutput[];
+  /** Old character-id → new character-id for every fold applied. */
+  rewrites: Record<string, string>;
+  /** Human-readable summary of what was folded, for the analysing-view log. */
+  summary: { foldedCount: number; intoMale: number; intoFemale: number };
+}
+
+const MIN_LINES_DEFAULT = 3;
+
+const MALE_BUCKET_ID   = 'unknown-male';
+const FEMALE_BUCKET_ID = 'unknown-female';
+const NARRATOR_ID      = 'narrator';
+
+function isUnknownName(name: string): boolean {
+  return /^unknown\b/i.test(name.trim());
+}
+
+function pickBucket(c: CharacterOutput): string {
+  /* Female only when the analyzer explicitly tagged it; everything else
+     (male, neutral, missing) goes to the male bucket. The user wants
+     two distinct background characters with no narrator fallback, so
+     ambiguous folds bias toward male; a manual merge can flip them. */
+  return c.gender === 'female' ? FEMALE_BUCKET_ID : MALE_BUCKET_ID;
+}
+
+function makeBucket(id: string, gender: 'male' | 'female'): CharacterOutput {
+  const label = gender === 'male' ? 'male' : 'female';
+  const title = gender === 'male' ? 'Unknown male' : 'Unknown female';
+  return {
+    id,
+    name: title,
+    role: 'background',
+    color: 'narrator',
+    gender,
+    description: `Composite voice covering one-off ${label} bystanders, ` +
+      `intruders, joggers, and similar background speakers who only have ` +
+      `a handful of lines. Folded automatically at analysis time so they ` +
+      `share a single generic voice instead of consuming one cast slot each.`,
+    aliases: [],
+  };
+}
+
+export function foldMinorCast(
+  characters: CharacterOutput[],
+  sentences: SentenceOutput[],
+  opts: FoldOptions = {},
+): FoldResult {
+  const minLines = opts.minLines ?? MIN_LINES_DEFAULT;
+
+  /* Count attributed lines per character id. */
+  const lineCount = new Map<string, number>();
+  for (const s of sentences) {
+    lineCount.set(s.characterId, (lineCount.get(s.characterId) ?? 0) + 1);
+  }
+
+  /* Decide who folds and where. Narrator is exempt. */
+  const rewrites: Record<string, string> = {};
+  const foldedSources: CharacterOutput[] = [];
+  for (const c of characters) {
+    if (c.id === NARRATOR_ID) continue;
+    const lines = lineCount.get(c.id) ?? 0;
+    const triggered = isUnknownName(c.name) || lines < minLines;
+    if (!triggered) continue;
+    const target = pickBucket(c);
+    if (target === c.id) continue;
+    rewrites[c.id] = target;
+    foldedSources.push(c);
+  }
+
+  /* No folds → no-op, preserve referential identity. */
+  if (foldedSources.length === 0) {
+    return {
+      characters,
+      sentences,
+      rewrites: {},
+      summary: { foldedCount: 0, intoMale: 0, intoFemale: 0 },
+    };
+  }
+
+  /* Rewrite sentence character ids. */
+  const rewrittenSentences = sentences.map(s =>
+    rewrites[s.characterId] ? { ...s, characterId: rewrites[s.characterId] } : s,
+  );
+
+  /* Determine which buckets actually received folds. */
+  const targets = new Set(Object.values(rewrites));
+  const needMale     = targets.has(MALE_BUCKET_ID);
+  const needFemale   = targets.has(FEMALE_BUCKET_ID);
+
+  /* Existing characters minus folded ones, narrator preserved in place. */
+  const survivors = characters.filter(c => !(c.id in rewrites));
+
+  /* Synthesise missing buckets (or re-use if already present in the input). */
+  const survivorById = new Map(survivors.map(c => [c.id, c]));
+  if (needMale && !survivorById.has(MALE_BUCKET_ID)) {
+    const bucket = makeBucket(MALE_BUCKET_ID, 'male');
+    survivors.push(bucket);
+    survivorById.set(bucket.id, bucket);
+  }
+  if (needFemale && !survivorById.has(FEMALE_BUCKET_ID)) {
+    const bucket = makeBucket(FEMALE_BUCKET_ID, 'female');
+    survivors.push(bucket);
+    survivorById.set(bucket.id, bucket);
+  }
+
+  /* Roll folded source names + any existing aliases into the target's
+     aliases array — same contract as the manual merge endpoint, so the
+     future voice matcher can recognise a folded background voice across
+     books in a series. Dedup case-insensitively, don't include the
+     bucket's own name. */
+  for (const src of foldedSources) {
+    const target = survivorById.get(rewrites[src.id]);
+    if (!target) continue;
+    const seen = new Set<string>([
+      target.name.toLowerCase(),
+      ...(target.aliases ?? []).map(a => a.toLowerCase()),
+    ]);
+    const next = [...(target.aliases ?? [])];
+    const add = (name: string) => {
+      const norm = name.toLowerCase().trim();
+      if (!norm || seen.has(norm)) return;
+      seen.add(norm);
+      next.push(name);
+    };
+    add(src.name);
+    for (const a of src.aliases ?? []) add(a);
+    target.aliases = next;
+  }
+
+  /* Recompute lines/scenes on every surviving character from the rewritten
+     sentence list — buckets need accurate counts, and folded-source counts
+     have to roll up. */
+  const lines  = new Map<string, number>();
+  const scenes = new Map<string, Set<number>>();
+  for (const s of rewrittenSentences) {
+    lines.set(s.characterId, (lines.get(s.characterId) ?? 0) + 1);
+    let set = scenes.get(s.characterId);
+    if (!set) { set = new Set(); scenes.set(s.characterId, set); }
+    set.add(s.chapterId);
+  }
+  const withCounts = survivors.map(c => ({
+    ...c,
+    lines:  lines.get(c.id)  ?? c.lines  ?? 0,
+    scenes: scenes.get(c.id)?.size ?? c.scenes ?? 0,
+  }));
+
+  /* Summary counters for the log line. */
+  let intoMale = 0, intoFemale = 0;
+  for (const target of Object.values(rewrites)) {
+    if (target === MALE_BUCKET_ID)        intoMale++;
+    else if (target === FEMALE_BUCKET_ID) intoFemale++;
+  }
+
+  return {
+    characters: withCounts,
+    sentences: rewrittenSentences,
+    rewrites,
+    summary: { foldedCount: foldedSources.length, intoMale, intoFemale },
+  };
+}
