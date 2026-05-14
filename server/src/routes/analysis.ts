@@ -14,6 +14,7 @@ import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/s
 import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { BookStateJson } from '../workspace/scan.js';
+import { normaliseForMatch as normaliseForMatchShared } from '../util/text-match.js';
 
 /* Human-readable label for a Gemini model id. Kept in lockstep with
    src/lib/models.ts MODEL_OPTIONS — the frontend sends the id, we render
@@ -77,20 +78,11 @@ export function sortEvidence(characters: CharacterOutput[]): void {
   }
 }
 
-/* Normalises text for evidence-vs-source substring matching. Tolerates
-   typography drift (smart quotes, em-dashes, ellipses, whitespace) that
-   legitimate verbatim copies often pick up, while still failing for
-   stitched quotes that concatenate non-adjacent passages. */
-export function normaliseForMatch(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[—–]/g, '-')
-    .replace(/…/g, '...')
-    .replace(/^[\s"'`]+|[\s"'`]+$/g, '')
-    .replace(/\s+/g, ' ');
-}
+/* Re-export the shared text normaliser (lives under server/src/util/) so
+   the existing `import { normaliseForMatch } from './analysis.js'` callers
+   (cast-merge, analysis.test) keep working. The voice-match route imports
+   it directly from the util. */
+export const normaliseForMatch = normaliseForMatchShared;
 
 /* Drops evidence quotes that aren't a substring of the source text. The
    skill prompt asks the model to copy quotes verbatim, but some models

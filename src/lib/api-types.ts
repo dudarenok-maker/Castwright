@@ -603,6 +603,24 @@ export interface components {
         };
         CharacterMatchInput: {
             id: string;
+            name: string;
+            /**
+             * @description Alternate forms accumulated when the user merged duplicate roster
+             *     entries (mirrors Character.aliases). The matcher scores against
+             *     name OR any alias on either side, so book N+1 can recognise a
+             *     character last met under a different form.
+             */
+            aliases?: string[];
+            /**
+             * @description Optional tie-breaker signal (set by analysis).
+             * @enum {string}
+             */
+            gender?: "male" | "female" | "neutral";
+            /**
+             * @description Optional tie-breaker signal (set by analysis).
+             * @enum {string}
+             */
+            ageRange?: "child" | "teen" | "adult" | "elderly";
             attributes: string[];
             tone?: {
                 warmth?: number;
