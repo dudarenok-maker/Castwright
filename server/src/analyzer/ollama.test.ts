@@ -128,7 +128,7 @@ describe('OllamaAnalyzer — keep_alive policy (per-model VRAM residency)', () =
     /* An unknown model id defaults to 0 — the conservative choice is
        "unload immediately" so we never accidentally pin a model the
        allowlist hasn't been tuned for. */
-    expect(keepAliveFor('mistral:7b')).toBe(0);
+    expect(keepAliveFor('placeholder:test-7b')).toBe(0);
   });
 
   it('threads keep_alive: "5m" into the /api/chat body when the model is qwen3.5:4b', async () => {
