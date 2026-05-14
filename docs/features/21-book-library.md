@@ -22,6 +22,10 @@ Home view that scans the on-disk workspace (`books/<Author>/<Series>/<Title>/`) 
 - `realDeleteBook` issues `DELETE /api/books/:bookId`; on error surfaces `error` from JSON body or `Delete failed (<status>)` (`src/lib/api.ts:500-507`).
 - `realReparseBook` issues `POST /api/books/:bookId/reparse`; response is `{ state: { chapters }, chapterCount, chapterTitles }` (`src/lib/api.ts:485-498`). Mock returns empty arrays (`src/lib/api.ts:513-516`).
 - Coverage gradient is a `[string, string]` tuple per `Voice.gradient` style; the row card renders both stops.
+- **Derived per-book stats are computed at scan time, not hardcoded** (`server/src/workspace/scan.ts`):
+  - `characterCount` = number of entries in `cast.json#characters` (0 when cast.json absent or malformed).
+  - `voiceCount` = distinct `voiceId ?? id` from `cast.json#characters` — characters sharing a library voice collapse into one slot (0 when cast.json absent or malformed).
+  - `runtime` = sum of `durationSec` across every `<slug>.segments.json` present in `audio/`, formatted as `"Xh Ym"` (or `"Xm"` when under one hour). `undefined` when no segments files exist, so the card renders `'—'`. Partial generations report the runtime of the chapters generated so far.
 
 ## Acceptance walkthrough
 
