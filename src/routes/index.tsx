@@ -53,7 +53,7 @@ function useHydrateStage(derived: Stage, deps: ReadonlyArray<unknown>) {
   }, deps);
 }
 
-function BooksRoute() {
+export function BooksRoute() {
   useHydrateStage({ kind: 'books' }, []);
   const dispatch = useAppDispatch();
   const library = useAppSelector(s => s.library);
@@ -82,6 +82,22 @@ function BooksRoute() {
           showError(`Couldn't re-parse "${b.title}"`, (err as Error).message, 'Re-parse');
           return;
         }
+        /* Server wiped cast.json + revisions.json + audio dir + analysis cache.
+           Mirror that in redux so a follow-up "Analyse now" doesn't merge new
+           Phase 0a cast detections on top of the previous run's roster. Also
+           reset the manuscript slice — its manuscriptId+title still pin the
+           layout's per-book hydration guard, which would otherwise short-
+           circuit and leave the cleared slices unrefreshed when the user
+           navigates back into the analysing stage.
+
+           Unconditional reset: this code runs from the books library, where
+           ui.stage.bookId is always undefined; gating on `bookId === b.bookId`
+           would never fire. Any per-book state still in redux is by definition
+           the *previous* open's residue, so wiping it is correct regardless
+           of which book is being re-parsed — the next book open re-hydrates
+           from disk. */
+        dispatch(castActions.setCharacters([]));
+        dispatch(manuscriptActions.reset());
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
         if (bookId === b.bookId) dispatch(uiActions.goHome());
