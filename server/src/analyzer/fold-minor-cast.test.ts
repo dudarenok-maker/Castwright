@@ -156,7 +156,7 @@ describe('foldMinorCast', () => {
     expect(bucket.aliases).toEqual(['Unknown Jogger', 'Unknown Shopkeep', 'The Shopkeeper', 'Garrow']);
     expect(bucket.lines).toBe(3);
     expect(bucket.scenes).toBe(3); // chapters 2, 3, 4
-    expect(result.summary).toEqual({ foldedCount: 3, intoMale: 3, intoFemale: 0 });
+    expect(result.summary).toEqual({ foldedCount: 3, intoMale: 3, intoFemale: 0, droppedSilent: 0 });
   });
 
   it('is idempotent — running on already-folded output produces the same result', () => {
@@ -206,7 +206,7 @@ describe('foldMinorCast', () => {
     expect(male.aliases).toEqual(['Unknown Runner']);
     expect(female.name).toBe('Unknown female');
     expect(male.name).toBe('Unknown male');
-    expect(result.summary).toEqual({ foldedCount: 3, intoMale: 1, intoFemale: 2 });
+    expect(result.summary).toEqual({ foldedCount: 3, intoMale: 1, intoFemale: 2, droppedSilent: 0 });
   });
 
   it('minLines: 0 disables the line-count trigger — only Unknown-named characters fold', () => {
@@ -252,6 +252,61 @@ describe('foldMinorCast', () => {
     const bucket = result.characters.find(c => c.id === 'unknown-male')!;
     expect(bucket.aliases).toEqual(['Marlow Halden']);
     expect(bucket.lines).toBe(4);
+  });
+
+  it('drops zero-line non-narrator characters entirely (no voice profile, narrator covers them)', () => {
+    /* Per-chapter detection sometimes slips pets, animals, or magical
+       creatures onto the roster because the narrator describes their
+       behaviour ("Marty purred"). Stage 2 attributes those onomatopoeic
+       lines to the narrator, leaving the pet with zero attributed
+       sentences. The fold pass drops such characters entirely so the
+       cast doesn't accumulate non-speaking entries. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('Wren',   { name: 'Wren',   gender: 'female' }),
+      makeChar('marty',    { name: 'Marty',    gender: 'neutral' }),  // pet cat — 0 lines
+      makeChar('verminion',{ name: 'Verminion',gender: 'neutral' }),  // imp — 0 lines
+      makeChar('Rufus',    { name: 'Rufus',    gender: 'neutral' }),  // pet dinosaur — 0 lines
+    ];
+    const sentences = makeSentences([
+      [1, 'narrator'], [1, 'narrator'], [1, 'narrator'],
+      [1, 'Wren'],   [1, 'Wren'],   [1, 'Wren'],
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+
+    expect(result.characters.map(c => c.id).sort()).toEqual(['narrator', 'Wren']);
+    expect(result.dropped.sort()).toEqual(['Marty', 'Rufus', 'Verminion']);
+    expect(result.summary.droppedSilent).toBe(3);
+    expect(result.summary.foldedCount).toBe(0);
+    /* No unknown-male / unknown-female bucket — these aren't background
+       speakers, they're non-speakers, so the narrator handles them. */
+    expect(result.characters.find(c => c.id === 'unknown-male')).toBeUndefined();
+    expect(result.characters.find(c => c.id === 'unknown-female')).toBeUndefined();
+  });
+
+  it('keeps an "Unknown <descriptor>" entry with 0 lines as a fold (analyzer-flagged minor speaker, not a non-speaker)', () => {
+    /* "Unknown Jogger" with 0 attributed lines still folds rather than
+       drops — the "Unknown" naming convention is a signal from the
+       analyzer that this is a one-off speaker whose lines may have been
+       missed during stage 2 attribution. The user-facing behaviour
+       stays "fold into unknown-male" not "drop entirely". */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('Wren',         { name: 'Wren',         gender: 'female' }),
+      makeChar('unknown-passer', { name: 'Unknown Passer', gender: 'male' }),
+    ];
+    const sentences = makeSentences([
+      [1, 'narrator'],
+      [1, 'Wren'], [1, 'Wren'], [1, 'Wren'],
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+
+    expect(result.rewrites).toEqual({ 'unknown-passer': 'unknown-male' });
+    expect(result.summary.droppedSilent).toBe(0);
+    const bucket = result.characters.find(c => c.id === 'unknown-male')!;
+    expect(bucket.aliases).toEqual(['Unknown Passer']);
   });
 
   it('dedups bucket aliases case-insensitively and never adds the bucket\'s own name', () => {

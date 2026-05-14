@@ -60,6 +60,37 @@ about exactly one chapter's id.
 
 ## Rules
 
+### Only actual speakers (CRITICAL — drives whether a voice profile is created)
+
+A character belongs in the roster **only if they have at least one quoted
+utterance of their own in this chapter** — a line of direct speech the
+narrator attributes to them, e.g. `"Hello," she said.` or
+`"Get out!" Marty growled.`
+
+Do **NOT** include:
+
+- Pets, animals, or non-speaking creatures (a cat that purrs, a dog that
+  barks, a horse that whinnies, a magical creature that scampers).
+  Sounds the narrator describes are not dialogue. Marty the cat, Rufus
+  the pet dinosaur, an imp that hisses — all of these are narrator
+  business, not cast.
+- Characters mentioned by name in narration but who never speak in this
+  chapter (a character described, remembered, talked-about, or in the
+  background of a scene without saying anything).
+- Inanimate objects, places, abstract concepts, or named items.
+- Entities whose only "lines" are non-verbal sounds (growls, purrs,
+  squeaks, hisses, roars) rendered as onomatopoeia. These read aloud
+  in the narrator's voice; they do not need their own roster slot.
+
+Test for inclusion: can you copy a verbatim sentence from this chapter
+that is dialogue the entity *speaks*? If no, they do not go on the
+roster. The narrator covers them.
+
+If a character previously had dialogue in an earlier chapter (already on
+the roster) but only appears in narration in *this* chapter, omit them
+from this chapter's output — see "Returning characters NOT in this
+chapter" below.
+
 ### Reusing existing ids (CRITICAL — drives roster stability)
 
 - If a character in this chapter is **already in the running roster**,
