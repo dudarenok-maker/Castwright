@@ -2,10 +2,11 @@
 fallbacks. Builds on the _FakeEngine + client fixture in test_smoke.py to
 keep test setup uniform across the sidecar suite.
 
-Scope note: these tests deliberately stay off the sidecar's perf knobs
-(COQUI_HALF, COQUI_DEEPSPEED, COQUI_DEVICE) — DeepSpeed enablement is in
-flight in a separate work stream, and the existing
-test_resolve_runtime_options_* tests already pin the decision tree."""
+Scope note: this file covers the HTTP wire surface only. Perf-knob wiring
+(COQUI_HALF / COQUI_DEEPSPEED / COQUI_DEVICE flowing through to
+init_gpt_for_inference + torch.autocast) lives in test_runtime_wiring.py;
+the env-var → flag decision tree lives in test_smoke.py's
+test_resolve_runtime_options_* cases."""
 from __future__ import annotations
 
 import sys
