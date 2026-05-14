@@ -49,7 +49,7 @@ beforeEach(() => {
   unloadSidecarSpy.mockReset();
   getOllamaHealthSpy.mockReset();
   getSidecarHealthSpy.mockReset();
-  getOllamaHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', models: [] });
+  getOllamaHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', models: [], resident: [], modelResident: false });
   getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
 });
 
@@ -592,8 +592,12 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
   }
 
   it('calls unloadAnalyzer before loadSidecar and surfaces the eviction banner when the analyzer was loaded', async () => {
+    /* modelResident is the truth: pulled-but-not-resident shouldn't fire
+       the banner. /api/ps says qwen3.5:4b is in VRAM right now. */
     getOllamaHealthSpy.mockResolvedValue({
-      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'], expectedModel: 'qwen3.5:4b', modelPulled: true,
+      status: 'reachable', url: '(test)',
+      models: ['qwen3.5:4b'], expectedModel: 'qwen3.5:4b', modelPulled: true,
+      resident: ['qwen3.5:4b'], modelResident: true,
     });
 
     renderView();
@@ -612,8 +616,13 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
   });
 
   it('does not surface the banner when the analyzer had no model loaded', async () => {
+    /* Pulled-but-not-resident is the case that the OLD check (`models.length > 0`)
+       got wrong — it fired the banner for a model that was never warmed.
+       modelResident:false guards against that lie. */
     getOllamaHealthSpy.mockResolvedValue({
-      status: 'reachable', url: '(test)', models: [], expectedModel: 'qwen3.5:4b', modelPulled: false,
+      status: 'reachable', url: '(test)',
+      models: ['qwen3.5:4b'], expectedModel: 'qwen3.5:4b', modelPulled: true,
+      resident: [], modelResident: false,
     });
 
     renderView();

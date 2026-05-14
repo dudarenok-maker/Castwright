@@ -31,9 +31,11 @@ vi.mock('../lib/api', async () => {
       getOllamaHealth: () => Promise.resolve({
         status: 'reachable' as const,
         url: '(test)',
-        models: [],
+        models: ['qwen3.5:4b'],
         expectedModel: 'qwen3.5:4b',
         modelPulled: true,
+        resident: [],
+        modelResident: false,
       }),
       getSidecarHealth: () => getSidecarHealthSpy(),
       loadAnalyzer:    () => { loadAnalyzerSpy(); return Promise.resolve({ status: 'ready' as const }); },

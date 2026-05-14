@@ -236,17 +236,18 @@ export function GenerationView({
     setPendingPillState('loading');
     setEvictionNotice(null);
     /* Auto-evict the analyzer before warming TTS — both models compete for
-       the same VRAM on a single-GPU box. If the analyzer wasn't loaded the
-       call is a cheap no-op on Ollama's side; either way we surface a
+       the same VRAM on a single-GPU box. If the analyzer wasn't resident
+       the call is a cheap no-op on Ollama's side; either way we surface a
        banner only when the unload actually freed something so we don't
-       lie about state. */
+       lie about state. modelResident (from /api/ps) is the truth — models
+       array (from /api/tags) lists pulled-not-loaded models too. */
     let analyzerWasLoaded = false;
     try {
       const ollama = await api.getOllamaHealth();
-      analyzerWasLoaded = ollama.status === 'reachable' && (ollama.models?.length ?? 0) > 0;
+      analyzerWasLoaded = ollama.status === 'reachable' && ollama.modelResident === true;
     } catch {
       /* If the analyzer health probe fails we still try to unload — Ollama
-         might be reachable for /api/generate even if /api/tags is flaky. */
+         might be reachable for /api/generate even if /api/ps is flaky. */
     }
     try {
       await api.unloadAnalyzer();

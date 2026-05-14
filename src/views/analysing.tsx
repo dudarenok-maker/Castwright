@@ -399,7 +399,10 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
     if (conn === 'streaming' || conn === 'connecting') return conn === 'streaming' ? 'streaming' : 'loading';
     if (!ollamaHealth) return 'idle';
     if (ollamaHealth.status === 'unreachable') return 'unreachable';
-    if ((ollamaHealth.models?.length ?? 0) > 0) return 'ready';
+    /* Resident-in-VRAM (not just "pulled") — the model has to be loaded
+       AND at the analyzer's num_ctx for the next chat call to skip the
+       reload. modelResident comes from Ollama's /api/ps. */
+    if (ollamaHealth.modelResident) return 'ready';
     return 'idle';
   })();
 
