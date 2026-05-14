@@ -418,16 +418,11 @@ export interface components {
             /**
              * @description Base URL of the local Ollama daemon. Falls through to OLLAMA_URL
              *     env then http://localhost:11434 in the server resolver. Re-read
-             *     on every analysis request, like sidecarUrl.
+             *     on every analysis request, like sidecarUrl. The Ollama *model*
+             *     tag is not stored separately — `defaultAnalysisModel` doubles
+             *     as the Ollama tag when it has Ollama shape (contains ':').
              */
             ollamaUrl: string;
-            /**
-             * @description Ollama model tag passed to /api/chat (e.g. qwen3.5:9b). Default
-             *     qwen3.5:9b is the recommended pick for 8 GB VRAM — see plan 29.
-             *     The analysis route honours a per-request `model` override on
-             *     top of this default.
-             */
-            ollamaModel: string;
             /**
              * @description Optional override for the WORKSPACE_DIR env var. Read once at
              *     server startup — changes require a server restart to apply
@@ -481,7 +476,6 @@ export interface components {
             /** @enum {string} */
             analysisEngine?: "local" | "gemini";
             ollamaUrl?: string;
-            ollamaModel?: string;
             workspaceDirOverride?: string | null;
             minorCastMinLines?: number;
         };

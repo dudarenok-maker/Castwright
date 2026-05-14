@@ -39,10 +39,6 @@ export const userSettingsSchema = z.object({
   /* Base URL of the local Ollama daemon. Falls through to OLLAMA_URL env
      and then http://localhost:11434 in getResolvedOllamaUrl. */
   ollamaUrl:            z.string().min(1).max(2000),
-  /* Model tag passed to /api/chat. Default qwen3.5:9b is the recommended
-     pick for 8 GB VRAM — see plan 29. The analysis route honours a
-     per-request `model` override on top of this default. */
-  ollamaModel:          z.string().min(1).max(120),
   workspaceDirOverride: z.string().max(2000).nullable(),
   /* Threshold for the minor-cast fold pass — see
      server/src/analyzer/fold-minor-cast.ts. A character with FEWER than
@@ -63,7 +59,6 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   sidecarUrl:           'http://localhost:9000',
   analysisEngine:       'local',
   ollamaUrl:            'http://localhost:11434',
-  ollamaModel:          'qwen3.5:9b',
   workspaceDirOverride: null,
   minorCastMinLines:    3,
 };
@@ -149,11 +144,17 @@ export function getResolvedOllamaUrl(): string {
   return raw.replace(/\/+$/, '');
 }
 
-/** Ollama model tag passed to /api/chat. Mirrors getResolvedOllamaUrl's
-    fallback chain: cached settings → OLLAMA_MODEL env → static default. */
+/** Ollama model tag passed to /api/chat. The single source of truth for
+    which model the local engine uses is `defaultAnalysisModel` from the
+    top "Analysis model" picker — when it has Ollama tag shape (contains
+    ':'), use it directly. Otherwise fall back to OLLAMA_MODEL env, then
+    the static default. The per-request `model` override (see
+    selectAnalyzer) trumps both. */
 export function getResolvedOllamaModel(): string {
   const c = cached;
-  return c?.ollamaModel ?? process.env.OLLAMA_MODEL ?? 'qwen3.5:9b';
+  const fromSettings = c?.defaultAnalysisModel;
+  if (fromSettings && fromSettings.includes(':')) return fromSettings;
+  return process.env.OLLAMA_MODEL ?? 'qwen3.5:9b';
 }
 
 /** Analyzer engine selector: cached settings → ANALYZER env → 'local'.
