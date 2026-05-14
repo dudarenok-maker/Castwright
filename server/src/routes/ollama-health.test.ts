@@ -27,17 +27,30 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/* /api/ollama/health now fans out across /api/tags AND /api/ps so the
+   probe can tell "pulled" from "resident in VRAM". The mock routes match
+   on URL substring so the order of Promise.all resolution doesn't matter. */
+function mockOllamaProbes(opts: { tags: Array<{ name: string }>, ps?: Array<{ name: string }> }) {
+  fetchMock.mockImplementation((url: string) => {
+    if (url.endsWith('/api/tags')) {
+      return Promise.resolve(new Response(JSON.stringify({ models: opts.tags }), { status: 200 }));
+    }
+    if (url.endsWith('/api/ps')) {
+      return Promise.resolve(new Response(JSON.stringify({ models: opts.ps ?? [] }), { status: 200 }));
+    }
+    return Promise.resolve(new Response('', { status: 404 }));
+  });
+}
+
 describe('GET /api/ollama/health', () => {
   it('returns reachable with the models array when the daemon answers 200', async () => {
     /* expectedModel mirrors DEFAULT_USER_SETTINGS.defaultAnalysisModel
        via getResolvedOllamaModel; the mocked /api/tags response must
        include that tag for modelPulled to come back true. */
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({
-      models: [
-        { name: 'qwen3.5:4b' },
-        { name: 'llama3.1:8b' },
-      ],
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    mockOllamaProbes({
+      tags: [{ name: 'qwen3.5:4b' }, { name: 'llama3.1:8b' }],
+      ps: [{ name: 'qwen3.5:4b' }],
+    });
 
     const res = await request(makeApp()).get('/api/ollama/health');
     expect(res.status).toBe(200);
@@ -45,14 +58,31 @@ describe('GET /api/ollama/health', () => {
     expect(res.body.models).toEqual(['qwen3.5:4b', 'llama3.1:8b']);
     expect(res.body.expectedModel).toBe('qwen3.5:4b');
     expect(res.body.modelPulled).toBe(true);
+    expect(res.body.modelResident).toBe(true);
+    expect(res.body.resident).toEqual(['qwen3.5:4b']);
+  });
+
+  it('separates "pulled" from "resident" — pulled-but-not-loaded must NOT flip the pill to ready', async () => {
+    /* This is the regression that surfaced as the "Try Again" loop: the
+       Analysing pill was showing green because the model was pulled, but
+       it wasn't actually warmed at the analyzer's num_ctx — Ollama
+       reloaded mid-request and the SSE died. /api/ps is the source of
+       truth for "is the weight actually in VRAM right now". */
+    mockOllamaProbes({
+      tags: [{ name: 'qwen3.5:4b' }],
+      ps: [],
+    });
+
+    const res = await request(makeApp()).get('/api/ollama/health');
+    expect(res.body.modelPulled).toBe(true);
+    expect(res.body.modelResident).toBe(false);
+    expect(res.body.resident).toEqual([]);
   });
 
   it('flags modelPulled=false when the configured model is absent from /api/tags', async () => {
     /* Mock /api/tags returns only llama — the expected qwen3.5:4b isn't
        pulled, so the endpoint should flag modelPulled: false. */
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({
-      models: [{ name: 'llama3.1:8b' }],
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    mockOllamaProbes({ tags: [{ name: 'llama3.1:8b' }], ps: [] });
 
     const res = await request(makeApp()).get('/api/ollama/health');
     expect(res.status).toBe(200);
@@ -93,7 +123,7 @@ describe('GET /api/ollama/health', () => {
 });
 
 describe('POST /api/ollama/load', () => {
-  it('POSTs /api/generate with keep_alive: "5m" + empty prompt and returns {status: ready}', async () => {
+  it('POSTs /api/generate with keep_alive: "5m", empty prompt, and the analyzer num_ctx', async () => {
     fetchMock.mockResolvedValue(new Response('', { status: 200 }));
 
     const res = await request(makeApp()).post('/api/ollama/load');
@@ -113,6 +143,11 @@ describe('POST /api/ollama/load', () => {
     const body = JSON.parse(init.body);
     expect(body.prompt).toBe('');
     expect(body.stream).toBe(false);
+    /* CRITICAL: warming must use the same num_ctx the analyzer's runStage
+       path passes (ANALYZER_NUM_CTX in server/src/analyzer/ollama.ts). If
+       these drift, the first real analysis call triggers a model reload
+       and the SSE dies mid-stream — the "Try Again" infinite-loop bug. */
+    expect(body.options?.num_ctx).toBe(16384);
   });
 
   it('surfaces the upstream error envelope when Ollama returns non-2xx', async () => {

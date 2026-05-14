@@ -93,6 +93,15 @@ export function keepAliveFor(model: string): string | number {
   return RESIDENT_MODELS.has(model) ? '5m' : 0;
 }
 
+/* num_ctx the analyzer hands Ollama on every /api/chat call (see the
+   structured-output runStage path below). Exported so the in-app Load
+   button's warming probe can pass the same value — Ollama treats
+   (model, num_ctx) as the cache key, so warming with default 2048 and
+   then running with 16384 triggers a full model reload mid-request,
+   which surfaces to the UI as "stream ended without a result event"
+   while Ollama re-paged the model. */
+export const ANALYZER_NUM_CTX = 16384;
+
 export class OllamaAnalyzer implements Analyzer {
   private readonly url: string;
   private readonly model: string;
@@ -290,7 +299,7 @@ export class OllamaAnalyzer implements Analyzer {
            structured-output path stalled with no first byte. The 4B
            weights (~3 GB) leave enough headroom on an 8 GB box for the
            larger KV cache. */
-        num_ctx: 16384,
+        num_ctx: ANALYZER_NUM_CTX,
       },
     };
 

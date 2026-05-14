@@ -9,6 +9,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../workspace/user-settings.js';
+import { ANALYZER_NUM_CTX } from '../analyzer/ollama.js';
 
 export const ollamaHealthRouter = Router();
 
@@ -26,25 +27,39 @@ interface OllamaTagsResponse {
    30s ceiling, but keep /unload on the 2s probe budget. */
 const LOAD_TIMEOUT_MS = 30_000;
 
+interface OllamaPsResponse {
+  models?: Array<{ name?: string; model?: string; expires_at?: string }>;
+}
+
 ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
   const url = getResolvedOllamaUrl();
   const expectedModel = getResolvedOllamaModel();
-  const target = `${url}/api/tags`;
+  /* Two probes in parallel: /api/tags for "is it pulled" and /api/ps for
+     "is it actually resident in VRAM". The pill needs the *resident*
+     signal — pulled-but-not-loaded looks identical to ready without it,
+     which is exactly the bug that surfaced as the "Try Again" loop:
+     after the user clicked Load and our warm-up succeeded, the model
+     was loaded but with the wrong num_ctx; analysis then triggered a
+     reload that broke the SSE, and the pill stayed green because tags
+     never stops listing the pulled model. */
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
-    const response = await fetch(target, { method: 'GET', signal: controller.signal });
+    const [tagsResp, psResp] = await Promise.all([
+      fetch(`${url}/api/tags`, { method: 'GET', signal: controller.signal }),
+      fetch(`${url}/api/ps`,   { method: 'GET', signal: controller.signal }),
+    ]);
     clearTimeout(timer);
-    if (!response.ok) {
+    if (!tagsResp.ok) {
       return res.json({
         status: 'unreachable',
         url,
-        error: `Ollama returned ${response.status} ${response.statusText}`,
+        error: `Ollama returned ${tagsResp.status} ${tagsResp.statusText}`,
       });
     }
-    const body = (await response.json().catch(() => ({}))) as OllamaTagsResponse;
-    const models = Array.isArray(body.models)
-      ? body.models.map(m => m.name ?? m.model ?? '').filter(Boolean)
+    const tagsBody = (await tagsResp.json().catch(() => ({}))) as OllamaTagsResponse;
+    const models = Array.isArray(tagsBody.models)
+      ? tagsBody.models.map(m => m.name ?? m.model ?? '').filter(Boolean)
       : [];
     /* Tag matching tolerates Ollama's habit of canonicalising tags (a model
        pulled as `qwen3.5:9b` may appear in /api/tags as `qwen3.5:9b` with no
@@ -55,12 +70,25 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
     const hasExpected = models.some(m =>
       m === expectedFull || m.startsWith(`${expectedFull}-`) || m.split(':')[0] === expectedRoot && m.startsWith(`${expectedRoot}:`)
     );
+    let resident: string[] = [];
+    let expectedResident = false;
+    if (psResp.ok) {
+      const psBody = (await psResp.json().catch(() => ({}))) as OllamaPsResponse;
+      resident = Array.isArray(psBody.models)
+        ? psBody.models.map(m => m.name ?? m.model ?? '').filter(Boolean)
+        : [];
+      expectedResident = resident.some(m =>
+        m === expectedFull || m.startsWith(`${expectedFull}-`) || m.split(':')[0] === expectedRoot && m.startsWith(`${expectedRoot}:`)
+      );
+    }
     return res.json({
       status: 'reachable',
       url,
       models,
       expectedModel,
       modelPulled: hasExpected,
+      resident,
+      modelResident: expectedResident,
     });
   } catch (e) {
     clearTimeout(timer);
@@ -127,13 +155,27 @@ async function callOllamaGenerate(
 
 /* POST /api/ollama/load — warm the configured analyzer model into VRAM so
    the next analysis run skips the cold-load tax. Used by the Analysing
-   screen's Load button. */
+   screen's Load button.
+
+   CRITICAL: pass the exact same num_ctx the analyzer's runStage path uses
+   (ANALYZER_NUM_CTX, 16K). Ollama treats (model, num_ctx) as the cache key
+   — warming with the default 2048 and then running analysis with 16384
+   forces a full model reload on the first analyzer chat call, which
+   surfaces to the UI as "Analysis stream ended without a result event"
+   mid-reload. The user sees the pill go green ("Analyzer ready") but
+   every Try Again triggers the same reload-and-die loop. */
 ollamaHealthRouter.post('/load', async (_req: Request, res: Response) => {
   const url = getResolvedOllamaUrl();
   const model = getResolvedOllamaModel();
   const result = await callOllamaGenerate(
     url,
-    { model, prompt: '', keep_alive: '5m', stream: false },
+    {
+      model,
+      prompt: '',
+      keep_alive: '5m',
+      stream: false,
+      options: { num_ctx: ANALYZER_NUM_CTX },
+    },
     LOAD_TIMEOUT_MS,
   );
   if (!result.ok) {

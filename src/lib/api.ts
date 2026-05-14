@@ -930,6 +930,13 @@ export interface OllamaHealth {
   models?: string[];
   expectedModel?: string;
   modelPulled?: boolean;
+  /* Resident-in-VRAM signal from Ollama's /api/ps probe. The pill needs
+     this distinct from `modelPulled` because pulled-but-not-loaded looks
+     identical to ready otherwise — and that's the state that caused the
+     "Try Again" loop (warm-up succeeded at 2K ctx, analysis reloaded at
+     16K ctx mid-request, pill stayed green because pulled never flips). */
+  resident?: string[];
+  modelResident?: boolean;
   error?: string;
 }
 
@@ -1116,9 +1123,11 @@ async function mockGetOllamaHealth(): Promise<OllamaHealth> {
   return {
     status: 'reachable',
     url: '(mock)',
-    models: MOCK_OLLAMA_MODEL_LOADED ? ['qwen3.5:4b'] : [],
+    models: ['qwen3.5:4b'],
     expectedModel: 'qwen3.5:4b',
     modelPulled: true,
+    resident: MOCK_OLLAMA_MODEL_LOADED ? ['qwen3.5:4b'] : [],
+    modelResident: MOCK_OLLAMA_MODEL_LOADED,
   };
 }
 

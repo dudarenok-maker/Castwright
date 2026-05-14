@@ -52,7 +52,7 @@ vi.mock('../lib/api', () => ({
        default — MODEL_OPTIONS[0] is qwen3.5:4b). These tests only care
        about manuscriptId derivation, so resolve the probe to a benign
        reachable shape and no-op the load/unload calls. */
-    getOllamaHealth:   () => Promise.resolve({ status: 'reachable', url: '(test)', models: [], expectedModel: 'qwen3.5:4b', modelPulled: false }),
+    getOllamaHealth:   () => Promise.resolve({ status: 'reachable', url: '(test)', models: [], expectedModel: 'qwen3.5:4b', modelPulled: false, resident: [], modelResident: false }),
     getSidecarHealth:  () => Promise.resolve({ status: 'unreachable', url: '(test)' }),
     loadSidecar:       () => Promise.resolve({ status: 'idle' }),
     unloadSidecar:     () => Promise.resolve({ status: 'idle' }),
