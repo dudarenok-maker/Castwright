@@ -267,3 +267,63 @@ describe('GET handler — filters orphan edits against the analysis cache', () =
     expect(ids.sort((a, b) => a - b)).toEqual([1, 42]);
   });
 });
+
+describe('reparse handler — legacy text-masquerading-as-binary fallback', () => {
+  /* Pre-fix versions of the import route wrote the *extracted text* to
+     manuscript.epub instead of the original binary. The reparse handler
+     must detect that, route the read through parseText, and produce a
+     valid chapter list — instead of crashing with "Invalid/missing file"
+     from epub2's adm-zip when it's handed plain text. */
+
+  const LEGACY_AUTHOR = 'Legacy Test';
+  const LEGACY_SERIES = 'Standalones';
+  const LEGACY_TITLE  = 'Legacy Text As Epub';
+  const LEGACY_MANUSCRIPT_ID = 'm_legacy_text_as_epub';
+  let legacyBookDir: string;
+  let legacyBookId: string;
+  let legacyCachePath: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    legacyBookId  = makeBookId(LEGACY_AUTHOR, LEGACY_SERIES, LEGACY_TITLE);
+    legacyBookDir = join(workspaceRoot, 'books', LEGACY_AUTHOR, LEGACY_SERIES, LEGACY_TITLE);
+    legacyCachePath = join(CACHE_DIR, `${LEGACY_MANUSCRIPT_ID}.json`);
+    mkdirSync(join(legacyBookDir, '.audiobook'), { recursive: true });
+    /* Plain text written to a .epub-named file — the exact pre-fix
+       failure mode. H2 (`##`) for both chapters so neither gets eaten
+       as the document title (parseText reserves the FIRST H1 for that). */
+    writeFileSync(
+      join(legacyBookDir, 'manuscript.epub'),
+      `## Chapter One\n\nFirst legacy sentence.\n\n## Chapter Two\n\nSecond legacy sentence.\n`,
+    );
+    writeFileSync(
+      join(legacyBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: legacyBookId,
+        manuscriptId: LEGACY_MANUSCRIPT_ID,
+        title: LEGACY_TITLE,
+        author: LEGACY_AUTHOR,
+        series: LEGACY_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.epub',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  afterAll(() => {
+    if (existsSync(legacyCachePath)) rmSync(legacyCachePath, { force: true });
+  });
+
+  it('routes through parseText when the on-disk .epub is actually plain text and produces a chapter list', async () => {
+    const res = await request(app).post(`/api/books/${legacyBookId}/reparse`);
+    expect(res.status).toBe(200);
+    expect(res.body.chapterCount).toBe(2);
+    expect(res.body.chapterTitles).toEqual(['Chapter One', 'Chapter Two']);
+  });
+});

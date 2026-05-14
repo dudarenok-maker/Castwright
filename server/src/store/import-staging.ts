@@ -18,6 +18,13 @@ export interface StagedImport {
   chapters: ChapterHint[];
   originalFileName: string | null;
   byteSize: number;
+  /** Original uploaded bytes — verbatim. Persisted to disk on confirm
+      so re-parse can re-run the parser over the same input later.
+      Required for ALL formats: EPUB/PDF need the binary, but markdown/
+      plaintext also need it because parseText strips headings and
+      injects audio tags into sourceText, so sourceText is NOT a
+      faithful copy of the original. */
+  originalBuffer: Buffer;
   createdAt: number;
 }
 

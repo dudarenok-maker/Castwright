@@ -67,6 +67,13 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
     let parsed;
     let originalFileName: string | null = null;
     let byteSize = 0;
+    /* Hold the uploaded bytes so we can persist them verbatim to the
+       workspace book directory on confirm. Required for ALL formats —
+       EPUB/PDF need the binary so re-parse can feed it back to the
+       binary parsers, and markdown/plaintext need it too because
+       parseText strips headings and injects audio tags into sourceText
+       (so sourceText is not a faithful copy of the original input). */
+    let originalBuffer: Buffer;
 
     if (req.file) {
       parsed = await parseManuscript({
@@ -76,11 +83,13 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
       });
       originalFileName = req.file.originalname;
       byteSize = req.file.size;
+      originalBuffer = req.file.buffer;
     } else if (typeof req.body?.text === 'string') {
       const fileName = typeof req.body?.fileName === 'string' ? req.body.fileName : undefined;
       parsed = await parseManuscript({ text: req.body.text, fileName });
       originalFileName = fileName ?? null;
-      byteSize = Buffer.byteLength(parsed.sourceText, 'utf8');
+      byteSize = Buffer.byteLength(req.body.text, 'utf8');
+      originalBuffer = Buffer.from(req.body.text, 'utf8');
     } else {
       return res.status(400).json({ error: 'Provide either multipart `file` or JSON `text`.' });
     }
@@ -97,6 +106,7 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
       chapters: parsed.chapters,
       originalFileName,
       byteSize,
+      originalBuffer,
       createdAt: Date.now(),
     };
     putStaging(entry);
@@ -175,7 +185,13 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     await mkdir(bookDir, { recursive: true });
     await mkdir(dotAudiobook(bookDir), { recursive: true });
     await mkdir(join(bookDir, 'audio'), { recursive: true });
-    await writeFile(manuscriptPath, entry.sourceText, 'utf8');
+    /* Persist the ORIGINAL uploaded bytes verbatim — re-parse later
+       needs the unmodified input. Earlier versions wrote sourceText
+       (the *extracted* text), which broke EPUB re-parse outright (plain
+       text isn't a valid ZIP) and silently corrupted markdown re-parse
+       too (parseText strips headings + injects audio tags, so re-parsing
+       the already-stripped-and-tagged text produces wrong chapters). */
+    await writeFile(manuscriptPath, entry.originalBuffer);
 
     const now = new Date().toISOString();
     const state: BookStateJson = {
