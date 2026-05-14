@@ -60,6 +60,10 @@ vi.mock('../lib/api', () => ({
     unloadSidecar:     () => Promise.resolve({ status: 'idle' }),
     loadAnalyzer:      () => Promise.resolve({ status: 'ready' }),
     unloadAnalyzer:    () => Promise.resolve({ status: 'unloaded' }),
+    /* AnalysingView fetches book-state on mount to hydrate the
+       per-chapter failed list. These tests don't exercise that surface;
+       reject so the catch path silently skips hydration. */
+    getBookState:      () => Promise.reject(new Error('not mocked')),
   },
   AnalysisError: class extends Error {
     code = 'unknown';

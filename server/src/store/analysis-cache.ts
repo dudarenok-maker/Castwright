@@ -33,6 +33,13 @@ export interface AnalysisCache {
       under-estimates the budget by 3-5×. */
   castDurations?: Record<number, number>;
   stage2Durations?: Record<number, number>;
+  /** Chapter ids whose Phase 0a cast detection threw after the analyzer's
+      built-in retry. The matching `chapterCast[id]` entry is `[]` (the
+      failure marker — see analysis.ts catch path), but storing the id list
+      separately lets the UI distinguish "tried and failed" from "tried and
+      genuinely had no cast" and surface a per-chapter retry affordance
+      that survives reload. Subset re-runs remove the id on success. */
+  failedChapterIds?: number[];
   updatedAt?: string;
 }
 
@@ -52,6 +59,7 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
     chapters: cache.chapters ?? {},
     castDurations: cache.castDurations ?? undefined,
     stage2Durations: cache.stage2Durations ?? undefined,
+    failedChapterIds: cache.failedChapterIds ?? undefined,
     updatedAt: cache.updatedAt,
   };
 }

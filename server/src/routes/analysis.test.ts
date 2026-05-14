@@ -430,4 +430,38 @@ describe('AnalysisCache schema — persisted durations', () => {
       await clearAnalysisCache(id);
     }
   });
+
+  /* failedChapterIds backs the analysing view's per-chapter Retry buttons
+     and the full-route's resume-with-retry behaviour. The cache must keep
+     it across save/load, AND legacy caches written before the field
+     existed must still load without exploding — otherwise `npm run dev`
+     against an existing partial book breaks on the first resume. */
+  it('round-trips failedChapterIds through load/save', async () => {
+    const { loadAnalysisCache, saveAnalysisCache, clearAnalysisCache } =
+      await import('../store/analysis-cache.js');
+    const id = `test-failedchapterids-${Date.now()}`;
+    try {
+      await saveAnalysisCache(id, {
+        chapters: {},
+        failedChapterIds: [44, 49],
+      });
+      const loaded = await loadAnalysisCache(id);
+      expect(loaded.failedChapterIds).toEqual([44, 49]);
+    } finally {
+      await clearAnalysisCache(id);
+    }
+  });
+
+  it('returns undefined failedChapterIds for caches that predate the field', async () => {
+    const { loadAnalysisCache, saveAnalysisCache, clearAnalysisCache } =
+      await import('../store/analysis-cache.js');
+    const id = `test-legacy-failed-${Date.now()}`;
+    try {
+      await saveAnalysisCache(id, { chapters: {} });
+      const loaded = await loadAnalysisCache(id);
+      expect(loaded.failedChapterIds).toBeUndefined();
+    } finally {
+      await clearAnalysisCache(id);
+    }
+  });
 });

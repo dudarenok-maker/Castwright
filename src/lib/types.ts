@@ -163,6 +163,12 @@ export interface BookStateResponse {
       empty list so the Activity view doesn't replay a stale demo seed for
       a book that hasn't been touched. */
   changeLog: ChangeLogEvent[] | null;
+  /** Persistent analysis state surfaced to the analysing view so it can
+      render per-chapter Retry buttons after reload. failedChapterIds is
+      the set of chapters whose Phase 0a cast detection threw across the
+      analyzer's built-in retry — server-side they live in the analysis
+      cache. */
+  analysis?: { failedChapterIds: number[] };
 }
 
 export type StateSlice = 'cast' | 'manuscript' | 'revisions' | 'state' | 'changeLog';

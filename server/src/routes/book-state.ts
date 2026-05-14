@@ -60,8 +60,16 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        — without this the reducer falls back to all-cast and the pill list
        flickers from "filtered" to "everyone" on hydrate. */
     const chapterCharacters: Record<number, string[]> = {};
+    /* Chapters whose Phase 0a cast detection failed across the analyzer's
+       built-in retry. Surfaced so the analysing view can render a
+       per-chapter Retry button that survives reload — without this, the
+       failed-id set lives only on the in-flight SSE and is lost the
+       moment the user navigates away. Sourced from the analysis cache,
+       populated in analysis.ts:913 (full route) and the subset route. */
+    let failedChapterIds: number[] = [];
     if (state.manuscriptId) {
       const cache = await loadAnalysisCache(state.manuscriptId);
+      failedChapterIds = cache.failedChapterIds ?? [];
       const cachedSentences = Object.values(cache.chapters ?? {}).flat();
       if (edits && Array.isArray(edits.sentences) && edits.sentences.length > 0) {
         if (cachedSentences.length > 0) {
@@ -124,6 +132,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       completedSlugs,
       chapterCharacters,
       changeLog: changeLog?.events ?? null,
+      analysis: { failedChapterIds },
     });
   } catch (e) {
     console.error('[book-state] GET failed', e);
