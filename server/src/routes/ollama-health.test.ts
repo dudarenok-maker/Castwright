@@ -34,21 +34,23 @@ describe('GET /api/ollama/health', () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({
       models: [
         { name: 'qwen3.5:4b' },
-        { name: 'mistral:7b' },
+        { name: 'llama3.1:8b' },
       ],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
 
     const res = await request(makeApp()).get('/api/ollama/health');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('reachable');
-    expect(res.body.models).toEqual(['qwen3.5:4b', 'mistral:7b']);
+    expect(res.body.models).toEqual(['qwen3.5:4b', 'llama3.1:8b']);
     expect(res.body.expectedModel).toBe('qwen3.5:4b');
     expect(res.body.modelPulled).toBe(true);
   });
 
   it('flags modelPulled=false when the configured model is absent from /api/tags', async () => {
+    /* Mock /api/tags returns only llama — the expected qwen3.5:4b isn't
+       pulled, so the endpoint should flag modelPulled: false. */
     fetchMock.mockResolvedValue(new Response(JSON.stringify({
-      models: [{ name: 'mistral:7b' }, { name: 'llama3.1:8b' }],
+      models: [{ name: 'llama3.1:8b' }],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
 
     const res = await request(makeApp()).get('/api/ollama/health');

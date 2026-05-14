@@ -87,9 +87,12 @@ describe('selectAnalyzer dispatch', () => {
 
   it('OLLAMA_MODEL env beats the static default', () => {
     process.env.ANALYZER = 'local';
-    process.env.OLLAMA_MODEL = 'mistral:7b';
+    /* Arbitrary fictional tag — the assertion is "env var overrides the
+       DEFAULT_USER_SETTINGS fallback", independent of which real model
+       the user has pulled. */
+    process.env.OLLAMA_MODEL = 'placeholder:test-7b';
     const s = selectAnalyzer();
-    expect(s.model).toBe('mistral:7b');
+    expect(s.model).toBe('placeholder:test-7b');
   });
 
   it('gemini + key → bare GeminiAnalyzer', () => {
