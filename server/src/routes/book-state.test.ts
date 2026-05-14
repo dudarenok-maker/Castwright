@@ -12,9 +12,10 @@
    the real router. */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
@@ -269,5 +270,168 @@ describe('book-state router — POST /chapters/:chapterId/exclude', () => {
       .post(`/api/books/unknown_book/chapters/1/exclude`)
       .send({ excluded: true });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('book-state router — rehydrate on GET populates real chapter bodies', () => {
+  /* Regression: an earlier "lightweight" rehydrate path inserted a
+     ManuscriptRecord with chapterHints[].body='' and sourceText=raw
+     utf-8 bytes of the file. For EPUBs that meant the ZIP archive's
+     binary bytes ended up as sourceText, producing wordCount values
+     orders of magnitude too low, and the analyzer ran against empty
+     chapters so cast detection produced "0 chars" per chapter. The
+     analysis route's getOrHydrateManuscript short-circuited on the
+     poisoned record, so the bug persisted through the whole run.
+
+     This test uses a multi-chapter .txt manuscript (the text parser
+     gives deterministic chapter splits without binary handling), and
+     verifies the post-GET in-memory record carries real chapter
+     bodies and a real wordCount instead of the placeholder shape. */
+  let manuscriptId: string;
+  let rehydrateBookId: string;
+  let rehydrateBookDir: string;
+
+  beforeAll(async () => {
+    manuscriptId = 'm_rehydrate_test';
+    const TITLE_HERE = 'Rehydrate Test Book';
+    const { makeBookId } = await import('../workspace/paths.js');
+    rehydrateBookId = makeBookId(AUTHOR, SERIES, TITLE_HERE);
+    rehydrateBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE_HERE);
+    mkdirSync(join(rehydrateBookDir, '.audiobook'), { recursive: true });
+
+    /* Plain text with explicit "Chapter N" headings — parseText
+       recognises these and emits a multi-chapter ParsedManuscript. */
+    const manuscriptText = [
+      'Chapter 1',
+      '',
+      'Once upon a time the keeper climbed the lighthouse stairs.',
+      'The cold light slipped across Solway Bay.',
+      '',
+      'Chapter 2',
+      '',
+      'The next morning she discovered the lamp had failed.',
+      'Wren ran down the cliff path to find help.',
+    ].join('\n');
+    writeFileSync(join(rehydrateBookDir, 'manuscript.txt'), manuscriptText);
+
+    writeFileSync(
+      join(rehydrateBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: rehydrateBookId,
+        manuscriptId,
+        title: TITLE_HERE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: false,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  it('populates the in-memory store with parsed chapter bodies (not empty strings)', async () => {
+    /* Cold path: ensure nothing left over from another suite is
+       pre-populating the store under this manuscriptId. */
+    const { getManuscript } = await import('../store/manuscripts.js');
+    expect(getManuscript(manuscriptId)).toBeUndefined();
+
+    const res = await request(app).get(`/api/books/${rehydrateBookId}/state`);
+    expect(res.status).toBe(200);
+
+    const rec = getManuscript(manuscriptId);
+    expect(rec).toBeDefined();
+    expect(rec!.chapterHints).toHaveLength(2);
+    /* Each chapter body must carry the real parsed text — not the
+       empty placeholder the broken rehydrate used to write. */
+    for (const ch of rec!.chapterHints) {
+      expect(ch.body.length).toBeGreaterThan(0);
+    }
+    expect(rec!.chapterHints[0].body).toMatch(/keeper climbed/);
+    expect(rec!.chapterHints[1].body).toMatch(/Wren ran/);
+  });
+
+  it('reports a wordCount matching the parsed source (not the raw file byte count)', async () => {
+    const res = await request(app).get(`/api/books/${rehydrateBookId}/state`);
+    expect(res.status).toBe(200);
+    /* The manuscript above has ~24 real prose words across the two
+       chapters. The broken path counted whitespace tokens of the raw
+       file (which for a .txt happens to coincide), but for EPUB it
+       produced binary-byte gibberish. Pin both halves: wordCount is
+       a small positive integer aligned with the prose, not zero
+       and not in the hundreds-of-thousands. */
+    expect(res.body.manuscript).toEqual({
+      wordCount: expect.any(Number),
+      format: 'plaintext',
+    });
+    expect(res.body.manuscript.wordCount).toBeGreaterThan(15);
+    expect(res.body.manuscript.wordCount).toBeLessThan(40);
+  });
+
+  it('reports the parsed wordCount for EPUB (not the ZIP archive byte count)', async () => {
+    /* Direct reproduction of the user-reported regression: a real
+       on-disk EPUB rehydrated via GET must report the parsed prose
+       wordCount, never the raw byte length of the ZIP archive.
+
+       Pre-fix, this case returned wordCount derived from
+       readFile(.epub, 'utf8') splitting binary bytes on whitespace,
+       which yielded a number wildly out of proportion to byteSize
+       (897k chars ÷ 20k words ≈ 43 chars/word in the original bug). */
+    const epubBookTitle = 'EPUB Rehydrate Test';
+    const epubManuscriptId = 'm_epub_rehydrate';
+    const { makeBookId } = await import('../workspace/paths.js');
+    const epubBookId = makeBookId(AUTHOR, SERIES, epubBookTitle);
+    const epubBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, epubBookTitle);
+    mkdirSync(join(epubBookDir, '.audiobook'), { recursive: true });
+
+    const here = dirname(fileURLToPath(import.meta.url));
+    const fixturePath = resolve(here, '../parsers/__fixtures__/sample.epub');
+    copyFileSync(fixturePath, join(epubBookDir, 'manuscript.epub'));
+
+    writeFileSync(
+      join(epubBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: epubBookId,
+        manuscriptId: epubManuscriptId,
+        title: epubBookTitle,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.epub',
+        castConfirmed: false,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+
+    const { getManuscript } = await import('../store/manuscripts.js');
+    expect(getManuscript(epubManuscriptId)).toBeUndefined();
+
+    const res = await request(app).get(`/api/books/${epubBookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.manuscript.format).toBe('epub');
+
+    /* sample.epub's combined prose is short — a few sentences across
+       two chapters. The raw .epub on disk is a ZIP archive of a few
+       KB. A correct parse yields a wordCount in the dozens, well
+       under any plausible byte count of the file. */
+    const rec = getManuscript(epubManuscriptId);
+    expect(rec).toBeDefined();
+    expect(rec!.chapterHints.every(c => c.body.length > 0)).toBe(true);
+    expect(res.body.manuscript.wordCount).toBeGreaterThan(0);
+    expect(res.body.manuscript.wordCount).toBeLessThan(rec!.byteSize / 4);
   });
 });

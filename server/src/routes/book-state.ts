@@ -24,7 +24,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
-import { putManuscript, getManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
+import { putManuscript, getManuscript, getOrHydrateManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { clearAnalysisCache, loadAnalysisCache } from '../store/analysis-cache.js';
 import { parseManuscript } from '../parsers/index.js';
 
@@ -101,41 +101,16 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
         .map(c => c.slug);
     } catch { /* fall through with empty list */ }
 
-    // Rehydrate the in-memory ManuscriptRecord if missing (after a server
-    // restart). Lets the analysis route re-run end-to-end without forcing the
-    // user to re-import their book.
-    if (!getManuscript(state.manuscriptId)) {
-      const manuscriptPath = join(bookDir, state.manuscriptFile);
-      if (existsSync(manuscriptPath)) {
-        const sourceText = await readFile(manuscriptPath, 'utf8');
-        const record: ManuscriptRecord = {
-          manuscriptId: state.manuscriptId,
-          format: extToFormat(state.manuscriptFile),
-          title: state.title,
-          wordCount: sourceText.trim().split(/\s+/).filter(Boolean).length,
-          byteSize: Buffer.byteLength(sourceText, 'utf8'),
-          uploadedAt: state.createdAt,
-          sourceText,
-          /* Carry the excluded flag forward so analysis/generation that
-             happens after this rehydrate honours the user's choices.
-             Body is intentionally empty here — this path is the lightweight
-             "page loaded, no analysis run yet" hydrate; the full re-parse
-             with bodies happens in store/manuscripts.ts. */
-          chapterHints: state.chapters.map(c => ({
-            id: c.id, title: c.title, body: '',
-            excluded: c.excluded || undefined,
-          })),
-          bookId: state.bookId,
-          bookDir,
-        };
-        putManuscript(record);
-      }
-    }
-
-    /* Surface lightweight manuscript metadata (wordCount, format) so the
-       frontend can render size-aware copy on the Analysing screen without
-       fetching the full sourceText. */
-    const rec = getManuscript(state.manuscriptId);
+    /* Rehydrate the in-memory ManuscriptRecord if missing (after a server
+       restart). Must parse the manuscript fully — a previous version read
+       the file as utf-8 bytes with empty chapter bodies, which for EPUB
+       meant the binary ZIP archive ended up in sourceText and the analyzer
+       was handed empty chapters. Symptom: wordCount displayed orders of
+       magnitude too low and Phase 0a logged "0 chars" per chapter. The
+       analyzer route also calls getOrHydrateManuscript, but it short-
+       circuits on whatever is already in the store, so the poisoned record
+       persisted through the analysis run. */
+    const rec = await getOrHydrateManuscript(state.manuscriptId);
     const manuscript = rec
       ? { wordCount: rec.wordCount, format: rec.format }
       : null;
@@ -532,11 +507,3 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
   }
 });
 
-function extToFormat(manuscriptFile: string): ManuscriptRecord['format'] {
-  const m = manuscriptFile.toLowerCase().match(/\.([a-z0-9]+)$/);
-  if (!m) return 'plaintext';
-  if (m[1] === 'epub') return 'epub';
-  if (m[1] === 'pdf') return 'pdf';
-  if (m[1] === 'md' || m[1] === 'markdown') return 'markdown';
-  return 'plaintext';
-}
