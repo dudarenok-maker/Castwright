@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { FallbackAnalyzer } from './index.js';
-import { LocalUnreachableError } from './ollama.js';
+import { LocalUnreachableError, AnalysisAbortedError } from './ollama.js';
 import type { Analyzer, StageCall } from './index.js';
 import type {
   Stage1Output,
@@ -81,6 +81,35 @@ describe('FallbackAnalyzer.runStage1Chapter — fallback policy', () => {
 
     await expect(f.runStage1Chapter('m', 1, '# p', CALL)).rejects.toThrow(/500/);
     expect(fallback.runStage1Chapter).not.toHaveBeenCalled();
+  });
+});
+
+/* AnalysisAbortedError must propagate without consulting the fallback.
+   An abort means the SSE client went away (or the route deliberately
+   tore the run down) — falling back to Gemini would waste paid quota
+   on output nobody can receive. */
+describe('FallbackAnalyzer — abort policy', () => {
+  it('does NOT fall back on AnalysisAbortedError; the abort propagates verbatim', async () => {
+    const primary  = makeAnalyzer({ runStage1Chapter: () => Promise.reject(new AnalysisAbortedError('client gone')) });
+    const fallback = makeAnalyzer({});
+    const f = new FallbackAnalyzer(primary, fallback);
+
+    await expect(f.runStage1Chapter('m', 1, '# p', CALL)).rejects.toBeInstanceOf(AnalysisAbortedError);
+    expect(fallback.runStage1Chapter).not.toHaveBeenCalled();
+  });
+
+  it('abort propagation also applies to runStage1 and runStage2Chapter', async () => {
+    const primary  = makeAnalyzer({
+      runStage1:        () => Promise.reject(new AnalysisAbortedError('client gone')),
+      runStage2Chapter: () => Promise.reject(new AnalysisAbortedError('client gone')),
+    });
+    const fallback = makeAnalyzer({});
+    const f = new FallbackAnalyzer(primary, fallback);
+
+    await expect(f.runStage1('m', '# p', CALL)).rejects.toBeInstanceOf(AnalysisAbortedError);
+    await expect(f.runStage2Chapter('m', 1, '# p', CALL)).rejects.toBeInstanceOf(AnalysisAbortedError);
+    expect(fallback.runStage1).not.toHaveBeenCalled();
+    expect(fallback.runStage2Chapter).not.toHaveBeenCalled();
   });
 });
 

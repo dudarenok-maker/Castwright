@@ -98,13 +98,18 @@ export function BooksRoute() {
            from disk. */
         dispatch(castActions.setCharacters([]));
         dispatch(manuscriptActions.reset());
-        const res = await api.getLibrary().catch(() => null);
-        if (res) dispatch(libraryActions.hydrate(res));
         if (bookId === b.bookId) dispatch(uiActions.goHome());
 
-        const updatedBook = res?.authors
-          .flatMap(a => a.series.flatMap(s => s.books))
-          .find(book => book.bookId === b.bookId);
+        /* Kick off the library rescan in the background — it only feeds
+           `updatedBook` for the onPrimary handler, which only fires
+           after the user reads the dialog and clicks "Analyse now".
+           Awaiting it before showing the dialog used to tack 300ms-1s
+           onto the perceived re-parse latency, depending on workspace
+           size. The dialog has everything it needs from `result`
+           already. */
+        const refreshedLibrary = api.getLibrary()
+          .then(res => { dispatch(libraryActions.hydrate(res)); return res; })
+          .catch(() => null);
 
         /* Chapter records for the dialog. The server emits the rich form
            on current builds; fall back to titles-only for older servers
@@ -138,7 +143,7 @@ export function BooksRoute() {
           title: 'Manuscript re-parsed',
           body,
           primaryLabel: 'Analyse now',
-          onPrimary: () => {
+          onPrimary: async () => {
             /* Apply any deltas the user made vs the server's preserved
                set, then navigate. Fired in parallel so a handful of
                toggles complete in well under a second. Errors are
@@ -151,6 +156,15 @@ export function BooksRoute() {
               initialExcludedSlugs,
               pendingBox.current,
             );
+            /* Await the background library rescan only at navigation time.
+               In practice the user spends >300ms reading the dialog, so
+               this is almost always already resolved by the time they
+               click. Falls back to the original card if the rescan is
+               still racing or failed. */
+            const res = await refreshedLibrary;
+            const updatedBook = res?.authors
+              .flatMap(a => a.series.flatMap(s => s.books))
+              .find(book => book.bookId === b.bookId);
             const target = updatedBook ?? b;
             dispatch(uiActions.openBook({
               id: target.bookId,

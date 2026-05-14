@@ -7,6 +7,7 @@
 import { Router, type Request, type Response } from 'express';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { selectAnalyzer, type AnalyzerSelection } from '../analyzer/index.js';
+import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import { readUserSettings } from '../workspace/user-settings.js';
 import { clearAnalysisCache, loadAnalysisCache, saveAnalysisCache, type AnalysisCache } from '../store/analysis-cache.js';
@@ -515,18 +516,59 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
+  /* Vite's dev proxy (http-proxy under the hood) closes the upstream
+     connection if it sees no body data for a while after the headers
+     land — which is exactly what happens on a cold server where
+     getOrHydrateManuscript re-parses a 100k+ word EPUB before the
+     first SSE event lands. The proxy fires RST, the route's
+     req.on('close') runs, the analysis aborts before the first
+     chapter is even prepared. Writing a single SSE comment (`:ok\n\n`)
+     right after flushHeaders keeps the stream visibly "active" so the
+     proxy doesn't bail. Comments are ignored by EventSource and by
+     our SSE reader (we filter for `data:` lines), so this is invisible
+     downstream. Plus a periodic keep-alive comment below covers
+     subsequent silent stretches (e.g. a slow first-chapter Ollama call). */
+  res.write(':ok\n\n');
+  const keepAlive = setInterval(() => {
+    try { res.write(':ka\n\n'); } catch { /* socket gone */ }
+  }, 15_000);
 
   /* Track whether the SSE client is still listening. When the user
      navigates away from the analysing view (back to library, page reload,
-     tab close) the socket closes. We don't tear the analysis loop down —
-     per-chapter cache writes are valuable and let a follow-up open resume
-     cheaply — but we DO skip the final cast.json / state.json persist,
-     because that write flips the book's library status to `cast_pending`
-     and routes a re-open to the confirm screen. Without the gate, a user
-     who briefly stepped away from a long run would come back to a confirm
-     screen for a run they don't perceive as finished. */
+     tab close) the socket closes. The original design kept the analysis
+     loop running so per-chapter cache writes weren't wasted — but at
+     concurrency=1 a zombie loop keeps Ollama busy, and the next time the
+     user opens the book another stream starts that ends up queued behind
+     the zombie. With AbortController plumbed all the way through to the
+     analyzer's fetch (server/src/analyzer/ollama.ts), we now tear the
+     in-flight model call down on disconnect; cache writes that have
+     already happened still survive on disk, so the next session resumes
+     from the chapter the abort caught. */
   let clientGone = false;
-  req.on('close', () => { clientGone = true; });
+  const abortController = new AbortController();
+  /* CRITICAL: use res.on('close'), NOT req.on('close'). Node.js's
+     IncomingMessage emits 'close' as soon as the request body stream
+     is fully consumed (which, for a body-bearing POST, happens
+     SYNCHRONOUSLY after Express's body-parser middleware reads it —
+     i.e. within milliseconds of route entry). The TCP connection is
+     still wide open at that point; the response stream is fine; the
+     client is still listening. Treating that signal as "client
+     disconnected" caused the route to abort itself on every single
+     POST before any analysis work could begin (verified with elapsed
+     timings: req.close fired at 1ms, while res.finish/res.close fired
+     only after the route itself called res.end()).
+     res.on('close') is the correct event: it fires when the response
+     socket actually closes, either from our own res.end() (normal
+     completion) or because the client disconnected mid-stream. We
+     differentiate via res.writableEnded — if true, the close is from
+     our own end() call and there's nothing to abort. */
+  res.on('close', () => {
+    if (res.writableEnded) return;  // normal completion, not a client abort
+    clientGone = true;
+    clearInterval(keepAlive);
+    abortController.abort();
+  });
+  res.on('finish', () => clearInterval(keepAlive));
 
   const send = (payload: unknown) => {
     if (clientGone) return;
@@ -706,6 +748,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       };
 
       const completedCast = new Set<number>(Object.keys(chapterCast).map(k => Number(k)));
+      /* Chapters that hit a non-recoverable per-chapter failure (e.g.
+         qwen3.5:4b truncated JSON output that survived the validation
+         retry). Tracked separately from completedCast so the route can
+         surface a final summary ("Phase 0 finished: 29/30 chapters,
+         1 failed") instead of silently producing a smaller roster. */
+      const failedCastChapters = new Set<number>();
       /* Excluded chapters never run Phase 0a, so the progress denominator
          counts only the chapters we'll actually process. Otherwise a book
          with 5 excluded chapters would stall the bar permanently below
@@ -792,47 +840,83 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         let lastHeartbeatAt = 0;
         let warnedSilenceAt: number | null = null;
         log(0, `Chapter ${i + 1}/${totalCastChapters} cast — ${ch.title} (${ch.body.length.toLocaleString()} chars) via ${analyzerLabel}…`);
-        const result = await analyzer.runStage1Chapter(
-          manuscriptId,
-          ch.id,
-          buildStage1ChapterInbox(manuscriptId, recordRef.title, ch, Array.from(rebuildRoster().values())),
-          {
-            onWaiting: (elapsed) => {
-              const slot = castInFlight.get(i);
-              if (slot) slot.elapsedMs = elapsed;
-              sendCastLiveTick();
-              /* Silence watchdog. Without this the user has no idea
-                 whether a slow Phase 0a call is rate-limited, hung, or
-                 just slow on free-tier Gemma. Warn once per silence
-                 stretch, re-arm on the next chunk. */
-              const sinceLastChunk = Date.now() - lastChunkAt;
-              if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
-                if (warnedSilenceAt === null || Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS) {
-                  warnedSilenceAt = Date.now();
-                  log(0, `Chapter ${i + 1}/${totalCastChapters} — no response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)}, still waiting.`);
+        let result;
+        try {
+          result = await analyzer.runStage1Chapter(
+            manuscriptId,
+            ch.id,
+            buildStage1ChapterInbox(manuscriptId, recordRef.title, ch, Array.from(rebuildRoster().values())),
+            {
+              signal: abortController.signal,
+              onWaiting: (elapsed) => {
+                const slot = castInFlight.get(i);
+                if (slot) slot.elapsedMs = elapsed;
+                sendCastLiveTick();
+                /* Silence watchdog. Without this the user has no idea
+                   whether a slow Phase 0a call is rate-limited, hung, or
+                   just slow on free-tier Gemma. Warn once per silence
+                   stretch, re-arm on the next chunk. */
+                const sinceLastChunk = Date.now() - lastChunkAt;
+                if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
+                  if (warnedSilenceAt === null || Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS) {
+                    warnedSilenceAt = Date.now();
+                    log(0, `Chapter ${i + 1}/${totalCastChapters} — no response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)}, still waiting.`);
+                  }
+                } else {
+                  warnedSilenceAt = null;
                 }
-              } else {
-                warnedSilenceAt = null;
-              }
+              },
+              onChunk: (info) => {
+                lastChunkAt = Date.now();
+                const now = lastChunkAt;
+                if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
+                lastHeartbeatAt = now;
+                const charsPerSec = info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
+                send({
+                  kind: 'heartbeat',
+                  phaseId: 0,
+                  receivedBytes: info.receivedBytes,
+                  charsPerSec,
+                  elapsedMs: info.elapsedMs,
+                  sinceLastChunkMs: info.sinceLastChunkMs,
+                  chapterIndex: i + 1,
+                });
+              },
             },
-            onChunk: (info) => {
-              lastChunkAt = Date.now();
-              const now = lastChunkAt;
-              if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
-              lastHeartbeatAt = now;
-              const charsPerSec = info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
-              send({
-                kind: 'heartbeat',
-                phaseId: 0,
-                receivedBytes: info.receivedBytes,
-                charsPerSec,
-                elapsedMs: info.elapsedMs,
-                sinceLastChunkMs: info.sinceLastChunkMs,
-                chapterIndex: i + 1,
-              });
-            },
-          },
-        );
+          );
+        } catch (chErr) {
+          /* Client disconnect propagates up — let the route's outer catch
+             land us back at res.end() without a "failed" SSE event. */
+          if (chErr instanceof AnalysisAbortedError) throw chErr;
+          /* Per-chapter failure (malformed JSON after retry, validation
+             miss, model truncation, …) is NON-FATAL for the run. The
+             chapter is dropped from cast detection; the rest of the
+             book still gets analysed. Surface the full error message in
+             the SSE log so the user can see WHICH chapter failed and WHY
+             — historically one bad chapter aborted the entire pool with
+             a generic toast and no way to diagnose. */
+          castInFlight.delete(i);
+          completedCast.add(i);                       // count toward progress denominator
+          failedCastChapters.add(ch.id);
+          const chDurationFail = Date.now() - startedChAt;
+          /* The duration cache feeds the observed-pace ETA. Recording a
+             failure's duration would skew the pace estimate (probably
+             upward — the model burned all its budget then errored), so
+             skip the duration save on failure. */
+          log(0, `❌ Chapter ${i + 1}/${totalCastChapters} cast FAILED — ${ch.title}: ${(chErr as Error).message}`);
+          log(0, `Continuing without chapter ${i + 1} in the cast roster (${humanSeconds(chDurationFail)} spent). Re-run analysis to retry.`);
+          /* Persist the failure marker into the cache so a resumed run
+             knows we tried this chapter and gave up — without this, a
+             follow-up open would queue it again and probably fail the
+             same way. Stored as an empty-cast entry so rebuildRoster
+             skips it and the cache key is taken. */
+          chapterCast[ch.id] = [];
+          cache.chapterCast = chapterCast;
+          await saveAnalysisCache(manuscriptId, cache);
+          sendCastLiveTick();
+          send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
+          return;
+        }
 
         chapterCast[ch.id] = result.characters;
         completedCast.add(i);
@@ -872,7 +956,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         sendCastLiveTick();
       }
 
-      /* Concurrency pool — same shape as the Phase 1 chapter pool. */
+      /* Concurrency pool — same shape as the Phase 1 chapter pool.
+         Per-chapter failures are caught INSIDE runCastChapter (they
+         become non-fatal log events + a failedCastChapters entry), so
+         the only thing that should escape here is AnalysisAbortedError —
+         the SSE client disconnected, we should tear the whole pool down
+         and let the outer try/catch end the response cleanly. */
       let nextCastTask = 0;
       let castAborted = false;
       const castWorkers: Promise<void>[] = [];
@@ -892,6 +981,13 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         castWorkers.push(launchNextCast());
       }
       await Promise.all(castWorkers);
+
+      /* Phase 0a summary — visibility into the skip-on-failure flow so a
+         silent reduction in roster size doesn't pass unnoticed. */
+      if (failedCastChapters.size > 0) {
+        const failedCount = failedCastChapters.size;
+        log(0, `Phase 0 finished with ${failedCount} chapter${failedCount === 1 ? '' : 's'} skipped due to per-chapter failures (see log lines above). Roster built from the remaining ${activeCastChapters - failedCount}.`);
+      }
 
       /* ── Phase 0b — finalise the roster.
          Replay merge once more in chapter-id order (canonical), then
@@ -1125,6 +1221,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         ch.id,
         buildStage2ChapterInbox(manuscriptId, recordRef.title, stage1, ch),
         {
+          signal: abortController.signal,
           onWaiting: (elapsed) => tickOverall(elapsed),
           /* Per-chunk heartbeat so the user sees evidence of model output
              on each chapter. Stage 2's existing wall-clock heartbeat log
@@ -1376,6 +1473,31 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     send({ kind: 'result', response });
     res.end();
   } catch (e) {
+    /* Client-disconnect short-circuit. Abort propagated up from the
+       analyzer's fetch — there's no client to send an error to in the
+       normal case, and we don't want this filling the server log with a
+       fake "failed" entry every time a user navigates away mid-analysis.
+       The send() is still issued (with `code: 'aborted'`) as a
+       belt-and-suspenders: if the abort fired for a non-disconnect
+       reason or there's a race where the client is briefly still
+       listening, they get a structured event instead of the
+       "Analysis stream ended without a result event" frontend fallback. */
+    if (e instanceof AnalysisAbortedError) {
+      console.log(`[analysis] aborted ${manuscriptId} (client disconnected)`);
+      /* Bypass the clientGone gate on send() — the abort came from a
+         disconnect, but there are race windows where the client is
+         briefly still reading (browser hasn't torn down the fetch
+         consumer yet). Writing to a truly-closed connection just hits
+         the local TCP buffer and gets discarded, so the worst case is
+         a silent no-op; the best case is the frontend gets a
+         structured event instead of falling through to its
+         "Analysis stream ended without a result event" message. */
+      try {
+        res.write(`data: ${JSON.stringify({ kind: 'error', code: 'aborted', message: 'Analysis aborted (client disconnected or server restarted).' })}\n\n`);
+      } catch { /* connection already torn down */ }
+      try { res.end(); } catch { /* already ended */ }
+      return;
+    }
     /* Structured dump — SDK errors don't stringify cleanly with bare
        console.error, which means the upstream status + details get lost in
        the log. Match the shape the route surfaces to the UI so debugging
@@ -1423,9 +1545,20 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   /* Mirror the full-route disconnect guard — see the comment on the parent
      analysis route. The subset route writes cast.json on completion too,
      so the same "no premature confirm-screen flip on navigate-away"
-     contract applies. */
+     contract applies. Same abort plumbing too: a navigate-away aborts
+     the in-flight Ollama fetch via the StageCall.signal threaded into
+     runStage2Chapter below. Same critical detail: must use
+     res.on('close'), not req.on('close') — the latter fires
+     immediately after Express's body-parser consumes the POST body,
+     which is NOT a client disconnect. See the comment on the full
+     analysis route above. */
   let clientGone = false;
-  req.on('close', () => { clientGone = true; });
+  const abortController = new AbortController();
+  res.on('close', () => {
+    if (res.writableEnded) return;
+    clientGone = true;
+    abortController.abort();
+  });
 
   const send = (payload: unknown) => {
     if (clientGone) return;
@@ -1557,7 +1690,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
         manuscriptId,
         ch.id,
         buildStage2ChapterInbox(manuscriptId, record.title, stage1, ch),
-        {},
+        { signal: abortController.signal },
       );
       for (const s of result.sentences) s.chapterId = ch.id;
       cachedChapters[ch.id] = result.sentences;
@@ -1645,6 +1778,14 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     send({ kind: 'result', response });
     res.end();
   } catch (e) {
+    if (e instanceof AnalysisAbortedError) {
+      console.log(`[analysis-subset] aborted ${manuscriptId} (client disconnected)`);
+      try {
+        res.write(`data: ${JSON.stringify({ kind: 'error', code: 'aborted', message: 'Analysis aborted (client disconnected or server restarted).' })}\n\n`);
+      } catch { /* connection already torn down */ }
+      try { res.end(); } catch { /* already ended */ }
+      return;
+    }
     const { code, message, detail } = describeError(e, analyzerLabel);
     console.error('[analysis-subset] failed', { manuscriptId, code, message });
     send({ kind: 'error', code, message, detail });

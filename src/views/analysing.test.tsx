@@ -15,6 +15,7 @@ let capturedOpts: AnalyseOpts | undefined;
 const loadAnalyzerSpy = vi.fn();
 const unloadSidecarSpy = vi.fn();
 const getSidecarHealthSpy = vi.fn();
+const getOllamaHealthSpy = vi.fn();
 
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api');
@@ -28,15 +29,7 @@ vi.mock('../lib/api', async () => {
         capturedOpts = opts;
         return new Promise<AnalyseResponse>(() => {});
       },
-      getOllamaHealth: () => Promise.resolve({
-        status: 'reachable' as const,
-        url: '(test)',
-        models: ['qwen3.5:4b'],
-        expectedModel: 'qwen3.5:4b',
-        modelPulled: true,
-        resident: [],
-        modelResident: false,
-      }),
+      getOllamaHealth: () => getOllamaHealthSpy(),
       getSidecarHealth: () => getSidecarHealthSpy(),
       loadAnalyzer:    () => { loadAnalyzerSpy(); return Promise.resolve({ status: 'ready' as const }); },
       unloadAnalyzer:  () => Promise.resolve({ status: 'unloaded' as const }),
@@ -47,10 +40,26 @@ vi.mock('../lib/api', async () => {
 });
 
 beforeEach(() => {
+  capturedOpts = undefined;
   loadAnalyzerSpy.mockReset();
   unloadSidecarSpy.mockReset();
   getSidecarHealthSpy.mockReset();
+  getOllamaHealthSpy.mockReset();
   getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
+  /* Default to "reachable AND model resident" — the analysis effect is
+     gated on isAnalyzerReady, so tests that drive phase/log events
+     through capturedOpts need the analysis to actually have fired.
+     Tests that specifically exercise the not-resident state override
+     this in-line. */
+  getOllamaHealthSpy.mockResolvedValue({
+    status: 'reachable',
+    url: '(test)',
+    models: ['qwen3.5:4b'],
+    expectedModel: 'qwen3.5:4b',
+    modelPulled: true,
+    resident: ['qwen3.5:4b'],
+    modelResident: true,
+  });
 });
 
 function renderView() {
@@ -75,9 +84,24 @@ function renderView() {
   };
 }
 
+/* The analysis effect is gated on (a) the probe useEffect having
+   resolved getOllamaHealth at least once with modelResident=true so
+   isAnalyzerReady flips on, AND (b) the user clicking the "Start
+   analysis" button (analysisStarted state). Tests that drive
+   phase/log events through capturedOpts therefore need to wait for
+   the button to enable, click it, and then wait for the analysis
+   fetch to be captured. This helper bundles the whole dance. */
+async function renderViewWaitingForAnalysis() {
+  const result = renderView();
+  const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+  await act(async () => { fireEvent.click(startBtn); });
+  await waitFor(() => expect(capturedOpts).toBeDefined());
+  return result;
+}
+
 describe('AnalysingView — live ticker (regression for stuck-chapter screenshot bug)', () => {
-  it('renders one row per in-flight chapter so a slow chapter does not hide concurrent progress', () => {
-    renderView();
+  it('renders one row per in-flight chapter so a slow chapter does not hide concurrent progress', async () => {
+    await renderViewWaitingForAnalysis();
 
     const live: AnalysisLiveInfo = {
       totalChapters: 7,
@@ -104,8 +128,8 @@ describe('AnalysingView — live ticker (regression for stuck-chapter screenshot
     expect(overBudget).toHaveLength(1);
   });
 
-  it('hides the ticker entirely when no chapters are in flight (between completion and next start)', () => {
-    renderView();
+  it('hides the ticker entirely when no chapters are in flight (between completion and next start)', async () => {
+    await renderViewWaitingForAnalysis();
 
     act(() => {
       capturedOpts?.onPhase?.({
@@ -120,8 +144,8 @@ describe('AnalysingView — live ticker (regression for stuck-chapter screenshot
 });
 
 describe('AnalysingView — streaming heartbeat indicator', () => {
-  it('renders a "Receiving response" line under the active phase when a heartbeat arrives', () => {
-    renderView();
+  it('renders a "Receiving response" line under the active phase when a heartbeat arrives', async () => {
+    await renderViewWaitingForAnalysis();
 
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.4 });
@@ -140,8 +164,8 @@ describe('AnalysingView — streaming heartbeat indicator', () => {
     expect(screen.getByText(/last chunk 1s ago/)).toBeInTheDocument();
   });
 
-  it('clears the previous phase\'s heartbeat the moment the active phase advances', () => {
-    renderView();
+  it('clears the previous phase\'s heartbeat the moment the active phase advances', async () => {
+    await renderViewWaitingForAnalysis();
 
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.4 });
@@ -160,8 +184,35 @@ describe('AnalysingView — streaming heartbeat indicator', () => {
     expect(screen.queryByText(/Receiving response/i)).not.toBeInTheDocument();
   });
 
-  it('flags as Stalled when the most recent chunk is older than the freshness threshold', () => {
-    renderView();
+  it('shows "Reading the manuscript…" while the SSE is connecting and no log lines have arrived yet', async () => {
+    /* On a cold server the first 2-3s after click are spent in
+       getOrHydrateManuscript re-parsing the EPUB. The screen used to
+       look frozen during that window — phase 0 active spinner, 0%
+       progress, no log lines, nothing else. The bridging status fills
+       that silent gap so the click doesn't look like a no-op. */
+    await renderViewWaitingForAnalysis();
+
+    /* Right after the fetch fires, the analysis useEffect sets conn
+       to 'connecting'. No phase/log events have arrived yet because
+       capturedOpts hasn't been called. The bridging line should
+       appear under the active phase. */
+    expect(screen.getByText(/Reading the manuscript \(parsing chapters\)…/)).toBeInTheDocument();
+
+    /* Once the first phase event lands, conn flips to 'streaming' and
+       the bridging line drops out (the live log + heartbeat take over). */
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.05 });
+      capturedOpts?.onLog?.({ phaseId: 0, message: 'Manuscript: 103,102 words, …' });
+    });
+    expect(screen.queryByText(/Reading the manuscript \(parsing chapters\)…/)).not.toBeInTheDocument();
+  });
+
+  it('flags as Stalled only past the engine-specific threshold (60s for local Ollama, 8s for cloud)', async () => {
+    /* Default renderView uses qwen3.5:4b (local) → 60s stall threshold.
+       12s is normal for constrained-decoding bursts and should NOT flag
+       as stalled (was the false-alarm bug we got from re-using cloud's
+       8s threshold). */
+    await renderViewWaitingForAnalysis();
 
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.6 });
@@ -170,10 +221,22 @@ describe('AnalysingView — streaming heartbeat indicator', () => {
         receivedBytes: 12_000,
         charsPerSec: 200,
         elapsedMs: 30_000,
-        sinceLastChunkMs: 12_000, // 12s — over the 8s threshold
+        sinceLastChunkMs: 12_000,
       });
     });
+    expect(screen.getByText(/Receiving response/)).toBeInTheDocument();
+    expect(screen.queryByText(/Stalled/)).not.toBeInTheDocument();
 
+    /* A real local stall (past 60s) should flag. */
+    act(() => {
+      capturedOpts?.onHeartbeat?.({
+        phaseId: 0,
+        receivedBytes: 12_000,
+        charsPerSec: 200,
+        elapsedMs: 90_000,
+        sinceLastChunkMs: 70_000, // 70s — past the local 60s threshold
+      });
+    });
     expect(screen.getByText(/Stalled/)).toBeInTheDocument();
     expect(screen.queryByText(/Receiving response/)).not.toBeInTheDocument();
   });
@@ -190,8 +253,8 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
     expect(screen.queryByText(/Cast so far/i)).not.toBeInTheDocument();
   });
 
-  it('renders the running roster as cast-update events arrive, growing chapter-by-chapter', () => {
-    renderView();
+  it('renders the running roster as cast-update events arrive, growing chapter-by-chapter', async () => {
+    await renderViewWaitingForAnalysis();
 
     /* Chapter 1 lands — narrator + Sophie. */
     act(() => {
@@ -217,8 +280,8 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
     expect(screen.getByText('Keefe')).toBeInTheDocument();
   });
 
-  it('keeps the cast preview visible under Phase 0 after the active phase advances (regression: model-switch retry on a fully-cached Phase 0 was wiping the chips from the UI even though the cast slice still held them)', () => {
-    renderView();
+  it('keeps the cast preview visible under Phase 0 after the active phase advances (regression: model-switch retry on a fully-cached Phase 0 was wiping the chips from the UI even though the cast slice still held them)', async () => {
+    await renderViewWaitingForAnalysis();
 
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 1 });
@@ -251,8 +314,8 @@ describe('AnalysingView — total ETA refresh', () => {
     expect(screen.queryByText(/remaining at the current pace/i)).not.toBeInTheDocument();
   });
 
-  it('swaps the heading to the refined remaining estimate when an eta event arrives', () => {
-    renderView();
+  it('swaps the heading to the refined remaining estimate when an eta event arrives', async () => {
+    await renderViewWaitingForAnalysis();
 
     act(() => {
       /* Server's projection after observing a few slow Ollama chapters —
@@ -264,8 +327,8 @@ describe('AnalysingView — total ETA refresh', () => {
     expect(screen.queryByText(/usually under 90 seconds/i)).not.toBeInTheDocument();
   });
 
-  it('keeps the refined estimate live across subsequent eta updates', () => {
-    renderView();
+  it('keeps the refined estimate live across subsequent eta updates', async () => {
+    await renderViewWaitingForAnalysis();
 
     act(() => {
       capturedOpts?.onEta?.({ remainingMs: 8 * 60_000 });
@@ -310,6 +373,12 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
     /* Sidecar has a model loaded → unloading it should fire AND the banner
        should surface so the user knows the swap happened. */
     getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: true });
+    /* Override the default-resident probe so the Load button is visible
+       (it only appears when the analyzer is NOT resident). */
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b', modelPulled: true, resident: [], modelResident: false,
+    });
 
     renderNoManuscript();
 
@@ -328,6 +397,10 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
     /* No-op unload should still fire (Ollama hates surprise state), but
        the banner lies if it pretends VRAM was freed when it wasn't. */
     getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b', modelPulled: true, resident: [], modelResident: false,
+    });
 
     renderNoManuscript();
     const loadBtn = await screen.findByRole('button', { name: /load model \(analyzer\)/i });
@@ -355,5 +428,84 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
     /* Gemini has no local lifecycle to manage; the analyzer pill should be
        absent (the original ConnPill renders instead). */
     expect(screen.queryByRole('button', { name: /load model \(analyzer\)/i })).not.toBeInTheDocument();
+  });
+});
+
+/* Regression for the user-reported "Loading analyzer…" pill that sits
+   stuck while the model is already 100% resident per `ollama ps`. The
+   prior derivation forced 'loading' whenever the analysis SSE was in
+   'connecting' (i.e. POST in-flight, no events yet) — which on a long
+   book's stage 0a is the bulk of the screen's lifetime. The pill is
+   meant to track the *model* lifecycle (Ollama VRAM), not the SSE
+   fetch lifecycle. */
+describe('AnalysingView — analyzer pill reflects model state, not SSE state', () => {
+  it('shows "Analyzer ready" when the model is resident and the SSE is still connecting', async () => {
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b',
+      modelPulled: true,
+      resident: ['qwen3.5:4b'],
+      modelResident: true,
+    });
+
+    renderView();
+
+    /* renderView mounts with manuscriptId set → useEffect flips conn into
+       'connecting' synchronously. The probe resolves on the next tick;
+       once it does, the pill must reflect the resident model rather than
+       the in-flight SSE. */
+    expect(await screen.findByText(/Analyzer ready/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Loading analyzer/i)).not.toBeInTheDocument();
+  });
+
+  it('shows "Streaming live" once SSE events start flowing, even if the probe is still stale', async () => {
+    /* Default mock from beforeEach already has modelResident: true — that
+       satisfies isAnalyzerReady so the analysis useEffect fires and
+       capturedOpts is captured. */
+    await renderViewWaitingForAnalysis();
+    /* First phase event flips conn → 'streaming'. */
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.05 });
+    });
+
+    expect(await screen.findByText(/Streaming live/i)).toBeInTheDocument();
+  });
+
+  it('auto-fires the Load when the model is not resident on mount', async () => {
+    /* The "implicit cold-load" path (analysis fires while the model is
+       cold) no longer exists — the gate at analysing.tsx prevents the
+       analysis from firing against a non-resident analyzer. Instead an
+       auto-load effect kicks off handleLoadAnalyzer the moment the
+       probe confirms the model isn't resident, so the user doesn't
+       have to click anything to get analysis started. Verify
+       loadAnalyzer fires; the pill's loading-text rendering is covered
+       in ModelControlPill.test.tsx. */
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b', modelPulled: true, resident: [], modelResident: false,
+    });
+
+    renderView();
+
+    await waitFor(() => expect(loadAnalyzerSpy).toHaveBeenCalled());
+    /* Analysis must NOT have fired against the cold analyzer. */
+    expect(capturedOpts).toBeUndefined();
+  });
+
+  it('shows "Ollama not reachable" regardless of SSE state when the daemon is down', async () => {
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'unreachable',
+      url: '(test)',
+      error: 'connect ECONNREFUSED',
+    });
+
+    renderView();
+
+    /* Daemon-level outage outranks everything else — the user needs to know
+       the analyzer can't run at all, not that the SSE is "connecting". */
+    expect(await screen.findByText(/Ollama not reachable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Loading analyzer/i)).not.toBeInTheDocument();
   });
 });

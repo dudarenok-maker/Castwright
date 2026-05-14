@@ -82,6 +82,13 @@ export interface AnalysisHeartbeat {
 }
 
 export interface AnalyseOpts {
+  /** Lets callers (the analysing view's useEffect cleanup) tear down the
+      underlying SSE fetch when the effect re-runs. Without this, a
+      "Try again" / model-switch click leaves the previous fetch alive
+      until the browser GC's it — at concurrency=1 the server keeps
+      working on the old request while the new one queues, manifesting
+      to the user as cascading aborts in the server log. */
+  signal?: AbortSignal;
   onPhase?: (e: { phaseId: number; progress: number; live?: AnalysisLiveInfo }) => void;
   /** Narrative log lines streamed from the server. Surface them in the
       active phase so the user sees real progress (e.g. detected characters,
@@ -535,12 +542,13 @@ export class AnalysisError extends Error {
   }
 }
 
-async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, onHeartbeat, onEta, onCastUpdate, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
   const hasBody = model !== undefined || fresh !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
     headers: hasBody ? { 'Content-Type': 'application/json' } : undefined,
     body: hasBody ? JSON.stringify({ model, fresh }) : undefined,
+    signal,
   });
   if (!res.ok || !res.body) throw new Error(`Analysis stream failed (${res.status}).`);
 
