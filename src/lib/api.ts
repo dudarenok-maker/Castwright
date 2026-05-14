@@ -92,6 +92,13 @@ export interface AnalyseOpts {
       one-liner under the active phase header — does NOT enter the log
       buffer, so it can't pollute the cached phase summary. */
   onHeartbeat?: (e: AnalysisHeartbeat) => void;
+  /** Refined total-remaining-ms estimate emitted after each chapter
+      completes. The server computes this from observed wall-clock
+      throughput, so it tracks whichever model the user actually picked
+      (Gemini ≈ 4ms/char, local Ollama ≈ 10ms/char). Drives the heading's
+      "~N minutes" line — it replaces the static word-count-based
+      describeSize string once the first chapter lands. */
+  onEta?: (e: { remainingMs: number }) => void;
   /** Live cast snapshot from Phase 0a (per-chapter cast detection). The
       server emits this after each chapter's cast lands, with the full
       running roster. Drives the analysing-view live cast preview so the
@@ -493,7 +500,7 @@ async function realUploadManuscript({ text, file, fileName, format }: UploadArgs
 }
 
 interface AnalysisStreamEvent {
-  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update';
+  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update' | 'eta';
   phaseId?: number;
   progress?: number;
   label?: string;
@@ -513,6 +520,8 @@ interface AnalysisStreamEvent {
   chapterIndex?: number;
   /* cast-update field — full running-roster snapshot from Phase 0a. */
   characters?: import('./types').Character[];
+  /* eta field — server's refined total remaining wall-clock ms. */
+  remainingMs?: number;
 }
 
 export class AnalysisError extends Error {
@@ -526,7 +535,7 @@ export class AnalysisError extends Error {
   }
 }
 
-async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, onHeartbeat, onCastUpdate, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, onHeartbeat, onEta, onCastUpdate, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
   const hasBody = model !== undefined || fresh !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
@@ -569,6 +578,10 @@ async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, onH
     } else if (payload.kind === 'cast-update') {
       if (Array.isArray(payload.characters)) {
         onCastUpdate?.({ characters: payload.characters });
+      }
+    } else if (payload.kind === 'eta') {
+      if (typeof payload.remainingMs === 'number') {
+        onEta?.({ remainingMs: payload.remainingMs });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
@@ -726,7 +739,7 @@ async function mockSetChapterExcluded(
 async function realRunAnalysisForChapters(
   manuscriptId: string,
   chapterIds: number[],
-  { onPhase, onLog, onHeartbeat, onCastUpdate, model }: AnalyseOpts = {},
+  { onPhase, onLog, onHeartbeat, onEta, onCastUpdate, model }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
   const res = await fetch(
     `/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis/chapters`,
@@ -774,6 +787,10 @@ async function realRunAnalysisForChapters(
     } else if (payload.kind === 'cast-update') {
       if (Array.isArray(payload.characters)) {
         onCastUpdate?.({ characters: payload.characters });
+      }
+    } else if (payload.kind === 'eta') {
+      if (typeof payload.remainingMs === 'number') {
+        onEta?.({ remainingMs: payload.remainingMs });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;

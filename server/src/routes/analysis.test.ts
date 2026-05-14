@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { sortEvidence, normaliseForMatch, verifyEvidenceAgainstSource, mergeRosterChapter } from './analysis.js';
+import {
+  sortEvidence, normaliseForMatch, verifyEvidenceAgainstSource, mergeRosterChapter,
+  chapterEstFromObserved, projectRemainingMs,
+} from './analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
 describe('sortEvidence', () => {
@@ -298,5 +301,133 @@ describe('mergeRosterChapter — Phase 0a roster merging', () => {
     expect(incoming[0].attributes).toEqual(['curious']);
     expect(incoming[0].evidence).toEqual([{ quote: 'a' }]);
     expect(incoming[0].tone).toEqual({ warmth: 30 });
+  });
+});
+
+/* Regression for the "Chapter 18/59 · 1:16 of ~0:40 · over budget" screenshot —
+   the old Phase 0a formula was `30s baseline + 0.5ms × chars`, which gave ~0:40
+   for a 20k-char chapter on local Ollama that was actually taking 2-4 minutes
+   per chapter. Once any prior chapter has run, the estimate must come from the
+   observed rate, not the static formula. */
+describe('chapterEstFromObserved', () => {
+  it('falls back to the supplied baseline before any samples exist', () => {
+    expect(chapterEstFromObserved(20_111, 0, 0, 40_000)).toBe(40_000);
+  });
+
+  it('uses observed ms-per-char once at least one chapter has completed', () => {
+    /* 4 chapters at the rates from the bug screenshot: 30+45+56+64 = 195s
+       across 6507+7909+13614+18296 = 46326 chars → ~4.21 ms/char. A new
+       20,111-char chapter projects to ~85s, not ~40s. */
+    const observed = chapterEstFromObserved(20_111, 195_000, 46_326, 40_000);
+    expect(observed).toBeGreaterThan(80_000);
+    expect(observed).toBeLessThan(90_000);
+  });
+
+  it('floors at 2s so micro-chapters do not teleport through the live ticker', () => {
+    expect(chapterEstFromObserved(50, 195_000, 46_326, 40_000)).toBe(2000);
+  });
+
+  it('grows the estimate when the model proves much slower than the baseline', () => {
+    /* Local Ollama at ~10ms/char (≈100 chars/sec, matching the screenshot's
+       heartbeat). For a 20k-char chapter we want ~200s, not the
+       baseline's ~40s. */
+    const observed = chapterEstFromObserved(20_000, 50_000, 5_000, 40_000);
+    expect(observed).toBeGreaterThanOrEqual(195_000);
+  });
+});
+
+describe('projectRemainingMs', () => {
+  it('returns the static fallbacks when nothing has been observed yet', () => {
+    const r = projectRemainingMs({
+      phase0WallClockMs: 0,
+      phase0CharsDone: 0,
+      phase0CharsRemaining: 100_000,
+      phase1WallClockMs: 0,
+      phase1CharsDone: 0,
+      phase1CharsRemaining: 100_000,
+      fallbackPhase0Ms: 60_000,
+      fallbackPhase1Ms: 300_000,
+    });
+    expect(r).toBe(360_000);
+  });
+
+  it('uses wall-clock-per-char (concurrency-aware) once Phase 0a has samples', () => {
+    /* 100k chars done in 200s wall-clock (under concurrency-2 these
+       chapters' per-chapter sum-of-ms would be ~400s, but the user's
+       wall-clock experience is 200s). Remaining 100k cast chars at the
+       same rate = another 200s. Phase 1 over the same 100k chars at
+       STAGE2_STRETCH (5×) the rate = ~1000s. Total ≈ 1200s. */
+    const r = projectRemainingMs({
+      phase0WallClockMs: 200_000,
+      phase0CharsDone: 100_000,
+      phase0CharsRemaining: 100_000,
+      phase1WallClockMs: 0,
+      phase1CharsDone: 0,
+      phase1CharsRemaining: 100_000,
+      fallbackPhase0Ms: 60_000,
+      fallbackPhase1Ms: 60_000,
+    });
+    /* 200s phase-0-remaining + 1000s phase-1-projection = 1.2M ms. */
+    expect(r).toBeGreaterThan(1_100_000);
+    expect(r).toBeLessThan(1_300_000);
+  });
+
+  it('prefers Phase 1 wall-clock when Phase 1 has its own samples', () => {
+    /* Phase 0 averaged 2ms/char wall-clock (would project Phase 1 at
+       10ms/char via STAGE2_STRETCH), but Phase 1's own samples show
+       it's actually faster — 8ms/char. Prefer Phase 1's number. */
+    const r = projectRemainingMs({
+      phase0WallClockMs: 200_000,
+      phase0CharsDone: 100_000,
+      phase0CharsRemaining: 0,
+      phase1WallClockMs: 80_000,
+      phase1CharsDone: 10_000,
+      phase1CharsRemaining: 50_000,
+      fallbackPhase0Ms: 0,
+      fallbackPhase1Ms: 999_000,
+    });
+    /* 50k × 8ms/char = 400,000ms — not 50k × 10ms/char and not the fallback. */
+    expect(r).toBe(400_000);
+  });
+});
+
+/* Regression for the second screenshot — "25 of 59 chapters already cached"
+   but the heading still showed "~38 minutes" and the per-chapter budget
+   reverted to the static formula. The cache must surface its persisted
+   durations and the route must use them. */
+describe('AnalysisCache schema — persisted durations', () => {
+  it('round-trips castDurations and stage2Durations through load/save', async () => {
+    const { loadAnalysisCache, saveAnalysisCache, clearAnalysisCache } =
+      await import('../store/analysis-cache.js');
+    const id = `test-durations-${Date.now()}`;
+    try {
+      await saveAnalysisCache(id, {
+        chapters: {},
+        castDurations: { 1: 30_000, 2: 45_000 },
+        stage2Durations: { 1: 120_000 },
+      });
+      const loaded = await loadAnalysisCache(id);
+      expect(loaded.castDurations).toEqual({ 1: 30_000, 2: 45_000 });
+      expect(loaded.stage2Durations).toEqual({ 1: 120_000 });
+    } finally {
+      await clearAnalysisCache(id);
+    }
+  });
+
+  it('returns undefined duration fields when the cache predates the feature', async () => {
+    const { loadAnalysisCache, saveAnalysisCache, clearAnalysisCache } =
+      await import('../store/analysis-cache.js');
+    const id = `test-legacy-cache-${Date.now()}`;
+    try {
+      /* Simulate an older cache file that only has chapters{} — no
+         durations field. The route's seeding loop must tolerate this
+         and start from 0 trackers without throwing. */
+      await saveAnalysisCache(id, { chapters: {} });
+      const loaded = await loadAnalysisCache(id);
+      expect(loaded.castDurations).toBeUndefined();
+      expect(loaded.stage2Durations).toBeUndefined();
+    } finally {
+      await clearAnalysisCache(id);
+    }
   });
 });
