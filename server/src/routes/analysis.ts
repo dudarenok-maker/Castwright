@@ -132,6 +132,15 @@ const OVERAGE_LOG_THRESHOLDS = [1.5, 2.0, 3.0] as const;
    chapter). Each threshold fires once per chapter. */
 const HEARTBEAT_MS_THRESHOLDS = [30_000, 60_000, 120_000, 180_000, 300_000, 420_000, 600_000, 900_000] as const;
 
+/* Streaming-chunk feedback. Throttle SSE heartbeat emission so a fast model
+   pumping 200 chunks/s doesn't drown the client. 2 s is high-signal:
+   noticeable to the user, low overhead on the wire. */
+const HEARTBEAT_EVENT_THROTTLE_MS = 2_000;
+/* If the model goes silent (no chunk) for this long, surface a warning log
+   line so the user knows something is wrong rather than mistaking the bar's
+   slow creep for activity. Re-armed once a chunk lands. */
+const SILENCE_THRESHOLD_MS = 45_000;
+
 /* Stage 2 chapter concurrency. Default 2 keeps us well under Gemini's
    free-tier RPM limits while roughly halving wall-clock time vs sequential.
    Bump via STAGE2_CONCURRENCY env if your tier (or the model) allows; cap
@@ -366,6 +375,18 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       log(0, `Asking ${analyzerLabel} to identify characters…`);
       log(0, `Estimated stage time: ~${humanSeconds(stage1EstMs)}`);
       const stage1Start = Date.now();
+      /* Streaming chunk feedback for stage 1.
+         - heartbeat: throttled SSE event ~every 2s so the UI can render
+           "Receiving response · N KB · last chunk Ms ago".
+         - character counter: count `"name":` occurrences in the buffer as
+           a cheap proxy for stage-1 progress; emit a real log line only
+           when N grows so the log doesn't pollute on every chunk.
+         - watchdog: track lastChunkAt; the onWaiting timer fires every
+           500ms and warns once per silence stretch >SILENCE_THRESHOLD_MS. */
+      let lastChunkAt = Date.now();
+      let lastFoundN = 0;
+      let lastHeartbeatAt = 0;
+      let warnedSilenceAt: number | null = null;
       stage1 = await analyzer.runStage1(
         manuscriptId,
         buildStage1Inbox(manuscriptId, record.title, record.sourceText, record.chapterHints),
@@ -375,6 +396,37 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
                real result lands. The bar jumps to 1.0 on completion. */
             const p = Math.min(0.02 + 0.93 * (elapsed / stage1EstMs), 0.95);
             send({ kind: 'phase', phaseId: 0, progress: p, label: PHASES[0].label });
+            const sinceLastChunk = Date.now() - lastChunkAt;
+            if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
+              if (warnedSilenceAt === null || Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS) {
+                warnedSilenceAt = Date.now();
+                log(0, `No response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)} — still waiting.`);
+              }
+            } else {
+              warnedSilenceAt = null;
+            }
+          },
+          onChunk: (info) => {
+            lastChunkAt = Date.now();
+            const matches = (info.receivedText.match(/"name"\s*:/g) || []).length;
+            if (matches > lastFoundN) {
+              lastFoundN = matches;
+              log(0, `Found ${matches} character${matches === 1 ? '' : 's'} so far…`);
+            }
+            const now = Date.now();
+            if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
+            lastHeartbeatAt = now;
+            const charsPerSec = info.elapsedMs > 0
+              ? Math.round((info.receivedBytes * 1000) / info.elapsedMs)
+              : 0;
+            send({
+              kind: 'heartbeat',
+              phaseId: 0,
+              receivedBytes: info.receivedBytes,
+              charsPerSec,
+              elapsedMs: info.elapsedMs,
+              sinceLastChunkMs: info.sinceLastChunkMs,
+            });
           },
         },
       );
@@ -563,12 +615,33 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       };
 
       log(1, `Chapter ${i + 1}/${totalChapters} — ${ch.title} (${ch.body.length.toLocaleString()} chars, ~${humanSeconds(chapterEstMs)}) via ${analyzerLabel}…`);
+      let chapterLastHeartbeatAt = 0;
       const result = await analyzer.runStage2Chapter(
         manuscriptId,
         ch.id,
         buildStage2ChapterInbox(manuscriptId, recordRef.title, stage1, ch),
         {
           onWaiting: (elapsed) => tickOverall(elapsed),
+          /* Per-chunk heartbeat so the user sees evidence of model output
+             on each chapter. Stage 2's existing wall-clock heartbeat log
+             lines already cover the silence-watchdog purpose. */
+          onChunk: (info) => {
+            const now = Date.now();
+            if (now - chapterLastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
+            chapterLastHeartbeatAt = now;
+            const charsPerSec = info.elapsedMs > 0
+              ? Math.round((info.receivedBytes * 1000) / info.elapsedMs)
+              : 0;
+            send({
+              kind: 'heartbeat',
+              phaseId: 1,
+              receivedBytes: info.receivedBytes,
+              charsPerSec,
+              elapsedMs: info.elapsedMs,
+              sinceLastChunkMs: info.sinceLastChunkMs,
+              chapterIndex: i + 1,
+            });
+          },
         },
       );
       for (const s of result.sentences) s.chapterId = ch.id;

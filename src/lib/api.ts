@@ -65,12 +65,32 @@ export interface AnalysisLiveInfo {
   totalChapters: number;
   chapters: AnalysisLiveChapter[];
 }
+export interface AnalysisHeartbeat {
+  phaseId: number;
+  /** Bytes of model output received so far on the in-flight LLM call. */
+  receivedBytes: number;
+  /** Smoothed throughput across the call (receivedBytes / elapsedMs). */
+  charsPerSec: number;
+  /** Wall-clock since the LLM call started. */
+  elapsedMs: number;
+  /** Wall-clock since the previous chunk landed — large values during a
+      live call mean the model has stalled. */
+  sinceLastChunkMs: number;
+  /** Stage 2 only: 1-based chapter index this heartbeat is reporting on. */
+  chapterIndex?: number;
+}
+
 export interface AnalyseOpts {
   onPhase?: (e: { phaseId: number; progress: number; live?: AnalysisLiveInfo }) => void;
   /** Narrative log lines streamed from the server. Surface them in the
       active phase so the user sees real progress (e.g. detected characters,
       sentence counts) instead of canned snippets. */
   onLog?: (e: { phaseId: number; message: string }) => void;
+  /** Streaming chunk heartbeat from the analyzer's LLM call. Throttled
+      server-side to ~one event per 2s. Designed to render as a live
+      one-liner under the active phase header — does NOT enter the log
+      buffer, so it can't pollute the cached phase summary. */
+  onHeartbeat?: (e: AnalysisHeartbeat) => void;
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
       Sent as JSON body to POST /api/manuscripts/:id/analysis. Ignored when
       the server runs in ANALYZER=manual mode. */
@@ -464,7 +484,7 @@ async function realUploadManuscript({ text, file, fileName, format }: UploadArgs
 }
 
 interface AnalysisStreamEvent {
-  kind: 'phase' | 'result' | 'error' | 'log';
+  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat';
   phaseId?: number;
   progress?: number;
   label?: string;
@@ -476,6 +496,12 @@ interface AnalysisStreamEvent {
       block in the analysing view so the headline stays readable. */
   detail?: string;
   live?: AnalysisLiveInfo;
+  /* Heartbeat fields. */
+  receivedBytes?: number;
+  charsPerSec?: number;
+  elapsedMs?: number;
+  sinceLastChunkMs?: number;
+  chapterIndex?: number;
 }
 
 export class AnalysisError extends Error {
@@ -489,7 +515,7 @@ export class AnalysisError extends Error {
   }
 }
 
-async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, onHeartbeat, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
   const hasBody = model !== undefined || fresh !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
@@ -511,6 +537,23 @@ async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, mod
     } else if (payload.kind === 'log') {
       if (typeof payload.phaseId === 'number' && typeof payload.message === 'string') {
         onLog?.({ phaseId: payload.phaseId, message: payload.message });
+      }
+    } else if (payload.kind === 'heartbeat') {
+      if (
+        typeof payload.phaseId === 'number' &&
+        typeof payload.receivedBytes === 'number' &&
+        typeof payload.charsPerSec === 'number' &&
+        typeof payload.elapsedMs === 'number' &&
+        typeof payload.sinceLastChunkMs === 'number'
+      ) {
+        onHeartbeat?.({
+          phaseId: payload.phaseId,
+          receivedBytes: payload.receivedBytes,
+          charsPerSec: payload.charsPerSec,
+          elapsedMs: payload.elapsedMs,
+          sinceLastChunkMs: payload.sinceLastChunkMs,
+          chapterIndex: payload.chapterIndex,
+        });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;

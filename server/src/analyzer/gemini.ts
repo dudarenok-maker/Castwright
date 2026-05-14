@@ -17,7 +17,7 @@ import {
   type Stage1Output,
   type Stage2ChapterOutput,
 } from '../handoff/schemas.js';
-import type { Analyzer, StageCall } from './index.js';
+import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_DIR = resolve(__dirname, '..', '..', '..', 'skills');
@@ -101,6 +101,7 @@ export class GeminiAnalyzer implements Analyzer {
       const firstText = await this.generateWithRetry(
         [{ role: 'user', parts: [{ text: promptMd }] }],
         systemInstruction,
+        call.onChunk,
       );
 
       const firstAttempt = parseAndValidate(firstText, schema);
@@ -124,6 +125,7 @@ export class GeminiAnalyzer implements Analyzer {
           { role: 'user', parts: [{ text: followup }] },
         ],
         systemInstruction,
+        call.onChunk,
       );
 
       const secondAttempt = parseAndValidate(secondText, schema);
@@ -166,23 +168,30 @@ export class GeminiAnalyzer implements Analyzer {
   private async generateWithRetry(
     contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
     systemInstruction: string,
+    onChunk?: (info: StageChunkInfo) => void,
   ): Promise<string> {
     try {
-      return await this.generate(contents, systemInstruction);
+      return await this.generate(contents, systemInstruction, onChunk);
     } catch (err) {
       if (!isRetryable5xx(err)) throw err;
       console.warn(`[gemini] transient ${describeStatus(err)} — retrying once in 3s`);
       await sleep(3000);
-      return await this.generate(contents, systemInstruction);
+      return await this.generate(contents, systemInstruction, onChunk);
     }
   }
 
+  /* Streamed generation. Iterating the stream gives us a per-chunk
+     heartbeat — first chunk usually arrives within 1–3s, every subsequent
+     chunk is hard proof the model is alive. The route layer surfaces this
+     as a live "Receiving response · N KB · last chunk Ms ago" indicator and
+     a watchdog that warns when chunks stop arriving. */
   private async generate(
     contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
     systemInstruction: string,
+    onChunk?: (info: StageChunkInfo) => void,
   ): Promise<string> {
     try {
-      const response = await this.client.models.generateContent({
+      const stream = await this.client.models.generateContentStream({
         model: this.model,
         contents,
         config: {
@@ -190,11 +199,26 @@ export class GeminiAnalyzer implements Analyzer {
           systemInstruction,
         },
       });
-      const text = response.text;
-      if (!text) {
+      const start = Date.now();
+      let lastChunkAt = start;
+      let buf = '';
+      for await (const chunk of stream) {
+        const text = chunk.text;
+        if (!text) continue;
+        buf += text;
+        const now = Date.now();
+        onChunk?.({
+          receivedBytes: buf.length,
+          receivedText: buf,
+          sinceLastChunkMs: now - lastChunkAt,
+          elapsedMs: now - start,
+        });
+        lastChunkAt = now;
+      }
+      if (!buf) {
         throw new Error(`Gemini ${this.model} returned an empty response.`);
       }
-      return text;
+      return buf;
     } catch (err) {
       /* The SDK's ApiError keeps the upstream body inside `.message` as a
          JSON envelope, so a bare console.error(err) only shows the stack +

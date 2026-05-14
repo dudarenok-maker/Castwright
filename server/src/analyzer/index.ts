@@ -9,8 +9,24 @@ import { ManualAnalyzer } from './manual.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { getResolvedAnalyzerMode } from '../workspace/user-settings.js';
 
+export interface StageChunkInfo {
+  /** Total bytes of model output received so far. */
+  receivedBytes: number;
+  /** Full assembled buffer so far — callers may peek (e.g. count
+      `"name":` occurrences during stage 1) but should not mutate. */
+  receivedText: string;
+  /** ms since the previous chunk arrived (or since the request started
+      for the first chunk). Big values warn that the model went quiet. */
+  sinceLastChunkMs: number;
+  /** ms since the request was sent. */
+  elapsedMs: number;
+}
+
 export interface StageCall {
   onWaiting?: (elapsedMs: number) => void;
+  /** Fired per streamed chunk from the model (Gemini analyzer only).
+      Manual analyzer never invokes this — it polls a file drop. */
+  onChunk?: (info: StageChunkInfo) => void;
 }
 
 export interface Analyzer {
