@@ -111,13 +111,6 @@ foreach ($svc in $services) {
 # timestamped sibling when OneDrive/AV still hold the canonical name open,
 # and the failure-tail block below needs to read the path we actually used.
 $logPaths = @{}
-# Quote args that contain whitespace so paths inside OneDrive (which lives
-# under a folder named "OneDrive - …" in some configs) survive the cmd.exe
-# parse intact.
-function Get-QuotedArg($s) {
-    if ($s -match '\s') { return '"' + $s + '"' }
-    return $s
-}
 foreach ($svc in $toStart) {
     $outRequested = Join-Path $logDir "$($svc.Name).log"
     $errRequested = Join-Path $logDir "$($svc.Name).err.log"
@@ -131,23 +124,11 @@ foreach ($svc in $toStart) {
     }
     $logPaths[$svc.Name] = @{ Out = $outLog; Err = $errLog }
 
-    # Spawn each service via `cmd.exe /s /c "..."` so cmd.exe handles the
-    # stdio redirection internally. Start-Process's own -RedirectStandardOutput
-    # ignores -WindowStyle Hidden on Windows — the redirected path uses a
-    # different CreateProcess flag set that omits CREATE_NO_WINDOW, so npm.cmd
-    # spawns flash a console window despite Hidden. Doing the redirect inside
-    # cmd.exe keeps Start-Process on the ShellExecute path where Hidden works.
-    # /s flag tells cmd.exe to always strip exactly one outer quote pair so
-    # the wrapped command line is interpreted verbatim, regardless of the
-    # other quote heuristics in `cmd /?`. We assemble ArgumentList as a single
-    # string (rather than an array) because PS 5.1's Start-Process array-form
-    # mis-escapes nested double quotes — and our $innerCmd is full of them.
-    $argsJoined = ($svc.ArgList | ForEach-Object { Get-QuotedArg $_ }) -join ' '
-    $innerCmd   = "`"$($svc.FilePath)`" $argsJoined 1>`"$outLog`" 2>`"$errLog`""
-    $cmdArgs    = "/s /c `"$innerCmd`""
-    $proc = Start-Process -FilePath cmd.exe `
-        -ArgumentList $cmdArgs `
+    $proc = Start-Process -FilePath $svc.FilePath `
+        -ArgumentList $svc.ArgList `
         -WorkingDirectory $svc.WorkDir `
+        -RedirectStandardOutput $outLog `
+        -RedirectStandardError  $errLog `
         -WindowStyle Hidden `
         -PassThru
 
@@ -200,8 +181,11 @@ if ($pending.Count -gt 0) {
     Fail ("Services did not come up within $timeoutSec s: $($pending -join ', ')`n`n" + ($detail -join "`n"))
 }
 
-# --- Open browser --------------------------------------------------------
-Start-Process "http://localhost:5173/"
+# --- Browser opens itself ------------------------------------------------
+# Vite's `server.open = true` (vite.config.ts) launches the default browser
+# at http://localhost:5173/ the moment dev:frontend is listening. We used to
+# *also* call Start-Process URL here, which surfaced as two Chrome tabs on
+# every start. The script-side launcher is gone; Vite is the single opener.
 Write-Status "[READY] http://localhost:5173/ (stop with stop-app.bat)"
 
 # Best-effort cleanup of stale rotated logs from past locked-start cycles.
