@@ -37,15 +37,31 @@ export function ConfirmMetadataView() {
     return null; // App.tsx only renders us when a candidate exists.
   }
 
+  const libraryBooks = useAppSelector(s => s.library.books);
+
   const trimmedAuthor = author.trim();
   const trimmedTitle  = title.trim();
   const trimmedSeries = series.trim();
-  const seriesPosNum  = seriesPosition.trim() ? parseInt(seriesPosition.trim(), 10) : NaN;
+  const seriesPosNum  = seriesPosition.trim() ? parseFloat(seriesPosition.trim()) : NaN;
   const canSubmit =
     !busy &&
     trimmedAuthor.length > 0 &&
     trimmedTitle.length > 0 &&
-    (isStandalone || (trimmedSeries.length > 0 && !Number.isNaN(seriesPosNum)));
+    (isStandalone || (trimmedSeries.length > 0 && Number.isFinite(seriesPosNum)));
+
+  /* Heads-up if a different book in the same series already claims this number.
+     Match on case-insensitive series + numeric equality; don't block save —
+     the user may legitimately be re-importing or correcting an existing entry. */
+  const duplicatePositionBook = useMemo(() => {
+    if (isStandalone || !trimmedSeries || !Number.isFinite(seriesPosNum)) return null;
+    const seriesKey = trimmedSeries.toLowerCase();
+    return libraryBooks.find(b =>
+      !b.isStandalone &&
+      b.series?.trim().toLowerCase() === seriesKey &&
+      typeof b.seriesPosition === 'number' &&
+      b.seriesPosition === seriesPosNum,
+    ) ?? null;
+  }, [isStandalone, trimmedSeries, seriesPosNum, libraryBooks]);
 
   async function handleSubmit(): Promise<void> {
     if (!candidate || !canSubmit) return;
@@ -145,11 +161,25 @@ export function ConfirmMetadataView() {
                        className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"/>
               </Field>
               <Field label="Book #" required>
-                <input value={seriesPosition} disabled={busy} inputMode="numeric"
-                       onChange={(e) => setSeriesPosition(e.target.value.replace(/[^0-9]/g, ''))}
+                <input value={seriesPosition} disabled={busy} inputMode="decimal"
+                       onChange={(e) => {
+                         /* Keep digits + the first dot only — supports novella positions like 1.5. */
+                         let v = e.target.value.replace(/[^0-9.]/g, '');
+                         const dot = v.indexOf('.');
+                         if (dot !== -1) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
+                         setSeriesPosition(v);
+                       }}
                        placeholder="1"
                        className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50 tabular-nums"/>
               </Field>
+            </div>
+          )}
+
+          {duplicatePositionBook && (
+            <div className="-mt-2 px-4 py-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
+              <span className="font-semibold">Heads-up:</span> "{duplicatePositionBook.title}" is already saved as
+              {' '}{duplicatePositionBook.series} #{duplicatePositionBook.seriesPosition}. Saving will create a separate
+              entry — change the number if that's not what you want.
             </div>
           )}
 
@@ -177,7 +207,7 @@ export function ConfirmMetadataView() {
                     className="text-sm text-ink/60 hover:text-ink disabled:opacity-50">
               ← Pick a different file
             </button>
-            <PrimaryButton variant="dark" onClick={handleSubmit}>
+            <PrimaryButton variant="dark" onClick={handleSubmit} disabled={!canSubmit}>
               <span className="inline-flex items-center gap-2">
                 {busy && <IconSpinner className="w-4 h-4"/>}
                 {busy ? 'Saving…' : 'Save book and start analysis'}

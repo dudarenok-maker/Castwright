@@ -423,6 +423,7 @@ export interface components {
             title: string;
             author: string;
             series: string;
+            /** @description Series position. Allows decimals for novellas (e.g. 1.5). */
             seriesPosition?: number | null;
             isStandalone: boolean;
             /** @enum {string} */
@@ -447,6 +448,7 @@ export interface components {
             title: string;
             author?: string | null;
             series?: string | null;
+            /** @description Series position. Allows decimals for novellas (e.g. 1.5). */
             seriesPosition?: number | null;
             sourceText: string;
             wordCount: number;
@@ -465,6 +467,7 @@ export interface components {
             tempId: string;
             author: string;
             series?: string;
+            /** @description Series position. Allows decimals for novellas (e.g. 1.5). */
             seriesPosition?: number | null;
             title: string;
             isStandalone: boolean;
@@ -473,6 +476,7 @@ export interface components {
             bookId: string;
             author: string;
             series: string;
+            /** @description Series position. Allows decimals for novellas (e.g. 1.5). */
             seriesPosition?: number | null;
             isStandalone: boolean;
             paths: {

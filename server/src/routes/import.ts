@@ -157,7 +157,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     const seriesPosition = isStandalone
       ? null
       : (typeof body.seriesPosition === 'number' && Number.isFinite(body.seriesPosition))
-        ? Math.floor(body.seriesPosition)
+        ? body.seriesPosition
         : null;
 
     ensureWorkspace();

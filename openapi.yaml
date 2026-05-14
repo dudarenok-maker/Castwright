@@ -548,8 +548,9 @@ components:
         author:           { type: string }
         series:           { type: string }
         seriesPosition:
-          type: integer
+          type: number
           nullable: true
+          description: "Series position. Allows decimals for novellas (e.g. 1.5)."
         isStandalone:     { type: boolean }
         status:
           type: string
@@ -580,8 +581,9 @@ components:
         author:         { type: string, nullable: true }
         series:         { type: string, nullable: true }
         seriesPosition:
-          type: integer
+          type: number
           nullable: true
+          description: "Series position. Allows decimals for novellas (e.g. 1.5)."
         sourceText:     { type: string }
         wordCount:      { type: integer }
         byteSize:       { type: integer }
@@ -609,8 +611,9 @@ components:
         author:       { type: string }
         series:       { type: string }
         seriesPosition:
-          type: integer
+          type: number
           nullable: true
+          description: "Series position. Allows decimals for novellas (e.g. 1.5)."
         title:        { type: string }
         isStandalone: { type: boolean }
 
@@ -624,8 +627,9 @@ components:
             author:       { type: string }
             series:       { type: string }
             seriesPosition:
-              type: integer
+              type: number
               nullable: true
+              description: "Series position. Allows decimals for novellas (e.g. 1.5)."
             isStandalone: { type: boolean }
             paths:
               type: object
