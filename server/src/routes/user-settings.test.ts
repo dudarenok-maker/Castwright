@@ -65,6 +65,38 @@ describe('user-settings router', () => {
     expect(res.body.defaultTtsModelKey).toBe('coqui-xtts-v2');
     expect(res.body.sidecarUrl).toBe('http://localhost:9000');
     expect(res.body.workspaceDirOverride).toBeNull();
+    /* Minor-cast fold default — see server/src/analyzer/fold-minor-cast.ts. */
+    expect(res.body.minorCastMinLines).toBe(3);
+  });
+
+  it('PUT round-trips minorCastMinLines and rejects out-of-range values', async () => {
+    /* Happy path — explicit override persists. */
+    const ok = await request(app)
+      .put('/api/user/settings')
+      .send({ minorCastMinLines: 5 });
+    expect(ok.status).toBe(200);
+    expect(ok.body.minorCastMinLines).toBe(5);
+    const onDisk = JSON.parse(readFileSync(userSettingsPath, 'utf8'));
+    expect(onDisk.minorCastMinLines).toBe(5);
+
+    /* 0 disables the line-count trigger entirely (still a valid setting). */
+    const zero = await request(app)
+      .put('/api/user/settings')
+      .send({ minorCastMinLines: 0 });
+    expect(zero.status).toBe(200);
+    expect(zero.body.minorCastMinLines).toBe(0);
+
+    /* Negative is out of schema range. */
+    const neg = await request(app)
+      .put('/api/user/settings')
+      .send({ minorCastMinLines: -1 });
+    expect(neg.status).toBe(400);
+
+    /* > 50 cap. */
+    const big = await request(app)
+      .put('/api/user/settings')
+      .send({ minorCastMinLines: 51 });
+    expect(big.status).toBe(400);
   });
 
   it('PUT persists a partial patch and merges into the on-disk file', async () => {

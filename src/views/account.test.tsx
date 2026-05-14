@@ -26,6 +26,7 @@ const SERVER_FIXTURE: UserSettings = {
   defaultTtsModelKey:   'coqui-xtts-v2',
   sidecarUrl:           'http://localhost:9000',
   workspaceDirOverride: null,
+  minorCastMinLines:    3,
   apiKeyStatus:         'unset',
   workspaceRoot:        '/users/mike/workspace',
   workspaceSource:      'env',
@@ -127,6 +128,50 @@ describe('AccountView — save flow', () => {
     await waitFor(() => {
       expect(screen.getByText(/disk full/i)).toBeInTheDocument();
     });
+  });
+
+  it('renders the minor-cast threshold input with the persisted value and labels the unit explicitly as sentences', () => {
+    renderView({ minorCastMinLines: 4 });
+    const input = screen.getByLabelText(/Minor-cast threshold/i) as HTMLInputElement;
+    expect(input.value).toBe('4');
+    /* The sublabel must clarify that "lines" means attributed sentences,
+       not words — the user explicitly asked for this unit to be made
+       explicit in the account UI so they don't have to guess. */
+    expect(screen.getByText(/attributed sentences/i)).toBeInTheDocument();
+    expect(screen.getByText(/not word count/i)).toBeInTheDocument();
+  });
+
+  it('round-trips minorCastMinLines through the Save patch', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      minorCastMinLines: 7,
+    });
+    const user = userEvent.setup();
+    renderView({ minorCastMinLines: 3 });
+    const input = screen.getByLabelText(/Minor-cast threshold/i) as HTMLInputElement;
+    /* fireEvent.change drives the controlled-input cleanly. user.type
+       would prepend onto the existing "3" because the input's onChange
+       drops NaN (empty) intermediate states by design — that's the same
+       guard that powers the clamp behaviour. */
+    fireEvent.change(input, { target: { value: '7' } });
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+    const [patch] = (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch.minorCastMinLines).toBe(7);
+  });
+
+  it('clamps an out-of-range entry rather than firing a failing PUT', () => {
+    /* The schema caps at 50; user fat-fingers a 999. The input clamps
+       in the onChange handler so Save never sends a value the server
+       would 400 on. */
+    renderView({ minorCastMinLines: 3 });
+    const input = screen.getByLabelText(/Minor-cast threshold/i) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '999' } });
+    expect(input.value).toBe('50');
+    fireEvent.change(input, { target: { value: '-5' } });
+    expect(input.value).toBe('0');
   });
 
   it('shows the restart-required badge as soon as workspaceDirOverride is edited', () => {

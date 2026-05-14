@@ -28,6 +28,7 @@ const initialState: AccountState = {
   defaultTtsModelKey:   'coqui-xtts-v2',
   sidecarUrl:           'http://localhost:9000',
   workspaceDirOverride: null,
+  minorCastMinLines:    3,
   apiKeyStatus:         'unset',
   workspaceRoot:        '',
   workspaceSource:      'default',

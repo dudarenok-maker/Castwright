@@ -814,6 +814,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   defaultTtsModelKey:   'coqui-xtts-v2',
   sidecarUrl:           'http://localhost:9000',
   workspaceDirOverride: null,
+  minorCastMinLines:    3,
   apiKeyStatus:         'unset',
   workspaceRoot:        '(mock)/audiobook-workspace',
   workspaceSource:      'default',

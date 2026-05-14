@@ -28,6 +28,7 @@ const SERVER_FIXTURE: UserSettings = {
   defaultTtsModelKey:   'gemini-2.5-flash',
   sidecarUrl:           'http://localhost:9001',
   workspaceDirOverride: null,
+  minorCastMinLines:    3,
   apiKeyStatus:         'set',
   workspaceRoot:        '/some/path',
   workspaceSource:      'env',

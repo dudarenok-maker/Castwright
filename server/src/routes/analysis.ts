@@ -8,6 +8,7 @@ import { Router, type Request, type Response } from 'express';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { selectAnalyzer } from '../analyzer/index.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
+import { readUserSettings } from '../workspace/user-settings.js';
 import { clearAnalysisCache, loadAnalysisCache, saveAnalysisCache, type AnalysisCache } from '../store/analysis-cache.js';
 import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
 import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../workspace/paths.js';
@@ -559,19 +560,34 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       };
 
       const completedCast = new Set<number>(Object.keys(chapterCast).map(k => Number(k)));
+      /* Excluded chapters never run Phase 0a, so the progress denominator
+         counts only the chapters we'll actually process. Otherwise a book
+         with 5 excluded chapters would stall the bar permanently below
+         100%. The full `totalCastChapters` is still used for log/log-message
+         framing ("Chapter 3/12 — Title") so the user sees their book's
+         original chapter numbering. */
+      const activeCastChapters = recordRef.chapterHints.filter(c => !c.excluded).length;
+      const excludedCastChapters = totalCastChapters - activeCastChapters;
+      if (excludedCastChapters > 0) {
+        log(0, `Skipping ${excludedCastChapters} excluded chapter${excludedCastChapters === 1 ? '' : 's'} (front/back-matter you opted out of narrating).`);
+      }
       const phase0Progress = (): number => {
         const done = completedCast.size;
-        return totalCastChapters > 0 ? Math.min(0.02 + 0.93 * (done / totalCastChapters), 0.95) : 0.02;
+        return activeCastChapters > 0 ? Math.min(0.02 + 0.93 * (done / activeCastChapters), 0.95) : 1;
       };
 
       /* Initial cast-update + progress reflecting any cached cast. */
       send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
       if (cachedCastCount > 0) emitCastUpdate();
 
-      /* Tasks that need to run. */
+      /* Tasks that need to run. Excluded chapters (front/back-matter the
+         user opted out of narrating) never run Phase 0a — saves Gemini
+         tokens and stops the roster from picking up characters only
+         named in a Dedication or Copyright page. */
       const castTaskIndices: number[] = [];
       for (let i = 0; i < totalCastChapters; i++) {
         const ch = recordRef.chapterHints[i];
+        if (ch.excluded) continue;
         if (!chapterCast[ch.id]) castTaskIndices.push(i);
       }
       const castConcurrency = readStage2Concurrency();
@@ -793,9 +809,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     const completedSet = new Set<number>();
 
     /* Replay cached chapters synchronously up front. Cheap, deterministic
-       progress, and avoids racing the concurrent pool against the cache. */
+       progress, and avoids racing the concurrent pool against the cache.
+       Excluded chapters are skipped — they never had attribution run and
+       must not be counted as cached. */
     for (let i = 0; i < totalChapters; i++) {
       const ch = recordRef.chapterHints[i];
+      if (ch.excluded) continue;
       const cached = cachedChapters[ch.id];
       if (cached && cached.length > 0) {
         log(1, `Chapter ${i + 1}/${totalChapters} — ${ch.title}: cached (${cached.length.toLocaleString()} sentences), skipping.`);
@@ -803,9 +822,17 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         completedSet.add(i);
       }
     }
+    /* Active = chapters that will actually run Phase 1. Excluded chapters
+       are subtracted from the denominator so a book with 5 excluded
+       chapters doesn't stall the bar below 100%. */
+    const activeChapterCount = recordRef.chapterHints.filter(c => !c.excluded).length;
+    const excludedChapterCount = totalChapters - activeChapterCount;
+    if (excludedChapterCount > 0) {
+      log(1, `Skipping ${excludedChapterCount} excluded chapter${excludedChapterCount === 1 ? '' : 's'} (no audio will be generated).`);
+    }
     /* Reflect cached progress in the bar before any work starts. */
     {
-      const cachedFrac = completedSet.size / totalChapters;
+      const cachedFrac = activeChapterCount > 0 ? completedSet.size / activeChapterCount : 1;
       send({
         kind: 'phase',
         phaseId: 1,
@@ -814,9 +841,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       });
     }
 
-    /* Tasks that need to actually run. */
+    /* Tasks that need to actually run. Excluded chapters are filtered
+       out — they're tracked in state.json but never get Phase 1
+       attribution and therefore never get TTS either. */
     const taskIndices: number[] = [];
     for (let i = 0; i < totalChapters; i++) {
+      if (recordRef.chapterHints[i].excluded) continue;
       if (!completedSet.has(i)) taskIndices.push(i);
     }
 
@@ -840,7 +870,9 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     const sendLiveTick = () => {
       const running = Array.from(inFlight.values())
         .sort((a, b) => a.chapterIndex - b.chapterIndex);
-      const p = Math.min(0.02 + 0.93 * (completedSet.size / totalChapters), 0.95);
+      const p = activeChapterCount > 0
+        ? Math.min(0.02 + 0.93 * (completedSet.size / activeChapterCount), 0.95)
+        : 1;
       send({
         kind: 'phase',
         phaseId: 1,
@@ -1038,16 +1070,25 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       state: 'queued' as const,
       progress: 0,
       characters: {} as Record<string, 'queued' | 'in_progress' | 'done' | 'skipped' | 'failed'>,
+      /* Carry the user's exclusion choice into the frontend so the Generate
+         view can render the chapter greyed-out with an "Excluded" pill
+         instead of stalling it as forever-queued. */
+      excluded: h.excluded || undefined,
     }));
 
     /* Minor-cast fold pass. Rolls "Unknown <descriptor>" characters and
-       anyone with too few attributed lines into generic male/female (or
-       narrator) buckets so the cast roster doesn't accumulate a voice
-       profile per one-off bystander. Runs on stage1 + sentence outputs
-       in-memory only — the cache stays ground truth so the rules can be
-       tuned without invalidating in-flight progress. See
+       anyone with too few attributed sentences into generic Unknown
+       male / Unknown female buckets so the cast roster doesn't accumulate
+       a voice profile per one-off bystander. Runs on stage1 + sentence
+       outputs in-memory only — the cache stays ground truth so the rules
+       can be tuned without invalidating in-flight progress. The
+       per-character sentence threshold is user-configurable in the
+       account view (`minorCastMinLines`); see
        server/src/analyzer/fold-minor-cast.ts for the trigger contract. */
-    const folded = foldMinorCast(stage1.characters, allSentences);
+    const userSettings = await readUserSettings();
+    const folded = foldMinorCast(stage1.characters, allSentences, {
+      minLines: userSettings.minorCastMinLines,
+    });
     if (folded.summary.foldedCount > 0) {
       const parts: string[] = [];
       if (folded.summary.intoMale)   parts.push(`${folded.summary.intoMale} → Unknown male`);
@@ -1084,6 +1125,13 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         const statePath = stateJsonPath(record.bookDir);
         const prev = await readJson<BookStateJson>(statePath);
         if (prev) {
+          /* Preserve the excluded flag — analysis owns chapter titles/
+             durations, the user owns excluded. Match on id so a re-run
+             after a re-parse picks up whichever ids the parser produced. */
+          const prevExcludedById = new Map<number, boolean>();
+          for (const c of prev.chapters) {
+            if (c.excluded) prevExcludedById.set(c.id, true);
+          }
           const next: BookStateJson = {
             ...prev,
             chapters: chapters.map(c => ({
@@ -1091,6 +1139,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
               title: c.title,
               slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
               duration: c.duration,
+              excluded: prevExcludedById.get(c.id) || undefined,
             })),
             updatedAt: new Date().toISOString(),
           };
@@ -1120,6 +1169,245 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       details: parsedLog?.details,
     });
     const { code, message, detail } = describeError(e, analyzerLabel);
+    send({ kind: 'error', code, message, detail });
+    res.end();
+  }
+});
+
+/* POST /api/manuscripts/:id/analysis/chapters — subset re-analysis.
+
+   Used when the user un-excludes a chapter in the Generate view: that
+   chapter never went through the full pipeline (because it was excluded
+   at confirm time) and now needs Phase 0a + Phase 1 to catch up. Runs
+   sequentially (typical subset is 1–3 chapters), reuses the existing
+   cache, and merges incrementally so the rest of the book's analysis
+   stays untouched.
+
+   Streaming shape is identical to the full-book route — same SSE event
+   kinds (phase / log / cast-update / heartbeat / result / error) so the
+   frontend's existing analysing-view listener handles it without
+   special-casing. The differences are operational: no `fresh` reset,
+   no concurrency pool (overkill for a handful of chapters), no Phase 2
+   stub (we don't redo voice matching for a subset). */
+analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response) => {
+  const manuscriptId = req.params.id;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const send = (payload: unknown) => {
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+  const log = (phaseId: number, message: string) => {
+    send({ kind: 'log', phaseId, message });
+  };
+
+  const record = await getOrHydrateManuscript(manuscriptId);
+  if (!record) {
+    send({ kind: 'error', code: 'unknown_manuscript', message: `No manuscript found for id "${manuscriptId}".` });
+    return res.end();
+  }
+
+  const body = req.body as { chapterIds?: unknown; model?: unknown };
+  const rawIds = Array.isArray(body?.chapterIds) ? body.chapterIds : [];
+  const requestedIds = Array.from(new Set(
+    rawIds.filter((n): n is number => typeof n === 'number' && Number.isInteger(n)),
+  ));
+  if (requestedIds.length === 0) {
+    send({ kind: 'error', code: 'bad_request', message: 'chapterIds is required and must be a non-empty array of integers.' });
+    return res.end();
+  }
+
+  /* Validate against the manuscript record so a stale frontend id doesn't
+     produce a confusing "chapter not found mid-stream" log line. */
+  const hintsById = new Map(record.chapterHints.map(h => [h.id, h]));
+  const targets = requestedIds
+    .map(id => hintsById.get(id))
+    .filter((h): h is NonNullable<typeof h> => !!h);
+  if (targets.length === 0) {
+    send({ kind: 'error', code: 'bad_request', message: 'None of the requested chapter ids match this manuscript.' });
+    return res.end();
+  }
+  const skippedExcluded = targets.filter(h => h.excluded);
+  if (skippedExcluded.length > 0) {
+    /* Hard-stop rather than silently re-analyzing — the typical reason a
+       caller hits this with excluded=true is a frontend bug where the
+       toggle endpoint wasn't awaited before subset analysis kicked off.
+       Better to fail fast than to leave half-state on disk. */
+    send({
+      kind: 'error',
+      code: 'chapter_excluded',
+      message: `Cannot run analysis on excluded chapter${skippedExcluded.length === 1 ? '' : 's'}: ${skippedExcluded.map(c => c.title).join(', ')}. Flip the exclude flag first via POST /api/books/.../chapters/:chapterId/exclude.`,
+    });
+    return res.end();
+  }
+  const toRun = targets.filter(h => !h.excluded);
+
+  const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
+  let analyzer;
+  try {
+    analyzer = selectAnalyzer({ model: requestedModel });
+  } catch (e) {
+    send({ kind: 'error', message: (e as Error).message });
+    return res.end();
+  }
+  const analyzerLabel = humanModel(requestedModel ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it');
+
+  try {
+    const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
+    const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
+    const cachedChapters = cache.chapters ?? {};
+
+    /* ── Phase 0a (subset). Re-run cast detection only for the targeted
+       chapters. The running roster passed into each prompt is rebuilt
+       from cache.chapterCast each iteration so the model sees every
+       character we've already found — same merge contract as the full
+       route. */
+    log(0, `Re-analyzing ${toRun.length} chapter${toRun.length === 1 ? '' : 's'} via ${analyzerLabel}.`);
+    send({ kind: 'phase', phaseId: 0, progress: 0.02, label: PHASES[0].label });
+
+    const rebuildRoster = (): Map<string, CharacterOutput> => {
+      const r = new Map<string, CharacterOutput>();
+      for (const ch of record.chapterHints) {
+        const cast = chapterCast[ch.id];
+        if (cast?.length) mergeRosterChapter(r, cast);
+      }
+      return r;
+    };
+    const emitCastUpdate = (): void => {
+      const roster = rebuildRoster();
+      send({ kind: 'cast-update', characters: Array.from(roster.values()) });
+    };
+
+    for (let idx = 0; idx < toRun.length; idx++) {
+      const ch = toRun[idx];
+      log(0, `Chapter ${ch.id} — ${ch.title}: detecting cast…`);
+      const result = await analyzer.runStage1Chapter(
+        manuscriptId,
+        ch.id,
+        buildStage1ChapterInbox(manuscriptId, record.title, ch, Array.from(rebuildRoster().values())),
+        {},
+      );
+      chapterCast[ch.id] = result.characters;
+      cache.chapterCast = chapterCast;
+      await saveAnalysisCache(manuscriptId, cache);
+      log(0, `Chapter ${ch.id} cast — ${result.characters.length} character${result.characters.length === 1 ? '' : 's'} detected.`);
+      emitCastUpdate();
+      send({ kind: 'phase', phaseId: 0, progress: 0.02 + 0.93 * ((idx + 1) / toRun.length), label: PHASES[0].label });
+    }
+
+    /* Finalise stage1: rebuild the roster, sort + verify, and refresh the
+       cache.stage1 entry so subsequent runs (or a full-book resume) see
+       the merged roster. */
+    const finalRoster = rebuildRoster();
+    const characters = Array.from(finalRoster.values());
+    sortEvidence(characters);
+    verifyEvidenceAgainstSource(characters, record.sourceText, msg => log(0, msg));
+    const stage1: Stage1Output = {
+      characters,
+      chapters: record.chapterHints.map(c => ({ id: c.id, title: c.title })),
+    };
+    cache.stage1 = stage1;
+    await saveAnalysisCache(manuscriptId, cache);
+    send({ kind: 'cast-update', characters: stage1.characters });
+    send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
+
+    /* ── Phase 1 (subset). Sentence attribution for the new chapters only.
+       Cached chapters are left alone — their sentences stay in
+       cache.chapters as-is. */
+    send({ kind: 'phase', phaseId: 1, progress: 0.02, label: PHASES[1].label });
+    for (let idx = 0; idx < toRun.length; idx++) {
+      const ch = toRun[idx];
+      log(1, `Chapter ${ch.id} — ${ch.title}: attributing sentences via ${analyzerLabel}…`);
+      const result = await analyzer.runStage2Chapter(
+        manuscriptId,
+        ch.id,
+        buildStage2ChapterInbox(manuscriptId, record.title, stage1, ch),
+        {},
+      );
+      for (const s of result.sentences) s.chapterId = ch.id;
+      cachedChapters[ch.id] = result.sentences;
+      cache.chapters = cachedChapters;
+      await saveAnalysisCache(manuscriptId, cache);
+      log(1, `Chapter ${ch.id} done — ${result.sentences.length.toLocaleString()} sentences.`);
+      send({ kind: 'phase', phaseId: 1, progress: 0.02 + 0.93 * ((idx + 1) / toRun.length), label: PHASES[1].label });
+    }
+
+    /* Stitch the full sentence list across all cached chapters (old + new),
+       in narrative order. Excluded chapters contribute nothing. */
+    const allSentences: SentenceOutput[] = [];
+    for (const h of record.chapterHints) {
+      if (h.excluded) continue;
+      const arr = cachedChapters[h.id];
+      if (arr) allSentences.push(...arr);
+    }
+
+    /* Re-fold the cast against the merged sentence set so the bucket
+       attributions stay coherent with the new chapters' attributions. */
+    const folded = foldMinorCast(stage1.characters, allSentences);
+    const enriched = attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences);
+
+    const chapterTitleById = new Map(stage1.chapters.map(c => [c.id, c.title]));
+    const chaptersOut = record.chapterHints.map(h => ({
+      id: h.id,
+      title: chapterTitleById.get(h.id) ?? h.title,
+      duration: durationPlaceholder(),
+      state: 'queued' as const,
+      progress: 0,
+      characters: {} as Record<string, 'queued' | 'in_progress' | 'done' | 'skipped' | 'failed'>,
+      excluded: h.excluded || undefined,
+    }));
+
+    const response = {
+      bookId: record.bookId ?? bookIdFromTitle(record.title),
+      manuscriptId,
+      title: record.title,
+      phaseTimings: PHASES.map(p => ({ id: p.id, label: p.label, duration: 0 })),
+      characters: enriched,
+      chapters: chaptersOut,
+      sentences: folded.sentences,
+      libraryMatches: [] as Array<{ characterId: string; voiceId: string; confidence: number }>,
+    };
+
+    /* Persist cast.json + manuscript-edits.json + state.json so a refresh
+       (or a follow-up generation pass) sees the merged state. */
+    if (record.bookDir) {
+      try {
+        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: folded.sentences });
+        await writeJsonAtomic(castJsonPath(record.bookDir), { characters: enriched });
+        const statePath = stateJsonPath(record.bookDir);
+        const prev = await readJson<BookStateJson>(statePath);
+        if (prev) {
+          const prevExcludedById = new Map<number, boolean>();
+          for (const c of prev.chapters) {
+            if (c.excluded) prevExcludedById.set(c.id, true);
+          }
+          const next: BookStateJson = {
+            ...prev,
+            chapters: chaptersOut.map(c => ({
+              id: c.id,
+              title: c.title,
+              slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+              duration: c.duration,
+              excluded: prevExcludedById.get(c.id) || undefined,
+            })),
+            updatedAt: new Date().toISOString(),
+          };
+          await writeJsonAtomic(statePath, next);
+        }
+      } catch (persistErr) {
+        console.error('[analysis-subset] failed to persist .audiobook/* for', record.bookDir, persistErr);
+      }
+    }
+
+    send({ kind: 'result', response });
+    res.end();
+  } catch (e) {
+    const { code, message, detail } = describeError(e, analyzerLabel);
+    console.error('[analysis-subset] failed', { manuscriptId, code, message });
     send({ kind: 'error', code, message, detail });
     res.end();
   }

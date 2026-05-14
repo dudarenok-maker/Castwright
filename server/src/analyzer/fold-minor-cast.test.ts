@@ -209,6 +209,51 @@ describe('foldMinorCast', () => {
     expect(result.summary).toEqual({ foldedCount: 3, intoMale: 1, intoFemale: 2 });
   });
 
+  it('minLines: 0 disables the line-count trigger — only Unknown-named characters fold', () => {
+    /* User opted out of the sentence-count threshold via the account
+       view. Named bystanders with 1 line should stay on the roster. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('sophie',           { name: 'Sophie',          gender: 'female' }),
+      makeChar('sandor',           { name: 'Sandor',          gender: 'male' }),  // 1 line
+      makeChar('unknown-jogger',   { name: 'Unknown Jogger',  gender: 'male' }),  // 1 line
+    ];
+    const sentences = makeSentences([
+      [1, 'sophie'], [1, 'sophie'], [1, 'sophie'],
+      [2, 'sandor'],
+      [3, 'unknown-jogger'],
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 0 });
+
+    /* Sandor stayed; only Unknown Jogger folded. */
+    expect(result.rewrites).toEqual({ 'unknown-jogger': 'unknown-male' });
+    expect(result.characters.map(c => c.id).sort()).toEqual(
+      ['narrator', 'sandor', 'sophie', 'unknown-male'],
+    );
+  });
+
+  it('honours a custom minLines higher than the default — wider net catches mid-tier speakers', () => {
+    /* User cranked minLines up to 5 to be aggressive about pruning the
+       cast list down to the principals only. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('sophie',  { name: 'Sophie',        gender: 'female' }),  // 8 lines — keeps
+      makeChar('keefe',   { name: 'Keefe Sencen',  gender: 'male'   }),  // 4 lines — folds
+    ];
+    const sentences = makeSentences([
+      ...Array.from({ length: 8 }, () => [1, 'sophie'] as [number, string]),
+      ...Array.from({ length: 4 }, () => [2, 'keefe']  as [number, string]),
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 5 });
+
+    expect(result.rewrites).toEqual({ 'keefe': 'unknown-male' });
+    const bucket = result.characters.find(c => c.id === 'unknown-male')!;
+    expect(bucket.aliases).toEqual(['Keefe Sencen']);
+    expect(bucket.lines).toBe(4);
+  });
+
   it('dedups bucket aliases case-insensitively and never adds the bucket\'s own name', () => {
     const chars = [
       makeChar('narrator'),
