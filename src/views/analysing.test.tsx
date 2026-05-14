@@ -8,10 +8,13 @@ import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { AnalysingView } from './analysing';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
-import type { AnalyseResponse, Character } from '../lib/types';
+import type { AnalyseResponse, BookStateResponse, Character } from '../lib/types';
 
 /* Captured handlers so tests can drive phase/log events at will. */
 let capturedOpts: AnalyseOpts | undefined;
+let capturedSubsetCall: { chapterIds: number[]; opts: AnalyseOpts | undefined } | undefined;
+let resolveSubset: ((value: AnalyseResponse) => void) | undefined;
+let getBookStateImpl: ((bookId: string) => Promise<BookStateResponse>) | undefined;
 const loadAnalyzerSpy = vi.fn();
 const unloadSidecarSpy = vi.fn();
 const getSidecarHealthSpy = vi.fn();
@@ -29,6 +32,14 @@ vi.mock('../lib/api', async () => {
         capturedOpts = opts;
         return new Promise<AnalyseResponse>(() => {});
       },
+      /* Subset retry — captures the chapter ids + opts and exposes a
+         manual resolver so tests can simulate a successful retry. */
+      runAnalysisForChapters: (_id: string, chapterIds: number[], opts?: AnalyseOpts) => {
+        capturedSubsetCall = { chapterIds, opts };
+        return new Promise<AnalyseResponse>(resolve => { resolveSubset = resolve; });
+      },
+      getBookState: (bookId: string) =>
+        getBookStateImpl ? getBookStateImpl(bookId) : Promise.reject(new Error('no impl')),
       getOllamaHealth: () => getOllamaHealthSpy(),
       getSidecarHealth: () => getSidecarHealthSpy(),
       loadAnalyzer:    () => { loadAnalyzerSpy(); return Promise.resolve({ status: 'ready' as const }); },
@@ -41,6 +52,9 @@ vi.mock('../lib/api', async () => {
 
 beforeEach(() => {
   capturedOpts = undefined;
+  capturedSubsetCall = undefined;
+  resolveSubset = undefined;
+  getBookStateImpl = undefined;
   loadAnalyzerSpy.mockReset();
   unloadSidecarSpy.mockReset();
   getSidecarHealthSpy.mockReset();
@@ -507,5 +521,146 @@ describe('AnalysingView — analyzer pill reflects model state, not SSE state', 
        the analyzer can't run at all, not that the SSE is "connecting". */
     expect(await screen.findByText(/Ollama not reachable/i)).toBeInTheDocument();
     expect(screen.queryByText(/Loading analyzer/i)).not.toBeInTheDocument();
+  });
+});
+
+/* Pause/Resume + per-chapter retry. These cover the user-facing controls
+   added to recover from mid-book cast-detection failures (the `qwen3.5:4b`
+   invalid-JSON crash on long chapters) without restarting the Node server.
+   The button must be a permanent fixture during the analysing stage, and
+   per-chapter Retry rows must survive page reload via book-state
+   hydration. */
+describe('AnalysingView — Start/Pause/Resume button cycle', () => {
+  it('Start → Pause → Resume: clicking Pause aborts the SSE; clicking Resume re-fires the analysis with a fresh AbortController', async () => {
+    /* Phase 1: Start. Default mock state has the analyzer resident; the
+       button reads "Start analysis", the click captures the first
+       AbortController via capturedOpts.signal. */
+    await renderViewWaitingForAnalysis();
+    const firstSignal = capturedOpts!.signal!;
+    expect(firstSignal.aborted).toBe(false);
+
+    /* Emit a phase event so conn flips to 'streaming' — the button label
+       hinges on conn. */
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.05 });
+    });
+    expect(await screen.findByRole('button', { name: /pause analysis/i })).toBeInTheDocument();
+
+    /* Phase 2: Pause. Click aborts the captured controller. The next
+       render swaps the label to Resume. */
+    const pauseBtn = screen.getByRole('button', { name: /pause analysis/i });
+    await act(async () => { fireEvent.click(pauseBtn); });
+    expect(firstSignal.aborted).toBe(true);
+    expect(await screen.findByRole('button', { name: /resume analysis/i })).toBeInTheDocument();
+
+    /* Phase 3: Resume. New analyseManuscript call lands with a fresh
+       AbortController — the old one stays aborted. */
+    capturedOpts = undefined;
+    const resumeBtn = screen.getByRole('button', { name: /resume analysis/i });
+    await act(async () => { fireEvent.click(resumeBtn); });
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+    expect(capturedOpts!.signal!.aborted).toBe(false);
+    expect(capturedOpts!.signal).not.toBe(firstSignal);
+  });
+});
+
+describe('AnalysingView — failed-chapter retry', () => {
+  function makeBookState(failedIds: number[]): BookStateResponse {
+    /* Minimal shape — only the fields the analysing view reads, padded
+       with required BookStateJson fields so the type-check stays happy. */
+    return {
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        title: 'Bonus Keefe Story',
+        author: '',
+        series: '',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'bonus-keefe.txt',
+        castConfirmed: false,
+        chapters: [
+          { id: 44, title: 'Chapter Forty-Two', slug: '44-chapter-forty-two', duration: '0:00' },
+          { id: 49, title: 'Chapter Forty-Seven', slug: '49-chapter-forty-seven', duration: '0:00' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: '2026-05-15T00:00:00.000Z',
+        updatedAt: '2026-05-15T00:00:00.000Z',
+      },
+      cast: null,
+      manuscript: null,
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      changeLog: null,
+      analysis: { failedChapterIds: failedIds },
+    };
+  }
+
+  it('hydrates the Failed-chapters panel from book-state on mount when failedChapterIds is non-empty', async () => {
+    getBookStateImpl = () => Promise.resolve(makeBookState([44, 49]));
+
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="Bonus Keefe Story"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    expect(await screen.findByText(/2 chapters failed cast detection/i)).toBeInTheDocument();
+    expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+    expect(screen.getByText('Chapter Forty-Seven')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /retry chapter/i })).toHaveLength(2);
+  });
+
+  it('clicking Retry calls runAnalysisForChapters with exactly [chapterId]; the row disappears when the subset call resolves', async () => {
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="Bonus Keefe Story"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+    await act(async () => { fireEvent.click(retryBtn); });
+
+    expect(capturedSubsetCall).toBeDefined();
+    expect(capturedSubsetCall!.chapterIds).toEqual([44]);
+    /* Button reads Retrying… while the subset promise is pending. */
+    expect(screen.getByRole('button', { name: /retrying/i })).toBeInTheDocument();
+
+    /* Resolve the subset call as if the server succeeded — the row drops
+       out of the panel, and because that was the only failed chapter the
+       whole panel disappears. */
+    await act(async () => {
+      resolveSubset?.({
+        bookId: 'b1', manuscriptId: 'm1', title: '',
+        phaseTimings: [], characters: [], chapters: [], sentences: [],
+        libraryMatches: [],
+      } as AnalyseResponse);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/chapter failed cast detection/i)).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
   });
 });

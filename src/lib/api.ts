@@ -112,6 +112,12 @@ export interface AnalyseOpts {
       user sees characters appear chapter-by-chapter instead of waiting
       for a whole-book Phase 0 pass to finish. */
   onCastUpdate?: (e: { characters: import('./types').Character[] }) => void;
+  /** A chapter's Phase 0a cast detection threw across the analyzer's
+      built-in retry. The run continues without it; the chapter id is
+      persisted to the analysis cache so the analysing view can render a
+      per-chapter Retry button. Emitted by both the full and subset
+      analysis routes. */
+  onChapterFailed?: (e: { chapterId: number; message: string }) => void;
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
       Sent as JSON body to POST /api/manuscripts/:id/analysis. Ignored when
       the server runs in ANALYZER=manual mode. */
@@ -507,13 +513,14 @@ async function realUploadManuscript({ text, file, fileName, format }: UploadArgs
 }
 
 interface AnalysisStreamEvent {
-  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update' | 'eta';
+  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update' | 'eta' | 'chapter-failed';
   phaseId?: number;
   progress?: number;
   label?: string;
   response?: AnalyseResponse;
   message?: string;
   code?: string;
+  chapterId?: number;
   /** Structured upstream detail (Google's `status` + `details[]` for ApiError
       envelopes; falls back to the raw SDK message). Rendered in a collapsible
       block in the analysing view so the headline stays readable. */
@@ -542,7 +549,7 @@ export class AnalysisError extends Error {
   }
 }
 
-async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
   const hasBody = model !== undefined || fresh !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
@@ -590,6 +597,10 @@ async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, on
     } else if (payload.kind === 'eta') {
       if (typeof payload.remainingMs === 'number') {
         onEta?.({ remainingMs: payload.remainingMs });
+      }
+    } else if (payload.kind === 'chapter-failed') {
+      if (typeof payload.chapterId === 'number' && typeof payload.message === 'string') {
+        onChapterFailed?.({ chapterId: payload.chapterId, message: payload.message });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
@@ -747,7 +758,7 @@ async function mockSetChapterExcluded(
 async function realRunAnalysisForChapters(
   manuscriptId: string,
   chapterIds: number[],
-  { onPhase, onLog, onHeartbeat, onEta, onCastUpdate, model }: AnalyseOpts = {},
+  { onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, model }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
   const res = await fetch(
     `/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis/chapters`,
@@ -799,6 +810,10 @@ async function realRunAnalysisForChapters(
     } else if (payload.kind === 'eta') {
       if (typeof payload.remainingMs === 'number') {
         onEta?.({ remainingMs: payload.remainingMs });
+      }
+    } else if (payload.kind === 'chapter-failed') {
+      if (typeof payload.chapterId === 'number' && typeof payload.message === 'string') {
+        onChapterFailed?.({ chapterId: payload.chapterId, message: payload.message });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;

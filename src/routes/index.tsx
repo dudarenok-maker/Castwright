@@ -237,6 +237,7 @@ export function AnalysingRoute() {
   return (
     <AnalysingView
       manuscriptId={manuscriptId}
+      bookId={bookId || null}
       title={manuscript.title || activeBook?.title || null}
       wordCount={manuscript.wordCount}
       model={ui.selectedModel}

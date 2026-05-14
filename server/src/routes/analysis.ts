@@ -777,16 +777,26 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       /* Tasks that need to run. Excluded chapters (front/back-matter the
          user opted out of narrating) never run Phase 0a — saves Gemini
          tokens and stops the roster from picking up characters only
-         named in a Dedication or Copyright page. */
+         named in a Dedication or Copyright page.
+         Chapters in failedChapterIds are re-queued on resume even though
+         chapterCast[id] is populated (with []) — without this carve-out
+         the failure marker would silently skip them forever, leaving the
+         user to either Start fresh or hit the per-chapter Retry button
+         one by one for every failed chapter. */
+      const failedSet = new Set(cache.failedChapterIds ?? []);
       const castTaskIndices: number[] = [];
       for (let i = 0; i < totalCastChapters; i++) {
         const ch = recordRef.chapterHints[i];
         if (ch.excluded) continue;
-        if (!chapterCast[ch.id]) castTaskIndices.push(i);
+        if (!chapterCast[ch.id] || failedSet.has(ch.id)) castTaskIndices.push(i);
       }
       const castConcurrency = readStage2Concurrency();
       if (castTaskIndices.length > 0) {
-        log(0, `Running ${castTaskIndices.length} chapter cast-detection${castTaskIndices.length === 1 ? '' : 's'} with up to ${castConcurrency} in parallel.`);
+        const requeuedFailedCount = castTaskIndices.filter(i => failedSet.has(recordRef.chapterHints[i].id)).length;
+        const requeueSuffix = requeuedFailedCount > 0
+          ? ` (including ${requeuedFailedCount} previously-failed)`
+          : '';
+        log(0, `Running ${castTaskIndices.length} chapter cast-detection${castTaskIndices.length === 1 ? '' : 's'}${requeueSuffix} with up to ${castConcurrency} in parallel.`);
       }
 
       /* Per-chapter live ticker, mirroring Phase 1's structure so the
@@ -912,7 +922,16 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
              skips it and the cache key is taken. */
           chapterCast[ch.id] = [];
           cache.chapterCast = chapterCast;
+          /* Promote the failure to durable cache state so the analysing
+             view can surface a per-chapter Retry button after reload.
+             The set is in-memory only; without this, the failed-id list
+             disappears the moment the SSE ends. Dedup via Set so a
+             second-chance retry inside the same run doesn't double up. */
+          const failedSet = new Set(cache.failedChapterIds ?? []);
+          failedSet.add(ch.id);
+          cache.failedChapterIds = Array.from(failedSet);
           await saveAnalysisCache(manuscriptId, cache);
+          send({ kind: 'chapter-failed', chapterId: ch.id, message: (chErr as Error).message });
           sendCastLiveTick();
           send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
           return;
@@ -921,6 +940,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         chapterCast[ch.id] = result.characters;
         completedCast.add(i);
         cache.chapterCast = chapterCast;
+        /* A previously-failed chapter just succeeded on resume — clear it
+           from the durable failed-id list so the analysing view's Retry
+           row disappears on the next book-state fetch. */
+        if (cache.failedChapterIds?.length) {
+          cache.failedChapterIds = cache.failedChapterIds.filter(id => id !== ch.id);
+        }
         const chDuration = Date.now() - startedChAt;
         /* Persist this chapter's wall-clock duration so a future resumed
            run can seed its observed-rate trackers without waiting for the
@@ -1649,17 +1674,38 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     for (let idx = 0; idx < toRun.length; idx++) {
       const ch = toRun[idx];
       log(0, `Chapter ${ch.id} — ${ch.title}: detecting cast…`);
-      const result = await analyzer.runStage1Chapter(
-        manuscriptId,
-        ch.id,
-        buildStage1ChapterInbox(manuscriptId, record.title, ch, Array.from(rebuildRoster().values())),
-        {},
-      );
-      chapterCast[ch.id] = result.characters;
-      cache.chapterCast = chapterCast;
-      await saveAnalysisCache(manuscriptId, cache);
-      log(0, `Chapter ${ch.id} cast — ${result.characters.length} character${result.characters.length === 1 ? '' : 's'} detected.`);
-      emitCastUpdate();
+      /* Per-chapter try/catch mirrors the full route at analysis.ts:887 —
+         one failed chapter in a batch retry shouldn't abort the rest of
+         the batch. On success we also clear the id from
+         cache.failedChapterIds so the analysing view's Retry row
+         disappears on reload. */
+      try {
+        const result = await analyzer.runStage1Chapter(
+          manuscriptId,
+          ch.id,
+          buildStage1ChapterInbox(manuscriptId, record.title, ch, Array.from(rebuildRoster().values())),
+          { signal: abortController.signal },
+        );
+        chapterCast[ch.id] = result.characters;
+        cache.chapterCast = chapterCast;
+        if (cache.failedChapterIds?.length) {
+          cache.failedChapterIds = cache.failedChapterIds.filter(id => id !== ch.id);
+        }
+        await saveAnalysisCache(manuscriptId, cache);
+        log(0, `Chapter ${ch.id} cast — ${result.characters.length} character${result.characters.length === 1 ? '' : 's'} detected.`);
+        emitCastUpdate();
+      } catch (chErr) {
+        if (chErr instanceof AnalysisAbortedError) throw chErr;
+        chapterCast[ch.id] = [];
+        cache.chapterCast = chapterCast;
+        const failedSet = new Set(cache.failedChapterIds ?? []);
+        failedSet.add(ch.id);
+        cache.failedChapterIds = Array.from(failedSet);
+        await saveAnalysisCache(manuscriptId, cache);
+        log(0, `❌ Chapter ${ch.id} cast FAILED — ${ch.title}: ${(chErr as Error).message}`);
+        send({ kind: 'chapter-failed', chapterId: ch.id, message: (chErr as Error).message });
+        emitCastUpdate();
+      }
       send({ kind: 'phase', phaseId: 0, progress: 0.02 + 0.93 * ((idx + 1) / toRun.length), label: PHASES[0].label });
     }
 

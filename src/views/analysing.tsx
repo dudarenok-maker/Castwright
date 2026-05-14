@@ -234,6 +234,7 @@ function describeRemaining(remainingMs: number, wordCount?: number): string {
 
 interface Props {
   manuscriptId: string | null | undefined;
+  bookId?: string | null;
   title?: string | null;
   wordCount?: number;
   model?: string;
@@ -242,7 +243,7 @@ interface Props {
 
 type ConnState = 'idle' | 'connecting' | 'streaming' | 'error' | 'done';
 
-export function AnalysingView({ manuscriptId, title, wordCount, model, onComplete }: Props) {
+export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, onComplete }: Props) {
   const dispatch = useAppDispatch();
   const [phase, setPhase] = useState(0);
   const [phaseProgress, setPhaseProgress] = useState(0);
@@ -265,6 +266,22 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const [, setNow] = useState(Date.now());
   const completedRef = useRef(false);
+  /* The active analysis fetch's AbortController. Lifted out of the
+     analysis effect so the Pause button (rendered in the header below)
+     can abort it imperatively without waiting for the effect's normal
+     deps-driven cleanup path. Assigned at the top of each effect run;
+     cleared by the cleanup. */
+  const analysisControllerRef = useRef<AbortController | null>(null);
+  /* Tracks whether analysis has been started at least once in this
+     mount. Used to pick the "Start" vs "Resume" label on the permanent
+     button — after a pause the cache holds completed chapters, so
+     "Resume" is the truthful word. */
+  const hasStartedOnceRef = useRef(false);
+  /* Per-chapter cast-detection failures that survive across reload. Seeded
+     from /api/books/:bookId/state on mount; appended to from the SSE's
+     chapter-failed event; cleared per id when a Retry succeeds. */
+  const [failedChapters, setFailedChapters] = useState<Array<{ chapterId: number; message: string }>>([]);
+  const [retryingChapterId, setRetryingChapterId] = useState<number | null>(null);
 
   /* Explicit "Start analysis" gate. The previous auto-fire path was hard
      to reason about — auto-load fires, probe re-runs, isAnalyzerReady
@@ -321,6 +338,8 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
        `[analysis] aborted (client disconnected)` pairs as the browser
        eventually pruned the orphaned fetches, breaking every retry. */
     const controller = new AbortController();
+    analysisControllerRef.current = controller;
+    hasStartedOnceRef.current = true;
     setPhase(0);
     setPhaseProgress(0);
     setLogs({});
@@ -388,6 +407,17 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
                by id, preserving locked voices on existing entries. */
             dispatch(castActions.mergeCharacters(characters));
           },
+          onChapterFailed: ({ chapterId, message }) => {
+            if (cancelled) return;
+            markEvent();
+            /* Upsert by chapterId so a retry of the same chapter (which
+               will fail again, replaying chapter-failed) doesn't double
+               the row. */
+            setFailedChapters(prev => {
+              const filtered = prev.filter(f => f.chapterId !== chapterId);
+              return [...filtered, { chapterId, message }];
+            });
+          },
         });
         if (cancelled || completedRef.current) return;
         completedRef.current = true;
@@ -412,6 +442,9 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
     return () => {
       cancelled = true;
       controller.abort();
+      if (analysisControllerRef.current === controller) {
+        analysisControllerRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manuscriptId, retry, isAnalyzerReady, analysisStarted]);
@@ -423,6 +456,97 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [conn]);
+
+  /* Per-chapter retry hydration. The analysis cache persists
+     failedChapterIds (see server/src/store/analysis-cache.ts), surfaced
+     through the book-state response. On mount we read it so the failed-
+     chapter rows survive page reload — without this the rows would only
+     live as long as the SSE that emitted the chapter-failed event.
+     Also seeds chapterTitleById from state.chapters so the rows can
+     show a human title instead of a bare numeric id. */
+  const [chapterTitleById, setChapterTitleById] = useState<Record<number, string>>({});
+  useEffect(() => {
+    if (!bookId) return;
+    let cancelled = false;
+    api.getBookState(bookId)
+      .then(res => {
+        if (cancelled) return;
+        const titles: Record<number, string> = {};
+        for (const c of res.state.chapters) titles[c.id] = c.title;
+        setChapterTitleById(titles);
+        const failedIds = res.analysis?.failedChapterIds ?? [];
+        if (failedIds.length === 0) return;
+        setFailedChapters(prev => {
+          /* Merge with whatever the SSE already pushed during this session
+             so we don't clobber a fresh chapter-failed event whose
+             message is more useful than the hydration placeholder. */
+          const messageById = new Map(prev.map(f => [f.chapterId, f.message]));
+          return failedIds.map(id => ({
+            chapterId: id,
+            message: messageById.get(id)
+              ?? 'Analysis failed on a previous attempt. Retry to try again.',
+          }));
+        });
+      })
+      .catch(err => { console.warn('[analysing] failed-chapter hydrate skipped:', err.message); });
+    return () => { cancelled = true; };
+  }, [bookId]);
+
+  /* Per-chapter retry handler. Reuses the existing SSE-callback
+     wiring so the active phase / log / cast UI keeps updating during
+     the retry, then removes the row when the result event lands. Server
+     side this hits /api/manuscripts/:id/analysis/chapters, which on
+     success removes the id from cache.failedChapterIds (so a follow-up
+     book-state fetch sees it cleared too). */
+  const handleRetryChapter = (chapterId: number) => {
+    if (!manuscriptId) return;
+    if (retryingChapterId !== null) return;
+    setRetryingChapterId(chapterId);
+    const markEvent = () => setLastEventAt(Date.now());
+    setConn('connecting');
+    api.runAnalysisForChapters(manuscriptId, [chapterId], {
+      model,
+      onPhase: ({ phaseId, progress, live }) => {
+        setConn('streaming'); markEvent();
+        setPhase(phaseId); setPhaseProgress(progress);
+        if (live) setLive(live);
+      },
+      onLog: ({ phaseId, message }) => {
+        setConn('streaming'); markEvent();
+        setLogs(prev => ({ ...prev, [phaseId]: [...(prev[phaseId] ?? []), message] }));
+      },
+      onHeartbeat: (hb) => {
+        setConn('streaming'); markEvent();
+        setHeartbeatByPhase(prev => ({ ...prev, [hb.phaseId]: { hb, receivedAt: Date.now() } }));
+      },
+      onCastUpdate: ({ characters }) => {
+        markEvent();
+        dispatch(castActions.mergeCharacters(characters));
+      },
+      onChapterFailed: ({ chapterId: failedId, message }) => {
+        markEvent();
+        setFailedChapters(prev => {
+          const filtered = prev.filter(f => f.chapterId !== failedId);
+          return [...filtered, { chapterId: failedId, message }];
+        });
+      },
+    })
+      .then(() => {
+        /* Subset call resolved without re-emitting chapter-failed for
+           this id — treat as success and drop the row. (If the retry
+           re-failed, onChapterFailed already replaced the message and
+           the row stays visible.) */
+        setFailedChapters(prev => prev.filter(f => f.chapterId !== chapterId));
+        setConn('idle');
+      })
+      .catch(err => {
+        console.warn('[analysing] retry failed:', err);
+        setConn('idle');
+      })
+      .finally(() => {
+        setRetryingChapterId(null);
+      });
+  };
 
   const overall = (phase + phaseProgress) / ANALYSIS_PHASES.length;
   const sinceLastSec = lastEventAt ? Math.max(0, Math.round((Date.now() - lastEventAt) / 1000)) : null;
@@ -569,36 +693,74 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
               />
             </div>
           )}
-          {/* Explicit "Start analysis" button. Visible only when the user
-              has a manuscript loaded and hasn't yet kicked off a run.
+          {/* Permanent analysis control. Cycles between Start / Pause /
+              Resume based on whether the SSE is in flight:
+              - running (conn streaming|connecting) → "Pause analysis";
+                clicking aborts via the lifted controller ref + flips
+                analysisStarted to false, which makes the effect cleanup
+                tear the fetch down and the early-out leave conn=idle.
+              - paused (started once, not running) → "Resume analysis";
+                clicking flips analysisStarted back on. The server
+                auto-skips chapters already in cache.chapterCast, so the
+                run picks up where it left off.
+              - idle (never started) → "Start analysis".
               For local analyzers the button is disabled until the model
               is resident (isAnalyzerReady) — clicking earlier would
               fire an SSE that the analysis useEffect's gate would
               immediately bounce, looking like a broken button to the
               user. For Gemini the button enables as soon as the
               manuscript is loaded (no local lifecycle to wait on). */}
-          {manuscriptId && !analysisStarted && (
-            <div className="mt-6 flex flex-col items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setAnalysisStarted(true)}
-                disabled={!isAnalyzerReady}
-                className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-colors ${
-                  isAnalyzerReady
-                    ? 'bg-ink text-canvas hover:bg-ink/90'
-                    : 'bg-ink/15 text-ink/40 cursor-not-allowed'
-                }`}
-              >
-                {isAnalyzerReady ? 'Start analysis' : 'Waiting for analyzer…'}
-              </button>
-              {isLocalAnalyzer && !isAnalyzerReady && (
-                <p className="text-[11px] text-ink/50">
-                  The model needs to be resident in VRAM before analysis can run.
-                  {pendingAnalyzerPill === 'loading' ? ' Loading now…' : ' Click Load above to warm it.'}
-                </p>
-              )}
-            </div>
-          )}
+          {manuscriptId && conn !== 'done' && (() => {
+            const isRunning = conn === 'streaming' || conn === 'connecting';
+            const label = isRunning
+              ? 'Pause analysis'
+              : (isAnalyzerReady
+                  ? (hasStartedOnceRef.current ? 'Resume analysis' : 'Start analysis')
+                  : 'Waiting for analyzer…');
+            const onClick = () => {
+              if (isRunning) {
+                /* Imperative abort — the effect's cleanup will also call
+                   .abort() when analysisStarted flips, but doing it here
+                   first means the user sees the SSE tear down without
+                   the brief race where conn could stay on 'streaming'
+                   between click and effect-cleanup. */
+                analysisControllerRef.current?.abort();
+                setAnalysisStarted(false);
+                setConn('idle');
+              } else {
+                /* Resume after a pause — bump retry.nonce so the effect
+                   re-runs even if analysisStarted is already true (it
+                   isn't here, but bumping is the established idiom for
+                   re-entering the effect, see Try again at the error
+                   panel below). */
+                setAnalysisStarted(true);
+                setRetry(r => ({ nonce: r.nonce + 1, fresh: false }));
+              }
+            };
+            const disabled = !isRunning && !isAnalyzerReady;
+            return (
+              <div className="mt-6 flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onClick}
+                  disabled={disabled}
+                  className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-colors ${
+                    disabled
+                      ? 'bg-ink/15 text-ink/40 cursor-not-allowed'
+                      : 'bg-ink text-canvas hover:bg-ink/90'
+                  }`}
+                >
+                  {label}
+                </button>
+                {isLocalAnalyzer && !isAnalyzerReady && !isRunning && (
+                  <p className="text-[11px] text-ink/50">
+                    The model needs to be resident in VRAM before analysis can run.
+                    {pendingAnalyzerPill === 'loading' ? ' Loading now…' : ' Click Load above to warm it.'}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
           {manuscriptId && (
             <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs">
               {!isLocalAnalyzer && (
@@ -810,6 +972,54 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
             );
           })}
         </div>
+
+        {/* Failed-chapter retry panel. Survives reload via book-state
+            hydration (see the failed-chapters effect above). Retries are
+            disabled while the main run is in flight to avoid two
+            concurrent Ollama chats fighting for the same model — the
+            user can Pause the main run, retry, then Resume. */}
+        {failedChapters.length > 0 && (
+          <div className="mt-6 rounded-3xl border border-amber-200 bg-amber-50/60 px-6 py-4">
+            <p className="text-sm font-semibold text-amber-900">
+              {failedChapters.length === 1
+                ? '1 chapter failed cast detection'
+                : `${failedChapters.length} chapters failed cast detection`}
+            </p>
+            <p className="mt-1 text-xs text-amber-800/80">
+              The model produced malformed output on these chapters even after the analyzer's built-in retry.
+              Retry runs them again on the currently-selected model.
+            </p>
+            <ul className="mt-3 space-y-2">
+              {failedChapters.map(f => {
+                const isRetrying = retryingChapterId === f.chapterId;
+                const isRunning = conn === 'streaming' || conn === 'connecting';
+                const disabled = isRetrying || (isRunning && retryingChapterId === null);
+                const title = chapterTitleById[f.chapterId] ?? `Chapter ${f.chapterId}`;
+                return (
+                  <li key={f.chapterId} className="flex items-start gap-3 rounded-2xl bg-white px-4 py-3 border border-amber-200/70">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-ink truncate" title={title}>{title}</p>
+                      <p className="mt-0.5 text-xs text-ink/60 break-words">{f.message}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRetryChapter(f.chapterId)}
+                      disabled={disabled}
+                      className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                        disabled
+                          ? 'bg-ink/10 text-ink/40 cursor-not-allowed'
+                          : 'bg-ink text-canvas hover:bg-ink/90'
+                      }`}
+                    >
+                      <IconRefresh className="w-3.5 h-3.5"/>
+                      {isRetrying ? 'Retrying…' : 'Retry chapter'}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
       </div>
     </div>
   );
