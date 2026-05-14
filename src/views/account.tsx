@@ -27,6 +27,7 @@ export function AccountView() {
   const [defaultTtsModelKey,    setDefaultTtsModelKey]    = useState<TtsModelKey>(account.defaultTtsModelKey);
   const [sidecarUrl,            setSidecarUrl]            = useState(account.sidecarUrl);
   const [workspaceDirOverride,  setWorkspaceDirOverride]  = useState<string>(account.workspaceDirOverride ?? '');
+  const [minorCastMinLines,     setMinorCastMinLines]     = useState<number>(account.minorCastMinLines);
   const [showSaved,             setShowSaved]             = useState(false);
 
   useEffect(() => {
@@ -36,9 +37,11 @@ export function AccountView() {
     setDefaultTtsModelKey(account.defaultTtsModelKey);
     setSidecarUrl(account.sidecarUrl);
     setWorkspaceDirOverride(account.workspaceDirOverride ?? '');
+    setMinorCastMinLines(account.minorCastMinLines);
   }, [account.hydrated, account.displayName, account.defaultAnalysisModel,
       account.defaultTtsEngine, account.defaultTtsModelKey,
-      account.sidecarUrl, account.workspaceDirOverride]);
+      account.sidecarUrl, account.workspaceDirOverride,
+      account.minorCastMinLines]);
 
   /* When the engine switches, the selected modelKey may not belong to the
      new engine's group. Default to the new group's first model so the
@@ -63,9 +66,10 @@ export function AccountView() {
         || defaultTtsEngine      !== account.defaultTtsEngine
         || defaultTtsModelKey    !== account.defaultTtsModelKey
         || sidecarUrl            !== account.sidecarUrl
+        || minorCastMinLines     !== account.minorCastMinLines
         || workspaceDirty;
   }, [displayName, defaultAnalysisModel, defaultTtsEngine, defaultTtsModelKey,
-      sidecarUrl, workspaceDirty, account]);
+      sidecarUrl, minorCastMinLines, workspaceDirty, account]);
 
   const onSave = async () => {
     const patch: UserSettingsPatch = {
@@ -75,6 +79,7 @@ export function AccountView() {
       defaultTtsModelKey,
       sidecarUrl,
       workspaceDirOverride: workspaceDirOverride.trim() === '' ? null : workspaceDirOverride.trim(),
+      minorCastMinLines,
     };
     const action = await dispatch(saveAccountSettings(patch));
     if (saveAccountSettings.fulfilled.match(action)) {
@@ -140,6 +145,29 @@ export function AccountView() {
                 <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>
               ))}
             </select>
+          </FieldRow>
+        </FormCard>
+
+        <FormCard title="Cast analysis"
+          hint="How the analyzer decides which characters earn a dedicated voice profile vs. get folded into the generic Unknown male / Unknown female buckets.">
+          <FieldRow label="Minor-cast threshold (sentences)"
+            sublabel={
+              'Characters with fewer than this many attributed sentences (each individual sentence the model assigns to that speaker counts as one — the same number shown as "Lines" on the cast roster, not word count) get folded into Unknown male / Unknown female at analysis time. Characters whose name begins with "Unknown" always fold regardless of this number. Set to 0 to disable the line-count trigger entirely. Default 3.'
+            }>
+            <input type="number"
+              min={0}
+              max={50}
+              step={1}
+              value={Number.isFinite(minorCastMinLines) ? minorCastMinLines : 3}
+              onChange={(e) => {
+                const parsed = parseInt(e.target.value, 10);
+                /* Clamp to schema [0, 50] so the Save round-trip never
+                   tips into a 400 on a user fat-finger. */
+                if (Number.isFinite(parsed)) {
+                  setMinorCastMinLines(Math.max(0, Math.min(50, parsed)));
+                }
+              }}
+              className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"/>
           </FieldRow>
         </FormCard>
 

@@ -169,6 +169,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/manuscripts/{manuscriptId}/analysis/chapters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-run analysis for a subset of chapters
+         * @description Runs Phase 0a (cast detection) + Phase 1 (sentence attribution)
+         *     for the listed chapter ids only, merging into the existing roster
+         *     and analysis cache without re-doing the whole book. Used when the
+         *     user un-excludes a chapter that was excluded at confirm time.
+         */
+        post: operations["analyseChapterSubset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/chapters/{chapterId}/exclude": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Toggle the excluded flag on a single chapter
+         * @description Updates state.json atomically and propagates the flag into the
+         *     in-memory ManuscriptRecord so subsequent analysis/generation
+         *     passes honour it. When `excluded` becomes true, any existing
+         *     audio output for the chapter is deleted; when it becomes false
+         *     the chapter is eligible for analysis-subset + audio generation
+         *     again.
+         */
+        post: operations["setChapterExcluded"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/voices/{voiceId}/sample": {
         parameters: {
             query?: never;
@@ -366,6 +414,19 @@ export interface components {
              */
             workspaceDirOverride?: string | null;
             /**
+             * @description Threshold for the minor-cast fold pass at analysis time. A
+             *     character whose number of attributed sentences (not words —
+             *     each sentence the model assigns to that speaker counts as one
+             *     "line", same as the count shown on the cast roster) is BELOW
+             *     this number gets folded into the generic `Unknown male` /
+             *     `Unknown female` bucket. Set to 0 to disable the line-count
+             *     trigger entirely (only characters whose name begins with
+             *     "Unknown" will still fold). Default 3 — i.e. a speaker who
+             *     says 0, 1, or 2 sentences in the whole book doesn't warrant a
+             *     dedicated voice profile.
+             */
+            minorCastMinLines: number;
+            /**
              * @description Whether process.env.GEMINI_API_KEY is non-empty. The key value
              *     itself is never returned over the wire — the UI uses this flag
              *     to render a "set in server/.env" pill.
@@ -397,6 +458,7 @@ export interface components {
             defaultTtsModelKey?: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             sidecarUrl?: string;
             workspaceDirOverride?: string | null;
+            minorCastMinLines?: number;
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];
@@ -448,6 +510,8 @@ export interface components {
             chapters: {
                 id: number;
                 title: string;
+                /** @description Words in this chapter body. Lets the confirm view auto-suggest front/back-matter exclusion. */
+                wordCount?: number;
             }[];
         };
         ImportResponse: {
@@ -463,6 +527,8 @@ export interface components {
             seriesPosition?: number | null;
             title: string;
             isStandalone: boolean;
+            /** @description Chapter slugs to seed as excluded=true in state.json. Built client-side from the candidate.chapters[].id + title; the server re-derives the slug to match. */
+            excludedSlugs?: string[];
         };
         ConfirmBookResponse: components["schemas"]["UploadResponse"] & {
             bookId: string;
@@ -800,6 +866,8 @@ export interface components {
                 [key: string]: "queued" | "in_progress" | "done" | "skipped" | "failed";
             };
             errorReason?: string | null;
+            /** @description When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author. */
+            excluded?: boolean;
         };
         Sentence: {
             id: number;
@@ -1061,6 +1129,78 @@ export interface operations {
                     "application/json": components["schemas"]["AnalyseResponse"];
                     "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseResponse"];
                 };
+            };
+        };
+    };
+    analyseChapterSubset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                manuscriptId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Chapter ids to re-run analysis for. Must reference chapters already in the manuscript record. */
+                    chapterIds: number[];
+                    /** @description Optional model id override (matches the full-book endpoint). */
+                    model?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description SSE stream identical in shape to the full-book analysis route. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseResponse"];
+                };
+            };
+        };
+    };
+    setChapterExcluded: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    excluded: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated chapter entry from state.json */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id: number;
+                        title: string;
+                        slug: string;
+                        excluded: boolean;
+                    };
+                };
+            };
+            /** @description Book or chapter not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

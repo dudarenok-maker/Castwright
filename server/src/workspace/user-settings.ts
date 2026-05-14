@@ -32,6 +32,13 @@ export const userSettingsSchema = z.object({
   defaultTtsModelKey:   z.enum(TTS_MODEL_KEY_VALUES),
   sidecarUrl:           z.string().min(1).max(2000),
   workspaceDirOverride: z.string().max(2000).nullable(),
+  /* Threshold for the minor-cast fold pass — see
+     server/src/analyzer/fold-minor-cast.ts. A character with FEWER than
+     this many attributed sentences gets folded into Unknown male /
+     female. 0 disables the line-count trigger (Unknown-named characters
+     still fold). Cap at 50 since beyond that the bucket would swallow
+     genuine cast members and the UI loses meaning. */
+  minorCastMinLines:    z.number().int().min(0).max(50),
 });
 
 export type UserSettings = z.infer<typeof userSettingsSchema>;
@@ -43,6 +50,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   defaultTtsModelKey:   'coqui-xtts-v2',
   sidecarUrl:           'http://localhost:9000',
   workspaceDirOverride: null,
+  minorCastMinLines:    3,
 };
 
 let cached: UserSettings | null = null;

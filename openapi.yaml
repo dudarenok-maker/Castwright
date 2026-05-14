@@ -224,6 +224,79 @@ paths:
                   - $ref: '#/components/schemas/AnalysePhaseEvent'
                   - $ref: '#/components/schemas/AnalyseResponse'
 
+  /api/manuscripts/{manuscriptId}/analysis/chapters:
+    post:
+      summary: Re-run analysis for a subset of chapters
+      operationId: analyseChapterSubset
+      description: |
+        Runs Phase 0a (cast detection) + Phase 1 (sentence attribution)
+        for the listed chapter ids only, merging into the existing roster
+        and analysis cache without re-doing the whole book. Used when the
+        user un-excludes a chapter that was excluded at confirm time.
+      parameters:
+        - { in: path, name: manuscriptId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chapterIds]
+              properties:
+                chapterIds:
+                  type: array
+                  items: { type: integer }
+                  description: "Chapter ids to re-run analysis for. Must reference chapters already in the manuscript record."
+                model: { type: string, description: "Optional model id override (matches the full-book endpoint)." }
+      responses:
+        '200':
+          description: SSE stream identical in shape to the full-book analysis route.
+          content:
+            text/event-stream:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/AnalysePhaseEvent'
+                  - $ref: '#/components/schemas/AnalyseResponse'
+
+  /api/books/{bookId}/chapters/{chapterId}/exclude:
+    post:
+      summary: Toggle the excluded flag on a single chapter
+      operationId: setChapterExcluded
+      description: |
+        Updates state.json atomically and propagates the flag into the
+        in-memory ManuscriptRecord so subsequent analysis/generation
+        passes honour it. When `excluded` becomes true, any existing
+        audio output for the chapter is deleted; when it becomes false
+        the chapter is eligible for analysis-subset + audio generation
+        again.
+      parameters:
+        - { in: path, name: bookId,    required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [excluded]
+              properties:
+                excluded: { type: boolean }
+      responses:
+        '200':
+          description: Updated chapter entry from state.json
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, title, slug, excluded]
+                properties:
+                  id:       { type: integer }
+                  title:    { type: string }
+                  slug:     { type: string }
+                  excluded: { type: boolean }
+        '404':
+          description: Book or chapter not found
+
   /api/voices/{voiceId}/sample:
     post:
       summary: Synthesise a ~12-second voice preview
@@ -422,6 +495,7 @@ components:
         - defaultTtsEngine
         - defaultTtsModelKey
         - sidecarUrl
+        - minorCastMinLines
         - apiKeyStatus
         - workspaceRoot
         - workspaceSource
@@ -464,6 +538,21 @@ components:
             Optional override for the WORKSPACE_DIR env var. Read once at
             server startup — changes require a server restart to apply
             (UI flags this with a "restart required" badge).
+        minorCastMinLines:
+          type: integer
+          minimum: 0
+          maximum: 50
+          description: |
+            Threshold for the minor-cast fold pass at analysis time. A
+            character whose number of attributed sentences (not words —
+            each sentence the model assigns to that speaker counts as one
+            "line", same as the count shown on the cast roster) is BELOW
+            this number gets folded into the generic `Unknown male` /
+            `Unknown female` bucket. Set to 0 to disable the line-count
+            trigger entirely (only characters whose name begins with
+            "Unknown" will still fold). Default 3 — i.e. a speaker who
+            says 0, 1, or 2 sentences in the whole book doesn't warrant a
+            dedicated voice profile.
         apiKeyStatus:
           type: string
           enum: [set, unset]
@@ -503,6 +592,10 @@ components:
         workspaceDirOverride:
           type: string
           nullable: true
+        minorCastMinLines:
+          type: integer
+          minimum: 0
+          maximum: 50
 
     # --- Library ----------------------------------------------------
     LibraryResponse:
@@ -585,8 +678,9 @@ components:
             type: object
             required: [id, title]
             properties:
-              id:    { type: integer }
-              title: { type: string }
+              id:        { type: integer }
+              title:     { type: string }
+              wordCount: { type: integer, description: "Words in this chapter body. Lets the confirm view auto-suggest front/back-matter exclusion." }
 
     ImportResponse:
       type: object
@@ -608,6 +702,10 @@ components:
           description: "Series position. Allows decimals for novellas (e.g. 1.5)."
         title:        { type: string }
         isStandalone: { type: boolean }
+        excludedSlugs:
+          type: array
+          items: { type: string }
+          description: "Chapter slugs to seed as excluded=true in state.json. Built client-side from the candidate.chapters[].id + title; the server re-derives the slug to match."
 
     ConfirmBookResponse:
       allOf:
@@ -1048,6 +1146,7 @@ components:
             type: string
             enum: [queued, in_progress, done, skipped, failed]
         errorReason:  { type: string, nullable: true }
+        excluded:     { type: boolean, description: "When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author." }
 
     Sentence:
       type: object
