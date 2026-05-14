@@ -965,7 +965,6 @@ const MOCK_USER_SETTINGS: UserSettings = {
   sidecarUrl:           'http://localhost:9000',
   analysisEngine:       'local',
   ollamaUrl:            'http://localhost:11434',
-  ollamaModel:          'qwen3.5:9b',
   workspaceDirOverride: null,
   minorCastMinLines:    3,
   apiKeyStatus:         'unset',
