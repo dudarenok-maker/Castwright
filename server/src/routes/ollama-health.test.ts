@@ -10,6 +10,7 @@ import { _resetUserSettingsCache } from '../workspace/user-settings.js';
 
 function makeApp() {
   const app = express();
+  app.use(express.json());
   app.use('/api/ollama', ollamaHealthRouter);
   return app;
 }
@@ -89,4 +90,64 @@ describe('GET /api/ollama/health', () => {
     expect(res.body.status).toBe('unreachable');
     expect(res.body.error).toMatch(/within \d+ms/);
   }, 10_000);
+});
+
+describe('POST /api/ollama/load', () => {
+  it('POSTs /api/generate with keep_alive: "5m" + empty prompt and returns {status: ready}', async () => {
+    fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+
+    const res = await request(makeApp()).post('/api/ollama/load');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'ready' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/generate$/),
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"keep_alive":"5m"'),
+      }),
+    );
+    /* Empty prompt is the warm-without-generating idiom — without it Ollama
+       would actually run inference against the analyzer model. */
+    const init = fetchMock.mock.calls[0][1];
+    const body = JSON.parse(init.body);
+    expect(body.prompt).toBe('');
+    expect(body.stream).toBe(false);
+  });
+
+  it('surfaces the upstream error envelope when Ollama returns non-2xx', async () => {
+    fetchMock.mockResolvedValue(new Response('model not found', { status: 404, statusText: 'Not Found' }));
+    const res = await request(makeApp()).post('/api/ollama/load');
+    expect(res.status).toBe(404);
+    expect(res.body.status).toBe('error');
+    expect(res.body.error).toMatch(/404/);
+  });
+});
+
+describe('POST /api/ollama/unload', () => {
+  it('POSTs /api/generate with keep_alive: 0 and returns {status: unloaded}', async () => {
+    fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+
+    const res = await request(makeApp()).post('/api/ollama/unload');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'unloaded' });
+    /* keep_alive: 0 is the documented Ollama idiom for "drop this model from
+       VRAM now" — see analyzer/ollama.ts:92 for the equivalent on real chat
+       calls. If the literal 0 changes (e.g. to "0s") the eviction stops
+       being immediate, which silently breaks auto-evict-before-TTS. */
+    const init = fetchMock.mock.calls[0][1];
+    const body = JSON.parse(init.body);
+    expect(body.keep_alive).toBe(0);
+    expect(body.prompt).toBe('');
+  });
+
+  it('returns 503 when Ollama is unreachable', async () => {
+    fetchMock.mockRejectedValue(Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+    }));
+    const res = await request(makeApp()).post('/api/ollama/unload');
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('error');
+  });
 });

@@ -16,6 +16,20 @@ export const sidecarHealthRouter = Router();
    stuck/loaded process as "unreachable". */
 const PROBE_TIMEOUT_MS = 2_000;
 
+/* Cold-loading XTTS v2 from disk takes 30–60s on a warm CPU/GPU and can spike
+   to ~90s on first ever pull (model weights cached after that). The /load
+   proxy needs a budget that covers the slowest realistic case; otherwise the
+   Node-side fetch aborts mid-load while the sidecar keeps loading happily,
+   leaving the UI with a phantom error and a model that's about to be ready. */
+const LOAD_TIMEOUT_MS = 90_000;
+
+interface SidecarHealthBody {
+  engines?: string[];
+  model_loaded?: boolean;
+  loading?: boolean;
+  device?: string | null;
+}
+
 sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
   const url = getResolvedSidecarUrl();
   const target = `${url}/health`;
@@ -31,11 +45,14 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
         error: `Sidecar returned ${response.status} ${response.statusText}`,
       });
     }
-    const body = await response.json().catch(() => ({})) as { engines?: string[] };
+    const body = (await response.json().catch(() => ({}))) as SidecarHealthBody;
     return res.json({
       status: 'reachable',
       url,
       engines: Array.isArray(body.engines) ? body.engines : undefined,
+      modelLoaded: body.model_loaded === true,
+      loading: body.loading === true,
+      device: typeof body.device === 'string' ? body.device : null,
     });
   } catch (e) {
     clearTimeout(timer);
@@ -50,6 +67,78 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       error: isTimeout
         ? `No response from ${url} within ${PROBE_TIMEOUT_MS}ms — the sidecar may be loading a model or stuck on a long synth.`
         : err.message || 'Sidecar fetch failed.',
+    });
+  }
+});
+
+/* POST /api/sidecar/load — proxies to the sidecar's /load endpoint with a
+   90s ceiling (vs. /health's 2s) because a cold XTTS load actually does take
+   that long. Idempotent on the sidecar side: a second call while the model
+   is loaded returns `ready` immediately, so the UI can fire this on every
+   screen entry without burning compute. */
+sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
+  const url = getResolvedSidecarUrl();
+  const target = `${url}/load`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LOAD_TIMEOUT_MS);
+  try {
+    const upstream = await fetch(target, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body ?? {}),
+    });
+    clearTimeout(timer);
+    const body = (await upstream.json().catch(() => ({}))) as { status?: string; error?: string };
+    if (!upstream.ok) {
+      return res.status(upstream.status).json({
+        status: 'error',
+        error: body.error || `Sidecar /load returned ${upstream.status}`,
+      });
+    }
+    return res.json(body);
+  } catch (e) {
+    clearTimeout(timer);
+    const err = e as { name?: string; message?: string };
+    const isTimeout = err.name === 'AbortError';
+    return res.status(503).json({
+      status: 'error',
+      error: isTimeout
+        ? `Sidecar /load did not complete within ${LOAD_TIMEOUT_MS}ms — model load is unusually slow or the process is stuck.`
+        : err.message || 'Sidecar /load request failed.',
+    });
+  }
+});
+
+/* POST /api/sidecar/unload — drops the loaded XTTS model and frees GPU
+   memory. Fast path on the sidecar side (no model load to await), so the
+   2s probe budget suffices. Idempotent: returns `idle` whether or not the
+   sidecar had a model resident. */
+sidecarHealthRouter.post('/unload', async (_req: Request, res: Response) => {
+  const url = getResolvedSidecarUrl();
+  const target = `${url}/unload`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const upstream = await fetch(target, { method: 'POST', signal: controller.signal });
+    clearTimeout(timer);
+    const body = (await upstream.json().catch(() => ({}))) as { status?: string };
+    if (!upstream.ok) {
+      return res.status(upstream.status).json({
+        status: 'error',
+        error: `Sidecar /unload returned ${upstream.status}`,
+      });
+    }
+    return res.json(body);
+  } catch (e) {
+    clearTimeout(timer);
+    const err = e as { name?: string; message?: string };
+    const isTimeout = err.name === 'AbortError';
+    return res.status(503).json({
+      status: 'error',
+      error: isTimeout
+        ? `Sidecar /unload did not respond within ${PROBE_TIMEOUT_MS}ms.`
+        : err.message || 'Sidecar /unload request failed.',
     });
   }
 });

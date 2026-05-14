@@ -25,6 +25,11 @@ Run the one-time setup first (see server\tts-sidecar\README.md):
 # sidecar from. We deliberately whitelist a prefix list rather than slurp
 # everything — `server/.env` also carries GEMINI_API_KEY and unrelated
 # server config that the sidecar has no business inheriting.
+#
+# Default for PRELOAD_COQUI is now 0 (lazy load). Set PRELOAD_COQUI=1 in
+# server/.env to restore the old eager-load-on-startup behaviour; the
+# in-app Load button on the Generate / Analysing screen triggers the
+# lazy path on demand.
 $envFile = Join-Path (Split-Path -Parent $here) ".env"
 if (Test-Path $envFile) {
     Get-Content $envFile | ForEach-Object {

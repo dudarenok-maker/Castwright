@@ -95,6 +95,14 @@ class CoquiEngine(Engine):
     def __init__(self) -> None:
         self._tts: Any = None
         self._torch: Any = None
+        # Tracks whether a `_ensure_loaded` call is mid-flight so the /load
+        # endpoint can report `loading: true` separately from `model_loaded:
+        # true`. Gated by `_load_lock` to serialise concurrent /load calls —
+        # FastAPI happily accepts a second POST while the first is awaiting
+        # `asyncio.to_thread(_ensure_loaded)`, and without the lock that second
+        # call would race past the `_tts is None` check and load XTTS twice.
+        self._loading: bool = False
+        self._load_lock: asyncio.Lock = asyncio.Lock()
         self._language = os.environ.get("COQUI_LANGUAGE", "en")
         self._device = os.environ.get("COQUI_DEVICE", "auto")  # auto | cpu | cuda
         # fp16 and DeepSpeed-inference are CUDA-only XTTS speedups. Each ~1.5–2×
@@ -237,6 +245,35 @@ class CoquiEngine(Engine):
             log.warning("Could not enumerate Coqui speakers (%s). Skipping pre-validation.", e)
             self._speakers = []
 
+    def unload(self) -> None:
+        """Drop references to the loaded XTTS model and free GPU memory.
+        Used by POST /unload when the UI's Stop button fires (or when the
+        Analysing screen's Load button auto-evicts the TTS model to make
+        room for the analyzer LLM). Idempotent — safe to call when nothing
+        is loaded."""
+        if self._tts is None:
+            return
+        torch_module = self._torch
+        self._tts = None
+        self._torch = None
+        self._speakers = []
+        self._resolved_device = "cpu"
+        self._use_half = False
+        # `torch.cuda.empty_cache()` releases the cached allocator blocks
+        # back to the driver. Python's GC will reclaim the model's tensors
+        # once `self._tts = None` drops the last reference, but the cached
+        # allocator can hold those blocks for the next allocation — calling
+        # empty_cache makes the freed VRAM visible to other processes (e.g.
+        # the Ollama daemon) immediately, which is the whole point of the
+        # auto-evict-on-load flow.
+        if torch_module is not None:
+            try:
+                if torch_module.cuda.is_available():
+                    torch_module.cuda.empty_cache()
+            except Exception as e:
+                log.warning("torch.cuda.empty_cache() failed (%s) — model is dropped, VRAM will free on GC.", e)
+        log.info("Coqui model unloaded.")
+
     def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
         self._ensure_loaded(model)
         assert self._tts is not None
@@ -310,15 +347,14 @@ ENGINES: dict[str, Engine] = {
 
 @app.on_event("startup")
 async def _preload_default_engine() -> None:
-    """Load Coqui XTTS v2 at process start so the user's first /synthesize call
-    doesn't pay the 30–60s model-load tax *on top of* a synth — that one long
-    call was indistinguishable from a hang from the UI's perspective (Generate
-    screen's 30s stall banner fired before the model even finished loading).
+    """Optional eager preload — OFF by default. The sidecar's HTTP port comes
+    up immediately so the in-app Load button can fire `/load` whenever the
+    user navigates to the Generate or Analysing screen.
 
-    Opt out with PRELOAD_COQUI=0 if you want lazy load (useful when iterating
-    on the wire protocol without burning RAM)."""
-    if os.environ.get("PRELOAD_COQUI", "1") == "0":
-        log.info("PRELOAD_COQUI=0 — skipping eager Coqui model load.")
+    Set PRELOAD_COQUI=1 in server/.env to restore the old eager-load
+    behaviour (~30–60s startup, model ready before any request)."""
+    if os.environ.get("PRELOAD_COQUI", "0") != "1":
+        log.info("PRELOAD_COQUI is not set — skipping eager load; use POST /load to warm the model.")
         return
     model = os.environ.get("PRELOAD_COQUI_MODEL", "xtts_v2")
     coqui = ENGINES.get("coqui")
@@ -336,7 +372,73 @@ async def _preload_default_engine() -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "engines": sorted(ENGINES.keys())}
+    """Liveness + load-state probe. `model_loaded` / `loading` / `device` let
+    the Node proxy render the right state in the in-app Load/Stop pill without
+    a separate round-trip to /speakers."""
+    coqui = ENGINES.get("coqui")
+    model_loaded = False
+    loading = False
+    device: Optional[str] = None
+    if isinstance(coqui, CoquiEngine):
+        model_loaded = coqui._tts is not None
+        loading = coqui._loading
+        device = coqui._resolved_device if model_loaded else None
+    return {
+        "ok": True,
+        "engines": sorted(ENGINES.keys()),
+        "model_loaded": model_loaded,
+        "loading": loading,
+        "device": device,
+    }
+
+
+@app.post("/load")
+async def load_model(req: Request) -> JSONResponse:
+    """Load the Coqui XTTS model into memory. Idempotent — returns `ready`
+    immediately if the model is already resident. Body: `{ model?: str }`,
+    defaults to `xtts_v2`. Serialised by `_load_lock` so concurrent UI
+    clicks don't double-load."""
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    model = body.get("model") if isinstance(body, dict) else None
+    if not isinstance(model, str) or not model.strip():
+        model = "xtts_v2"
+
+    coqui = ENGINES.get("coqui")
+    if not isinstance(coqui, CoquiEngine):
+        return JSONResponse({"status": "error", "error": "coqui engine missing"}, status_code=500)
+
+    if coqui._tts is not None:
+        return JSONResponse({"status": "ready"})
+
+    async with coqui._load_lock:
+        # Re-check under the lock — another concurrent request may have just
+        # finished loading while we were waiting on the mutex.
+        if coqui._tts is not None:
+            return JSONResponse({"status": "ready"})
+        coqui._loading = True
+        try:
+            await asyncio.to_thread(coqui._ensure_loaded, model)
+        except Exception as e:
+            log.exception("/load failed (model=%s)", model)
+            return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+        finally:
+            coqui._loading = False
+    return JSONResponse({"status": "ready"})
+
+
+@app.post("/unload")
+async def unload_model() -> JSONResponse:
+    """Drop the loaded XTTS model and free GPU memory. Idempotent — returns
+    `idle` whether or not a model was loaded. The Analysing screen's Load
+    button fires this automatically (via the Node proxy) to evict TTS before
+    warming the analyzer LLM, and vice-versa."""
+    coqui = ENGINES.get("coqui")
+    if isinstance(coqui, CoquiEngine):
+        await asyncio.to_thread(coqui.unload)
+    return JSONResponse({"status": "idle"})
 
 
 @app.get("/speakers")

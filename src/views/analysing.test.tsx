@@ -1,7 +1,7 @@
 // Pairs with docs/features/04-analysing-view-progress.md
 
-import { describe, expect, it, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
@@ -12,6 +12,9 @@ import type { AnalyseResponse, Character } from '../lib/types';
 
 /* Captured handlers so tests can drive phase/log events at will. */
 let capturedOpts: AnalyseOpts | undefined;
+const loadAnalyzerSpy = vi.fn();
+const unloadSidecarSpy = vi.fn();
+const getSidecarHealthSpy = vi.fn();
 
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api');
@@ -25,8 +28,27 @@ vi.mock('../lib/api', async () => {
         capturedOpts = opts;
         return new Promise<AnalyseResponse>(() => {});
       },
+      getOllamaHealth: () => Promise.resolve({
+        status: 'reachable' as const,
+        url: '(test)',
+        models: [],
+        expectedModel: 'qwen3.5:4b',
+        modelPulled: true,
+      }),
+      getSidecarHealth: () => getSidecarHealthSpy(),
+      loadAnalyzer:    () => { loadAnalyzerSpy(); return Promise.resolve({ status: 'ready' as const }); },
+      unloadAnalyzer:  () => Promise.resolve({ status: 'unloaded' as const }),
+      loadSidecar:     () => Promise.resolve({ status: 'ready' as const }),
+      unloadSidecar:   () => { unloadSidecarSpy(); return Promise.resolve({ status: 'idle' as const }); },
     },
   };
+});
+
+beforeEach(() => {
+  loadAnalyzerSpy.mockReset();
+  unloadSidecarSpy.mockReset();
+  getSidecarHealthSpy.mockReset();
+  getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
 });
 
 function renderView() {
@@ -254,5 +276,82 @@ describe('AnalysingView — total ETA refresh', () => {
     });
     expect(screen.getByText(/~5 minutes remaining/i)).toBeInTheDocument();
     expect(screen.queryByText(/~8 minutes remaining/i)).not.toBeInTheDocument();
+  });
+});
+
+/* Analyzer Load/Stop pill is the only way users have to free GPU memory
+   without killing processes. If the Load click stops auto-evicting TTS,
+   loading the analyzer on a tight-VRAM box would OOM the new model — the
+   whole point of the auto-evict-with-banner flow. */
+describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
+  /* Render WITHOUT a manuscriptId so the auto-start analyseManuscript
+     effect doesn't flip conn into 'connecting' (which would push the pill
+     into 'loading' state with Stop disabled). The pill is meant to render
+     even pre-analysis so the user can pre-warm Ollama from this screen. */
+  function renderNoManuscript() {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+    });
+    return render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId={null}
+          title="Demo"
+          wordCount={500}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('unloads the TTS sidecar before warming the analyzer when both compete for VRAM', async () => {
+    /* Sidecar has a model loaded → unloading it should fire AND the banner
+       should surface so the user knows the swap happened. */
+    getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: true });
+
+    renderNoManuscript();
+
+    /* Wait for the initial health probe to settle so the pill is rendered. */
+    const loadBtn = await screen.findByRole('button', { name: /load model \(analyzer\)/i });
+    await act(async () => { fireEvent.click(loadBtn); });
+
+    await waitFor(() => expect(unloadSidecarSpy).toHaveBeenCalledTimes(1));
+    expect(loadAnalyzerSpy).toHaveBeenCalledTimes(1);
+    /* Auto-evict banner — the user must see that loading the analyzer
+       freed VRAM from TTS, otherwise the swap is silent and confusing. */
+    expect(await screen.findByText(/TTS unloaded to free VRAM/i)).toBeInTheDocument();
+  });
+
+  it('does not surface the eviction banner when TTS had no model loaded to begin with', async () => {
+    /* No-op unload should still fire (Ollama hates surprise state), but
+       the banner lies if it pretends VRAM was freed when it wasn't. */
+    getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
+
+    renderNoManuscript();
+    const loadBtn = await screen.findByRole('button', { name: /load model \(analyzer\)/i });
+    await act(async () => { fireEvent.click(loadBtn); });
+
+    await waitFor(() => expect(loadAnalyzerSpy).toHaveBeenCalled());
+    expect(screen.queryByText(/TTS unloaded to free VRAM/i)).not.toBeInTheDocument();
+  });
+
+  it('hides the analyzer pill when a cloud (Gemini) model is selected — nothing to load locally', () => {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          title="Demo"
+          wordCount={500}
+          model="gemini-2.5-flash"
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    /* Gemini has no local lifecycle to manage; the analyzer pill should be
+       absent (the original ConnPill renders instead). */
+    expect(screen.queryByRole('button', { name: /load model \(analyzer\)/i })).not.toBeInTheDocument();
   });
 });

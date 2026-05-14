@@ -136,6 +136,9 @@ class _LoadFixture:
         self.speaker_manager: Any = None         # default empty _FakeSpeakerManager
         self.tts_model_factory: Any = None       # callable(record) → tts_model — overrides other knobs
         self.instances: list[_FakeTtsInstance] = []
+        # Counter for torch.cuda.empty_cache() invocations — exposed so the
+        # /unload tests can assert the cached-allocator drain actually fires.
+        self.empty_cache_calls: int = 0
 
 
 @pytest.fixture
@@ -171,6 +174,10 @@ def load_stubs(monkeypatch) -> _LoadFixture:
         @staticmethod
         def is_available() -> bool:
             return fixture.cuda_available
+
+        @staticmethod
+        def empty_cache() -> None:
+            fixture.empty_cache_calls += 1
 
     fake_torch = types.ModuleType("torch")
     fake_torch.cuda = _FakeCuda
@@ -404,6 +411,75 @@ def test_speaker_manifest_falls_back_to_speaker_names(monkeypatch, load_stubs):
     engine._ensure_loaded("xtts_v2")
 
     assert engine._speakers == ["Ana Florence", "Asya Anara", "Claribel Dervla"]
+
+
+def test_unload_clears_state_and_empties_cuda_cache(monkeypatch, load_stubs):
+    """After unload(), _tts/_torch/_speakers must be reset and the CUDA
+    cached-allocator drained via torch.cuda.empty_cache(). The empty_cache
+    call is the load-bearing bit: Python GC drops the model tensors when
+    _tts is nilled, but the cached-allocator blocks stay reserved until
+    empty_cache() releases them — and the whole point of the auto-evict
+    flow is for other processes (Ollama) to see freed VRAM immediately."""
+    monkeypatch.setenv("COQUI_DEVICE", "cuda")
+    monkeypatch.setenv("COQUI_DEEPSPEED", "0")
+    monkeypatch.delenv("COQUI_HALF", raising=False)
+    load_stubs.cuda_available = True
+    load_stubs.speaker_manager = _FakeSpeakerManager(
+        name_to_id={"Claribel Dervla": 0, "Ana Florence": 1},
+    )
+
+    engine = main.CoquiEngine()
+    engine._ensure_loaded("xtts_v2")
+    assert engine._tts is not None
+    assert engine._speakers != []
+    assert load_stubs.empty_cache_calls == 0
+
+    engine.unload()
+
+    assert engine._tts is None
+    assert engine._torch is None
+    assert engine._speakers == []
+    assert engine._resolved_device == "cpu"
+    assert engine._use_half is False
+    assert load_stubs.empty_cache_calls == 1
+
+
+def test_unload_idempotent_when_idle(monkeypatch):
+    """unload() with no model loaded must be a safe no-op — the auto-evict
+    flow on the Analysing screen fires /unload on TTS whether or not the
+    sidecar happened to be warm, so this path runs on every analyzer-Load
+    click. If it raised or touched a None _torch, the analyzer button
+    would surface an error toast even though nothing is wrong."""
+    engine = main.CoquiEngine()
+    assert engine._tts is None  # fresh engine starts unloaded
+    engine.unload()              # must not raise
+    assert engine._tts is None
+
+
+def test_load_unload_load_roundtrip(monkeypatch, load_stubs):
+    """Full lifecycle: load → unload → load. The second load must rebuild
+    state via _ensure_loaded (NOT short-circuit on stale flags). Without
+    this, clicking Stop then Load again in the UI would leave _loading=True
+    or _speakers=[] forever, breaking voice substitution."""
+    monkeypatch.setenv("COQUI_DEVICE", "cuda")
+    monkeypatch.setenv("COQUI_DEEPSPEED", "0")
+    monkeypatch.delenv("COQUI_HALF", raising=False)
+    load_stubs.cuda_available = True
+    load_stubs.speaker_manager = _FakeSpeakerManager(name_to_id={"Claribel Dervla": 0})
+
+    engine = main.CoquiEngine()
+    engine._ensure_loaded("xtts_v2")
+    assert engine._tts is not None
+
+    engine.unload()
+    assert engine._tts is None
+    assert engine._speakers == []
+
+    engine._ensure_loaded("xtts_v2")
+    assert engine._tts is not None
+    assert engine._speakers == ["Claribel Dervla"]
+    init_calls = [c for c in load_stubs.record.calls if c[0] == "TTS.__init__"]
+    assert len(init_calls) == 2, "second _ensure_loaded must re-run TTS.__init__"
 
 
 def test_speaker_manifest_error_falls_back_to_empty_list(monkeypatch, load_stubs, caplog):

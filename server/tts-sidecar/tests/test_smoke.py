@@ -74,13 +74,79 @@ def client(monkeypatch):
 
 
 def test_health_smoke(client: TestClient) -> None:
-    """/health returns the engines registry. This is the indicator the
-    frontend's sidecar-pill polls — it MUST be a trivial sync route."""
+    """/health returns the engines registry + load state. The new
+    model_loaded/loading/device fields drive the in-app Load/Stop pill —
+    if they drift, the UI can't tell idle from ready and the button gets
+    stuck on the wrong action."""
     r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
     assert "coqui" in body["engines"]
+    # Fresh engine: nothing loaded yet, not currently loading.
+    assert body["model_loaded"] is False
+    assert body["loading"] is False
+    assert body["device"] is None
+
+
+def test_health_reflects_loaded_state(client: TestClient) -> None:
+    """When the model is loaded, /health reports model_loaded:true and the
+    resolved device. The Generate-screen pill flips from 'Idle' → 'Model
+    ready' based on this; without it, the user has no signal that their
+    Load click actually took effect."""
+    fake = client.app_state_fake_engine  # type: ignore[attr-defined]
+    fake._tts = object()  # sentinel — _FakeEngine.synthesize doesn't read it
+    fake._resolved_device = "cuda"
+
+    r = client.get("/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["model_loaded"] is True
+    assert body["device"] == "cuda"
+
+
+def test_load_endpoint_idempotent_when_already_loaded(client: TestClient) -> None:
+    """POST /load with a model already resident must return {status: ready}
+    immediately without re-running _ensure_loaded. The UI's auto-evict flow
+    fires /load on every screen entry; if it actually reloaded each time,
+    every navigation would burn 30–60s on a real box."""
+    fake = client.app_state_fake_engine  # type: ignore[attr-defined]
+    sentinel = object()
+    fake._tts = sentinel  # pretend already loaded
+
+    r = client.post("/load", json={"model": "xtts_v2"})
+    assert r.status_code == 200
+    assert r.json() == {"status": "ready"}
+    # Critical: _tts must still be our sentinel (no re-init happened).
+    assert fake._tts is sentinel
+
+
+def test_unload_endpoint_idempotent_when_idle(client: TestClient) -> None:
+    """POST /unload on a fresh sidecar (no model loaded) must succeed with
+    {status: idle} — the Analysing screen's Load button always evicts TTS
+    first, so this path is hit on every analyzer-Load click whether or not
+    the TTS was warm. A 500 here would surface as a phantom error toast."""
+    r = client.post("/unload")
+    assert r.status_code == 200
+    assert r.json() == {"status": "idle"}
+
+
+def test_unload_endpoint_drops_loaded_model(client: TestClient) -> None:
+    """POST /unload with a model resident must call CoquiEngine.unload()
+    and report idle. After this round-trip, /health must reflect the new
+    state so the UI's pill flips back to 'Idle'."""
+    fake = client.app_state_fake_engine  # type: ignore[attr-defined]
+    fake._tts = object()
+    fake._speakers = ["Claribel Dervla"]
+
+    r = client.post("/unload")
+    assert r.status_code == 200
+    assert r.json() == {"status": "idle"}
+    assert fake._tts is None
+    assert fake._speakers == []
+
+    health = client.get("/health").json()
+    assert health["model_loaded"] is False
 
 
 def test_synthesize_validates_body(client: TestClient) -> None:

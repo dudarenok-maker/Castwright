@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconCheck, IconRefresh, IconSpinner } from '../lib/icons';
 import { SectionLabel, MixedHeading } from '../components/primitives';
-import { api, AnalysisError, type AnalysisLiveInfo, type AnalysisLiveChapter, type AnalysisHeartbeat } from '../lib/api';
+import { api, AnalysisError, type AnalysisLiveInfo, type AnalysisLiveChapter, type AnalysisHeartbeat, type OllamaHealth } from '../lib/api';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../lib/models';
+import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -352,6 +353,86 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
   const overall = (phase + phaseProgress) / ANALYSIS_PHASES.length;
   const sinceLastSec = lastEventAt ? Math.max(0, Math.round((Date.now() - lastEventAt) / 1000)) : null;
 
+  /* Analyzer Load/Stop control. Only meaningful when the selected analyzer
+     is a local Ollama model — Gemini lives in the cloud and has no local
+     lifecycle to manage. */
+  const selectedModel = useMemo(() => {
+    const id = model ?? MODEL_OPTIONS[0].id;
+    return MODEL_OPTIONS.find(m => m.id === id);
+  }, [model]);
+  const isLocalAnalyzer = selectedModel?.engine === 'local';
+
+  const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
+  const [pendingAnalyzerPill, setPendingAnalyzerPill] = useState<ModelControlState | null>(null);
+  const [analyzerProbeKey, setAnalyzerProbeKey] = useState(0);
+  const [analyzerEvictionNotice, setAnalyzerEvictionNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isLocalAnalyzer) {
+      setOllamaHealth(null);
+      return;
+    }
+    let cancelled = false;
+    const probe = () => {
+      api.getOllamaHealth()
+        .then(h => {
+          if (cancelled) return;
+          setOllamaHealth(h);
+          setPendingAnalyzerPill(null);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setOllamaHealth({ status: 'unreachable', url: '', error: 'Probe failed.' });
+          setPendingAnalyzerPill(null);
+        });
+    };
+    probe();
+    const id = setInterval(probe, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [isLocalAnalyzer, analyzerProbeKey]);
+
+  /* Pill on this screen shows only the coarse state ("Streaming live") —
+     HeartbeatRow below already renders the per-chunk bytes/throughput, so
+     duplicating numbers in the header is just noise. */
+  const analyzerPillState: ModelControlState = (() => {
+    if (pendingAnalyzerPill) return pendingAnalyzerPill;
+    if (conn === 'streaming' || conn === 'connecting') return conn === 'streaming' ? 'streaming' : 'loading';
+    if (!ollamaHealth) return 'idle';
+    if (ollamaHealth.status === 'unreachable') return 'unreachable';
+    if ((ollamaHealth.models?.length ?? 0) > 0) return 'ready';
+    return 'idle';
+  })();
+
+  const handleLoadAnalyzer = async () => {
+    setPendingAnalyzerPill('loading');
+    setAnalyzerEvictionNotice(null);
+    /* Auto-evict the TTS sidecar before warming the analyzer — they fight
+       for the same VRAM. Only surface the banner when the unload actually
+       freed something so we don't lie about state. */
+    let sidecarHadModel = false;
+    try {
+      const sc = await api.getSidecarHealth();
+      sidecarHadModel = sc.status === 'reachable' && sc.modelLoaded === true;
+    } catch {}
+    try {
+      await api.unloadSidecar();
+      if (sidecarHadModel) setAnalyzerEvictionNotice('TTS unloaded to free VRAM for the analyzer.');
+    } catch {}
+    try {
+      await api.loadAnalyzer();
+    } catch {}
+    setAnalyzerProbeKey(k => k + 1);
+  };
+
+  const handleStopAnalyzer = async () => {
+    setPendingAnalyzerPill('idle');
+    setAnalyzerEvictionNotice(null);
+    try {
+      await api.unloadAnalyzer();
+    } catch {}
+    setAnalyzerProbeKey(k => k + 1);
+  };
+
   return (
     <div className="relative min-h-[calc(100vh-64px)] flex items-center justify-center px-6 py-16">
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-60 pointer-events-none"/>
@@ -364,9 +445,28 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
           <p className="mt-4 text-ink/70">
             {remainingMs !== null ? describeRemaining(remainingMs, wordCount) : describeSize(wordCount)}
           </p>
+          {/* Analyzer Load/Stop control. Rendered even without a manuscript
+              so the user can pre-warm Ollama from the Analysing screen (the
+              page-refresh / deep-link case where manuscriptId is null lands
+              here too — same screen, just no analysis to run yet). The
+              ConnPill stays scoped to cloud analyzers + the manuscriptId
+              branch where the SSE wiring lives. */}
+          {isLocalAnalyzer && (
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs">
+              <ModelControlPill
+                kind="analyzer"
+                state={analyzerPillState}
+                unreachableLabel="Ollama not reachable"
+                onLoad={handleLoadAnalyzer}
+                onStop={handleStopAnalyzer}
+              />
+            </div>
+          )}
           {manuscriptId && (
             <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs">
-              <ConnPill state={conn} sinceLastSec={sinceLastSec}/>
+              {!isLocalAnalyzer && (
+                <ConnPill state={conn} sinceLastSec={sinceLastSec}/>
+              )}
               {/* Live model picker. Changing the model mid-run cancels the
                   in-flight request and restarts from the first uncached
                   chapter — completed chapters in the analysis cache survive,
@@ -405,6 +505,12 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
                 Back to library
               </button>
             </div>
+          )}
+          {analyzerEvictionNotice && (
+            <p className="mt-3 inline-flex items-center gap-2 text-[11px] text-emerald-700">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>
+              {analyzerEvictionNotice}
+            </p>
           )}
           {!manuscriptId && (
             <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left">
