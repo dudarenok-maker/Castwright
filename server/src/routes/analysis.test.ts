@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   sortEvidence, normaliseForMatch, verifyEvidenceAgainstSource, mergeRosterChapter,
-  chapterEstFromObserved, projectRemainingMs,
+  chapterEstFromObserved, projectRemainingMs, buildInterimCast,
 } from './analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
@@ -463,5 +463,79 @@ describe('AnalysisCache schema — persisted durations', () => {
     } finally {
       await clearAnalysisCache(id);
     }
+  });
+});
+
+/* buildInterimCast underpins the mid-run cast.json writes — the helper
+   must produce a deduped, palette-coloured roster with lines:0/scenes:0
+   placeholders so the file shape matches the post-Phase-1 end-of-run
+   write and frontend cast.json readers don't choke on partial data. */
+describe('buildInterimCast — mid-run cast snapshot', () => {
+  const makeChar = (id: string, name: string, opts: Partial<CharacterOutput> = {}): CharacterOutput => ({
+    id, name, role: 'character', color: 'unset',
+    evidence: [{ quote: `${name}'s line one, long enough to be representative.` }],
+    ...opts,
+  });
+
+  it('merges per-chapter character lists in chapter-id order and palette-colours the roster', () => {
+    const chapterCast: Record<number, CharacterOutput[]> = {
+      1: [makeChar('narrator', 'Narrator'), makeChar('Wren', 'Wren')],
+      2: [makeChar('Wren', 'Wren'), makeChar('Marlow', 'Marlow')],
+      3: [makeChar('Marlow', 'Marlow'), makeChar('Maerin', 'Maerin')],
+    };
+
+    const interim = buildInterimCast(chapterCast, [1, 2, 3]);
+
+    /* 4 distinct ids after merge (narrator + Wren + Marlow + Maerin). */
+    expect(interim.map(c => c.id)).toEqual(['narrator', 'Wren', 'Marlow', 'Maerin']);
+
+    /* Narrator keeps its dedicated palette slot; everyone else gets a
+       deterministic non-narrator slot. */
+    const narrator = interim.find(c => c.id === 'narrator')!;
+    expect(narrator.color).toBe('narrator');
+    for (const c of interim) {
+      if (c.id === 'narrator') continue;
+      expect(c.color).not.toBe('narrator');
+      expect(c.color).not.toBe('unset');
+    }
+
+    /* lines: 0 / scenes: 0 placeholders so the shape matches the
+       post-Phase-1 end-of-run write — Phase 1 attribution hasn't run
+       yet, so per-character counts can't be known. */
+    for (const c of interim as Array<CharacterOutput & { lines?: number; scenes?: number }>) {
+      expect(c.lines).toBe(0);
+      expect(c.scenes).toBe(0);
+    }
+  });
+
+  it('returns [] when the chapterCast map is empty (caller guards the cast.json write)', () => {
+    expect(buildInterimCast({}, [])).toEqual([]);
+    expect(buildInterimCast({}, [1, 2, 3])).toEqual([]);
+    /* Chapters present in the map but with empty arrays (failure markers)
+       should also produce an empty result — no characters were detected. */
+    expect(buildInterimCast({ 1: [], 2: [] }, [1, 2])).toEqual([]);
+  });
+
+  it('assigns palette colours deterministically across runs with the same input', () => {
+    const chapterCast: Record<number, CharacterOutput[]> = {
+      1: [makeChar('narrator', 'N'), makeChar('a', 'A'), makeChar('b', 'B'), makeChar('c', 'C')],
+    };
+
+    const first = buildInterimCast(chapterCast, [1]);
+    const second = buildInterimCast(chapterCast, [1]);
+
+    expect(first.map(c => ({ id: c.id, color: c.color })))
+      .toEqual(second.map(c => ({ id: c.id, color: c.color })));
+  });
+
+  it('skips chapters that are missing from the chapterCast map (cache predates the chapter, or excluded)', () => {
+    const chapterCast: Record<number, CharacterOutput[]> = {
+      1: [makeChar('Wren', 'Wren')],
+      /* chapter 2 missing entirely — buildInterimCast must not throw. */
+      3: [makeChar('Marlow', 'Marlow')],
+    };
+
+    const interim = buildInterimCast(chapterCast, [1, 2, 3]);
+    expect(interim.map(c => c.id)).toEqual(['Wren', 'Marlow']);
   });
 });

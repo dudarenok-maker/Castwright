@@ -4,6 +4,7 @@
      { kind: 'result', response: AnalyseResponse }
    The frontend's `real.analyseManuscript` reads this with fetch + ReadableStream. */
 
+import { rm } from 'node:fs/promises';
 import { Router, type Request, type Response } from 'express';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { selectAnalyzer, type AnalyzerSelection } from '../analyzer/index.js';
@@ -203,6 +204,32 @@ export function mergeRosterChapter(
     if (!existing.gender   && incoming.gender)   existing.gender   = incoming.gender;
     if (!existing.ageRange && incoming.ageRange) existing.ageRange = incoming.ageRange;
   }
+}
+
+/* Build an "interim" cast suitable for writing to cast.json mid-run.
+   Walks chapterCast in narrative chapter order, merges via the same
+   mergeRosterChapter the live SSE uses, applies deterministic palette
+   colours, and attaches `lines: 0, scenes: 0` placeholders — Phase 1
+   hasn't run yet so per-character line counts aren't known. The shape
+   matches the post-Phase-1 end-of-run write so frontend cast.json
+   readers tolerate it; the post-fold final write replaces this with the
+   authoritative version once Phase 1 + fold completes.
+   Returns `[]` when the roster is empty so callers can guard the
+   cast.json write. */
+export function buildInterimCast(
+  chapterCast: Record<number, CharacterOutput[]>,
+  chapterOrder: number[],
+): CharacterOutput[] {
+  const roster = new Map<string, CharacterOutput>();
+  for (const chapterId of chapterOrder) {
+    const cast = chapterCast[chapterId];
+    if (cast?.length) mergeRosterChapter(roster, cast);
+  }
+  if (roster.size === 0) return [];
+  return attachLinesAndScenes(
+    assignPaletteColors(Array.from(roster.values())),
+    [],
+  );
 }
 
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
@@ -632,6 +659,18 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     const requestedFresh = req.body?.fresh === true;
     if (requestedFresh) {
       await clearAnalysisCache(manuscriptId);
+      /* Match the filesystem to the cleared cache state. Without this,
+         "Start fresh" leaves the previous run's partial cast.json and
+         manuscript-edits.json behind until the new run completes — the
+         library card hydration would then briefly show stale cast
+         entries against an empty cache. `rm({ force: true })` is a
+         no-op when the file doesn't exist (manuscripts uploaded via
+         the legacy non-workspace path have no bookDir; the guard
+         keeps it cheap). */
+      if (recordRef.bookDir) {
+        await rm(castJsonPath(recordRef.bookDir), { force: true });
+        await rm(manuscriptEditsJsonPath(recordRef.bookDir), { force: true });
+      }
       log(0, 'Discarded cached progress — starting from scratch.');
     }
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
@@ -953,6 +992,26 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         castDurations[ch.id] = chDuration;
         cache.castDurations = castDurations;
         await saveAnalysisCache(manuscriptId, cache);
+        /* Mirror the cache write into cast.json so the book folder reflects
+           progress mid-run — without this, a user inspecting `.audiobook/`
+           or re-opening the book mid-run sees an empty folder even when
+           30+ chapters of cast are already detected. Carries the same
+           shape as the post-Phase-1 end-of-run write (palette colours +
+           lines:0/scenes:0 placeholders); the final fold-and-attribute
+           pass overwrites with the authoritative version. Skipped on
+           client disconnect to match the end-of-run write — we don't
+           want a navigate-away to flip the library status to
+           cast_pending. */
+        if (recordRef.bookDir && !clientGone) {
+          const interim = buildInterimCast(chapterCast, recordRef.chapterHints.map(h => h.id));
+          if (interim.length > 0) {
+            try {
+              await writeJsonAtomic(castJsonPath(recordRef.bookDir), { characters: interim });
+            } catch (persistErr) {
+              console.warn('[analysis] interim cast.json write failed', persistErr);
+            }
+          }
+        }
         castInFlight.delete(i);
         log(0, `Chapter ${i + 1}/${totalCastChapters} cast done — ${result.characters.length} character${result.characters.length === 1 ? '' : 's'} in ${humanSeconds(chDuration)}`);
         /* Accumulate observed pace so subsequent Phase 0a chapter estimates
@@ -1033,6 +1092,20 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       await saveAnalysisCache(manuscriptId, cache);
       stage1ActualMs = Date.now() - stage0Start;
       send({ kind: 'cast-update', characters: stage1.characters });
+      /* Finalised-but-not-folded roster lands in cast.json so the file
+         reflects the verified Phase 0b state before Phase 1's attribution
+         pass starts (which can be the longest phase by far on a long
+         book). attachLinesAndScenes with no sentences gives lines:0 /
+         scenes:0 placeholders — the post-fold end-of-run write later
+         overwrites with the authoritative counts. */
+      if (recordRef.bookDir && !clientGone) {
+        try {
+          const stage1Cast = attachLinesAndScenes(assignPaletteColors(stage1.characters), []);
+          await writeJsonAtomic(castJsonPath(recordRef.bookDir), { characters: stage1Cast });
+        } catch (persistErr) {
+          console.warn('[analysis] stage1 cast.json write failed', persistErr);
+        }
+      }
     }
     /* Use the observed rate to refine stage 2's estimate. Stage 2 prompt is
        a similar size to stage 1 plus the small character roster, but its
@@ -1692,6 +1765,19 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
           cache.failedChapterIds = cache.failedChapterIds.filter(id => id !== ch.id);
         }
         await saveAnalysisCache(manuscriptId, cache);
+        /* Mirror the cache write into cast.json so a subset retry's
+           progress is reflected on disk too — matches the full route's
+           interim write contract. */
+        if (record.bookDir && !clientGone) {
+          const interim = buildInterimCast(chapterCast, record.chapterHints.map(h => h.id));
+          if (interim.length > 0) {
+            try {
+              await writeJsonAtomic(castJsonPath(record.bookDir), { characters: interim });
+            } catch (persistErr) {
+              console.warn('[analysis-subset] interim cast.json write failed', persistErr);
+            }
+          }
+        }
         log(0, `Chapter ${ch.id} cast — ${result.characters.length} character${result.characters.length === 1 ? '' : 's'} detected.`);
         emitCastUpdate();
       } catch (chErr) {

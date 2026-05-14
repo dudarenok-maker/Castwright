@@ -20,7 +20,7 @@ export const MODEL_OPTIONS: ModelOption[] = [
   /* --- Local (Ollama) — small → large, default first ----------------- */
   { id: 'qwen3.5:4b',             label: 'Qwen3.5 4B (local)',     hint: 'Recommended default — ~3 GB VRAM, stays resident across the analysis loop', engine: 'local' },
   { id: 'qwen3.5:9b',             label: 'Qwen3.5 9B (local)',     hint: '~6.6 GB VRAM, stronger on edge cases; unloads between chapters',             engine: 'local' },
-  { id: 'llama3.1:8b',            label: 'Llama 3.1 8B (local)',   hint: 'Alternative local model — ~5 GB VRAM, unloads between chapters',             engine: 'local' },
+  { id: 'llama3.1:8b',            label: 'Llama 3.1 8B (local)',   hint: '~5 GB VRAM, stays resident across the analysis loop; stronger than the 4B on dialogue-dense edge cases', engine: 'local' },
   /* --- Gemini API (direct or fallback) — open-weights first, then
         Gemini Flash variants from lightest-rate-limit to strictest. ---- */
   { id: 'gemma-4-31b-it',         label: 'Gemma 4 31B',            hint: 'Open-weights via Gemini API — separate quota from gemini-*', engine: 'gemini' },
