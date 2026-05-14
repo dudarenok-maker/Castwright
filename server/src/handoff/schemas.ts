@@ -48,6 +48,15 @@ export const stage1Schema = z.object({
   chapters:   z.array(chapterStub).min(1),
 }).strict();
 
+/* Per-chapter cast detection (Phase 0a). The route loops over chapters,
+   each call returns the characters that appear in THIS chapter (new +
+   recurring); the route merges them into a running roster and emits a
+   `cast-update` SSE event after each merge. No `chapters` field — the
+   parser's chapter list is already authoritative. */
+export const stage1ChapterSchema = z.object({
+  characters: z.array(characterSchema),
+}).strict();
+
 export const sentenceSchema = z.object({
   id:          z.number().int().positive(),
   chapterId:   z.number().int().positive(),
@@ -67,6 +76,7 @@ export const stage2Schema = z.object({
 export const stage2ChapterSchema = stage2Schema;
 
 export type Stage1Output = z.infer<typeof stage1Schema>;
+export type Stage1ChapterOutput = z.infer<typeof stage1ChapterSchema>;
 export type Stage2Output = z.infer<typeof stage2Schema>;
 export type Stage2ChapterOutput = z.infer<typeof stage2ChapterSchema>;
 export type CharacterOutput = z.infer<typeof characterSchema>;

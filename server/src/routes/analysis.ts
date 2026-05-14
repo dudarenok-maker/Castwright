@@ -122,6 +122,86 @@ export function verifyEvidenceAgainstSource(
   return { totalDropped, affectedCharacters };
 }
 
+/* Merge a per-chapter character list into a running roster keyed by id.
+   Designed for Phase 0a, where each chapter call returns the characters
+   that appear in that chapter (new + recurring) and the route accumulates
+   them across the book.
+   - Existing id → field-level merge:
+     - description: longest-wins (more text usually = richer profile)
+     - tone fields: latest-wins (the model has more context as it sees
+       more chapters; later refinements supersede earlier guesses)
+     - attributes: union, deduplicated
+     - evidence: append non-duplicate quotes (dedup on normalised quote
+       text so smart-vs-straight quote variants don't double up)
+     - gender / ageRange / color: keep existing if already set; only adopt
+       a new value when the existing entry doesn't have one (these are
+       supposed to be stable from first detection).
+   - New id → append the entry as-is.
+   Mutates `roster` in place; returns nothing. Order of insertion of new
+   characters reflects the order chapters were processed in. */
+export function mergeRosterChapter(
+  roster: Map<string, CharacterOutput>,
+  fromChapter: CharacterOutput[],
+): void {
+  for (const incoming of fromChapter) {
+    const existing = roster.get(incoming.id);
+    if (!existing) {
+      /* Defensive clone: callers shouldn't keep references into the cached
+         per-chapter array, since the route mutates the merged copy via
+         later passes (sortEvidence, verifyEvidenceAgainstSource). */
+      roster.set(incoming.id, {
+        ...incoming,
+        attributes: incoming.attributes ? [...incoming.attributes] : undefined,
+        evidence: incoming.evidence ? incoming.evidence.map(e => ({ ...e })) : undefined,
+        tone: incoming.tone ? { ...incoming.tone } : undefined,
+      });
+      continue;
+    }
+    /* Description: keep whichever is longer. */
+    if (incoming.description && (!existing.description || incoming.description.length > existing.description.length)) {
+      existing.description = incoming.description;
+    }
+    /* Tone: latest-wins per field, but only when the incoming entry
+       provided that field (don't blank out a known value). */
+    if (incoming.tone) {
+      existing.tone = { ...existing.tone, ...incoming.tone };
+    }
+    /* Attributes: union dedup. Order: existing first, then any new. */
+    if (incoming.attributes?.length) {
+      const seen = new Set(existing.attributes ?? []);
+      const next = [...(existing.attributes ?? [])];
+      for (const a of incoming.attributes) {
+        if (!seen.has(a)) {
+          next.push(a);
+          seen.add(a);
+        }
+      }
+      existing.attributes = next;
+    }
+    /* Evidence: append non-duplicate quotes. Dedup on normalised quote
+       so smart-vs-straight typography drift between chapters doesn't
+       inflate the array. */
+    if (incoming.evidence?.length) {
+      const seen = new Set((existing.evidence ?? []).map(e => normaliseForMatch(e.quote)));
+      const next = [...(existing.evidence ?? [])];
+      for (const e of incoming.evidence) {
+        const norm = normaliseForMatch(e.quote);
+        if (norm.length > 0 && !seen.has(norm)) {
+          next.push({ ...e });
+          seen.add(norm);
+        }
+      }
+      existing.evidence = next;
+    }
+    /* Gender / ageRange / color / role / name: only adopt incoming when
+       existing doesn't have a value. First detection wins for identity
+       fields — switching pronouns mid-book is almost always a model
+       error, not a character development. */
+    if (!existing.gender   && incoming.gender)   existing.gender   = incoming.gender;
+    if (!existing.ageRange && incoming.ageRange) existing.ageRange = incoming.ageRange;
+  }
+}
+
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
    and scenes (distinct chapters appeared in) from stage 2 output once we
    have it, and attach to each character. */
@@ -191,11 +271,6 @@ const HEARTBEAT_MS_THRESHOLDS = [30_000, 60_000, 120_000, 180_000, 300_000, 420_
    pumping 200 chunks/s doesn't drown the client. 2 s is high-signal:
    noticeable to the user, low overhead on the wire. */
 const HEARTBEAT_EVENT_THROTTLE_MS = 2_000;
-/* If the model goes silent (no chunk) for this long, surface a warning log
-   line so the user knows something is wrong rather than mistaking the bar's
-   slow creep for activity. Re-armed once a chunk lands. */
-const SILENCE_THRESHOLD_MS = 45_000;
-
 /* Stage 2 chapter concurrency. Default 2 keeps us well under Gemini's
    free-tier RPM limits while roughly halving wall-clock time vs sequential.
    Bump via STAGE2_CONCURRENCY env if your tier (or the model) allows; cap
@@ -217,62 +292,61 @@ function humanSeconds(ms: number): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
-function buildStage1Inbox(
+function buildStage1ChapterInbox(
   manuscriptId: string,
   title: string,
-  sourceText: string,
-  chapterHints: Array<{ id: number; title: string }>,
+  chapter: { id: number; title: string; body: string },
+  runningRoster: CharacterOutput[],
 ): string {
-  /* Pre-detected chapter list. The local parser already split the
-     manuscript into chapters; pass that list so the analyzer doesn't have
-     to re-detect boundaries from a flat sourceText (the boundaries don't
-     survive the body-stitching that produces sourceText). The analyzer is
-     instructed below to use these ids/titles verbatim. */
-  const chapterListJson = JSON.stringify(
-    chapterHints.map(c => ({ id: c.id, title: c.title })),
+  /* Compact roster format — only the identity fields the model needs to
+     reuse ids verbatim. Skipping evidence/tone/description keeps each
+     per-chapter call's prompt small even on book #15 of a series. */
+  const rosterJson = JSON.stringify(
+    runningRoster.map(c => ({ id: c.id, name: c.name, role: c.role })),
     null,
     2,
   );
+  const rosterBlock = runningRoster.length === 0
+    ? '_No characters detected yet — this is the first chapter being processed. Use kebab-case ids that will be stable across the rest of the book._'
+    : `\`\`\`json\n${rosterJson}\n\`\`\``;
   return `---
 manuscriptId: ${manuscriptId}
-stage: 1
-expectedOutput: ./outbox/${manuscriptId}-stage1.json
-schema: see skills/audiobook-character-analysis.md
+stage: 1-ch${chapter.id}
+expectedOutput: ./outbox/${manuscriptId}-stage1-ch${chapter.id}.json
+schema: see skills/audiobook-character-detection-per-chapter.md
 ---
 
-# Stage 1 — Character roster + chapter boundaries
+# Phase 0a — Per-chapter cast detection
 
-Run the **\`audiobook-character-analysis\`** skill on the manuscript below.
-Save the JSON output to:
+Run the **\`audiobook-character-detection-per-chapter\`** skill on the chapter
+below. Save the JSON output to:
 
 \`\`\`
-server/handoff/outbox/${manuscriptId}-stage1.json
+server/handoff/outbox/${manuscriptId}-stage1-ch${chapter.id}.json
 \`\`\`
 
-Schema and few-shot examples live in
-\`skills/audiobook-character-analysis.md\`.
+Schema and rules live in
+\`skills/audiobook-character-detection-per-chapter.md\`.
 
-Return ONLY a JSON object matching the schema above. No prose, no code fences.
+Return ONLY a JSON object matching the schema. No prose, no code fences.
 
 ## Manuscript metadata
 
 - Title: ${title}
 - Manuscript ID: ${manuscriptId}
+- Chapter: ${chapter.id} — ${chapter.title}
 
-## Chapter list (pre-detected by the local parser — use verbatim)
+## Running roster (from earlier chapters — reuse these ids verbatim)
 
-The local parser has already split the manuscript into chapters. Use this
-exact list in your output's \`chapters\` field — preserve every \`id\` and
-\`title\` as given, in the same order. **Do not merge, split, drop, or
-re-title these chapters.** They will be the source of truth for stage 2.
+For any character below who appears in this chapter, use the existing \`id\`
+**verbatim**. The server merges by id; a stylistic variation creates a
+duplicate roster entry.
 
-\`\`\`json
-${chapterListJson}
-\`\`\`
+${rosterBlock}
 
-## Manuscript
+## Chapter
 
-${sourceText}
+${chapter.body}
 `;
 }
 
@@ -412,92 +486,208 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     const cachedChapters = cache.chapters ?? {};
     const cachedChapterCount = Object.keys(cachedChapters).length;
 
-    /* ── Phase 0: detecting characters (handoff stage 1). */
+    /* ── Phase 0: detecting characters.
+       The route runs Phase 0a (per-chapter cast detection) over the
+       parser's chapter list, merging each chapter's character output
+       into a running roster and emitting cast-update events live. Once
+       all chapters land, Phase 0b finalises the roster (sortEvidence,
+       verifyEvidenceAgainstSource, assignPaletteColors) and stores it
+       as cache.stage1. The expensive whole-book stage 1 call is gone —
+       a 60-chapter book that used to hang for 10+ minutes now scrolls
+       characters into view as each chapter completes. */
     markPhase(0);
     log(0, `Manuscript: ${wordCount.toLocaleString()} words, ${sourceChars.toLocaleString()} characters, ${record.chapterHints.length} chapter${record.chapterHints.length === 1 ? '' : 's'}`);
     log(0, `Estimated total time: ~${humanSeconds(stage1EstMs + stage2EstMs)} (refined after stage 1)`);
     let stage1: Stage1Output;
     let stage1ActualMs = 0;
+    const totalCastChapters = record.chapterHints.length;
     if (cache.stage1) {
+      /* Phase 0 already completed on a prior run — short-circuit straight
+         to the finalised roster. Still re-sort + re-verify in case the
+         cache predates the current verifier pass. */
       const charCount = cache.stage1.characters.length;
-      log(0, `Resuming — stage 1 already complete (${charCount} character${charCount === 1 ? '' : 's'} cached).`);
+      log(0, `Resuming — Phase 0 already complete (${charCount} character${charCount === 1 ? '' : 's'} cached).`);
       send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
       stage1 = cache.stage1;
-      /* Legacy caches predate longest-first ordering; re-sort on load. */
       sortEvidence(stage1.characters);
-      /* Legacy caches also predate verifyEvidenceAgainstSource — sweep
-         fabricated quotes from cached rosters too, and rewrite the cache
-         once if anything was dropped. */
       const verified = verifyEvidenceAgainstSource(stage1.characters, record.sourceText, msg => log(0, msg));
       if (verified.totalDropped > 0) {
         cache.stage1 = stage1;
         await saveAnalysisCache(manuscriptId, cache);
       }
+      send({ kind: 'cast-update', characters: stage1.characters });
     } else {
-      send({ kind: 'phase', phaseId: 0, progress: 0.02, label: PHASES[0].label });
-      log(0, `Asking ${analyzerLabel} to identify characters…`);
-      log(0, `Estimated stage time: ~${humanSeconds(stage1EstMs)}`);
-      const stage1Start = Date.now();
-      /* Streaming chunk feedback for stage 1.
-         - heartbeat: throttled SSE event ~every 2s so the UI can render
-           "Receiving response · N KB · last chunk Ms ago".
-         - character counter: count `"name":` occurrences in the buffer as
-           a cheap proxy for stage-1 progress; emit a real log line only
-           when N grows so the log doesn't pollute on every chunk.
-         - watchdog: track lastChunkAt; the onWaiting timer fires every
-           500ms and warns once per silence stretch >SILENCE_THRESHOLD_MS. */
-      let lastChunkAt = Date.now();
-      let lastFoundN = 0;
-      let lastHeartbeatAt = 0;
-      let warnedSilenceAt: number | null = null;
-      stage1 = await analyzer.runStage1(
-        manuscriptId,
-        buildStage1Inbox(manuscriptId, record.title, record.sourceText, record.chapterHints),
-        {
-          onWaiting: (elapsed) => {
-            /* Linear progress against the estimate, capped at 0.95 until the
-               real result lands. The bar jumps to 1.0 on completion. */
-            const p = Math.min(0.02 + 0.93 * (elapsed / stage1EstMs), 0.95);
-            send({ kind: 'phase', phaseId: 0, progress: p, label: PHASES[0].label });
-            const sinceLastChunk = Date.now() - lastChunkAt;
-            if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
-              if (warnedSilenceAt === null || Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS) {
-                warnedSilenceAt = Date.now();
-                log(0, `No response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)} — still waiting.`);
-              }
-            } else {
-              warnedSilenceAt = null;
-            }
+      /* Phase 0a — per-chapter cast detection. The chapterCast cache
+         lets us resume mid-Phase-0a after a crash / rate-limit / model
+         swap by replaying the per-chapter outputs we already have. */
+      const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
+      const cachedCastCount = Object.keys(chapterCast).length;
+      const stage0Start = Date.now();
+      log(0, `Detecting cast chapter-by-chapter across ${totalCastChapters} chapter${totalCastChapters === 1 ? '' : 's'} via ${analyzerLabel}…`);
+      if (cachedCastCount > 0) {
+        log(0, `Resuming — ${cachedCastCount} of ${totalCastChapters} chapter${cachedCastCount === 1 ? '' : 's'} already cached.`);
+      }
+
+      /* Replay the merge in chapter-id order whenever a new chapter lands,
+         so the running roster is deterministic regardless of completion
+         order under concurrency. The Map's insertion order also drives
+         the cast-update payload's ordering — stable across renders. */
+      const rebuildRoster = (): Map<string, CharacterOutput> => {
+        const r = new Map<string, CharacterOutput>();
+        for (const ch of recordRef.chapterHints) {
+          const cast = chapterCast[ch.id];
+          if (cast?.length) mergeRosterChapter(r, cast);
+        }
+        return r;
+      };
+      const emitCastUpdate = (): void => {
+        const roster = rebuildRoster();
+        send({ kind: 'cast-update', characters: Array.from(roster.values()) });
+      };
+
+      const completedCast = new Set<number>(Object.keys(chapterCast).map(k => Number(k)));
+      const phase0Progress = (): number => {
+        const done = completedCast.size;
+        return totalCastChapters > 0 ? Math.min(0.02 + 0.93 * (done / totalCastChapters), 0.95) : 0.02;
+      };
+
+      /* Initial cast-update + progress reflecting any cached cast. */
+      send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
+      if (cachedCastCount > 0) emitCastUpdate();
+
+      /* Tasks that need to run. */
+      const castTaskIndices: number[] = [];
+      for (let i = 0; i < totalCastChapters; i++) {
+        const ch = recordRef.chapterHints[i];
+        if (!chapterCast[ch.id]) castTaskIndices.push(i);
+      }
+      const castConcurrency = readStage2Concurrency();
+      if (castTaskIndices.length > 0) {
+        log(0, `Running ${castTaskIndices.length} chapter cast-detection${castTaskIndices.length === 1 ? '' : 's'} with up to ${castConcurrency} in parallel.`);
+      }
+
+      /* Per-chapter live ticker, mirroring Phase 1's structure so the
+         frontend's existing LiveChapterTicker can render Phase 0 the
+         same way. */
+      interface CastInFlight {
+        chapterIndex: number;
+        chapterTitle: string;
+        chapterEstMs: number;
+        startedAt: number;
+        elapsedMs: number;
+      }
+      const castInFlight = new Map<number, CastInFlight>();
+      const sendCastLiveTick = (): void => {
+        const running = Array.from(castInFlight.values()).sort((a, b) => a.chapterIndex - b.chapterIndex);
+        send({
+          kind: 'phase',
+          phaseId: 0,
+          progress: phase0Progress(),
+          label: PHASES[0].label,
+          live: running.length > 0 ? {
+            totalChapters: totalCastChapters,
+            chapters: running.map(r => ({
+              chapterIndex: r.chapterIndex + 1,
+              chapterTitle: r.chapterTitle,
+              elapsedMs: r.elapsedMs,
+              estMs: r.chapterEstMs,
+            })),
+          } : undefined,
+        });
+      };
+
+      async function runCastChapter(i: number): Promise<void> {
+        const ch = recordRef.chapterHints[i];
+        /* Rough per-chapter estimate: a fraction of the static stage-1
+           baseline by char count. After a couple of chapters complete
+           the live ticker still ticks against this — we don't refine
+           because the dominant signal for the user is "X of N chapters
+           done", which the bar already shows. */
+        const chapterEstMs = Math.max(2000, Math.round(stage1EstMs * (ch.body.length / Math.max(1, sourceChars))));
+        const startedChAt = Date.now();
+        castInFlight.set(i, { chapterIndex: i, chapterTitle: ch.title, chapterEstMs, startedAt: startedChAt, elapsedMs: 0 });
+
+        let lastHeartbeatAt = 0;
+        log(0, `Chapter ${i + 1}/${totalCastChapters} cast — ${ch.title} (${ch.body.length.toLocaleString()} chars) via ${analyzerLabel}…`);
+        const result = await analyzer.runStage1Chapter(
+          manuscriptId,
+          ch.id,
+          buildStage1ChapterInbox(manuscriptId, recordRef.title, ch, Array.from(rebuildRoster().values())),
+          {
+            onWaiting: (elapsed) => {
+              const slot = castInFlight.get(i);
+              if (slot) slot.elapsedMs = elapsed;
+              sendCastLiveTick();
+            },
+            onChunk: (info) => {
+              const now = Date.now();
+              if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
+              lastHeartbeatAt = now;
+              const charsPerSec = info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
+              send({
+                kind: 'heartbeat',
+                phaseId: 0,
+                receivedBytes: info.receivedBytes,
+                charsPerSec,
+                elapsedMs: info.elapsedMs,
+                sinceLastChunkMs: info.sinceLastChunkMs,
+                chapterIndex: i + 1,
+              });
+            },
           },
-          onChunk: (info) => {
-            lastChunkAt = Date.now();
-            const matches = (info.receivedText.match(/"name"\s*:/g) || []).length;
-            if (matches > lastFoundN) {
-              lastFoundN = matches;
-              log(0, `Found ${matches} character${matches === 1 ? '' : 's'} so far…`);
-            }
-            const now = Date.now();
-            if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
-            lastHeartbeatAt = now;
-            const charsPerSec = info.elapsedMs > 0
-              ? Math.round((info.receivedBytes * 1000) / info.elapsedMs)
-              : 0;
-            send({
-              kind: 'heartbeat',
-              phaseId: 0,
-              receivedBytes: info.receivedBytes,
-              charsPerSec,
-              elapsedMs: info.elapsedMs,
-              sinceLastChunkMs: info.sinceLastChunkMs,
-            });
-          },
-        },
-      );
-      stage1ActualMs = Date.now() - stage1Start;
-      sortEvidence(stage1.characters);
-      verifyEvidenceAgainstSource(stage1.characters, record.sourceText, msg => log(0, msg));
+        );
+
+        chapterCast[ch.id] = result.characters;
+        completedCast.add(i);
+        cache.chapterCast = chapterCast;
+        await saveAnalysisCache(manuscriptId, cache);
+        const chDuration = Date.now() - startedChAt;
+        castInFlight.delete(i);
+        log(0, `Chapter ${i + 1}/${totalCastChapters} cast done — ${result.characters.length} character${result.characters.length === 1 ? '' : 's'} in ${humanSeconds(chDuration)}`);
+        emitCastUpdate();
+        sendCastLiveTick();
+      }
+
+      /* Concurrency pool — same shape as the Phase 1 chapter pool. */
+      let nextCastTask = 0;
+      let castAborted = false;
+      const castWorkers: Promise<void>[] = [];
+      const launchNextCast = async (): Promise<void> => {
+        while (nextCastTask < castTaskIndices.length && !castAborted) {
+          const i = castTaskIndices[nextCastTask++];
+          try {
+            await runCastChapter(i);
+          } catch (e) {
+            castInFlight.delete(i);
+            castAborted = true;
+            throw e;
+          }
+        }
+      };
+      for (let w = 0; w < Math.min(castConcurrency, castTaskIndices.length); w++) {
+        castWorkers.push(launchNextCast());
+      }
+      await Promise.all(castWorkers);
+
+      /* ── Phase 0b — finalise the roster.
+         Replay merge once more in chapter-id order (canonical), then
+         sort+verify+colour. Always include 'narrator' so downstream
+         (stage-2 attribution, voice picker) can rely on its presence. */
+      const finalRoster = rebuildRoster();
+      const characters = Array.from(finalRoster.values());
+      sortEvidence(characters);
+      verifyEvidenceAgainstSource(characters, record.sourceText, msg => log(0, msg));
+      stage1 = {
+        characters,
+        /* Carry the parser's chapter list verbatim — Phase 0a deliberately
+           doesn't return a chapters[] field, and stage 2's prompt /
+           merging downstream both work off the same list. */
+        chapters: recordRef.chapterHints.map(c => ({ id: c.id, title: c.title })),
+      };
       cache.stage1 = stage1;
       await saveAnalysisCache(manuscriptId, cache);
+      stage1ActualMs = Date.now() - stage0Start;
+      send({ kind: 'cast-update', characters: stage1.characters });
     }
     /* Use the observed rate to refine stage 2's estimate. Stage 2 prompt is
        a similar size to stage 1 plus the small character roster, but its

@@ -9,13 +9,20 @@
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { SentenceOutput, Stage1Output } from '../handoff/schemas.js';
+import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = resolve(__dirname, '..', '..', 'handoff', 'cache');
 
 export interface AnalysisCache {
+  /** Phase 0a — raw per-chapter character output keyed by chapterId. The
+      route replays these in chapter-id order through the merge to rebuild
+      the running roster on resume when stage1 isn't yet present. */
+  chapterCast?: Record<number, CharacterOutput[]>;
+  /** Phase 0b output — finalised, sorted, palette-coloured roster. Set
+      once Phase 0 completes; on resume the route skips Phase 0a entirely
+      when this is present. */
   stage1?: Stage1Output;
   /** chapterId → sentences. Keyed by number-as-string per JSON convention. */
   chapters: Record<number, SentenceOutput[]>;
@@ -32,7 +39,12 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
   /* JSON parse turns the chapter-id keys into strings, but the route uses
      numeric ids. Coerce shape so callers can use cache.chapters[chapterId]
      directly. */
-  return { stage1: cache.stage1, chapters: cache.chapters ?? {}, updatedAt: cache.updatedAt };
+  return {
+    chapterCast: cache.chapterCast ?? undefined,
+    stage1: cache.stage1,
+    chapters: cache.chapters ?? {},
+    updatedAt: cache.updatedAt,
+  };
 }
 
 export async function saveAnalysisCache(manuscriptId: string, cache: AnalysisCache): Promise<void> {

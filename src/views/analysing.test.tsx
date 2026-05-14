@@ -5,9 +5,10 @@ import { render, screen, act } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
+import { castSlice } from '../store/cast-slice';
 import { AnalysingView } from './analysing';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
-import type { AnalyseResponse } from '../lib/types';
+import type { AnalyseResponse, Character } from '../lib/types';
 
 /* Captured handlers so tests can drive phase/log events at will. */
 let capturedOpts: AnalyseOpts | undefined;
@@ -29,17 +30,25 @@ vi.mock('../lib/api', async () => {
 });
 
 function renderView() {
-  const store = configureStore({ reducer: { ui: uiSlice.reducer } });
-  return render(
-    <Provider store={store}>
-      <AnalysingView
-        manuscriptId="m1"
-        title="the Coalfall Commission"
-        wordCount={2440}
-        onComplete={() => {}}
-      />
-    </Provider>,
-  );
+  const store = configureStore({
+    reducer: {
+      ui:   uiSlice.reducer,
+      cast: castSlice.reducer,
+    },
+  });
+  return {
+    store,
+    ...render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    ),
+  };
 }
 
 describe('AnalysingView — live ticker (regression for stuck-chapter screenshot bug)', () => {
@@ -143,5 +152,62 @@ describe('AnalysingView — streaming heartbeat indicator', () => {
 
     expect(screen.getByText(/Stalled/)).toBeInTheDocument();
     expect(screen.queryByText(/Receiving response/)).not.toBeInTheDocument();
+  });
+});
+
+describe('AnalysingView — Phase 0a live cast preview', () => {
+  const makeChar = (id: string, name: string): Character => ({
+    id, name, role: 'role', color: id, voiceState: 'generated',
+  });
+
+  it('does not render the cast preview before any cast-update has arrived', () => {
+    renderView();
+    /* Phase 0 is active by default; no characters yet → no preview. */
+    expect(screen.queryByText(/Cast so far/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the running roster as cast-update events arrive, growing chapter-by-chapter', () => {
+    renderView();
+
+    /* Chapter 1 lands — narrator + Wren. */
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.05 });
+      capturedOpts?.onCastUpdate?.({ characters: [
+        makeChar('narrator', 'Narrator'),
+        makeChar('Wren', 'Wren'),
+      ]});
+    });
+    expect(screen.getByText(/Cast so far · 2 characters/)).toBeInTheDocument();
+    expect(screen.getByText('Wren')).toBeInTheDocument();
+
+    /* Chapter 5 lands — adds Marlow. */
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.4 });
+      capturedOpts?.onCastUpdate?.({ characters: [
+        makeChar('narrator', 'Narrator'),
+        makeChar('Wren', 'Wren'),
+        makeChar('Marlow', 'Marlow'),
+      ]});
+    });
+    expect(screen.getByText(/Cast so far · 3 characters/)).toBeInTheDocument();
+    expect(screen.getByText('Marlow')).toBeInTheDocument();
+  });
+
+  it('does not render the cast preview under Phase 1 (attribution) once that phase becomes active', () => {
+    renderView();
+
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 1 });
+      capturedOpts?.onCastUpdate?.({ characters: [
+        makeChar('narrator', 'Narrator'), makeChar('Wren', 'Wren'),
+      ]});
+      /* Now Phase 1 (attribution) becomes active. */
+      capturedOpts?.onPhase?.({ phaseId: 1, progress: 0.05 });
+    });
+
+    /* Cast preview is keyed to Phase 0 specifically (LiveCastPreview is
+       only rendered inside the p.id === 0 branch); once Phase 1 is the
+       active phase, the preview shouldn't be visible. */
+    expect(screen.queryByText(/Cast so far/i)).not.toBeInTheDocument();
   });
 });

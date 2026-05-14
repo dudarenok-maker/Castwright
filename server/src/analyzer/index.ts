@@ -4,7 +4,7 @@
    calls runStage1 / runStage2; both implementations preserve the SSE
    onWaiting callback so the progress bar animates in either mode. */
 
-import type { Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
+import type { Stage1Output, Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schemas.js';
 import { ManualAnalyzer } from './manual.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { getResolvedAnalyzerMode } from '../workspace/user-settings.js';
@@ -30,7 +30,15 @@ export interface StageCall {
 }
 
 export interface Analyzer {
+  /* Legacy whole-book stage 1 — kept for back-compat with any caller still
+     wiring it. The current route uses runStage1Chapter (Phase 0a) instead. */
   runStage1(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage1Output>;
+  /* Phase 0a — per-chapter cast detection. Each call returns the speaking
+     characters that appear in ONE chapter (new + recurring). The route
+     merges these into a running roster across the book. Same StageCall
+     plumbing as runStage2Chapter — onChunk fires per stream chunk for
+     the live "Receiving response" indicator. */
+  runStage1Chapter(manuscriptId: string, chapterId: number, promptMd: string, call: StageCall): Promise<Stage1ChapterOutput>;
   /* Stage 2 runs per chapter so we stay under model context windows and the
      free-tier rate limit can recover between calls on transient 429/5xx.
      The route iterates chapters and concatenates the per-chapter sentence

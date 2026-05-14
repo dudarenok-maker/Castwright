@@ -143,3 +143,67 @@ describe('castSlice — initial state (mock-leak regression)', () => {
     expect(castSlice.getInitialState().characters).toEqual([]);
   });
 });
+
+describe('castSlice — mergeCharacters (Phase 0a live cast snapshots)', () => {
+  it('appends new characters in incoming order on an empty slice, defaulting voiceState', () => {
+    const start = baseState([]);
+    const next = castSlice.reducer(start, castActions.mergeCharacters([
+      makeChar('narrator'),
+      makeChar('Wren'),
+    ]));
+    expect(next.characters.map(c => c.id)).toEqual(['narrator', 'Wren']);
+    expect(next.characters[0].voiceState).toBe('generated');
+  });
+
+  it('upserts by id and preserves locked voiceId / matchedFrom on the existing entry', () => {
+    /* User had matched Wren to a previous-book voice + locked it; a
+       later cast-update snapshot from the analyzer must NOT clobber
+       voiceId / matchedFrom / voiceState='locked'. */
+    const start = baseState([makeChar('Wren', {
+      voiceState: 'locked',
+      voiceId: 'v_Wren_from_book1',
+      matchedFrom: { bookTitle: 'KOTC #1', confidence: 0.94 },
+    })]);
+    const next = castSlice.reducer(start, castActions.mergeCharacters([
+      /* Snapshot from a later chapter — analyzer doesn't know about the lock. */
+      { id: 'Wren', name: 'Wren Sparrow', role: 'protagonist', color: 'orange',
+        description: 'Updated richer description.' },
+    ]));
+    const Wren = next.characters.find(c => c.id === 'Wren')!;
+    expect(Wren.voiceId).toBe('v_Wren_from_book1');
+    expect(Wren.voiceState).toBe('locked');
+    expect(Wren.matchedFrom).toEqual({ bookTitle: 'KOTC #1', confidence: 0.94 });
+    /* New fields from the snapshot still flow through. */
+    expect(Wren.name).toBe('Wren Sparrow');
+    expect(Wren.description).toBe('Updated richer description.');
+  });
+
+  it('appends new characters from a later snapshot at the end (preserves discovery order)', () => {
+    const start = baseState([makeChar('Wren'), makeChar('Marlow')]);
+    const next = castSlice.reducer(start, castActions.mergeCharacters([
+      makeChar('Wren'),
+      makeChar('Marlow'),
+      makeChar('Maerin'), /* New in chapter 5 */
+    ]));
+    expect(next.characters.map(c => c.id)).toEqual(['Wren', 'Marlow', 'Maerin']);
+  });
+
+  it('preserves locally-known characters the snapshot omitted (defensive — full snapshots in practice)', () => {
+    const start = baseState([
+      makeChar('Wren', { voiceState: 'locked' }),
+      makeChar('Marlow'),
+    ]);
+    /* Snapshot only has 'Wren' — 'Marlow' should still be present. */
+    const next = castSlice.reducer(start, castActions.mergeCharacters([
+      makeChar('Wren', { description: 'updated' }),
+    ]));
+    expect(next.characters.map(c => c.id).sort()).toEqual(['Marlow', 'Wren']);
+    expect(next.characters.find(c => c.id === 'Wren')!.voiceState).toBe('locked');
+  });
+
+  it('is a no-op for an empty incoming list', () => {
+    const start = baseState([makeChar('Wren')]);
+    const next = castSlice.reducer(start, castActions.mergeCharacters([]));
+    expect(next.characters).toEqual(start.characters);
+  });
+});
