@@ -166,7 +166,7 @@ export class OllamaAnalyzer implements Analyzer {
       const firstAttempt = parseAndValidate(firstText, schema);
       if (firstAttempt.ok) {
         if (firstAttempt.repaired) {
-          console.warn(`[ollama] ${this.model} ${key} required JSON repair (unescaped quotes inside string value)`);
+          console.warn(`[ollama] ${this.model} ${key} required JSON cleanup before parse (markdown fence and/or unescaped quotes)`);
         }
         await persistResponse(manuscriptId, key, firstText);
         return firstAttempt.value;
@@ -218,7 +218,7 @@ export class OllamaAnalyzer implements Analyzer {
       const secondAttempt = parseAndValidate(secondText, schema);
       if (secondAttempt.ok) {
         if (secondAttempt.repaired) {
-          console.warn(`[ollama] ${this.model} ${key} required JSON repair on retry (unescaped quotes inside string value)`);
+          console.warn(`[ollama] ${this.model} ${key} required JSON cleanup on retry (markdown fence and/or unescaped quotes)`);
         }
         await persistResponse(manuscriptId, key, secondText);
         return secondAttempt.value;

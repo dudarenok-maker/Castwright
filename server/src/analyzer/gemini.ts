@@ -283,31 +283,36 @@ export type ParseResult<T> =
   | { ok: false; kind: 'schema-validation'; detail: z.ZodIssue[] };
 
 export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseResult<T> {
-  /* First attempt: parse the raw text as-is. The common case on well-behaved
-     models (Gemini, qwen3.5:9b, qwen3.5:4b on most chapters) lands here and
-     returns immediately. */
+  /* Pre-pass: strip a wrapping ```json ... ``` markdown fence if present.
+     qwen3.5:4b occasionally ignores the system prompt's "no code fences"
+     rule and emits its JSON wrapped in a fenced block, even when Ollama's
+     `format:<schema>` constrained decoding is in effect (real failure:
+     ch13 returned "```json {...}```", causing JSON.parse to choke on the
+     leading backtick). The strip is a no-op on byte-clean JSON and on any
+     payload that doesn't start with a fence, so it's safe to run always. */
+  const stripped = stripCodeFences(raw);
   let parsed: unknown;
-  let repaired = false;
+  let repaired = stripped !== raw;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(stripped);
   } catch {
-    /* Targeted recovery for qwen3.5:4b's signature failure mode: unescaped
-       double-quote inside a string value when transcribing dialogue from the
-       manuscript, e.g. `"quote": "Sophie, let the dog go," Mr. Forkle
-       ordered.",`. Ollama's `format:<schema>` enforces JSON Schema shape but
-       not string-content escaping — once the model is inside a JSON string,
-       the constrained decoder still lets a raw `"` token close it. The
-       repair pass walks the text, finds each `"` inside a string, and
-       escapes it iff the next non-whitespace char isn't a valid post-value
-       token (`,` `}` `]` `:` EOF). Verified against the real failing raws
-       (ch8 byte 2363, ch10 byte 1432). */
-    const repairedRaw = repairUnescapedQuotes(raw);
+    /* Targeted recovery for qwen3.5:4b's other signature failure mode:
+       unescaped double-quote inside a string value when transcribing
+       dialogue from the manuscript, e.g. `"quote": "Sophie, let the dog
+       go," Mr. Forkle ordered.",`. Ollama's `format:<schema>` enforces
+       JSON Schema shape but not string-content escaping — once the model
+       is inside a JSON string, the constrained decoder still lets a raw
+       `"` token close it. The repair pass walks the text, finds each `"`
+       inside a string, and escapes it iff the next non-whitespace char
+       isn't a valid post-value token (`,` `}` `]` `:` EOF). Verified
+       against the real failing raws (ch8 byte 2363, ch10 byte 1432). */
+    const repairedRaw = repairUnescapedQuotes(stripped);
     try {
       parsed = JSON.parse(repairedRaw);
       repaired = true;
     } catch (e2) {
-      /* Repair didn't help — return the post-repair error message so the
-         operator can see which attempt actually failed. */
+      /* Neither cleanup helped — return the post-repair error message so
+         the operator sees the actual remaining issue. */
       return { ok: false, kind: 'invalid-json', detail: (e2 as Error).message };
     }
   }
@@ -316,6 +321,22 @@ export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseRes
     return { ok: false, kind: 'schema-validation', detail: result.error.issues };
   }
   return { ok: true, value: result.data, repaired };
+}
+
+/* Strips a wrapping ```json ... ``` (or bare ``` ... ```) markdown fence
+   if present. Returns the input unchanged if no leading fence is found,
+   so this is byte-identical on the happy path. The match is anchored at
+   the start/end of the trimmed text, which means backticks embedded inside
+   string values can't false-positive. */
+export function stripCodeFences(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('```')) return raw;
+  /* Drop opening fence + optional language tag + optional newline.
+     Handles ```json\n, ```JSON\n, ```\n, ``` (inline, no newline). */
+  let body = trimmed.replace(/^```[a-zA-Z]*[ \t]*\n?/, '');
+  /* Drop closing fence at the very end. */
+  body = body.replace(/\n?[ \t]*```\s*$/, '');
+  return body.trim();
 }
 
 /* Walks the text character by character. Tracks whether we're currently
