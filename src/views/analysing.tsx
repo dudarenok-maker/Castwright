@@ -144,11 +144,21 @@ function LiveCastPreview() {
   );
 }
 
+/* Stall thresholds vary by engine. Cloud (Gemini) streams steadily —
+   any gap >8s is a real problem. qwen3.5:4b under structured-output
+   constrained decoding emits in bursts and routinely sits silent for
+   20-40s while the schema-constraint solver works, which is normal
+   per-chapter behaviour; flagging that as "Stalled" cried wolf and
+   conditioned users to ignore the badge. 60s is well past the longest
+   observed legitimate gap on qwen3.5:4b chapters. */
+const STALL_THRESHOLD_CLOUD_SEC = 8;
+const STALL_THRESHOLD_LOCAL_SEC = 60;
+
 /* Live indicator that the analyzer's LLM call is actively returning bytes.
    Displays size received, throughput, and seconds since the last chunk —
    the third value is the most reassuring during long runs because it ticks
    forward even between server heartbeats (we re-anchor on each event). */
-function HeartbeatRow({ hb, receivedAt }: { hb: AnalysisHeartbeat; receivedAt: number }) {
+function HeartbeatRow({ hb, receivedAt, stallThresholdSec }: { hb: AnalysisHeartbeat; receivedAt: number; stallThresholdSec: number }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -158,7 +168,7 @@ function HeartbeatRow({ hb, receivedAt }: { hb: AnalysisHeartbeat; receivedAt: n
   const sinceLastSec = Math.round(sinceLast / 1000);
   const sizeKb = hb.receivedBytes / 1024;
   const sizeText = sizeKb >= 10 ? `${Math.round(sizeKb)} KB` : `${sizeKb.toFixed(1)} KB`;
-  const stalled = sinceLastSec > 8;
+  const stalled = sinceLastSec > stallThresholdSec;
   return (
     <div className={`mt-2 inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${stalled ? 'text-amber-700' : 'text-emerald-700'}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${stalled ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`}/>
@@ -256,9 +266,61 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
   const [, setNow] = useState(Date.now());
   const completedRef = useRef(false);
 
+  /* Explicit "Start analysis" gate. The previous auto-fire path was hard
+     to reason about — auto-load fires, probe re-runs, isAnalyzerReady
+     flips, analysis useEffect re-runs… and at any link in the chain a
+     leaked fetch or a stale render could pile up against Ollama. With
+     an explicit click the user controls when the analysis kicks off,
+     and the server log shows exactly one [analysis] entry per click. */
+  const [analysisStarted, setAnalysisStarted] = useState(false);
+
+  /* Analyzer readiness gate — declared up here (above the analysis
+     useEffect) because the analysis effect depends on it. The full
+     analyzer Load/Stop machinery lives further down; this slice pulls
+     just the bits the analysis effect needs to decide whether it's
+     safe to fire the SSE. */
+  const selectedModel = useMemo(() => {
+    const id = model ?? MODEL_OPTIONS[0].id;
+    return MODEL_OPTIONS.find(m => m.id === id);
+  }, [model]);
+  const isLocalAnalyzer = selectedModel?.engine === 'local';
+  const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
+  const [pendingAnalyzerPill, setPendingAnalyzerPill] = useState<ModelControlState | null>(null);
+  const [analyzerProbeKey, setAnalyzerProbeKey] = useState(0);
+  const [analyzerEvictionNotice, setAnalyzerEvictionNotice] = useState<string | null>(null);
+  const isAnalyzerReady = !isLocalAnalyzer || (
+    ollamaHealth?.status === 'reachable' && ollamaHealth?.modelResident === true
+  );
+
   useEffect(() => {
     if (!manuscriptId) return;     // nothing to analyse — UI shows a CTA below
+    /* Explicit user click — see analysisStarted comment above. */
+    if (!analysisStarted) {
+      setConn('idle');
+      return;
+    }
+    /* Hold off until the analyzer is actually able to take a request.
+       For local engines this means Ollama has the configured model
+       resident in VRAM (see isAnalyzerReady above). Firing the SSE
+       against a cold Ollama caused the very pile-up the user reported:
+       the first chat call kicked off a model load, every retry in the
+       meantime queued another chat call, and Ollama returned errors
+       for each one as the load swapped its state. Gemini is gated as
+       "always ready" so the cloud path is unaffected. */
+    if (!isAnalyzerReady) {
+      setConn('idle');
+      return;
+    }
     let cancelled = false;
+    /* AbortController tied to the effect's cleanup. Without this, every
+       re-run of this effect (Try again / model switch / "Start fresh")
+       leaked the previous fetch's TCP connection — the cleanup only set
+       `cancelled = true` to drop incoming results, but the underlying
+       request kept the server's analysis loop busy. At concurrency=1
+       the server's log filled with `[analysis] manuscript=...` ↔
+       `[analysis] aborted (client disconnected)` pairs as the browser
+       eventually pruned the orphaned fetches, breaking every retry. */
+    const controller = new AbortController();
     setPhase(0);
     setPhaseProgress(0);
     setLogs({});
@@ -272,6 +334,7 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
     (async () => {
       try {
         const payload = await api.analyseManuscript(manuscriptId, {
+          signal: controller.signal,
           model,
           fresh: retry.fresh || undefined,
           onPhase: ({ phaseId, progress, live }) => {
@@ -332,15 +395,26 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
         onComplete(payload);
       } catch (e) {
         if (cancelled) return;
+        /* AbortError = the effect cleanup tore the fetch down (the user
+           re-tried / switched models / unmounted). Server emits a
+           `kind: 'error', code: 'aborted'` event for the same reason —
+           either way it's a benign disconnect, not a failure to surface
+           in the UI. Falling through would flash "Analysis failed:
+           Analysis aborted" right before the new attempt renders. */
+        if ((e as Error)?.name === 'AbortError') return;
+        if (e instanceof AnalysisError && e.code === 'aborted') return;
         setConn('error');
         const code = e instanceof AnalysisError ? e.code : 'unknown';
         const detail = e instanceof AnalysisError ? e.detail : undefined;
         setError({ message: (e as Error).message || 'Analysis failed.', code, detail });
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manuscriptId, retry]);
+  }, [manuscriptId, retry, isAnalyzerReady, analysisStarted]);
 
   /* Tick once a second while we're waiting on events so the "X seconds since
      last update" indicator advances even if the server is quiet. */
@@ -355,17 +429,9 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
 
   /* Analyzer Load/Stop control. Only meaningful when the selected analyzer
      is a local Ollama model — Gemini lives in the cloud and has no local
-     lifecycle to manage. */
-  const selectedModel = useMemo(() => {
-    const id = model ?? MODEL_OPTIONS[0].id;
-    return MODEL_OPTIONS.find(m => m.id === id);
-  }, [model]);
-  const isLocalAnalyzer = selectedModel?.engine === 'local';
-
-  const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
-  const [pendingAnalyzerPill, setPendingAnalyzerPill] = useState<ModelControlState | null>(null);
-  const [analyzerProbeKey, setAnalyzerProbeKey] = useState(0);
-  const [analyzerEvictionNotice, setAnalyzerEvictionNotice] = useState<string | null>(null);
+     lifecycle to manage. The state hooks for this section (selectedModel,
+     ollamaHealth, isAnalyzerReady, …) are declared higher up so the
+     analysis useEffect can gate on them. */
 
   useEffect(() => {
     if (!isLocalAnalyzer) {
@@ -393,16 +459,30 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
 
   /* Pill on this screen shows only the coarse state ("Streaming live") —
      HeartbeatRow below already renders the per-chunk bytes/throughput, so
-     duplicating numbers in the header is just noise. */
+     duplicating numbers in the header is just noise.
+     The pill reflects the *model* lifecycle, not the SSE-fetch lifecycle —
+     conflating the two used to surface as "Loading analyzer…" sitting
+     stuck on screen while Ollama's /api/ps already shows the model 100%
+     resident, because conn stays 'connecting' until the first phase event
+     lands (which can be a minute on a long book's stage 0a). The probe is
+     the source of truth for what's in VRAM; the analysis state only fills
+     in the streaming detail. */
   const analyzerPillState: ModelControlState = (() => {
     if (pendingAnalyzerPill) return pendingAnalyzerPill;
-    if (conn === 'streaming' || conn === 'connecting') return conn === 'streaming' ? 'streaming' : 'loading';
-    if (!ollamaHealth) return 'idle';
-    if (ollamaHealth.status === 'unreachable') return 'unreachable';
+    /* Daemon-level outage wins everything else — the model can't be in a
+       useful state if Ollama itself isn't answering. */
+    if (ollamaHealth?.status === 'unreachable') return 'unreachable';
+    /* Active SSE means the analysis is mid-chunk against the model, so the
+       pill should reflect "in use" regardless of probe staleness. */
+    if (conn === 'streaming') return 'streaming';
     /* Resident-in-VRAM (not just "pulled") — the model has to be loaded
        AND at the analyzer's num_ctx for the next chat call to skip the
        reload. modelResident comes from Ollama's /api/ps. */
-    if (ollamaHealth.modelResident) return 'ready';
+    if (ollamaHealth?.modelResident) return 'ready';
+    /* Model not resident yet AND analysis is reaching out — the very first
+       chat call is implicitly warming the model, so surface as 'loading'
+       so the user has visible feedback during the cold-load tax. */
+    if (conn === 'connecting') return 'loading';
     return 'idle';
   })();
 
@@ -436,6 +516,30 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
     setAnalyzerProbeKey(k => k + 1);
   };
 
+  /* Auto-warm the analyzer on arrival when:
+       1. there's a manuscript to analyse (skip pre-import screens),
+       2. the selected engine is local,
+       3. we've probed Ollama and the configured model is NOT resident,
+       4. no Load is already in flight (avoid double-fire on re-render).
+     The analysis useEffect above is gated on isAnalyzerReady, so the run
+     starts the moment Ollama confirms the model is resident — no extra
+     click required. Without this, the user lands on Analysing, sees
+     "Loading analyzer…" do nothing (the analysis won't fire because of
+     the gate), and has to manually click Load. */
+  const autoLoadFiredRef = useRef(false);
+  useEffect(() => {
+    if (!manuscriptId) return;
+    if (!isLocalAnalyzer) return;
+    if (!ollamaHealth) return;                   // probe still pending
+    if (ollamaHealth.status !== 'reachable') return;
+    if (ollamaHealth.modelResident) return;      // already warm
+    if (pendingAnalyzerPill) return;             // a Load is already in flight
+    if (autoLoadFiredRef.current) return;        // one-shot per mount
+    autoLoadFiredRef.current = true;
+    void handleLoadAnalyzer();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manuscriptId, isLocalAnalyzer, ollamaHealth, pendingAnalyzerPill]);
+
   return (
     <div className="relative min-h-[calc(100vh-64px)] flex items-center justify-center px-6 py-16">
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-60 pointer-events-none"/>
@@ -463,6 +567,36 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
                 onLoad={handleLoadAnalyzer}
                 onStop={handleStopAnalyzer}
               />
+            </div>
+          )}
+          {/* Explicit "Start analysis" button. Visible only when the user
+              has a manuscript loaded and hasn't yet kicked off a run.
+              For local analyzers the button is disabled until the model
+              is resident (isAnalyzerReady) — clicking earlier would
+              fire an SSE that the analysis useEffect's gate would
+              immediately bounce, looking like a broken button to the
+              user. For Gemini the button enables as soon as the
+              manuscript is loaded (no local lifecycle to wait on). */}
+          {manuscriptId && !analysisStarted && (
+            <div className="mt-6 flex flex-col items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAnalysisStarted(true)}
+                disabled={!isAnalyzerReady}
+                className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-colors ${
+                  isAnalyzerReady
+                    ? 'bg-ink text-canvas hover:bg-ink/90'
+                    : 'bg-ink/15 text-ink/40 cursor-not-allowed'
+                }`}
+              >
+                {isAnalyzerReady ? 'Start analysis' : 'Waiting for analyzer…'}
+              </button>
+              {isLocalAnalyzer && !isAnalyzerReady && (
+                <p className="text-[11px] text-ink/50">
+                  The model needs to be resident in VRAM before analysis can run.
+                  {pendingAnalyzerPill === 'loading' ? ' Loading now…' : ' Click Load above to warm it.'}
+                </p>
+              )}
             </div>
           )}
           {manuscriptId && (
@@ -634,10 +768,22 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
                       <div className="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
                         <div className="h-full bg-gradient-progress rounded-full" style={{ width: `${phaseProgress * 100}%` }}/>
                       </div>
+                      {/* Bridging status while the SSE is open but no log
+                          lines have arrived yet. On a fresh server the
+                          first ~2-3s after clicking Start is spent in
+                          getOrHydrateManuscript re-parsing the EPUB —
+                          silence during that window made the screen look
+                          frozen / the button look broken. */}
+                      {p.id === 0 && phaseLogs.length === 0 && analysisStarted && conn === 'connecting' && (
+                        <p className="mt-3 text-xs font-mono text-ink/50 italic">
+                          Reading the manuscript (parsing chapters)…
+                        </p>
+                      )}
                       {heartbeatByPhase[p.id] && (
                         <HeartbeatRow
                           hb={heartbeatByPhase[p.id].hb}
                           receivedAt={heartbeatByPhase[p.id].receivedAt}
+                          stallThresholdSec={isLocalAnalyzer ? STALL_THRESHOLD_LOCAL_SEC : STALL_THRESHOLD_CLOUD_SEC}
                         />
                       )}
                       {live && live.chapters.length > 0 && (

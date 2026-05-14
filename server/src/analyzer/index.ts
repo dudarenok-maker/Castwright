@@ -10,7 +10,7 @@
 
 import type { Stage1Output, Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schemas.js';
 import { GeminiAnalyzer } from './gemini.js';
-import { OllamaAnalyzer, LocalUnreachableError } from './ollama.js';
+import { OllamaAnalyzer, LocalUnreachableError, AnalysisAbortedError } from './ollama.js';
 import {
   getResolvedAnalysisEngine,
   getResolvedOllamaUrl,
@@ -34,6 +34,11 @@ export interface StageCall {
   onWaiting?: (elapsedMs: number) => void;
   /** Fired per streamed chunk from the model. */
   onChunk?: (info: StageChunkInfo) => void;
+  /** Optional abort signal — when the caller (the analysis route) sees its
+      SSE client disconnect, it aborts the controller so the analyzer can
+      tear down the in-flight Ollama/Gemini request instead of running on
+      as a zombie that holds the model busy for the next session. */
+  signal?: AbortSignal;
 }
 
 export interface Analyzer {
@@ -138,6 +143,7 @@ export class FallbackAnalyzer implements Analyzer {
     try {
       return await this.primary.runStage1(manuscriptId, promptMd, call);
     } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof LocalUnreachableError) {
         return await this.fallback.runStage1(manuscriptId, promptMd, call);
       }
@@ -154,6 +160,7 @@ export class FallbackAnalyzer implements Analyzer {
     try {
       return await this.primary.runStage1Chapter(manuscriptId, chapterId, promptMd, call);
     } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof LocalUnreachableError) {
         return await this.fallback.runStage1Chapter(manuscriptId, chapterId, promptMd, call);
       }
@@ -170,6 +177,7 @@ export class FallbackAnalyzer implements Analyzer {
     try {
       return await this.primary.runStage2Chapter(manuscriptId, chapterId, promptMd, call);
     } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof LocalUnreachableError) {
         return await this.fallback.runStage2Chapter(manuscriptId, chapterId, promptMd, call);
       }

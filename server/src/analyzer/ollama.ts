@@ -44,6 +44,18 @@ export class LocalUnreachableError extends Error {
   }
 }
 
+/** Sentinel error for "the SSE client disconnected, drop work silently."
+    The analysis route uses `err instanceof AnalysisAbortedError` to skip
+    its own error-reporting path (the client is gone — there's no one to
+    tell) and to NOT trigger the Gemini fallback decorator. */
+export class AnalysisAbortedError extends Error {
+  readonly code = 'ANALYSIS_ABORTED';
+  constructor(message: string) {
+    super(message);
+    this.name = 'AnalysisAbortedError';
+  }
+}
+
 interface OllamaOptions {
   /** Base URL of the Ollama daemon (e.g. http://localhost:11434).
       Trailing slash already stripped by getResolvedOllamaUrl. */
@@ -170,6 +182,7 @@ export class OllamaAnalyzer implements Analyzer {
         responseFormat,
         DEFAULT_TEMPERATURE,
         call.onChunk,
+        call.signal,
       );
 
       const firstAttempt = parseAndValidate(firstText, schema);
@@ -222,6 +235,7 @@ export class OllamaAnalyzer implements Analyzer {
         responseFormat,
         retryTemperature,
         call.onChunk,
+        call.signal,
       );
 
       const secondAttempt = parseAndValidate(secondText, schema);
@@ -258,12 +272,17 @@ export class OllamaAnalyzer implements Analyzer {
 
   /* Streamed chat against /api/chat. Mirrors GeminiAnalyzer.generate so the
      route-layer 45s silence watchdog (analysis.ts) keeps working unchanged —
-     each NDJSON line fires onChunk with the assembled buffer. */
+     each NDJSON line fires onChunk with the assembled buffer.
+     When the caller passes an AbortSignal, it's wired into both the initial
+     fetch and the stream-read loop. If the signal fires we throw an
+     AnalysisAbortedError so the route can distinguish "client went away,
+     drop work silently" from a real model failure. */
   private async chat(
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
     responseFormat: unknown,
     temperature: number,
     onChunk?: (info: StageChunkInfo) => void,
+    signal?: AbortSignal,
   ): Promise<string> {
     const body = {
       model: this.model,
@@ -303,14 +322,25 @@ export class OllamaAnalyzer implements Analyzer {
       },
     };
 
+    /* Short-circuit if the caller has already aborted (e.g. the SSE client
+       disconnected while a previous chapter was still running). Saves a
+       wasted Ollama round-trip and lets the route loop bail immediately. */
+    if (signal?.aborted) {
+      throw new AnalysisAbortedError(`Ollama ${this.model} call aborted before fetch (client disconnected).`);
+    }
+
     let response: Response;
     try {
       response = await fetch(`${this.url}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal,
       });
     } catch (err) {
+      if (signal?.aborted) {
+        throw new AnalysisAbortedError(`Ollama ${this.model} fetch aborted (client disconnected).`);
+      }
       throw classifyConnectError(err, this.url);
     }
 
@@ -335,10 +365,19 @@ export class OllamaAnalyzer implements Analyzer {
 
     try {
       for (;;) {
+        if (signal?.aborted) {
+          /* Caller (the route's req.on('close') handler) aborted while we
+             were mid-stream. Tear down cleanly rather than burning more
+             tokens on output the client will never see. */
+          throw new AnalysisAbortedError(`Ollama ${this.model} stream aborted (client disconnected).`);
+        }
         let result: { done: boolean; value?: Uint8Array };
         try {
           result = await reader.read();
         } catch (err) {
+          if (signal?.aborted) {
+            throw new AnalysisAbortedError(`Ollama ${this.model} stream aborted (client disconnected).`);
+          }
           /* A connection drop mid-stream — daemon was up, then went away.
              If we've already seen bytes, this is a partial-stream failure
              (hard-fail). If we haven't, treat as unreachable. */
