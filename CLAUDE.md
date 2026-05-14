@@ -125,7 +125,12 @@ Working practice:
 - **Do not use `--no-verify` to bypass.** If a hook fails, fix the underlying
   issue (or update the regression doc + paired test if behavior intentionally
   changed — see `docs/features/INDEX.md`).
-- Sidecar pytest coverage exists at `server/tts-sidecar/test_smoke.py` and
-  `server/tts-sidecar/test_synthesize.py` (22 cases). Next milestones:
-  exercise `_float_audio_to_int16_le` edge cases (clipping, mono/stereo)
-  and the DeepSpeed enable/disable lifecycle with mocked `TTS`.
+- Sidecar pytest coverage lives at `server/tts-sidecar/tests/` —
+  `test_smoke.py`, `test_synthesize.py`, `test_runtime_wiring.py`
+  (33 cases). `test_runtime_wiring.py` pins the CUDA+DeepSpeed+fp16
+  primary path: DeepSpeed init reaches the model and runs before
+  `tts.to(device)`, init failure is swallowed, fp16 autocast wraps the
+  synth call, `_float_audio_to_int16_le` handles clipping / stereo
+  downmix / list input, and speaker-manifest enumeration tolerates
+  API drift. Next milestones: wire pytest into `npm run test:all` so
+  the gate covers it; concurrent-synthesis / thread-pool saturation.
