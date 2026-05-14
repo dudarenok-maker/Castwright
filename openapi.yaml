@@ -802,9 +802,26 @@ components:
     # --- Voice match ------------------------------------------------
     CharacterMatchInput:
       type: object
-      required: [id, attributes]
+      required: [id, name, attributes]
       properties:
         id:             { type: string }
+        name:           { type: string }
+        aliases:
+          type: array
+          items: { type: string }
+          description: |
+            Alternate forms accumulated when the user merged duplicate roster
+            entries (mirrors Character.aliases). The matcher scores against
+            name OR any alias on either side, so book N+1 can recognise a
+            character last met under a different form.
+        gender:
+          type: string
+          enum: [male, female, neutral]
+          description: Optional tie-breaker signal (set by analysis).
+        ageRange:
+          type: string
+          enum: [child, teen, adult, elderly]
+          description: Optional tie-breaker signal (set by analysis).
         attributes:     { type: array, items: { type: string } }
         tone:
           type: object

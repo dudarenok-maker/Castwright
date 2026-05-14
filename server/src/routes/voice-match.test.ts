@@ -1,0 +1,306 @@
+/* Integration tests for the voice-match router.
+
+   Sets up a tempdir workspace with two prior confirmed books and exercises
+   the scoring matrix from POST /api/books/:bookId/voice-match. Mirrors
+   cast-merge.test.ts's lazy-import pattern: WORKSPACE_DIR must be set
+   BEFORE workspace/paths.js loads so BOOKS_ROOT captures the tempdir. */
+
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import express, { type Express } from 'express';
+import request from 'supertest';
+
+let workspaceRoot: string;
+let app: Express;
+let makeBookIdFn: (a: string, s: string, t: string) => string;
+
+const AUTHOR = 'Shannon Messenger';
+const SERIES = 'Keeper of the Lost Cities';
+
+interface PriorCast {
+  bookId: string;
+  characters: Array<{
+    id: string;
+    name?: string;
+    role?: string;
+    voiceId?: string;
+    aliases?: string[];
+    attributes?: string[];
+    gender?: 'male' | 'female' | 'neutral';
+    ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+  }>;
+}
+
+function writeBookOnDisk(
+  workspace: string,
+  author: string,
+  series: string,
+  title: string,
+  bookId: string,
+  cast: PriorCast['characters'],
+  castConfirmed: boolean,
+) {
+  const bookDir = join(workspace, 'books', author, series, title);
+  mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+  writeFileSync(
+    join(bookDir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId,
+      manuscriptId: `m_${bookId}`,
+      title,
+      author,
+      series,
+      seriesPosition: null,
+      isStandalone: false,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed,
+      chapters: [],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+  writeFileSync(
+    join(bookDir, '.audiobook', 'cast.json'),
+    JSON.stringify({ characters: cast }),
+  );
+}
+
+beforeAll(async () => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-voice-match-test-'));
+  process.env.WORKSPACE_DIR = workspaceRoot;
+
+  const [{ voiceMatchRouter }, { makeBookId }] = await Promise.all([
+    import('./voice-match.js'),
+    import('../workspace/paths.js'),
+  ]);
+  makeBookIdFn = makeBookId;
+
+  /* Book 1 — confirmed; contains Keefe with an alias and a Sophie. */
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, 'Book One',
+    makeBookId(AUTHOR, SERIES, 'Book One'),
+    [
+      { id: 'keefe',  name: 'Keefe',         voiceId: 'v_keefe',
+        aliases: ['Lord Hunkyhair'], attributes: ['playful', 'sarcastic'],
+        gender: 'male',   ageRange: 'teen' },
+      { id: 'sophie', name: 'Sophie Foster', voiceId: 'v_sophie',
+        attributes: ['curious', 'brave'],
+        gender: 'female', ageRange: 'teen' },
+    ],
+    true,
+  );
+
+  /* Book 2 — confirmed; contains a second Keefe with stronger attribute
+     overlap, plus a Grady (no overlap with anything in book-3 requests). */
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, 'Book Two',
+    makeBookId(AUTHOR, SERIES, 'Book Two'),
+    [
+      { id: 'keefe',  name: 'Keefe Sencen',  voiceId: 'v_keefe_alt',
+        attributes: ['playful', 'rebellious', 'empath'],
+        gender: 'male',   ageRange: 'teen' },
+      { id: 'grady',  name: 'Grady Ruewen',  voiceId: 'v_grady',
+        attributes: ['gruff'],
+        gender: 'male',   ageRange: 'adult' },
+    ],
+    true,
+  );
+
+  /* Book 3 — unconfirmed; voices here must NEVER appear in candidates. */
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, 'Book Three Unconfirmed',
+    makeBookId(AUTHOR, SERIES, 'Book Three Unconfirmed'),
+    [
+      { id: 'fitz', name: 'Fitz', voiceId: 'v_fitz_wip', gender: 'male', ageRange: 'teen' },
+    ],
+    false,
+  );
+
+  app = express();
+  app.use(express.json());
+  app.use('/api/books', voiceMatchRouter);
+});
+
+afterAll(() => {
+  if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
+  delete process.env.WORKSPACE_DIR;
+});
+
+function callMatch(bookId: string, body: object) {
+  return request(app)
+    .post(`/api/books/${encodeURIComponent(bookId)}/voice-match`)
+    .set('Content-Type', 'application/json')
+    .send(body);
+}
+
+describe('voice-match router', () => {
+  /* The "current book" we're analysing — distinct from the two prior books
+     on disk, so all library voices are eligible. */
+  const CURRENT_BOOK_ID = 'currently-analysing__std__new-book';
+
+  it('returns empty matches when the library has nothing useful', async () => {
+    const res = await callMatch(CURRENT_BOOK_ID, {
+      characters: [
+        { id: 'newperson', name: 'Some Random Stranger',
+          attributes: [], gender: 'female', ageRange: 'adult' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.bookId).toBe(CURRENT_BOOK_ID);
+    expect(res.body.matches).toHaveLength(1);
+    expect(res.body.matches[0].characterId).toBe('newperson');
+    expect(res.body.matches[0].candidates).toEqual([]);
+  });
+
+  it('exact-name hit: Keefe vs library Keefe → name_exact factor, score ≥ 0.9', async () => {
+    const res = await callMatch(CURRENT_BOOK_ID, {
+      characters: [
+        { id: 'keefe', name: 'Keefe',
+          attributes: ['playful', 'sarcastic'],
+          gender: 'male', ageRange: 'teen' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const m = res.body.matches[0];
+    expect(m.characterId).toBe('keefe');
+    expect(m.candidates.length).toBeGreaterThan(0);
+    const top = m.candidates[0];
+    expect(top.score).toBeGreaterThanOrEqual(0.9);
+    expect(top.factors[0].id).toBe('name_exact');
+    /* Top candidate is Book One's Keefe (exact name match wins over token-overlap). */
+    expect(top.voiceId).toBe('v_keefe');
+    expect(top.fromBookTitle).toBe('Book One');
+  });
+
+  it('token-overlap hit: "Keefe Sencen" vs library "Keefe" → name_tokens, no name_exact', async () => {
+    /* Wipe Book Two's "Keefe Sencen" entry to isolate the token-overlap case;
+       we want the only library Keefe to be the single-token "Keefe" from Book One. */
+    const res = await callMatch(CURRENT_BOOK_ID, {
+      characters: [
+        { id: 'keefe', name: 'Keefe Sencen',
+          attributes: [], gender: 'male', ageRange: 'teen' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const m = res.body.matches[0];
+    /* Both "Keefe" (Book One) and "Keefe Sencen" (Book Two, exact) appear.
+       Pick the candidate that came from Book One — its factor should be name_tokens. */
+    const fromBookOne = m.candidates.find((c: { fromBookTitle: string }) => c.fromBookTitle === 'Book One');
+    expect(fromBookOne).toBeDefined();
+    const ids = fromBookOne!.factors.map((f: { id: string }) => f.id);
+    expect(ids).toContain('name_tokens');
+    expect(ids).not.toContain('name_exact');
+  });
+
+  it('alias hit on the library side: "Lord Hunkyhair" → name_exact via library aliases', async () => {
+    const res = await callMatch(CURRENT_BOOK_ID, {
+      characters: [
+        { id: 'lordhunkyhair', name: 'Lord Hunkyhair',
+          attributes: [], gender: 'male', ageRange: 'teen' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const m = res.body.matches[0];
+    expect(m.candidates.length).toBeGreaterThan(0);
+    const top = m.candidates[0];
+    expect(top.voiceId).toBe('v_keefe');
+    expect(top.factors[0].id).toBe('name_exact');
+    expect(top.score).toBeGreaterThanOrEqual(0.9);
+  });
+
+  it('floor enforcement: matching gender + age alone does NOT produce a candidate', async () => {
+    /* Request Bronte — never appears anywhere in the library. Same gender
+       and ageRange as the library Sophies / Keefes, but no name overlap.
+       Floor (nameScore < 0.34) must drop every library voice. */
+    const res = await callMatch(CURRENT_BOOK_ID, {
+      characters: [
+        { id: 'bronte', name: 'Bronte',
+          attributes: ['stern'], gender: 'male', ageRange: 'adult' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const m = res.body.matches[0];
+    expect(m.candidates).toEqual([]);
+  });
+
+  it('current-book exclusion: a book never matches against its own confirmed cast', async () => {
+    /* Call as if we're inside Book One — Book One's Keefe must NOT appear
+       in candidates. Book Two's Keefe (exact name match) may. */
+    const bookOneId = makeBookIdFn(AUTHOR, SERIES, 'Book One');
+    const res = await callMatch(bookOneId, {
+      characters: [
+        { id: 'keefe', name: 'Keefe',
+          attributes: ['playful'], gender: 'male', ageRange: 'teen' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const m = res.body.matches[0];
+    const voiceIds = m.candidates.map((c: { voiceId: string }) => c.voiceId);
+    expect(voiceIds).not.toContain('v_keefe');     // own book excluded
+    expect(voiceIds).toContain('v_keefe_alt');     // other book still in
+  });
+
+  it('unconfirmed books are excluded from the library', async () => {
+    /* Book Three (Fitz) is castConfirmed: false. Even an exact-name request
+       for Fitz must return empty candidates. */
+    const res = await callMatch(CURRENT_BOOK_ID, {
+      characters: [
+        { id: 'fitz', name: 'Fitz',
+          attributes: [], gender: 'male', ageRange: 'teen' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.matches[0].candidates).toEqual([]);
+  });
+
+  it('libraryVoiceIds allow-list restricts candidates to the listed voices', async () => {
+    const res = await callMatch(CURRENT_BOOK_ID, {
+      characters: [
+        { id: 'keefe', name: 'Keefe',
+          attributes: [], gender: 'male', ageRange: 'teen' },
+      ],
+      libraryVoiceIds: ['v_keefe_alt'],
+    });
+    expect(res.status).toBe(200);
+    const m = res.body.matches[0];
+    /* Only v_keefe_alt was allowed; v_keefe (Book One's exact match) is filtered out. */
+    const voiceIds = m.candidates.map((c: { voiceId: string }) => c.voiceId);
+    expect(voiceIds).toEqual(['v_keefe_alt']);
+  });
+
+  it('multiple candidates: exact-name + token-overlap both surface, ranked', async () => {
+    /* Request "Keefe Sencen" — both Book One ("Keefe", token-overlap) and
+       Book Two ("Keefe Sencen", exact-name) are library entries. Exact must
+       rank above token-overlap. */
+    const res = await callMatch(CURRENT_BOOK_ID, {
+      characters: [
+        { id: 'keefe', name: 'Keefe Sencen',
+          attributes: ['playful'], gender: 'male', ageRange: 'teen' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const m = res.body.matches[0];
+    expect(m.candidates.length).toBeGreaterThanOrEqual(2);
+    expect(m.candidates[0].voiceId).toBe('v_keefe_alt');   // Book Two — exact
+    expect(m.candidates[0].score).toBeGreaterThan(m.candidates[1].score);
+    /* The runner-up is Book One's Keefe (token-overlap). */
+    expect(m.candidates[1].voiceId).toBe('v_keefe');
+  });
+
+  it('processes every input character, even when some have no candidates', async () => {
+    const res = await callMatch(CURRENT_BOOK_ID, {
+      characters: [
+        { id: 'keefe',     name: 'Keefe',     attributes: [], gender: 'male',   ageRange: 'teen' },
+        { id: 'nobody',    name: 'Some Random Stranger', attributes: [], gender: 'female', ageRange: 'adult' },
+        { id: 'sophie',    name: 'Sophie',    attributes: [], gender: 'female', ageRange: 'teen' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.matches.map((m: { characterId: string }) => m.characterId))
+      .toEqual(['keefe', 'nobody', 'sophie']);
+    expect(res.body.matches[0].candidates.length).toBeGreaterThan(0); // keefe matched
+    expect(res.body.matches[1].candidates).toEqual([]);               // nobody empty
+    expect(res.body.matches[2].candidates.length).toBeGreaterThan(0); // sophie matched
+  });
+});
