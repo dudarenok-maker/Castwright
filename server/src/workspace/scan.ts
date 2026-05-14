@@ -85,6 +85,24 @@ export interface LibraryResponse {
 
 const MANUSCRIPT_EXTS = ['.epub', '.md', '.markdown', '.txt', '.pdf'];
 
+/* Cast.json shape — only the fields scanBook reads. Kept minimal here; the
+   authoritative shape lives in server/src/tts/synthesise-chapter.ts. */
+interface CastJsonForScan {
+  characters?: Array<{ id?: string; voiceId?: string }>;
+}
+
+/* Segments file shape — only durationSec matters for runtime totals. */
+interface SegmentsJsonForScan {
+  durationSec?: number;
+}
+
+function formatRuntime(totalSec: number): string {
+  const totalMin = Math.round(totalSec / 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 function listDirs(path: string): string[] {
   if (!existsSync(path)) return [];
   try {
@@ -176,6 +194,47 @@ async function scanBook(author: string, series: string, title: string): Promise<
   const completedChapters = audioFiles.length;
   const lastWorkedOn = relativeTimeFromMs(mtimeMs(existsSync(dotDir) ? dotDir : bookDir));
 
+  /* Cast-derived counts: characterCount = total cast entries; voiceCount =
+     distinct voice ids (multiple characters can share a library voice). A
+     malformed cast.json leaves counts at 0 — the surrounding status logic
+     surfaces 'unreadable' separately when state.json itself fails to parse;
+     cast.json being broken without state.json being broken is rare enough
+     that we don't gate the whole row on it. */
+  let castCharacterCount = 0;
+  let castVoiceCount = 0;
+  if (hasCast) {
+    try {
+      const cast = await readJson<CastJsonForScan>(castJson);
+      const characters = cast?.characters ?? [];
+      castCharacterCount = characters.length;
+      const voiceIds = new Set<string>();
+      for (const c of characters) {
+        const vid = c.voiceId ?? c.id;
+        if (vid) voiceIds.add(vid);
+      }
+      castVoiceCount = voiceIds.size;
+    } catch { /* ignore; counts stay at 0 */ }
+  }
+
+  /* Runtime totals come from each chapter's <slug>.segments.json (written
+     by the synthesis pipeline). We sum every chapter that has one — a
+     partially-generated book reports the runtime it has so far. Returning
+     undefined when the total is 0 keeps the card showing '—' rather than
+     '0m' for books that haven't generated yet. */
+  let totalSec = 0;
+  if (state) {
+    for (const ch of state.chapters) {
+      const segPath = join(audioDir(bookDir), `${ch.slug}.segments.json`);
+      try {
+        const meta = await readJson<SegmentsJsonForScan>(segPath);
+        if (meta && typeof meta.durationSec === 'number' && Number.isFinite(meta.durationSec)) {
+          totalSec += meta.durationSec;
+        }
+      } catch { /* malformed segments file → skip */ }
+    }
+  }
+  const runtime = totalSec > 0 ? formatRuntime(totalSec) : undefined;
+
   let status: LibraryBookStatus;
   if (unreadable) status = 'unreadable';
   else if (hasState && !manuscriptFile) status = 'orphaned';
@@ -198,9 +257,10 @@ async function scanBook(author: string, series: string, title: string): Promise<
     manuscriptId: state?.manuscriptId,
     chapterCount,
     completedChapters,
-    characterCount: 0,         // populated from cast.json in a later phase
-    voiceCount: 0,             // ditto
+    characterCount: castCharacterCount,
+    voiceCount: castVoiceCount,
     progress: status === 'generating' || status === 'analysing' ? progress : undefined,
+    runtime,
     lastWorkedOn,
     coverGradient,
   };
