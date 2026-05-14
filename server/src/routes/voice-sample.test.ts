@@ -167,7 +167,8 @@ describe('voice-sample router', () => {
       expect(args.text).toBe(expected);
     });
 
-    it('pads short quotes with the character-said intro when nothing meets MIN_CHARS', async () => {
+    it('uses short real quotes verbatim — never pads with "<character> said:" or any other fabrication', async () => {
+      const shortReal = '“Cold supper it is, then, and may the wind take the rest.”'; // ~50 chars
       const res = await request(app)
         .post('/api/voices/v_marcus/sample')
         .send({
@@ -175,7 +176,7 @@ describe('voice-sample router', () => {
           voice: { id: 'v_marcus', character: 'Marcus', attributes: ['Male'] },
           characterHint: {
             evidence: [
-              '“Cold supper it is, then, and may the wind take the rest.”', // ~50 chars
+              shortReal,
               '“Aye.”',
             ],
           },
@@ -183,11 +184,36 @@ describe('voice-sample router', () => {
 
       expect(res.status).toBe(200);
       const args = synthesize.mock.calls[0][0] as { text: string };
-      expect(args.text.startsWith('Marcus said: ')).toBe(true);
-      expect(args.text).toContain('Cold supper it is');
+      /* The longest real quote is returned as-is (smart-quote-stripped),
+         no "Marcus said: " prefix, no padding text. The user accepts a
+         shorter sample over an invented longer one. */
+      const expected = shortReal.replace(/^[“”"'‘’\s]+|[“”"'‘’\s]+$/g, '').trim();
+      expect(args.text).toBe(expected);
+      expect(args.text.startsWith('Marcus said:')).toBe(false);
+      expect(args.text).not.toContain("I'm Marcus");
     });
 
-    it('falls back to the generic "Hello. I\'m …" script when evidence is empty', async () => {
+    it('uses the longest available evidence even when every quote is well under 80 chars', async () => {
+      const res = await request(app)
+        .post('/api/voices/v_terse/sample')
+        .send({
+          modelKey: 'coqui-xtts-v2',
+          voice: { id: 'v_terse', character: 'Terse', attributes: ['Male'] },
+          /* All quotes short — there's no quote that meets the old
+             MIN_CHARS threshold. Used to fall through to the canned
+             "Hello. I'm…" script; now must use the longest real one. */
+          characterHint: {
+            evidence: ['Aye.', 'Yes.', 'No, sir.'],
+          },
+        });
+
+      expect(res.status).toBe(200);
+      const args = synthesize.mock.calls[0][0] as { text: string };
+      expect(args.text).toBe('No, sir.');
+      expect(args.text).not.toContain("I'm Terse");
+    });
+
+    it('falls back to the generic "Hello. I\'m …" script ONLY when the evidence array is genuinely empty', async () => {
       const res = await request(app)
         .post('/api/voices/v_new/sample')
         .send({
@@ -199,6 +225,24 @@ describe('voice-sample router', () => {
       expect(res.status).toBe(200);
       const args = synthesize.mock.calls[0][0] as { text: string };
       expect(args.text.startsWith("Hello. I'm Newcomer.")).toBe(true);
+    });
+
+    it('treats whitespace-only / quote-mark-only evidence entries as empty for fallback purposes', async () => {
+      /* The verifier will normally drop these upstream, but defensively
+         the route must also collapse them to "no evidence" before the
+         canned-script fallback fires (rather than synthesising a
+         zero-length string). */
+      const res = await request(app)
+        .post('/api/voices/v_blank/sample')
+        .send({
+          modelKey: 'coqui-xtts-v2',
+          voice: { id: 'v_blank', character: 'Blank', attributes: ['Male'] },
+          characterHint: { evidence: ['  ', '“”', '\n'] },
+        });
+
+      expect(res.status).toBe(200);
+      const args = synthesize.mock.calls[0][0] as { text: string };
+      expect(args.text.startsWith("Hello. I'm Blank.")).toBe(true);
     });
   });
 

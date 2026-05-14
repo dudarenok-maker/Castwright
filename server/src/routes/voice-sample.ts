@@ -31,13 +31,15 @@ const AUDIO_DIR = process.env.VOICE_SAMPLE_AUDIO_DIR
   ?? resolve(__dirname, '..', '..', 'audio', 'voices');
 
 /* Sample script. The analyzer ships ≥3 evidence quotes per character,
-   sorted longest-first server-side (see analysis.ts sortEvidence), with
-   the first quote intentionally long enough (~180–280 chars) to settle
-   TTS prosody. Voice samples consume the longest quote so each preview
-   actually sounds like *that character* — not a generic "Hello, I'm X"
-   recitation. Falls back to a stock intro when no evidence is available
-   (e.g. brand-new library voices, or legacy cached analyses). */
-const MIN_CHARS = 80;
+   sorted longest-first server-side (see analysis.ts sortEvidence) and
+   verified against the manuscript by verifyEvidenceAgainstSource. We
+   feed the longest *real* quote to the TTS so each preview sounds like
+   that character — even if it's short. We never pad with invented text
+   (no "X said:" prefix, no canned intro tacked on); a 40-char real line
+   beats a 200-char fabricated one for voice cloning. The canned
+   "Hello. I'm…" script is only used when the evidence array is
+   genuinely empty (brand-new library voices, all-fabricated rosters
+   the verifier swept clean). */
 const MAX_CHARS = 320;
 
 function buildSampleText(voice: VoiceLike, hint?: CharacterHint): string {
@@ -50,15 +52,8 @@ function buildSampleText(voice: VoiceLike, hint?: CharacterHint): string {
     .sort((a, b) => b.length - a.length);
 
   const longest = cleaned[0];
-  if (longest && longest.length >= MIN_CHARS) {
+  if (longest) {
     return longest.slice(0, MAX_CHARS);
-  }
-
-  if (longest && longest.length >= 30) {
-    /* Short quote — pad with the character intro so the TTS has enough
-       prosody to settle. */
-    const name = voice.character?.trim() ?? '';
-    return name ? `${name} said: ${longest}` : longest;
   }
 
   const name = voice.character?.trim() || 'an unnamed character';

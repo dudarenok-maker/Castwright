@@ -67,13 +67,25 @@ A JSON object with exactly these two top-level fields:
 - `ageRange`: `"child"` (≤12), `"teen"` (13–19), `"adult"` (20–60), `"elderly"` (60+). Use the manuscript's stated or strongly implied age. Skip the field if you genuinely don't know.
 - `tone`: integer fields, 0 (low) to 100 (high). Skip a field rather than guess.
 - `evidence`: **at least 3 quotes per character**, sorted longest-first.
-  - The **first (longest) quote** is fed verbatim to the TTS engine as the
-    voice-cloning sample — it must be substantial enough to settle prosody.
-    Aim for **~180–280 chars**; a 2-sentence excerpt is fine and often best.
-  - The remaining quotes can stay short (≤120 chars) — they're tonal evidence
-    shown beneath the sample quote in the UI.
+  - **Each quote MUST be a single continuous utterance, copied verbatim
+    from the manuscript.** Do **NOT** stitch fragments from different
+    paragraphs, scenes, or chapters together to make one longer "quote"
+    — even if every utterance the character has is short. A 40-char
+    real line is always preferable to a 250-char Frankenstein quote
+    that the character never actually said in one breath. The server
+    verifies each quote is a substring of the source text on ingest and
+    will drop quotes that are not — sticking to verbatim is the only
+    way to get the quote into the cast.
+  - The **first quote drives the TTS voice-cloning sample**, so it
+    should be the **single longest utterance the character actually
+    has** in the manuscript. Longer is better for prosody settling, but
+    if the character's longest real line is "Yes." then "Yes." is the
+    entry. The TTS sample will be short; that's intentional — short
+    real audio beats fabricated long audio.
+  - The remaining quotes are tonal evidence shown beneath the sample
+    quote in the UI. Same verbatim rule.
   - Add a `note` when the link to the character's voice/identity isn't
-    obvious. Always note *why* the long-form quote is representative.
+    obvious. Always note *why* the first quote is representative.
   - The server re-sorts longest-first on ingest, so ordering errors won't
     break the UI — but emit them sorted so the JSON is human-readable.
 - `chapters[]` — **use the pre-detected list from the inbox verbatim.**
