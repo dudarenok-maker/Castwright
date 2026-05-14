@@ -12,8 +12,9 @@ interface PrimaryButtonProps {
   onClick?: () => void;
   icon?: boolean;
   size?: ButtonSize;
+  disabled?: boolean;
 }
-export function PrimaryButton({ children, variant = 'dark', onClick, icon = true, size = 'md' }: PrimaryButtonProps) {
+export function PrimaryButton({ children, variant = 'dark', onClick, icon = true, size = 'md', disabled = false }: PrimaryButtonProps) {
   const styles: Record<ButtonVariant, string> = {
     dark:   'bg-ink text-canvas hover:bg-ink-soft',
     light:  'bg-canvas text-ink hover:bg-white',
@@ -23,8 +24,10 @@ export function PrimaryButton({ children, variant = 'dark', onClick, icon = true
   };
   const sizing = size === 'sm' ? 'pl-3.5 pr-1 py-1 text-xs' : 'pl-5 pr-1.5 py-1.5 text-sm';
   const dot = size === 'sm' ? 'w-5 h-5' : 'w-7 h-7';
+  const disabledCls = disabled ? 'opacity-50 cursor-not-allowed pointer-events-none' : '';
   return (
-    <button onClick={onClick} className={`inline-flex items-center gap-2 rounded-full font-medium transition-colors ${sizing} ${styles[variant]}`}>
+    <button onClick={onClick} disabled={disabled} aria-disabled={disabled}
+            className={`inline-flex items-center gap-2 rounded-full font-medium transition-colors ${sizing} ${styles[variant]} ${disabledCls}`}>
       <span>{children}</span>
       {icon && <span className={`grid place-items-center rounded-full bg-white/15 ${dot}`}><IconArrow className="w-3.5 h-3.5"/></span>}
     </button>
