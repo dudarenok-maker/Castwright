@@ -37,12 +37,24 @@ export function errorPath(manuscriptId: string, key: HandoffKey): string {
   return join(OUTBOX, `${manuscriptId}-stage${key}.errors.json`);
 }
 
+/* Forensic record of a model response that failed parse/validation. Lives
+   alongside the structured `errors.json` so a developer can open the
+   actual bytes (e.g. byte 1365 line 46 col 37) and diagnose what tripped
+   the parser. `attempt` is 1 or 2 — both attempts get their own file when
+   they fail, so a partial-success retry preserves the first attempt's text
+   for comparison. */
+export function rawAttemptPath(manuscriptId: string, key: HandoffKey, attempt: 1 | 2): string {
+  return join(OUTBOX, `${manuscriptId}-stage${key}.attempt${attempt}.raw.txt`);
+}
+
 export async function writeInbox(manuscriptId: string, key: HandoffKey, body: string): Promise<string> {
   await ensureDirs();
   const path = inboxPath(manuscriptId, key);
   // Clean any stale outbox so a stale dropped file can't masquerade as fresh.
   await rm(outboxPath(manuscriptId, key), { force: true });
   await rm(errorPath(manuscriptId, key), { force: true });
+  await rm(rawAttemptPath(manuscriptId, key, 1), { force: true });
+  await rm(rawAttemptPath(manuscriptId, key, 2), { force: true });
   await writeFile(path, body, 'utf8');
   return path;
 }
