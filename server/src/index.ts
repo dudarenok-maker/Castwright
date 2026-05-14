@@ -27,6 +27,7 @@ import { generationRouter } from './routes/generation.js';
 import { chapterAudioRouter } from './routes/chapter-audio.js';
 import { revisionsRouter } from './routes/revisions.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
+import { ollamaHealthRouter } from './routes/ollama-health.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { userSettingsRouter } from './routes/user-settings.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
@@ -71,6 +72,7 @@ app.use('/api/books', revisionsRouter);      // mounts /:bookId/revisions (drift
 app.use('/api/voices', voicesRouter);        // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter);   // mounts POST /:voiceId/sample
 app.use('/api/sidecar', sidecarHealthRouter); // mounts GET /health
+app.use('/api/ollama', ollamaHealthRouter);  // mounts GET /health (local LLM analyzer)
 
 const PORT = Number(process.env.PORT ?? 8080);
 app.listen(PORT, () => {

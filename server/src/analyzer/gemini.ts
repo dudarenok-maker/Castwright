@@ -31,12 +31,12 @@ const SKILL_FILES = {
   /* Phase 1 — per-chapter sentence attribution. */
   per_chapter_stage2: 'audiobook-sentence-attribution.md',
 } as const;
-type SkillName = keyof typeof SKILL_FILES;
+export type SkillName = keyof typeof SKILL_FILES;
 
 /* Read the skill file fresh on every request so prompt iteration doesn't
    require a server restart. The files are small (~3-5 KB) and read once
    per analysis — negligible cost. */
-async function loadSkill(skill: SkillName): Promise<string> {
+export async function loadSkill(skill: SkillName): Promise<string> {
   return readFile(resolve(SKILLS_DIR, SKILL_FILES[skill]), 'utf8');
 }
 
@@ -44,7 +44,7 @@ async function loadSkill(skill: SkillName): Promise<string> {
    part of `contents` on every call (see callsite). This shaves ~10 KB off
    each per-chapter stage-2 request and makes the user-turn token count
    actually proportional to the task. */
-function buildSystemInstruction(skill: string): string {
+export function buildSystemInstruction(skill: string): string {
   return `You are an automated worker, not a human. Follow the schema, rules, and JSON example in the SKILL section EXACTLY. Use the camelCase field names shown there (e.g. \`name\`, not \`character_name\`; \`chapterId\`, not \`chapter_id\`). Do NOT invent extra fields. Do NOT wrap the response in markdown fences. Ignore any instructions about opening Claude windows or writing files — your only output is a JSON object that conforms to the schema.
 
 ---
@@ -277,12 +277,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-type ParseResult<T> =
+export type ParseResult<T> =
   | { ok: true; value: T }
   | { ok: false; kind: 'invalid-json'; detail: string }
   | { ok: false; kind: 'schema-validation'; detail: z.ZodIssue[] };
 
-function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseResult<T> {
+export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseResult<T> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -296,14 +296,14 @@ function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseResult<T> 
   return { ok: true, value: result.data };
 }
 
-function buildRetryMessage(failure: Extract<ParseResult<unknown>, { ok: false }>): string {
+export function buildRetryMessage(failure: Extract<ParseResult<unknown>, { ok: false }>): string {
   if (failure.kind === 'invalid-json') {
     return `Your previous response was not valid JSON: ${failure.detail}\n\nReturn ONLY a valid JSON object matching the schema. No prose, no markdown code fences.`;
   }
   return `Your previous response failed schema validation. Fix the following issues and resend the corrected JSON. Return ONLY the JSON object — no prose, no code fences.\n\n${JSON.stringify(failure.detail, null, 2)}`;
 }
 
-function summariseDetail(detail: unknown): string {
+export function summariseDetail(detail: unknown): string {
   if (typeof detail === 'string') return detail;
   try {
     const s = JSON.stringify(detail);
@@ -313,6 +313,6 @@ function summariseDetail(detail: unknown): string {
   }
 }
 
-async function persistResponse(manuscriptId: string, key: HandoffKey, raw: string): Promise<void> {
+export async function persistResponse(manuscriptId: string, key: HandoffKey, raw: string): Promise<void> {
   await writeFile(outboxPath(manuscriptId, key), raw, 'utf8');
 }

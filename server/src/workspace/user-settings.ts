@@ -19,6 +19,7 @@ const SERVER_ROOT = resolve(__dirname, '..', '..');
 export const USER_SETTINGS_PATH = join(SERVER_ROOT, 'user-settings.json');
 
 export const TTS_ENGINE_VALUES = ['local', 'gemini'] as const;
+export const ANALYSIS_ENGINE_VALUES = ['local', 'gemini'] as const;
 export const TTS_MODEL_KEY_VALUES = [
   'coqui-xtts-v2',
   'gemini-2.5-flash',
@@ -31,6 +32,17 @@ export const userSettingsSchema = z.object({
   defaultTtsEngine:     z.enum(TTS_ENGINE_VALUES),
   defaultTtsModelKey:   z.enum(TTS_MODEL_KEY_VALUES),
   sidecarUrl:           z.string().min(1).max(2000),
+  /* Analyzer dispatch. `local` routes through OllamaAnalyzer (with Gemini
+     as automatic fallback iff GEMINI_API_KEY is set and the local daemon
+     is unreachable — see selectAnalyzer). `gemini` always goes direct. */
+  analysisEngine:       z.enum(ANALYSIS_ENGINE_VALUES),
+  /* Base URL of the local Ollama daemon. Falls through to OLLAMA_URL env
+     and then http://localhost:11434 in getResolvedOllamaUrl. */
+  ollamaUrl:            z.string().min(1).max(2000),
+  /* Model tag passed to /api/chat. Default qwen3.5:9b is the recommended
+     pick for 8 GB VRAM — see plan 29. The analysis route honours a
+     per-request `model` override on top of this default. */
+  ollamaModel:          z.string().min(1).max(120),
   workspaceDirOverride: z.string().max(2000).nullable(),
   /* Threshold for the minor-cast fold pass — see
      server/src/analyzer/fold-minor-cast.ts. A character with FEWER than
@@ -49,6 +61,9 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   defaultTtsEngine:     'local',
   defaultTtsModelKey:   'coqui-xtts-v2',
   sidecarUrl:           'http://localhost:9000',
+  analysisEngine:       'local',
+  ollamaUrl:            'http://localhost:11434',
+  ollamaModel:          'qwen3.5:9b',
   workspaceDirOverride: null,
   minorCastMinLines:    3,
 };
@@ -124,6 +139,30 @@ export function getResolvedSidecarUrl(): string {
   const c = cached;
   const raw = c?.sidecarUrl ?? process.env.LOCAL_TTS_URL ?? 'http://localhost:9000';
   return raw.replace(/\/+$/, '');
+}
+
+/** Same fallback chain as getResolvedSidecarUrl, but for the local Ollama
+    daemon: cached user-settings → OLLAMA_URL env → localhost:11434. */
+export function getResolvedOllamaUrl(): string {
+  const c = cached;
+  const raw = c?.ollamaUrl ?? process.env.OLLAMA_URL ?? 'http://localhost:11434';
+  return raw.replace(/\/+$/, '');
+}
+
+/** Ollama model tag passed to /api/chat. Mirrors getResolvedOllamaUrl's
+    fallback chain: cached settings → OLLAMA_MODEL env → static default. */
+export function getResolvedOllamaModel(): string {
+  const c = cached;
+  return c?.ollamaModel ?? process.env.OLLAMA_MODEL ?? 'qwen3.5:9b';
+}
+
+/** Analyzer engine selector: cached settings → ANALYZER env → 'local'.
+    Defended against legacy values ('manual' was the old default and is
+    no longer routable) by coercing anything outside the schema to 'local'. */
+export function getResolvedAnalysisEngine(): 'local' | 'gemini' {
+  const c = cached;
+  const raw = c?.analysisEngine ?? process.env.ANALYZER ?? 'local';
+  return raw === 'gemini' ? 'gemini' : 'local';
 }
 
 /** Test-only: drop the in-process cache so the next read re-parses disk. */

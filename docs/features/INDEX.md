@@ -24,7 +24,8 @@ PRs that change behavior cited in a plan MUST update the relevant plan in the sa
 ### C. Analysis pipeline
 - [04 — Analysing view & SSE progress](04-analysing-view-progress.md) — Stream rendering, live ETA, model selection, "Start fresh."
 - [05 — Manual handoff analyzer](05-analyzer-manual-handoff.md) — `ANALYZER=manual` file-drop cowork loop.
-- [06 — Gemini analyzer](06-analyzer-gemini.md) — `ANALYZER=gemini` direct-API mode.
+- [06 — Gemini analyzer](06-analyzer-gemini.md) — `ANALYZER=gemini` direct-API mode (also the fallback when local is unreachable).
+- [29 — Local Ollama analyzer + fallback](29-analyzer-ollama-local.md) — `ANALYZER=local` default; auto-fallback to Gemini only when daemon is unreachable.
 - [07 — Audio tag vocabulary](07-audio-tag-vocabulary.md) — `[tag]` vocabulary UI ↔ parser sync.
 - [08 — Audio tag auto-detection](08-audio-tag-auto-detection.md) — Server-side auto-tagging from punctuation/markdown/HTML.
 
