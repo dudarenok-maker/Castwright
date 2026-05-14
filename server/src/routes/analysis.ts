@@ -6,7 +6,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
-import { selectAnalyzer } from '../analyzer/index.js';
+import { selectAnalyzer, type AnalyzerSelection } from '../analyzer/index.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import { readUserSettings } from '../workspace/user-settings.js';
 import { clearAnalysisCache, loadAnalysisCache, saveAnalysisCache, type AnalysisCache } from '../store/analysis-cache.js';
@@ -296,6 +296,17 @@ const SILENCE_THRESHOLD_MS = 45_000;
    every cast call read "over budget" within seconds. 30s is a sensible
    floor that matches typical observed times. */
 const PHASE0_PER_CHAPTER_BASELINE_MS = 30_000;
+/* Per-engine fallback rate (ms/char on top of the TTFT baseline) used for
+   the very first chapter of a fresh run — before any observed samples
+   exist for this manuscript+model combination. Gemini Flash is ~10×
+   faster than local Ollama qwen3.5:4b on input chars, so a single
+   constant under-estimates one or over-estimates the other. Once any
+   chapter completes (or a prior run's cached durations seed the
+   trackers), this is ignored. */
+const ENGINE_FALLBACK_MS_PER_CHAR: Record<'gemini' | 'local', number> = {
+  gemini: 0.5,
+  local:  5.0,
+};
 /* Stage 2 chapter concurrency. Default 2 keeps us well under Gemini's
    free-tier RPM limits while roughly halving wall-clock time vs sequential.
    Bump via STAGE2_CONCURRENCY env if your tier (or the model) allows; cap
@@ -309,6 +320,70 @@ function readStage2Concurrency(): number {
 
 function clampEst(ms: number): number {
   return Math.max(MIN_EST_MS, Math.min(MAX_EST_MS, Math.round(ms)));
+}
+
+/* Per-chapter ETA from observed pace. Once at least one chapter has
+   completed we trust observed wall-clock-per-char over any static formula:
+   local models (Ollama qwen3.5:4b, etc.) can be 5–10× slower than Gemini,
+   and the old `30s baseline + 0.5ms/char` formula gave ~0:40 for a 20k-char
+   chapter that actually takes 2-4 minutes. fallbackMs is used until we have
+   a sample (first chapter of the phase). 2s floor keeps micro-chapters from
+   teleporting through the live ticker. Exported for unit testing. */
+export function chapterEstFromObserved(
+  chars: number,
+  observedMsTotal: number,
+  observedCharsTotal: number,
+  fallbackMs: number,
+): number {
+  if (observedCharsTotal > 0) {
+    const observedRate = observedMsTotal / observedCharsTotal;
+    return Math.max(2000, Math.round(observedRate * chars));
+  }
+  return Math.max(2000, Math.round(fallbackMs));
+}
+
+/* Remaining-time projection across the whole analysis, accounting for
+   concurrency. Uses wall-clock-since-phase-start divided by chars-completed
+   so the result reflects what the user actually observes (concurrency-2
+   doubles per-chapter ms but halves wall-clock rate — this captures the
+   wall-clock rate). Stage 2 work is projected at STAGE2_STRETCH× the cast
+   rate when only Phase 0a samples are available. Exported for testing. */
+export function projectRemainingMs(args: {
+  phase0WallClockMs: number;
+  phase0CharsDone: number;
+  phase0CharsRemaining: number;
+  phase1WallClockMs: number;
+  phase1CharsDone: number;
+  phase1CharsRemaining: number;
+  fallbackPhase0Ms: number;
+  fallbackPhase1Ms: number;
+}): number {
+  let remaining = 0;
+  /* Phase 0 remaining work. */
+  if (args.phase0CharsRemaining > 0) {
+    if (args.phase0CharsDone > 0 && args.phase0WallClockMs > 0) {
+      const wallRate = args.phase0WallClockMs / args.phase0CharsDone;
+      remaining += wallRate * args.phase0CharsRemaining;
+    } else {
+      remaining += args.fallbackPhase0Ms;
+    }
+  }
+  /* Phase 1 remaining work. Prefer phase 1's own wall-clock once we have
+     any phase 1 samples; otherwise extrapolate from phase 0's rate
+     stretched by STAGE2_STRETCH (output-heavy attribution is materially
+     slower per char than cast detection). */
+  if (args.phase1CharsRemaining > 0) {
+    if (args.phase1CharsDone > 0 && args.phase1WallClockMs > 0) {
+      const wallRate = args.phase1WallClockMs / args.phase1CharsDone;
+      remaining += wallRate * args.phase1CharsRemaining;
+    } else if (args.phase0CharsDone > 0 && args.phase0WallClockMs > 0) {
+      const wallRate = args.phase0WallClockMs / args.phase0CharsDone;
+      remaining += wallRate * STAGE2_STRETCH * args.phase1CharsRemaining;
+    } else {
+      remaining += args.fallbackPhase1Ms;
+    }
+  }
+  return Math.max(0, Math.round(remaining));
 }
 
 function humanSeconds(ms: number): string {
@@ -352,6 +427,14 @@ server/handoff/outbox/${manuscriptId}-stage1-ch${chapter.id}.json
 
 Schema and rules live in
 \`skills/audiobook-character-detection-per-chapter.md\`.
+
+**Only return characters who SPEAK in this chapter.** A character belongs
+in the output only if you can copy a verbatim line of dialogue they utter
+in the chapter below. Pets, animals, magical creatures, and any entity
+whose only "lines" are non-verbal sounds (purring, growling, hissing,
+roaring) do NOT belong on the roster — the narrator covers them. If a
+running-roster character appears only by being mentioned or described in
+this chapter (no spoken line), omit them from this chapter's output.
 
 Return ONLY a JSON object matching the schema. No prose, no code fences.
 
@@ -441,7 +524,20 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
+  /* Track whether the SSE client is still listening. When the user
+     navigates away from the analysing view (back to library, page reload,
+     tab close) the socket closes. We don't tear the analysis loop down —
+     per-chapter cache writes are valuable and let a follow-up open resume
+     cheaply — but we DO skip the final cast.json / state.json persist,
+     because that write flips the book's library status to `cast_pending`
+     and routes a re-open to the confirm screen. Without the gate, a user
+     who briefly stepped away from a long run would come back to a confirm
+     screen for a run they don't perceive as finished. */
+  let clientGone = false;
+  req.on('close', () => { clientGone = true; });
+
   const send = (payload: unknown) => {
+    if (clientGone) return;
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
   const log = (phaseId: number, message: string) => {
@@ -468,7 +564,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   const endPhase = (id: number) => Date.now() - (phaseStarts[id] ?? Date.now());
 
   const requestedModel = typeof req.body?.model === 'string' ? req.body.model : undefined;
-  let selection;
+  let selection: AnalyzerSelection;
   try {
     selection = selectAnalyzer({ model: requestedModel });
   } catch (e) {
@@ -523,6 +619,56 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     let stage1: Stage1Output;
     let stage1ActualMs = 0;
     const totalCastChapters = record.chapterHints.length;
+    /* Observed-pace trackers for Phase 0a — declared at the route scope so
+       Phase 1's ETA projection can read them too. SUM-of-per-chapter ms,
+       not wall-clock; for wall-clock-rate use phase0WallClockMs below.
+       Both stay 0 when Phase 0 is cached (cache hit path) since we never
+       run any cast chapters in that case — the eta projection then falls
+       back to Phase 1 samples / static baselines. */
+    let castActualMsTotal = 0;
+    let castActualCharsTotal = 0;
+    let phase0WallClockMs = 0;
+    /* Seed pace trackers from prior-run durations so a resumed analysis
+       doesn't fall back to the static "30s + 0.5ms/char" formula on its
+       first chapter just because the in-session counters are empty. The
+       durations were saved by past runs of this exact route on this
+       manuscript, so they're the best available signal for what this
+       model+book combo will take. */
+    const castDurations: Record<number, number> = cache.castDurations ?? {};
+    for (const idStr of Object.keys(castDurations)) {
+      const id = Number(idStr);
+      const ch = record.chapterHints.find(c => c.id === id);
+      if (!ch) continue;
+      castActualMsTotal += castDurations[id];
+      castActualCharsTotal += ch.body.length;
+    }
+    /* Char totals for ETA projection. totalCastCharsAll: chars across all
+       non-excluded chapters (Phase 0a iterates these). totalStage2CharsAll:
+       same set since stage 2 runs the same non-excluded chapters. */
+    const totalCastCharsAll = record.chapterHints
+      .filter(c => !c.excluded)
+      .reduce((sum, c) => sum + c.body.length, 0);
+    /* Emit an initial ETA up front so the heading swaps from the static
+       Gemini-calibrated describeSize string (22ms/word) to an
+       engine-aware projection immediately, even on a fresh run before
+       any chapter completes. Uses cached durations when present (typical
+       resume case); otherwise falls back to the per-engine ms/char rate. */
+    {
+      const fallbackMsPerChar = ENGINE_FALLBACK_MS_PER_CHAR[selection.engine] ?? 0.5;
+      const phase0CharsRemainingInitial = Math.max(0, totalCastCharsAll - castActualCharsTotal);
+      const initialRemainingMs = projectRemainingMs({
+        phase0WallClockMs: 0,
+        phase0CharsDone: castActualCharsTotal,
+        phase0CharsRemaining: phase0CharsRemainingInitial,
+        phase1WallClockMs: 0,
+        phase1CharsDone: 0,
+        phase1CharsRemaining: totalCastCharsAll,
+        fallbackPhase0Ms: fallbackMsPerChar * phase0CharsRemainingInitial
+          + PHASE0_PER_CHAPTER_BASELINE_MS,
+        fallbackPhase1Ms: fallbackMsPerChar * STAGE2_STRETCH * totalCastCharsAll,
+      });
+      send({ kind: 'eta', remainingMs: initialRemainingMs });
+    }
     if (cache.stage1) {
       /* Phase 0 already completed on a prior run — short-circuit straight
          to the finalised roster. Still re-sort + re-verify in case the
@@ -635,14 +781,18 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
 
       async function runCastChapter(i: number): Promise<void> {
         const ch = recordRef.chapterHints[i];
-        /* TTFT-dominated baseline. Don't scale by chapter byte count —
-           that produced misleading "~0:02" estimates that flagged every
-           tiny chapter (Dedication, Preface) as "over budget" within
-           seconds of starting. Add a tiny char-proportional component
-           for very large chapters so the live ticker still makes sense
-           on a 50KB chapter. */
-        const chapterEstMs = PHASE0_PER_CHAPTER_BASELINE_MS
-          + Math.round(0.5 * ch.body.length); // ~0.5ms/char on top of the baseline
+        /* Per-chapter estimate. Prefer the observed pace from already-
+           completed cast chapters — on local Ollama / qwen3.5:4b the
+           real rate is 5–10× slower than Gemini, and the old static
+           "30s baseline + 0.5ms/char" pegged a 20k-char chapter at
+           ~0:40 even when prior chapters averaged 4-5ms/char. Falls
+           back to the TTFT-dominated baseline only on the first
+           chapter of the phase, when no samples exist yet. */
+        const msPerCharFallback = ENGINE_FALLBACK_MS_PER_CHAR[selection.engine] ?? 0.5;
+        const fallback = PHASE0_PER_CHAPTER_BASELINE_MS + msPerCharFallback * ch.body.length;
+        const chapterEstMs = chapterEstFromObserved(
+          ch.body.length, castActualMsTotal, castActualCharsTotal, fallback,
+        );
         const startedChAt = Date.now();
         castInFlight.set(i, { chapterIndex: i, chapterTitle: ch.title, chapterEstMs, startedAt: startedChAt, elapsedMs: 0 });
 
@@ -695,10 +845,37 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         chapterCast[ch.id] = result.characters;
         completedCast.add(i);
         cache.chapterCast = chapterCast;
-        await saveAnalysisCache(manuscriptId, cache);
         const chDuration = Date.now() - startedChAt;
+        /* Persist this chapter's wall-clock duration so a future resumed
+           run can seed its observed-rate trackers without waiting for the
+           first new chapter to complete. */
+        castDurations[ch.id] = chDuration;
+        cache.castDurations = castDurations;
+        await saveAnalysisCache(manuscriptId, cache);
         castInFlight.delete(i);
         log(0, `Chapter ${i + 1}/${totalCastChapters} cast done — ${result.characters.length} character${result.characters.length === 1 ? '' : 's'} in ${humanSeconds(chDuration)}`);
+        /* Accumulate observed pace so subsequent Phase 0a chapter estimates
+           (and the cross-phase ETA projection below) reflect the real model
+           speed instead of the static TTFT baseline. */
+        castActualMsTotal += chDuration;
+        castActualCharsTotal += ch.body.length;
+        phase0WallClockMs = Date.now() - stage0Start;
+        /* Emit a refined total-remaining ETA. The frontend swaps this in
+           for the static "~38 minutes" describeSize string the moment the
+           first chapter completes, so the user sees a number that tracks
+           the model they actually picked. */
+        const phase0CharsRemaining = Math.max(0, totalCastCharsAll - castActualCharsTotal);
+        const remainingMs = projectRemainingMs({
+          phase0WallClockMs,
+          phase0CharsDone: castActualCharsTotal,
+          phase0CharsRemaining,
+          phase1WallClockMs: 0,
+          phase1CharsDone: 0,
+          phase1CharsRemaining: totalCastCharsAll, // phase 1 will run over the same set
+          fallbackPhase0Ms: stage1EstMs,
+          fallbackPhase1Ms: stage2EstMs,
+        });
+        send({ kind: 'eta', remainingMs });
         emitCastUpdate();
         sendCastLiveTick();
       }
@@ -784,6 +961,16 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     const totalStage2Chars = record.chapterHints.reduce((sum, c) => sum + c.body.length, 0);
     let actualMsTotal = 0;
     let actualCharsTotal = 0;
+    /* Seed from prior-run stage 2 durations so a resumed run already has
+       per-chapter ETA samples — same rationale as the cast pass above. */
+    const stage2Durations: Record<number, number> = cache.stage2Durations ?? {};
+    for (const idStr of Object.keys(stage2Durations)) {
+      const id = Number(idStr);
+      const ch = record.chapterHints.find(c => c.id === id);
+      if (!ch) continue;
+      actualMsTotal += stage2Durations[id];
+      actualCharsTotal += ch.body.length;
+    }
     const chapterEstMsFor = (chars: number): number => {
       /* Once any chapter has run, prefer the observed rate. One completed
          chapter is already a better signal than the stage-1 extrapolation
@@ -973,6 +1160,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       sentencesByChapter.set(ch.id, result.sentences);
       cachedChapters[ch.id] = result.sentences;
       cache.chapters = cachedChapters;
+      /* Persist this chapter's wall-clock duration so a future resumed run
+         can seed its observed-rate trackers without waiting for the first
+         new chapter to complete. */
+      const chDurationForCache = Date.now() - startedAt;
+      stage2Durations[ch.id] = chDurationForCache;
+      cache.stage2Durations = stage2Durations;
       /* Cache + edits writes are atomic-rename and JS is single-threaded, so
          concurrent saves serialise naturally. Worst case is two near-
          simultaneous writes overlap and the second wins — both contain the
@@ -1007,6 +1200,23 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         const remainingEstMs = Math.round(observedRate * remaining.chars);
         const secsPer1k = observedRate;
         log(1, `Refined pace — ${secsPer1k.toFixed(1)}s per 1,000 chars · ~${humanSeconds(remainingEstMs)} remaining over ${remaining.count} chapter${remaining.count === 1 ? '' : 's'}.`);
+      }
+      /* Refined total ETA so the heading updates to reflect Phase 1's
+         actual observed pace, not just Phase 0a extrapolation. */
+      {
+        const phase1WallClockMs = Date.now() - (phaseStarts[1] ?? Date.now());
+        const phase1CharsRemaining = remaining.chars;
+        const remainingMs = projectRemainingMs({
+          phase0WallClockMs,
+          phase0CharsDone: castActualCharsTotal,
+          phase0CharsRemaining: 0,
+          phase1WallClockMs,
+          phase1CharsDone: actualCharsTotal,
+          phase1CharsRemaining,
+          fallbackPhase0Ms: 0,
+          fallbackPhase1Ms: stage2EstMs,
+        });
+        send({ kind: 'eta', remainingMs });
       }
       sendLiveTick();
     }
@@ -1103,6 +1313,11 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       if (folded.summary.intoFemale) parts.push(`${folded.summary.intoFemale} → Unknown female`);
       log(1, `Folded ${folded.summary.foldedCount} background character${folded.summary.foldedCount === 1 ? '' : 's'} (${parts.join(', ')}) — names rolled into aliases.`);
     }
+    if (folded.summary.droppedSilent > 0) {
+      const sample = folded.dropped.slice(0, 4).join(', ');
+      const more = folded.dropped.length > 4 ? `, +${folded.dropped.length - 4} more` : '';
+      log(1, `Dropped ${folded.summary.droppedSilent} non-speaking character${folded.summary.droppedSilent === 1 ? '' : 's'} from the cast (${sample}${more}) — no attributed dialogue, narrator covers them.`);
+    }
 
     const characters = attachLinesAndScenes(
       assignPaletteColors(folded.characters),
@@ -1126,7 +1341,14 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     // into the on-disk book. Only runs for books that came through POST
     // /api/books (workspace flow); legacy POST /api/manuscripts uploads
     // have no bookDir and are skipped.
-    if (record.bookDir) {
+    //
+    // Skipped when the SSE client has disconnected: writing cast.json flips
+    // the library status to `cast_pending`, which routes a re-open of the
+    // book to the confirm screen. If the user navigated away mid-run we
+    // don't want them to come back to a confirm screen for a run they
+    // perceive as unfinished — the cache still holds the per-chapter
+    // progress so a follow-up open resumes cheaply.
+    if (record.bookDir && !clientGone) {
       try {
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: folded.sentences });
         await writeJsonAtomic(castJsonPath(record.bookDir), { characters });
@@ -1206,7 +1428,15 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
+  /* Mirror the full-route disconnect guard — see the comment on the parent
+     analysis route. The subset route writes cast.json on completion too,
+     so the same "no premature confirm-screen flip on navigate-away"
+     contract applies. */
+  let clientGone = false;
+  req.on('close', () => { clientGone = true; });
+
   const send = (payload: unknown) => {
+    if (clientGone) return;
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
   const log = (phaseId: number, message: string) => {
@@ -1255,7 +1485,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   const toRun = targets.filter(h => !h.excluded);
 
   const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
-  let selection;
+  let selection: AnalyzerSelection;
   try {
     selection = selectAnalyzer({ model: requestedModel });
   } catch (e) {
@@ -1357,6 +1587,11 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     /* Re-fold the cast against the merged sentence set so the bucket
        attributions stay coherent with the new chapters' attributions. */
     const folded = foldMinorCast(stage1.characters, allSentences);
+    if (folded.summary.droppedSilent > 0) {
+      const sample = folded.dropped.slice(0, 4).join(', ');
+      const more = folded.dropped.length > 4 ? `, +${folded.dropped.length - 4} more` : '';
+      log(1, `Dropped ${folded.summary.droppedSilent} non-speaking character${folded.summary.droppedSilent === 1 ? '' : 's'} from the cast (${sample}${more}) — no attributed dialogue, narrator covers them.`);
+    }
     const enriched = attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences);
 
     const chapterTitleById = new Map(stage1.chapters.map(c => [c.id, c.title]));
@@ -1382,8 +1617,11 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     };
 
     /* Persist cast.json + manuscript-edits.json + state.json so a refresh
-       (or a follow-up generation pass) sees the merged state. */
-    if (record.bookDir) {
+       (or a follow-up generation pass) sees the merged state.
+       Skipped when the SSE client has disconnected — see the parent
+       analysis route comment for why we don't flip the library status
+       in the background. */
+    if (record.bookDir && !clientGone) {
       try {
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: folded.sentences });
         await writeJsonAtomic(castJsonPath(record.bookDir), { characters: enriched });

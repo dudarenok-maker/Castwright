@@ -26,6 +26,13 @@ export interface AnalysisCache {
   stage1?: Stage1Output;
   /** chapterId → sentences. Keyed by number-as-string per JSON convention. */
   chapters: Record<number, SentenceOutput[]>;
+  /** Per-chapter Phase 0a wall-clock durations (ms) and Phase 1 durations,
+      both keyed by chapterId. Persisted so that a resumed run already has
+      observed-rate samples — without this, the first chapter of every
+      resume falls back to the static formula, which on local Ollama
+      under-estimates the budget by 3-5×. */
+  castDurations?: Record<number, number>;
+  stage2Durations?: Record<number, number>;
   updatedAt?: string;
 }
 
@@ -43,6 +50,8 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
     chapterCast: cache.chapterCast ?? undefined,
     stage1: cache.stage1,
     chapters: cache.chapters ?? {},
+    castDurations: cache.castDurations ?? undefined,
+    stage2Durations: cache.stage2Durations ?? undefined,
     updatedAt: cache.updatedAt,
   };
 }

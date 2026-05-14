@@ -213,3 +213,46 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
     expect(screen.getByText('Sophie')).toBeInTheDocument();
   });
 });
+
+/* Regression for "neither the total estimate at the top get refreshed" —
+   the static describeSize() string is Gemini-calibrated (22ms/word) and
+   overshoots local Ollama by 3-5×, so the heading must swap to the
+   server-supplied wall-clock projection the moment the first chapter
+   completes. */
+describe('AnalysingView — total ETA refresh', () => {
+  it('shows the static describeSize until the server emits its first eta', () => {
+    renderView();
+    /* 2440 words × 22ms/word ≈ 54s → "under 90 seconds". */
+    expect(screen.getByText(/usually under 90 seconds/i)).toBeInTheDocument();
+    expect(screen.queryByText(/remaining at the current pace/i)).not.toBeInTheDocument();
+  });
+
+  it('swaps the heading to the refined remaining estimate when an eta event arrives', () => {
+    renderView();
+
+    act(() => {
+      /* Server's projection after observing a few slow Ollama chapters —
+         the heading must reflect this, not the canned 22ms/word figure. */
+      capturedOpts?.onEta?.({ remainingMs: 4 * 60_000 });
+    });
+
+    expect(screen.getByText(/~4 minutes remaining at the current pace/i)).toBeInTheDocument();
+    expect(screen.queryByText(/usually under 90 seconds/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the refined estimate live across subsequent eta updates', () => {
+    renderView();
+
+    act(() => {
+      capturedOpts?.onEta?.({ remainingMs: 8 * 60_000 });
+    });
+    expect(screen.getByText(/~8 minutes remaining/i)).toBeInTheDocument();
+
+    /* A later chapter completes — fresher rate brings the estimate down. */
+    act(() => {
+      capturedOpts?.onEta?.({ remainingMs: 5 * 60_000 });
+    });
+    expect(screen.getByText(/~5 minutes remaining/i)).toBeInTheDocument();
+    expect(screen.queryByText(/~8 minutes remaining/i)).not.toBeInTheDocument();
+  });
+});

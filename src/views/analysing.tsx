@@ -205,6 +205,22 @@ function describeSize(wordCount?: number): string {
   return `${words} words — usually ~${mins} minutes. This is a long one.`;
 }
 
+/* Refined-ETA caption that swaps in for describeSize once the server has
+   observed at least one chapter's wall-clock rate. The static string is
+   Gemini-calibrated (22ms/word) and overshoots local Ollama by 3-5×, so
+   the moment we have a real sample we should show it. */
+function describeRemaining(remainingMs: number, wordCount?: number): string {
+  const words = wordCount && wordCount > 0 ? `${wordCount.toLocaleString()} words — ` : '';
+  if (remainingMs < 60_000) {
+    const secs = Math.max(5, Math.round(remainingMs / 1000));
+    return `${words}~${secs} seconds remaining at the current pace.`;
+  }
+  const mins = Math.max(1, Math.round(remainingMs / 60_000));
+  if (mins <= 5)  return `${words}~${mins} minute${mins === 1 ? '' : 's'} remaining at the current pace.`;
+  if (mins <= 15) return `${words}~${mins} minutes remaining at the current pace. Grab a coffee.`;
+  return `${words}~${mins} minutes remaining at the current pace. This is a long one.`;
+}
+
 interface Props {
   manuscriptId: string | null | undefined;
   title?: string | null;
@@ -231,6 +247,11 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
      re-render every second between events advances the "last chunk Ns ago"
      counter so the indicator never visibly stalls. */
   const [heartbeatByPhase, setHeartbeatByPhase] = useState<Record<number, { hb: AnalysisHeartbeat; receivedAt: number }>>({});
+  /* Server-refined total-remaining-ms. Null until the first chapter
+     completes — then the heading swaps from the static describeSize
+     string (Gemini-calibrated 22ms/word) to a value that reflects the
+     model the user actually picked. */
+  const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const [, setNow] = useState(Date.now());
   const completedRef = useRef(false);
 
@@ -245,6 +266,7 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
     setLastEventAt(null);
     setLive(null);
     setHeartbeatByPhase({});
+    setRemainingMs(null);
     const markEvent = () => setLastEventAt(Date.now());
     (async () => {
       try {
@@ -285,6 +307,12 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
             setConn('streaming');
             markEvent();
             setHeartbeatByPhase(prev => ({ ...prev, [hb.phaseId]: { hb, receivedAt: Date.now() } }));
+          },
+          onEta: ({ remainingMs: ms }) => {
+            if (cancelled) return;
+            setConn('streaming');
+            markEvent();
+            setRemainingMs(ms);
           },
           onCastUpdate: ({ characters }) => {
             if (cancelled) return;
@@ -333,7 +361,9 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
           <div className="mt-5">
             <MixedHeading level="h1" regular="Reading" bold={title || 'your manuscript'}/>
           </div>
-          <p className="mt-4 text-ink/70">{describeSize(wordCount)}</p>
+          <p className="mt-4 text-ink/70">
+            {remainingMs !== null ? describeRemaining(remainingMs, wordCount) : describeSize(wordCount)}
+          </p>
           {manuscriptId && (
             <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs">
               <ConnPill state={conn} sinceLastSec={sinceLastSec}/>
