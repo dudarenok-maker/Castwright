@@ -193,7 +193,7 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
     expect(screen.getByText('Keefe')).toBeInTheDocument();
   });
 
-  it('does not render the cast preview under Phase 1 (attribution) once that phase becomes active', () => {
+  it('keeps the cast preview visible under Phase 0 after the active phase advances (regression: model-switch retry on a fully-cached Phase 0 was wiping the chips from the UI even though the cast slice still held them)', () => {
     renderView();
 
     act(() => {
@@ -205,9 +205,11 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
       capturedOpts?.onPhase?.({ phaseId: 1, progress: 0.05 });
     });
 
-    /* Cast preview is keyed to Phase 0 specifically (LiveCastPreview is
-       only rendered inside the p.id === 0 branch); once Phase 1 is the
-       active phase, the preview shouldn't be visible. */
-    expect(screen.queryByText(/Cast so far/i)).not.toBeInTheDocument();
+    /* Cast roster is Phase 0's outcome — must remain visible after Phase 0
+       completes. The chips render under Phase 0's row regardless of which
+       phase is currently active. */
+    expect(screen.getByText(/Cast so far · 2 characters/)).toBeInTheDocument();
+    expect(screen.getByText('Narrator')).toBeInTheDocument();
+    expect(screen.getByText('Sophie')).toBeInTheDocument();
   });
 });

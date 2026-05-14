@@ -17,6 +17,7 @@ Server-sent-events stream rendering for the two-stage analysis pipeline. Phase t
 - `AnalysisError` carries `code` (e.g. `'rate_limit'`, `'auth'`, `'unknown'`) and optional structured `detail` (e.g. Google's `status` + `details[]`) (`src/lib/api.ts:412-421`). UI surfaces the headline message inline and the `detail` in a collapsible block.
 - SSE frame format is `data: <json>\n\n`; multiple `data:` lines per frame join with `\n` (`src/lib/api.ts:458-468`). Do not change the splitter.
 - "Start fresh" sets `fresh: true` in the request body; the server discards any partial progress before re-running (no resume).
+- **Phase 0 cast roster persists as a visible outcome.** Once `cast-update` events have populated the cast slice, the chip list under the Phase 0 row stays visible even after Phase 0 completes — including the cached-resume fast path that fires after a model switch, where the server only re-emits a single "Phase 0 already complete" log line. The roster is Phase 0's outcome and must not vanish when the active phase advances.
 
 ## Acceptance walkthrough
 
