@@ -30,7 +30,11 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
-logging.basicConfig(level=logging.INFO, format="[sidecar] %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s.%(msecs)03d [sidecar] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 log = logging.getLogger("sidecar")
 
 app = FastAPI(title="audiobook-generator local TTS sidecar")
