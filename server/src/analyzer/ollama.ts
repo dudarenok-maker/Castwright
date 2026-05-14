@@ -57,6 +57,28 @@ interface OllamaOptions {
    failure) means the daemon is reachable but misbehaving — hard-fail. */
 const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'UND_ERR_SOCKET']);
 
+/* Models we want Ollama to hold in VRAM between back-to-back analysis
+   calls. Stage 1 → Stage 2 → next chapter happens on a tight loop, and
+   reloading a multi-GB weight set between each one would dominate
+   wall-clock time. The 4B is small enough (~3 GB) to leave resident
+   without crowding XTTS on an 8 GB box; the 9B (~6.6 GB) and Llama-8B
+   (~5 GB) eat too much VRAM to leave sitting around, so we explicitly
+   ask Ollama to evict them as soon as each call completes. Tune the
+   allowlist in lockstep with src/lib/models.ts MODEL_OPTIONS. */
+const RESIDENT_MODELS = new Set([
+  'qwen3.5:4b',
+]);
+
+/** Picks the `keep_alive` value for an Ollama /api/chat call:
+    - models in RESIDENT_MODELS → '5m' (stay loaded for the analysis loop)
+    - everything else            → 0   (unload immediately after the call,
+                                        matching `keep_alive: 0` in Ollama's
+                                        own unload pattern — see
+                                        https://github.com/ollama/ollama/blob/main/docs/api.md#keep-alive). */
+export function keepAliveFor(model: string): string | number {
+  return RESIDENT_MODELS.has(model) ? '5m' : 0;
+}
+
 export class OllamaAnalyzer implements Analyzer {
   private readonly url: string;
   private readonly model: string;
@@ -186,12 +208,11 @@ export class OllamaAnalyzer implements Analyzer {
          deps. Upgrade path: pass the per-stage Zod schema through
          zod-to-json-schema if first-attempt validation rates ever sag. */
       format: 'json',
-      /* Keep the model resident across the back-to-back Stage 1 → Stage 2
-         calls for a chapter, and across chapters in the analysis loop, so
-         we don't pay the 10–15 s load cost between calls. XTTS generation
-         happens AFTER user confirmation; the 5-min keep-alive timer will
-         have expired by then in normal usage. */
-      keep_alive: '5m',
+      /* Per-model keep_alive — see keepAliveFor + RESIDENT_MODELS above.
+         Small models (4B) stay resident across the analysis loop; larger
+         ones (9B, Llama-8B) unload immediately so they don't squat on
+         VRAM that XTTS needs after analysis. */
+      keep_alive: keepAliveFor(this.model),
       /* Suppress qwen3.5's thinking tokens — they'd appear as
          `<think>…</think>` ahead of the JSON and break the parser. Ollama
          silently ignores this flag on non-thinking models. */

@@ -93,7 +93,10 @@ describe('OllamaAnalyzer — happy path streaming', () => {
     expect(body.model).toBe('qwen3.5:9b');
     expect(body.stream).toBe(true);
     expect(body.format).toBe('json');
-    expect(body.keep_alive).toBe('5m');
+    /* 9B is too heavy to leave resident — see RESIDENT_MODELS in ollama.ts.
+       Only the 4B holds the keep_alive: '5m' slot; everything else gets
+       unloaded immediately with keep_alive: 0. */
+    expect(body.keep_alive).toBe(0);
     expect(body.options.num_ctx).toBe(8192);
     /* System + user turn shape. */
     expect(body.messages).toHaveLength(2);
@@ -111,6 +114,39 @@ describe('OllamaAnalyzer — happy path streaming', () => {
     /* Parsed payload comes through. */
     expect(result.characters).toHaveLength(2);
     expect(result.characters.map(c => c.id)).toEqual(['narrator', 'Wren']);
+  });
+});
+
+describe('OllamaAnalyzer — keep_alive policy (per-model VRAM residency)', () => {
+  /* Direct pure-function check on keepAliveFor — guards the allowlist
+     contract independent of the wire format. */
+  it('returns "5m" for qwen3.5:4b and 0 for the other supported local models', async () => {
+    const { keepAliveFor } = await import('./ollama.js');
+    expect(keepAliveFor('qwen3.5:4b')).toBe('5m');
+    expect(keepAliveFor('qwen3.5:9b')).toBe(0);
+    expect(keepAliveFor('llama3.1:8b')).toBe(0);
+    /* An unknown model id defaults to 0 — the conservative choice is
+       "unload immediately" so we never accidentally pin a model the
+       allowlist hasn't been tuned for. */
+    expect(keepAliveFor('mistral:7b')).toBe(0);
+  });
+
+  it('threads keep_alive: "5m" into the /api/chat body when the model is qwen3.5:4b', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+    await analyzer.runStage1Chapter('m_ollama_keepalive_4b', 1, '# prompt', {});
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.keep_alive).toBe('5m');
+  });
+
+  it('threads keep_alive: 0 into the /api/chat body for llama3.1:8b (heavy model — unload immediately)', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'llama3.1:8b' });
+    await analyzer.runStage1Chapter('m_ollama_keepalive_llama', 1, '# prompt', {});
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.keep_alive).toBe(0);
   });
 });
 
@@ -248,6 +284,7 @@ afterAll(async () => {
     'm_ollama_ok', 'm_ollama_down', 'm_ollama_bare_fetchfail', 'm_ollama_abort',
     'm_ollama_404', 'm_ollama_404_again', 'm_ollama_500', 'm_ollama_empty',
     'm_ollama_retry', 'm_ollama_retry_fail',
+    'm_ollama_keepalive_4b', 'm_ollama_keepalive_llama',
   ]) {
     await rm(resolve(HANDOFF_ROOT, 'inbox',  `${id}-stage1-ch1.md`),    { force: true });
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.json`),   { force: true });
