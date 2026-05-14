@@ -103,7 +103,7 @@ describe('OllamaAnalyzer — happy path streaming', () => {
        Only the 4B holds the keep_alive: '5m' slot; everything else gets
        unloaded immediately with keep_alive: 0. */
     expect(body.keep_alive).toBe(0);
-    expect(body.options.num_ctx).toBe(8192);
+    expect(body.options.num_ctx).toBe(16384);
     /* DEFAULT_TEMPERATURE on the first attempt — invalid-json retries bump
        to INVALID_JSON_RETRY_TEMPERATURE (covered in its own test below). */
     expect(body.options.temperature).toBe(0.2);
