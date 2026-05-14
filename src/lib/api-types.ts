@@ -747,6 +747,14 @@ export interface components {
             lines?: number;
             scenes?: number;
             attributes?: string[];
+            /**
+             * @description Alternate names this character is known by. Populated when the
+             *     user merges a duplicate roster entry (e.g. "Sophie" merged into
+             *     "Sophie Foster" adds "Sophie" here). Surfaced to the voice
+             *     matcher so the same person can be recognised when later books
+             *     in a series detect the character under a different form.
+             */
+            aliases?: string[];
             tone?: {
                 warmth?: number;
                 pace?: number;

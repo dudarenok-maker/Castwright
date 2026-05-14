@@ -987,6 +987,15 @@ components:
         lines:       { type: integer }
         scenes:      { type: integer }
         attributes:  { type: array, items: { type: string } }
+        aliases:
+          type: array
+          items: { type: string }
+          description: |
+            Alternate names this character is known by. Populated when the
+            user merges a duplicate roster entry (e.g. "Sophie" merged into
+            "Sophie Foster" adds "Sophie" here). Surfaced to the voice
+            matcher so the same person can be recognised when later books
+            in a series detect the character under a different form.
         tone:
           type: object
           properties:

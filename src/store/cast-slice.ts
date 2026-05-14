@@ -83,6 +83,30 @@ export const castSlice = createSlice({
       }
       s.characters = next;
     },
+    /* From POST /api/books/:bookId/cast/merge — replaces the local cast
+       with the server's merged list. The server is authoritative because
+       it walks manuscript-edits.json + the analysis cache to recompute
+       lines / scenes; doing the merge in the reducer would risk drift
+       against the persisted state. */
+    applyMerge: (s, a: PayloadAction<{ characters: Character[] }>) => {
+      const { characters } = a.payload;
+      if (!characters) return;
+      /* Preserve voiceId / matchedFrom / matchFactors / voiceState on each
+         surviving character — those are local-only or library-derived and
+         the server's character list doesn't carry them. */
+      const byId = new Map(s.characters.map(c => [c.id, c]));
+      s.characters = characters.map(inc => {
+        const existing = byId.get(inc.id);
+        if (!existing) return inc;
+        return {
+          ...inc,
+          voiceId:      existing.voiceId      ?? inc.voiceId,
+          matchedFrom:  existing.matchedFrom  ?? inc.matchedFrom,
+          matchFactors: existing.matchFactors ?? inc.matchFactors,
+          voiceState:   existing.voiceState   ?? inc.voiceState,
+        };
+      });
+    },
     /* From POST /api/books/:bookId/voice-match. */
     applyVoiceMatches: (s, a: PayloadAction<VoiceMatchResponse>) => {
       const { matches } = a.payload;
