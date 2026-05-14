@@ -143,3 +143,67 @@ describe('castSlice — initial state (mock-leak regression)', () => {
     expect(castSlice.getInitialState().characters).toEqual([]);
   });
 });
+
+describe('castSlice — mergeCharacters (Phase 0a live cast snapshots)', () => {
+  it('appends new characters in incoming order on an empty slice, defaulting voiceState', () => {
+    const start = baseState([]);
+    const next = castSlice.reducer(start, castActions.mergeCharacters([
+      makeChar('narrator'),
+      makeChar('sophie'),
+    ]));
+    expect(next.characters.map(c => c.id)).toEqual(['narrator', 'sophie']);
+    expect(next.characters[0].voiceState).toBe('generated');
+  });
+
+  it('upserts by id and preserves locked voiceId / matchedFrom on the existing entry', () => {
+    /* User had matched Sophie to a previous-book voice + locked it; a
+       later cast-update snapshot from the analyzer must NOT clobber
+       voiceId / matchedFrom / voiceState='locked'. */
+    const start = baseState([makeChar('sophie', {
+      voiceState: 'locked',
+      voiceId: 'v_sophie_from_book1',
+      matchedFrom: { bookTitle: 'KOTC #1', confidence: 0.94 },
+    })]);
+    const next = castSlice.reducer(start, castActions.mergeCharacters([
+      /* Snapshot from a later chapter — analyzer doesn't know about the lock. */
+      { id: 'sophie', name: 'Sophie Foster', role: 'protagonist', color: 'orange',
+        description: 'Updated richer description.' },
+    ]));
+    const sophie = next.characters.find(c => c.id === 'sophie')!;
+    expect(sophie.voiceId).toBe('v_sophie_from_book1');
+    expect(sophie.voiceState).toBe('locked');
+    expect(sophie.matchedFrom).toEqual({ bookTitle: 'KOTC #1', confidence: 0.94 });
+    /* New fields from the snapshot still flow through. */
+    expect(sophie.name).toBe('Sophie Foster');
+    expect(sophie.description).toBe('Updated richer description.');
+  });
+
+  it('appends new characters from a later snapshot at the end (preserves discovery order)', () => {
+    const start = baseState([makeChar('sophie'), makeChar('keefe')]);
+    const next = castSlice.reducer(start, castActions.mergeCharacters([
+      makeChar('sophie'),
+      makeChar('keefe'),
+      makeChar('biana'), /* New in chapter 5 */
+    ]));
+    expect(next.characters.map(c => c.id)).toEqual(['sophie', 'keefe', 'biana']);
+  });
+
+  it('preserves locally-known characters the snapshot omitted (defensive — full snapshots in practice)', () => {
+    const start = baseState([
+      makeChar('sophie', { voiceState: 'locked' }),
+      makeChar('keefe'),
+    ]);
+    /* Snapshot only has 'sophie' — 'keefe' should still be present. */
+    const next = castSlice.reducer(start, castActions.mergeCharacters([
+      makeChar('sophie', { description: 'updated' }),
+    ]));
+    expect(next.characters.map(c => c.id).sort()).toEqual(['keefe', 'sophie']);
+    expect(next.characters.find(c => c.id === 'sophie')!.voiceState).toBe('locked');
+  });
+
+  it('is a no-op for an empty incoming list', () => {
+    const start = baseState([makeChar('sophie')]);
+    const next = castSlice.reducer(start, castActions.mergeCharacters([]));
+    expect(next.characters).toEqual(start.characters);
+  });
+});

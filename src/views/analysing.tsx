@@ -5,8 +5,9 @@ import { api, AnalysisError, type AnalysisLiveInfo, type AnalysisLiveChapter, ty
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { MODEL_OPTIONS } from '../lib/models';
 import type { AnalyseResponse } from '../lib/types';
-import { useAppDispatch } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { castActions } from '../store/cast-slice';
 
 /* Heuristic estimate matched to the server's analysis pacing (server/src/
    routes/analysis.ts: STAGE1_BASELINE_RATE × STAGE2_STRETCH ≈ 4 ms per input
@@ -116,6 +117,28 @@ function ActivePhaseLog({ lines }: { lines: string[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/* Live cast preview rendered under Phase 0 — fills in chapter-by-chapter
+   as cast-update events arrive. Order mirrors the running roster from the
+   server (insertion order = chapter discovery order). Names truncate to
+   keep wide casts on a single row at viewport widths the rest of the app
+   supports; full list is always visible on the cast view once stage='confirm'. */
+function LiveCastPreview() {
+  const characters = useAppSelector(s => s.cast.characters);
+  if (characters.length === 0) return null;
+  return (
+    <div className="mt-3 text-[11px] text-ink/60">
+      <div className="font-semibold text-ink/80">Cast so far · {characters.length} character{characters.length === 1 ? '' : 's'}</div>
+      <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
+        {characters.map(c => (
+          <span key={c.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-ink/[0.04] text-ink/70">
+            {c.name}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -262,6 +285,16 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
             setConn('streaming');
             markEvent();
             setHeartbeatByPhase(prev => ({ ...prev, [hb.phaseId]: { hb, receivedAt: Date.now() } }));
+          },
+          onCastUpdate: ({ characters }) => {
+            if (cancelled) return;
+            setConn('streaming');
+            markEvent();
+            /* Merge into the cast slice so the cast view (and Phase 0
+               live preview below) reflect the chapter-by-chapter roster
+               as it grows. Replay-safe — late-arriving snapshots upsert
+               by id, preserving locked voices on existing entries. */
+            dispatch(castActions.mergeCharacters(characters));
           },
         });
         if (cancelled || completedRef.current) return;
@@ -463,6 +496,7 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
                       {live && live.chapters.length > 0 && (
                         <LiveChapterTicker live={live}/>
                       )}
+                      {p.id === 0 && <LiveCastPreview/>}
                     </>
                   )}
                   {phaseLogs.length > 0 && (

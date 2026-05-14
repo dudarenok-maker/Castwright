@@ -44,6 +44,45 @@ export const castSlice = createSlice({
         s.characters = characters.map(c => c.voiceState ? c : { ...c, voiceState: 'generated' });
       }
     },
+    /* Live cast-update events from Phase 0a (per-chapter cast detection).
+       Each event carries the running roster snapshot — upsert by id so
+       user-locked voiceId / matchedFrom on existing entries survive a
+       mid-analysis snapshot replacing them. New characters land at the
+       end of the array in roster discovery order. */
+    mergeCharacters: (s, a: PayloadAction<Character[]>) => {
+      const incoming = a.payload;
+      if (!incoming?.length) return;
+      const byId = new Map(s.characters.map(c => [c.id, c]));
+      const next: Character[] = [];
+      const seen = new Set<string>();
+      for (const inc of incoming) {
+        const existing = byId.get(inc.id);
+        if (existing) {
+          /* Preserve voiceId / matchedFrom / matchFactors / voiceState
+             from the local entry — those came from voice matching or
+             user edits and shouldn't get clobbered by an analyser
+             snapshot that doesn't know about them. */
+          next.push({
+            ...inc,
+            voiceId:      existing.voiceId      ?? inc.voiceId,
+            matchedFrom:  existing.matchedFrom  ?? inc.matchedFrom,
+            matchFactors: existing.matchFactors ?? inc.matchFactors,
+            voiceState:   existing.voiceState   ?? inc.voiceState ?? 'generated',
+          });
+        } else {
+          next.push(inc.voiceState ? inc : { ...inc, voiceState: 'generated' });
+        }
+        seen.add(inc.id);
+      }
+      /* Carry forward any locally-known characters the snapshot omitted.
+         Defensive — Phase 0a sends the full roster on every event so this
+         set should always be empty in practice, but keeps the slice safe
+         against future delta-style updates. */
+      for (const c of s.characters) {
+        if (!seen.has(c.id)) next.push(c);
+      }
+      s.characters = next;
+    },
     /* From POST /api/books/:bookId/voice-match. */
     applyVoiceMatches: (s, a: PayloadAction<VoiceMatchResponse>) => {
       const { matches } = a.payload;

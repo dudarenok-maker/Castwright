@@ -13,24 +13,31 @@ import type { z } from 'zod';
 import { writeInbox, outboxPath, errorPath, type HandoffKey } from '../handoff/protocol.js';
 import {
   stage1Schema,
+  stage1ChapterSchema,
   stage2ChapterSchema,
   type Stage1Output,
+  type Stage1ChapterOutput,
   type Stage2ChapterOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_DIR = resolve(__dirname, '..', '..', '..', 'skills');
-const SKILL_FILES: Record<1 | 2, string> = {
-  1: 'audiobook-character-analysis.md',
-  2: 'audiobook-sentence-attribution.md',
-};
+const SKILL_FILES = {
+  /* Legacy whole-book stage 1 — kept for any caller still wiring it. */
+  whole_book_stage1: 'audiobook-character-analysis.md',
+  /* Phase 0a — per-chapter cast detection (the current default). */
+  per_chapter_stage1: 'audiobook-character-detection-per-chapter.md',
+  /* Phase 1 — per-chapter sentence attribution. */
+  per_chapter_stage2: 'audiobook-sentence-attribution.md',
+} as const;
+type SkillName = keyof typeof SKILL_FILES;
 
 /* Read the skill file fresh on every request so prompt iteration doesn't
    require a server restart. The files are small (~3-5 KB) and read once
    per analysis — negligible cost. */
-async function loadSkill(stage: 1 | 2): Promise<string> {
-  return readFile(resolve(SKILLS_DIR, SKILL_FILES[stage]), 'utf8');
+async function loadSkill(skill: SkillName): Promise<string> {
+  return readFile(resolve(SKILLS_DIR, SKILL_FILES[skill]), 'utf8');
 }
 
 /* The skill text is moved to `systemInstruction` rather than re-sent as
@@ -66,7 +73,17 @@ export class GeminiAnalyzer implements Analyzer {
   }
 
   async runStage1(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage1Output> {
-    return this.runStage(manuscriptId, '1', 1, promptMd, stage1Schema, call);
+    return this.runStage(manuscriptId, '1', 'whole_book_stage1', promptMd, stage1Schema, call);
+  }
+
+  async runStage1Chapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<Stage1ChapterOutput> {
+    const key = `1-ch${chapterId}` as const;
+    return this.runStage(manuscriptId, key, 'per_chapter_stage1', promptMd, stage1ChapterSchema, call);
   }
 
   async runStage2Chapter(
@@ -76,20 +93,20 @@ export class GeminiAnalyzer implements Analyzer {
     call: StageCall,
   ): Promise<Stage2ChapterOutput> {
     const key = `2-ch${chapterId}` as const;
-    return this.runStage(manuscriptId, key, 2, promptMd, stage2ChapterSchema, call);
+    return this.runStage(manuscriptId, key, 'per_chapter_stage2', promptMd, stage2ChapterSchema, call);
   }
 
   private async runStage<T>(
     manuscriptId: string,
     key: HandoffKey,
-    skillStage: 1 | 2,
+    skillName: SkillName,
     promptMd: string,
     schema: z.ZodType<T>,
     call: StageCall,
   ): Promise<T> {
     await writeInbox(manuscriptId, key, promptMd);
 
-    const skill = await loadSkill(skillStage);
+    const skill = await loadSkill(skillName);
     const systemInstruction = buildSystemInstruction(skill);
 
     const start = Date.now();

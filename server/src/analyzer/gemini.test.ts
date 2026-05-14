@@ -128,11 +128,47 @@ describe('GeminiAnalyzer.runStage1 — streaming chunk feedback', () => {
   });
 });
 
+describe('GeminiAnalyzer.runStage1Chapter — Phase 0a per-chapter cast detection', () => {
+  /* Per-chapter cast output is a strict subset of stage 1: { characters }
+     only. Schema rejects an extra `chapters` field, which is the load-bearing
+     test that we can't accidentally call the whole-book schema by mistake. */
+  const PER_CHAPTER_RESPONSE = JSON.stringify({
+    characters: [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator',
+        evidence: [{ quote: 'a' }, { quote: 'bb' }] },
+      { id: 'sophie', name: 'Sophie', role: 'protagonist', color: 'orange',
+        evidence: [{ quote: 'cc' }, { quote: 'dddd' }] },
+    ],
+  });
+
+  it('reuses the same streaming path as runStage1 and returns parsed per-chapter output', async () => {
+    const slices = chunksOf(PER_CHAPTER_RESPONSE, 32);
+    generateContentStream.mockResolvedValue(asyncFromArray(slices.map(text => ({ text }))));
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+    const onChunk = vi.fn();
+    const result = await analyzer.runStage1Chapter('m_test', 7, '# stage 1 chapter prompt', { onChunk });
+
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+    expect(onChunk).toHaveBeenCalledTimes(slices.length);
+
+    expect(result.characters).toHaveLength(2);
+    expect(result.characters.map(c => c.id)).toEqual(['narrator', 'sophie']);
+    /* No chapters[] field on the per-chapter shape — the parser is the
+       source of truth for the chapter list. */
+    expect((result as unknown as { chapters?: unknown }).chapters).toBeUndefined();
+  });
+});
+
 afterAll(async () => {
   /* Tidy the test inbox/outbox we touched so the workspace stays clean. */
   await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_test-stage1.md'),       { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_skip_empty-stage1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_empty-stage1.md'),      { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_test-stage1-ch7.md'),   { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_test-stage1.json'),       { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_skip_empty-stage1.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_test-stage1-ch7.json'),   { force: true });
 });

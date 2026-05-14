@@ -21,8 +21,11 @@ const INBOX = join(HANDOFF_ROOT, 'inbox');
 const OUTBOX = join(HANDOFF_ROOT, 'outbox');
 
 /* Handoff key identifying the slice of work the inbox/outbox pair carries.
-   Literal types instead of free strings so callers can't typo a key. */
-export type HandoffKey = '1' | '2' | `2-ch${number}`;
+   Literal types instead of free strings so callers can't typo a key.
+   `1-ch{n}` is per-chapter Phase 0a cast detection (the new flow);
+   plain `1` is the legacy whole-book stage 1 (kept for back-compat with
+   any cached drops). */
+export type HandoffKey = '1' | `1-ch${number}` | '2' | `2-ch${number}`;
 
 async function ensureDirs(): Promise<void> {
   await mkdir(INBOX, { recursive: true });

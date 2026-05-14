@@ -91,6 +91,12 @@ export interface AnalyseOpts {
       one-liner under the active phase header — does NOT enter the log
       buffer, so it can't pollute the cached phase summary. */
   onHeartbeat?: (e: AnalysisHeartbeat) => void;
+  /** Live cast snapshot from Phase 0a (per-chapter cast detection). The
+      server emits this after each chapter's cast lands, with the full
+      running roster. Drives the analysing-view live cast preview so the
+      user sees characters appear chapter-by-chapter instead of waiting
+      for a whole-book Phase 0 pass to finish. */
+  onCastUpdate?: (e: { characters: import('./types').Character[] }) => void;
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
       Sent as JSON body to POST /api/manuscripts/:id/analysis. Ignored when
       the server runs in ANALYZER=manual mode. */
@@ -484,7 +490,7 @@ async function realUploadManuscript({ text, file, fileName, format }: UploadArgs
 }
 
 interface AnalysisStreamEvent {
-  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat';
+  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update';
   phaseId?: number;
   progress?: number;
   label?: string;
@@ -502,6 +508,8 @@ interface AnalysisStreamEvent {
   elapsedMs?: number;
   sinceLastChunkMs?: number;
   chapterIndex?: number;
+  /* cast-update field — full running-roster snapshot from Phase 0a. */
+  characters?: import('./types').Character[];
 }
 
 export class AnalysisError extends Error {
@@ -515,7 +523,7 @@ export class AnalysisError extends Error {
   }
 }
 
-async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, onHeartbeat, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, onHeartbeat, onCastUpdate, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
   const hasBody = model !== undefined || fresh !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
@@ -554,6 +562,10 @@ async function realAnalyseManuscript(manuscriptId: string, { onPhase, onLog, onH
           sinceLastChunkMs: payload.sinceLastChunkMs,
           chapterIndex: payload.chapterIndex,
         });
+      }
+    } else if (payload.kind === 'cast-update') {
+      if (Array.isArray(payload.characters)) {
+        onCastUpdate?.({ characters: payload.characters });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
