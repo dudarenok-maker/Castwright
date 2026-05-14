@@ -86,13 +86,18 @@ export const INVALID_JSON_RETRY_TEMPERATURE = 0.6;
 /* Models we want Ollama to hold in VRAM between back-to-back analysis
    calls. Stage 1 → Stage 2 → next chapter happens on a tight loop, and
    reloading a multi-GB weight set between each one would dominate
-   wall-clock time. The 4B is small enough (~3 GB) to leave resident
-   without crowding XTTS on an 8 GB box; the 9B (~6.6 GB) and Llama-8B
-   (~5 GB) eat too much VRAM to leave sitting around, so we explicitly
-   ask Ollama to evict them as soon as each call completes. Tune the
-   allowlist in lockstep with src/lib/models.ts MODEL_OPTIONS. */
+   wall-clock time. The 4B (~3 GB) and Llama-8B (~5 GB) both fit
+   resident on an 8 GB box alongside the ~1–1.5 GB KV cache at
+   ANALYZER_NUM_CTX, with enough headroom to absorb a long-chapter KV
+   spike. The 9B (~6.6 GB) is too tight — KV cache pushes it over budget
+   — so we still evict that immediately after each call. XTTS is loaded
+   on a separate, mutually-exclusive pipeline phase, so neither tenant
+   has to fit alongside the other; the auto-evict pill mediates the
+   swap. Tune the allowlist in lockstep with src/lib/models.ts
+   MODEL_OPTIONS. */
 const RESIDENT_MODELS = new Set([
   'qwen3.5:4b',
+  'llama3.1:8b',
 ]);
 
 /** Picks the `keep_alive` value for an Ollama /api/chat call:

@@ -664,3 +664,48 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
   });
 });
+
+/* Mid-run recovery surface. With incremental cast.json writes landing on
+   every Phase 0a chapter (see server/src/routes/analysis.ts buildInterimCast
+   call site), the layout's getBookState hydration now pre-populates the
+   cast slice on book open — so a re-opened book mid-run shows the cast
+   that was found so far without waiting for the SSE to replay. The
+   analysing view's contract is "render whatever is in the cast slice on
+   mount", which this test pins down. */
+describe('AnalysingView — pre-hydrated cast preview on mount', () => {
+  const makeChar = (id: string, name: string): Character => ({
+    id, name, role: 'role', color: id, voiceState: 'generated',
+  });
+
+  it('renders the cast preview from a pre-hydrated cast slice before any SSE event fires', () => {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+    });
+    /* Simulate the layout's getBookState → setCharacters hydration that
+       runs ahead of the analysing route mounting. With cast.json now
+       written incrementally on the server, this slice can land
+       non-empty even when the user just re-opened a mid-run book. */
+    store.dispatch(castSlice.actions.setCharacters([
+      makeChar('narrator', 'Narrator'),
+      makeChar('sophie', 'Sophie'),
+      makeChar('keefe', 'Keefe'),
+    ]));
+
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          title="Bonus Keefe Story"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    /* Chips render immediately — no Start click, no cast-update SSE event. */
+    expect(screen.getByText(/Cast so far · 3 characters/)).toBeInTheDocument();
+    expect(screen.getByText('Narrator')).toBeInTheDocument();
+    expect(screen.getByText('Sophie')).toBeInTheDocument();
+    expect(screen.getByText('Keefe')).toBeInTheDocument();
+  });
+});

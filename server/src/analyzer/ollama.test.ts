@@ -99,9 +99,11 @@ describe('OllamaAnalyzer — happy path streaming', () => {
      * the string sentinel. */
     expect(body.format).not.toBe('json');
     expect(typeof body.format).toBe('object');
-    /* 9B is too heavy to leave resident — see RESIDENT_MODELS in ollama.ts.
-       Only the 4B holds the keep_alive: '5m' slot; everything else gets
-       unloaded immediately with keep_alive: 0. */
+    /* 9B is too heavy to leave resident on an 8 GB box (weights + KV cache
+       at num_ctx 16384 spill over budget) — see RESIDENT_MODELS in
+       ollama.ts. The 4B and llama3.1:8b both hold the keep_alive: '5m'
+       slot; the 9B and any unknown tag get unloaded immediately with
+       keep_alive: 0. */
     expect(body.keep_alive).toBe(0);
     expect(body.options.num_ctx).toBe(16384);
     /* DEFAULT_TEMPERATURE on the first attempt — invalid-json retries bump
@@ -129,11 +131,17 @@ describe('OllamaAnalyzer — happy path streaming', () => {
 describe('OllamaAnalyzer — keep_alive policy (per-model VRAM residency)', () => {
   /* Direct pure-function check on keepAliveFor — guards the allowlist
      contract independent of the wire format. */
-  it('returns "5m" for qwen3.5:4b and 0 for the other supported local models', async () => {
+  it('returns "5m" for the resident-allowlisted models and 0 for the rest', async () => {
     const { keepAliveFor } = await import('./ollama.js');
+    /* 4B (~3 GB) and llama3.1:8b (~5 GB) both fit resident with the KV
+       cache at ANALYZER_NUM_CTX on an 8 GB box, so they hold across the
+       Stage 1 → Stage 2 → next-chapter loop. */
     expect(keepAliveFor('qwen3.5:4b')).toBe('5m');
+    expect(keepAliveFor('llama3.1:8b')).toBe('5m');
+    /* 9B (~6.6 GB) is over budget once the KV cache lands — unload
+       immediately so XTTS isn't squeezed when the user flips to the
+       generation phase. */
     expect(keepAliveFor('qwen3.5:9b')).toBe(0);
-    expect(keepAliveFor('llama3.1:8b')).toBe(0);
     /* An unknown model id defaults to 0 — the conservative choice is
        "unload immediately" so we never accidentally pin a model the
        allowlist hasn't been tuned for. */
@@ -149,11 +157,20 @@ describe('OllamaAnalyzer — keep_alive policy (per-model VRAM residency)', () =
     expect(body.keep_alive).toBe('5m');
   });
 
-  it('threads keep_alive: 0 into the /api/chat body for llama3.1:8b (heavy model — unload immediately)', async () => {
+  it('threads keep_alive: "5m" into the /api/chat body for llama3.1:8b (resident across the analysis loop)', async () => {
     fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
     const { OllamaAnalyzer } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'llama3.1:8b' });
     await analyzer.runStage1Chapter('m_ollama_keepalive_llama', 1, '# prompt', {});
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.keep_alive).toBe('5m');
+  });
+
+  it('threads keep_alive: 0 into the /api/chat body for qwen3.5:9b (over budget — unload immediately)', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    await analyzer.runStage1Chapter('m_ollama_keepalive_9b', 1, '# prompt', {});
     const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
     expect(body.keep_alive).toBe(0);
   });
