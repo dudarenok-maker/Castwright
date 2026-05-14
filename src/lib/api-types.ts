@@ -408,6 +408,27 @@ export interface components {
              */
             sidecarUrl: string;
             /**
+             * @description Analyzer dispatch. `local` routes through OllamaAnalyzer (with
+             *     Gemini as automatic fallback iff GEMINI_API_KEY is set AND the
+             *     local daemon is unreachable). `gemini` always goes direct.
+             *     See server/src/analyzer/index.ts selectAnalyzer.
+             * @enum {string}
+             */
+            analysisEngine: "local" | "gemini";
+            /**
+             * @description Base URL of the local Ollama daemon. Falls through to OLLAMA_URL
+             *     env then http://localhost:11434 in the server resolver. Re-read
+             *     on every analysis request, like sidecarUrl.
+             */
+            ollamaUrl: string;
+            /**
+             * @description Ollama model tag passed to /api/chat (e.g. qwen3.5:9b). Default
+             *     qwen3.5:9b is the recommended pick for 8 GB VRAM — see plan 29.
+             *     The analysis route honours a per-request `model` override on
+             *     top of this default.
+             */
+            ollamaModel: string;
+            /**
              * @description Optional override for the WORKSPACE_DIR env var. Read once at
              *     server startup — changes require a server restart to apply
              *     (UI flags this with a "restart required" badge).
@@ -457,6 +478,10 @@ export interface components {
             /** @enum {string} */
             defaultTtsModelKey?: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             sidecarUrl?: string;
+            /** @enum {string} */
+            analysisEngine?: "local" | "gemini";
+            ollamaUrl?: string;
+            ollamaModel?: string;
             workspaceDirOverride?: string | null;
             minorCastMinLines?: number;
         };

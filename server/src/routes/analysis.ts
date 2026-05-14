@@ -31,6 +31,14 @@ function humanModel(modelId: string | undefined): string {
   return MODEL_LABELS[modelId] ?? modelId;
 }
 
+/** Engine-aware label so SSE chunks read "Ollama (qwen3.5:9b)" for the
+    local analyzer and "Gemma 4 31B" for Gemini. The MODEL_LABELS lookup
+    only covers Gemini ids, so the local branch surfaces the raw tag —
+    which is fine, Ollama tags are already human-readable. */
+function engineLabel(engine: 'local' | 'gemini', modelId: string): string {
+  return engine === 'local' ? `Ollama (${modelId})` : humanModel(modelId);
+}
+
 /* Front-end palette has 30 character slots (see src/lib/colors.ts
    CHAR_COLORS + CHARACTER_SLOTS). Gemini and humans both like to invent
    character-specific kebab names like `keefe` that don't exist in the
@@ -460,9 +468,9 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   const endPhase = (id: number) => Date.now() - (phaseStarts[id] ?? Date.now());
 
   const requestedModel = typeof req.body?.model === 'string' ? req.body.model : undefined;
-  let analyzerLocal;
+  let selection;
   try {
-    analyzerLocal = selectAnalyzer({ model: requestedModel });
+    selection = selectAnalyzer({ model: requestedModel });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });
     return res.end();
@@ -470,12 +478,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   /* Const re-bind so TS keeps the narrowed type inside nested closures
      (the `let analyzer` was inferred as `Analyzer | undefined` and got
      widened to `any` when captured by runChapter). */
-  const analyzer = analyzerLocal;
+  const analyzer = selection.analyzer;
   const recordRef = record;
-  const activeModelId = requestedModel ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
-  const analyzerLabel = humanModel(activeModelId);
+  const activeModelId = selection.model;
+  const analyzerLabel = engineLabel(selection.engine, activeModelId);
   if (requestedModel) {
-    console.log(`[analysis] manuscript=${manuscriptId} model=${requestedModel}`);
+    console.log(`[analysis] manuscript=${manuscriptId} engine=${selection.engine} model=${selection.model}`);
   }
 
   try {
@@ -1247,14 +1255,15 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   const toRun = targets.filter(h => !h.excluded);
 
   const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
-  let analyzer;
+  let selection;
   try {
-    analyzer = selectAnalyzer({ model: requestedModel });
+    selection = selectAnalyzer({ model: requestedModel });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });
     return res.end();
   }
-  const analyzerLabel = humanModel(requestedModel ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it');
+  const analyzer = selection.analyzer;
+  const analyzerLabel = engineLabel(selection.engine, selection.model);
 
   try {
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);

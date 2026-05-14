@@ -26,6 +26,9 @@ export function AccountView() {
   const [defaultTtsEngine,      setDefaultTtsEngine]      = useState<TtsEngineId>(account.defaultTtsEngine);
   const [defaultTtsModelKey,    setDefaultTtsModelKey]    = useState<TtsModelKey>(account.defaultTtsModelKey);
   const [sidecarUrl,            setSidecarUrl]            = useState(account.sidecarUrl);
+  const [analysisEngine,        setAnalysisEngine]        = useState<'local' | 'gemini'>(account.analysisEngine);
+  const [ollamaUrl,             setOllamaUrl]             = useState(account.ollamaUrl);
+  const [ollamaModel,           setOllamaModel]           = useState(account.ollamaModel);
   const [workspaceDirOverride,  setWorkspaceDirOverride]  = useState<string>(account.workspaceDirOverride ?? '');
   const [minorCastMinLines,     setMinorCastMinLines]     = useState<number>(account.minorCastMinLines);
   const [showSaved,             setShowSaved]             = useState(false);
@@ -36,11 +39,15 @@ export function AccountView() {
     setDefaultTtsEngine(account.defaultTtsEngine);
     setDefaultTtsModelKey(account.defaultTtsModelKey);
     setSidecarUrl(account.sidecarUrl);
+    setAnalysisEngine(account.analysisEngine);
+    setOllamaUrl(account.ollamaUrl);
+    setOllamaModel(account.ollamaModel);
     setWorkspaceDirOverride(account.workspaceDirOverride ?? '');
     setMinorCastMinLines(account.minorCastMinLines);
   }, [account.hydrated, account.displayName, account.defaultAnalysisModel,
       account.defaultTtsEngine, account.defaultTtsModelKey,
-      account.sidecarUrl, account.workspaceDirOverride,
+      account.sidecarUrl, account.analysisEngine, account.ollamaUrl,
+      account.ollamaModel, account.workspaceDirOverride,
       account.minorCastMinLines]);
 
   /* When the engine switches, the selected modelKey may not belong to the
@@ -66,10 +73,14 @@ export function AccountView() {
         || defaultTtsEngine      !== account.defaultTtsEngine
         || defaultTtsModelKey    !== account.defaultTtsModelKey
         || sidecarUrl            !== account.sidecarUrl
+        || analysisEngine        !== account.analysisEngine
+        || ollamaUrl             !== account.ollamaUrl
+        || ollamaModel           !== account.ollamaModel
         || minorCastMinLines     !== account.minorCastMinLines
         || workspaceDirty;
   }, [displayName, defaultAnalysisModel, defaultTtsEngine, defaultTtsModelKey,
-      sidecarUrl, minorCastMinLines, workspaceDirty, account]);
+      sidecarUrl, analysisEngine, ollamaUrl, ollamaModel,
+      minorCastMinLines, workspaceDirty, account]);
 
   const onSave = async () => {
     const patch: UserSettingsPatch = {
@@ -78,6 +89,9 @@ export function AccountView() {
       defaultTtsEngine,
       defaultTtsModelKey,
       sidecarUrl,
+      analysisEngine,
+      ollamaUrl,
+      ollamaModel,
       workspaceDirOverride: workspaceDirOverride.trim() === '' ? null : workspaceDirOverride.trim(),
       minorCastMinLines,
     };
@@ -172,13 +186,43 @@ export function AccountView() {
         </FormCard>
 
         <FormCard title="Server configuration"
-          hint="Non-secret overrides for what's in server/.env. Sidecar URL takes effect on the next request; workspace directory needs a server restart.">
+          hint="Non-secret overrides for what's in server/.env. Sidecar URL and Ollama settings take effect on the next request; workspace directory needs a server restart.">
           <FieldRow label="Sidecar URL"
             sublabel="Local TTS sidecar endpoint. Default: http://localhost:9000">
             <input type="text"
               value={sidecarUrl}
               onChange={(e) => setSidecarUrl(e.target.value)}
               placeholder="http://localhost:9000"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"/>
+          </FieldRow>
+          <FieldRow label="Analyzer engine"
+            sublabel={
+              'Local routes through the Ollama daemon — with Gemini as automatic fallback only when the daemon is unreachable, assuming a Gemini key is configured below. Gemini sends every chapter straight to the Gemini API.'
+            }>
+            <select
+              value={analysisEngine}
+              onChange={(e) => setAnalysisEngine(e.target.value as 'local' | 'gemini')}
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30">
+              <option value="local">Local (Ollama, with Gemini fallback)</option>
+              <option value="gemini">Gemini API (direct)</option>
+            </select>
+          </FieldRow>
+          <FieldRow label="Ollama URL"
+            sublabel="Local Ollama daemon endpoint. Default: http://localhost:11434">
+            <input type="text"
+              value={ollamaUrl}
+              onChange={(e) => setOllamaUrl(e.target.value)}
+              placeholder="http://localhost:11434"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"/>
+          </FieldRow>
+          <FieldRow label="Ollama model"
+            sublabel={
+              'Model tag passed to /api/chat. Default qwen3.5:9b is the recommended pick for 8 GB VRAM. Pull once with `ollama pull qwen3.5:9b` before first run.'
+            }>
+            <input type="text"
+              value={ollamaModel}
+              onChange={(e) => setOllamaModel(e.target.value)}
+              placeholder="qwen3.5:9b"
               className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"/>
           </FieldRow>
           <FieldRow label="Workspace directory override"

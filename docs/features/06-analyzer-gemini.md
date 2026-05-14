@@ -1,6 +1,6 @@
 # Gemini analyzer (`ANALYZER=gemini`)
 
-> Status: stable (opt-in)
+> Status: stable (opt-in direct, OR automatic fallback when `ANALYZER=local` and Ollama is unreachable — see [plan 29](29-analyzer-ollama-local.md))
 > Key files: `server/src/analyzer/gemini.ts`, `server/src/analyzer/index.ts`, `server/src/handoff/schemas.ts`
 > URL surface: indirect (`#/books/:bookId/analysing`)
 > OpenAPI ops: `POST /api/manuscripts/:id/analysis`
