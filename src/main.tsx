@@ -1,3 +1,6 @@
+import { installTimestamps } from './lib/logger';
+installTimestamps();
+
 import { createRoot } from 'react-dom/client';
 import { Provider } from 'react-redux';
 import { RouterProvider } from 'react-router-dom';

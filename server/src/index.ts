@@ -10,6 +10,12 @@
    bug that recreates `audiobook-workspace/` inside the repo. */
 import './load-env.js';
 
+/* Patch console.* to prefix every line with a YYYY-MM-DD HH:mm:ss.SSS
+   stamp. Runtime logging (route handlers, app.listen callback, …) all
+   fires after this call, so every line in logs/server.log is stamped. */
+import { installTimestamps } from './logger.js';
+installTimestamps();
+
 import express from 'express';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
