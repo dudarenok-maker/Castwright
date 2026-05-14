@@ -246,9 +246,16 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
 
     /* Read the original file as a Buffer so the parser dispatcher can route
        binary formats (PDF, EPUB) the same way the upload route does. The
-       text parsers will utf8-decode internally when format calls for it. */
+       text parsers will utf8-decode internally when format calls for it.
+       Also pass sourcePath so the EPUB parser can read directly from the
+       workspace location — bypasses the %TEMP%-roundtrip that races
+       against AV/OneDrive on Windows ("Invalid/missing file" errors). */
     const buffer = await readFile(manuscriptPath);
-    const parsed = await parseManuscript({ buffer, fileName: state.manuscriptFile });
+    const parsed = await parseManuscript({
+      buffer,
+      fileName: state.manuscriptFile,
+      sourcePath: manuscriptPath,
+    });
 
     /* Replace the chapter list with whatever the parser produced. Slugs are
        regenerated from the new titles so the audio dir layout stays in

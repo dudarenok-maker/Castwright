@@ -26,10 +26,23 @@ function stripHtml(html: string): string {
     .trim();
 }
 
-export async function parseEpub(buffer: Buffer, opts: { fileName?: string }): Promise<ParsedManuscript> {
-  const tmp = await mkdtemp(join(tmpdir(), 'epub-'));
-  const filePath = join(tmp, opts.fileName ?? 'book.epub');
-  await writeFile(filePath, buffer);
+export async function parseEpub(buffer: Buffer, opts: { fileName?: string; sourcePath?: string }): Promise<ParsedManuscript> {
+  /* When the caller already has the EPUB on disk (re-parse path: workspace
+     book directory), read it straight from there. The temp-roundtrip path
+     below was originally needed because epub2's createAsync only accepts a
+     file path, but on Windows the mkdtemp+writeFile+createAsync sequence
+     races against AV / OneDrive scanners that touch %TEMP% as soon as a
+     new file appears, producing intermittent "Invalid/missing file" errors.
+     Direct path is also one fewer copy. */
+  let filePath: string;
+  let tmp: string | null = null;
+  if (opts.sourcePath) {
+    filePath = opts.sourcePath;
+  } else {
+    tmp = await mkdtemp(join(tmpdir(), 'epub-'));
+    filePath = join(tmp, opts.fileName ?? 'book.epub');
+    await writeFile(filePath, buffer);
+  }
   try {
     // epub2's createAsync returns the parsed EPub instance.
     const epub = await EPub.createAsync(filePath);
@@ -73,6 +86,8 @@ export async function parseEpub(buffer: Buffer, opts: { fileName?: string }): Pr
         : fileMeta.seriesPosition,
     };
   } finally {
-    await rm(tmp, { recursive: true, force: true });
+    /* Only clean up the tempdir we created. When sourcePath was given we
+       did not create one. */
+    if (tmp) await rm(tmp, { recursive: true, force: true });
   }
 }

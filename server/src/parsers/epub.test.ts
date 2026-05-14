@@ -75,4 +75,33 @@ describe('parseEpub', () => {
     expect(out.seriesPosition).toBe(2);
     expect(out.author).toBe('Jane Doe');
   });
+
+  /* Re-parse path: when sourcePath is supplied, parseEpub reads directly
+     from that path instead of writing the buffer to a fresh tempdir. The
+     buffer arg may even be empty — sourcePath wins. This dodges the
+     %TEMP%-roundtrip race against AV/OneDrive on Windows that produced
+     "Invalid/missing file C:\\Users\\…\\Temp\\epub-XXXX\\manuscript.epub". */
+  describe('parseEpub — sourcePath path (re-parse from workspace location)', () => {
+    it('reads from sourcePath verbatim when provided, ignoring the buffer', async () => {
+      /* Pass an empty buffer to prove sourcePath is the actual data source. */
+      const out = await parseEpub(Buffer.alloc(0), {
+        fileName: 'sample.epub',
+        sourcePath: fixturePath,
+      });
+      expect(out.format).toBe('epub');
+      expect(out.title).toBe('The Solway Light');
+      expect(out.chapters.length).toBeGreaterThan(0);
+    });
+
+    it('does not create a temp directory under %TEMP%/epub-* when sourcePath is provided', async () => {
+      const { readdirSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const before = readdirSync(tmpdir()).filter(n => n.startsWith('epub-')).length;
+      await parseEpub(Buffer.alloc(0), { fileName: 'sample.epub', sourcePath: fixturePath });
+      const after = readdirSync(tmpdir()).filter(n => n.startsWith('epub-')).length;
+      /* Some other test or process may have created an epub-* dir
+         concurrently, so we only assert this call didn't add one. */
+      expect(after).toBe(before);
+    });
+  });
 });
