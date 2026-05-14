@@ -635,6 +635,18 @@ export interface ReparseBookResponse {
   state: { chapters: Array<{ id: number; title: string; slug: string }> };
   chapterCount: number;
   chapterTitles: string[];
+  /** Rich chapter records used by the re-parse confirmation dialog so it
+      can render include/exclude checkboxes with the auto-suggest heuristic
+      against the freshly-parsed chapter list. Optional because pre-feature
+      server builds omitted it; the dialog falls back to chapterTitles
+      when this is missing. */
+  chapters?: Array<{
+    id: number;
+    title: string;
+    slug: string;
+    wordCount: number;
+    excluded: boolean;
+  }>;
 }
 async function realReparseBook(bookId: string): Promise<ReparseBookResponse> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/reparse`, { method: 'POST' });
@@ -661,7 +673,7 @@ async function mockDeleteBook(_bookId: string): Promise<void> {
 
 async function mockReparseBook(_bookId: string): Promise<ReparseBookResponse> {
   await wait(120);
-  return { state: { chapters: [] }, chapterCount: 0, chapterTitles: [] };
+  return { state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] };
 }
 
 /* Per-chapter exclude toggle. Used by the Generate view's chapter row to

@@ -3,7 +3,7 @@
    something different from the current redux state. The Layout component
    owns the reverse direction (Redux→URL sync). */
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   createHashRouter, Navigate, useOutletContext,
   useParams, useSearchParams,
@@ -33,6 +33,8 @@ import { BookLibraryView } from '../views/book-library';
 import { ConfirmMetadataView } from '../views/confirm-metadata';
 import { ChangeLogView } from '../views/change-log';
 import { AccountView } from '../views/account';
+import { ChapterExclusionList } from '../components/chapter-exclusion-list';
+import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 import type { Character, Stage, View } from '../lib/types';
 
 const VALID_VIEWS: View[] = ['manuscript', 'cast', 'library', 'generate', 'listen', 'log'];
@@ -84,12 +86,36 @@ function BooksRoute() {
         if (res) dispatch(libraryActions.hydrate(res));
         if (bookId === b.bookId) dispatch(uiActions.goHome());
 
-        const chapters = result.chapterTitles;
-        const body = <ReparseResultBody bookTitle={b.title} chapters={chapters}/>;
-
         const updatedBook = res?.authors
           .flatMap(a => a.series.flatMap(s => s.books))
           .find(book => book.bookId === b.bookId);
+
+        /* Chapter records for the dialog. The server emits the rich form
+           on current builds; fall back to titles-only for older servers
+           so the dialog still renders something useful. */
+        const dialogChapters = result.chapters ?? result.chapterTitles.map((title, i) => ({
+          id: i + 1, title, slug: '', wordCount: 0, excluded: false,
+        }));
+
+        /* The server preserved excluded flags across the re-parse by
+           best-effort (id then slug match). That's our starting point
+           for the dialog. The user can toggle and we apply any deltas
+           via the per-chapter exclude endpoint before navigating.
+           Shared mutable box: the body's onChange writes here, the
+           onPrimary closure reads it. */
+        const initialExcludedSlugs = new Set<string>(
+          dialogChapters.filter(c => c.excluded).map(c => c.slug || chapterSlug(c.id, c.title)),
+        );
+        const pendingBox: { current: Set<string> } = { current: new Set(initialExcludedSlugs) };
+
+        const body = (
+          <ReparseResultBody
+            bookTitle={b.title}
+            chapters={dialogChapters}
+            initialExcludedSlugs={initialExcludedSlugs}
+            onChangeExcludedSlugs={(s) => { pendingBox.current = s; }}
+          />
+        );
 
         showInfo({
           eyebrow: 'Re-parse',
@@ -97,6 +123,18 @@ function BooksRoute() {
           body,
           primaryLabel: 'Analyse now',
           onPrimary: () => {
+            /* Apply any deltas the user made vs the server's preserved
+               set, then navigate. Fired in parallel so a handful of
+               toggles complete in well under a second. Errors are
+               logged but don't block navigation — the worst case is a
+               chapter that should have been excluded gets analyzed and
+               the user can re-toggle from the Generate view. */
+            void applyExcludedDeltas(
+              b.bookId,
+              dialogChapters,
+              initialExcludedSlugs,
+              pendingBox.current,
+            );
             const target = updatedBook ?? b;
             dispatch(uiActions.openBook({
               id: target.bookId,
@@ -327,13 +365,56 @@ function ListenRoute({ bookId }: { bookId: string }) {
   );
 }
 
+interface ReparseDialogChapter {
+  id: number;
+  title: string;
+  slug: string;
+  wordCount: number;
+  excluded: boolean;
+}
+
 /* Body shown inside the re-parse result dialog. Lives outside its parent's
    stale-closure scope so the model picker reads live redux state — the
    user's choice here lands in ui.selectedModel and the analysing view
-   picks it up when "Analyse now" routes there. */
-function ReparseResultBody({ bookTitle, chapters }: { bookTitle: string; chapters: string[] }): ReactNode {
+   picks it up when "Analyse now" routes there.
+
+   The chapter list is interactive: pre-tick rows the server preserved as
+   excluded, layer the front/back-matter heuristic on top, let the user
+   override per row. The parent owns the final set via a mutable callback
+   (onChangeExcludedSlugs) so the dialog's onPrimary can apply deltas
+   without coupling to dialog state. */
+function ReparseResultBody({
+  bookTitle, chapters, initialExcludedSlugs, onChangeExcludedSlugs,
+}: {
+  bookTitle: string;
+  chapters: ReparseDialogChapter[];
+  initialExcludedSlugs: Set<string>;
+  onChangeExcludedSlugs: (s: Set<string>) => void;
+}): ReactNode {
   const dispatch = useAppDispatch();
   const selectedModel = useAppSelector(s => s.ui.selectedModel);
+  /* Combine the server-preserved excluded set with auto-suggestions
+     against the *new* chapter list. The heuristic only adds (never
+     removes) — if the server preserved Chapter 1 as excluded but the
+     heuristic doesn't think Chapter 1 is front-matter, we still respect
+     the preservation. Computed once on mount; "Reset suggestions" snaps
+     back to this combined baseline. */
+  const suggestedExcludedSlugs = useMemo(() => {
+    const out = new Set(initialExcludedSlugs);
+    for (const ch of chapters) {
+      const slug = ch.slug || chapterSlug(ch.id, ch.title);
+      if (isLikelyFrontMatter(ch.title, ch.wordCount)) out.add(slug);
+    }
+    return out;
+  }, [chapters, initialExcludedSlugs]);
+
+  const [excludedSlugs, setExcludedSlugs] = useState<Set<string>>(suggestedExcludedSlugs);
+  const [showChapterList, setShowChapterList] = useState<boolean>(false);
+
+  /* Mirror local state into the parent's box so the onPrimary closure
+     sees the latest selection without re-rendering. */
+  useEffect(() => { onChangeExcludedSlugs(excludedSlugs); }, [excludedSlugs, onChangeExcludedSlugs]);
+
   return (
     <div className="space-y-3">
       <p>
@@ -341,26 +422,24 @@ function ReparseResultBody({ bookTitle, chapters }: { bookTitle: string; chapter
         chapter{chapters.length === 1 ? '' : 's'} detected in{' '}
         <span className="font-semibold text-ink">{bookTitle}</span>.
       </p>
-      <div className="rounded-2xl border border-ink/10 overflow-hidden">
-        <div className="max-h-64 overflow-y-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-ink/[0.03] text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
-              <tr>
-                <th className="text-right tabular-nums px-3 py-2 w-12">#</th>
-                <th className="text-left px-3 py-2">Chapter title</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-ink/5">
-              {chapters.map((title, i) => (
-                <tr key={i} className="hover:bg-ink/[0.02]">
-                  <td className="text-right tabular-nums text-ink/50 px-3 py-2 w-12">{i + 1}</td>
-                  <td className="text-ink px-3 py-2 font-medium">{title}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+
+      <ChapterExclusionList
+        chapters={chapters}
+        excludedSlugs={excludedSlugs}
+        onToggle={(slug, include) => {
+          setExcludedSlugs(prev => {
+            const next = new Set(prev);
+            if (include) next.delete(slug); else next.add(slug);
+            return next;
+          });
+        }}
+        onSelectAll={() => setExcludedSlugs(new Set())}
+        onResetSuggestions={() => setExcludedSlugs(new Set(suggestedExcludedSlugs))}
+        expanded={showChapterList}
+        onToggleExpanded={() => setShowChapterList(v => !v)}
+        disabled={false}
+        heading="Chapters to analyze"
+      />
 
       <label className="flex items-center justify-between gap-3 rounded-2xl bg-canvas border border-ink/10 px-3 py-2.5">
         <span className="text-sm font-medium text-ink">Analyse with</span>
@@ -384,6 +463,45 @@ function ReparseResultBody({ bookTitle, chapters }: { bookTitle: string; chapter
       </p>
     </div>
   );
+}
+
+/* Fire setChapterExcluded for every chapter whose include/exclude state
+   differs between the server's preserved set and the user's final
+   choice. Runs in parallel — typical bookkeeping is a handful of
+   toggles. Errors are logged but don't propagate; the worst case is a
+   chapter that should have been excluded slips into analysis, and the
+   user can re-toggle from the Generate view. */
+async function applyExcludedDeltas(
+  bookId: string,
+  chapters: ReparseDialogChapter[],
+  initialSlugs: Set<string>,
+  finalSlugs: Set<string>,
+): Promise<void> {
+  const slugToId = new Map<string, number>();
+  for (const c of chapters) {
+    const slug = c.slug || chapterSlug(c.id, c.title);
+    slugToId.set(slug, c.id);
+  }
+  const calls: Array<Promise<unknown>> = [];
+  /* Newly excluded — slugs in final but not in initial. */
+  for (const slug of finalSlugs) {
+    if (initialSlugs.has(slug)) continue;
+    const id = slugToId.get(slug);
+    if (id == null) continue;
+    calls.push(api.setChapterExcluded(bookId, id, true).catch(err => {
+      console.error('[reparse] failed to exclude chapter', id, err);
+    }));
+  }
+  /* Newly included — slugs in initial but not in final. */
+  for (const slug of initialSlugs) {
+    if (finalSlugs.has(slug)) continue;
+    const id = slugToId.get(slug);
+    if (id == null) continue;
+    calls.push(api.setChapterExcluded(bookId, id, false).catch(err => {
+      console.error('[reparse] failed to include chapter', id, err);
+    }));
+  }
+  await Promise.all(calls);
 }
 
 /* Catch-all → redirect home. Replaces parseHash's fallback to { kind: 'books' }. */
