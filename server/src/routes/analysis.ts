@@ -67,6 +67,61 @@ export function sortEvidence(characters: CharacterOutput[]): void {
   }
 }
 
+/* Normalises text for evidence-vs-source substring matching. Tolerates
+   typography drift (smart quotes, em-dashes, ellipses, whitespace) that
+   legitimate verbatim copies often pick up, while still failing for
+   stitched quotes that concatenate non-adjacent passages. */
+export function normaliseForMatch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[—–]/g, '-')
+    .replace(/…/g, '...')
+    .replace(/^[\s"'`]+|[\s"'`]+$/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+/* Drops evidence quotes that aren't a substring of the source text. The
+   skill prompt asks the model to copy quotes verbatim, but some models
+   stitch separate utterances together to hit a length target — the
+   stitched "quote" won't appear as a contiguous run anywhere in the
+   source, so it's dropped here. Mutates characters in place so the
+   cleaned arrays flow into the cache + SSE payload. `log` is invoked
+   once per character that had drops, surfacing the catch in the
+   analysing-view log. */
+export function verifyEvidenceAgainstSource(
+  characters: CharacterOutput[],
+  sourceText: string,
+  log: (message: string) => void,
+): { totalDropped: number; affectedCharacters: number } {
+  const normalisedSource = normaliseForMatch(sourceText);
+  let totalDropped = 0;
+  let affectedCharacters = 0;
+  for (const c of characters) {
+    if (!c.evidence?.length) continue;
+    const kept: typeof c.evidence = [];
+    const dropped: string[] = [];
+    for (const e of c.evidence) {
+      const norm = normaliseForMatch(e.quote);
+      if (norm.length > 0 && normalisedSource.includes(norm)) {
+        kept.push(e);
+      } else {
+        dropped.push(e.quote);
+      }
+    }
+    if (dropped.length > 0) {
+      totalDropped += dropped.length;
+      affectedCharacters += 1;
+      const head = dropped[0].slice(0, 60).replace(/\s+/g, ' ');
+      log(`Dropped ${dropped.length} fabricated quote${dropped.length === 1 ? '' : 's'} on ${c.id} (e.g. "${head}${dropped[0].length > 60 ? '…' : ''}").`);
+      console.warn(`[analysis] dropped ${dropped.length} unverified quote(s) on ${c.id}`);
+    }
+    c.evidence = kept;
+  }
+  return { totalDropped, affectedCharacters };
+}
+
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
    and scenes (distinct chapters appeared in) from stage 2 output once we
    have it, and attach to each character. */
@@ -370,6 +425,14 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       stage1 = cache.stage1;
       /* Legacy caches predate longest-first ordering; re-sort on load. */
       sortEvidence(stage1.characters);
+      /* Legacy caches also predate verifyEvidenceAgainstSource — sweep
+         fabricated quotes from cached rosters too, and rewrite the cache
+         once if anything was dropped. */
+      const verified = verifyEvidenceAgainstSource(stage1.characters, record.sourceText, msg => log(0, msg));
+      if (verified.totalDropped > 0) {
+        cache.stage1 = stage1;
+        await saveAnalysisCache(manuscriptId, cache);
+      }
     } else {
       send({ kind: 'phase', phaseId: 0, progress: 0.02, label: PHASES[0].label });
       log(0, `Asking ${analyzerLabel} to identify characters…`);
@@ -432,6 +495,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       );
       stage1ActualMs = Date.now() - stage1Start;
       sortEvidence(stage1.characters);
+      verifyEvidenceAgainstSource(stage1.characters, record.sourceText, msg => log(0, msg));
       cache.stage1 = stage1;
       await saveAnalysisCache(manuscriptId, cache);
     }
