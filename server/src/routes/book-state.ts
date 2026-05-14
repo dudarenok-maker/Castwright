@@ -388,10 +388,31 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     };
     putManuscript(record);
 
+    /* Per-chapter wordCount lets the re-parse dialog auto-suggest
+       front/back-matter exclusion against the *new* chapter list —
+       the parser may have re-split sections in ways that flip what's
+       short or what's recognised by title. parsed.chapters carries
+       the body verbatim from the parser; word count is cheap. */
+    const wordCountByChapterId = new Map<number, number>();
+    for (const c of parsed.chapters) {
+      const body = (c.body ?? '').trim();
+      wordCountByChapterId.set(c.id, body ? body.split(/\s+/).filter(Boolean).length : 0);
+    }
+
     res.json({
       state: nextState,
       chapterCount: newChapters.length,
       chapterTitles: newChapters.map(c => c.title),
+      /* Rich chapter records so the re-parse dialog can render
+         checkboxes (preserved excluded + auto-suggest by wordCount)
+         identical to the confirm-stage form. */
+      chapters: newChapters.map(c => ({
+        id: c.id,
+        title: c.title,
+        slug: c.slug,
+        wordCount: wordCountByChapterId.get(c.id) ?? 0,
+        excluded: !!c.excluded,
+      })),
     });
   } catch (e) {
     console.error('[book-state] reparse failed', e);

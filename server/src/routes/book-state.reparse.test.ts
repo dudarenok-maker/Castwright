@@ -170,6 +170,39 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
     expect(ch2.excluded).toBeFalsy();
   });
 
+  it('returns rich chapter records (id, title, slug, wordCount, excluded) in the response', async () => {
+    /* The re-parse dialog renders include/exclude checkboxes against
+       this list. Without wordCount it can't run the heuristic; without
+       excluded it can't pre-tick the server-preserved set; without slug
+       the toggle-endpoint can't be addressed. All four fields are
+       load-bearing. */
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const cur = JSON.parse(readFileSync(statePath, 'utf8'));
+    cur.chapters = [
+      { id: 1, title: 'Chapter One', slug: '01-chapter-one', excluded: true },
+      { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+    ];
+    writeFileSync(statePath, JSON.stringify(cur));
+
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.chapters)).toBe(true);
+    expect(res.body.chapters.length).toBe(2);
+    for (const c of res.body.chapters as Array<{ id: number; title: string; slug: string; wordCount: number; excluded: boolean }>) {
+      expect(typeof c.id).toBe('number');
+      expect(typeof c.title).toBe('string');
+      expect(typeof c.slug).toBe('string');
+      expect(c.slug.length).toBeGreaterThan(0);
+      expect(typeof c.wordCount).toBe('number');
+      expect(c.wordCount).toBeGreaterThanOrEqual(0);
+      expect(typeof c.excluded).toBe('boolean');
+    }
+    /* The preserved excluded flag must surface as excluded: true on the
+       chapter whose id carried over. */
+    const preserved = res.body.chapters.find((c: { id: number }) => c.id === 1);
+    expect(preserved.excluded).toBe(true);
+  });
+
   it('preserves the excluded flag across reparse (slug match — id shifted)', async () => {
     /* If the parser reshuffles chapter ids but produces a chapter with
        a slug that matches an old excluded one, carry the flag over.
