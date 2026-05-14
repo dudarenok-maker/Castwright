@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { parseAndValidate, repairUnescapedQuotes } from './gemini.js';
+import { parseAndValidate, repairUnescapedQuotes, stripCodeFences } from './gemini.js';
 
 describe('repairUnescapedQuotes', () => {
   it('is a no-op on already-valid JSON', () => {
@@ -98,6 +98,73 @@ describe('repairUnescapedQuotes', () => {
   });
 });
 
+describe('stripCodeFences', () => {
+  it('is a no-op on plain JSON with no fence wrapper', () => {
+    const ok = '{"a":"hello","b":42}';
+    expect(stripCodeFences(ok)).toBe(ok);
+  });
+
+  it('is a no-op (byte-identical) on JSON with leading/trailing whitespace but no fence', () => {
+    /* Trim happens INSIDE the strip helper to detect a fence, but if none
+       is found we return the original buffer untouched — the parser will
+       tolerate the whitespace, and we want to avoid spuriously flagging
+       `repaired:true` on benign formatting. */
+    const ok = '  \n{"a":"hello"}\n  ';
+    expect(stripCodeFences(ok)).toBe(ok);
+  });
+
+  it('strips a ```json\\n ... \\n``` fence (the canonical qwen3.5:4b failure mode)', () => {
+    /* Exact pattern from the ch13 failure: "Unexpected token '`',
+       \"```json { \"... is not valid JSON". Model emitted its JSON wrapped
+       in a fenced block despite the system prompt's "no code fences" rule. */
+    const wrapped = '```json\n{"a":"hello","b":42}\n```';
+    const stripped = stripCodeFences(wrapped);
+    expect(JSON.parse(stripped)).toEqual({ a: 'hello', b: 42 });
+  });
+
+  it('strips a bare ```\\n ... \\n``` fence (no language tag)', () => {
+    const wrapped = '```\n{"a":"hello"}\n```';
+    expect(JSON.parse(stripCodeFences(wrapped))).toEqual({ a: 'hello' });
+  });
+
+  it('strips an inline ```json {...} ``` fence (no newline between fence and body)', () => {
+    const wrapped = '```json {"a":"hello"} ```';
+    expect(JSON.parse(stripCodeFences(wrapped))).toEqual({ a: 'hello' });
+  });
+
+  it('tolerates leading/trailing whitespace around the fence', () => {
+    const wrapped = '  \n```json\n{"a":"hello"}\n```\n  ';
+    expect(JSON.parse(stripCodeFences(wrapped))).toEqual({ a: 'hello' });
+  });
+
+  it('does NOT strip stray backticks that appear inside string values', () => {
+    /* Anchored at start-of-trimmed-input: a `"value with `backticks`"` in
+       the middle of a payload must not trigger fence-stripping. */
+    const ok = '{"q":"value with `backticks` in it","n":"x"}';
+    expect(stripCodeFences(ok)).toBe(ok);
+    expect(JSON.parse(stripCodeFences(ok))).toEqual({ q: 'value with `backticks` in it', n: 'x' });
+  });
+
+  it('preserves the wrapped JSON byte-for-byte except for the fence markers', () => {
+    /* The body inside the fence must round-trip unchanged — including
+       backslash-escapes that the JSON parser cares about. */
+    const body = '{"s":"line1\\nline2\\t\\"quoted\\""}';
+    const wrapped = '```json\n' + body + '\n```';
+    expect(stripCodeFences(wrapped)).toBe(body);
+    expect(JSON.parse(stripCodeFences(wrapped)).s).toBe('line1\nline2\t"quoted"');
+  });
+
+  it('is safe on empty / fence-only / unclosed-fence inputs', () => {
+    expect(stripCodeFences('')).toBe('');
+    /* No leading triple-backtick → no-op. */
+    expect(stripCodeFences('``')).toBe('``');
+    /* Leading fence but no closing fence: strip the opener and return what
+       remains. The downstream JSON.parse will still fail, but the caller's
+       invalid-json branch handles that. We don't want this helper to throw. */
+    expect(() => stripCodeFences('```json\n{"a":1}')).not.toThrow();
+  });
+});
+
 describe('parseAndValidate — repair integration', () => {
   const schema = z.object({
     quote: z.string(),
@@ -121,6 +188,36 @@ describe('parseAndValidate — repair integration', () => {
     expect(() => JSON.parse(broken)).toThrow();
 
     const r = parseAndValidate(broken, schema);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.repaired).toBe(true);
+      expect(r.value.quote).toBe('Wren, let the dog go," Mr. Casper ordered.');
+      expect(r.value.note).toBe('x');
+    }
+  });
+
+  it('returns ok with repaired:true when the raw was wrapped in ```json fences', () => {
+    /* The canonical ch13 failure pattern — JSON.parse on the raw text
+       chokes on the leading backtick. Strip-then-parse must succeed and
+       flag the result as `repaired` so the caller logs the cleanup. */
+    const fenced = '```json\n{"quote":"hi","note":"n"}\n```';
+    expect(() => JSON.parse(fenced)).toThrow();
+
+    const r = parseAndValidate(fenced, schema);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.repaired).toBe(true);
+      expect(r.value).toEqual({ quote: 'hi', note: 'n' });
+    }
+  });
+
+  it('returns ok with repaired:true when fence AND quote-escape repair are BOTH needed', () => {
+    /* Worst-case: model emits the fence wrapper AND has unescaped dialogue
+       quotes inside a string value. Both cleanup passes must run, in order. */
+    const fenced = '```json\n{"quote":"Wren, let the dog go," Mr. Casper ordered.","note":"x"}\n```';
+    expect(() => JSON.parse(fenced)).toThrow();
+
+    const r = parseAndValidate(fenced, schema);
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.repaired).toBe(true);
