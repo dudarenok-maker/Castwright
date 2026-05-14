@@ -496,9 +496,13 @@ export function AnalysingView({ manuscriptId, title, wordCount, model, onComplet
                       {live && live.chapters.length > 0 && (
                         <LiveChapterTicker live={live}/>
                       )}
-                      {p.id === 0 && <LiveCastPreview/>}
                     </>
                   )}
+                  {/* Cast roster is Phase 0's outcome — keep it visible after
+                      Phase 0 completes (or is skipped via a cached resume after
+                      a model switch) so the user doesn't lose the detected
+                      cast just because the active phase advanced. */}
+                  {p.id === 0 && <LiveCastPreview/>}
                   {phaseLogs.length > 0 && (
                     isActive
                       ? <ActivePhaseLog lines={phaseLogs}/>
