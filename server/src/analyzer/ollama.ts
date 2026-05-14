@@ -283,11 +283,14 @@ export class OllamaAnalyzer implements Analyzer {
            attempt and schema-validation retries, INVALID_JSON_RETRY_TEMPERATURE
            for invalid-json retries. See runStage for the kind-aware branch. */
         temperature,
-        /* 8K is plenty for chapter prompts (~3–4K typical) and keeps the
-           KV cache well within the ~1.4 GB VRAM headroom on an 8 GB box
-           after the 6.6 GB qwen3.5:9b weight load. Bump only if chapter
-           prompts start running long and the chunker can't help. */
-        num_ctx: 8192,
+        /* 16K covers long chapters (~12–15K chars ≈ 3–4K tokens) plus the
+           inlined response schema + skill system prompt without spilling.
+           At 8K we observed silent hangs on 12K+ char chapters where the
+           combined prompt brushed the context limit and Ollama's
+           structured-output path stalled with no first byte. The 4B
+           weights (~3 GB) leave enough headroom on an 8 GB box for the
+           larger KV cache. */
+        num_ctx: 16384,
       },
     };
 
