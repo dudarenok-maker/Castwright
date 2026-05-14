@@ -22,6 +22,7 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   manuscript: { sentences: [] },
   revisions: { pending: [], drift: [] },
   changeLog: { events: [] },
+  bookMeta: { draft: null, saved: {} },
   ...overrides,
 });
 
@@ -143,6 +144,38 @@ describe('persistenceMiddleware — payload shape', () => {
     expect(putBookState).toHaveBeenCalledWith('book-1', {
       slice: 'state',
       patch: { castConfirmed: true },
+    });
+  });
+
+  it('sends the full editable metadata for bookMeta/commitDraft (slice="state")', async () => {
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      bookMeta: {
+        draft: null,
+        saved: {
+          'book-1': {
+            title: 'Renamed',
+            author: 'Mike Dudarenok',
+            series: 'NCT · Book 2',
+            narratorCredit: 'Anders Vale',
+            genre: 'Literary fiction',
+            publicationDate: '2026-05-09',
+          },
+        },
+      },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'bookMeta/commitDraft' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'state',
+      patch: {
+        title: 'Renamed',
+        author: 'Mike Dudarenok',
+        series: 'NCT · Book 2',
+        narratorCredit: 'Anders Vale',
+        genre: 'Literary fiction',
+        publicationDate: '2026-05-09',
+      },
     });
   });
 });

@@ -51,4 +51,16 @@ export const SUPPORTED_APPS: ListenerApp[] = [
     description: 'Embedded chapters display correctly. Stream to any device on your network or beyond.',
     sendVerb: 'Send to library',
   },
+  {
+    /* First-class integration target — daily-driver reader on the user's
+       Android device. Ships ahead of others when real handoff lands. */
+    id: 'pocketbook',
+    name: 'PocketBook',
+    glyph: 'PB',
+    gradient: ['#2C7A4B', '#0F3A23'],
+    platforms: ['Android', 'iOS', 'E-Ink'],
+    tagline: 'E-reader maker’s own audiobook app.',
+    description: 'Side-load M4B into the PocketBook Reader app — works on PocketBook e-readers with audio support and on the phone apps. Chapter markers and cover art are honoured.',
+    sendVerb: 'Send to PocketBook',
+  },
 ];

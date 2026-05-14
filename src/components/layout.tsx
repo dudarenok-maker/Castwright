@@ -10,6 +10,7 @@ import { revisionsActions } from '../store/revisions-slice';
 import { libraryActions } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
 import { changeLogActions } from '../store/change-log-slice';
+import { bookMetaActions, narratorNameFromCast } from '../store/book-meta-slice';
 import {
   buildChapterRegenEvent,
   buildCharacterRegenEvent,
@@ -178,11 +179,47 @@ export function Layout() {
         }));
         dispatch(revisionsActions.hydrateFromBookState(res.revisions ?? null));
         dispatch(changeLogActions.hydrateFromBookState(res.changeLog ?? null));
+        /* Editable Listen-view metadata: seed from state.json's editorial
+           fields, falling back to the cast narrator's name when the book
+           predates the narratorCredit field. */
+        dispatch(bookMetaActions.hydrateFromBookState({
+          bookId,
+          state: {
+            title:           res.state.title,
+            author:          res.state.author,
+            series:          res.state.series,
+            narratorCredit:  res.state.narratorCredit ?? null,
+            genre:           res.state.genre ?? null,
+            publicationDate: res.state.publicationDate ?? null,
+          },
+          narratorFallback: narratorNameFromCast(res.cast?.characters ?? []),
+        }));
       })
       .catch(err => { console.warn('[book-state] hydrate skipped:', err.message); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, stageKind]);
+
+  /* Book-meta fallback hydration — covers the mock-mode path where
+     getBookState rejects (no disk workspace) and the realer flow where the
+     library lands before the per-book state fetch. Seeds saved[bookId] from
+     the library entry the first time the user opens a book; the on-disk
+     fetch above overwrites it with the authoritative state.json values when
+     it lands. */
+  const libraryBooks = useAppSelector(s => s.library.books);
+  const bookMetaSavedKeys = useAppSelector(s => Object.keys(s.bookMeta.saved).join('|'));
+  useEffect(() => {
+    if (!bookId || stageKind !== 'ready') return;
+    if (bookMetaSavedKeys.split('|').includes(bookId)) return;
+    const entry = libraryBooks.find(b => b.bookId === bookId);
+    if (!entry) return;
+    dispatch(bookMetaActions.hydrateFromBookState({
+      bookId,
+      state: { title: entry.title, author: entry.author, series: entry.series },
+      narratorFallback: narratorNameFromCast(characters),
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId, stageKind, libraryBooks, bookMetaSavedKeys]);
 
   /* Voice matching — fires once when analysis completes (stage becomes
      'confirm'). Real backend: POST /api/books/:bookId/voice-match. */

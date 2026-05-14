@@ -40,6 +40,12 @@ export interface BookStateJson {
   coverGradient: [string, string];
   createdAt: string;
   updatedAt: string;
+  /* Editable audiobook metadata surfaced by the Listen view's metadata editor.
+     Optional so older state.json files keep loading; absent fields fall back
+     to library/cast defaults on the frontend. */
+  narratorCredit?: string | null;
+  genre?: string | null;
+  publicationDate?: string | null;
 }
 
 export interface LibraryBook {

@@ -121,3 +121,28 @@ export function Pill({ children, color = 'neutral' }: { children: ReactNode; col
   };
   return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${map[color]}`}>{children}</span>;
 }
+
+/* Coming-soon affordance for still-mocked sections (listener-app cards,
+   download tiles, export-queue rows). Sits in the title row of each card
+   and pairs with disabled action buttons so smoke passes can't mistake demo
+   UI for shipped behaviour. */
+export function ComingSoonBadge({ label = 'Soon' }: { label?: string }) {
+  return (
+    <span data-testid="coming-soon-badge"
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-peach/20 text-magenta border border-peach/40">
+      {label}
+    </span>
+  );
+}
+
+/* Section-level banner above any block whose cards/rows are visually present
+   but non-functional. One-liner so the section header still fits on a single
+   row at viewport widths the rest of the app supports. */
+export function MockedPreviewBanner({ children }: { children: ReactNode }) {
+  return (
+    <div data-testid="mocked-preview-banner"
+         className="mb-3 px-4 py-2 rounded-xl bg-peach/10 border border-peach/30 text-[12px] text-ink/70 leading-relaxed">
+      <span className="font-semibold text-magenta">Mocked preview</span> — {children}
+    </div>
+  );
+}

@@ -114,3 +114,67 @@ describe('book-state router — changeLog slice', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('book-state router — state slice editable metadata', () => {
+  it('PUT slice=state round-trips title/author/series/narratorCredit/genre/publicationDate', async () => {
+    const patch = {
+      title: 'Renamed Title',
+      author: 'Different Author',
+      series: 'Renamed Series',
+      narratorCredit: 'New Narrator',
+      genre: 'Sci-fi',
+      publicationDate: '2026-12-25',
+    };
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch });
+    expect(put.status).toBe(204);
+
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.title).toBe('Renamed Title');
+    expect(onDisk.author).toBe('Different Author');
+    expect(onDisk.series).toBe('Renamed Series');
+    expect(onDisk.narratorCredit).toBe('New Narrator');
+    expect(onDisk.genre).toBe('Sci-fi');
+    expect(onDisk.publicationDate).toBe('2026-12-25');
+    /* Should NOT have mutated identity / paths. */
+    expect(onDisk.bookId).toBe(bookId);
+    expect(onDisk.manuscriptId).toBe('m_test');
+    expect(onDisk.manuscriptFile).toBe('manuscript.txt');
+  });
+
+  it('PUT slice=state preserves prior values when patch fields are absent', async () => {
+    /* Touch only narratorCredit; the title from the previous test should stick. */
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { narratorCredit: 'Yet Another' } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.title).toBe('Renamed Title');
+    expect(onDisk.narratorCredit).toBe('Yet Another');
+  });
+
+  it('PUT slice=state stores explicit null for cleared optional fields', async () => {
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { genre: null, publicationDate: null } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.genre).toBeNull();
+    expect(onDisk.publicationDate).toBeNull();
+  });
+
+  it('PUT slice=state ignores attempts to overwrite bookId/manuscriptId', async () => {
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { bookId: 'hacked', manuscriptId: 'hacked' } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.bookId).toBe(bookId);
+    expect(onDisk.manuscriptId).toBe('m_test');
+  });
+});
