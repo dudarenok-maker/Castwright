@@ -271,6 +271,21 @@ const HEARTBEAT_MS_THRESHOLDS = [30_000, 60_000, 120_000, 180_000, 300_000, 420_
    pumping 200 chunks/s doesn't drown the client. 2 s is high-signal:
    noticeable to the user, low overhead on the wire. */
 const HEARTBEAT_EVENT_THROTTLE_MS = 2_000;
+/* If no chunk lands for this long during an in-flight call, surface a
+   warning log line so the user knows something is wrong rather than
+   mistaking the bar's slow creep (or a frozen ticker) for activity.
+   Re-armed once a chunk lands; per-chapter scope. */
+const SILENCE_THRESHOLD_MS = 45_000;
+/* Per-chapter Phase 0a budget — TTFT-dominated, not input-size-dominated.
+   The per-chapter call's wall-clock cost on a small model (Gemma 4 31B,
+   Gemini 2.5 Flash) is largely time-to-first-token plus a small fixed
+   generation cost; chapter input length contributes very little until you
+   get into the multi-tens-of-KB range. Using an input-proportional
+   estimate (e.g. stage1EstMs × chBytes/sourceChars) produced wildly
+   wrong values like "~0:02" for a 121-char Dedication chapter, making
+   every cast call read "over budget" within seconds. 30s is a sensible
+   floor that matches typical observed times. */
+const PHASE0_PER_CHAPTER_BASELINE_MS = 30_000;
 /* Stage 2 chapter concurrency. Default 2 keeps us well under Gemini's
    free-tier RPM limits while roughly halving wall-clock time vs sequential.
    Bump via STAGE2_CONCURRENCY env if your tier (or the model) allows; cap
@@ -455,11 +470,8 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      widened to `any` when captured by runChapter). */
   const analyzer = analyzerLocal;
   const recordRef = record;
-  const isGemini = (process.env.ANALYZER ?? 'manual').toLowerCase() === 'gemini';
-  const activeModelId = isGemini
-    ? (requestedModel ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it')
-    : undefined;
-  const analyzerLabel = isGemini ? humanModel(activeModelId) : 'cowork reviewer';
+  const activeModelId = requestedModel ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
+  const analyzerLabel = humanModel(activeModelId);
   if (requestedModel) {
     console.log(`[analysis] manuscript=${manuscriptId} model=${requestedModel}`);
   }
@@ -598,16 +610,20 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
 
       async function runCastChapter(i: number): Promise<void> {
         const ch = recordRef.chapterHints[i];
-        /* Rough per-chapter estimate: a fraction of the static stage-1
-           baseline by char count. After a couple of chapters complete
-           the live ticker still ticks against this — we don't refine
-           because the dominant signal for the user is "X of N chapters
-           done", which the bar already shows. */
-        const chapterEstMs = Math.max(2000, Math.round(stage1EstMs * (ch.body.length / Math.max(1, sourceChars))));
+        /* TTFT-dominated baseline. Don't scale by chapter byte count —
+           that produced misleading "~0:02" estimates that flagged every
+           tiny chapter (Dedication, Preface) as "over budget" within
+           seconds of starting. Add a tiny char-proportional component
+           for very large chapters so the live ticker still makes sense
+           on a 50KB chapter. */
+        const chapterEstMs = PHASE0_PER_CHAPTER_BASELINE_MS
+          + Math.round(0.5 * ch.body.length); // ~0.5ms/char on top of the baseline
         const startedChAt = Date.now();
         castInFlight.set(i, { chapterIndex: i, chapterTitle: ch.title, chapterEstMs, startedAt: startedChAt, elapsedMs: 0 });
 
+        let lastChunkAt = Date.now();
         let lastHeartbeatAt = 0;
+        let warnedSilenceAt: number | null = null;
         log(0, `Chapter ${i + 1}/${totalCastChapters} cast — ${ch.title} (${ch.body.length.toLocaleString()} chars) via ${analyzerLabel}…`);
         const result = await analyzer.runStage1Chapter(
           manuscriptId,
@@ -618,9 +634,23 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
               const slot = castInFlight.get(i);
               if (slot) slot.elapsedMs = elapsed;
               sendCastLiveTick();
+              /* Silence watchdog. Without this the user has no idea
+                 whether a slow Phase 0a call is rate-limited, hung, or
+                 just slow on free-tier Gemma. Warn once per silence
+                 stretch, re-arm on the next chunk. */
+              const sinceLastChunk = Date.now() - lastChunkAt;
+              if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
+                if (warnedSilenceAt === null || Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS) {
+                  warnedSilenceAt = Date.now();
+                  log(0, `Chapter ${i + 1}/${totalCastChapters} — no response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)}, still waiting.`);
+                }
+              } else {
+                warnedSilenceAt = null;
+              }
             },
             onChunk: (info) => {
-              const now = Date.now();
+              lastChunkAt = Date.now();
+              const now = lastChunkAt;
               if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
               lastHeartbeatAt = now;
               const charsPerSec = info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;

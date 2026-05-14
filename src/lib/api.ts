@@ -787,7 +787,6 @@ const MOCK_USER_SETTINGS: UserSettings = {
   defaultAnalysisModel: 'gemma-4-31b-it',
   defaultTtsEngine:     'local',
   defaultTtsModelKey:   'coqui-xtts-v2',
-  analyzerMode:         'manual',
   sidecarUrl:           'http://localhost:9000',
   workspaceDirOverride: null,
   apiKeyStatus:         'unset',
@@ -821,10 +820,10 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
   /* Strip read-only fields a misbehaving caller might submit so the mock
      path enforces the same invariant as the server. */
   const { displayName, defaultAnalysisModel, defaultTtsEngine, defaultTtsModelKey,
-          analyzerMode, sidecarUrl, workspaceDirOverride } = patch;
+          sidecarUrl, workspaceDirOverride } = patch;
   Object.assign(MOCK_USER_SETTINGS, Object.fromEntries(
     Object.entries({ displayName, defaultAnalysisModel, defaultTtsEngine,
-                     defaultTtsModelKey, analyzerMode, sidecarUrl, workspaceDirOverride })
+                     defaultTtsModelKey, sidecarUrl, workspaceDirOverride })
       .filter(([, v]) => v !== undefined),
   ));
   return { ...MOCK_USER_SETTINGS };

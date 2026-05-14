@@ -24,7 +24,6 @@ const SERVER_FIXTURE: UserSettings = {
   defaultAnalysisModel: 'gemma-4-31b-it',
   defaultTtsEngine:     'local',
   defaultTtsModelKey:   'coqui-xtts-v2',
-  analyzerMode:         'manual',
   sidecarUrl:           'http://localhost:9000',
   workspaceDirOverride: null,
   apiKeyStatus:         'unset',

@@ -63,7 +63,6 @@ describe('user-settings router', () => {
     expect(res.body.defaultAnalysisModel).toBe('gemma-4-31b-it');
     expect(res.body.defaultTtsEngine).toBe('local');
     expect(res.body.defaultTtsModelKey).toBe('coqui-xtts-v2');
-    expect(res.body.analyzerMode).toBe('manual');
     expect(res.body.sidecarUrl).toBe('http://localhost:9000');
     expect(res.body.workspaceDirOverride).toBeNull();
   });
@@ -77,7 +76,7 @@ describe('user-settings router', () => {
     expect(res.body.displayName).toBe('Test User');
     expect(res.body.defaultAnalysisModel).toBe('gemini-2.5-flash');
     // Untouched defaults survive the merge.
-    expect(res.body.analyzerMode).toBe('manual');
+    expect(res.body.sidecarUrl).toBe('http://localhost:9000');
 
     // On disk
     expect(existsSync(userSettingsPath)).toBe(true);
@@ -147,7 +146,7 @@ describe('user-settings router', () => {
   it('PUT rejects an out-of-range enum with 400', async () => {
     const res = await request(app)
       .put('/api/user/settings')
-      .send({ analyzerMode: 'definitely-not-a-mode' });
+      .send({ defaultTtsEngine: 'definitely-not-an-engine' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid/i);
   });

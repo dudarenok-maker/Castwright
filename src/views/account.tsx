@@ -13,8 +13,6 @@ import type { TtsModelKey, UserSettingsPatch } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import { saveAccountSettings } from '../store/account-slice';
 
-type AnalyzerMode = 'manual' | 'gemini';
-
 export function AccountView() {
   const dispatch = useAppDispatch();
   const account = useAppSelector(s => s.account);
@@ -27,7 +25,6 @@ export function AccountView() {
   const [defaultAnalysisModel,  setDefaultAnalysisModel]  = useState(account.defaultAnalysisModel);
   const [defaultTtsEngine,      setDefaultTtsEngine]      = useState<TtsEngineId>(account.defaultTtsEngine);
   const [defaultTtsModelKey,    setDefaultTtsModelKey]    = useState<TtsModelKey>(account.defaultTtsModelKey);
-  const [analyzerMode,          setAnalyzerMode]          = useState<AnalyzerMode>(account.analyzerMode);
   const [sidecarUrl,            setSidecarUrl]            = useState(account.sidecarUrl);
   const [workspaceDirOverride,  setWorkspaceDirOverride]  = useState<string>(account.workspaceDirOverride ?? '');
   const [showSaved,             setShowSaved]             = useState(false);
@@ -37,11 +34,10 @@ export function AccountView() {
     setDefaultAnalysisModel(account.defaultAnalysisModel);
     setDefaultTtsEngine(account.defaultTtsEngine);
     setDefaultTtsModelKey(account.defaultTtsModelKey);
-    setAnalyzerMode(account.analyzerMode);
     setSidecarUrl(account.sidecarUrl);
     setWorkspaceDirOverride(account.workspaceDirOverride ?? '');
   }, [account.hydrated, account.displayName, account.defaultAnalysisModel,
-      account.defaultTtsEngine, account.defaultTtsModelKey, account.analyzerMode,
+      account.defaultTtsEngine, account.defaultTtsModelKey,
       account.sidecarUrl, account.workspaceDirOverride]);
 
   /* When the engine switches, the selected modelKey may not belong to the
@@ -66,11 +62,10 @@ export function AccountView() {
         || defaultAnalysisModel  !== account.defaultAnalysisModel
         || defaultTtsEngine      !== account.defaultTtsEngine
         || defaultTtsModelKey    !== account.defaultTtsModelKey
-        || analyzerMode          !== account.analyzerMode
         || sidecarUrl            !== account.sidecarUrl
         || workspaceDirty;
   }, [displayName, defaultAnalysisModel, defaultTtsEngine, defaultTtsModelKey,
-      analyzerMode, sidecarUrl, workspaceDirty, account]);
+      sidecarUrl, workspaceDirty, account]);
 
   const onSave = async () => {
     const patch: UserSettingsPatch = {
@@ -78,7 +73,6 @@ export function AccountView() {
       defaultAnalysisModel,
       defaultTtsEngine,
       defaultTtsModelKey,
-      analyzerMode,
       sidecarUrl,
       workspaceDirOverride: workspaceDirOverride.trim() === '' ? null : workspaceDirOverride.trim(),
     };
@@ -150,17 +144,7 @@ export function AccountView() {
         </FormCard>
 
         <FormCard title="Server configuration"
-          hint="Non-secret overrides for what's in server/.env. Analyzer mode and sidecar URL take effect on the next request; workspace directory needs a server restart.">
-          <FieldRow label="Analyzer mode"
-            sublabel="Manual writes a prompt for you to drop into a separate window; Gemini calls the API directly.">
-            <select
-              value={analyzerMode}
-              onChange={(e) => setAnalyzerMode(e.target.value as AnalyzerMode)}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30">
-              <option value="manual">Manual (file-drop handoff)</option>
-              <option value="gemini">Gemini (live API)</option>
-            </select>
-          </FieldRow>
+          hint="Non-secret overrides for what's in server/.env. Sidecar URL takes effect on the next request; workspace directory needs a server restart.">
           <FieldRow label="Sidecar URL"
             sublabel="Local TTS sidecar endpoint. Default: http://localhost:9000">
             <input type="text"

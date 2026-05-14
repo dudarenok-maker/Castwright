@@ -44,10 +44,10 @@ mkdirSync(resolve(AUDIO_DIR, 'voices'), { recursive: true });
 app.use('/audio', express.static(AUDIO_DIR, { fallthrough: true, maxAge: '1h' }));
 
 ensureWorkspace();
-/* Warm the user-settings cache so sync resolvers (getResolvedAnalyzerMode /
-   getResolvedSidecarUrl) see real values from disk before the first request
-   lands. Fire-and-forget: a missing or malformed file falls through to
-   defaults inside readUserSettings(). */
+/* Warm the user-settings cache so sync resolvers (getResolvedSidecarUrl)
+   see real values from disk before the first request lands. Fire-and-forget:
+   a missing or malformed file falls through to defaults inside
+   readUserSettings(). */
 void readUserSettings();
 app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, maxAge: '1h' }));
 
