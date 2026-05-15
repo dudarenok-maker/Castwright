@@ -205,6 +205,13 @@ export const chaptersSlice = createSlice({
            the Generate view greys excluded chapters out without waiting
            on a separate fetch. */
         excluded: c.excluded || undefined,
+        /* Engine-drift tracking (plan 35). Carry the TTS model key that
+           rendered this chapter's existing audio so the chapter row can
+           render a drift badge when it differs from the project's
+           current ui.ttsModelKey. Absent on unrendered chapters; the
+           server backfills it from segments.json for legacy chapters. */
+        audioModelKey: c.audioModelKey,
+        audioRenderedAt: c.audioRenderedAt,
       } as Chapter));
       s.lastError = null;
       s.generationStartedAt = null;
@@ -315,6 +322,12 @@ export const chaptersSlice = createSlice({
         for (const k of Object.keys(ch.characters)) {
           if (ch.characters[k] !== 'skipped') ch.characters[k] = 'done';
         }
+        /* Engine-drift tracking (plan 35). Stamp the rendered engine
+           the moment the chapter completes so the drift badge can flip
+           without waiting for a state.json reload. Absence in the tick
+           is tolerated (older server before this field landed) — the
+           chapter stays at its previously-hydrated value. */
+        if (ev.audioModelKey) ch.audioModelKey = ev.audioModelKey;
         return;
       }
 

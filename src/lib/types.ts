@@ -136,7 +136,22 @@ export interface BookStateJson {
   isStandalone: boolean;
   manuscriptFile: string;
   castConfirmed: boolean;
-  chapters: Array<{ id: number; title: string; slug: string; duration?: string; excluded?: boolean }>;
+  chapters: Array<{
+    id: number;
+    title: string;
+    slug: string;
+    duration?: string;
+    excluded?: boolean;
+    /** TTS model key that produced this chapter's existing audio.
+        Stamped at render time and lazy-backfilled from the segments
+        file for legacy chapters. Mirror of the server's BookStateJson
+        type (`server/src/workspace/scan.ts`). Drives the engine-drift
+        badge per plan 35. */
+    audioModelKey?: TtsModelKey;
+    /** ISO timestamp when the audio was synthesised; mirrors the
+        segments file's `synthesizedAt`. */
+    audioRenderedAt?: string;
+  }>;
   coverGradient: [string, string];
   createdAt: string;
   updatedAt: string;

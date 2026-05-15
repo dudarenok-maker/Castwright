@@ -124,6 +124,13 @@ export function GenerationView({
   const failed        = activeChapters.filter(c => c.state === 'failed').length;
   const inProgressCnt = activeChapters.filter(c => c.state === 'in_progress').length;
   const queued        = activeChapters.filter(c => c.state === 'queued').length;
+  /* Engine drift count (plan 35). A drifted chapter has audio recorded
+     with a different TTS engine than the project's current selection —
+     usually because the user changed the model picker after generation.
+     Drives both the top-of-view banner and the per-row caption. */
+  const driftedCount  = activeChapters.filter(c =>
+    c.state === 'done' && c.audioModelKey != null && c.audioModelKey !== modelKey,
+  ).length;
   /* Used by the header action: Resume/Pause is meaningless once every chapter
      has finished synthesising, so the button flips to Regenerate. Failed
      chapters keep the Pause/Resume affordance because the user might still
@@ -411,6 +418,25 @@ export function GenerationView({
         </div>
       )}
 
+      {driftedCount > 0 && (
+        /* Engine drift banner (plan 35). Counts chapters whose recorded
+           audio engine differs from the project's current TTS model.
+           Regenerating any drifted chapter through its row-level
+           Regenerate button refreshes the audio with the active engine
+           and decrements this counter. */
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/70 px-5 py-4 flex items-start gap-3 fade-in">
+          <IconWarning className="w-5 h-5 text-amber-700 shrink-0 mt-0.5"/>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-amber-900">
+              {driftedCount} chapter{driftedCount === 1 ? '' : 's'} generated with a different engine
+            </p>
+            <p className="text-sm text-amber-800/90 mt-0.5">
+              Current engine is <span className="font-medium">{ttsModelLabel(modelKey)}</span>. Drifted chapters keep their original voices until you regenerate them — use Regenerate on each chapter row to refresh, or stay on a single engine for book-wide consistency.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 mb-8">
         <div className="flex items-center justify-between mb-3">
           <p className="text-sm font-semibold text-ink">Overall progress</p>
@@ -441,7 +467,8 @@ export function GenerationView({
                         onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
                         onPreview={onPreview}
                         onToggleExcluded={handleToggleExcluded}
-                        excludeBusy={excludeBusy.has(ch.id)}/>
+                        excludeBusy={excludeBusy.has(ch.id)}
+                        activeModelKey={modelKey}/>
           ))}
         </div>
         <aside className="lg:sticky lg:top-20 self-start bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
@@ -521,11 +548,17 @@ interface ChapterRowProps {
   onPreview: (chapterId: number) => void;
   onToggleExcluded: (chapterId: number, excluded: boolean) => void;
   excludeBusy: boolean;
+  /** Active TTS model on the project. Used to compute engine drift: a
+      chapter whose `audioModelKey` differs gets a "Generated with X"
+      badge prompting the user to regenerate for consistency
+      (plan 35). */
+  activeModelKey: TtsModelKey;
 }
 
 function ChapterRow({
   chapter, characters, bookId, expanded, onToggle, paused, blocked, stalled, charStats, charPositions,
   onRegenerate, onRegenerateCharacterInChapter, onPreview, onToggleExcluded, excludeBusy,
+  activeModelKey,
 }: ChapterRowProps) {
   /* Excluded chapters get a compact, greyed-out row with a single
      "Include in book" action. Skip the full state-machine rendering
@@ -626,6 +659,19 @@ function ChapterRow({
             <span className="block text-[11px] text-magenta tabular-nums mt-0.5 truncate">
               {liveSpeaker ? `Synthesising ${liveSpeaker.name} · ` : ''}
               line {liveCurrent.toLocaleString()} of {liveTotal.toLocaleString()}
+            </span>
+          ) : chapter.state === 'done' && chapter.audioModelKey && chapter.audioModelKey !== activeModelKey ? (
+            /* Engine drift caption (plan 35). When a Done chapter's
+               recorded engine differs from the project's current TTS
+               model, surface it in place of the words/lines static meta
+               so the user notices on the row that's eye-level with the
+               Regenerate-this-chapter link below. Tooltip carries the
+               full message; the inline copy stays compact. */
+            <span
+              className="block text-[11px] text-amber-700 tabular-nums mt-0.5 truncate"
+              title={`Generated with ${ttsModelLabel(chapter.audioModelKey)}. Current engine is ${ttsModelLabel(activeModelKey)}. Regenerate to refresh.`}
+            >
+              ⚠ Generated with {ttsModelLabel(chapter.audioModelKey)} · current engine is {ttsModelLabel(activeModelKey)}
             </span>
           ) : chapterTotals && (
             <span className="block text-[11px] text-ink/50 tabular-nums mt-0.5 truncate">

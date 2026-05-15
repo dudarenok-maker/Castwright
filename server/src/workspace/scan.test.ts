@@ -366,3 +366,110 @@ describe('scanLibrary derived stats', () => {
     expect(b.runtime).toBe('10m');
   });
 });
+
+describe('scanLibrary backfills audioModelKey from segments.json', () => {
+  /* Regression for the engine-drift feature (plan 35). A book rendered
+     before the audioModelKey/audioRenderedAt fields landed in state.json
+     should have those fields lazy-migrated from each chapter's segments
+     file on the next scan. The disk write is idempotent so subsequent
+     scans on a fully-backfilled book are free. */
+  it('upgrades state.json with audioModelKey + audioRenderedAt when missing', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Pre-Drift Book', {
+      castConfirmed: true,
+      chapters: [
+        { id: 1, slug: 'pd-01' },
+        { id: 2, slug: 'pd-02' },
+      ],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    /* writeSegments writes modelKey 'xtts_v2' + a fresh synthesizedAt
+       — both audio files present so the chapter counts as rendered. */
+    writeSegments(audioRoot, 'pd-01', 120);
+    writeSegments(audioRoot, 'pd-02', 240);
+    writeFileSync(join(audioRoot, 'pd-01.mp3'), '');
+    writeFileSync(join(audioRoot, 'pd-02.mp3'), '');
+
+    await flatten(); // triggers scanBook → backfill writes back
+
+    /* Re-read state.json — both chapters now carry audioModelKey + audioRenderedAt. */
+    const fs = await import('node:fs/promises');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const persisted = JSON.parse(await fs.readFile(statePath, 'utf-8'));
+    expect(persisted.chapters).toHaveLength(2);
+    for (const ch of persisted.chapters) {
+      expect(ch.audioModelKey).toBe('xtts_v2');
+      expect(typeof ch.audioRenderedAt).toBe('string');
+      expect(ch.audioRenderedAt.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('leaves an already-stamped chapter untouched and does not bump updatedAt', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Already-Stamped Book', {
+      castConfirmed: true,
+      chapters: [
+        { id: 1, slug: 'as-01' },
+      ],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeSegments(audioRoot, 'as-01', 60);
+    writeFileSync(join(audioRoot, 'as-01.mp3'), '');
+
+    /* Pre-stamp the chapter with a DIFFERENT engine than the segments
+       file claims. The backfill should NOT overwrite an existing stamp
+       — once written it's authoritative until the chapter regenerates. */
+    const fs = await import('node:fs/promises');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const before = JSON.parse(await fs.readFile(statePath, 'utf-8'));
+    before.chapters[0].audioModelKey = 'kokoro-v1';
+    before.chapters[0].audioRenderedAt = '2026-01-01T00:00:00.000Z';
+    const beforeUpdatedAt = before.updatedAt;
+    await fs.writeFile(statePath, JSON.stringify(before));
+
+    await flatten();
+
+    const after = JSON.parse(await fs.readFile(statePath, 'utf-8'));
+    /* Existing stamp wins. */
+    expect(after.chapters[0].audioModelKey).toBe('kokoro-v1');
+    expect(after.chapters[0].audioRenderedAt).toBe('2026-01-01T00:00:00.000Z');
+    /* updatedAt wasn't bumped because no backfill was needed. The whole
+       file is byte-identical to `before`, but at minimum updatedAt must
+       not change. */
+    expect(after.updatedAt).toBe(beforeUpdatedAt);
+  });
+
+  it('does not touch state.json when no chapters need backfilling and all are already stamped', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('All-Stamped Book', {
+      castConfirmed: true,
+      chapters: [
+        { id: 1, slug: 'ast-01' },
+        { id: 2, slug: 'ast-02' },
+      ],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeSegments(audioRoot, 'ast-01', 60);
+    writeSegments(audioRoot, 'ast-02', 60);
+    writeFileSync(join(audioRoot, 'ast-01.mp3'), '');
+    writeFileSync(join(audioRoot, 'ast-02.mp3'), '');
+
+    const fs = await import('node:fs/promises');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const before = JSON.parse(await fs.readFile(statePath, 'utf-8'));
+    for (const ch of before.chapters) {
+      ch.audioModelKey = 'xtts_v2';
+      ch.audioRenderedAt = '2026-04-01T00:00:00.000Z';
+    }
+    await fs.writeFile(statePath, JSON.stringify(before));
+    const beforeContent = await fs.readFile(statePath, 'utf-8');
+
+    await flatten();
+
+    /* Steady-state read: no chapter needs backfilling, so state.json
+       is byte-identical to before. This pins the "free idempotent
+       repeat" property of the migration helper. */
+    const afterContent = await fs.readFile(statePath, 'utf-8');
+    expect(afterContent).toBe(beforeContent);
+  });
+});
