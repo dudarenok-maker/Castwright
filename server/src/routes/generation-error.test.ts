@@ -51,18 +51,21 @@ describe('describeSynthesisError', () => {
     expect(out.fatal).toBe(true);
   });
 
-  it('flags CUDA device-side assert as fatal with a restart-the-sidecar message', () => {
+  it('flags CUDA device-side assert as fatal with an auto-restart message', () => {
     /* The actual failure mode the screenshot pinned: the sidecar's GPT
        decoder hit an out-of-bounds embedding lookup, the CUDA context is
-       now corrupted for the rest of the process, and only a sidecar
-       restart will fix it. Classifying as fatal guarantees the user gets
-       a single banner instead of the cascade detector burning two
-       chapters' worth of identical 500s before it bails on its own. */
+       now corrupted for the rest of the process, only a fresh Python
+       process recovers — start.ps1's supervisor loop catches the
+       sidecar's poison-code exit and respawns it. Classifying as fatal
+       guarantees the user gets a single banner instead of the cascade
+       detector burning two chapters' worth of identical 500s before it
+       bails on its own. */
     const out = describeSynthesisError(new Error(
       'Local TTS sidecar returned 500: {"detail":"CUDA error: device-side assert triggered\\nCUDA kernel errors might be asynchronously reported…"}',
     ));
     expect(out.fatal).toBe(true);
-    expect(out.errorReason).toMatch(/restart/i);
+    expect(out.errorReason).toMatch(/auto-restart/i);
+    expect(out.errorReason).toMatch(/retry/i);
     expect(out.errorReason).toMatch(/cuda/i);
   });
 
@@ -76,7 +79,7 @@ describe('describeSynthesisError', () => {
       'Local TTS sidecar returned 503: {"detail":"TTS sidecar is in a poisoned CUDA state…","poisoned":true}',
     ));
     expect(out.fatal).toBe(true);
-    expect(out.errorReason).toMatch(/restart/i);
+    expect(out.errorReason).toMatch(/auto-restart/i);
   });
 
   it('returns the raw message as non-fatal for unknown errors', () => {

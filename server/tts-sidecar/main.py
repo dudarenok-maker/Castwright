@@ -24,6 +24,7 @@ import io
 import logging
 import os
 import re
+import threading
 import wave
 from typing import Any, Optional
 
@@ -52,6 +53,47 @@ _CUDA_POISON_RE = re.compile(
     r"out of memory.*CUDA|CUDA out of memory",
     re.IGNORECASE,
 )
+
+# Exit code used to signal "the supervisor (start.ps1's while-loop) should
+# restart me — my CUDA context is poisoned and only a fresh process can
+# clear it." Picked outside the conventional 0/1/2 range so a normal Ctrl+C
+# or syntax error doesn't trigger a respawn. start.ps1 explicitly checks
+# for this value; any other exit code breaks the loop and stays down.
+_POISON_EXIT_CODE = 42
+
+# How long to wait after flagging poison before we actually exit. The 503
+# JSON response is small (~120 bytes) and uvicorn's HTTP/1.1 keep-alive
+# socket buffers flush within a couple of ms, but we give a generous
+# margin so a slow client read on Windows loopback can't drop the body.
+# Override via TTS_SIDECAR_POISON_EXIT_DELAY_MS for tests.
+_POISON_EXIT_DELAY_MS = int(os.environ.get("TTS_SIDECAR_POISON_EXIT_DELAY_MS", "500"))
+
+
+def _schedule_poison_exit() -> None:
+    """Schedule a hard process exit on a background thread so the inbound
+    /synthesize response can flush BEFORE we vanish. Idempotent — multiple
+    callers (the first poisoned synth + any concurrent in-flight ones)
+    race onto the same timer, but only the first wins because of the
+    `_exit_scheduled` flag the caller checks.
+
+    Uses os._exit (not sys.exit) so we bypass uvicorn's graceful-shutdown
+    sequence — that path attempts to close socket connections cleanly,
+    which on a poisoned CUDA context risks blocking forever on a
+    background thread waiting on a corrupted GPU op. Hard-exit is the
+    right call: the supervisor in start.ps1 brings us straight back up."""
+    def _do_exit() -> None:
+        log.error(
+            "Exiting with code %d so the start.ps1 supervisor restarts a "
+            "fresh Python process with an uncorrupted CUDA context. "
+            "Click Retry on the failed chapter once /health responds again.",
+            _POISON_EXIT_CODE,
+        )
+        # os._exit skips atexit handlers and Python finalisers — exactly
+        # what we want when the CUDA context is unsafe to touch.
+        os._exit(_POISON_EXIT_CODE)
+
+    delay_s = _POISON_EXIT_DELAY_MS / 1000.0
+    threading.Timer(delay_s, _do_exit).start()
 
 
 def _parse_bool(value: Optional[str], default: bool) -> bool:
@@ -148,11 +190,14 @@ class CoquiEngine(Engine):
         # of empty_cache(), reload, or model recreation will reset it. Only
         # restarting Python clears the state. While poisoned, /synthesize
         # fast-fails 503 with a structured detail so the Node classifier can
-        # surface a single "restart the sidecar" banner instead of letting
-        # the cascade detector burn through two chapters' worth of failures.
-        # `_poison_reason` carries the original CUDA error string for /health.
+        # surface a single "auto-restarting" banner; meanwhile the
+        # `_exit_scheduled` flag stops us from scheduling overlapping exit
+        # timers when concurrent in-flight requests all hit the same poison
+        # detection. `_poison_reason` carries the original CUDA error string
+        # for /health diagnostics.
         self._poisoned: bool = False
         self._poison_reason: Optional[str] = None
+        self._exit_scheduled: bool = False
 
     def _resolve_runtime_options(self, torch_module: Any) -> dict[str, Any]:
         """Resolve device + fp16 + deepspeed knobs into a concrete config dict.
@@ -573,18 +618,25 @@ async def synthesize(req: Request) -> Response:
         # lifetime of the process — empty_cache(), del model, even creating
         # a fresh model won't reset it. Only a process restart will.
         # Flag the engine so subsequent /synthesize calls fail-fast with a
-        # 503 + structured detail (handled at the top of this route) and
-        # the Node-side classifier can surface a single banner.
+        # 503 + structured detail (handled at the top of this route), AND
+        # schedule a deferred os._exit(_POISON_EXIT_CODE) so the start.ps1
+        # supervisor wraps us in a while-loop and brings up a fresh process
+        # with a clean CUDA context. The user sees a brief "click Retry"
+        # window while uvicorn rebinds :9000 (~2 s, model lazy-loads on the
+        # next /synthesize).
         is_cuda_poisoned = bool(_CUDA_POISON_RE.search(err_str))
         if is_cuda_poisoned and isinstance(engine, CoquiEngine):
             engine._poisoned = True
             engine._poison_reason = err_str
             log.error(
-                "CUDA poisoned — the sidecar process must be restarted to "
-                "recover. Subsequent /synthesize calls will fast-fail 503. "
-                "Trigger: engine=%s model=%s voice=%s text_preview=%r",
+                "CUDA poisoned — scheduling self-exit so the supervisor "
+                "respawns me. Trigger: engine=%s model=%s voice=%s "
+                "text_preview=%r",
                 engine_id, model, voice, truncated,
             )
+            if not engine._exit_scheduled:
+                engine._exit_scheduled = True
+                _schedule_poison_exit()
             return JSONResponse(
                 {"detail": err_str, "poisoned": True},
                 status_code=503,
