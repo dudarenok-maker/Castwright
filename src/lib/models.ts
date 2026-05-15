@@ -44,8 +44,10 @@ import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 export const DEFAULT_MODEL = FRONTEND_ACCOUNT_DEFAULTS.defaultAnalysisModel;
 
 /* Grouped form for <optgroup>-rendering pickers. Keeps the optgroup labels
-   in one place so the upload / re-parse / analysing pickers stay in sync. */
+   in one place so the upload / re-parse / analysing pickers stay in sync.
+   Gemini renders first because it's now the default analyzer engine —
+   local Ollama follows as the on-device alternative. */
 export const MODEL_OPTION_GROUPS: Array<{ engine: 'local' | 'gemini'; label: string; models: ModelOption[] }> = [
-  { engine: 'local',  label: 'Local (Ollama)', models: MODEL_OPTIONS.filter(m => m.engine === 'local') },
-  { engine: 'gemini', label: 'Gemini API',     models: MODEL_OPTIONS.filter(m => m.engine === 'gemini') },
+  { engine: 'gemini', label: 'Gemini API (default)',         models: MODEL_OPTIONS.filter(m => m.engine === 'gemini') },
+  { engine: 'local',  label: 'Local Ollama (on-device)',     models: MODEL_OPTIONS.filter(m => m.engine === 'local') },
 ];
