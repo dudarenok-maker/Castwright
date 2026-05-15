@@ -195,6 +195,15 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
     window.getSelection()?.removeAllRanges();
   }
 
+  /* Defensive guard for the empty-chapters transient (e.g. the manuscript
+     slice rehydrating after a reparse, or a stale URL pointing at a book
+     whose chapter list hasn't loaded yet). The whole view dereferences
+     currentChapter.* down in the main pane, so without this the page
+     crashes with "Cannot read properties of undefined (reading 'id')".
+     Render nothing rather than a half-built skeleton — the parent route
+     swaps us back in as soon as chapters arrive. */
+  if (!currentChapter) return null;
+
   return (
     <div className="max-w-[1500px] mx-auto px-6 py-8 grid grid-cols-[280px_1fr_360px] gap-6" ref={containerRef}>
       {/* Sidebar shell — flex column with no outer scroll. Each card owns
@@ -224,7 +233,7 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
               />
             </label>
           </div>
-          <ul className="flex-1 min-h-0 overflow-y-auto px-5 pb-5 space-y-0.5">
+          <ul className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-5 pb-5 space-y-0.5">
             {filteredChapters.map(ch => {
               const active = currentChapterId === ch.id;
               const excluded = !!ch.excluded;
@@ -273,7 +282,7 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
           {/* Single scroll region for the cast list + "Add character" +
               help text, mirroring the prior in-card flow but bounded so
               the chapter card next to it isn't crowded out. */}
-          <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-5">
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-5 pb-5">
             <ul className="space-y-1">
               {characters.map(c => {
                 const active = filterChar === c.id;
@@ -578,7 +587,7 @@ function SegmentInspector({ seg, characters, findChar, onClose, onReassignSegmen
           <span className="text-sm font-semibold text-ink tabular-nums">{Math.round(minConf * 100)}%</span>
         </div>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         <div className="px-5 mt-5">
           <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">Reassign whole segment to</p>
           <div className="flex flex-col gap-1">
