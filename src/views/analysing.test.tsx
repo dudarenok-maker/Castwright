@@ -8,13 +8,14 @@ import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { AnalysingView } from './analysing';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
-import type { AnalyseResponse, BookStateResponse, Character } from '../lib/types';
+import type { AnalyseResponse, BookStateResponse, Character, DroppedQuotesResponse } from '../lib/types';
 
 /* Captured handlers so tests can drive phase/log events at will. */
 let capturedOpts: AnalyseOpts | undefined;
 let capturedSubsetCall: { chapterIds: number[]; opts: AnalyseOpts | undefined } | undefined;
 let resolveSubset: ((value: AnalyseResponse) => void) | undefined;
 let getBookStateImpl: ((bookId: string) => Promise<BookStateResponse>) | undefined;
+let getDroppedQuotesImpl: ((bookId: string) => Promise<DroppedQuotesResponse>) | undefined;
 const loadAnalyzerSpy = vi.fn();
 const unloadSidecarSpy = vi.fn();
 const getSidecarHealthSpy = vi.fn();
@@ -40,6 +41,10 @@ vi.mock('../lib/api', async () => {
       },
       getBookState: (bookId: string) =>
         getBookStateImpl ? getBookStateImpl(bookId) : Promise.reject(new Error('no impl')),
+      getDroppedQuotes: (bookId: string) =>
+        getDroppedQuotesImpl
+          ? getDroppedQuotesImpl(bookId)
+          : Promise.resolve({ manuscriptId: 'm1', batches: [] }),
       getOllamaHealth: () => getOllamaHealthSpy(),
       getSidecarHealth: () => getSidecarHealthSpy(),
       loadAnalyzer:    () => { loadAnalyzerSpy(); return Promise.resolve({ status: 'ready' as const }); },
@@ -55,6 +60,7 @@ beforeEach(() => {
   capturedSubsetCall = undefined;
   resolveSubset = undefined;
   getBookStateImpl = undefined;
+  getDroppedQuotesImpl = undefined;
   loadAnalyzerSpy.mockReset();
   unloadSidecarSpy.mockReset();
   getSidecarHealthSpy.mockReset();
@@ -752,5 +758,129 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
     expect(screen.getByText('Narrator')).toBeInTheDocument();
     expect(screen.getByText('Wren')).toBeInTheDocument();
     expect(screen.getByText('Marlow')).toBeInTheDocument();
+  });
+});
+
+describe('AnalysingView — dropped-quotes panel', () => {
+  function renderWithBookId() {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+    });
+    return render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  /* getBookState needs SOME impl so the failed-chapter hydration effect
+     doesn't reject loudly — return an empty BookStateResponse. The
+     book-state hydration isn't what these tests exercise. */
+  function setEmptyBookState() {
+    getBookStateImpl = () => Promise.resolve({
+      state: {
+        bookId: 'b1', manuscriptId: 'm1', title: '',
+        author: '', series: '', seriesPosition: null, isStandalone: true,
+        manuscriptFile: '', castConfirmed: false, chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: '2026-05-15T00:00:00.000Z',
+        updatedAt: '2026-05-15T00:00:00.000Z',
+      },
+      cast: null, manuscript: null, manuscriptEdits: null,
+      revisions: null, completedSlugs: [], changeLog: null,
+      analysis: { failedChapterIds: [] },
+    } as BookStateResponse);
+  }
+
+  it('renders nothing when the endpoint returns an empty envelope', async () => {
+    setEmptyBookState();
+    getDroppedQuotesImpl = () => Promise.resolve({ manuscriptId: 'm1', batches: [] });
+    renderWithBookId();
+
+    /* Wait for any rendering settled — the panel must not appear. */
+    await waitFor(() => expect(screen.queryByText(/verifier dropped/i)).not.toBeInTheDocument());
+  });
+
+  it('renders the latest batch grouped by character with the drop reason rendered', async () => {
+    setEmptyBookState();
+    getDroppedQuotesImpl = () => Promise.resolve({
+      manuscriptId: 'm1',
+      batches: [
+        {
+          recordedAt: '2026-05-15T10:00:00.000Z',
+          route: 'analysis-stream',
+          totalDropped: 3,
+          affectedCharacters: 2,
+          entries: [
+            { characterId: 'Wren', characterName: 'Wren', quote: 'fabricated 1', truncated: false, reason: 'not_in_source' },
+            { characterId: 'Wren', characterName: 'Wren', quote: 'fabricated 2', truncated: false, reason: 'not_in_source' },
+            { characterId: 'Marlow',  characterName: 'Marlow',  quote: '   ', truncated: false, reason: 'empty_after_normalisation' },
+          ],
+        },
+      ],
+    });
+    renderWithBookId();
+
+    /* Header reports the totals. */
+    expect(await screen.findByText(/Verifier dropped 3 quotes across 2 characters/)).toBeInTheDocument();
+    /* Both character groups render. */
+    expect(screen.getByText('Wren')).toBeInTheDocument();
+    expect(screen.getByText('Marlow')).toBeInTheDocument();
+    /* Quotes themselves appear (with quote marks rendered around them). */
+    expect(screen.getByText(/fabricated 1/)).toBeInTheDocument();
+    expect(screen.getByText(/fabricated 2/)).toBeInTheDocument();
+    /* Reason rendered for the empty-after-normalisation branch. */
+    expect(screen.getByText('empty after normalisation')).toBeInTheDocument();
+  });
+
+  it('shows the [truncated] marker for entries truncated server-side', async () => {
+    setEmptyBookState();
+    getDroppedQuotesImpl = () => Promise.resolve({
+      manuscriptId: 'm1',
+      batches: [{
+        recordedAt: '2026-05-15T10:00:00.000Z',
+        route: 'analysis-stream',
+        totalDropped: 1, affectedCharacters: 1,
+        entries: [{
+          characterId: 'verbose', characterName: 'Verbose',
+          quote: 'this was originally much longer',
+          truncated: true,
+          reason: 'not_in_source',
+        }],
+      }],
+    });
+    renderWithBookId();
+    expect(await screen.findByText(/\[truncated\]/)).toBeInTheDocument();
+  });
+
+  it('renders only the latest batch when multiple batches exist', async () => {
+    setEmptyBookState();
+    getDroppedQuotesImpl = () => Promise.resolve({
+      manuscriptId: 'm1',
+      batches: [
+        {
+          recordedAt: '2026-05-15T09:00:00.000Z',
+          route: 'analysis-stream',
+          totalDropped: 1, affectedCharacters: 1,
+          entries: [{ characterId: 'a', characterName: 'OldOne', quote: 'old fabrication', truncated: false, reason: 'not_in_source' }],
+        },
+        {
+          recordedAt: '2026-05-15T10:00:00.000Z',
+          route: 'analysis-chapters',
+          totalDropped: 1, affectedCharacters: 1,
+          entries: [{ characterId: 'b', characterName: 'NewOne', quote: 'recent fabrication', truncated: false, reason: 'not_in_source' }],
+        },
+      ],
+    });
+    renderWithBookId();
+    expect(await screen.findByText('NewOne')).toBeInTheDocument();
+    expect(screen.queryByText('OldOne')).not.toBeInTheDocument();
+    expect(screen.queryByText(/old fabrication/)).not.toBeInTheDocument();
   });
 });

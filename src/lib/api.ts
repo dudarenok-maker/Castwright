@@ -10,7 +10,7 @@ import type {
   Voice, VoiceSample, TtsModelKey, LibraryResponse, VoiceLibraryResponse,
   ImportResponse, ConfirmBookRequest, ConfirmBookResponse,
   BookStateResponse, PutStateRequest, WorkspaceChangeLogResponse,
-  UserSettings, UserSettingsPatch,
+  UserSettings, UserSettingsPatch, DroppedQuotesResponse,
 } from './types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
@@ -457,6 +457,23 @@ async function realGetBookState(bookId: string): Promise<BookStateResponse> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/state`);
   if (!res.ok) throw new Error(`Book state fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
+}
+
+/* Per-book dropped-quote ledger. Append-only file written by the two
+   analysis routes after the verify pass — see
+   server/src/store/dropped-quotes.ts for the envelope shape and
+   server/src/routes/book-state.ts for the handler. Returns an empty
+   envelope when the file doesn't exist yet (no analysis run has
+   produced drops). */
+async function realGetDroppedQuotes(bookId: string): Promise<DroppedQuotesResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/dropped-quotes`);
+  if (!res.ok) throw new Error(`Dropped-quotes fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function mockGetDroppedQuotes(_bookId: string): Promise<DroppedQuotesResponse> {
+  await wait(40);
+  return { manuscriptId: 'mock', batches: [] };
 }
 
 async function realPutBookState(bookId: string, req: PutStateRequest): Promise<void> {
@@ -1164,6 +1181,7 @@ const real = {
   setVoicePin:       realSetVoicePin,
   getBookState:      realGetBookState,
   putBookState:      realPutBookState,
+  getDroppedQuotes:  realGetDroppedQuotes,
   importManuscript:  realImportManuscript,
   confirmBook:       realConfirmBook,
   uploadManuscript:  realUploadManuscript,
@@ -1210,6 +1228,7 @@ const mock = {
   setVoicePin:       mockSetVoicePin,
   getBookState:      mockGetBookState,
   putBookState:      mockPutBookState,
+  getDroppedQuotes:  mockGetDroppedQuotes,
   importManuscript:  mockImportManuscript,
   confirmBook:       mockConfirmBook,
   uploadManuscript:  mockUploadManuscript,

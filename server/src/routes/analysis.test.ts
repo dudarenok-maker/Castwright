@@ -186,6 +186,68 @@ describe('verifyEvidenceAgainstSource', () => {
     ];
     expect(() => verifyEvidenceAgainstSource(chars, SOURCE, () => {})).not.toThrow();
   });
+
+  it('returns entries[] empty when nothing was dropped', () => {
+    const chars: CharacterOutput[] = [{
+      id: 'halloran', name: 'Halloran', role: 'captain', color: 'c',
+      evidence: [{ quote: 'Hard to starboard' }],
+    }];
+    const result = verifyEvidenceAgainstSource(chars, SOURCE, () => {});
+    expect(result.entries).toEqual([]);
+  });
+
+  it('returns one dropped entry per fabricated quote with characterName captured at drop-time', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const chars: CharacterOutput[] = [{
+      id: 'halloran', name: 'Halloran', role: 'captain', color: 'c',
+      evidence: [
+        { quote: 'Hard to starboard. Cold supper it is, then. Aye.', note: 'stitched' },
+        { quote: 'Halloran said something profound.' },
+      ],
+    }];
+    const result = verifyEvidenceAgainstSource(chars, SOURCE, () => {});
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries[0]).toMatchObject({
+      characterId: 'halloran',
+      characterName: 'Halloran',
+      reason: 'not_in_source',
+      truncated: false,
+      note: 'stitched',
+    });
+    expect(result.entries[1].note).toBeUndefined();
+    warn.mockRestore();
+  });
+
+  it('tags empty-after-normalisation drops with the distinct reason', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const chars: CharacterOutput[] = [{
+      id: 'voiceless', name: 'Voiceless', role: 'r', color: 'c',
+      evidence: [
+        /* Only quote marks + whitespace — normaliseForMatch strips
+           these to '' so the verifier sees an empty needle. */
+        { quote: '   "  "   ' },
+      ],
+    }];
+    const result = verifyEvidenceAgainstSource(chars, SOURCE, () => {});
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].reason).toBe('empty_after_normalisation');
+    warn.mockRestore();
+  });
+
+  it('truncates dropped quotes that exceed the 2000-char cap and flags truncated:true', async () => {
+    const { MAX_QUOTE_CHARS } = await import('../store/dropped-quotes.js');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const huge = 'a'.repeat(MAX_QUOTE_CHARS + 500); // not in source
+    const chars: CharacterOutput[] = [{
+      id: 'verbose', name: 'Verbose', role: 'r', color: 'c',
+      evidence: [{ quote: huge }],
+    }];
+    const result = verifyEvidenceAgainstSource(chars, SOURCE, () => {});
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].quote.length).toBe(MAX_QUOTE_CHARS);
+    expect(result.entries[0].truncated).toBe(true);
+    warn.mockRestore();
+  });
 });
 
 describe('mergeRosterChapter — Phase 0a roster merging', () => {

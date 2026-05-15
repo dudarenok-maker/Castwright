@@ -171,6 +171,39 @@ export interface BookStateResponse {
   analysis?: { failedChapterIds: number[] };
 }
 
+/** Drop-reason enum mirrored from server/src/store/dropped-quotes.ts.
+    Two logical branches collapse out of verifyEvidenceAgainstSource:
+    - `not_in_source`: normalised quote isn't a substring of the source
+      (the "stitched fabrication" path)
+    - `empty_after_normalisation`: pure whitespace / punctuation / empty
+      after normaliseForMatch */
+export type DropReason = 'not_in_source' | 'empty_after_normalisation';
+
+export interface DroppedQuoteEntry {
+  characterId: string;
+  characterName: string;
+  /** Capped at 2000 chars server-side — see `truncated`. */
+  quote: string;
+  truncated: boolean;
+  reason: DropReason;
+  /** Verbatim copy of the model's optional `note` field on the
+      original evidence entry. */
+  note?: string;
+}
+
+export interface DroppedQuotesBatch {
+  recordedAt: string;
+  route: 'analysis-stream' | 'analysis-chapters';
+  totalDropped: number;
+  affectedCharacters: number;
+  entries: DroppedQuoteEntry[];
+}
+
+export interface DroppedQuotesResponse {
+  manuscriptId: string;
+  batches: DroppedQuotesBatch[];
+}
+
 export type StateSlice = 'cast' | 'manuscript' | 'revisions' | 'state' | 'changeLog';
 
 export interface PutStateRequest {

@@ -116,6 +116,14 @@ export function changeLogJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'change-log.json');
 }
 
+/** Per-book dropped-quote ledger. Each Phase 0 verify pass appends a
+    batch; we never overwrite, so the user can audit what the model
+    fabricated across every analyser run (model switch, retry, etc.).
+    File envelope shape lives in store/dropped-quotes.ts. */
+export function droppedQuotesJsonPath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'dropped-quotes.json');
+}
+
 /** Workspace-level voice metadata (pin flags). Spans every book in the
     workspace, so it lives at the workspace root rather than inside any
     one book's .audiobook/ folder. */

@@ -17,6 +17,15 @@ import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../w
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { normaliseForMatch as normaliseForMatchShared } from '../util/text-match.js';
+import {
+  appendBatch,
+  loadDroppedQuotes,
+  saveDroppedQuotes,
+  truncateQuote,
+  type DropReason,
+  type DroppedQuoteEntry,
+  type DroppedQuotesBatch,
+} from '../store/dropped-quotes.js';
 
 /* Human-readable label for a Gemini model id. Kept in lockstep with
    src/lib/models.ts MODEL_OPTIONS — the frontend sends the id, we render
@@ -93,37 +102,84 @@ export const normaliseForMatch = normaliseForMatchShared;
    source, so it's dropped here. Mutates characters in place so the
    cleaned arrays flow into the cache + SSE payload. `log` is invoked
    once per character that had drops, surfacing the catch in the
-   analysing-view log. */
+   analysing-view log.
+
+   The `entries` field on the return value lets callers persist a
+   batch to .audiobook/dropped-quotes.json — quotes are truncated at
+   MAX_QUOTE_CHARS so an outlier multi-paragraph fabrication doesn't
+   bloat the ledger. The `c.name` is captured at drop-time so the
+   ledger stays human-readable even after a later merge renames the
+   character. */
 export function verifyEvidenceAgainstSource(
   characters: CharacterOutput[],
   sourceText: string,
   log: (message: string) => void,
-): { totalDropped: number; affectedCharacters: number } {
+): { totalDropped: number; affectedCharacters: number; entries: DroppedQuoteEntry[] } {
   const normalisedSource = normaliseForMatch(sourceText);
   let totalDropped = 0;
   let affectedCharacters = 0;
+  const entries: DroppedQuoteEntry[] = [];
   for (const c of characters) {
     if (!c.evidence?.length) continue;
     const kept: typeof c.evidence = [];
-    const dropped: string[] = [];
+    const dropped: typeof c.evidence = [];
+    const droppedReasons: DropReason[] = [];
     for (const e of c.evidence) {
       const norm = normaliseForMatch(e.quote);
       if (norm.length > 0 && normalisedSource.includes(norm)) {
         kept.push(e);
       } else {
-        dropped.push(e.quote);
+        dropped.push(e);
+        droppedReasons.push(norm.length === 0 ? 'empty_after_normalisation' : 'not_in_source');
       }
     }
     if (dropped.length > 0) {
       totalDropped += dropped.length;
       affectedCharacters += 1;
-      const head = dropped[0].slice(0, 60).replace(/\s+/g, ' ');
-      log(`Dropped ${dropped.length} fabricated quote${dropped.length === 1 ? '' : 's'} on ${c.id} (e.g. "${head}${dropped[0].length > 60 ? '…' : ''}").`);
+      const head = dropped[0].quote.slice(0, 60).replace(/\s+/g, ' ');
+      log(`Dropped ${dropped.length} fabricated quote${dropped.length === 1 ? '' : 's'} on ${c.id} (e.g. "${head}${dropped[0].quote.length > 60 ? '…' : ''}").`);
       console.warn(`[analysis] dropped ${dropped.length} unverified quote(s) on ${c.id}`);
+      for (let i = 0; i < dropped.length; i++) {
+        const d = dropped[i];
+        const { text, truncated } = truncateQuote(d.quote);
+        entries.push({
+          characterId: c.id,
+          characterName: c.name,
+          quote: text,
+          truncated,
+          reason: droppedReasons[i],
+          note: d.note,
+        });
+      }
     }
     c.evidence = kept;
   }
-  return { totalDropped, affectedCharacters };
+  return { totalDropped, affectedCharacters, entries };
+}
+
+/* Persist a verify-pass's dropped entries to .audiobook/dropped-quotes.json.
+   No-op when the pass had zero drops or when the book has no bookDir yet
+   (e.g. uploaded but not confirmed) — the ledger lives next to cast.json
+   so it needs the same disk anchor. Read-modify-write so concurrent
+   subset-vs-main runs don't lose each other's batches; the file is
+   append-only so the conflict window is narrow but real. */
+export async function persistDroppedQuotesBatch(
+  bookDir: string | undefined,
+  manuscriptId: string,
+  route: DroppedQuotesBatch['route'],
+  verified: { entries: DroppedQuoteEntry[]; totalDropped: number; affectedCharacters: number },
+): Promise<void> {
+  if (!bookDir) return;
+  if (verified.entries.length === 0) return;
+  const file = await loadDroppedQuotes(bookDir, manuscriptId);
+  const batch: DroppedQuotesBatch = {
+    recordedAt: new Date().toISOString(),
+    route,
+    totalDropped: verified.totalDropped,
+    affectedCharacters: verified.affectedCharacters,
+    entries: verified.entries,
+  };
+  await saveDroppedQuotes(bookDir, appendBatch(file, batch));
 }
 
 /* Merge a per-chapter character list into a running roster keyed by id.
@@ -756,6 +812,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         cache.stage1 = stage1;
         await saveAnalysisCache(manuscriptId, cache);
       }
+      await persistDroppedQuotesBatch(recordRef.bookDir, manuscriptId, 'analysis-stream', verified);
       send({ kind: 'cast-update', characters: stage1.characters });
     } else {
       /* Phase 0a — per-chapter cast detection. The chapterCast cache
@@ -1096,7 +1153,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       const finalRoster = rebuildRoster();
       const characters = Array.from(finalRoster.values());
       sortEvidence(characters);
-      verifyEvidenceAgainstSource(characters, record.sourceText, msg => log(0, msg));
+      const verified = verifyEvidenceAgainstSource(characters, record.sourceText, msg => log(0, msg));
       stage1 = {
         characters,
         /* Carry the parser's chapter list verbatim — Phase 0a deliberately
@@ -1106,6 +1163,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       };
       cache.stage1 = stage1;
       await saveAnalysisCache(manuscriptId, cache);
+      await persistDroppedQuotesBatch(recordRef.bookDir, manuscriptId, 'analysis-stream', verified);
       stage1ActualMs = Date.now() - stage0Start;
       send({ kind: 'cast-update', characters: stage1.characters });
       /* Finalised-but-not-folded roster lands in cast.json so the file
@@ -1841,7 +1899,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     const finalRoster = rebuildRoster();
     const characters = Array.from(finalRoster.values());
     sortEvidence(characters);
-    verifyEvidenceAgainstSource(characters, record.sourceText, msg => log(0, msg));
+    const verified = verifyEvidenceAgainstSource(characters, record.sourceText, msg => log(0, msg));
     const stage1: Stage1Output = {
       characters,
       chapters: record.chapterHints.map(c => ({ id: c.id, title: c.title })),
@@ -1851,6 +1909,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       cache.stage1 = stage1;
     }
     await saveAnalysisCache(manuscriptId, cache);
+    await persistDroppedQuotesBatch(record.bookDir, manuscriptId, 'analysis-chapters', verified);
     send({ kind: 'cast-update', characters: stage1.characters });
     send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
 

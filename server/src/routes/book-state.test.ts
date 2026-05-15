@@ -116,6 +116,52 @@ describe('book-state router — changeLog slice', () => {
   });
 });
 
+describe('book-state router — dropped-quotes endpoint', () => {
+  it('GET dropped-quotes returns an empty envelope when the file does not exist', async () => {
+    /* The book was created in beforeAll with no dropped-quotes.json on
+       disk — the loader should fall through to the empty envelope. */
+    const res = await request(app).get(`/api/books/${bookId}/dropped-quotes`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ manuscriptId: 'm_test', batches: [] });
+  });
+
+  it('GET dropped-quotes returns persisted batches verbatim', async () => {
+    /* Write a fixture directly to disk so the test exercises the read
+       path (loadDroppedQuotes through the route). */
+    const fixture = {
+      manuscriptId: 'm_test',
+      batches: [
+        {
+          recordedAt: '2026-05-15T10:00:00.000Z',
+          route: 'analysis-stream',
+          totalDropped: 2,
+          affectedCharacters: 1,
+          entries: [
+            {
+              characterId: 'Wren', characterName: 'Wren',
+              quote: 'fabricated dialogue', truncated: false, reason: 'not_in_source',
+            },
+            {
+              characterId: 'Wren', characterName: 'Wren',
+              quote: '   ', truncated: false, reason: 'empty_after_normalisation',
+              note: 'punct-only',
+            },
+          ],
+        },
+      ],
+    };
+    writeFileSync(join(bookDir, '.audiobook', 'dropped-quotes.json'), JSON.stringify(fixture));
+    const res = await request(app).get(`/api/books/${bookId}/dropped-quotes`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(fixture);
+  });
+
+  it('GET dropped-quotes 404s when the book does not exist', async () => {
+    const res = await request(app).get('/api/books/this-id-does-not-exist/dropped-quotes');
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('book-state router — state slice editable metadata', () => {
   it('PUT slice=state round-trips title/author/series/narratorCredit/genre/publicationDate', async () => {
     const patch = {

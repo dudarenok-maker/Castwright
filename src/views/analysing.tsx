@@ -5,7 +5,7 @@ import { api, AnalysisError, type AnalysisLiveInfo, type AnalysisLiveChapter, ty
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../lib/models';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
-import type { AnalyseResponse } from '../lib/types';
+import type { AnalyseResponse, DroppedQuotesResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
@@ -141,6 +141,66 @@ function LiveCastPreview() {
         ))}
       </div>
     </div>
+  );
+}
+
+/* Read-only ledger of evidence quotes the analyser's verifier rejected
+   for not matching the source text. Pulls the latest batch from
+   GET /api/books/:bookId/dropped-quotes and groups entries by
+   characterName. No Restore button in Phase 1 — this view is an audit
+   surface for tuning the verifier prompt; raising/lowering the
+   threshold is a separate workflow. Re-fetches when the run completes
+   so a fresh batch from the just-finished verify pass shows up
+   without a page reload. */
+function DroppedQuotesPanel({ bookId, refreshKey }: { bookId: string | null | undefined; refreshKey: number }) {
+  const [file, setFile] = useState<DroppedQuotesResponse | null>(null);
+  useEffect(() => {
+    if (!bookId) return;
+    let cancelled = false;
+    api.getDroppedQuotes(bookId)
+      .then(f => { if (!cancelled) setFile(f); })
+      .catch(err => { console.warn('[analysing] dropped-quotes fetch skipped:', err.message); });
+    return () => { cancelled = true; };
+  }, [bookId, refreshKey]);
+  const latest = file?.batches.length ? file.batches[file.batches.length - 1] : null;
+  if (!latest || latest.entries.length === 0) return null;
+  /* Group entries by characterName so a character with 5 fabricated
+     quotes renders as one collapsible row, not five separate rows. */
+  const grouped = new Map<string, typeof latest.entries>();
+  for (const e of latest.entries) {
+    const list = grouped.get(e.characterName);
+    if (list) list.push(e);
+    else grouped.set(e.characterName, [e]);
+  }
+  const groups = Array.from(grouped.entries());
+  return (
+    <details className="mt-3 text-[11px] text-ink/60">
+      <summary className="cursor-pointer select-none font-semibold text-ink/80">
+        Verifier dropped {latest.totalDropped} quote{latest.totalDropped === 1 ? '' : 's'} across {latest.affectedCharacters} character{latest.affectedCharacters === 1 ? '' : 's'}
+        <span className="ml-2 font-normal text-ink/50">· latest batch</span>
+      </summary>
+      <ul className="mt-2 space-y-2">
+        {groups.map(([name, entries]) => (
+          <li key={name} className="rounded-2xl border border-ink/[0.08] bg-white/60 px-3 py-2">
+            <div className="font-semibold text-ink/80">{name}</div>
+            <ul className="mt-1 space-y-1.5">
+              {entries.map((e, i) => (
+                <li key={i} className="border-l-2 border-amber-300/70 pl-2">
+                  <div className="font-mono text-ink/70 italic break-words">
+                    "{e.quote}"
+                    {e.truncated && <span className="ml-1 text-ink/40">[truncated]</span>}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] text-ink/40">
+                    <span>{e.reason === 'not_in_source' ? 'not in source' : 'empty after normalisation'}</span>
+                    {e.note && <span>· note: {e.note}</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -282,6 +342,12 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
      chapter-failed event; cleared per id when a Retry succeeds. */
   const [failedChapters, setFailedChapters] = useState<Array<{ chapterId: number; message: string }>>([]);
   const [retryingChapterId, setRetryingChapterId] = useState<number | null>(null);
+  /* Bump to refetch the dropped-quotes ledger. Goes up when the server
+     finishes a verify pass (run completes, hits cast_incomplete, or a
+     subset retry resolves) so the new batch shows up without a
+     page reload. Initial value 0 means the panel fetches once on
+     mount. */
+  const [droppedQuotesRefreshKey, setDroppedQuotesRefreshKey] = useState(0);
   /* True after the server emits `kind: 'error', code: 'cast_incomplete'`
      — the run finished Phase 0a but at least one chapter is still in
      failedChapterIds, so Phase 1 hasn't started. The view treats this
@@ -435,6 +501,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
         if (cancelled || completedRef.current) return;
         completedRef.current = true;
         setConn('done');
+        setDroppedQuotesRefreshKey(k => k + 1);
         onComplete(payload);
       } catch (e) {
         if (cancelled) return;
@@ -453,6 +520,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
         if (e instanceof AnalysisError && e.code === 'cast_incomplete') {
           setConn('idle');
           setCastIncomplete(true);
+          setDroppedQuotesRefreshKey(k => k + 1);
           return;
         }
         setConn('error');
@@ -611,6 +679,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
       })
       .finally(() => {
         setRetryingChapterId(null);
+        setDroppedQuotesRefreshKey(k => k + 1);
       });
   };
 
@@ -1024,6 +1093,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                       a model switch) so the user doesn't lose the detected
                       cast just because the active phase advanced. */}
                   {p.id === 0 && <LiveCastPreview/>}
+                  {p.id === 0 && <DroppedQuotesPanel bookId={bookId} refreshKey={droppedQuotesRefreshKey}/>}
                   {phaseLogs.length > 0 && (
                     isActive
                       ? <ActivePhaseLog lines={phaseLogs}/>
