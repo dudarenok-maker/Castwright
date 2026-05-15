@@ -81,8 +81,15 @@ describe('AccountView — rendering', () => {
 
   it('does not expose any input for the Gemini API key (read-only invariant)', () => {
     renderView();
-    // No input or textarea labelled "API key" / "Gemini API key" / etc.
-    expect(screen.queryByLabelText(/api key/i)).toBeNull();
+    /* No textbox (input/textarea) is associated with an "API key"
+       label. We can't use queryByLabelText alone — the analyzer-engine
+       sublabel mentions "GEMINI_API_KEY" and "API key" as descriptive
+       prose, so any combobox whose accessible name includes the sublabel
+       (e.g. the Analyzer-engine select) would false-positive a naive
+       /api key/i regex. Anchor on the label *start* to target only
+       widgets whose primary label is the API-key field. */
+    expect(screen.queryByRole('textbox', { name: /^gemini api key/i })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: /^gemini api key/i })).toBeNull();
   });
 });
 

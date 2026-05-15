@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { IconArrowLeft, IconAB, IconSpinner, IconClock, IconWarning } from '../lib/icons';
 import { Avatar } from './primitives';
 import type { Stage, View } from '../lib/types';
@@ -38,6 +39,12 @@ interface TopBarProps {
       Activity, etc. `null` hides the pill entirely. Clicking routes back to
       the Generate view of the active book. */
   generationPill?: GenerationPillData | null;
+  /** Optional global TTS pill. Layout supplies a `<ModelControlPill kind="tts" ... />`
+      element here so the affordance is visible from every book-context stage
+      (Confirm Cast, Cast, Drawer-host views, Generation, Listen). The pill is
+      driven by `useTtsLifecycle()` mounted once in Layout, so its state stays
+      in sync with whatever the Generation view's local pill is showing. */
+  ttsPill?: ReactNode;
 }
 
 const TABS: Array<{ id: View; label: string }> = [
@@ -58,7 +65,7 @@ const GLOBAL_NAV: Array<{ id: 'books' | 'voices' | 'changelog'; label: string }>
   { id: 'changelog', label: 'Change log' },
 ];
 
-export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClick, pendingRevisionsCount, onOpenRevisions, onOpenVoices, onOpenChangelog, onOpenAccount, userDisplayName, generationPill }: TopBarProps) {
+export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClick, pendingRevisionsCount, onOpenRevisions, onOpenVoices, onOpenChangelog, onOpenAccount, userDisplayName, generationPill, ttsPill }: TopBarProps) {
   const showGlobalNav = stage === 'books' || stage === 'voices' || stage === 'changelog';
   const onGlobal = (id: 'books' | 'voices' | 'changelog') => {
     if (id === 'books')     onHome();
@@ -99,6 +106,7 @@ export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClic
           </nav>
         )}
         <div className={`flex items-center gap-3 ${stage === 'ready' || showGlobalNav ? '' : 'ml-auto'}`}>
+          {ttsPill}
           {generationPill && <GenerationPill data={generationPill}/>}
           {pendingRevisionsCount > 0 && (
             <button onClick={onOpenRevisions} className="relative inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold transition-colors">

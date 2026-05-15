@@ -22,6 +22,8 @@ import { api } from '../lib/api';
 import { engineForModelKey } from '../lib/tts-models';
 import { stageToHash } from '../lib/router';
 import { TopBar, type GenerationPillData } from './top-bar';
+import { ModelControlPill } from './ModelControlPill';
+import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
 import { MiniPlayer } from './mini-player';
 import { PreviewListenerView } from '../views/preview-listener';
 import { MatchDetailDrawer } from '../modals/match-detail';
@@ -308,6 +310,24 @@ export function Layout() {
   }
 
   const ctx: LayoutContext = { showInfo, showError };
+  /* Top-bar TTS pill — shown whenever a book is in scope (Confirm Cast,
+     Analysing, Ready). Books/upload don't render it since TTS only matters
+     once a manuscript is loaded. Drives its own /health poll independent of
+     the Generation view's existing local pill; the two converge within the
+     30 s poll cadence after either is clicked. Consolidating to a single
+     poll is a future follow-up tracked in docs/features/30-global-model-control.md. */
+  const ttsLifecycle = useTtsLifecycle();
+  const showGlobalTtsPill =
+    stageKind === 'analysing' || stageKind === 'confirm' || stageKind === 'ready';
+  const ttsPillElement = showGlobalTtsPill ? (
+    <ModelControlPill
+      kind="tts"
+      state={ttsLifecycle.state}
+      unreachableLabel="Sidecar process not running"
+      onLoad={() => { void ttsLifecycle.onLoad(); }}
+      onStop={() => { void ttsLifecycle.onStop(); }}
+    />
+  ) : null;
 
   /* Re-render once per second while a generation run is alive so the global
      pill's "stalled" computation has a clock to react against. The middleware
@@ -353,6 +373,7 @@ export function Layout() {
         onTitleClick={stageKind === 'confirm' ? () => dispatch(uiActions.reanalyse()) : undefined}
         pendingRevisionsCount={pending.length}
         generationPill={generationPill}
+        ttsPill={ttsPillElement}
         onOpenRevisions={() => dispatch(uiActions.setShowRevisionPlayer(true))}
         onOpenVoices={() => dispatch(uiActions.openVoices())}
         onOpenChangelog={() => dispatch(uiActions.openChangelog())}
