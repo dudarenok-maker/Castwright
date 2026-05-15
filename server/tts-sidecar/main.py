@@ -34,10 +34,19 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
+# Exposed as module constants so the logging-format regression test can
+# assert on the intended format directly, instead of fishing the formatter
+# off `logging.getLogger().handlers[0]` — pytest's caplog plugin installs
+# its own root handler before `main` is imported, so basicConfig becomes a
+# no-op and the handler-0 fishing approach reads pytest's formatter
+# instead of ours.
+LOG_FORMAT = "%(asctime)s.%(msecs)03d [sidecar] %(message)s"
+LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s.%(msecs)03d [sidecar] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format=LOG_FORMAT,
+    datefmt=LOG_DATEFMT,
 )
 log = logging.getLogger("sidecar")
 
