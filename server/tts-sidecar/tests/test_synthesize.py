@@ -33,6 +33,26 @@ if str(TESTS_DIR) not in sys.path:
 from test_smoke import _FakeEngine  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _stub_poison_exit_timer(monkeypatch):
+    """Safety fence for the whole module: stub `threading.Timer` so the
+    poison-exit scheduler (main._schedule_poison_exit) never arms a real
+    os._exit(42) that would terminate pytest mid-suite. Any test that
+    needs to ASSERT on the timer must install its own monkeypatch with
+    a recording stub (see the two scheduling tests below) — the autouse
+    `setattr(... lambda: None)` pattern below loses to a later
+    `setattr(... _FakeTimer)`, which is exactly the behaviour we want."""
+
+    class _NoOpTimer:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(main.threading, "Timer", _NoOpTimer)
+
+
 @pytest.fixture
 def client(monkeypatch):
     fake = _FakeEngine(sleep_sec=0.0)
@@ -121,6 +141,87 @@ def test_synthesize_returns_500_when_engine_raises(monkeypatch) -> None:
 
 
 # ── CUDA poison fence ────────────────────────────────────────────────────
+
+def test_synthesize_schedules_process_exit_on_cuda_assert(monkeypatch) -> None:
+    """The first poisoned synth must arm a deferred os._exit(_POISON_EXIT_CODE)
+    on a background thread so the start.ps1 supervisor sees the sidecar
+    die with the agreed code and respawns it. Without this, the sidecar
+    sits with a corrupted CUDA context fast-failing 503 forever until the
+    user manually kills it.
+
+    We replace `threading.Timer` (the scheduler the production code uses)
+    with a fake that records calls but never actually exits the test
+    process — otherwise asserting on the timer would terminate pytest."""
+    timer_calls: list[tuple[float, Any]] = []
+
+    class _FakeTimer:
+        def __init__(self, delay: float, fn: Any) -> None:
+            timer_calls.append((delay, fn))
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(main.threading, "Timer", _FakeTimer)
+
+    class _CudaPoisonedEngine(_FakeEngine):
+        def synthesize(self, model: str, voice: str, text: str):
+            raise RuntimeError("CUDA error: device-side assert triggered")
+
+    engine = _CudaPoisonedEngine()
+    monkeypatch.setitem(main.ENGINES, "coqui", engine)
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/synthesize",
+            json={"engine": "coqui", "model": "xtts_v2", "voice": "v", "text": "hi"},
+        )
+    assert r.status_code == 503
+    assert engine._poisoned is True
+    assert engine._exit_scheduled is True
+    # Exactly one timer scheduled; the delay matches the configured ms.
+    assert len(timer_calls) == 1
+    delay, _fn = timer_calls[0]
+    assert delay == main._POISON_EXIT_DELAY_MS / 1000.0
+
+
+def test_synthesize_does_not_double_schedule_exit_on_concurrent_poison(monkeypatch) -> None:
+    """If two requests race into the poison branch (chapter 1 + chapter 2
+    both in flight when the assert fires), the second one must NOT arm a
+    second exit timer — the supervisor only respawns once, so a second
+    timer would either no-op (good) or risk an os._exit fight (bad)."""
+    timer_calls: list[tuple[float, Any]] = []
+
+    class _FakeTimer:
+        def __init__(self, delay: float, fn: Any) -> None:
+            timer_calls.append((delay, fn))
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(main.threading, "Timer", _FakeTimer)
+
+    class _CudaPoisonedEngine(_FakeEngine):
+        def synthesize(self, model: str, voice: str, text: str):
+            raise RuntimeError("CUDA error: device-side assert triggered")
+
+    engine = _CudaPoisonedEngine()
+    monkeypatch.setitem(main.ENGINES, "coqui", engine)
+    with TestClient(main.app) as client:
+        # First request flags poison + schedules exit.
+        client.post(
+            "/synthesize",
+            json={"engine": "coqui", "model": "xtts_v2", "voice": "v", "text": "hi"},
+        )
+        # Second request — the fast-fail fence at the top of /synthesize
+        # short-circuits with 503 BEFORE re-entering the synth path, so
+        # the engine.synthesize hook never re-throws. Even if it did,
+        # _exit_scheduled is already true. Either way: still exactly one
+        # timer.
+        client.post(
+            "/synthesize",
+            json={"engine": "coqui", "model": "xtts_v2", "voice": "v", "text": "hi"},
+        )
+    assert len(timer_calls) == 1
+
 
 def test_synthesize_flags_engine_as_poisoned_on_cuda_assert(monkeypatch) -> None:
     """A `CUDA error: device-side assert triggered` corrupts the whole CUDA

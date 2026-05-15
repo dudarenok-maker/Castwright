@@ -49,15 +49,20 @@ export function describeSynthesisError(err: unknown): SynthesisErrorClassificati
      control char in the manuscript that survived `normaliseForTts`).
      PyTorch's contract is unambiguous: once any CUDA kernel asserts, the
      context is corrupted for the rest of the process and every subsequent
-     call re-raises the same error. The sidecar self-flags as poisoned and
-     fast-fails subsequent /synthesize calls with 503; either way, this is
-     fatal at the route level so the user gets a single banner instead of
-     the run grinding through queued chapters with identical 500s. */
+     call re-raises the same error. The sidecar self-flags as poisoned,
+     fast-fails subsequent /synthesize calls with 503, and exits with code
+     42 — which start.ps1's supervisor loop catches to respawn uvicorn
+     with a fresh CUDA context. From the user's POV this is fatal for the
+     current chapter (we stop the run so the cascade detector doesn't burn
+     queued chapters during the ~5–10 s restart window), but clicking
+     Retry once /health comes back picks up cleanly. The offending text is
+     in the sidecar log under `text_preview=` — usually a stray
+     zero-width, bidi, or control char in the manuscript. */
   const isCudaPoisoned = /device-side assert|CUDA error|CUDA kernel errors|"poisoned":\s*true/i.test(raw);
   if (isCudaPoisoned) {
     return {
       errorReason:
-        'Local TTS sidecar hit a CUDA error and must be restarted (the CUDA context is corrupted for the rest of the process). Stop the sidecar from the Generate-screen pill, restart it, then resume. The offending text is in the sidecar log — usually a stray zero-width or control char in the manuscript.',
+        'Local TTS sidecar hit a CUDA error and is auto-restarting (the CUDA context is corrupted process-wide; only a fresh Python process recovers). Wait ~10 seconds for the sidecar pill to go green again, then click Retry on this chapter. The offending text is in the sidecar log (text_preview=) — usually a stray zero-width or control char in the manuscript.',
       fatal: true,
     };
   }
