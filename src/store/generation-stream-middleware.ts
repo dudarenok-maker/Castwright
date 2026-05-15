@@ -1,24 +1,36 @@
 /* Generation-stream middleware — owns the SSE handle so generation keeps
-   running while the user navigates away from the Generate screen.
+   running while the user navigates anywhere in the app, not just inside
+   the generating book.
 
-   The previous design opened the SSE in a useEffect inside GenerationView,
-   which meant unmount (navigate to Cast / Manuscript / Voices) cancelled the
-   stream — and because `mockStreamGeneration`'s state machine IS the stream
-   (no separate worker), the user came back to a frozen-looking screen.
+   v1 design opened the SSE in a useEffect inside GenerationView; unmount
+   (navigate to Cast / Manuscript / Voices) cancelled the stream and the
+   user came back to a frozen-looking screen.
 
-   This middleware reacts to slice transitions instead of view lifetime. It
-   opens the SSE whenever:
-     - a regenerate reducer set `pendingRegen` (regenEpoch bumped), OR
-     - the slice has any chapter in `in_progress` / `queued` and we're not
-       holding an open handle and we're not paused.
+   v2 (this file) moved the SSE into a Redux middleware that reacts to slice
+   transitions instead of view lifetime, so generation survived intra-book
+   navigation. But reconcile still closed the stream the moment
+   `stage.bookId` went null (Books home, Upload, Voices, Account) or
+   switched to a different book — so the user couldn't start a new import
+   or open another book without "bumping" generation.
 
-   It closes the SSE on Pause, on the idle tick that settles the queue, on
-   book switch, and on store teardown.
+   v3 (current) decouples the stream from `stage.bookId` entirely. Once a
+   handle opens for book X, it's pinned to book X and ignores every
+   navigation that follows. The only ways to stop the run are:
+     - chapters/setPaused(true), dispatched by the Generate-view Stop
+       button or by the local-analyzer confirm prompt (see
+       src/hooks/use-local-analyzer-guard.tsx) when a Qwen-backed import
+       would compete with TTS for GPU.
+     - the queue draining (final idle tick from the server).
+
+   To keep the global header pill alive while the user is on a different
+   book, the middleware publishes an out-of-band `chapters.activeStream`
+   snapshot — done/total/inProgress/lastTickAt — that survives slice
+   re-hydration. Reducers in chapters-slice ignore tick payloads when the
+   slice has drifted to a different book (see the cross-book guard at the
+   top of applyGenerationTick).
 
    Side responsibility: emit `generation_started` / `chapter_complete` /
-   `chapter_failed` change-log events from the same vantage point. Reducers
-   can't dispatch and the view doesn't see all ticks once we strip its
-   useEffect, so this is the only place that can.
+   `chapter_failed` change-log events from the same vantage point.
 
    Skipped under VITE_USE_MOCKS=true? — NO. The mock SSE depends on a long-
    lived caller; the whole point of this middleware is to BE that caller. */
@@ -32,7 +44,7 @@ import {
 } from '../lib/change-log';
 import { chaptersActions } from './chapters-slice';
 import { changeLogActions } from './change-log-slice';
-import type { ChaptersState } from './chapters-slice';
+import type { ActiveStreamSnapshot, ChaptersState } from './chapters-slice';
 import type { UiState } from './ui-slice';
 import type { Chapter, GenerationTick, TtsModelKey } from '../lib/types';
 
@@ -50,13 +62,29 @@ function hasWork(chapters: Chapter[]): boolean {
   return chapters.some(c => c.state === 'in_progress' || c.state === 'queued');
 }
 
+function snapshotFromChapters(
+  bookId: string,
+  modelKey: TtsModelKey,
+  state: ChaptersState,
+): ActiveStreamSnapshot {
+  const chapters = state.chapters;
+  return {
+    bookId,
+    modelKey,
+    done: chapters.filter(c => c.state === 'done').length,
+    total: chapters.length,
+    inProgress: chapters.filter(c => c.state === 'in_progress').length,
+    lastTickAt: state.lastTickAt,
+    halted: state.lastError != null,
+  };
+}
+
 /* The set of action types that *might* require us to open or close the SSE.
    Other actions still pass through untouched — we only reconcile on these.
 
    `chapters/setChapters` and `chapters/hydrateFromAnalysis` are in here
-   because the chapters slice now starts EMPTY (was: fixture seed, which made
-   reconcile-on-openBook spuriously "see" work). Now the moment chapters
-   actually appear — either via setChapters from analysis, hydrateFromAnalysis
+   because the chapters slice starts EMPTY; the moment chapters actually
+   appear — either via setChapters from analysis, hydrateFromAnalysis
    landing, or hydrateFromBookState seeding from disk — is the moment work
    becomes scope-visible, so reconcile has to run then. */
 const TRIGGER_TYPES = new Set<string>([
@@ -68,6 +96,7 @@ const TRIGGER_TYPES = new Set<string>([
   'chapters/setPaused',
   'chapters/applyGenerationTick',
   'chapters/hydrateFromBookState',
+  'chapters/setCurrentBookId',
   'ui/openBook',
   'ui/goHome',
   'ui/hydrateFromUrl',
@@ -88,13 +117,14 @@ interface OpenHandle {
 export const generationStreamMiddleware: Middleware = (store) => {
   let handle: OpenHandle | null = null;
 
+  const dispatch = store.dispatch as Dispatch;
+
   const closeHandle = () => {
     if (!handle) return;
     handle.cancel();
     handle = null;
+    dispatch(chaptersActions.clearActiveStream());
   };
-
-  const dispatch = store.dispatch as Dispatch;
 
   const openHandle = (bookId: string, modelKey: TtsModelKey, spec: ChaptersState['pendingRegen']) => {
     /* Emit a system-level "generation started" event so the activity feed has
@@ -108,6 +138,15 @@ export const generationStreamMiddleware: Middleware = (store) => {
           .filter(c => c.state === 'in_progress' || c.state === 'queued')
           .map(c => c.id);
     dispatch(changeLogActions.appendLogEvent(buildGenerationStartedEvent({ chapterIds: ids })));
+
+    /* Seed the cross-book snapshot from the slice's current rows — at open
+       time the slice IS the generating book's data. Subsequent ticks will
+       refresh it; once the user navigates into a different book the slice
+       drifts but the snapshot freezes at whatever it was just before, so
+       the pill keeps showing the last-known progress. */
+    dispatch(chaptersActions.setActiveStream(
+      snapshotFromChapters(bookId, modelKey, after.chapters),
+    ));
 
     const cancel = api.streamGeneration({
       bookId,
@@ -131,40 +170,66 @@ export const generationStreamMiddleware: Middleware = (store) => {
 
   const reconcile = () => {
     const after = store.getState() as StreamableRootState;
-    const bookId = bookIdFromState(after);
+    const stageBookId = bookIdFromState(after);
     const modelKey = after.ui.ttsModelKey;
-    const { chapters, paused, pendingRegen } = after.chapters;
+    const { chapters, paused, pendingRegen, currentBookId } = after.chapters;
 
-    /* No book in scope — nothing can be running. Close any straggler. */
-    if (!bookId) { closeHandle(); return; }
+    /* Pause is the universal user-initiated stop. It is dispatched only
+       from contexts that mean "stop the active stream": the Generate-view
+       Stop button (current book is the streaming book), or the
+       local-analyzer confirm prompt (handles cross-book pause). Either
+       way, close. */
+    if (handle && paused) { closeHandle(); return; }
 
-    /* Pause means stop. */
-    if (paused) { closeHandle(); return; }
+    /* Sticky semantics: once a handle is open for book X, it stays open
+       across goHome, openBook(otherBook), changeView, setTtsModelKey, and
+       every other transition. The only termination is pause (above) or
+       queue drain (below, when shouldOpen = false). Notably:
+         - We do NOT close on stageBookId == null. The user is allowed to
+           navigate Books → Voices → Upload while the stream keeps running
+           in the background.
+         - We do NOT close on stageBookId != handle.bookId. The user is
+           allowed to open another book; the slice gets repopulated but the
+           handle keeps streaming for the original book, and the
+           applyGenerationTick reducer's cross-book guard prevents the
+           drift from clobbering the other book's rows.
+         - We do NOT close on modelKey change. Switching the TTS model in
+           Account settings or anywhere else takes effect on the NEXT
+           generation start, not the live one. */
 
-    /* Book switched out from under us — drop the old stream. The slice's
-       hydrateFromBookState will repopulate chapters from disk; if the new
-       book has queued work, the next reconcile pass opens a fresh handle. */
-    if (handle && handle.bookId !== bookId) closeHandle();
+    /* Open-side reconcile only fires when the slice's currently-loaded
+       book is the same as `stage.bookId`. If the user is on Books home or
+       another book entirely, we never auto-open a stream for the absent
+       book; opens happen when the user actually returns to the generating
+       book's Generate view and the SSE finds work waiting. */
+    if (handle) {
+      /* Already streaming — nothing to do on the open side. The only
+         remaining close trigger is the queue-drain check the slice runs
+         itself on the final idle tick, which will leave hasWork(chapters)
+         false on the next reconcile pass. */
+      if (currentBookId === handle.bookId) {
+        const shouldOpen = pendingRegen != null || hasWork(chapters);
+        if (!shouldOpen) closeHandle();
+      }
+      return;
+    }
 
-    /* Model switched mid-run — the live handle is using stale config. Drop
-       and reopen so the user's TTS engine choice takes effect. */
-    if (handle && handle.modelKey !== modelKey) closeHandle();
-
-    /* Queue fully drained — close any open handle (mock + real both rely on
-       a closed handle to settle resources, and the next reconcile won't
-       reopen because shouldOpen will stay false). */
+    /* No handle. Open only when the slice and the URL agree on which book
+       we're on, there's work in scope, and the user hasn't paused. */
+    if (!stageBookId) return;
+    if (currentBookId !== stageBookId) return;
+    if (paused) return;
     const shouldOpen = pendingRegen != null || hasWork(chapters);
-    if (!shouldOpen) { closeHandle(); return; }
-
-    /* Open when there's work to do (or a pending regen spec to forward) and
-       we don't already have a handle. */
-    if (!handle) openHandle(bookId, modelKey, pendingRegen);
+    if (!shouldOpen) return;
+    openHandle(stageBookId, modelKey, pendingRegen);
   };
 
   /* Regen actions need an explicit close *before* reconcile so the new spec
      gets a fresh stream — without this, the existing handle stays open and
      reconcile sees `handle != null` and skips the openHandle that would
-     forward `chapterIds + force`. */
+     forward `chapterIds + force`. Only relevant when the user is acting on
+     the same book the handle is streaming for — regen from a different
+     book context would be a no-op for the existing stream anyway. */
   const REGEN_TYPES = new Set<string>([
     'chapters/regenerateChapter',
     'chapters/regenerateCharacter',
@@ -177,17 +242,29 @@ export const generationStreamMiddleware: Middleware = (store) => {
     const type = a?.type;
     if (!type || !TRIGGER_TYPES.has(type)) return result;
 
-    if (REGEN_TYPES.has(type)) closeHandle();
+    if (REGEN_TYPES.has(type) && handle) {
+      const after = store.getState() as StreamableRootState;
+      if (after.chapters.currentBookId === handle.bookId) closeHandle();
+    }
 
     /* Emit per-tick log events using the post-reducer state — that's where
-       the chapter has already flipped to done/failed. */
-    if (type === 'chapters/applyGenerationTick') {
+       the chapter has already flipped to done/failed. Also refresh the
+       cross-book snapshot so the global header pill keeps moving even
+       when the user is on a different book and the per-chapter reducer
+       skipped its mutation. */
+    if (type === 'chapters/applyGenerationTick' && handle) {
       const ev = (a as { payload?: GenerationTick }).payload;
       const after = store.getState() as StreamableRootState;
-      if (ev && ev.type === 'chapter_complete' && ev.chapterId != null) {
+      const sliceMatchesHandle = after.chapters.currentBookId === handle.bookId;
+      if (sliceMatchesHandle) {
+        dispatch(chaptersActions.setActiveStream(
+          snapshotFromChapters(handle.bookId, handle.modelKey, after.chapters),
+        ));
+      }
+      if (ev && ev.type === 'chapter_complete' && ev.chapterId != null && sliceMatchesHandle) {
         const ch = after.chapters.chapters.find(c => c.id === ev.chapterId);
         if (ch) dispatch(changeLogActions.appendLogEvent(buildChapterCompleteEvent({ chapter: ch })));
-      } else if (ev && ev.type === 'chapter_failed' && ev.chapterId != null) {
+      } else if (ev && ev.type === 'chapter_failed' && ev.chapterId != null && sliceMatchesHandle) {
         const ch = after.chapters.chapters.find(c => c.id === ev.chapterId);
         if (ch) {
           dispatch(changeLogActions.appendLogEvent(buildChapterFailedEvent({

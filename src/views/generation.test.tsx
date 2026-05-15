@@ -559,8 +559,11 @@ describe('generationStreamMiddleware — Pause/Resume regenerate loop (regressio
       },
       middleware: (gd) => gd().concat(generationStreamMiddleware),
     });
-    /* Middleware skips opens unless a book is in scope. */
+    /* Middleware skips opens unless a book is in scope AND the chapters
+       slice has claimed that book via setCurrentBookId (cross-book guard
+       requires the pair to agree before reconcile opens or closes). */
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
     /* Setup may have opened a stream on the initial chapters; the assertion
        below cares only about the regenerate-driven reopen. */

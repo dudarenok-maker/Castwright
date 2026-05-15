@@ -8,6 +8,7 @@ import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 
 const TEXT_EXT_RE = /\.(md|markdown|txt|text)$/i;
 const BINARY_EXT_RE = /\.(pdf|epub)$/i;
@@ -22,6 +23,12 @@ export function UploadView() {
   const [pastedText, setPastedText] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  /* When an audio generation run is alive elsewhere AND the user has
+     picked a local analyzer (Ollama), guard the import behind a
+     "pause-and-analyse?" confirm. Gemini/Gemma engines pass through
+     unguarded — they don't touch the local GPU. */
+  const { guard, modal: guardModal } = useLocalAnalyzerGuard();
+
   async function processUpload(args: UploadArgs) {
     setError(null);
     setBusy(true);
@@ -34,22 +41,28 @@ export function UploadView() {
     }
   }
 
+  /* Wrap processUpload in the guard. If the user cancels at the prompt,
+     `busy` never flips and the upload screen stays interactive. */
+  function guardedUpload(args: UploadArgs) {
+    guard(() => { void processUpload(args); });
+  }
+
   async function handleFile(file?: File | null) {
     if (!file) return;
     if (TEXT_EXT_RE.test(file.name)) {
       const text = await file.text();
-      await processUpload({ text, fileName: file.name });
+      guardedUpload({ text, fileName: file.name });
       return;
     }
     if (BINARY_EXT_RE.test(file.name)) {
-      await processUpload({ file, fileName: file.name });
+      guardedUpload({ file, fileName: file.name });
       return;
     }
     setError(`${file.name.split('.').pop()?.toUpperCase()} files aren't supported. Try .md, .txt, .pdf, or .epub.`);
   }
 
-  async function handleSample() {
-    await processUpload({ text: SAMPLE_MANUSCRIPT_MD, fileName: 'the-northern-star.md', format: 'markdown' });
+  function handleSample() {
+    guardedUpload({ text: SAMPLE_MANUSCRIPT_MD, fileName: 'the-northern-star.md', format: 'markdown' });
   }
 
   return (
@@ -122,7 +135,7 @@ export function UploadView() {
                       className="w-full h-44 rounded-xl border border-ink/10 px-4 py-3 text-sm font-mono text-ink/80 focus:outline-none focus:border-peach"/>
             <div className="mt-3 flex justify-end">
               <PrimaryButton variant="dark"
-                             onClick={() => !busy && pastedText.trim() && processUpload({ text: pastedText, fileName: 'pasted.md', format: 'markdown' })}>
+                             onClick={() => !busy && pastedText.trim() && guardedUpload({ text: pastedText, fileName: 'pasted.md', format: 'markdown' })}>
                 Upload pasted text
               </PrimaryButton>
             </div>
@@ -131,6 +144,7 @@ export function UploadView() {
 
         <p className="text-center text-xs text-ink/40 mt-8">Working on a series? Voices from previous books are available in your library — we'll match characters automatically.</p>
       </div>
+      {guardModal}
     </div>
   );
 }

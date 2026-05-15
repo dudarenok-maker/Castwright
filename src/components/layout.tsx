@@ -18,7 +18,6 @@ import {
   buildVoiceTuneEvent,
   buildVoiceLockEvent,
 } from '../lib/change-log';
-import { overallProgress, sentencesPerChapter } from '../lib/generation-progress';
 import { api } from '../lib/api';
 import { engineForModelKey } from '../lib/tts-models';
 import { stageToHash } from '../lib/router';
@@ -57,10 +56,7 @@ export function Layout() {
   const userDisplayName = useAppSelector(s => s.account.displayName);
   const characters = useAppSelector(s => s.cast.characters);
   const chapters   = useAppSelector(s => s.chapters.chapters);
-  const paused     = useAppSelector(s => s.chapters.paused);
-  const lastError  = useAppSelector(s => s.chapters.lastError);
-  const lastTickAt = useAppSelector(s => s.chapters.lastTickAt);
-  const sentences  = useAppSelector(s => s.manuscript.sentences);
+  const activeStream = useAppSelector(s => s.chapters.activeStream);
   const drift      = useAppSelector(s => s.revisions.drift);
   const pending    = useAppSelector(s => s.revisions.pending);
   const manuscript = useAppSelector(s => s.manuscript);
@@ -178,6 +174,7 @@ export function Layout() {
            of 0 as Phase 0a streams in fresh detections. */
         dispatch(castActions.setCharacters(res.cast?.characters ?? []));
         dispatch(chaptersActions.hydrateFromBookState({
+          bookId,
           chapters: res.state.chapters,
           completedSlugs: res.completedSlugs ?? [],
           characters: res.cast?.characters ?? [],
@@ -285,40 +282,36 @@ export function Layout() {
 
   /* Re-render once per second while a generation run is alive so the global
      pill's "stalled" computation has a clock to react against. The middleware
-     keeps the SSE open across view navigation; this is purely a UI tick to
+     keeps the SSE open across all navigation; this is purely a UI tick to
      surface elapsed-since-last-tick. */
   const [, forceClockTick] = useState(0);
-  const hasGenerationWork = chapters.some(c => c.state === 'in_progress' || c.state === 'queued') || lastError != null;
+  const pillAlive = activeStream != null;
   useEffect(() => {
-    if (!hasGenerationWork) return;
+    if (!pillAlive) return;
     const id = setInterval(() => forceClockTick(n => n + 1), 1000);
     return () => clearInterval(id);
-  }, [hasGenerationWork]);
+  }, [pillAlive]);
 
-  /* Computed inline (not memoised) because the stalled check reads Date.now();
-     the surrounding component re-renders once per second via forceClockTick
-     while a run is alive, so this stays in sync without manual deps. */
+  /* Pill is anchored to the middleware's cross-book snapshot, NOT the live
+     chapters slice. The snapshot keeps moving while the user is on the
+     generating book; it freezes (but keeps rendering) once they navigate
+     into a different book, so the pill remains a clickable shortcut back
+     to /books/{generatingBookId}/generate from anywhere in the app.
+     Computed inline (not memoised) so the per-second forceClockTick above
+     keeps the "stalled" check fresh against Date.now(). */
   const generationPill: GenerationPillData | null = (() => {
-    if (!hasGenerationWork) return null;
-    const bookForPill = bookId ?? null;
-    if (!bookForPill && !lastError) return null;
-
-    const done = chapters.filter(c => c.state === 'done').length;
-    const total = chapters.length;
-    const counts = sentencesPerChapter(sentences);
-    const percent = Math.round(overallProgress(chapters, counts) * 100);
-    const inProgressCount = chapters.filter(c => c.state === 'in_progress').length;
-    const stalled = !paused && inProgressCount > 0 && lastTickAt != null
+    if (!activeStream) return null;
+    const { bookId: streamBookId, done, total, inProgress, lastTickAt, halted } = activeStream;
+    const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+    const stalled = !halted && inProgress > 0 && lastTickAt != null
       && (Date.now() - lastTickAt) > STALL_THRESHOLD_MS;
-    const state: GenerationPillData['state'] = lastError ? 'halted' : stalled ? 'stalled' : 'running';
+    const state: GenerationPillData['state'] = halted ? 'halted' : stalled ? 'stalled' : 'running';
     return {
       state,
       done,
       total,
       percent,
-      onClick: () => {
-        if (bookForPill) navigate(`/books/${bookForPill}/generate`);
-      },
+      onClick: () => navigate(`/books/${streamBookId}/generate`),
     };
   })();
 
