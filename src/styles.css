@@ -86,3 +86,34 @@ body       { font-family: var(--font-sans); -webkit-font-smoothing: antialiased;
 
 /* Reusable component classes ---------------------------------------------- */
 .ring-peach-2 { box-shadow: 0 0 0 2px var(--peach); }
+
+/* Thin inset scrollbar for in-card scroll regions. The default Chromium
+   scrollbar is wide and runs the full height of the scroll container,
+   so on a rounded-3xl card it visually extends INTO the rounded
+   top-right and bottom-right corners. We paint the thumb on a transparent
+   background with a 5px transparent border (content-box clip) so the
+   visible thumb body is only 4px wide and inset 5px from each side, AND
+   we leave a 28px gap at the top/bottom of the track so the thumb's
+   travel ends BEFORE the 24px rounded-3xl corner begins. scrollbar-
+   gutter:stable keeps the gutter reserved even when content doesn't
+   overflow, so the right edge of the rows doesn't jitter as the user
+   scrolls. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--ink-rgb), 0.22) transparent;
+  scrollbar-gutter: stable;
+}
+.scrollbar-thin::-webkit-scrollbar { width: 14px; }
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 28px 0;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(var(--ink-rgb), 0.22);
+  background-clip: content-box;
+  border: 5px solid transparent;
+  border-radius: 999px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(var(--ink-rgb), 0.36);
+}
