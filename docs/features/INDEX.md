@@ -39,7 +39,8 @@ PRs that change behavior cited in a plan MUST update the relevant plan in the sa
 
 ### F. TTS
 - [13 — TTS engine picker](13-tts-engine-picker.md) — Two-tier engine + model selector.
-- [14 — Coqui XTTS sidecar](14-tts-sidecar-coqui.md) — Local sidecar default.
+- [14 — Coqui XTTS sidecar](14-tts-sidecar-coqui.md) — Local sidecar alternate (zero-shot voice cloning).
+- [14a — Kokoro v1 TTS engine](14a-tts-sidecar-kokoro.md) — Local sidecar default, English-only, per-engine cast voice profiles.
 - [15 — Gemini cloud TTS](15-tts-gemini-cloud.md) — Cloud opt-in.
 
 ### G. Generation

@@ -44,14 +44,35 @@ export const voicesSlice = createSlice({
        because the engine-aware resolution lives server-side — the next
        hydrate refreshes ttsVoice with whatever picker output reflects the
        current engine. The local state is enough for the UI to flip the
-       "Manual" / "Auto" badge instantly. */
+       "Manual" / "Auto" badge instantly.
+
+       Payload semantics mirror the server route:
+       - `override = { engine, name }` → set `overrideTtsVoices[engine] = {name}`,
+         leaving other engine slots untouched.
+       - `override = null` → clear EVERY engine slot. (Per-slot clearing
+         isn't surfaced yet; if a UI needs it later, add a separate
+         action with an explicit `engine` field.) */
     setOverride: (
       s,
       a: PayloadAction<{ voiceId: string; override: BaseVoice | null }>,
     ) => {
       const v = s.voices.find(v => v.id === a.payload.voiceId);
       if (!v) return;
-      v.overrideTtsVoice = a.payload.override;
+      const override = a.payload.override;
+      if (override === null) {
+        v.overrideTtsVoices = null;
+        v.overrideTtsVoice = null;
+        return;
+      }
+      const map = { ...(v.overrideTtsVoices ?? {}) };
+      map[override.engine] = { name: override.name };
+      v.overrideTtsVoices = map;
+      /* Project the active engine's slot back into the legacy field
+         so legacy badge/UI code keeps working until it's migrated to
+         read overrideTtsVoices directly. The Voice the UI is editing
+         is normally for the active synth engine, so this is right
+         99% of the time. */
+      v.overrideTtsVoice = override;
     },
     hydrateBaseVoices: (s, a: PayloadAction<BaseVoice[]>) => {
       s.baseVoicesLoaded = true;

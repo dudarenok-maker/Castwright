@@ -29,7 +29,8 @@ export const TTS_ENGINES: TtsEngineGroup[] = [
     label: 'Local (free)',
     hint: 'Runs on your machine via the TTS sidecar — no rate limits',
     models: [
-      { id: 'coqui-xtts-v2', label: 'Coqui XTTS v2', hint: 'Default · 30 baked voices' },
+      { id: 'kokoro-v1', label: 'Kokoro v1', hint: 'Default · 28 English voices · quality-tuned' },
+      { id: 'coqui-xtts-v2', label: 'Coqui XTTS v2', hint: 'Alternate · 30 baked voices · zero-shot cloning' },
     ],
   },
   {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IconClose, IconWaveform, IconRefresh, IconStar, IconLock, IconPlus, IconPause, IconSpinner } from '../lib/icons';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import type { BaseVoice, TtsEngine, TtsModelKey } from '../lib/types';
@@ -318,7 +318,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
 
             <ModelVoiceOverridePicker
               voiceId={voice?.id ?? (character.voiceId ?? character.id)}
-              currentOverride={voice?.overrideTtsVoice ?? null}
+              currentOverrides={mapOverridesToBaseVoiceMap(voice?.overrideTtsVoices ?? null, voice?.overrideTtsVoice ?? null)}
               autoVoiceName={sampleSubject.ttsVoice.name}
               autoVoiceEngine={sampleSubject.ttsVoice.provider as TtsEngine}
               activeEngine={ttsEngine}
@@ -339,8 +339,24 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                   await api.setVoiceOverride(voiceIdForApi, next);
                 } catch (err) {
                   setOverrideError((err as Error).message);
-                  if (voice?.id && voice.overrideTtsVoice !== undefined) {
-                    dispatch(voicesActions.setOverride({ voiceId: voiceIdForApi, override: voice.overrideTtsVoice ?? null }));
+                  /* On failure, revert by re-dispatching the prior state.
+                     For per-engine overrides this is a coarse revert — we
+                     restore the full prior map. The next hydrate corrects
+                     any drift. */
+                  if (voice?.id) {
+                    const prior = voice.overrideTtsVoices ?? null;
+                    if (prior) {
+                      for (const [engine, slot] of Object.entries(prior)) {
+                        if (slot?.name) {
+                          dispatch(voicesActions.setOverride({
+                            voiceId: voiceIdForApi,
+                            override: { engine: engine as TtsEngine, name: slot.name },
+                          }));
+                        }
+                      }
+                    } else {
+                      dispatch(voicesActions.setOverride({ voiceId: voiceIdForApi, override: null }));
+                    }
                   }
                 }
               }}
@@ -678,18 +694,45 @@ function voiceAgeFromAttributes(attrs: string[] | undefined): CharAgeRange | nul
    specific base voice from any engine. Sits inside the Voice profile
    section of the drawer so the swap and the resulting preview live
    next to each other. Persists via PUT /api/voices/:id/override. */
+/* Normalise the on-Voice override fields into the picker's expected
+   shape. Prefers the new per-engine map; falls back to projecting the
+   legacy singular field into a single-slot map so older Voice payloads
+   (from a not-yet-rolled-out server) still render correctly. */
+function mapOverridesToBaseVoiceMap(
+  map: Partial<Record<TtsEngine, { name: string }>> | null,
+  legacy: BaseVoice | null,
+): Partial<Record<TtsEngine, BaseVoice>> {
+  const out: Partial<Record<TtsEngine, BaseVoice>> = {};
+  if (map) {
+    for (const [engine, slot] of Object.entries(map)) {
+      if (slot?.name) {
+        out[engine as TtsEngine] = { engine: engine as TtsEngine, name: slot.name };
+      }
+    }
+  }
+  if (legacy?.engine && legacy.name && !out[legacy.engine]) {
+    out[legacy.engine] = legacy;
+  }
+  return out;
+}
+
 interface OverridePickerProps {
   voiceId: string;
-  currentOverride: BaseVoice | null;
+  /** Per-engine override map — what's stored on the Voice and what the
+      tabbed picker reads/writes. The picker shows one tab per engine
+      present in `baseVoices`, with the current selection coming from
+      `currentOverrides[engineTab]`. */
+  currentOverrides: Partial<Record<TtsEngine, BaseVoice>>;
   /** Name of the auto-resolved voice — shown as "Auto (currently <X>)" so
       the user can compare what they'd be moving away from. */
   autoVoiceName: string;
-  /** Engine of the auto-resolved voice. The "Auto" option is implicitly
-      bound to this engine. */
+  /** Engine of the auto-resolved voice — the synth picker resolves this
+      against the active engine when no override is set. */
   autoVoiceEngine: TtsEngine;
-  /** TTS engine the project is currently set to. When the override's
-      engine differs, the override is ignored at synth time — we render an
-      explicit warning. */
+  /** TTS engine the project is currently set to. Used to decide which
+      engine tab is selected on first render and which tab gets the
+      "active" badge so the user knows which engine actually drives
+      synthesis right now. */
   activeEngine: TtsEngine;
   baseVoices: BaseVoice[];
   baseVoicesLoaded: boolean;
@@ -697,32 +740,85 @@ interface OverridePickerProps {
   onChange: (next: BaseVoice | null) => Promise<void> | void;
 }
 function ModelVoiceOverridePicker({
-  voiceId, currentOverride, autoVoiceName, autoVoiceEngine, activeEngine,
+  voiceId, currentOverrides, autoVoiceName, autoVoiceEngine, activeEngine,
   baseVoices, baseVoicesLoaded, error, onChange,
 }: OverridePickerProps) {
-  /* Selected value encodes either AUTO or `${engine}|${name}`. We round-
-     trip through that string because <select> options only carry strings. */
-  const AUTO = 'auto';
-  const selectedValue = currentOverride
-    ? `${currentOverride.engine}|${currentOverride.name}`
-    : AUTO;
-  const engineMismatch = !!currentOverride && currentOverride.engine !== activeEngine;
-  /* Group by engine so the dropdown reads "Coqui · Asya Anara" etc. and
-     the user can spot cross-engine voices at a glance. */
+  /* Group base voices by engine. Order tabs deterministically so the UI
+     doesn't reshuffle between renders — Coqui first (longest-running),
+     Kokoro second (new default), then anything else in insertion order. */
   const byEngine = new Map<TtsEngine, BaseVoice[]>();
   for (const bv of baseVoices) {
     const list = byEngine.get(bv.engine) ?? [];
     list.push(bv);
     byEngine.set(bv.engine, list);
   }
+  const tabOrder: TtsEngine[] = ['coqui', 'kokoro', 'piper', 'gemini'];
+  const availableEngines = tabOrder.filter(e => byEngine.has(e));
+  /* Pick a sensible default tab: the active engine if its catalog has
+     voices, otherwise the first available. */
+  const initialTab: TtsEngine = availableEngines.includes(activeEngine)
+    ? activeEngine
+    : (availableEngines[0] ?? activeEngine);
+  const [engineTab, setEngineTab] = useState<TtsEngine>(initialTab);
+  /* If the catalog hydrates after first render and the active engine
+     becomes available, re-pin the tab to the active engine so the user
+     lands on the slot that actually drives current synthesis. */
+  useEffect(() => {
+    if (availableEngines.includes(activeEngine) && engineTab !== activeEngine) {
+      const otherSlots = (Object.keys(currentOverrides) as TtsEngine[]).filter(e => e !== engineTab);
+      /* Don't surprise the user mid-edit — only swap to the active
+         engine if no slot is currently selected in the other engines
+         (i.e. they haven't actively been working in a different tab). */
+      if (otherSlots.length === 0) setEngineTab(activeEngine);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseVoicesLoaded]);
+
+  const AUTO = 'auto';
+  const currentForTab = currentOverrides[engineTab] ?? null;
+  const selectedValue = currentForTab
+    ? `${currentForTab.engine}|${currentForTab.name}`
+    : AUTO;
+  const voicesForTab = byEngine.get(engineTab) ?? [];
+
   return (
     <div className="mt-3 p-3 rounded-2xl bg-canvas border border-ink/10">
-      <label className="block text-[11px] text-ink/60 font-medium mb-1.5" htmlFor={`override-${voiceId}`}>
-        Model voice
-      </label>
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-[11px] text-ink/60 font-medium" htmlFor={`override-${voiceId}`}>
+          Model voice
+        </label>
+        <span className="text-[10px] text-ink/40">Active engine: {capitalise(activeEngine)}</span>
+      </div>
+      {availableEngines.length > 1 && (
+        <div role="tablist" aria-label="Override engine" className="mb-2 inline-flex rounded-xl border border-ink/10 bg-white/40 p-0.5">
+          {availableEngines.map(engine => {
+            const isCurrent = engine === engineTab;
+            const slotFilled = !!currentOverrides[engine];
+            return (
+              <button
+                key={engine}
+                role="tab"
+                aria-selected={isCurrent}
+                onClick={() => setEngineTab(engine)}
+                className={`px-3 py-1.5 text-[11px] font-medium rounded-lg transition-colors inline-flex items-center gap-1.5 ${
+                  isCurrent
+                    ? 'bg-white text-ink shadow-sm'
+                    : 'text-ink/60 hover:text-ink hover:bg-white/60'
+                }`}
+              >
+                <span>{capitalise(engine)}</span>
+                {slotFilled && <span className="w-1.5 h-1.5 rounded-full bg-magenta" aria-hidden="true"/>}
+                {engine === activeEngine && (
+                  <span className="text-[9px] uppercase tracking-wider text-ink/40">Active</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <select
         id={`override-${voiceId}`}
-        aria-label="Model voice override"
+        aria-label={`Model voice override (${engineTab})`}
         value={selectedValue}
         disabled={!baseVoicesLoaded}
         onChange={(e) => {
@@ -735,31 +831,24 @@ function ModelVoiceOverridePicker({
         className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
       >
         <option value={AUTO}>
-          Auto — currently {capitalise(autoVoiceEngine)} · {autoVoiceName}
+          {engineTab === autoVoiceEngine
+            ? `Auto — currently ${capitalise(autoVoiceEngine)} · ${autoVoiceName}`
+            : `Auto for ${capitalise(engineTab)} — attribute-driven`}
         </option>
-        {Array.from(byEngine.entries()).map(([engine, voices]) => (
-          <optgroup key={engine} label={capitalise(engine)}>
-            {voices.map(bv => (
-              <option key={`${bv.engine}|${bv.name}`} value={`${bv.engine}|${bv.name}`}>
-                {capitalise(bv.engine)} · {bv.name}
-              </option>
-            ))}
-          </optgroup>
+        {voicesForTab.map(bv => (
+          <option key={`${bv.engine}|${bv.name}`} value={`${bv.engine}|${bv.name}`}>
+            {bv.name}
+          </option>
         ))}
       </select>
       {!baseVoicesLoaded && (
         <p className="mt-2 text-[11px] text-ink/50">Loading base voice catalog…</p>
       )}
-      {engineMismatch && (
-        <p className="mt-2 text-[11px] text-amber-700 font-medium">
-          ⚠ Engine mismatch — this {capitalise(currentOverride!.engine)} voice won't be used while the project is on {capitalise(activeEngine)}.
-        </p>
-      )}
       {error && (
         <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {error}</p>
       )}
       <p className="mt-2 text-[11px] text-ink/50">
-        Pick a specific base voice to override the attribute-driven match. Auditioning the raw voice in the Voices view's "Base voices" tab is a fast way to find one you like.
+        Each engine has its own voice slot — switching the project's engine picks up the corresponding slot, so you don't need to re-cast when toggling Coqui ↔ Kokoro.
       </p>
     </div>
   );

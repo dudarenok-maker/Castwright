@@ -125,28 +125,84 @@ describe('GET /api/voices — aggregation', () => {
     expect(v_fitz.usedIn).toBe(2);
   });
 
-  it('exposes overrideTtsVoice when cast.json carries one', async () => {
+  it('exposes overrideTtsVoices map when cast.json carries one', async () => {
     /* Quick targeted write — bypass the PUT endpoint to isolate the read side. */
     const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_ONE, '.audiobook', 'cast.json');
     const cast = JSON.parse(readFileSync(castPath, 'utf8')) as { characters: Array<Record<string, unknown>> };
-    cast.characters[0].overrideTtsVoice = { engine: 'coqui', name: 'Asya Anara' };
+    cast.characters[0].overrideTtsVoices = { coqui: { name: 'Asya Anara' } };
     writeFileSync(castPath, JSON.stringify(cast));
 
     const res = await request(app).get('/api/voices');
     const v_fitz = res.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
+    expect(v_fitz.overrideTtsVoices).toEqual({ coqui: { name: 'Asya Anara' } });
+    /* Legacy field projects the active engine's slot for backwards-
+       compatible clients. */
     expect(v_fitz.overrideTtsVoice).toEqual({ engine: 'coqui', name: 'Asya Anara' });
     /* When override engine matches the (default) Coqui engine, ttsVoice
        must resolve to the override name. */
     expect(v_fitz.ttsVoice.name).toBe('Asya Anara');
 
     /* Reset for the next test. */
+    delete cast.characters[0].overrideTtsVoices;
+    writeFileSync(castPath, JSON.stringify(cast));
+  });
+
+  it('migrates legacy singular overrideTtsVoice into the new map on read', async () => {
+    /* Regression for the read-time normaliser. cast.json files written
+       by older clients carry the singular field; the aggregator must
+       transparently treat that as if the map slot were populated. */
+    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_ONE, '.audiobook', 'cast.json');
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as { characters: Array<Record<string, unknown>> };
+    cast.characters[0].overrideTtsVoice = { engine: 'coqui', name: 'Damien Black' };
+    delete cast.characters[0].overrideTtsVoices;
+    writeFileSync(castPath, JSON.stringify(cast));
+
+    const res = await request(app).get('/api/voices');
+    const v_fitz = res.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
+    expect(v_fitz.overrideTtsVoices).toEqual({ coqui: { name: 'Damien Black' } });
+    expect(v_fitz.ttsVoice.name).toBe('Damien Black');
+
+    /* Cleanup. */
     delete cast.characters[0].overrideTtsVoice;
+    writeFileSync(castPath, JSON.stringify(cast));
+  });
+
+  it('keeps a Kokoro override available when the response engine is Coqui', async () => {
+    /* Per-engine pluralization: a cast carrying both a Coqui and a
+       Kokoro slot must expose both on the response, so the UI tabs
+       render correctly. ttsVoice resolves to the engine in the query. */
+    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_ONE, '.audiobook', 'cast.json');
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as { characters: Array<Record<string, unknown>> };
+    cast.characters[0].overrideTtsVoices = {
+      coqui:  { name: 'Asya Anara' },
+      kokoro: { name: 'am_onyx' },
+    };
+    writeFileSync(castPath, JSON.stringify(cast));
+
+    const coquiRes = await request(app).get('/api/voices?engine=coqui');
+    const fromCoqui = coquiRes.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
+    expect(fromCoqui.ttsVoice.name).toBe('Asya Anara');
+    expect(fromCoqui.overrideTtsVoices).toEqual({
+      coqui:  { name: 'Asya Anara' },
+      kokoro: { name: 'am_onyx' },
+    });
+
+    const kokoroRes = await request(app).get('/api/voices?engine=kokoro');
+    const fromKokoro = kokoroRes.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
+    expect(fromKokoro.ttsVoice.name).toBe('am_onyx');
+    expect(fromKokoro.overrideTtsVoices).toEqual({
+      coqui:  { name: 'Asya Anara' },
+      kokoro: { name: 'am_onyx' },
+    });
+
+    /* Cleanup. */
+    delete cast.characters[0].overrideTtsVoices;
     writeFileSync(castPath, JSON.stringify(cast));
   });
 });
 
 describe('PUT /api/voices/:voiceId/override', () => {
-  it('writes the override to every cast.json sharing the voiceId', async () => {
+  it('writes the override into overrideTtsVoices[engine] across every cast.json sharing the voiceId', async () => {
     const res = await request(app)
       .put('/api/voices/v_fitz/override')
       .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
@@ -154,14 +210,67 @@ describe('PUT /api/voices/:voiceId/override', () => {
 
     const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
     const two = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
-    expect(one.characters[0].overrideTtsVoice).toEqual({ engine: 'coqui', name: 'Asya Anara' });
-    expect(two.characters[0].overrideTtsVoice).toEqual({ engine: 'coqui', name: 'Asya Anara' });
+    expect(one.characters[0].overrideTtsVoices).toEqual({ coqui: { name: 'Asya Anara' } });
+    expect(two.characters[0].overrideTtsVoices).toEqual({ coqui: { name: 'Asya Anara' } });
+    /* Legacy singular field must be removed on write so the cast.json
+       has a single source of truth. */
+    expect(one.characters[0].overrideTtsVoice).toBeUndefined();
+    expect(two.characters[0].overrideTtsVoice).toBeUndefined();
   });
 
-  it('clears the override on every matching cast.json when override is null', async () => {
+  it('preserves other engine slots when updating one engine', async () => {
+    /* The per-engine map's whole point: setting the Coqui slot must not
+       wipe a previously-set Kokoro slot. */
+    await request(app)
+      .put('/api/voices/v_fitz/override')
+      .send({ override: { engine: 'kokoro', name: 'am_onyx' } });
     await request(app)
       .put('/api/voices/v_fitz/override')
       .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    expect(one.characters[0].overrideTtsVoices).toEqual({
+      coqui:  { name: 'Asya Anara' },
+      kokoro: { name: 'am_onyx' },
+    });
+
+    /* Cleanup. */
+    await request(app).put('/api/voices/v_fitz/override').send({ override: null });
+  });
+
+  it('migrates legacy overrideTtsVoice on the first write that touches the cast', async () => {
+    /* User flow: cast.json was written by an older client (legacy field),
+       user opens the profile drawer and pins a Coqui voice → the write
+       path normalises the legacy field into the map and removes it. */
+    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_ONE, '.audiobook', 'cast.json');
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as { characters: Array<Record<string, unknown>> };
+    cast.characters[0].overrideTtsVoice = { engine: 'kokoro', name: 'am_michael' };
+    delete cast.characters[0].overrideTtsVoices;
+    writeFileSync(castPath, JSON.stringify(cast));
+
+    await request(app)
+      .put('/api/voices/v_fitz/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+
+    const after = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    /* Both engines now in the map, legacy field gone. */
+    expect(after.characters[0].overrideTtsVoices).toEqual({
+      coqui:  { name: 'Asya Anara' },
+      kokoro: { name: 'am_michael' },
+    });
+    expect(after.characters[0].overrideTtsVoice).toBeUndefined();
+
+    /* Cleanup. */
+    await request(app).put('/api/voices/v_fitz/override').send({ override: null });
+  });
+
+  it('clears every engine slot when override is null', async () => {
+    await request(app)
+      .put('/api/voices/v_fitz/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    await request(app)
+      .put('/api/voices/v_fitz/override')
+      .send({ override: { engine: 'kokoro', name: 'am_onyx' } });
     const clear = await request(app)
       .put('/api/voices/v_fitz/override')
       .send({ override: null });
@@ -169,6 +278,8 @@ describe('PUT /api/voices/:voiceId/override', () => {
 
     const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
     const two = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
+    expect(one.characters[0].overrideTtsVoices).toBeUndefined();
+    expect(two.characters[0].overrideTtsVoices).toBeUndefined();
     expect(one.characters[0].overrideTtsVoice).toBeUndefined();
     expect(two.characters[0].overrideTtsVoice).toBeUndefined();
   });

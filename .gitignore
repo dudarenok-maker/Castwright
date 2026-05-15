@@ -57,6 +57,8 @@ server/tts-sidecar/.venv/
 server/tts-sidecar/models/
 server/tts-sidecar/.coqui/
 server/tts-sidecar/sample.*
+# Kokoro v1 weights downloaded by scripts/install-kokoro.ps1 (~330 MB total).
+server/tts-sidecar/voices/
 
 # Python build/cache artefacts — match anywhere in the tree since the sidecar
 # is currently the only Python in the repo and these are never wanted.

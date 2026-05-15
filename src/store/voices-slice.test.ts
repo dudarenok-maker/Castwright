@@ -68,22 +68,45 @@ describe('voicesSlice — setPinned', () => {
 });
 
 describe('voicesSlice — setOverride', () => {
-  it('writes the override onto the matching voice', () => {
+  it('writes the override into overrideTtsVoices[engine] and projects it onto the legacy field', () => {
     const start = voicesSlice.reducer(undefined, voicesActions.hydrate({ voices: [voice('v_fitz'), voice('v_other')] }));
     const next = voicesSlice.reducer(start, voicesActions.setOverride({
       voiceId: 'v_fitz',
       override: { engine: 'coqui', name: 'Asya Anara' },
     }));
-    expect(next.voices.find(v => v.id === 'v_fitz')!.overrideTtsVoice).toEqual({ engine: 'coqui', name: 'Asya Anara' });
+    const fitz = next.voices.find(v => v.id === 'v_fitz')!;
+    expect(fitz.overrideTtsVoices).toEqual({ coqui: { name: 'Asya Anara' } });
+    /* Legacy field still reflects the active engine's slot for callers
+       that haven't migrated yet. */
+    expect(fitz.overrideTtsVoice).toEqual({ engine: 'coqui', name: 'Asya Anara' });
     /* Unrelated voice is untouched. */
-    expect(next.voices.find(v => v.id === 'v_other')!.overrideTtsVoice).toBeUndefined();
+    expect(next.voices.find(v => v.id === 'v_other')!.overrideTtsVoices).toBeUndefined();
   });
 
-  it('clears the override when given null', () => {
+  it('preserves an existing engine slot when setting a different engine', () => {
+    /* The whole point of pluralization — Coqui and Kokoro slots must
+       coexist so engine switches don't force a re-cast. */
     const start = voicesSlice.reducer(undefined, voicesActions.hydrate({
-      voices: [voice('v_fitz', { overrideTtsVoice: { engine: 'coqui', name: 'Asya Anara' } })],
+      voices: [voice('v_fitz', { overrideTtsVoices: { kokoro: { name: 'am_onyx' } } })],
+    }));
+    const next = voicesSlice.reducer(start, voicesActions.setOverride({
+      voiceId: 'v_fitz',
+      override: { engine: 'coqui', name: 'Asya Anara' },
+    }));
+    expect(next.voices[0].overrideTtsVoices).toEqual({
+      coqui:  { name: 'Asya Anara' },
+      kokoro: { name: 'am_onyx' },
+    });
+  });
+
+  it('clears EVERY engine slot when given null', () => {
+    const start = voicesSlice.reducer(undefined, voicesActions.hydrate({
+      voices: [voice('v_fitz', {
+        overrideTtsVoices: { coqui: { name: 'Asya Anara' }, kokoro: { name: 'am_onyx' } },
+      })],
     }));
     const next = voicesSlice.reducer(start, voicesActions.setOverride({ voiceId: 'v_fitz', override: null }));
+    expect(next.voices[0].overrideTtsVoices).toBeNull();
     expect(next.voices[0].overrideTtsVoice).toBeNull();
   });
 

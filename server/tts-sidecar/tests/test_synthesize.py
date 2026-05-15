@@ -363,4 +363,8 @@ def test_speakers_returns_empty_list_before_model_loaded(monkeypatch) -> None:
     with TestClient(main.app) as client:
         r = client.get("/speakers")
     assert r.status_code == 200
-    assert r.json() == {"coqui": []}
+    # /speakers now reports every registered engine — assert the Coqui slot
+    # is the known-empty list rather than full-dict equality so adding
+    # other engines (Kokoro) doesn't churn this test.
+    body = r.json()
+    assert body["coqui"] == []

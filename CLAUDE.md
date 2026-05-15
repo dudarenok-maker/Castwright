@@ -97,18 +97,27 @@ the canonical recipe.
 - Align the `Sentence` shape with the OpenAPI spec (currently the fixtures use
   `{ id: string, charId, text }` while the spec uses `{ id: number, characterId,
   chapterId, text }`).
-- **Model lifecycle is button-driven, not eager** — both local models
-  (TTS sidecar XTTS v2 + analyzer Ollama qwen3.5:4b) are loaded on
-  demand via the in-app Load / Stop pill (`ModelControlPill` in
-  `src/components/`). The TTS sidecar defaults `PRELOAD_COQUI=0`
-  (`server/tts-sidecar/main.py`) so its port comes up in ~2 s with no
-  model loaded; analyzer Ollama always lazy-loaded. Loading either model
-  auto-evicts the other (with an inline "TTS / Analyzer unloaded to
-  free VRAM" banner) so an 8 GB GPU can comfortably hold one model
-  resident at a time. Endpoints: `POST /api/sidecar/{load,unload}`
-  (60 s / 2 s budgets), `POST /api/ollama/{load,unload}` (uses Ollama's
-  `keep_alive` idiom, see `server/src/analyzer/ollama.ts:92` for the
-  equivalent in-band evict on real chat calls).
+- **Model lifecycle is split between eager and button-driven** —
+  - **Kokoro v1 (default, new in 2026-05)**: eagerly loaded at sidecar
+    startup, ~1 s cold load, ~1 GB VRAM. Permanently resident alongside
+    the analyzer Ollama on an 8 GB GPU. NO Load/Stop pill — it's just
+    always available once `scripts/install-kokoro.ps1` has dropped the
+    weights into `server/tts-sidecar/voices/kokoro/`. Voice catalog
+    filtered to English-only (28 voices: `af_*`, `am_*`, `bf_*`, `bm_*`).
+  - **Coqui XTTS v2 (alternate)**: button-driven via `ModelControlPill`
+    (`src/components/`). The TTS sidecar defaults `PRELOAD_COQUI=0`
+    (`server/tts-sidecar/main.py`) so XTTS only loads on demand. Loading
+    XTTS auto-evicts the analyzer Ollama and vice versa (with an inline
+    "TTS / Analyzer unloaded to free VRAM" banner). Endpoints:
+    `POST /api/sidecar/{load,unload}` (60 s / 2 s budgets),
+    `POST /api/ollama/{load,unload}` (uses Ollama's `keep_alive` idiom,
+    see `server/src/analyzer/ollama.ts:92` for the equivalent in-band
+    evict on real chat calls).
+  - **Per-character voice profiles are per-engine**: each cast member
+    carries an `overrideTtsVoices: { coqui?: {name}, kokoro?: {name},
+    gemini?: {name} }` map. Engine switches preserve cast assignments;
+    no re-cast needed when toggling Coqui ↔ Kokoro. Legacy single-field
+    `overrideTtsVoice` is migrated lazily at cast.json read time.
 
 ## Commit gate
 Two-tier automated test gate, enforced by husky hooks in `.husky/`:

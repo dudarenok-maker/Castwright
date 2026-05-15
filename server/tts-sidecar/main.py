@@ -7,10 +7,12 @@ Wire format:
                               X-Sample-Rate header, content-type audio/L16.
   GET  /health      response: { ok, engines: ['coqui', ...] }
 
-Engines are lazy-loaded on first call. Coqui XTTS v2 takes a few seconds to
-load and a few GB of RAM, so the process holds it in memory for the rest of
-its lifetime. Piper / Kokoro plug in alongside by adding their own
-`Engine`-subclass under engines/ and registering in ENGINES.
+Engines plug in by subclassing `Engine` and registering in ENGINES. Coqui
+XTTS v2 is lazy-loaded on first call (a few GB of VRAM, ~30 s init — the
+in-app Load/Stop pill controls its lifetime so it can be evicted to free
+VRAM for the analyzer). Kokoro v1 is eagerly loaded at startup (~300 MB
+ONNX + ~30 MB voices, ~1 s init; small enough to be permanently resident
+alongside the analyzer).
 
 License note: Coqui XTTS v2 ships under the Coqui Public Model License (CPML),
 which restricts commercial use. This project is local-only / personal use, so
@@ -403,6 +405,185 @@ class CoquiEngine(Engine):
         return SynthResult(pcm=pcm, sample_rate=sample_rate, substituted_from=substituted_from)
 
 
+class KokoroEngine(Engine):
+    """Kokoro v1 via the `kokoro-onnx` package. Tuned for quality, not VRAM
+    thrift: fp32 ONNX, CUDA execution provider when available with CPU
+    fallback. Eagerly loaded on sidecar startup (the model is small enough
+    that the cold-start cost isn't worth gating behind a /load button).
+
+    The bundled voices-v1.0.bin manifest carries ~54 voices across 8
+    languages; this project surfaces only the 28 English voices (American
+    and British, female and male). The filter is hardcoded — if you ever
+    need another language, extend ENGLISH_VOICE_PREFIXES and restart.
+    """
+
+    name = "kokoro"
+
+    # American/British × female/male. Filters Kokoro's multilingual catalog
+    # down to the English subset (28 voices) at load time so every consumer
+    # — /speakers, /synthesize substitution, the Node-side base-voices
+    # aggregator, the picker UI — sees the same shortlist. Non-English
+    # voice IDs requested by /synthesize fall back to FALLBACK_VOICE the
+    # same way XTTS substitutes unknown speakers.
+    ENGLISH_VOICE_PREFIXES = ("af_", "am_", "bf_", "bm_")
+
+    # Most-cited "narrator-quality" Kokoro voice in 2026 surveys. Used when
+    # the requested voice isn't in the English manifest — synth still
+    # completes rather than failing the whole chapter.
+    FALLBACK_VOICE = "af_heart"
+
+    # Kokoro v1 native output sample rate. Hardcoded because kokoro-onnx
+    # versions have shuffled where they expose this; matching XTTS's 24 kHz
+    # means the Node side doesn't need to special-case the WAV header.
+    NATIVE_SAMPLE_RATE = 24000
+
+    def __init__(self) -> None:
+        self._kokoro: Any = None
+        self._loading: bool = False
+        self._load_lock: asyncio.Lock = asyncio.Lock()
+        # Default weight paths live next to this file under voices/kokoro/.
+        # The install-kokoro.ps1 script downloads them there. Env overrides
+        # let the user park the ~330 MB of weights on a different drive.
+        default_dir = os.path.join(os.path.dirname(__file__), "voices", "kokoro")
+        self._model_path = os.environ.get(
+            "KOKORO_MODEL_PATH",
+            os.path.join(default_dir, "kokoro-v1.0.onnx"),
+        )
+        self._voices_path = os.environ.get(
+            "KOKORO_VOICES_PATH",
+            os.path.join(default_dir, "voices-v1.0.bin"),
+        )
+        # Kokoro's language codes use the espeak-ng convention ("en-us",
+        # "en-gb"). The voice itself encodes accent (af_ = American, bf_ =
+        # British), so the language code is largely a phonemiser hint;
+        # default to en-us and let users override if they hit edge cases.
+        self._language = os.environ.get("KOKORO_LANGUAGE", "en-us")
+        # English subset of the voice manifest, populated at load time.
+        self._voices: list[str] = []
+
+    def _ensure_loaded(self, model: str) -> None:
+        if self._kokoro is not None:
+            return
+        try:
+            from kokoro_onnx import Kokoro  # type: ignore
+        except ImportError as e:
+            raise RuntimeError(
+                f"Failed to import kokoro-onnx ({e}). Install with: "
+                "`.\\.venv\\Scripts\\python.exe -m pip install kokoro-onnx onnxruntime-gpu` "
+                "in server/tts-sidecar (or onnxruntime for CPU-only)."
+            ) from e
+
+        if not os.path.isfile(self._model_path):
+            raise RuntimeError(
+                f"Kokoro model not found at {self._model_path}. "
+                "Run server/tts-sidecar/scripts/install-kokoro.ps1 to download weights."
+            )
+        if not os.path.isfile(self._voices_path):
+            raise RuntimeError(
+                f"Kokoro voices manifest not found at {self._voices_path}. "
+                "Run server/tts-sidecar/scripts/install-kokoro.ps1 to download weights."
+            )
+
+        log.info("Loading Kokoro model=%s voices=%s ...", self._model_path, self._voices_path)
+        # kokoro-onnx selects ONNX Runtime providers automatically — CUDA
+        # when onnxruntime-gpu is installed, CPU fallback otherwise. We
+        # don't pass a providers list explicitly because the constructor
+        # signature has shifted across kokoro-onnx releases; the auto-
+        # detection has been stable.
+        kokoro = Kokoro(self._model_path, self._voices_path)
+
+        # Enumerate the voice manifest. The API has drifted across kokoro-
+        # onnx versions: older releases expose `voices` as a dict, newer
+        # ones add a `get_voices()` method. Try both; if neither works,
+        # log and leave the list empty so /speakers reports nothing rather
+        # than crashing the load.
+        all_voices: list[str] = []
+        try:
+            getter = getattr(kokoro, "get_voices", None)
+            if callable(getter):
+                all_voices = list(getter())
+            else:
+                voices_attr = getattr(kokoro, "voices", None)
+                if isinstance(voices_attr, dict):
+                    all_voices = list(voices_attr.keys())
+                elif voices_attr is not None:
+                    all_voices = list(voices_attr)
+        except Exception as e:
+            log.warning(
+                "Could not enumerate Kokoro voices (%s). /speakers will be empty "
+                "and substitution will skip pre-validation.",
+                e,
+            )
+            all_voices = []
+
+        # English-only filter — the load-bearing line that keeps non-
+        # English voices out of every downstream consumer.
+        self._voices = sorted(
+            v for v in all_voices
+            if isinstance(v, str) and v.startswith(self.ENGLISH_VOICE_PREFIXES)
+        )
+        self._kokoro = kokoro
+        log.info(
+            "Kokoro loaded. English voices: %d (filtered from %d total in manifest).",
+            len(self._voices), len(all_voices),
+        )
+
+    def unload(self) -> None:
+        """Drop the Kokoro model. Idempotent. Kokoro is eagerly preloaded
+        at startup so this is rarely called in production — kept for
+        symmetry with CoquiEngine and to let tests reset state."""
+        if self._kokoro is None:
+            return
+        self._kokoro = None
+        self._voices = []
+        log.info("Kokoro model unloaded.")
+
+    def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
+        self._ensure_loaded(model)
+        assert self._kokoro is not None
+
+        # Pre-flight voice validation. Non-English voice IDs (ef_*, ff_*,
+        # etc.) or unknown names fall back to FALLBACK_VOICE. The Node
+        # side reads X-Voice-Substituted-From and surfaces a warning so
+        # the upstream catalog can be fixed.
+        actual_voice = voice
+        substituted_from: Optional[str] = None
+        if self._voices and voice not in self._voices:
+            substituted_from = voice
+            actual_voice = (
+                self.FALLBACK_VOICE
+                if self.FALLBACK_VOICE in self._voices
+                else self._voices[0]
+            )
+            log.warning(
+                "Voice '%s' not in Kokoro English subset — substituting '%s'. "
+                "Valid sample: %s",
+                voice, actual_voice, ", ".join(self._voices[:8]),
+            )
+
+        # kokoro-onnx's create() returns (samples, sample_rate). samples is
+        # a numpy float32 array in [-1, 1]; sample_rate is the model's
+        # native rate (24 kHz for v1). Wrap defensively in case a future
+        # release changes the return shape.
+        result = self._kokoro.create(
+            text,
+            voice=actual_voice,
+            speed=1.0,
+            lang=self._language,
+        )
+        if isinstance(result, tuple) and len(result) == 2:
+            audio, sample_rate = result
+        else:
+            audio = result
+            sample_rate = self.NATIVE_SAMPLE_RATE
+        pcm = _float_audio_to_int16_le(audio)
+        return SynthResult(
+            pcm=pcm,
+            sample_rate=int(sample_rate),
+            substituted_from=substituted_from,
+        )
+
+
 def _float_audio_to_int16_le(audio: Any) -> bytes:
     """Coqui returns either numpy float32 or a python list of floats in
     [-1.0, 1.0]. Convert to 16-bit signed LE mono PCM."""
@@ -417,32 +598,49 @@ def _float_audio_to_int16_le(audio: Any) -> bytes:
 
 ENGINES: dict[str, Engine] = {
     "coqui": CoquiEngine(),
+    "kokoro": KokoroEngine(),
 }
 
 
 @app.on_event("startup")
-async def _preload_default_engine() -> None:
-    """Optional eager preload — OFF by default. The sidecar's HTTP port comes
-    up immediately so the in-app Load button can fire `/load` whenever the
-    user navigates to the Generate or Analysing screen.
+async def _preload_default_engines() -> None:
+    """Engine preload at startup.
 
-    Set PRELOAD_COQUI=1 in server/.env to restore the old eager-load
-    behaviour (~30–60s startup, model ready before any request)."""
-    if os.environ.get("PRELOAD_COQUI", "0") != "1":
-        log.info("PRELOAD_COQUI is not set — skipping eager load; use POST /load to warm the model.")
-        return
-    model = os.environ.get("PRELOAD_COQUI_MODEL", "xtts_v2")
-    coqui = ENGINES.get("coqui")
-    if not isinstance(coqui, CoquiEngine):
-        return
-    try:
-        log.info("Preloading Coqui (model=%s) at startup…", model)
-        await asyncio.to_thread(coqui._ensure_loaded, model)
-        log.info("Coqui preload complete — /synthesize will respond fast on first call.")
-    except Exception as e:
-        # Don't crash the process — the user still gets /health and a
-        # diagnostic on the first real /synthesize call.
-        log.warning("Coqui preload failed (%s). Will retry lazily on first request.", e)
+    Coqui: opt-in via PRELOAD_COQUI=1 (off by default — the in-app Load
+    button warms it on demand to avoid eating ~30 s of boot time and ~3 GB
+    of VRAM the user may not need yet).
+
+    Kokoro: eager by default. ~1 s cold start and ~1 GB VRAM make the
+    "always loaded" choice cheap. Failure-tolerant: if the weights aren't
+    installed yet (fresh clone before install-kokoro.ps1 runs), log a
+    warning and keep the sidecar alive so the Coqui path still works."""
+    if os.environ.get("PRELOAD_COQUI", "0") == "1":
+        coqui_model = os.environ.get("PRELOAD_COQUI_MODEL", "xtts_v2")
+        coqui = ENGINES.get("coqui")
+        if isinstance(coqui, CoquiEngine):
+            try:
+                log.info("Preloading Coqui (model=%s) at startup…", coqui_model)
+                await asyncio.to_thread(coqui._ensure_loaded, coqui_model)
+                log.info("Coqui preload complete — /synthesize will respond fast on first call.")
+            except Exception as e:
+                # Don't crash the process — the user still gets /health and a
+                # diagnostic on the first real /synthesize call.
+                log.warning("Coqui preload failed (%s). Will retry lazily on first request.", e)
+    else:
+        log.info("PRELOAD_COQUI is not set — skipping eager Coqui load; use POST /load to warm the model.")
+
+    kokoro = ENGINES.get("kokoro")
+    if isinstance(kokoro, KokoroEngine):
+        try:
+            log.info("Preloading Kokoro at startup…")
+            await asyncio.to_thread(kokoro._ensure_loaded, "v1")
+            log.info("Kokoro preload complete — /synthesize is hot.")
+        except Exception as e:
+            log.warning(
+                "Kokoro preload failed (%s). The Coqui path still works; run "
+                "server/tts-sidecar/scripts/install-kokoro.ps1 to install Kokoro weights.",
+                e,
+            )
 
 
 @app.get("/health")
@@ -529,14 +727,24 @@ async def unload_model() -> JSONResponse:
 
 @app.get("/speakers")
 def speakers() -> dict[str, Any]:
-    """List the speaker names the loaded model actually knows about.
-    Useful for hunting drift between the Node-side voice catalog
-    (server/src/tts/voice-mapping.ts) and what XTTS v2 ships. Empty list
-    if the model isn't loaded yet or the speaker manager API has shifted."""
+    """List the voice names each loaded engine knows about. Used by the
+    Node-side base-voices aggregator (server/src/tts/base-voices.ts) to
+    populate the cast picker with the live catalog rather than a stale
+    hardcoded list. Engine keys are present even when empty (model not
+    loaded yet or manifest enumeration failed) so the consumer can tell
+    "no voices" from "engine unknown".
+
+    Kokoro's list is the English subset (28 voices) — non-English voices
+    are filtered out at engine load time per the project's English-only
+    scope."""
+    out: dict[str, Any] = {}
     coqui = ENGINES.get("coqui")
     if isinstance(coqui, CoquiEngine):
-        return {"coqui": coqui._speakers}
-    return {}
+        out["coqui"] = coqui._speakers
+    kokoro = ENGINES.get("kokoro")
+    if isinstance(kokoro, KokoroEngine):
+        out["kokoro"] = kokoro._voices
+    return out
 
 
 @app.post("/synthesize")

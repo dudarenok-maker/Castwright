@@ -183,6 +183,56 @@ If it logs `DeepSpeed enable failed (…)`, search the `…` for the cause:
 - `Cannot find file 'bin\deepspeed.bat'` → sdist patch (step 3 stub) was
   skipped.
 
+## Kokoro v1 (second local engine, English-only)
+
+Kokoro v1 is a lightweight quality-tuned TTS model that runs alongside
+Coqui XTTS v2 in the same sidecar process. It is the default engine for
+new accounts. Compared to XTTS:
+
+- **~1 GB VRAM with the GPU runtime** (vs ~3 GB for XTTS) — small enough
+  to stay permanently resident, so there is no Load/Stop pill for it.
+- **28 baked English voices** (American + British, female + male). Other
+  languages from Kokoro's manifest are filtered out at the sidecar
+  boundary; this project is English-only.
+- **No voice cloning** — pick from the catalog. XTTS remains available
+  for its zero-shot cloning if/when the UI surfaces it.
+- **ONNX runtime** — `kokoro-onnx` + `onnxruntime-gpu` (or `onnxruntime`
+  for CPU-only). Pure-Python install, no DeepSpeed/CUDA Toolkit dance.
+
+### Install
+
+The Python deps land via `requirements.txt` (already added). The model
+weights (~330 MB) are gitignored and downloaded by a helper script:
+
+```powershell
+cd server\tts-sidecar
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+powershell -ExecutionPolicy Bypass -File scripts\install-kokoro.ps1
+```
+
+That drops `kokoro-v1.0.onnx` and `voices-v1.0.bin` into
+`server/tts-sidecar/voices/kokoro/`. The script is idempotent (re-runs
+skip already-downloaded files) and failure-tolerant (wipes partial
+downloads so the next run retries cleanly).
+
+If you put the weights elsewhere, point the sidecar at them via env:
+
+```
+KOKORO_MODEL_PATH=D:\kokoro\kokoro-v1.0.onnx
+KOKORO_VOICES_PATH=D:\kokoro\voices-v1.0.bin
+```
+
+Kokoro auto-preloads at sidecar startup (~1 s cold load). If the weights
+aren't installed yet, the sidecar logs a warning and stays alive on the
+Coqui path; install Kokoro and restart to pick it up.
+
+### Pause OneDrive sync before installing
+
+`pip install kokoro-onnx onnxruntime-gpu` and the weight downloads can
+both trip the OneDrive lock trap below. Pause sync first (system tray →
+Pause sync) or pre-purge `__pycache__` / `*.dist-info` dirs as described
+in the troubleshooting section.
+
 ## Windows install troubleshooting
 
 A non-exhaustive list of gotchas this sidecar has eaten on Windows. Most
@@ -316,6 +366,13 @@ $resp.Headers['X-Sample-Rate']
 - `PRELOAD_COQUI` (default `1`) — load XTTS at startup so the first
   /synthesize doesn't pay the 30–60s model-load cost on top of the synth.
   Set `0` for lazy load during protocol iteration.
+- `KOKORO_MODEL_PATH` (default `voices/kokoro/kokoro-v1.0.onnx`) —
+  override where the Kokoro ONNX weights live.
+- `KOKORO_VOICES_PATH` (default `voices/kokoro/voices-v1.0.bin`) —
+  override where the Kokoro voice manifest lives.
+- `KOKORO_LANGUAGE` (default `en-us`) — espeak-ng language code passed to
+  Kokoro's phonemiser. The voice IDs encode accent (`af_` American,
+  `bf_` British), so this is mainly a phonemiser hint.
 
 ## License note
 

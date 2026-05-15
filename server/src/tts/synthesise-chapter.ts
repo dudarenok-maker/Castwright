@@ -33,10 +33,17 @@ export interface CastCharacter {
       consumes a `string[]` of bare quotes. `buildHintFromCast` does the
       flattening. */
   evidence?: Array<{ quote?: string; note?: string } | string>;
-  /** User-set manual override for this character's TTS voice. When the
-      override's engine matches the synth engine, `pickVoiceForEngine`
-      bypasses attribute inference and uses the named speaker directly.
-      Persisted in cast.json so it survives reloads + analysis reparses. */
+  /** Per-engine user-set voice overrides. The active synth engine reads
+      its own slot; missing slots fall through to attribute inference.
+      Persisted in cast.json so it survives reloads + analysis reparses.
+      Switching engines (Coqui ↔ Kokoro) preserves cast assignments
+      because each engine has its own slot. */
+  overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  /** @deprecated Legacy singular override. Read paths normalise this
+      into `overrideTtsVoices` at cast.json load time (see
+      `normaliseCastCharacter` in routes/voices.ts). Kept on the type so
+      cast.json files written by older clients still satisfy this
+      interface before normalisation. */
   overrideTtsVoice?: { engine: TtsEngine; name: string } | null;
 }
 
@@ -124,12 +131,18 @@ export function buildSentenceGroups(sentences: SentenceOutput[]): SentenceGroup[
 
 /** Build the VoiceLike payload that pickVoiceForEngine consumes from a
     confirmed-cast Character. Uses voiceId when present so the same character
-    in the library stays on the same prebuilt voice; falls back to characterId. */
+    in the library stays on the same prebuilt voice; falls back to characterId.
+
+    Passes BOTH the new per-engine map and the legacy singular field; the
+    picker prefers the map when present and the synth engine matches a
+    slot. The legacy field is only consulted as a fallback for cast.json
+    files that haven't yet round-tripped through the normaliser. */
 function toVoiceLike(c: CastCharacter): VoiceLike {
   return {
     id: c.voiceId ?? c.id,
     character: c.name,
     attributes: c.attributes ?? [],
+    overrideTtsVoices: c.overrideTtsVoices ?? null,
     overrideTtsVoice: c.overrideTtsVoice ?? null,
   };
 }

@@ -12,6 +12,7 @@
 import {
   COQUI_PROFILE_VOICES,
   GEMINI_PROFILE_VOICES,
+  KOKORO_PROFILE_VOICES,
 } from './voice-mapping.js';
 
 type VoiceProfile =
@@ -54,6 +55,10 @@ function hashGradient(seed: string): [string, string] {
 function lookupBucketSlot(name: string): [VoiceProfile, 0 | 1] | null {
   for (const profile of Object.keys(COQUI_PROFILE_VOICES) as VoiceProfile[]) {
     const idx = COQUI_PROFILE_VOICES[profile].indexOf(name);
+    if (idx === 0 || idx === 1) return [profile, idx];
+  }
+  for (const profile of Object.keys(KOKORO_PROFILE_VOICES) as VoiceProfile[]) {
+    const idx = KOKORO_PROFILE_VOICES[profile].indexOf(name);
     if (idx === 0 || idx === 1) return [profile, idx];
   }
   for (const profile of Object.keys(GEMINI_PROFILE_VOICES) as VoiceProfile[]) {
