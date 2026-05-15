@@ -246,6 +246,82 @@ describe('voice-sample router', () => {
     });
   });
 
+  describe('raw-speaker bypass (Base voices tab)', () => {
+    /* When the client sets rawEngine + rawSpeaker, the picker is bypassed
+       and the named speaker is synthesised directly. This is what the
+       "Base voices" tab and family-header Play buttons rely on so an
+       unmodified preview of a specific speaker is reproducible. */
+
+    it('passes rawSpeaker directly to the provider, skipping pickVoiceForEngine', async () => {
+      const res = await request(app)
+        .post('/api/voices/v_anything/sample')
+        .send({
+          modelKey: 'coqui-xtts-v2',
+          /* Voice profile attributes that would normally land on a male-deep
+             pick — we want to confirm the override wins regardless. */
+          voice: { id: 'v_anything', character: 'Fitz', attributes: ['Male', 'Deep', 'Authoritative'] },
+          characterHint: { gender: 'male' },
+          rawEngine: 'coqui',
+          rawSpeaker: 'Asya Anara',
+        });
+
+      expect(res.status).toBe(200);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+      const args = synthesize.mock.calls[0][0] as { voiceName: string; text: string };
+      expect(args.voiceName).toBe('Asya Anara');
+      /* Default raw sample text — engine-agnostic neutral sentence. */
+      expect(args.text).toMatch(/unmodified model voice/i);
+    });
+
+    it('caches raw samples by (engine, speaker), independent of the voiceId path', async () => {
+      /* Same raw speaker on two different voiceId paths should resolve to
+         the same on-disk file so unused base voices don't get re-synthesised
+         once per voiceId they happen to ride along. */
+      const a = await request(app)
+        .post('/api/voices/v_one/sample')
+        .send({
+          modelKey: 'coqui-xtts-v2',
+          rawEngine: 'coqui',
+          rawSpeaker: 'Asya Anara',
+        });
+      const b = await request(app)
+        .post('/api/voices/v_two/sample')
+        .send({
+          modelKey: 'coqui-xtts-v2',
+          rawEngine: 'coqui',
+          rawSpeaker: 'Asya Anara',
+        });
+
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(a.body.url).toBe(b.body.url);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+      /* Cache scope must NOT include the voiceId path component. */
+      expect(a.body.url).not.toContain('v_one');
+      expect(a.body.url).not.toContain('v_two');
+      expect(a.body.url).toMatch(/raw-coqui-/);
+    });
+
+    it('uses a Gemini-compatible modelKey when the project is on Coqui but the raw voice is Gemini', async () => {
+      /* A user clicking Play on Gemini · Charon while the project's
+         modelKey is coqui-xtts-v2 must still route to a Gemini provider —
+         otherwise the synth would send "Charon" to the Coqui sidecar and
+         500 mid-synth. */
+      const res = await request(app)
+        .post('/api/voices/v_x/sample')
+        .send({
+          modelKey: 'coqui-xtts-v2',
+          rawEngine: 'gemini',
+          rawSpeaker: 'Charon',
+        });
+      expect(res.status).toBe(200);
+      /* Cache filename should reflect the effective modelKey (gemini-2.5-flash)
+         so a later Coqui-routed request for the same character doesn't
+         collide with this entry. */
+      expect(res.body.url).toMatch(/gemini-2\.5-flash/);
+    });
+  });
+
   describe('provider errors', () => {
     it('503 sidecar_down when the sidecar is unreachable', async () => {
       synthesize.mockRejectedValueOnce(new Error('sidecar not reachable at http://localhost:9000'));

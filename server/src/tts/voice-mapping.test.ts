@@ -9,7 +9,7 @@
    side of the pair fails the test instead of shipping silently. */
 
 import { describe, it, expect } from 'vitest';
-import { auditEngineCatalog } from './voice-mapping.js';
+import { auditEngineCatalog, pickVoiceForEngine } from './voice-mapping.js';
 
 describe('voice-mapping catalogs are self-consistent', () => {
   it('coqui: every picker voice has a description and every described voice is routable', () => {
@@ -36,5 +36,80 @@ describe('voice-mapping catalogs are self-consistent', () => {
        (< total documented) so a future refactor doesn't accidentally
        hand-pick more voices than documented. */
     expect(audit.unrouted.length).toBeLessThan(40);
+  });
+});
+
+describe('pickVoiceForEngine honours the per-cast overrideTtsVoice', () => {
+  /* The override is the user's manual reassignment of a cast member's TTS
+     voice (e.g. "make Fitz use Coqui · Asya Anara"). When set AND its
+     engine matches the synth engine, attribute inference is skipped and
+     the named speaker is used verbatim. Cross-engine overrides are kept
+     on the cast record but ignored at synth time. */
+
+  it('returns the override name verbatim when the engine matches', () => {
+    const picked = pickVoiceForEngine(
+      'coqui',
+      {
+        id: 'char-fitz',
+        character: 'Fitz',
+        attributes: ['Male', 'Teen'],
+        overrideTtsVoice: { engine: 'coqui', name: 'Asya Anara' },
+      },
+      { gender: 'male', ageRange: 'teen' },
+    );
+    expect(picked).toBe('Asya Anara');
+  });
+
+  it('falls through to attribute inference when the override engine differs from the synth engine', () => {
+    /* Override says "Gemini · Charon" but the synth engine is Coqui. The
+       picker must pretend the override doesn't exist and pick from the
+       Coqui catalog — anything else would route a Gemini speaker name to
+       the Coqui sidecar and 500 the chapter. */
+    const picked = pickVoiceForEngine(
+      'coqui',
+      {
+        id: 'char-fitz',
+        character: 'Fitz',
+        attributes: [],
+        overrideTtsVoice: { engine: 'gemini', name: 'Charon' },
+      },
+      { gender: 'male', ageRange: 'adult' },
+    );
+    expect(picked).not.toBe('Charon');
+    /* Picker should land on one of the male-mid Coqui options. */
+    expect(['Aaron Dreschner', 'Viktor Menelaos']).toContain(picked);
+  });
+
+  it('ignores an override whose name is empty', () => {
+    /* A previously-set override that the user cleared lands as an empty
+       string in the wire format (clients may send {engine, name: ''}
+       instead of override: null). Treat it as no override. */
+    const picked = pickVoiceForEngine(
+      'coqui',
+      {
+        id: 'char-fitz',
+        character: 'Fitz',
+        attributes: [],
+        overrideTtsVoice: { engine: 'coqui', name: '' },
+      },
+      { gender: 'female', ageRange: 'adult' },
+    );
+    expect(picked).not.toBe('');
+    /* Should land on a female-mid Coqui option. */
+    expect(['Daisy Studious', 'Sofia Hellen']).toContain(picked);
+  });
+
+  it('null override is the same as no override', () => {
+    const withNull = pickVoiceForEngine(
+      'coqui',
+      { id: 'x', character: 'X', attributes: [], overrideTtsVoice: null },
+      { gender: 'male' },
+    );
+    const withoutKey = pickVoiceForEngine(
+      'coqui',
+      { id: 'x', character: 'X', attributes: [] },
+      { gender: 'male' },
+    );
+    expect(withNull).toBe(withoutKey);
   });
 });

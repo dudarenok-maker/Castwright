@@ -1,5 +1,7 @@
-/* GET /api/voices
-   PUT /api/voices/:voiceId/pin
+/* GET    /api/voices
+   GET    /api/voices/base
+   PUT    /api/voices/:voiceId/pin
+   PUT    /api/voices/:voiceId/override
 
    The voice "library" is a derived view of every book's confirmed cast.json
    in the workspace — there's no separate voice store. Each character becomes
@@ -15,7 +17,13 @@
    `engine` query param (default 'coqui' to match the UI's default).
 
    Pin flags live in audiobook-workspace/voices.json (workspace-scope, not
-   per-book) since they decide where a voice surfaces across every book. */
+   per-book) since they decide where a voice surfaces across every book.
+
+   Override flags (`overrideTtsVoice`) live on the character entry inside
+   each cast.json — they belong to the character's identity, same as
+   `voiceId` and `gender`. When a user overrides a Voice family that spans
+   multiple books, every character sharing that voiceId picks up the same
+   override (writing through to each cast.json). */
 
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -36,6 +44,8 @@ import {
 import { gradientForTtsVoice } from '../tts/voice-palette.js';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine } from '../tts/index.js';
+import { listBaseVoices, invalidateBaseVoiceCache, type BaseVoiceEntry } from '../tts/base-voices.js';
+import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 
 export const voicesRouter = Router();
 
@@ -44,6 +54,10 @@ interface DerivedVoice {
   character: string;
   bookTitle: string;
   bookId: string;
+  /** Series name parsed from the book directory (`books/<Author>/<Series>/<Book>`),
+      or null for standalones. Used by the voice-family-grouped Voices view
+      to nest cast members under their book series. */
+  bookSeries: string | null;
   attributes: string[];
   gradient: [string, string];
   usedIn: number;
@@ -51,6 +65,11 @@ interface DerivedVoice {
   reusable?: boolean;
   pinned?: boolean;
   ttsVoice: TtsVoiceAssignment;
+  /** User-set manual voice override, when present. The `ttsVoice` field
+      above already reflects the override when its engine matches the
+      query's `engine` param; this field is surfaced separately so the UI
+      can show "Manual" / "Engine mismatch" badges and offer to clear it. */
+  overrideTtsVoice?: { engine: TtsEngine; name: string } | null;
 }
 
 interface CastJson {
@@ -88,6 +107,15 @@ function parseEngine(value: unknown): TtsEngine {
   return 'coqui';
 }
 
+function normaliseSeries(name: string): string | null {
+  /* `Standalones` is the synthetic series slot used for one-off books — it's
+     not a real series the user would want to see as a nested header. Treat
+     it as null so the UI can flatten standalones rather than grouping them. */
+  if (!name) return null;
+  if (name === 'Standalones') return null;
+  return name;
+}
+
 async function aggregateVoices(currentBookId: string | undefined, engine: TtsEngine): Promise<DerivedVoice[]> {
   ensureWorkspace();
   const meta = await loadVoicesMeta();
@@ -109,6 +137,7 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
         for (const c of cast.characters) {
           const id = c.voiceId ?? c.id;
           if (!id) continue;
+          const override = (c.overrideTtsVoice && c.overrideTtsVoice.name) ? c.overrideTtsVoice : null;
           const existing = acc.get(id);
           if (existing) {
             existing.books.add(state.bookId);
@@ -119,13 +148,22 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
               existing.source = 'current';
               existing.bookTitle = state.title;
               existing.bookId = state.bookId;
+              existing.bookSeries = normaliseSeries(seriesName);
+            }
+            /* If a previously-seen book left the override null and a later
+               book carries one, pick it up. Conflicting overrides across
+               books with the same voiceId are unlikely (the override write
+               loops every cast.json), but if it happens we keep the first
+               non-null value the aggregator sees. */
+            if (!existing.overrideTtsVoice && override) {
+              existing.overrideTtsVoice = override;
             }
             continue;
           }
           const isCurrent = !!currentBookId && state.bookId === currentBookId;
           const ttsVoice = resolveVoiceAssignment(
             engine,
-            { id, character: c.name, attributes: c.attributes ?? [] },
+            { id, character: c.name, attributes: c.attributes ?? [], overrideTtsVoice: override },
             buildHintFromCast(c),
           );
           acc.set(id, {
@@ -133,6 +171,7 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
             character: c.name ?? id,
             bookTitle: state.title,
             bookId: state.bookId,
+            bookSeries: normaliseSeries(seriesName),
             attributes: c.attributes ?? [],
             gradient: gradientForTtsVoice(ttsVoice.name, id),
             usedIn: 1,
@@ -140,6 +179,7 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
             reusable: isNarratorId(id, c.name) || undefined,
             pinned: pinned.has(id) || undefined,
             ttsVoice,
+            overrideTtsVoice: override,
             books: new Set([state.bookId]),
           });
         }
@@ -172,6 +212,23 @@ voicesRouter.get('/', async (req: Request, res: Response) => {
   }
 });
 
+/* GET /api/voices/base — base-voice catalog across every engine. Used by
+   the Voices view's "Base voices" tab and the Profile Drawer's override
+   picker. Coqui entries come from the live sidecar manifest (with a
+   fallback to the static catalog when the sidecar is down); Gemini lists
+   all 30 published prebuilt voices. Piper/Kokoro are empty until their
+   tables land in voice-mapping.ts. */
+voicesRouter.get('/base', async (_req: Request, res: Response) => {
+  try {
+    const sidecarUrl = getResolvedSidecarUrl();
+    const voices: BaseVoiceEntry[] = await listBaseVoices({ sidecarUrl });
+    res.json({ voices });
+  } catch (e) {
+    console.error('[voices] base catalog failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Base-voice catalog failed.' });
+  }
+});
+
 voicesRouter.put('/:voiceId/pin', async (req: Request, res: Response) => {
   try {
     const { voiceId } = req.params;
@@ -195,3 +252,80 @@ voicesRouter.put('/:voiceId/pin', async (req: Request, res: Response) => {
     res.status(500).json({ error: (e as Error).message || 'Pin update failed.' });
   }
 });
+
+/* PUT /api/voices/:voiceId/override — set or clear the manual base-voice
+   override for every cast.json character whose voiceId matches. Body shape:
+       { override: { engine, name } }   to set
+       { override: null }               to clear
+   Walks every confirmed-cast book in the workspace because the same voiceId
+   can recur across a series — they're meant to be the same character, so
+   one override applies to all. */
+voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
+  const { voiceId } = req.params;
+  const body = (req.body ?? {}) as { override?: unknown };
+  const parsed = parseOverrideField(body.override);
+  if (parsed === 'invalid') {
+    return res.status(400).json({
+      error: 'Body must include `override: { engine, name }` or `override: null`.',
+    });
+  }
+  try {
+    ensureWorkspace();
+    const updates = await applyOverrideToCastFiles(voiceId, parsed);
+    if (updates === 0) {
+      return res.status(404).json({ error: `No character with voiceId "${voiceId}" found in any confirmed cast.` });
+    }
+    res.status(204).end();
+  } catch (e) {
+    console.error('[voices] override failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Override update failed.' });
+  }
+});
+
+function parseOverrideField(value: unknown): { engine: TtsEngine; name: string } | null | 'invalid' {
+  if (value === null) return null;
+  if (typeof value !== 'object' || value === null) return 'invalid';
+  const v = value as { engine?: unknown; name?: unknown };
+  if (typeof v.engine !== 'string' || typeof v.name !== 'string') return 'invalid';
+  if (v.engine !== 'coqui' && v.engine !== 'gemini' && v.engine !== 'piper' && v.engine !== 'kokoro') return 'invalid';
+  if (v.name.trim().length === 0) return 'invalid';
+  return { engine: v.engine, name: v.name.trim() };
+}
+
+async function applyOverrideToCastFiles(
+  voiceId: string,
+  override: { engine: TtsEngine; name: string } | null,
+): Promise<number> {
+  let updated = 0;
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        if (!state || !state.castConfirmed) continue;
+        const cast = await readJson<CastJson>(castJsonPath(bookDir));
+        if (!cast?.characters?.length) continue;
+        let dirty = false;
+        for (const c of cast.characters) {
+          const id = c.voiceId ?? c.id;
+          if (id !== voiceId) continue;
+          if (override) {
+            c.overrideTtsVoice = override;
+          } else {
+            delete c.overrideTtsVoice;
+          }
+          dirty = true;
+          updated += 1;
+        }
+        if (dirty) {
+          await writeJsonAtomic(castJsonPath(bookDir), cast);
+        }
+      }
+    }
+  }
+  /* Override changes don't affect the base-voice catalog itself, but call
+     this anyway so a future invocation refreshes /speakers cleanly if the
+     sidecar was bounced in between. Cheap and side-effect free. */
+  if (updated > 0) invalidateBaseVoiceCache();
+  return updated;
+}

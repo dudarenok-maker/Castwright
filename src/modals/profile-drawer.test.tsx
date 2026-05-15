@@ -1,13 +1,14 @@
 // Pairs with docs/features/10-profile-drawer.md
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
+import { voicesSlice, voicesActions } from '../store/voices-slice';
 import { ProfileDrawer } from './profile-drawer';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
-import type { Character } from '../lib/types';
+import type { BaseVoice, Character, Voice } from '../lib/types';
 
 vi.mock('../lib/play-sample-with-auto-load', () => ({
   playSampleWithAutoLoad: vi.fn().mockResolvedValue({ analyzerEvicted: false }),
@@ -23,8 +24,25 @@ vi.mock('../lib/use-sample-playback', () => ({
   }),
 }));
 
-function makeStore() {
-  return configureStore({ reducer: { ui: uiSlice.reducer } });
+const setVoiceOverride = vi.fn((_voiceId: string, _override: BaseVoice | null) => Promise.resolve());
+vi.mock('../lib/api', () => ({
+  api: {
+    setVoiceOverride: (voiceId: string, override: BaseVoice | null) => setVoiceOverride(voiceId, override),
+  },
+}));
+
+interface StoreSetup {
+  baseVoices?: BaseVoice[];
+  voices?: Voice[];
+}
+
+function makeStore({ baseVoices, voices }: StoreSetup = {}) {
+  const store = configureStore({
+    reducer: { ui: uiSlice.reducer, voices: voicesSlice.reducer },
+  });
+  if (baseVoices) store.dispatch(voicesActions.hydrateBaseVoices(baseVoices));
+  if (voices) store.dispatch(voicesActions.hydrate({ voices }));
+  return store;
 }
 
 function renderDrawer(
@@ -32,21 +50,28 @@ function renderDrawer(
   extra: {
     mergeCandidates?: Character[];
     onMerge?: (sourceId: string, targetId: string) => Promise<void>;
+    voice?: Voice;
+    baseVoices?: BaseVoice[];
+    voices?: Voice[];
   } = {},
 ) {
-  return render(
-    <Provider store={makeStore()}>
-      <ProfileDrawer
-        character={character}
-        voice={undefined}
-        onClose={() => {}}
-        onSave={() => {}}
-        onLock={() => {}}
-        mergeCandidates={extra.mergeCandidates}
-        onMerge={extra.onMerge}
-      />
-    </Provider>,
-  );
+  const store = makeStore({ baseVoices: extra.baseVoices, voices: extra.voices });
+  return {
+    store,
+    ...render(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={character}
+          voice={extra.voice}
+          onClose={() => {}}
+          onSave={() => {}}
+          onLock={() => {}}
+          mergeCandidates={extra.mergeCandidates}
+          onMerge={extra.onMerge}
+        />
+      </Provider>,
+    ),
+  };
 }
 
 const evidenceLongFirst = [
@@ -281,5 +306,69 @@ describe('ProfileDrawer downgrade to background bucket', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(await screen.findByText(/Disk full\./)).toBeTruthy();
+  });
+});
+
+describe('ProfileDrawer model-voice override picker', () => {
+  const fitz: Character = {
+    id: 'fitz', name: 'Fitz', role: 'protagonist', color: 'eliza',
+    lines: 50, scenes: 5, gender: 'male', ageRange: 'teen',
+  };
+
+  const fitzVoice: Voice = {
+    id: 'v_fitz', character: 'Fitz', bookTitle: 'Book One', bookId: 'b1',
+    attributes: ['Male', 'Teen'],
+    gradient: ['#3C194F', '#0F0E0D'],
+    usedIn: 1,
+    source: 'current',
+    ttsVoice: { provider: 'coqui', name: 'Aaron Dreschner', description: 'Mid · Male' },
+  };
+
+  const baseCatalog: BaseVoice[] = [
+    { engine: 'coqui', name: 'Asya Anara' },
+    { engine: 'coqui', name: 'Damien Black' },
+    { engine: 'gemini', name: 'Charon' },
+  ];
+
+  it('renders an "Auto — currently …" default and the base catalog grouped by engine', async () => {
+    renderDrawer(fitz, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    const picker = await screen.findByRole('combobox', { name: /Model voice override/i });
+    /* The auto label calls out the resolved voice so the user knows what
+       they'd be moving away from. */
+    expect(picker).toHaveValue('auto');
+    expect(within(picker).getByRole('option', { name: /Auto — currently Coqui · Aaron Dreschner/i })).toBeTruthy();
+    /* Engine optgroups present. */
+    expect(picker.querySelector('optgroup[label="Coqui"]')).toBeTruthy();
+    expect(picker.querySelector('optgroup[label="Gemini"]')).toBeTruthy();
+  });
+
+  it('persists an override via api.setVoiceOverride when the user picks a base voice', async () => {
+    setVoiceOverride.mockClear();
+    renderDrawer(fitz, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    const picker = await screen.findByRole('combobox', { name: /Model voice override/i });
+    fireEvent.change(picker, { target: { value: 'coqui|Asya Anara' } });
+    await waitFor(() => {
+      expect(setVoiceOverride).toHaveBeenCalledWith('v_fitz', { engine: 'coqui', name: 'Asya Anara' });
+    });
+  });
+
+  it('clears the override when the user picks "Auto"', async () => {
+    setVoiceOverride.mockClear();
+    const overridden: Voice = { ...fitzVoice, overrideTtsVoice: { engine: 'coqui', name: 'Asya Anara' } };
+    renderDrawer(fitz, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
+    const picker = await screen.findByRole('combobox', { name: /Model voice override/i });
+    expect(picker).toHaveValue('coqui|Asya Anara');
+    fireEvent.change(picker, { target: { value: 'auto' } });
+    await waitFor(() => {
+      expect(setVoiceOverride).toHaveBeenCalledWith('v_fitz', null);
+    });
+  });
+
+  it('warns about an engine mismatch when override engine differs from the active engine', async () => {
+    /* Default ui.ttsModelKey points at a Coqui model. A Gemini override
+       on top should surface the "engine mismatch" copy. */
+    const overridden: Voice = { ...fitzVoice, overrideTtsVoice: { engine: 'gemini', name: 'Charon' } };
+    renderDrawer(fitz, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
+    expect(await screen.findByText(/Engine mismatch/i)).toBeTruthy();
   });
 });

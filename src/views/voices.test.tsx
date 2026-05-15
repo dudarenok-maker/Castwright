@@ -9,13 +9,17 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { LibraryView } from './voices';
-import type { Character, Sentence, Voice } from '../lib/types';
+import type { BaseVoice, Character, Sentence, Voice } from '../lib/types';
 
 const setVoicePin = vi.fn((_voiceId: string, _pinned: boolean) => Promise.resolve());
+const getBaseVoices = vi.fn<() => Promise<{ voices: BaseVoice[] }>>(() => Promise.resolve({ voices: [] }));
+const setVoiceOverride = vi.fn();
 
 vi.mock('../lib/api', () => ({
   api: {
     setVoicePin: (voiceId: string, pinned: boolean) => setVoicePin(voiceId, pinned),
+    getBaseVoices: () => getBaseVoices(),
+    setVoiceOverride: (...args: unknown[]) => setVoiceOverride(...args),
   },
 }));
 
@@ -33,15 +37,21 @@ function makeVoice(over: Partial<Voice> & Pick<Voice, 'id' | 'character' | 'book
     gradient: ['#3C194F', '#0F0E0D'],
     usedIn: 1,
     ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
+    bookSeries: 'Keeper of the Lost Cities',
     ...over,
   } as Voice;
 }
 
+/* Library spans two cast members in two different books that both resolve
+   to the Charon voice family, plus a third cast member resolving to Kore.
+   Two families, with the Charon family carrying cast across multiple
+   books — that's the cross-book voice-family invariant the user described. */
 const library: Voice[] = [
-  makeVoice({ id: 'narrator', character: 'Narrator', bookId: 'b1', bookTitle: 'Bonus Keefe Story', source: 'current' }),
-  makeVoice({ id: 'keefe',    character: 'Keefe',    bookId: 'b1', bookTitle: 'Bonus Keefe Story', source: 'current' }),
-  makeVoice({ id: 'elwin',    character: 'Elwin',    bookId: 'b1', bookTitle: 'Bonus Keefe Story', source: 'current' }),
-  makeVoice({ id: 'v_lib',    character: 'Pemberton', bookId: 'sb', bookTitle: 'Solway Bay',         source: 'library', usedIn: 2 }),
+  makeVoice({ id: 'narrator', character: 'Narrator', bookId: 'b1', bookTitle: 'Book One',  source: 'current' }),
+  makeVoice({ id: 'keefe',    character: 'Keefe',    bookId: 'b2', bookTitle: 'Book Two',  source: 'library',
+    ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' } }),
+  makeVoice({ id: 'elwin',    character: 'Elwin',    bookId: 'b1', bookTitle: 'Book One',  source: 'current',
+    ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' } }),
 ];
 
 function makeStore() {
@@ -70,64 +80,88 @@ function renderView(lib: Voice[] = library) {
 
 beforeEach(() => {
   setVoicePin.mockClear();
+  getBaseVoices.mockClear();
+  getBaseVoices.mockResolvedValue({ voices: [] });
+  setVoiceOverride.mockClear();
 });
 
-describe('LibraryView grouping', () => {
-  it('renders one section per distinct book, current-source first', () => {
+describe('LibraryView voice-family grouping', () => {
+  it('renders one section per voice family (e.g. Charon, Kore) — not per book', () => {
     renderView();
     const sections = screen.getAllByRole('region');
     expect(sections.length).toBe(2);
-    /* aria-label === bookTitle; first section is the current book. */
-    expect(sections[0]).toHaveAttribute('aria-label', 'Bonus Keefe Story');
-    expect(sections[1]).toHaveAttribute('aria-label', 'Solway Bay');
+    const labels = sections.map(s => s.getAttribute('aria-label'));
+    expect(labels).toContain('Gemini · Charon');
+    expect(labels).toContain('Gemini · Kore');
   });
 
-  it('shows the book title once in the section header, not duplicated inside each card', () => {
+  it('nests cast members from different books under the same family', () => {
     renderView();
-    /* The current-book section renders 3 cards; if showBookTitle leaked, we'd
-       see "Bonus Keefe Story" four times. Section header counts once. */
-    const matches = screen.getAllByText('Bonus Keefe Story');
-    expect(matches.length).toBe(1);
+    const charonSection = screen.getByRole('region', { name: 'Gemini · Charon' });
+    /* Two cast members (Narrator in Book One, Keefe in Book Two) hang
+       off this family. The two book titles must both appear as nested
+       headers. */
+    expect(within(charonSection).getByText('Book One')).toBeInTheDocument();
+    expect(within(charonSection).getByText('Book Two')).toBeInTheDocument();
+    /* Both cast names appear in the section. */
+    expect(within(charonSection).getByText('Narrator')).toBeInTheDocument();
+    expect(within(charonSection).getByText('Keefe')).toBeInTheDocument();
   });
 
-  it('drops the redundant "Used in N book" footer', () => {
+  it('groups books under their series header when bookSeries is set', () => {
     renderView();
-    expect(screen.queryByText(/Used in \d+ book/i)).toBeNull();
+    const charonSection = screen.getByRole('region', { name: 'Gemini · Charon' });
+    /* The series header is rendered above the books. */
+    expect(within(charonSection).getByText('Keeper of the Lost Cities')).toBeInTheDocument();
   });
 
-  it('sorts voices within a section by line count desc', () => {
-    renderView();
-    const currentSection = screen.getByRole('region', { name: 'Bonus Keefe Story' });
-    const names = within(currentSection).getAllByText(/^(Narrator|Keefe|Elwin)$/).map(n => n.textContent);
-    /* Narrator (120) > Keefe (60) > Elwin (10) */
-    expect(names).toEqual(['Narrator', 'Keefe', 'Elwin']);
-  });
-
-  it('filters by "This book" tab to current-source sections only', () => {
+  it('filters to families with current-source members under the "This book" tab', () => {
     renderView();
     fireEvent.click(screen.getByRole('button', { name: /This book/i }));
+    /* Charon has Narrator (current); Kore has Elwin (current). Both stay. */
     const sections = screen.getAllByRole('region');
-    expect(sections.length).toBe(1);
-    expect(sections[0]).toHaveAttribute('aria-label', 'Bonus Keefe Story');
+    expect(sections.length).toBe(2);
   });
 
-  it('filters by "Series & older" tab to library-source sections only', () => {
+  it('filters to families with only library-source members under "Series & older"', () => {
     renderView();
     fireEvent.click(screen.getByRole('button', { name: /Series & older/i }));
+    /* Only Keefe (library) survives — its family Charon. Kore's only
+       member is current-source, so Kore drops out. */
     const sections = screen.getAllByRole('region');
     expect(sections.length).toBe(1);
-    expect(sections[0]).toHaveAttribute('aria-label', 'Solway Bay');
+    expect(sections[0]).toHaveAttribute('aria-label', 'Gemini · Charon');
   });
 });
 
 describe('LibraryView pin button', () => {
-  it('renders an inline pin button per card and calls api.setVoicePin on click', () => {
+  it('renders an inline pin button per cast card and calls api.setVoicePin on click', () => {
     renderView();
     const pinButtons = screen.getAllByRole('button', { name: /Pin voice|Unpin voice/i });
-    /* One per voice card: 3 current + 1 library = 4. */
-    expect(pinButtons.length).toBe(4);
+    /* One per cast card: 3 total. */
+    expect(pinButtons.length).toBe(3);
     fireEvent.click(pinButtons[0]);
     expect(setVoicePin).toHaveBeenCalledTimes(1);
     expect(setVoicePin).toHaveBeenCalledWith(expect.any(String), true);
+  });
+});
+
+describe('LibraryView Base voices tab', () => {
+  it('shows the catalog from getBaseVoices when the user clicks the tab', async () => {
+    getBaseVoices.mockResolvedValue({
+      voices: [
+        { engine: 'coqui', name: 'Asya Anara' },
+        { engine: 'gemini', name: 'Charon' },
+      ],
+    });
+    renderView();
+    /* Catalog is fetched on mount; await the promise resolution before
+       clicking through to the tab. */
+    await new Promise(resolve => setTimeout(resolve, 0));
+    fireEvent.click(screen.getByRole('button', { name: /Base voices/i }));
+    expect(screen.getByText('Asya Anara')).toBeInTheDocument();
+    /* Charon appears in BOTH the family section and the base catalog; the
+       Coqui section is what proves the catalog itself is rendering. */
+    expect(screen.getByLabelText('Coqui')).toBeInTheDocument();
   });
 });

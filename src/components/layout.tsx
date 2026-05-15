@@ -149,6 +149,21 @@ export function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, stageKind, ttsEngine]);
 
+  /* Base-voice catalog — used by the Profile Drawer override picker and
+     the Voices view's Base voices tab. Hydrate once at app start (the
+     catalog is small and only changes when the sidecar's loaded model
+     changes; we let the user re-hit the Voices tab to refresh it).
+     Fire-and-forget — the picker shows a "Loading base voices…"
+     placeholder when this hasn't completed yet. */
+  useEffect(() => {
+    let cancelled = false;
+    api.getBaseVoices()
+      .then(res => { if (!cancelled) dispatch(voicesActions.hydrateBaseVoices(res.voices)); })
+      .catch(err => { console.error('[voices] base catalog hydrate failed', err); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /* Per-book hydration. When the user opens a book whose redux state isn't
      populated (page refresh, library click on a previously analysed book, or
      library click on a book mid-analysis), fetch the on-disk .audiobook/*.json

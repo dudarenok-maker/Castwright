@@ -33,6 +33,11 @@ export interface CastCharacter {
       consumes a `string[]` of bare quotes. `buildHintFromCast` does the
       flattening. */
   evidence?: Array<{ quote?: string; note?: string } | string>;
+  /** User-set manual override for this character's TTS voice. When the
+      override's engine matches the synth engine, `pickVoiceForEngine`
+      bypasses attribute inference and uses the named speaker directly.
+      Persisted in cast.json so it survives reloads + analysis reparses. */
+  overrideTtsVoice?: { engine: TtsEngine; name: string } | null;
 }
 
 export interface SentenceGroup {
@@ -125,6 +130,7 @@ function toVoiceLike(c: CastCharacter): VoiceLike {
     id: c.voiceId ?? c.id,
     character: c.name,
     attributes: c.attributes ?? [],
+    overrideTtsVoice: c.overrideTtsVoice ?? null,
   };
 }
 

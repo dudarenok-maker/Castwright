@@ -15,6 +15,11 @@ export interface VoiceLike {
   id: string;
   character?: string;
   attributes?: string[];
+  /** User-set manual override: when present AND its engine matches the
+      synth engine, the picker bypasses attribute inference and returns
+      `overrideTtsVoice.name` directly. Cross-engine overrides are kept
+      but ignored at synth time (see `pickVoiceForEngine`). */
+  overrideTtsVoice?: { engine: TtsEngine; name: string } | null;
 }
 
 export interface CharacterHint {
@@ -116,12 +121,21 @@ export interface TtsVoiceAssignment {
 
 /** Engine-aware: returns the prebuilt voice name (no description). Callers
     inside the synth pipeline only need the name; the UI-facing
-    resolveVoiceAssignment wraps this with the description. */
+    resolveVoiceAssignment wraps this with the description.
+
+    Override semantics: if `voice.overrideTtsVoice` is set and its engine
+    matches the requested engine, the override's name is returned verbatim
+    — attribute inference and the gender×register pipeline are skipped.
+    Cross-engine overrides are ignored (the caller would have to switch
+    engine first); the inference path handles it the same as no override. */
 export function pickVoiceForEngine(
   engine: TtsEngine,
   voice: VoiceLike,
   hint?: CharacterHint,
 ): string {
+  if (voice.overrideTtsVoice && voice.overrideTtsVoice.engine === engine && voice.overrideTtsVoice.name) {
+    return voice.overrideTtsVoice.name;
+  }
   const profile = inferProfile(voice, hint);
   const table = catalogForEngine(engine);
   const options = table[profile];

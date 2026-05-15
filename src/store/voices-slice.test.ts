@@ -19,7 +19,12 @@ const voice = (id: string, overrides: Partial<Voice> = {}): Voice => ({
 
 describe('voicesSlice — initial state', () => {
   it('starts empty and not loaded', () => {
-    expect(voicesSlice.getInitialState()).toEqual({ loaded: false, voices: [] });
+    expect(voicesSlice.getInitialState()).toEqual({
+      loaded: false,
+      voices: [],
+      baseVoices: [],
+      baseVoicesLoaded: false,
+    });
   });
 });
 
@@ -59,5 +64,52 @@ describe('voicesSlice — setPinned', () => {
     const start = voicesSlice.reducer(undefined, voicesActions.hydrate({ voices: [voice('v1')] }));
     const next = voicesSlice.reducer(start, voicesActions.setPinned({ voiceId: 'missing', pinned: true }));
     expect(next.voices).toEqual(start.voices);
+  });
+});
+
+describe('voicesSlice — setOverride', () => {
+  it('writes the override onto the matching voice', () => {
+    const start = voicesSlice.reducer(undefined, voicesActions.hydrate({ voices: [voice('v_fitz'), voice('v_other')] }));
+    const next = voicesSlice.reducer(start, voicesActions.setOverride({
+      voiceId: 'v_fitz',
+      override: { engine: 'coqui', name: 'Asya Anara' },
+    }));
+    expect(next.voices.find(v => v.id === 'v_fitz')!.overrideTtsVoice).toEqual({ engine: 'coqui', name: 'Asya Anara' });
+    /* Unrelated voice is untouched. */
+    expect(next.voices.find(v => v.id === 'v_other')!.overrideTtsVoice).toBeUndefined();
+  });
+
+  it('clears the override when given null', () => {
+    const start = voicesSlice.reducer(undefined, voicesActions.hydrate({
+      voices: [voice('v_fitz', { overrideTtsVoice: { engine: 'coqui', name: 'Asya Anara' } })],
+    }));
+    const next = voicesSlice.reducer(start, voicesActions.setOverride({ voiceId: 'v_fitz', override: null }));
+    expect(next.voices[0].overrideTtsVoice).toBeNull();
+  });
+
+  it('is a no-op for an unknown voiceId', () => {
+    const start = voicesSlice.reducer(undefined, voicesActions.hydrate({ voices: [voice('v1')] }));
+    const next = voicesSlice.reducer(start, voicesActions.setOverride({
+      voiceId: 'missing',
+      override: { engine: 'coqui', name: 'X' },
+    }));
+    expect(next.voices).toEqual(start.voices);
+  });
+});
+
+describe('voicesSlice — hydrateBaseVoices', () => {
+  it('replaces baseVoices and marks the catalog loaded', () => {
+    const next = voicesSlice.reducer(undefined, voicesActions.hydrateBaseVoices([
+      { engine: 'coqui', name: 'Asya Anara' },
+      { engine: 'gemini', name: 'Charon' },
+    ]));
+    expect(next.baseVoicesLoaded).toBe(true);
+    expect(next.baseVoices.map(v => v.name)).toEqual(['Asya Anara', 'Charon']);
+  });
+
+  it('a subsequent re-hydrate replaces the catalog', () => {
+    let s = voicesSlice.reducer(undefined, voicesActions.hydrateBaseVoices([{ engine: 'coqui', name: 'A' }]));
+    s = voicesSlice.reducer(s, voicesActions.hydrateBaseVoices([{ engine: 'gemini', name: 'B' }]));
+    expect(s.baseVoices.map(v => v.name)).toEqual(['B']);
   });
 });

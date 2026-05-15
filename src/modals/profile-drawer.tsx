@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { IconClose, IconWaveform, IconRefresh, IconStar, IconLock, IconPlus, IconPause, IconSpinner } from '../lib/icons';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
-import type { TtsModelKey } from '../lib/types';
+import type { BaseVoice, TtsEngine, TtsModelKey } from '../lib/types';
 import { Avatar, VoiceSwatch, Pill, PrimaryButton } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
 import type { Character, Voice, CharColor } from '../lib/types';
@@ -9,7 +9,9 @@ import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad, type SampleStatus } from '../lib/play-sample-with-auto-load';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
-import { useAppSelector } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
+import { voicesActions } from '../store/voices-slice';
+import { api } from '../lib/api';
 
 interface Props {
   character: Character;
@@ -65,8 +67,12 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
   const [regenerating, setRegenerating] = useState(false);
   const c = CHAR_COLORS[character.color as CharColor] ?? CHAR_COLORS.narrator;
   const playback = useSamplePlayback();
+  const dispatch = useAppDispatch();
   const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
   const ttsEngine = engineForModelKey(ttsModelKey);
+  const baseVoices = useAppSelector(s => s.voices.baseVoices);
+  const baseVoicesLoaded = useAppSelector(s => s.voices.baseVoicesLoaded);
+  const [overrideError, setOverrideError] = useState<string | null>(null);
   const [sampleStatus, setSampleStatus] = useState<SampleStatus | 'idle'>('idle');
   const [sampleError, setSampleError] = useState<string | null>(null);
   /* Surfaces the auto-evict banner inline above the sample row when the
@@ -309,6 +315,36 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                 </div>
               </div>
             </div>
+
+            <ModelVoiceOverridePicker
+              voiceId={voice?.id ?? (character.voiceId ?? character.id)}
+              currentOverride={voice?.overrideTtsVoice ?? null}
+              autoVoiceName={sampleSubject.ttsVoice.name}
+              autoVoiceEngine={sampleSubject.ttsVoice.provider as TtsEngine}
+              activeEngine={ttsEngine}
+              baseVoices={baseVoices}
+              baseVoicesLoaded={baseVoicesLoaded}
+              error={overrideError}
+              onChange={async (next) => {
+                setOverrideError(null);
+                const voiceIdForApi = voice?.id ?? (character.voiceId ?? character.id);
+                /* Optimistic local update — slice mutation only takes effect
+                   when the targeted Voice exists in the library payload. For
+                   unmatched characters (no library Voice yet) the reducer
+                   no-ops and the next hydrate picks up the persisted value. */
+                if (voice?.id) {
+                  dispatch(voicesActions.setOverride({ voiceId: voiceIdForApi, override: next }));
+                }
+                try {
+                  await api.setVoiceOverride(voiceIdForApi, next);
+                } catch (err) {
+                  setOverrideError((err as Error).message);
+                  if (voice?.id && voice.overrideTtsVoice !== undefined) {
+                    dispatch(voicesActions.setOverride({ voiceId: voiceIdForApi, override: voice.overrideTtsVoice ?? null }));
+                  }
+                }
+              }}
+            />
 
             {hasConflict && (
               <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-xs text-amber-900">
@@ -636,6 +672,97 @@ function voiceAgeFromAttributes(attrs: string[] | undefined): CharAgeRange | nul
     }
   }
   return null;
+}
+
+/* Picker that lets the user override the auto-assigned model voice with a
+   specific base voice from any engine. Sits inside the Voice profile
+   section of the drawer so the swap and the resulting preview live
+   next to each other. Persists via PUT /api/voices/:id/override. */
+interface OverridePickerProps {
+  voiceId: string;
+  currentOverride: BaseVoice | null;
+  /** Name of the auto-resolved voice — shown as "Auto (currently <X>)" so
+      the user can compare what they'd be moving away from. */
+  autoVoiceName: string;
+  /** Engine of the auto-resolved voice. The "Auto" option is implicitly
+      bound to this engine. */
+  autoVoiceEngine: TtsEngine;
+  /** TTS engine the project is currently set to. When the override's
+      engine differs, the override is ignored at synth time — we render an
+      explicit warning. */
+  activeEngine: TtsEngine;
+  baseVoices: BaseVoice[];
+  baseVoicesLoaded: boolean;
+  error: string | null;
+  onChange: (next: BaseVoice | null) => Promise<void> | void;
+}
+function ModelVoiceOverridePicker({
+  voiceId, currentOverride, autoVoiceName, autoVoiceEngine, activeEngine,
+  baseVoices, baseVoicesLoaded, error, onChange,
+}: OverridePickerProps) {
+  /* Selected value encodes either AUTO or `${engine}|${name}`. We round-
+     trip through that string because <select> options only carry strings. */
+  const AUTO = 'auto';
+  const selectedValue = currentOverride
+    ? `${currentOverride.engine}|${currentOverride.name}`
+    : AUTO;
+  const engineMismatch = !!currentOverride && currentOverride.engine !== activeEngine;
+  /* Group by engine so the dropdown reads "Coqui · Asya Anara" etc. and
+     the user can spot cross-engine voices at a glance. */
+  const byEngine = new Map<TtsEngine, BaseVoice[]>();
+  for (const bv of baseVoices) {
+    const list = byEngine.get(bv.engine) ?? [];
+    list.push(bv);
+    byEngine.set(bv.engine, list);
+  }
+  return (
+    <div className="mt-3 p-3 rounded-2xl bg-canvas border border-ink/10">
+      <label className="block text-[11px] text-ink/60 font-medium mb-1.5" htmlFor={`override-${voiceId}`}>
+        Model voice
+      </label>
+      <select
+        id={`override-${voiceId}`}
+        aria-label="Model voice override"
+        value={selectedValue}
+        disabled={!baseVoicesLoaded}
+        onChange={(e) => {
+          const raw = e.target.value;
+          if (raw === AUTO) { void onChange(null); return; }
+          const [engine, ...rest] = raw.split('|');
+          const name = rest.join('|');
+          void onChange({ engine: engine as TtsEngine, name });
+        }}
+        className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+      >
+        <option value={AUTO}>
+          Auto — currently {capitalise(autoVoiceEngine)} · {autoVoiceName}
+        </option>
+        {Array.from(byEngine.entries()).map(([engine, voices]) => (
+          <optgroup key={engine} label={capitalise(engine)}>
+            {voices.map(bv => (
+              <option key={`${bv.engine}|${bv.name}`} value={`${bv.engine}|${bv.name}`}>
+                {capitalise(bv.engine)} · {bv.name}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      {!baseVoicesLoaded && (
+        <p className="mt-2 text-[11px] text-ink/50">Loading base voice catalog…</p>
+      )}
+      {engineMismatch && (
+        <p className="mt-2 text-[11px] text-amber-700 font-medium">
+          ⚠ Engine mismatch — this {capitalise(currentOverride!.engine)} voice won't be used while the project is on {capitalise(activeEngine)}.
+        </p>
+      )}
+      {error && (
+        <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {error}</p>
+      )}
+      <p className="mt-2 text-[11px] text-ink/50">
+        Pick a specific base voice to override the attribute-driven match. Auditioning the raw voice in the Voices view's "Base voices" tab is a fast way to find one you like.
+      </p>
+    </div>
+  );
 }
 
 interface ToneSliderProps { label: string; value: number; onChange: (v: number) => void; leftLabel: string; rightLabel: string; }

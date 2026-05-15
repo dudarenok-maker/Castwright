@@ -15,7 +15,8 @@
    The caller drives per-row UI from the onStatus callback. */
 
 import { api } from './api';
-import type { VoiceSampleArgs } from './api';
+import type { VoiceSampleArgs, BaseVoiceSampleArgs } from './api';
+import type { TtsEngine } from './types';
 
 export type SampleStatus = 'evicting' | 'loading-tts' | 'synthesizing';
 
@@ -130,6 +131,39 @@ async function prepareSidecar(
     throw new Error(result.error ?? 'TTS sidecar failed to load.');
   }
   return { analyzerEvicted: analyzerResident };
+}
+
+/* Auto-load variant for the "Base voices" tab + family-header Play. Same
+   orchestration as the cast-row variant for Coqui/Piper/Kokoro (sidecar
+   prep, then synth), but the prep step is skipped entirely for Gemini
+   raw samples — Gemini doesn't run through the local sidecar. The caller
+   doesn't have a Voice/Character context for an unassigned base voice,
+   so we accept a flatter args shape. */
+export interface PlayBaseSampleOptions {
+  args: BaseVoiceSampleArgs;
+  playback: { play: (url: string) => Promise<void> };
+  onStatus?: (status: SampleStatus, opts: { analyzerEvicted: boolean }) => void;
+}
+
+export async function playBaseVoiceSampleWithAutoLoad(opts: PlayBaseSampleOptions): Promise<PlaySampleResult> {
+  const { args, playback, onStatus } = opts;
+  const needsSidecar: TtsEngine = args.engine;
+  let analyzerEvicted = false;
+  if (needsSidecar !== 'gemini') {
+    const prep = prepInFlight ?? (prepInFlight = prepareSidecar(onStatus));
+    try {
+      ({ analyzerEvicted } = await prep);
+    } finally {
+      if (prepInFlight === prep) prepInFlight = null;
+    }
+  }
+  onStatus?.('synthesizing', { analyzerEvicted });
+  const res = await api.getBaseVoiceSample(args);
+  if (!res.url) {
+    throw new Error('Voice samples need the live server (VITE_USE_MOCKS=false).');
+  }
+  await playback.play(res.url);
+  return { analyzerEvicted };
 }
 
 /* Test-only escape hatch — exported so the unit tests can reset the
