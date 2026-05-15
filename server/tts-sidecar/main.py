@@ -23,6 +23,7 @@ import asyncio
 import io
 import logging
 import os
+import re
 import wave
 from typing import Any, Optional
 
@@ -38,6 +39,19 @@ logging.basicConfig(
 log = logging.getLogger("sidecar")
 
 app = FastAPI(title="audiobook-generator local TTS sidecar")
+
+
+# CUDA poison detection — phrases that PyTorch / NVIDIA emit when a kernel
+# raises a device-side assert. Once any of these fire, the CUDA context is
+# corrupted process-wide; every subsequent CUDA call re-raises the same
+# error. We match liberally (any one of these strings is enough) because
+# we never want to MISS a poison — over-classifying is harmless (fast-fail
+# with a "restart the sidecar" detail is the right UX either way).
+_CUDA_POISON_RE = re.compile(
+    r"device-side assert|CUDA error|CUDA kernel errors|CUBLAS_STATUS|cublas|"
+    r"out of memory.*CUDA|CUDA out of memory",
+    re.IGNORECASE,
+)
 
 
 def _parse_bool(value: Optional[str], default: bool) -> bool:
@@ -127,6 +141,18 @@ class CoquiEngine(Engine):
         # user as a 500 with no actionable detail. Validating up front lets
         # us substitute the fallback and tell the caller what happened.
         self._speakers: list[str] = []
+        # Process-lifetime poison fence. Set to True the first time
+        # /synthesize catches a CUDA device-side assert (see _CUDA_POISON_RE).
+        # PyTorch/NVIDIA semantics: once a kernel asserts on the device, the
+        # CUDA context is corrupted for the rest of the process — no amount
+        # of empty_cache(), reload, or model recreation will reset it. Only
+        # restarting Python clears the state. While poisoned, /synthesize
+        # fast-fails 503 with a structured detail so the Node classifier can
+        # surface a single "restart the sidecar" banner instead of letting
+        # the cascade detector burn through two chapters' worth of failures.
+        # `_poison_reason` carries the original CUDA error string for /health.
+        self._poisoned: bool = False
+        self._poison_reason: Optional[str] = None
 
     def _resolve_runtime_options(self, torch_module: Any) -> dict[str, Any]:
         """Resolve device + fp16 + deepspeed knobs into a concrete config dict.
@@ -378,21 +404,32 @@ async def _preload_default_engine() -> None:
 def health() -> dict[str, Any]:
     """Liveness + load-state probe. `model_loaded` / `loading` / `device` let
     the Node proxy render the right state in the in-app Load/Stop pill without
-    a separate round-trip to /speakers."""
+    a separate round-trip to /speakers.
+
+    `poisoned: true` signals "this process needs to be restarted before
+    /synthesize will work again" — set the first time a device-side assert
+    fires (see CoquiEngine._poisoned). The UI shows a red banner; the user
+    has to actually kill+restart the sidecar."""
     coqui = ENGINES.get("coqui")
     model_loaded = False
     loading = False
     device: Optional[str] = None
+    poisoned = False
+    poison_reason: Optional[str] = None
     if isinstance(coqui, CoquiEngine):
         model_loaded = coqui._tts is not None
         loading = coqui._loading
         device = coqui._resolved_device if model_loaded else None
+        poisoned = coqui._poisoned
+        poison_reason = coqui._poison_reason
     return {
         "ok": True,
         "engines": sorted(ENGINES.keys()),
         "model_loaded": model_loaded,
         "loading": loading,
         "device": device,
+        "poisoned": poisoned,
+        "poison_reason": poison_reason,
     }
 
 
@@ -482,6 +519,28 @@ async def synthesize(req: Request) -> Response:
         raise HTTPException(status_code=400, detail="`text` is required.")
 
     engine = ENGINES[engine_id]
+
+    # Cross-request poison fence. A CUDA device-side assert corrupts the
+    # whole CUDA context for the lifetime of this Python process — every
+    # subsequent CUDA call (including the next /synthesize) raises the same
+    # error. Without this gate, the Node side hits the same 500 once per
+    # chapter and the cascade detector takes ~2 chapters to bail. With it,
+    # we fail fast and give the Node side a single fatal classification
+    # that surfaces a clear "restart the sidecar" banner.
+    if isinstance(engine, CoquiEngine) and engine._poisoned:
+        return JSONResponse(
+            {
+                "detail": (
+                    "TTS sidecar is in a poisoned CUDA state from a prior "
+                    "device-side assert and must be restarted. Stop the "
+                    "sidecar (Stop button or kill the process) and start it "
+                    "again before retrying."
+                ),
+                "poisoned": True,
+            },
+            status_code=503,
+        )
+
     try:
         # CRITICAL: offload to a worker thread.
         #
@@ -497,8 +556,41 @@ async def synthesize(req: Request) -> Response:
         # synthesis. This is the single biggest UX fix in the sidecar.
         result = await asyncio.to_thread(engine.synthesize, model, voice, text)
     except Exception as e:
-        log.exception("synth failed (engine=%s model=%s voice=%s)", engine_id, model, voice)
-        return JSONResponse({"detail": str(e)}, status_code=500)
+        err_str = str(e)
+        # Forensic log: the offending text + speaker + language make a
+        # post-mortem possible. Without these, "synth failed" with no
+        # context means we keep hitting the same input bug blind. Truncated
+        # to ~200 chars so log lines stay scannable; the full text is
+        # already in the manuscript so this is just a beacon.
+        truncated = text if len(text) <= 200 else text[:200] + "…"
+        log.exception(
+            "synth failed (engine=%s model=%s voice=%s text_len=%d text_preview=%r)",
+            engine_id, model, voice, len(text), truncated,
+        )
+
+        # CUDA-poisoned detection. PyTorch/NVIDIA semantics: once a kernel
+        # raises a device-side assert, the CUDA context is corrupted for the
+        # lifetime of the process — empty_cache(), del model, even creating
+        # a fresh model won't reset it. Only a process restart will.
+        # Flag the engine so subsequent /synthesize calls fail-fast with a
+        # 503 + structured detail (handled at the top of this route) and
+        # the Node-side classifier can surface a single banner.
+        is_cuda_poisoned = bool(_CUDA_POISON_RE.search(err_str))
+        if is_cuda_poisoned and isinstance(engine, CoquiEngine):
+            engine._poisoned = True
+            engine._poison_reason = err_str
+            log.error(
+                "CUDA poisoned — the sidecar process must be restarted to "
+                "recover. Subsequent /synthesize calls will fast-fail 503. "
+                "Trigger: engine=%s model=%s voice=%s text_preview=%r",
+                engine_id, model, voice, truncated,
+            )
+            return JSONResponse(
+                {"detail": err_str, "poisoned": True},
+                status_code=503,
+            )
+
+        return JSONResponse({"detail": err_str}, status_code=500)
 
     headers = {"X-Sample-Rate": str(result.sample_rate)}
     if result.substituted_from is not None:

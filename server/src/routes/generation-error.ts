@@ -44,6 +44,24 @@ export function describeSynthesisError(err: unknown): SynthesisErrorClassificati
     };
   }
 
+  /* CUDA device-side assert — the XTTS GPT decoder hit an out-of-bounds
+     embedding lookup (most commonly from a stray zero-width / bidi /
+     control char in the manuscript that survived `normaliseForTts`).
+     PyTorch's contract is unambiguous: once any CUDA kernel asserts, the
+     context is corrupted for the rest of the process and every subsequent
+     call re-raises the same error. The sidecar self-flags as poisoned and
+     fast-fails subsequent /synthesize calls with 503; either way, this is
+     fatal at the route level so the user gets a single banner instead of
+     the run grinding through queued chapters with identical 500s. */
+  const isCudaPoisoned = /device-side assert|CUDA error|CUDA kernel errors|"poisoned":\s*true/i.test(raw);
+  if (isCudaPoisoned) {
+    return {
+      errorReason:
+        'Local TTS sidecar hit a CUDA error and must be restarted (the CUDA context is corrupted for the rest of the process). Stop the sidecar from the Generate-screen pill, restart it, then resume. The offending text is in the sidecar log — usually a stray zero-width or control char in the manuscript.',
+      fatal: true,
+    };
+  }
+
   const trimmed = raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
   return { errorReason: trimmed, fatal: false };
 }
