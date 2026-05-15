@@ -10,7 +10,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { CastView } from './cast';
 import type { Character, Voice } from '../lib/types';
@@ -99,6 +99,55 @@ function renderView() {
     </Provider>,
   );
 }
+
+function rowFor(name: string): HTMLElement {
+  /* The cast table renders one row per character with a grid-cols layout.
+     The character's name shows up in the second column wrapped in a
+     <span class="font-semibold ...">. Match on that to skip the page
+     header (which may also mention the name). */
+  const labels = screen.getAllByText(name);
+  for (const el of labels) {
+    const row = el.closest('div[class*="grid-cols-[40px"]');
+    if (row) return row as HTMLElement;
+  }
+  throw new Error(`No row found for character ${name}`);
+}
+function checkboxIn(row: HTMLElement): HTMLElement {
+  /* The row's first <span> is the click target for the checkbox cell
+     (cast.tsx:194). We click it directly to toggle selection. */
+  return row.querySelector('span') as HTMLElement;
+}
+
+describe('CastView compare-button visibility', () => {
+  it('does not show the floating action bar until a row is selected', () => {
+    renderView();
+    expect(screen.queryByRole('button', { name: /^Compare$/ })).toBeNull();
+  });
+
+  it('shows Compare disabled when one row is selected', () => {
+    renderView();
+    fireEvent.click(checkboxIn(rowFor('Narrator')));
+    const btn = screen.getByRole('button', { name: /^Compare$/ });
+    expect(btn).toBeDisabled();
+  });
+
+  it('enables Compare when exactly two rows are selected', () => {
+    renderView();
+    fireEvent.click(checkboxIn(rowFor('Narrator')));
+    fireEvent.click(checkboxIn(rowFor('Mr. Marrow')));
+    const btn = screen.getByRole('button', { name: /^Compare$/ });
+    expect(btn).not.toBeDisabled();
+  });
+
+  it('opens the compare modal when Compare is clicked with two rows selected', () => {
+    renderView();
+    fireEvent.click(checkboxIn(rowFor('Narrator')));
+    fireEvent.click(checkboxIn(rowFor('Mr. Marrow')));
+    fireEvent.click(screen.getByRole('button', { name: /^Compare$/ }));
+    /* Modal heading mounts when the modal opens. */
+    expect(screen.getByText('Compare cast members')).toBeInTheDocument();
+  });
+});
 
 describe('CastView voice-column presentation', () => {
   it('shows the prebuilt voice profile line for a generated character', () => {

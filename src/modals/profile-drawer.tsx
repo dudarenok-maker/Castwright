@@ -12,6 +12,7 @@ import { gradientForTtsVoice } from '../lib/voice-palette';
 import { useAppDispatch, useAppSelector } from '../store';
 import { voicesActions } from '../store/voices-slice';
 import { api } from '../lib/api';
+import { buildCharacterHint } from '../lib/build-character-hint';
 
 interface Props {
   character: Character;
@@ -188,19 +189,15 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
        flips on click; the onStatus callback below upgrades it to
        `evicting` / `loading-tts` when those phases actually fire. */
     setSampleStatus('synthesizing');
-    const evidence = (character.evidence ?? []).map(e => e.quote).filter((q): q is string => typeof q === 'string' && q.length > 0);
     /* Live edits — read from drawer state, not the (stale) character prop,
        so the user can preview an attribute change before committing it
        with Save. Server hashes (text, voiceName) into the cache filename,
        so a different (gender, age, tone) really does produce new audio. */
-    const characterHint = {
-      description: character.description,
-      role: character.role,
-      gender: (gender || character.gender) as 'male' | 'female' | 'neutral' | undefined,
-      ageRange: (ageRange || character.ageRange) as 'child' | 'teen' | 'adult' | 'elderly' | undefined,
+    const characterHint = buildCharacterHint(character, {
+      gender: gender || character.gender,
+      ageRange: ageRange || character.ageRange,
       tone,
-      evidence: evidence.length ? evidence : undefined,
-    };
+    });
     // eslint-disable-next-line no-console
     console.log('[sample] requesting', { voiceId: sampleVoiceId, modelKey: ttsModelKey });
     try {
