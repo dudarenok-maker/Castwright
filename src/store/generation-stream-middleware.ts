@@ -98,6 +98,7 @@ const TRIGGER_TYPES = new Set<string>([
   'chapters/setChapters',
   'chapters/hydrateFromAnalysis',
   'chapters/regenerateChapter',
+  'chapters/regenerateChapterIds',
   'chapters/regenerateCharacter',
   'chapters/batchRegenerateCharacters',
   'chapters/setPaused',
@@ -262,6 +263,7 @@ export const generationStreamMiddleware: Middleware = (store) => {
      book context would be a no-op for the existing stream anyway. */
   const REGEN_TYPES = new Set<string>([
     'chapters/regenerateChapter',
+    'chapters/regenerateChapterIds',
     'chapters/regenerateCharacter',
     'chapters/batchRegenerateCharacters',
   ]);

@@ -859,3 +859,149 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
     expect(screen.queryByText(/generated with a different engine/i)).toBeNull();
   });
 });
+
+describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', () => {
+  /* The banner now carries a "Regenerate all" affordance that confirms
+     once and dispatches regenerateChapterIds for every drifted chapter
+     in one shot. This describe pins the confirm-dialog flow + dispatched
+     payload + slice state transitions end-to-end. */
+
+  function makeDriftStore(chapters: Chapter[]) {
+    const store = configureStore({
+      reducer: {
+        ui:         uiSlice.reducer,
+        chapters:   chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog:  changeLogSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters(chapters));
+    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
+      bookId: 'b1',
+      characters,
+      chapters,
+      sentences,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any));
+    return store;
+  }
+
+  function renderDrift(store: ReturnType<typeof makeDriftStore>, chapters: Chapter[]) {
+    return render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={chapters}
+          characters={characters}
+          paused
+          title="Drift Fixture"
+          bookId="b1"
+          modelKey="kokoro-v1"
+          setPaused={() => {}}
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('confirm dialog names the source engine, target engine, and dispatches regenerateChapterIds with the full drifted list', () => {
+    const drifted1: Chapter = { ...chapter1, audioModelKey: 'coqui-xtts-v2' };
+    const drifted3: Chapter = {
+      id: 3,
+      title: 'Chapter 3',
+      duration: '01:23',
+      state: 'done',
+      progress: 1,
+      characters: { narrator: 'done' },
+      audioModelKey: 'coqui-xtts-v2',
+    };
+    const store = makeDriftStore([drifted1, chapter2, drifted3]);
+    renderDrift(store, [drifted1, chapter2, drifted3]);
+
+    /* Banner button opens the confirm dialog. */
+    const bannerBtn = screen.getByRole('button', { name: /^Regenerate all$/ });
+    fireEvent.click(bannerBtn);
+
+    /* Title carries the count + target engine label; body carries the
+       source engine label. The dialog also re-uses the "Existing audio
+       remains available" copy from the per-chapter modal for continuity. */
+    expect(screen.getByText(/Regenerate 2 chapters with Kokoro v1\?/)).toBeInTheDocument();
+    expect(screen.getByText(/rendered with/i).textContent).toMatch(/Coqui XTTS v2/);
+    expect(screen.getByText(/Existing audio remains available/i)).toBeInTheDocument();
+
+    /* Confirm — the button label includes the count for plural cases. */
+    fireEvent.click(screen.getByRole('button', { name: /Regenerate all 2/ }));
+
+    /* Slice transitions: head id (1) flips in_progress, second (3)
+       queues; chapter 2 (queued, never drifted) is untouched. */
+    const state = store.getState();
+    expect(state.chapters.pendingRegen).toEqual({ chapterIds: [1, 3], force: true });
+    expect(state.chapters.chapters.find(c => c.id === 1)?.state).toBe('in_progress');
+    expect(state.chapters.chapters.find(c => c.id === 2)?.state).toBe('queued');
+    expect(state.chapters.chapters.find(c => c.id === 3)?.state).toBe('queued');
+    expect(state.chapters.regenEpoch).toBe(1);
+  });
+
+  it('singular copy when only one chapter is drifted', () => {
+    const drifted: Chapter = { ...chapter1, audioModelKey: 'coqui-xtts-v2' };
+    const store = makeDriftStore([drifted, chapter2]);
+    renderDrift(store, [drifted, chapter2]);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Regenerate all$/ }));
+    /* "1 chapter" not "1 chapters"; confirm button singular too. */
+    expect(screen.getByText(/Regenerate 1 chapter with Kokoro v1\?/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Regenerate 1 chapter/ })).toBeInTheDocument();
+  });
+
+  it('mid-run banner adds the "interrupt the current run" warning to the confirm body', () => {
+    /* When any chapter is in_progress, the bulk-regen would interrupt
+       the live SSE. Surface that to the user inside the confirm body
+       instead of disabling the button. */
+    const drifted: Chapter = { ...chapter1, audioModelKey: 'coqui-xtts-v2' };
+    const live: Chapter = { ...chapter2, state: 'in_progress', progress: 0.4 };
+    const store = makeDriftStore([drifted, live]);
+    renderDrift(store, [drifted, live]);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Regenerate all$/ }));
+    expect(screen.getByText(/interrupt the current run/i)).toBeInTheDocument();
+  });
+
+  it('Cancel closes the dialog without dispatching anything', () => {
+    const drifted: Chapter = { ...chapter1, audioModelKey: 'coqui-xtts-v2' };
+    const store = makeDriftStore([drifted, chapter2]);
+    renderDrift(store, [drifted, chapter2]);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Regenerate all$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+
+    /* Dialog gone, no regenerate dispatched. */
+    expect(screen.queryByText(/Regenerate 1 chapter with Kokoro v1\?/)).not.toBeInTheDocument();
+    expect(store.getState().chapters.pendingRegen).toBe(null);
+    expect(store.getState().chapters.regenEpoch).toBe(0);
+  });
+
+  it('mixed source engines render side-by-side in the dialog body', () => {
+    /* Accumulated drift: one Coqui-rendered + one Gemini-rendered chapter
+       both differ from the active Kokoro engine. The body should name
+       both source engines rather than awkwardly picking one. */
+    const coquiDrift: Chapter = { ...chapter1, audioModelKey: 'coqui-xtts-v2' };
+    const geminiDrift: Chapter = {
+      id: 3,
+      title: 'Chapter 3',
+      duration: '01:23',
+      state: 'done',
+      progress: 1,
+      characters: { narrator: 'done' },
+      audioModelKey: 'gemini-2.5-flash',
+    };
+    const store = makeDriftStore([coquiDrift, chapter2, geminiDrift]);
+    renderDrift(store, [coquiDrift, chapter2, geminiDrift]);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Regenerate all$/ }));
+    const body = screen.getByText(/rendered across/i);
+    expect(body.textContent).toMatch(/Coqui XTTS v2/);
+    expect(body.textContent).toMatch(/Gemini/);
+  });
+});

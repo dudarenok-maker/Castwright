@@ -424,6 +424,79 @@ describe('chaptersSlice — regenerate reducers', () => {
     expect(next.chapters[1].characters.halloran).toBe('queued');
     expect(next.chapters[1].characters.eliza).toBe('queued');
   });
+
+  /* regenerateChapterIds tests — paired with plan 35's bulk-regen
+     affordance. The reducer drives the drift-banner "Regenerate all"
+     button: an explicit, possibly non-contiguous list of chapter ids
+     gets re-queued on the active engine. Each test below pins one
+     facet of the contract the middleware + view depend on. */
+  it('regenerateChapterIds re-queues every listed chapter and stamps pendingRegen', () => {
+    const start = baseState([
+      makeChapter(3, { state: 'done',   progress: 1, audioModelKey: 'coqui-xtts-v2', characters: { narrator: 'done', halloran: 'done', eliza: 'done' } }),
+      makeChapter(4, { state: 'done',   progress: 1, audioModelKey: 'coqui-xtts-v2' }),
+      makeChapter(5, { state: 'queued', progress: 0 }),
+      makeChapter(6, { state: 'done',   progress: 1, audioModelKey: 'coqui-xtts-v2' }),
+    ]);
+    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapterIds({
+      chapterIds: [3, 4, 6],
+    }));
+    /* Non-contiguous list — chapter 5 was never drifted (queued), so it
+       stays untouched. The pendingRegen list mirrors the targets in
+       slice order so the head row (id 3) goes in_progress and the
+       middleware POSTs the canonical chapterIds + force. */
+    expect(next.pendingRegen).toEqual({ chapterIds: [3, 4, 6], force: true });
+    expect(next.regenEpoch).toBe(1);
+    expect(next.chapters[0].state).toBe('in_progress');
+    expect(next.chapters[0].progress).toBeCloseTo(0.05);
+    expect(next.chapters[0].characters.narrator).toBe('queued');
+    expect(next.chapters[1].state).toBe('queued');
+    expect(next.chapters[2].state).toBe('queued'); // chapter 5 untouched
+    expect(next.chapters[3].state).toBe('queued');
+  });
+
+  it('regenerateChapterIds is a no-op when the list contains only unknown ids', () => {
+    const start = baseState([
+      makeChapter(3, { state: 'done' }),
+    ]);
+    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapterIds({
+      chapterIds: [99, 100],
+    }));
+    expect(next.pendingRegen).toBe(null);
+    expect(next.regenEpoch).toBe(0);
+    expect(next.chapters[0].state).toBe('done');
+  });
+
+  it('regenerateChapterIds silently skips excluded chapters', () => {
+    /* Plan 35 invariant 6: drift only matters for chapters that
+       participate in the book. Re-queuing an excluded chapter would
+       re-include it in the bargain — defensive skip here matches the
+       view's activeChapters filter and keeps the bulk action honest
+       even if a stale id list slips through. */
+    const start = baseState([
+      makeChapter(3, { state: 'done',   audioModelKey: 'coqui-xtts-v2', excluded: false }),
+      makeChapter(4, { state: 'queued', audioModelKey: 'coqui-xtts-v2', excluded: true  }),
+    ]);
+    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapterIds({
+      chapterIds: [3, 4],
+    }));
+    expect(next.pendingRegen).toEqual({ chapterIds: [3], force: true });
+    expect(next.chapters[0].state).toBe('in_progress');
+    expect(next.chapters[1].state).toBe('queued'); // unchanged
+    expect(next.chapters[1].excluded).toBe(true);
+  });
+
+  it('regenerateChapterIds clears lastError and generationStartedAt', () => {
+    const start: ChaptersState = {
+      ...baseState([makeChapter(3, { state: 'done' })]),
+      lastError: 'previous run failed',
+      generationStartedAt: Date.now() - 10_000,
+    };
+    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapterIds({
+      chapterIds: [3],
+    }));
+    expect(next.lastError).toBe(null);
+    expect(next.generationStartedAt).toBe(null);
+  });
 });
 
 describe('chaptersSlice — hydrateFromAnalysis', () => {

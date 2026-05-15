@@ -8,6 +8,7 @@ import {
   SectionLabel, MixedHeading, Pill, ColorDot,
 } from '../components/primitives';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
+import { ConfirmDialog } from '../modals/confirm-dialog';
 import { useAppDispatch, useAppSelector } from '../store';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { api } from '../lib/api';
@@ -124,13 +125,23 @@ export function GenerationView({
   const failed        = activeChapters.filter(c => c.state === 'failed').length;
   const inProgressCnt = activeChapters.filter(c => c.state === 'in_progress').length;
   const queued        = activeChapters.filter(c => c.state === 'queued').length;
-  /* Engine drift count (plan 35). A drifted chapter has audio recorded
-     with a different TTS engine than the project's current selection —
-     usually because the user changed the model picker after generation.
-     Drives both the top-of-view banner and the per-row caption. */
-  const driftedCount  = activeChapters.filter(c =>
+  /* Engine drift (plan 35). A drifted chapter has audio recorded with a
+     different TTS engine than the project's current selection — usually
+     because the user changed the model picker after generation. The list
+     drives the top-of-view banner (count + bulk-regen affordance), the
+     per-row caption, and the bulk-regen confirm dialog's body copy. */
+  const driftedChapters = useMemo(() => activeChapters.filter(c =>
     c.state === 'done' && c.audioModelKey != null && c.audioModelKey !== modelKey,
-  ).length;
+  ), [activeChapters, modelKey]);
+  const driftedCount = driftedChapters.length;
+  /* Distinct source engines seen across the drifted set. The common case
+     is a single engine (user flipped one switch), but accumulated drift
+     across multiple swaps can leave a mixed set — render both shapes
+     gracefully in the confirm dialog. */
+  const driftedSourceEngines = useMemo(() => Array.from(new Set(
+    driftedChapters.map(c => ttsModelLabel(c.audioModelKey!))
+  )), [driftedChapters]);
+  const [bulkRegenOpen, setBulkRegenOpen] = useState(false);
   /* Used by the header action: Resume/Pause is meaningless once every chapter
      has finished synthesising, so the button flips to Regenerate. Failed
      chapters keep the Pause/Resume affordance because the user might still
@@ -421,9 +432,11 @@ export function GenerationView({
       {driftedCount > 0 && (
         /* Engine drift banner (plan 35). Counts chapters whose recorded
            audio engine differs from the project's current TTS model.
-           Regenerating any drifted chapter through its row-level
-           Regenerate button refreshes the audio with the active engine
-           and decrements this counter. */
+           The "Regenerate all" button bulk-re-queues every chapter in
+           the drifted set through chaptersActions.regenerateChapterIds,
+           which the middleware turns into a single fresh SSE with
+           chapterIds + force=true. Per-row Regenerate still works for
+           the surgical case. */
         <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/70 px-5 py-4 flex items-start gap-3 fade-in">
           <IconWarning className="w-5 h-5 text-amber-700 shrink-0 mt-0.5"/>
           <div className="flex-1 min-w-0">
@@ -431,11 +444,53 @@ export function GenerationView({
               {driftedCount} chapter{driftedCount === 1 ? '' : 's'} generated with a different engine
             </p>
             <p className="text-sm text-amber-800/90 mt-0.5">
-              Current engine is <span className="font-medium">{ttsModelLabel(modelKey)}</span>. Drifted chapters keep their original voices until you regenerate them — use Regenerate on each chapter row to refresh, or stay on a single engine for book-wide consistency.
+              Current engine is <span className="font-medium">{ttsModelLabel(modelKey)}</span>. Drifted chapters keep their original voices until you regenerate them.
             </p>
           </div>
+          <button
+            type="button"
+            onClick={() => setBulkRegenOpen(true)}
+            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-900/90 text-white text-xs font-semibold hover:bg-amber-900 transition-colors"
+          >
+            <IconRefresh className="w-3.5 h-3.5"/> Regenerate all
+          </button>
         </div>
       )}
+
+      <ConfirmDialog
+        open={bulkRegenOpen}
+        variant="danger"
+        eyebrow="Regenerate"
+        icon={<IconRefresh className="w-4 h-4"/>}
+        title={`Regenerate ${driftedCount} chapter${driftedCount === 1 ? '' : 's'} with ${ttsModelLabel(modelKey)}?`}
+        body={
+          <div className="space-y-3">
+            <p>
+              {driftedSourceEngines.length === 1
+                ? <>These chapters were rendered with <span className="font-medium text-ink">{driftedSourceEngines[0]}</span>.</>
+                : <>These chapters were rendered across <span className="font-medium text-ink">{driftedSourceEngines.join(', ')}</span>.</>}
+              {' '}They will be re-synthesised on the current engine.
+            </p>
+            <p className="text-ink/60">
+              Existing audio remains available until each new chapter completes.
+            </p>
+            {inProgressCnt > 0 && (
+              <p className="text-amber-800">
+                This will interrupt the current run.
+              </p>
+            )}
+          </div>
+        }
+        confirmLabel={`Regenerate ${driftedCount === 1 ? '1 chapter' : `all ${driftedCount}`}`}
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          dispatch(chaptersActions.regenerateChapterIds({
+            chapterIds: driftedChapters.map(c => c.id),
+          }));
+          setBulkRegenOpen(false);
+        }}
+        onClose={() => setBulkRegenOpen(false)}
+      />
 
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 mb-8">
         <div className="flex items-center justify-between mb-3">
