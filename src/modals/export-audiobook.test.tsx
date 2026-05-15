@@ -116,8 +116,32 @@ describe('ExportAudiobookModal', () => {
     }, { timeout: 5000 });
     expect(mockedApi.createBookExport).toHaveBeenCalledWith(
       'demo__sa__test',
-      expect.objectContaining({ format: 'mp3-zip', destination: 'download' }),
+      expect.objectContaining({ format: 'm4b', destination: 'download' }),
     );
+  });
+
+  it('switches the export format to MP3.ZIP and submits with that format', async () => {
+    mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
+    mockedApi.getBookExport.mockResolvedValue(makeJob({ status: 'done', progress: 1, sizeBytes: 1024, downloadUrl: 'blob:demo' }));
+
+    renderModal();
+    /* Default should be M4B — verify the toggle reflects that before clicking. */
+    expect(screen.getByTestId('export-format-m4b')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('export-format-mp3-zip'));
+
+    const submit = await waitFor(() => {
+      const btn = screen.getByTestId('export-submit');
+      if ((btn as HTMLButtonElement).disabled) throw new Error('still disabled');
+      return btn;
+    });
+    fireEvent.click(submit);
+
+    await waitFor(() => {
+      expect(mockedApi.createBookExport).toHaveBeenCalledWith(
+        'demo__sa__test',
+        expect.objectContaining({ format: 'mp3-zip', destination: 'download' }),
+      );
+    });
   });
 
   it('shows the missing-chapter banner on 409 export_incomplete', async () => {
