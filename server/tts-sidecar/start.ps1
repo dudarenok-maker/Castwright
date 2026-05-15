@@ -103,28 +103,34 @@ if (-not $env:COQUI_TOS_AGREED) { $env:COQUI_TOS_AGREED = "1" }
 # device-side assert (the CUDA context becomes corrupted for the lifetime
 # of the process and only a fresh Python interpreter can recover). On 42
 # we relaunch uvicorn so the user's next /synthesize hits a clean process
-# — model lazy-loads on the first call, ~30–60 s on cold cache. Any other
+# -- model lazy-loads on the first call, ~30-60 s on cold cache. Any other
 # exit code (0 normal shutdown, 1 syntax / import error, 130 Ctrl+C, etc.)
 # breaks the loop so a real bug doesn't trap the supervisor in a tight
 # crash-respawn cycle.
 #
 # stop-app.ps1 kills the whole process tree via `taskkill /T`, so this
-# loop tears down cleanly when the user invokes Stop — the wrapper
+# loop tears down cleanly when the user invokes Stop -- the wrapper
 # PowerShell receives the kill alongside its uvicorn child.
-$POISON_EXIT_CODE = 42
-$RESTART_BACKOFF_SEC = 2
+#
+# ASCII-only by design: Windows PowerShell 5.1 reads UTF-8-without-BOM as
+# Windows-1252, which mojibakes em-dash bytes into a control character
+# and breaks the parser at the surrounding `try { ... } finally`. Keep
+# this whole block ASCII so the parser stays happy regardless of how the
+# file is saved.
+$PoisonExitCode = 42
+$RestartBackoffSec = 2
 
 Push-Location $here
 try {
     while ($true) {
         & $venvPython -m uvicorn main:app --host $bindHost --port $port
         $code = $LASTEXITCODE
-        if ($code -eq $POISON_EXIT_CODE) {
-            Write-Host "[supervisor] sidecar exited with poison code $code — restarting in ${RESTART_BACKOFF_SEC}s so the next synth gets a clean CUDA context."
-            Start-Sleep -Seconds $RESTART_BACKOFF_SEC
+        if ($code -eq $PoisonExitCode) {
+            Write-Host "[supervisor] sidecar exited with poison code $code - restarting in $RestartBackoffSec seconds so the next synth gets a clean CUDA context."
+            Start-Sleep -Seconds $RestartBackoffSec
             continue
         }
-        Write-Host "[supervisor] sidecar exited with code $code — not restarting."
+        Write-Host "[supervisor] sidecar exited with code $code - not restarting."
         break
     }
 } finally {
