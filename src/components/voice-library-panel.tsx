@@ -75,6 +75,11 @@ interface VoiceCardProps {
   character?: Character;
   onOpenProfile?: (id: string) => void;
   onPlaySample?: (character: Character, voice: Voice) => void;
+  /* Library-view click handler. When set, takes precedence over the
+     character+onOpenProfile pair so a voice card is interactive even when
+     no character from the currently-loaded cast matches — e.g. the global
+     `#/voices` page, where the click navigates to the voice's source book. */
+  onSelect?: (voice: Voice) => void;
 }
 
 export function VoiceCard({
@@ -88,18 +93,25 @@ export function VoiceCard({
   character,
   onOpenProfile,
   onPlaySample,
+  onSelect,
 }: VoiceCardProps) {
   const isDragging = draggingVoiceId === voice.id;
   const canOpenProfile = !!(character && onOpenProfile);
   const canPlay = !!(character && onPlaySample);
+  const interactive = !!onSelect || canOpenProfile;
+  const activate = onSelect
+    ? () => onSelect(voice)
+    : canOpenProfile
+      ? () => onOpenProfile!(character!.id)
+      : undefined;
   return (
     <div draggable
       onDragStart={(e) => { setDraggingVoiceId(voice.id); e.dataTransfer.effectAllowed = 'copy'; }}
       onDragEnd={() => setDraggingVoiceId(null)}
-      onClick={canOpenProfile ? () => onOpenProfile!(character!.id) : undefined}
-      role={canOpenProfile ? 'button' : undefined}
-      tabIndex={canOpenProfile ? 0 : undefined}
-      onKeyDown={canOpenProfile ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenProfile!(character!.id); } } : undefined}
+      onClick={activate}
+      role={interactive ? 'button' : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      onKeyDown={activate ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } } : undefined}
       className={`group flex items-start gap-3 p-3 rounded-2xl border bg-canvas hover:bg-white border-ink/10 cursor-grab active:cursor-grabbing transition-all ${isDragging ? 'opacity-40 scale-[0.98]' : ''}`}>
       <span onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
         <VoiceSwatch voice={voice} size="sm" showLabel={false}

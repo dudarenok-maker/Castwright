@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   createHashRouter, Navigate, useOutletContext,
-  useParams, useSearchParams,
+  useNavigate, useParams, useSearchParams,
 } from 'react-router-dom';
 import { useAppDispatch, useAppSelector, store } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -198,7 +198,17 @@ function UploadRoute() {
 function VoicesRoute() {
   useHydrateStage({ kind: 'voices' }, []);
   const voices = useAppSelector(s => s.voices.voices);
-  return <LibraryView library={voices}/>;
+  const navigate = useNavigate();
+  /* Clicking a voice card from the global Voices view navigates to the
+     character's source-book cast view with `?profile=<charId>` set. The
+     ReadyRoute parses the param into stage.openProfileId, Layout hydrates
+     that book's cast from disk, and the ProfileDrawer pops out alongside
+     the cast table — same affordance as the cast view's in-book panel. */
+  return <LibraryView library={voices}
+    onOpenCharacter={(voice) => {
+      if (!voice.bookId) return;
+      navigate(`/books/${voice.bookId}/cast?profile=${encodeURIComponent(voice.id)}`);
+    }}/>;
 }
 
 function AccountRoute() {
@@ -375,6 +385,7 @@ function ReadyRoute() {
    the param-derivation effect runs ahead of the view's selectors. */
 function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookId: string; currentChapterId: number }) {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const characters = useAppSelector(s => s.cast.characters);
   const chapters   = useAppSelector(s => s.chapters.chapters);
   const paused     = useAppSelector(s => s.chapters.paused);
@@ -412,7 +423,19 @@ function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookI
           onShowDrift={() => dispatch(uiActions.setShowDriftReport(true))}/>
       );
     case 'library':
-      return <LibraryView library={voices}/>;
+      /* Clicking a voice card opens the profile drawer for the linked
+         character. If the voice belongs to the currently-open book we open
+         the drawer in place (cast slice already carries those characters);
+         otherwise we navigate to the source book's cast view so the drawer
+         can render against that book's hydrated cast. */
+      return <LibraryView library={voices}
+        onOpenCharacter={(voice) => {
+          if (voice.bookId === bookId) {
+            dispatch(uiActions.setOpenProfileId(voice.id));
+          } else if (voice.bookId) {
+            navigate(`/books/${voice.bookId}/cast?profile=${encodeURIComponent(voice.id)}`);
+          }
+        }}/>;
     case 'generate':
       return (
         <GenerationView chapters={chapters} characters={characters}

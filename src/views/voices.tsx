@@ -19,7 +19,16 @@ import { gradientForTtsVoice } from '../lib/voice-palette';
 
 type Tab = 'all' | 'current' | 'library' | 'base';
 
-interface Props { library: Voice[]; }
+interface Props {
+  library: Voice[];
+  /* Click handler for a voice/character card. The Voices view sits in two
+     places: the global `#/voices` page (no book loaded) and the per-book
+     "Voices" tab (`#/books/:bookId/library`). Both wire this prop to open
+     the linked character's profile drawer — in-place when the voice belongs
+     to the currently-open book, by navigating to the source book otherwise.
+     When unset, cards stay drag-only (legacy behavior used by tests). */
+  onOpenCharacter?: (voice: Voice) => void;
+}
 
 /* A voice "family" — every cast Voice that resolves to the same model
    speaker (e.g. every character mapped to Coqui · Asya Anara). Each family
@@ -55,7 +64,7 @@ const ENGINE_LABEL: Record<TtsEngine, string> = {
   kokoro: 'Kokoro',
 };
 
-export function LibraryView({ library }: Props) {
+export function LibraryView({ library, onOpenCharacter }: Props) {
   const [tab, setTab] = useState<Tab>('all');
   const [draggingVoiceId, setDraggingVoiceId] = useState<string | null>(null);
   const [familyStatus, setFamilyStatus] = useState<{ key: string; label: string } | null>(null);
@@ -215,6 +224,7 @@ export function LibraryView({ library }: Props) {
               onTogglePin={togglePin}
               onPlay={playFamilySample}
               status={familyStatus}
+              onOpenCharacter={onOpenCharacter}
             />
           ))}
         </div>
@@ -320,8 +330,9 @@ interface FamilyProps {
   onTogglePin: (v: Voice) => void;
   onPlay: (f: VoiceFamily) => void;
   status: { key: string; label: string } | null;
+  onOpenCharacter?: (voice: Voice) => void;
 }
-function VoiceFamilySection({ family, draggingVoiceId, setDraggingVoiceId, onTogglePin, onPlay, status }: FamilyProps) {
+function VoiceFamilySection({ family, draggingVoiceId, setDraggingVoiceId, onTogglePin, onPlay, status, onOpenCharacter }: FamilyProps) {
   const seriesGroups = family.seriesGroups;
   const isBusy = status?.key === family.key;
   /* Build a Voice-shaped stand-in for the family header swatch so VoiceSwatch
@@ -389,6 +400,7 @@ function VoiceFamilySection({ family, draggingVoiceId, setDraggingVoiceId, onTog
                         showBookTitle={false}
                         pinned={!!v.pinned}
                         onTogglePin={onTogglePin}
+                        onSelect={onOpenCharacter}
                       />
                     ))}
                   </div>
