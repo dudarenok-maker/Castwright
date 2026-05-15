@@ -11,7 +11,11 @@ import { ModelControlPill, type ModelControlState } from '../components/ModelCon
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { useAppDispatch, useAppSelector } from '../store';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
-import { api } from '../lib/api';
+import { castActions } from '../store/cast-slice';
+import { manuscriptActions } from '../store/manuscript-slice';
+import { api, AnalysisError } from '../lib/api';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
+import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { ttsModelLabel } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
@@ -28,6 +32,21 @@ import type {
 const ACTIVITY_FEED_TYPES: ChangeLogEvent['type'][] = [
   'regenerate', 'chapter_complete', 'chapter_failed', 'generation_started',
 ];
+
+/* Transient per-chapter state for an in-flight "Include in book" subset
+   analysis. Lives only while the SSE is streaming — drops on success,
+   on cancel, or when the user clicks Retry. The error variant keeps
+   the entry around so the row can offer Retry without losing the
+   message. */
+interface SubsetProgress {
+  chapterId: number;
+  phaseId: 0 | 1;
+  phaseLabel: string;
+  progress: number;
+  throttle: { until: number; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after'; model: string } | null;
+  error: string | null;
+  controller: AbortController;
+}
 
 interface Props {
   chapters: Chapter[];
@@ -59,46 +78,161 @@ export function GenerationView({
   const manuscriptId        = useAppSelector(s => s.manuscript.manuscriptId);
   const activityEvents      = useAppSelector(s => s.changeLog.events);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
-  /* Per-chapter busy state for the exclude/include toggle. The toggle is
-     a multi-step async (POST exclude → optionally POST subset analysis),
-     so we surface a spinner on the row until both land. */
-  const [excludeBusy, setExcludeBusy] = useState<Set<number>>(new Set());
+  /* Per-chapter subset-analysis state for the un-exclude flow. Lives only
+     for the duration of the inline run — once the chapter transitions
+     back to a normal queued row (or the user cancels) the entry is
+     dropped. The un-exclude path is now a multi-phase streamed
+     analysis and the user needs phase/progress/throttle/error
+     feedback inline. */
+  const [subsetByChapter, setSubsetByChapter] = useState<Record<number, SubsetProgress>>({});
+
+  /* Guard for mid-generation TTS eviction. When the selected analyzer is
+     local (Ollama) AND a generation stream is alive, clicking Include
+     would silently load Ollama and evict the TTS sidecar. The hook
+     short-circuits to a straight call-through for remote engines
+     (Gemini), so this is a no-op unless both conditions hold. */
+  const { guard, modal: analyzerGuardModal } = useLocalAnalyzerGuard({ generatingBookTitle: title });
+
+  const patchSubset = (chapterId: number, patch: Partial<SubsetProgress>) => {
+    setSubsetByChapter(prev => {
+      const existing = prev[chapterId];
+      if (!existing) return prev;
+      return { ...prev, [chapterId]: { ...existing, ...patch } };
+    });
+  };
 
   async function handleToggleExcluded(chapterId: number, excluded: boolean): Promise<void> {
-    const ch = chapters.find(c => c.id === chapterId);
-    if (!ch) return;
-    setExcludeBusy(prev => {
-      const next = new Set(prev);
-      next.add(chapterId);
-      return next;
-    });
-    try {
-      await api.setChapterExcluded(bookId, chapterId, excluded);
-      dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded }));
-      /* When un-excluding a chapter that has no analysis on file, run
-         Phase 0a + Phase 1 just for that chapter so it can be generated.
-         Detect "no analysis" by an empty characters map — chapters that
-         went through analysis always have at least the narrator. */
-      if (!excluded && manuscriptId) {
-        const hasAnalysis = ch.characters && Object.keys(ch.characters).length > 0;
-        if (!hasAnalysis) {
-          const res = await api.runAnalysisForChapters(manuscriptId, [chapterId]);
-          dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
-        }
+    /* Exclude direction — flip the flag and walk away. No analysis is
+       needed; the server cleans up audio + segments and the slice resets
+       transient generation state for the row. */
+    if (excluded) {
+      try {
+        await api.setChapterExcluded(bookId, chapterId, true);
+        dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
+      } catch (e) {
+        console.error('[generation] exclude failed', e);
       }
-    } catch (e) {
-      console.error('[generation] exclude toggle failed', e);
-      /* The slice change wasn't dispatched if the network call failed, so
-         the UI stays in its prior state. A toast/banner would be the next
-         improvement here; for now the console error + reverted UI is the
-         signal. */
-    } finally {
-      setExcludeBusy(prev => {
-        const next = new Set(prev);
-        next.delete(chapterId);
-        return next;
-      });
+      return;
     }
+
+    /* Un-exclude direction — POST exclude=false, then ALWAYS run subset
+       analysis (Phase 0a + Phase 1) so the chapter's sentences land in
+       manuscript.sentences, new characters land in cast, and the row's
+       characters map populates. Without that triple-merge a chapter
+       that was excluded at import has nothing for generation to
+       synthesise. The subset route is cheap-ish on Gemini and worth the
+       round-trip even for a previously-analysed chapter so the user
+       doesn't have to reason about cache freshness vs. cast/manuscript
+       edits made while the chapter was excluded. */
+    if (!manuscriptId) return;
+    /* Idempotency guard — a second click while subset analysis is in
+       flight should do nothing rather than starting a parallel run.
+       An errored entry doesn't block retry: handleRetrySubset relies
+       on this so the user can re-fire the flow without a state-update
+       microtask dance. */
+    if (subsetByChapter[chapterId] && subsetByChapter[chapterId].error == null) return;
+
+    const controller = new AbortController();
+    setSubsetByChapter(prev => ({
+      ...prev,
+      [chapterId]: {
+        chapterId,
+        phaseId: 0,
+        phaseLabel: ANALYSIS_PHASES[0].label,
+        progress: 0,
+        throttle: null,
+        error: null,
+        controller,
+      },
+    }));
+
+    try {
+      await api.setChapterExcluded(bookId, chapterId, false);
+      dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: false }));
+
+      const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
+        signal: controller.signal,
+        onPhase: ({ phaseId, progress }) => {
+          patchSubset(chapterId, {
+            phaseId: phaseId as 0 | 1,
+            phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? ANALYSIS_PHASES[0].label,
+            progress,
+          });
+        },
+        onCastUpdate: ({ characters }) => {
+          dispatch(castActions.mergeCharacters(characters));
+        },
+        onThrottle: ({ model: throttleModel, waitMs, reason }) => {
+          patchSubset(chapterId, {
+            throttle: { until: Date.now() + waitMs, model: throttleModel, reason },
+          });
+        },
+        onChapterFailed: ({ chapterId: failedId, message }) => {
+          if (failedId === chapterId) {
+            patchSubset(chapterId, { error: message });
+          }
+        },
+      });
+
+      /* Triple-slice merge — this is the load-bearing fix. Pre-fix only
+         chaptersActions.mergeSubsetAnalysis was dispatched, so the new
+         chapter's sentences never reached manuscript.sentences and
+         audio generation had nothing to synthesise. */
+      dispatch(castActions.mergeCharacters(res.characters ?? []));
+      dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
+      dispatch(manuscriptActions.hydrateFromAnalysis(res));
+
+      setSubsetByChapter(prev => {
+        const { [chapterId]: _, ...rest } = prev;
+        return rest;
+      });
+    } catch (e) {
+      /* AbortError = user clicked Cancel; any other error = subset
+         analysis failed (network, analyzer offline, server-side
+         exception). In both cases the chapter has been flipped to
+         excluded=false on the server already, but its analysis is
+         absent / partial. Roll the flag back so the chapter doesn't
+         drift to an included-but-unanalysed state that no UI surfaces.
+         The rollback is best-effort — if it fails the worst case is
+         the chapter sticks around as queued-with-no-content until the
+         user re-excludes it manually. */
+      const isAbort = (e as Error)?.name === 'AbortError'
+        || (e instanceof AnalysisError && e.code === 'aborted');
+      await rollbackInclude(chapterId).catch(rollbackErr => {
+        console.warn('[generation] include rollback failed', rollbackErr);
+      });
+      if (isAbort) {
+        setSubsetByChapter(prev => {
+          const { [chapterId]: _, ...rest } = prev;
+          return rest;
+        });
+        return;
+      }
+      const message = (e as Error).message || 'Subset analysis failed.';
+      patchSubset(chapterId, { error: message });
+    }
+  }
+
+  /* Re-exclude server-side AND in the slice to undo the optimistic
+     un-exclude when an in-flight Include either failed or was
+     cancelled. Kept separate from the main handler so the catch arm
+     stays readable. */
+  async function rollbackInclude(chapterId: number): Promise<void> {
+    await api.setChapterExcluded(bookId, chapterId, true);
+    dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
+  }
+
+  function handleCancelSubset(chapterId: number): void {
+    const entry = subsetByChapter[chapterId];
+    if (entry) entry.controller.abort();
+  }
+
+  function handleRetrySubset(chapterId: number): void {
+    void handleToggleExcluded(chapterId, false);
+  }
+
+  function handleIncludeClick(chapterId: number): void {
+    guard(() => { void handleToggleExcluded(chapterId, false); });
   }
 
   /* Manuscript-derived shape used both for accurate overall-progress
@@ -522,7 +656,10 @@ export function GenerationView({
                         onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
                         onPreview={onPreview}
                         onToggleExcluded={handleToggleExcluded}
-                        excludeBusy={excludeBusy.has(ch.id)}
+                        onIncludeClick={handleIncludeClick}
+                        onCancelSubset={handleCancelSubset}
+                        onRetrySubset={handleRetrySubset}
+                        subsetProgress={subsetByChapter[ch.id] ?? null}
                         activeModelKey={modelKey}/>
           ))}
         </div>
@@ -555,6 +692,7 @@ export function GenerationView({
           <span>Runtime so far: <span className="tabular-nums text-ink/70">{runtimeSec > 0 ? formatTime(runtimeSec) : '0:00'}</span></span>
         </div>
       </div>
+      {analyzerGuardModal}
     </div>
   );
 }
@@ -602,7 +740,16 @@ interface ChapterRowProps {
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
   onPreview: (chapterId: number) => void;
   onToggleExcluded: (chapterId: number, excluded: boolean) => void;
-  excludeBusy: boolean;
+  /** Guard-wrapped variant of `onToggleExcluded(id, false)`. Wraps the
+      un-exclude call in `useLocalAnalyzerGuard` so the local-analyzer
+      mid-gen confirm modal can intercept before the analysis fires. */
+  onIncludeClick: (chapterId: number) => void;
+  onCancelSubset: (chapterId: number) => void;
+  onRetrySubset: (chapterId: number) => void;
+  /** In-flight subset analysis state for this chapter, or null when
+      the row is idle. Drives the inline progress / throttle / error
+      block on the excluded-chapter variant. */
+  subsetProgress: SubsetProgress | null;
   /** Active TTS model on the project. Used to compute engine drift: a
       chapter whose `audioModelKey` differs gets a "Generated with X"
       badge prompting the user to regenerate for consistency
@@ -612,39 +759,26 @@ interface ChapterRowProps {
 
 function ChapterRow({
   chapter, characters, bookId, expanded, onToggle, paused, blocked, stalled, charStats, charPositions,
-  onRegenerate, onRegenerateCharacterInChapter, onPreview, onToggleExcluded, excludeBusy,
+  onRegenerate, onRegenerateCharacterInChapter, onPreview, onToggleExcluded,
+  onIncludeClick, onCancelSubset, onRetrySubset, subsetProgress,
   activeModelKey,
 }: ChapterRowProps) {
-  /* Excluded chapters get a compact, greyed-out row with a single
-     "Include in book" action. Skip the full state-machine rendering
-     below — these chapters don't have analysis or audio. */
-  if (chapter.excluded) {
+  /* Render the greyed-out variant when the chapter is excluded OR a
+     subset re-analysis is in flight for it. The transitional case
+     (excluded flipped to false server-side but analysis is still
+     running) MUST keep the special row visible — without it the
+     in-flight progress / Cancel / error UI would disappear the moment
+     the slice action lands and the row would morph into an empty
+     normal queued row mid-stream. */
+  if (chapter.excluded || subsetProgress) {
     return (
-      <div className="rounded-3xl border border-ink/10 bg-ink/[0.03] overflow-hidden">
-        <div className="grid grid-cols-[32px_52px_minmax(0,1fr)_auto] items-center gap-3 px-5 py-3">
-          <span className="grid place-items-center text-ink/30">
-            <span className="w-4 h-4 rounded-full border border-ink/15"/>
-          </span>
-          <span className="text-sm font-bold text-ink/35 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
-          <span className="min-w-0">
-            <span className="block font-medium text-ink/40 truncate line-through decoration-1">
-              {chapter.title}
-            </span>
-            <span className="block text-[11px] text-ink/45 mt-0.5">
-              Excluded — not analyzed, no audio will be generated.
-            </span>
-          </span>
-          <button
-            onClick={() => onToggleExcluded(chapter.id, false)}
-            disabled={excludeBusy}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta disabled:opacity-50 transition-colors"
-          >
-            {excludeBusy
-              ? <><IconSpinner className="w-3.5 h-3.5"/> Re-analyzing…</>
-              : <>+ Include in book</>}
-          </button>
-        </div>
-      </div>
+      <ExcludedChapterRow
+        chapter={chapter}
+        subsetProgress={subsetProgress}
+        onIncludeClick={onIncludeClick}
+        onCancelSubset={onCancelSubset}
+        onRetrySubset={onRetrySubset}
+      />
     );
   }
 
@@ -773,11 +907,10 @@ function ChapterRow({
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onToggleExcluded(chapter.id, true); }}
-            disabled={excludeBusy}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/45 hover:text-ink/70 disabled:opacity-50 transition-colors"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/45 hover:text-ink/70 transition-colors"
             title="Skip this chapter — no audio will be generated for it."
           >
-            {excludeBusy ? <IconSpinner className="w-3.5 h-3.5"/> : <IconClose className="w-3.5 h-3.5"/>} Exclude
+            <IconClose className="w-3.5 h-3.5"/> Exclude
           </button>
         </div>
       )}
@@ -789,13 +922,13 @@ function ChapterRow({
         <div className="px-6 -mt-3 flex justify-end">
           <button
             onClick={(e) => { e.stopPropagation(); onToggleExcluded(chapter.id, true); }}
-            disabled={excludeBusy || chapter.state === 'in_progress'}
+            disabled={chapter.state === 'in_progress'}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/45 hover:text-ink/70 disabled:opacity-40 transition-colors"
             title={chapter.state === 'in_progress'
               ? 'Pause first, then you can exclude this chapter.'
               : 'Skip this chapter — no audio will be generated for it.'}
           >
-            {excludeBusy ? <IconSpinner className="w-3.5 h-3.5"/> : <IconClose className="w-3.5 h-3.5"/>} Exclude
+            <IconClose className="w-3.5 h-3.5"/> Exclude
           </button>
         </div>
       )}
@@ -882,6 +1015,108 @@ function ChapterRow({
           {chapter.state === 'done' && (
             <ChapterSegmentStrip chapter={chapter} bookId={bookId} characters={characters}/>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Idle / running / errored variants of the greyed-out excluded-chapter
+   row on the Generate screen. Lives at this top level so the parent
+   ChapterRow stays focused on the live-chapter state machine; the
+   excluded path has its own three-state UI now (idle → inline progress
+   → optional error/retry). */
+function ExcludedChapterRow({
+  chapter, subsetProgress, onIncludeClick, onCancelSubset, onRetrySubset,
+}: {
+  chapter: Chapter;
+  subsetProgress: SubsetProgress | null;
+  onIncludeClick: (chapterId: number) => void;
+  onCancelSubset: (chapterId: number) => void;
+  onRetrySubset: (chapterId: number) => void;
+}) {
+  /* Three-state UI: idle (subsetProgress null) → running (entry exists,
+     no error) → errored (entry exists with error). Narrowing via direct
+     null/error checks rather than aliased booleans so TypeScript's
+     control-flow analysis flows through every branch. */
+  const running = subsetProgress && subsetProgress.error == null ? subsetProgress : null;
+  const errored = subsetProgress && subsetProgress.error != null ? subsetProgress : null;
+  const throttleActive = running?.throttle != null && running.throttle.until > Date.now();
+
+  return (
+    <div className="rounded-3xl border border-ink/10 bg-ink/[0.03] overflow-hidden">
+      <div className="grid grid-cols-[32px_52px_minmax(0,1fr)_auto] items-center gap-3 px-5 py-3">
+        <span className="grid place-items-center text-ink/30">
+          <span className="w-4 h-4 rounded-full border border-ink/15"/>
+        </span>
+        <span className="text-sm font-bold text-ink/35 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
+        <span className="min-w-0">
+          <span className="block font-medium text-ink/40 truncate line-through decoration-1">
+            {chapter.title}
+          </span>
+          {running ? (
+            <span className="block text-[11px] text-ink/55 mt-0.5">
+              Re-analyzing — {running.phaseLabel} (Phase {running.phaseId === 0 ? '0a' : '1'})
+            </span>
+          ) : errored ? (
+            <span className="block text-[11px] text-rose-700 mt-0.5">
+              Re-analysis failed: {errored.error}
+            </span>
+          ) : (
+            <span className="block text-[11px] text-ink/45 mt-0.5">
+              Excluded — not analyzed, no audio will be generated.
+            </span>
+          )}
+        </span>
+        {running ? (
+          <button
+            type="button"
+            onClick={() => onCancelSubset(chapter.id)}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+          >
+            Cancel
+          </button>
+        ) : errored ? (
+          <button
+            type="button"
+            onClick={() => onRetrySubset(chapter.id)}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+          >
+            <IconRefresh className="w-3.5 h-3.5"/> Retry
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onIncludeClick(chapter.id)}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+          >
+            + Include in book
+          </button>
+        )}
+      </div>
+      {running && (
+        /* Inline progress bar — same gradient + stripe-travel as the live
+           chapter rows so the visual language stays consistent. The bar
+           fills 0→1 across the active phase; the phase label above is
+           the user's cue that there's a Phase 0a → Phase 1 handoff. */
+        <div className="px-5 pb-3 -mt-1">
+          <div className="relative h-1.5 rounded-full bg-ink/[0.06] overflow-hidden">
+            <div
+              className="absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all duration-700"
+              style={{ width: `${Math.max(0, Math.min(1, running.progress)) * 100}%` }}
+            >
+              <div className="absolute inset-0 stripe-travel"/>
+            </div>
+          </div>
+          <div className="mt-1 flex items-center justify-between text-[10px] text-ink/50 tabular-nums">
+            <span>{Math.round(running.progress * 100)}%</span>
+            {throttleActive && running.throttle && (
+              <span className="inline-flex items-center gap-1 text-amber-700">
+                <IconClock className="w-2.5 h-2.5"/>
+                Waiting on {running.throttle.model} ({running.throttle.reason})
+              </span>
+            )}
+          </div>
         </div>
       )}
     </div>

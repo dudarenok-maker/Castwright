@@ -8,6 +8,8 @@ import { chaptersSlice } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice } from '../store/ui-slice';
 import { changeLogSlice } from '../store/change-log-slice';
+import { castSlice } from '../store/cast-slice';
+import { librarySlice } from '../store/library-slice';
 import { generationStreamMiddleware } from '../store/generation-stream-middleware';
 import { GenerationView } from './generation';
 import type { Chapter, Character, Sentence } from '../lib/types';
@@ -18,6 +20,8 @@ const loadSidecarSpy = vi.fn();
 const unloadSidecarSpy = vi.fn();
 const getOllamaHealthSpy = vi.fn();
 const getSidecarHealthSpy = vi.fn();
+const setChapterExcludedSpy = vi.fn();
+const runAnalysisForChaptersSpy = vi.fn();
 
 vi.mock('../lib/api', () => ({
   /* Never-resolving so the ChapterSegmentStrip useEffect doesn't flush a
@@ -40,6 +44,26 @@ vi.mock('../lib/api', () => ({
     unloadSidecar:    () => unloadSidecarSpy(),
     loadAnalyzer:     () => Promise.resolve({ status: 'ready' }),
     unloadAnalyzer:   () => { unloadAnalyzerSpy(); return Promise.resolve({ status: 'unloaded' }); },
+    /* Drives the Include-in-book toggle. The handler always flips the
+       flag first, then runs subset analysis on the un-exclude path. */
+    setChapterExcluded: (bookId: string, chapterId: number, excluded: boolean) =>
+      setChapterExcludedSpy(bookId, chapterId, excluded),
+    runAnalysisForChapters: (
+      manuscriptId: string,
+      chapterIds: number[],
+      opts?: Record<string, unknown>,
+    ) => runAnalysisForChaptersSpy(manuscriptId, chapterIds, opts),
+  },
+  /* Stub class so `instanceof AnalysisError` checks in production code
+     don't throw "Right-hand side of instanceof is not callable". */
+  AnalysisError: class AnalysisError extends Error {
+    code: string;
+    detail?: string;
+    constructor(message: string, code = 'unknown', detail?: string) {
+      super(message);
+      this.code = code;
+      this.detail = detail;
+    }
   },
 }));
 
@@ -49,10 +73,18 @@ beforeEach(() => {
   unloadSidecarSpy.mockReset();
   getOllamaHealthSpy.mockReset();
   getSidecarHealthSpy.mockReset();
+  setChapterExcludedSpy.mockReset();
+  runAnalysisForChaptersSpy.mockReset();
   getOllamaHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', models: [], resident: [], modelResident: false });
   getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
   loadSidecarSpy.mockResolvedValue({ status: 'ready' });
   unloadSidecarSpy.mockResolvedValue({ status: 'idle' });
+  /* Default: setChapterExcluded resolves trivially and
+     runAnalysisForChapters never resolves so tests that don't exercise
+     the include path don't spuriously dispatch the merge actions. Tests
+     that need a real flow override these in the body. */
+  setChapterExcludedSpy.mockResolvedValue({ id: 0, title: '', slug: '', excluded: false });
+  runAnalysisForChaptersSpy.mockReturnValue(new Promise(() => {}));
 });
 
 const characters: Character[] = [
@@ -91,6 +123,8 @@ function makeStore() {
       chapters:   chaptersSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       changeLog:  changeLogSlice.reducer,
+      cast:       castSlice.reducer,
+      library:    librarySlice.reducer,
     },
   });
   store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
@@ -185,6 +219,8 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
         chapters:   chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog:  changeLogSlice.reducer,
+        cast:       castSlice.reducer,
+        library:    librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([ch1Done, ch2Queued, ch3Excluded]));
@@ -247,6 +283,8 @@ describe('GenerationView — early-tick render guards (regression)', () => {
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([live]));
@@ -353,6 +391,8 @@ describe('GenerationView — per-character progress is derived from the manuscri
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([liveChapter]));
@@ -428,6 +468,8 @@ describe('GenerationView — heartbeat / stalled state', () => {
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([live]));
@@ -482,6 +524,8 @@ describe('GenerationView — activity sidebar', () => {
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
@@ -536,6 +580,8 @@ describe('GenerationView — header action once the run is complete', () => {
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([allDone1, allDone2]));
@@ -579,6 +625,8 @@ describe('GenerationView — header action once the run is complete', () => {
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
@@ -626,6 +674,8 @@ describe('generationStreamMiddleware — Pause/Resume regenerate loop (regressio
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
       },
       middleware: (gd) => gd().concat(generationStreamMiddleware),
     });
@@ -765,6 +815,8 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
         chapters:   chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog:  changeLogSlice.reducer,
+        cast:       castSlice.reducer,
+        library:    librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters(chapters));
@@ -873,6 +925,8 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
         chapters:   chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog:  changeLogSlice.reducer,
+        cast:       castSlice.reducer,
+        library:    librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters(chapters));
@@ -1003,5 +1057,267 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
     const body = screen.getByText(/rendered across/i);
     expect(body.textContent).toMatch(/Coqui XTTS v2/);
     expect(body.textContent).toMatch(/Gemini/);
+  });
+});
+
+describe('GenerationView — Include in book (subset re-analysis)', () => {
+  /* Pre-fix the un-exclude path dispatched ONLY chaptersActions.mergeSubsetAnalysis,
+     so the chapter's sentences never reached manuscript.sentences and audio
+     generation had nothing to synthesise. The handler now triple-merges
+     (cast + chapters + manuscript) on success, runs subset analysis
+     unconditionally (no stale-cache heuristic), surfaces inline progress
+     with phase + percentage, supports Cancel via AbortController, and
+     gates local-analyzer-mid-generation behind the existing
+     useLocalAnalyzerGuard modal. */
+
+  const ch3Excluded: Chapter = {
+    id: 3,
+    title: 'Chapter 3',
+    duration: '00:00',
+    state: 'queued',
+    progress: 0,
+    excluded: true,
+    characters: {},
+  };
+
+  /* Subset-analysis response shaped to mirror the live server payload:
+     full re-folded cast + the chapter's freshly-attributed sentences +
+     a chapters list reset to queued state. */
+  const subsetResponse = {
+    bookId: 'b1',
+    manuscriptId: 'm1',
+    title: 'Bonus Keefe Story',
+    phaseTimings: [],
+    characters: [
+      ...characters,
+      { id: 'sophie', name: 'Sophie', role: 'Protagonist', color: 'magenta' as const },
+    ],
+    chapters: [
+      { ...chapter1, characters: {} },
+      { ...chapter2, characters: {} },
+      { ...ch3Excluded, excluded: undefined, characters: {} },
+    ],
+    sentences: [
+      { id: 50, chapterId: 3, characterId: 'narrator', text: 'Chapter three begins.' },
+      { id: 51, chapterId: 3, characterId: 'sophie',   text: 'I have something to say.' },
+    ],
+    libraryMatches: [],
+  };
+
+  function makeIncludeStore({
+    selectedModel,
+    activeStream,
+  }: {
+    selectedModel?: string;
+    activeStream?: { bookId: string; modelKey: string };
+  } = {}) {
+    const store = configureStore({
+      reducer: {
+        ui:         uiSlice.reducer,
+        chapters:   chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog:  changeLogSlice.reducer,
+        cast:       castSlice.reducer,
+        library:    librarySlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2, ch3Excluded]));
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    /* Order matters: hydrateFromAnalysis FIRST while manuscriptId is
+       still null so the slice takes the wholesale-replace branch and
+       wipes the demo fixture (which seeds 14 chapter-3 sentences and
+       would pollute our subset-merge assertions). uploadComplete
+       second to set manuscriptId — the un-exclude handler bails out
+       early when it's null, so we need a value before the click. */
+    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      title: 'Bonus Keefe Story',
+      characters,
+      chapters: [chapter1, chapter2, ch3Excluded],
+      sentences,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any));
+    store.dispatch(manuscriptSlice.actions.uploadComplete({
+      manuscriptId: 'm1',
+      title: 'Bonus Keefe Story',
+      format: 'plaintext',
+      wordCount: 0,
+      byteSize: 0,
+      uploadedAt: new Date().toISOString(),
+      sourceText: '',
+    }));
+    store.dispatch(castSlice.actions.setCharacters(characters));
+    if (selectedModel) {
+      store.dispatch(uiSlice.actions.setSelectedModel(selectedModel));
+    }
+    if (activeStream) {
+      store.dispatch(chaptersSlice.actions.setActiveStream({
+        bookId: activeStream.bookId,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        modelKey: activeStream.modelKey as any,
+        done: 0,
+        total: 2,
+        inProgress: 1,
+        lastTickAt: Date.now(),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any));
+    }
+    return store;
+  }
+
+  function renderInclude(store: ReturnType<typeof makeIncludeStore>) {
+    return render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={[chapter1, chapter2, ch3Excluded]}
+          characters={characters}
+          paused
+          title="Bonus Keefe Story"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          setPaused={() => {}}
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('on success, merges sentences into the manuscript slice, characters into cast, and clears the row excluded flag', async () => {
+    const store = makeIncludeStore();
+    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    runAnalysisForChaptersSpy.mockResolvedValue(subsetResponse);
+
+    renderInclude(store);
+    const btn = await screen.findByRole('button', { name: /\+ Include in book/i });
+    fireEvent.click(btn);
+
+    /* Wait for the row to transition out of the excluded variant —
+       the slice change is the load-bearing signal that the merge ran. */
+    await screen.findByText('14 words · 3 lines · 2 speakers'); // chapter 1 still renders normally
+    const state = store.getState();
+    expect(state.chapters.chapters.find(c => c.id === 3)?.excluded).toBeUndefined();
+    /* Manuscript merge — pre-fix this stayed as the original 4 sentences. */
+    const ch3Sentences = state.manuscript.sentences.filter(s => s.chapterId === 3);
+    expect(ch3Sentences).toHaveLength(2);
+    expect(ch3Sentences.map(s => s.characterId).sort()).toEqual(['narrator', 'sophie']);
+    /* Cast merge — sophie is a newly-detected character. */
+    expect(state.cast.characters.some(c => c.id === 'sophie')).toBe(true);
+    /* Chapter characters map populated for ch3 — the row will render
+       sophie + narrator as queued speakers on the next paint. */
+    const ch3 = state.chapters.chapters.find(c => c.id === 3);
+    expect(ch3?.characters).toMatchObject({ narrator: 'queued', sophie: 'queued' });
+  });
+
+  it('renders inline phase + percentage while subset analysis is streaming', async () => {
+    const store = makeIncludeStore();
+    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    /* Capture the opts to invoke onPhase synchronously after the click,
+       and return a never-resolving promise so the row stays in the
+       running variant for assertion. */
+    let capturedOpts: { onPhase?: (e: { phaseId: number; progress: number }) => void } | undefined;
+    runAnalysisForChaptersSpy.mockImplementation((_id, _ids, opts) => {
+      capturedOpts = opts;
+      return new Promise(() => {});
+    });
+
+    renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    /* Let the awaited setChapterExcluded resolve so the analysis-call
+       happens and capturedOpts is set. */
+    await screen.findByRole('button', { name: /Cancel/i });
+
+    capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.37 });
+    expect(await screen.findByText(/Re-analyzing — Detecting characters \(Phase 0a\)/i)).toBeInTheDocument();
+    expect(screen.getByText('37%')).toBeInTheDocument();
+  });
+
+  it('Cancel aborts the underlying signal and reverts the row to the idle Include CTA', async () => {
+    const store = makeIncludeStore();
+    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    let capturedSignal: AbortSignal | undefined;
+    runAnalysisForChaptersSpy.mockImplementation((_id, _ids, opts) => {
+      capturedSignal = (opts as { signal?: AbortSignal })?.signal;
+      return new Promise((_resolve, reject) => {
+        capturedSignal?.addEventListener('abort', () => {
+          const err: Error & { name: string } = new Error('aborted');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      });
+    });
+
+    renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    const cancelBtn = await screen.findByRole('button', { name: /Cancel/i });
+    fireEvent.click(cancelBtn);
+
+    expect(capturedSignal?.aborted).toBe(true);
+    /* Row reverts to idle — Include CTA is back. */
+    expect(await screen.findByRole('button', { name: /\+ Include in book/i })).toBeInTheDocument();
+  });
+
+  it('on error, surfaces the message inline with a Retry button that re-runs the subset call', async () => {
+    const store = makeIncludeStore();
+    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new Error('analyzer offline'));
+
+    renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    expect(await screen.findByText(/Re-analysis failed: analyzer offline/i)).toBeInTheDocument();
+
+    /* Stub a successful second attempt and click Retry. */
+    runAnalysisForChaptersSpy.mockResolvedValueOnce(subsetResponse);
+    fireEvent.click(screen.getByRole('button', { name: /Retry/i }));
+    /* runAnalysisForChapters should have been invoked TWICE — once on
+       the failing click, once on Retry. */
+    await screen.findByRole('button', { name: /\+ Include in book/i }).catch(() => {
+      /* If the row already morphed into a non-excluded state, the
+         Include CTA won't be findable — which is also a valid
+         success signal. Either way the spy count is the assertion. */
+    });
+    expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('with a local analyzer selected and a generation stream alive, surfaces the pause-to-analyse modal before firing subset analysis', async () => {
+    const store = makeIncludeStore({
+      selectedModel: 'qwen3.5:4b',
+      activeStream: { bookId: 'other-book', modelKey: 'coqui-xtts-v2' },
+    });
+    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    runAnalysisForChaptersSpy.mockResolvedValue(subsetResponse);
+
+    renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    /* Modal appears — subset analysis has NOT been called yet. */
+    expect(await screen.findByText(/Pause audio generation to analyse\?/i)).toBeInTheDocument();
+    expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+
+    /* Confirm — should dispatch setPaused(true) and only THEN kick off
+       the subset analysis call. */
+    fireEvent.click(screen.getByRole('button', { name: /Pause and analyse/i }));
+    expect(store.getState().chapters.paused).toBe(true);
+    await screen.findByRole('button', { name: /Cancel/i }).catch(() => null);
+    expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('with a remote analyzer selected, skips the modal and runs subset analysis immediately', async () => {
+    const store = makeIncludeStore({
+      selectedModel: 'gemini-2.5-flash',
+      activeStream: { bookId: 'other-book', modelKey: 'coqui-xtts-v2' },
+    });
+    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    runAnalysisForChaptersSpy.mockResolvedValue(subsetResponse);
+
+    renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    await screen.findByRole('button', { name: /Cancel/i }).catch(() => null);
+
+    /* No pause-modal in the DOM, and the analysis spy fired right away. */
+    expect(screen.queryByText(/Pause audio generation to analyse\?/i)).toBeNull();
+    expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
   });
 });
