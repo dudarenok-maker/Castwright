@@ -29,6 +29,12 @@ export function MiniPlayer({ chapter, bookId, onClose, onPrev, onNext, prevAvail
     if (!chapter) return;
     setCurrentSec(0);
     setError(null);
+    /* Drop the previous chapter's URL synchronously so the <audio> element
+       stops its current playback immediately. Without this reset, src
+       continues pointing at chapter A until B's metadata fetch resolves —
+       which feels like a stalled click if the network is slow or the fetch
+       fails (the old chapter just keeps playing under the new chapter's UI). */
+    setAudio({ durationSec: 0, peaks: [], url: null });
     let cancelled = false;
     api.getChapterAudio({ bookId, chapterId: chapter.id, duration: chapter.duration })
       .then(meta => { if (!cancelled) setAudio(meta); })
