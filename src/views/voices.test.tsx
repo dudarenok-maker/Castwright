@@ -70,10 +70,10 @@ function makeStore() {
   return store;
 }
 
-function renderView(lib: Voice[] = library) {
+function renderView(lib: Voice[] = library, onOpenCharacter?: (v: Voice) => void) {
   return render(
     <Provider store={makeStore()}>
-      <LibraryView library={lib}/>
+      <LibraryView library={lib} onOpenCharacter={onOpenCharacter}/>
     </Provider>
   );
 }
@@ -143,6 +143,34 @@ describe('LibraryView pin button', () => {
     fireEvent.click(pinButtons[0]);
     expect(setVoicePin).toHaveBeenCalledTimes(1);
     expect(setVoicePin).toHaveBeenCalledWith(expect.any(String), true);
+  });
+});
+
+describe('LibraryView character-card click', () => {
+  it('fires onOpenCharacter with the clicked voice so the host can open the profile drawer', () => {
+    /* Regression for the voice library doc's step 7 — pre-fix, the
+       per-character cards under each voice family were drag-only and the
+       user had no way to reach the profile drawer from the Voices view.
+       The host (route) decides whether to open the drawer in place or
+       navigate to the source book; the view just hands back the voice. */
+    const onOpenCharacter = vi.fn<(v: Voice) => void>();
+    renderView(library, onOpenCharacter);
+    /* Both `Keefe` and the bookTitle `Book Two` render the same text node
+       in different contexts; the character card carries role="button" so
+       scope the lookup that way. */
+    const card = screen.getByText('Keefe').closest('[role="button"]')!;
+    expect(card).not.toBeNull();
+    fireEvent.click(card);
+    expect(onOpenCharacter).toHaveBeenCalledTimes(1);
+    expect(onOpenCharacter.mock.calls[0][0].id).toBe('keefe');
+    expect(onOpenCharacter.mock.calls[0][0].bookId).toBe('b2');
+  });
+
+  it('leaves cards drag-only when onOpenCharacter is unset (no false-interactive a11y signal)', () => {
+    renderView();
+    /* Without the handler the card must not advertise role="button" — the
+     legacy LibraryView behavior pre-bug-fix. */
+    expect(screen.queryByRole('button', { name: 'Keefe' })).toBeNull();
   });
 });
 

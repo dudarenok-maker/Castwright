@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent, screen, within } from '@testing-library/react';
-import { VoiceLibraryPanel } from './voice-library-panel';
+import { VoiceCard, VoiceLibraryPanel } from './voice-library-panel';
 import type { Character, Voice } from '../lib/types';
 
 const makeVoice = (id: string, character: string, overrides: Partial<Voice> = {}): Voice => ({
@@ -148,6 +148,30 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     );
     const card = screen.getByText('Keefe').closest('div.group')!;
     expect(card.getAttribute('role')).toBeNull();
+  });
+
+  it('fires onSelect(voice) when the card is clicked even without a matching character (Voices view path)', () => {
+    /* The global Voices page renders VoiceCards without the
+       character/onOpenProfile pair — the click handler instead navigates
+       to the voice's source book. The `onSelect` prop unlocks that path:
+       any voice card becomes interactive (role="button" + Enter/Space)
+       and fires the callback with the clicked voice. */
+    const onSelect = vi.fn();
+    const voice = makeVoice('v_keefe', 'Keefe');
+    render(
+      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} onSelect={onSelect}/>
+    );
+    const card = screen.getByText('Keefe').closest('[role="button"]')!;
+    expect(card).not.toBeNull();
+    fireEvent.click(card);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect.mock.calls[0][0].id).toBe('v_keefe');
+    /* Keyboard activation must also work — the card advertises role="button"
+       so screen-reader users expect Enter/Space to fire the same action. */
+    fireEvent.keyDown(card, { key: 'Enter' });
+    expect(onSelect).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(card, { key: ' ' });
+    expect(onSelect).toHaveBeenCalledTimes(3);
   });
 
   it('wraps the voice list in the inset-scrollbar utility so the thumb clears the card corners', () => {
