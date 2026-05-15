@@ -1,15 +1,19 @@
-import { useMemo, useState } from 'react';
-import { IconHistory, IconClock, IconUndo } from '../lib/icons';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { IconHistory, IconClock } from '../lib/icons';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import { LOG_TYPES } from '../data/log-types';
 import { withRecomputedDisplay } from '../lib/change-log';
-import type { ChangeLogEvent, ChangeLogType } from '../lib/types';
+import type {
+  ChangeLogEvent,
+  ChangeLogType,
+  WorkspaceChangeLogCategoryCounts,
+} from '../lib/types';
 
 type FilterKey = 'all' | 'voice' | 'generation' | 'manuscript' | 'cast';
 
 const FILTER_MAP: Record<Exclude<FilterKey, 'all'>, ChangeLogType[]> = {
   voice:      ['voice_tune', 'voice_reuse', 'voice_lock', 'library_add'],
-  generation: ['regenerate', 'chapter_complete', 'chapter_failed', 'generation_started'],
+  generation: ['regenerate', 'generation_run_complete', 'chapter_complete', 'chapter_failed', 'generation_started'],
   manuscript: ['boundary_move', 'import', 'reparse'],
   cast:       ['cast_confirm', 'analysis_complete'],
 };
@@ -27,20 +31,39 @@ const DATE_LABEL: Record<ChangeLogEvent['date'], string> = {
    Yesterday/Earlier sections off-screen. */
 const SECTION_MAX_HEIGHT_PX = 640;
 
-interface Props { events: ChangeLogEvent[]; title?: string | null; }
+interface Props {
+  events: ChangeLogEvent[];
+  title?: string | null;
+  /** Server-side total over the FULL set (all pages). When present, drives
+      the "All (N)" pill label so the count stays honest while the user is
+      mid-scroll through a paginated workspace. Omit for the per-book view
+      where every event is already loaded and the in-memory count is real. */
+  totalCount?: number;
+  /** Server-side per-category totals over the full set. Same rationale as
+      totalCount — keeps the pill labels truthful under pagination. */
+  categoryCounts?: WorkspaceChangeLogCategoryCounts;
+  /** Fired when the user scrolls within reach of the list tail. Trigger
+      a `before=<nextCursor>` fetch; mount the sentinel only when `hasMore`
+      is true so the observer doesn't keep firing once the tail is loaded. */
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+}
 
-export function ChangeLogView({ events, title }: Props) {
+export function ChangeLogView({
+  events, title, totalCount, categoryCounts: serverCategoryCounts,
+  onLoadMore, hasMore, loadingMore,
+}: Props) {
   const [filter, setFilter] = useState<FilterKey>('all');
   /* Recompute relative timestamps / date buckets so persisted entries age
      correctly across reloads. Fixture entries (no `at` field) pass through
      untouched, keeping their hand-authored copy. */
   const displayEvents = useMemo(() => withRecomputedDisplay(events), [events]);
-  /* Per-category counts over the full event set, not the filtered subset —
-     surfaced in the filter button labels so the user can tell at a glance
-     whether clicking a category is going to yield anything (and so the
-     filter visibly *is* doing something, not silently no-op'ing on a
-     bucket that happens to be empty). */
-  const categoryCounts = useMemo(() => {
+  /* Per-category counts over the loaded set, used only as the fallback when
+     the caller didn't supply server-side totals (per-book view). The
+     workspace view passes `categoryCounts` from the server so the pills
+     stay truthful even when only one page is in memory. */
+  const loadedCategoryCounts = useMemo(() => {
     const counts: Record<Exclude<FilterKey, 'all'>, number> = {
       voice: 0, generation: 0, manuscript: 0, cast: 0,
     };
@@ -51,6 +74,8 @@ export function ChangeLogView({ events, title }: Props) {
     }
     return counts;
   }, [displayEvents]);
+  const effectiveCategoryCounts = serverCategoryCounts ?? loadedCategoryCounts;
+  const effectiveTotal = totalCount ?? displayEvents.length;
   const visible = filter === 'all' ? displayEvents : displayEvents.filter(e => FILTER_MAP[filter].includes(e.type));
   const groups = visible.reduce<Record<string, ChangeLogEvent[]>>((acc, e) => {
     (acc[e.date] ??= []).push(e);
@@ -58,12 +83,31 @@ export function ChangeLogView({ events, title }: Props) {
   }, {});
 
   const filterButtons: Array<{ id: FilterKey; label: string; count: number }> = [
-    { id: 'all',        label: 'All',        count: displayEvents.length },
-    { id: 'voice',      label: 'Voice',      count: categoryCounts.voice      },
-    { id: 'generation', label: 'Generation', count: categoryCounts.generation },
-    { id: 'manuscript', label: 'Manuscript', count: categoryCounts.manuscript },
-    { id: 'cast',       label: 'Cast',       count: categoryCounts.cast       },
+    { id: 'all',        label: 'All',        count: effectiveTotal                     },
+    { id: 'voice',      label: 'Voice',      count: effectiveCategoryCounts.voice      },
+    { id: 'generation', label: 'Generation', count: effectiveCategoryCounts.generation },
+    { id: 'manuscript', label: 'Manuscript', count: effectiveCategoryCounts.manuscript },
+    { id: 'cast',       label: 'Cast',       count: effectiveCategoryCounts.cast       },
   ];
+
+  /* Infinite-scroll sentinel: when the trailing div intersects, ask the
+     caller for the next page. We only mount the observer when there's
+     something to load (hasMore) and a callback was supplied (workspace
+     view); the per-book view passes neither and the sentinel never
+     renders. */
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!onLoadMore || !hasMore) return;
+    const node = sentinelRef.current;
+    if (!node) return;
+    const obs = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) onLoadMore();
+      }
+    }, { rootMargin: '200px' });
+    obs.observe(node);
+    return () => obs.disconnect();
+  }, [onLoadMore, hasMore]);
 
   /* Distinct copy for the two empty states:
        - Nothing logged yet (filter=all, displayEvents=[]) — onboarding-style
@@ -77,15 +121,12 @@ export function ChangeLogView({ events, title }: Props) {
 
   return (
     <div className="max-w-[1100px] mx-auto px-6 py-10">
-      <div className="mb-6 flex items-end justify-between gap-6 flex-wrap">
-        <div>
-          <SectionLabel>Activity</SectionLabel>
-          <div className="mt-4">
-            <MixedHeading regular="Everything that's happened" bold={title ? `to ${title}` : 'across your library'} level="h1"/>
-          </div>
-          <p className="mt-3 text-ink/60 max-w-xl">Every regeneration, voice change, and boundary move — recorded so you can audit what changed and roll back if something doesn't sound right.</p>
+      <div className="mb-6">
+        <SectionLabel>Activity</SectionLabel>
+        <div className="mt-4">
+          <MixedHeading regular="Everything that's happened" bold={title ? `to ${title}` : 'across your library'} level="h1"/>
         </div>
-        <button className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"><IconHistory className="w-4 h-4"/>Export log</button>
+        <p className="mt-3 text-ink/60 max-w-xl">Every regeneration, voice change, and boundary move — recorded so you can audit what changed.</p>
       </div>
 
       <div className="flex items-center gap-1 mb-6 flex-wrap">
@@ -156,6 +197,16 @@ export function ChangeLogView({ events, title }: Props) {
             )}
           </div>
         )}
+        {/* Infinite-scroll sentinel. Only renders for paginated callers
+            (workspace view): omitted when hasMore is false or no onLoadMore
+            was supplied. The "Loading more…" hint lives inside so the user
+            sees an explicit beat rather than just a stalled scroll. */}
+        {onLoadMore && hasMore && (
+          <div ref={sentinelRef} data-testid="changelog-load-more-sentinel"
+               className="py-4 text-center text-xs text-ink/45">
+            {loadingMore ? 'Loading more…' : ' '}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -187,11 +238,6 @@ function ChangeLogEntry({ event }: { event: ChangeLogEvent }) {
       </div>
       <div className="flex flex-col items-end gap-1 shrink-0 text-right">
         <span className="text-xs text-ink/55 inline-flex items-center gap-1.5"><IconClock className="w-3 h-3"/>{event.ts}</span>
-        {event.revertible && (
-          <button className="text-xs font-medium text-ink/60 hover:text-ink inline-flex items-center gap-1">
-            <IconUndo className="w-3 h-3"/> Revert
-          </button>
-        )}
       </div>
     </div>
   );

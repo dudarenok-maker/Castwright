@@ -4,10 +4,39 @@
    runaway "Today" bucket on a long generate run doesn't push the rest of
    the activity feed off-screen. */
 
-import { describe, it, expect } from 'vitest';
+import { beforeAll, afterAll, describe, it, expect } from 'vitest';
 import { render, screen, within, fireEvent } from '@testing-library/react';
 import { ChangeLogView } from './change-log';
 import type { ChangeLogEvent } from '../lib/types';
+
+/* jsdom has no IntersectionObserver. The view's infinite-scroll sentinel
+   constructs one inside a useEffect, so without a stub here every test
+   that mounts ChangeLogView with onLoadMore would crash with a
+   ReferenceError. The stub is a no-op observer — tests don't need to
+   simulate intersection callbacks; the sentinel-render assertions key off
+   the data-testid alone. */
+class StubIntersectionObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): IntersectionObserverEntry[] { return []; }
+  root: Element | null = null;
+  rootMargin = '';
+  thresholds: number[] = [];
+}
+
+let originalIO: typeof IntersectionObserver | undefined;
+beforeAll(() => {
+  originalIO = (globalThis as { IntersectionObserver?: typeof IntersectionObserver }).IntersectionObserver;
+  (globalThis as { IntersectionObserver: unknown }).IntersectionObserver = StubIntersectionObserver;
+});
+afterAll(() => {
+  if (originalIO === undefined) {
+    delete (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver;
+  } else {
+    (globalThis as { IntersectionObserver: typeof IntersectionObserver }).IntersectionObserver = originalIO;
+  }
+});
 
 function makeEvent(overrides: Partial<ChangeLogEvent> & Pick<ChangeLogEvent, 'id' | 'type'>): ChangeLogEvent {
   return {
@@ -162,6 +191,62 @@ describe('ChangeLogView filter', () => {
     expect(screen.getByRole('button', { name: 'Manuscript (2)' })).toBeInTheDocument();
     /* All count tracks the full event set. */
     expect(screen.getByRole('button', { name: `All (${sampleEvents.length})` })).toBeInTheDocument();
+  });
+
+  it('uses server-side totalCount + categoryCounts when provided (workspace pagination case)', () => {
+    /* When only one page of a 200-event workspace log is loaded, the pills
+       must surface the SERVER totals — not the per-page loaded subset —
+       otherwise the user sees "All (50)" on a 200-event workspace and the
+       count looks invented. */
+    render(<ChangeLogView events={sampleEvents}
+      totalCount={199}
+      categoryCounts={{ voice: 8, generation: 175, manuscript: 12, cast: 4 }}
+    />);
+    expect(screen.getByRole('button', { name: 'All (199)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Voice (8)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generation (175)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manuscript (12)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cast (4)' })).toBeInTheDocument();
+  });
+});
+
+describe('ChangeLogView removed-affordance regression', () => {
+  it('does not render an Export log button — capability was never wired', () => {
+    render(<ChangeLogView events={sampleEvents}/>);
+    expect(screen.queryByRole('button', { name: /Export log/i })).toBeNull();
+  });
+
+  it('does not render a per-row Revert button even on events marked revertible', () => {
+    /* `revertible` stays in the data shape for a future revert UI, but the
+       affordance is gone for now — the no-op button was misleading. */
+    const withRevertible: ChangeLogEvent[] = [
+      makeEvent({ id: 1, type: 'regenerate', title: 'Regenerated CH 3', chapterId: 3, revertible: true }),
+    ];
+    render(<ChangeLogView events={withRevertible}/>);
+    expect(screen.queryByRole('button', { name: /Revert/i })).toBeNull();
+  });
+});
+
+describe('ChangeLogView infinite-scroll sentinel', () => {
+  it('renders the load-more sentinel when hasMore + onLoadMore are supplied', () => {
+    render(<ChangeLogView events={sampleEvents}
+      onLoadMore={() => {}}
+      hasMore={true}
+    />);
+    expect(screen.getByTestId('changelog-load-more-sentinel')).toBeInTheDocument();
+  });
+
+  it('omits the sentinel for the per-book view (no onLoadMore wired) so the page does not promise scroll-to-load it cannot deliver', () => {
+    render(<ChangeLogView events={sampleEvents}/>);
+    expect(screen.queryByTestId('changelog-load-more-sentinel')).toBeNull();
+  });
+
+  it('omits the sentinel once the workspace tail is reached (hasMore=false)', () => {
+    render(<ChangeLogView events={sampleEvents}
+      onLoadMore={() => {}}
+      hasMore={false}
+    />);
+    expect(screen.queryByTestId('changelog-load-more-sentinel')).toBeNull();
   });
 });
 

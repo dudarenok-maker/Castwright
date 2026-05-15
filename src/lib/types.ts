@@ -45,6 +45,15 @@ export type Voice = Omit<components['schemas']['Voice'], 'gradient'> & {
 };
 export type VoiceLibraryResponse = { voices: Voice[] };
 
+/* Base-voice catalog — the unmodified speakers each TTS engine exposes.
+   Used by the Voices view's "Base voices" tab and the Profile Drawer's
+   override picker. The (engine, name) pair is the stable identity; the
+   server uses it to route a raw audition or to apply a per-cast override
+   to chapter synthesis (see `pickVoiceForEngine`). */
+export type BaseVoice = components['schemas']['BaseVoice'];
+export type BaseVoiceCatalog = components['schemas']['BaseVoiceCatalog'];
+export type TtsEngine = NonNullable<BaseVoice['engine']>;
+
 /* User-level account defaults + non-secret server overrides. Mirrors the
    /api/user/settings response. Read-only fields (apiKeyStatus, workspaceRoot,
    workspaceSource) come from the server's env layer and can't be edited
@@ -262,7 +271,8 @@ export interface LibraryResponse {
 
 export type ChangeLogType =
   | 'regenerate' | 'voice_tune' | 'voice_reuse' | 'voice_lock'
-  | 'boundary_move' | 'chapter_complete' | 'chapter_failed' | 'generation_started'
+  | 'boundary_move' | 'chapter_complete' | 'generation_run_complete'
+  | 'chapter_failed' | 'generation_started'
   | 'cast_confirm' | 'analysis_complete' | 'import' | 'library_add' | 'reparse';
 
 export interface ChangeLogEvent {
@@ -289,8 +299,27 @@ export interface ChangeLogEvent {
   author?: string;
 }
 
+export interface WorkspaceChangeLogCategoryCounts {
+  voice: number;
+  generation: number;
+  manuscript: number;
+  cast: number;
+}
+
 export interface WorkspaceChangeLogResponse {
   events: ChangeLogEvent[];
+  /** ISO timestamp of the last event in this page when more follow; `null`
+      when this page is the tail. Pass it back as `before` to fetch the next
+      page. */
+  nextCursor: string | null;
+  /** Total events across the workspace — not just this page. Drives the
+      "All (N)" pill in the Activity view so it stays truthful while the
+      user scrolls. */
+  totalCount: number;
+  /** Per-category totals across the FULL workspace set. Drives the
+      Voice/Generation/Manuscript/Cast pills so they don't lie when only
+      part of the log is loaded. */
+  categoryCounts: WorkspaceChangeLogCategoryCounts;
 }
 
 export interface ListenerApp {

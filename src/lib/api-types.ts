@@ -49,8 +49,14 @@ export interface paths {
          * Aggregated change log across every book in the workspace
          * @description Fans out `.audiobook/change-log.json` from every book in the workspace,
          *     attaches `bookId`, `bookTitle`, and `author` to each event, and returns
-         *     the flattened list sorted newest-first. Books without an on-disk
+         *     a page of events sorted newest-first. Books without an on-disk
          *     change-log are skipped. Backs the global Change Log view.
+         *
+         *     Pagination is cursor-based: pass `before` (the previous page's
+         *     `nextCursor`) to fetch the next page. `totalCount` and
+         *     `categoryCounts` always reflect the FULL workspace set, not just
+         *     this page — the workspace Activity pills can show honest totals while
+         *     the user scrolls through pages.
          */
         get: operations["getWorkspaceChangelog"];
         put?: never;
@@ -217,6 +223,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/voices/base": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the raw model voices the configured engines expose
+         * @description Returns the catalog of unmodified model voices available across every
+         *     supported TTS engine, used both by the Voices view's "Base voices"
+         *     tab and by the per-cast voice-override picker in the Profile Drawer.
+         *
+         *     For `coqui`, the list is read from the live sidecar `GET /speakers`
+         *     — entries reflect whatever XTTS v2's `speaker_manager` actually
+         *     publishes today (the sidecar tolerates `name_to_id` / `speaker_names`
+         *     API drift). If the sidecar is unreachable, the coqui section is
+         *     empty rather than failing the whole call.
+         *
+         *     For `gemini`, `piper`, `kokoro`, the list comes from the
+         *     engine-specific static constants in `server/src/tts/voice-mapping.ts`
+         *     — these engines either ship fixed voice catalogs or aren't installed
+         *     locally, so they don't depend on a running sidecar.
+         */
+        get: operations["getBaseVoices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/voices/{voiceId}/sample": {
         parameters: {
             query?: never;
@@ -233,6 +272,13 @@ export interface paths {
          *     `voiceId` + `modelKey`; subsequent requests with the same key return
          *     immediately with `cached: true`. The frontend plays the URL with a
          *     plain `<audio>` element.
+         *
+         *     When `rawEngine` + `rawSpeaker` are provided, the picker is
+         *     bypassed and the named speaker is synthesised directly. This is
+         *     what powers the "Base voices" tab and the family-header Play
+         *     buttons — the voiceId in the path is treated as a cache scope
+         *     (`raw-<engine>-<speaker>`) so unused base voices can still cache
+         *     without piggy-backing on a real Voice id.
          */
         post: operations["getVoiceSample"];
         delete?: never;
@@ -344,6 +390,36 @@ export interface paths {
          *     the library response so favourites stay at hand across books.
          */
         put: operations["setVoicePin"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voices/{voiceId}/override": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set or clear the manual base-voice override on a voice family
+         * @description Writes a manual base-voice override into every cast.json character
+         *     whose `voiceId` (or character id, when voiceId is absent) matches the
+         *     path parameter. The same voiceId can recur across a series (the
+         *     character is meant to be the same identity), so one PUT propagates to
+         *     every confirmed-cast book that shares it. Pass `override: null` to
+         *     clear.
+         *
+         *     When the override's engine matches the project's active TTS engine,
+         *     synthesis bypasses the attribute-driven picker (`pickVoiceForEngine`)
+         *     and uses the named speaker directly. Cross-engine overrides are kept
+         *     but ignored at synth time; the UI surfaces an "engine mismatch" badge.
+         */
+        put: operations["setVoiceOverride"];
         post?: never;
         delete?: never;
         options?: never;
@@ -822,6 +898,19 @@ export interface components {
             };
             /** @description Optional override script. Capped to ~30 words server-side to stay near 12 s. */
             text?: string;
+            /**
+             * @description When set together with `rawSpeaker`, the server skips the
+             *     attribute-driven prebuilt-voice picker and synthesises with the
+             *     named base voice directly. Used by the Voices view's "Base voices"
+             *     tab and family-header Play buttons.
+             * @enum {string}
+             */
+            rawEngine?: "coqui" | "gemini" | "piper" | "kokoro";
+            /**
+             * @description Base-voice name from `GET /api/voices/base` (e.g. "Asya Anara",
+             *     "Charon"). Ignored unless `rawEngine` is also set.
+             */
+            rawSpeaker?: string;
         };
         VoiceSample: {
             /** @description Path under the server's static /audio mount; play directly with <audio>. */
@@ -845,6 +934,29 @@ export interface components {
             /** @description Short label for the picked voice — engine-specific. Empty/placeholder when the engine doesn't publish descriptors. */
             description: string;
         };
+        /**
+         * @description One unmodified speaker exposed by a TTS engine. The pair (engine, name)
+         *     is the stable identity — the engine routes the request to the right
+         *     provider, the name is the engine-specific speaker handle (XTTS speaker
+         *     name, Gemini prebuilt voice id, Piper short name, etc.). Used by the
+         *     Voices view's "Base voices" tab and the Profile Drawer override picker.
+         */
+        BaseVoice: {
+            /** @enum {string} */
+            engine: "coqui" | "gemini" | "piper" | "kokoro";
+            /** @description Engine-specific speaker handle, e.g. 'Asya Anara' (Coqui XTTS) or 'Charon' (Gemini). */
+            name: string;
+            /** @description Optional ISO 639-1 / BCP-47 hint; absent when the engine doesn't tag languages. */
+            language?: string;
+            /**
+             * @description Engine-supplied gender hint; absent when the engine doesn't publish one (XTTS speakers don't).
+             * @enum {string}
+             */
+            gender?: "male" | "female" | "neutral";
+        };
+        BaseVoiceCatalog: {
+            voices: components["schemas"]["BaseVoice"][];
+        };
         Voice: {
             /** @description Stable id used to hash a TTS prebuilt voice. Defaults to character.voiceId or character.id. */
             id: string;
@@ -865,6 +977,20 @@ export interface components {
             /** @description Workspace-level pin flag from audiobook-workspace/voices.json. */
             pinned?: boolean;
             ttsVoice: components["schemas"]["TtsVoiceAssignment"];
+            /**
+             * @description User-set override that wins over the attribute-driven picker.
+             *     When the override's engine matches the project's active engine,
+             *     `ttsVoice` will resolve to it and synthesis will use the named
+             *     speaker directly. Cross-engine overrides are kept but ignored at
+             *     synth time — the UI surfaces an "engine mismatch" badge.
+             */
+            overrideTtsVoice?: components["schemas"]["BaseVoice"] | null;
+            /**
+             * @description Series name from the book directory (`books/<Author>/<Series>/<Book>`),
+             *     or null/empty for standalones. Lets the voice-family-grouped Voices
+             *     view nest cast members under their book series before the book.
+             */
+            bookSeries?: string | null;
         };
         VoiceLibraryResponse: {
             voices: components["schemas"]["Voice"][];
@@ -899,7 +1025,7 @@ export interface components {
             /** @enum {string} */
             date: "today" | "yesterday" | "earlier";
             /** @enum {string} */
-            type: "regenerate" | "voice_tune" | "voice_reuse" | "voice_lock" | "boundary_move" | "chapter_complete" | "chapter_failed" | "generation_started" | "cast_confirm" | "analysis_complete" | "import" | "library_add";
+            type: "regenerate" | "voice_tune" | "voice_reuse" | "voice_lock" | "boundary_move" | "chapter_complete" | "generation_run_complete" | "chapter_failed" | "generation_started" | "cast_confirm" | "analysis_complete" | "import" | "library_add" | "reparse";
             title: string;
             note: string;
             /** @enum {string} */
@@ -1144,14 +1270,23 @@ export interface operations {
     };
     getWorkspaceChangelog: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Page size. Defaults to 50; capped at 200. */
+                limit?: number;
+                /**
+                 * @description ISO timestamp cursor. Only events strictly older than this land
+                 *     in the page. Omit on the first request; pass `nextCursor` from
+                 *     the previous response thereafter.
+                 */
+                before?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Workspace-wide editorial activity feed */
+            /** @description One page of workspace-wide editorial activity */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1159,6 +1294,19 @@ export interface operations {
                 content: {
                     "application/json": {
                         events: components["schemas"]["WorkspaceChangeLogEvent"][];
+                        /**
+                         * @description ISO timestamp of the last event in this page when more
+                         *     events follow it; `null` when this page is the tail.
+                         */
+                        nextCursor: string | null;
+                        /** @description Total events across the workspace (all pages). */
+                        totalCount: number;
+                        categoryCounts: {
+                            voice: number;
+                            generation: number;
+                            manuscript: number;
+                            cast: number;
+                        };
                     };
                 };
             };
@@ -1409,6 +1557,26 @@ export interface operations {
             };
         };
     };
+    getBaseVoices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Merged base-voice catalog across all engines */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BaseVoiceCatalog"];
+                };
+            };
+        };
+    };
     getVoiceSample: {
         parameters: {
             query?: never;
@@ -1596,6 +1764,46 @@ export interface operations {
             };
             /** @description Missing or non-boolean `pinned` field */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setVoiceOverride: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voiceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    override: components["schemas"]["BaseVoice"] | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Override written (or cleared) on every matching cast.json entry */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Body is missing or malformed (override must be a BaseVoice or null) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No character with that voiceId exists in any confirmed cast */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

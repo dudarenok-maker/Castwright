@@ -242,30 +242,82 @@ describe('generationStreamMiddleware', () => {
     expect(streamGenerationMock).not.toHaveBeenCalled();
   });
 
-  it('emits chapter_complete and chapter_failed change-log events from ticks', () => {
+  it('accumulates chapter_complete ticks into a single rollup event on run end', () => {
+    /* Used to emit one chapter_complete log entry per tick — a 14-chapter run
+       became 14 nearly-identical "Chapter N complete" lines in the audit
+       feed. The middleware now defers per-chapter ticks until closeHandle,
+       then writes one generation_run_complete that names every chapter. */
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
-    seedBook(store, 'b1', [ch(3, { state: 'in_progress', progress: 0.5 })]);
-    const beforeCount = store.getState().changeLog.events.length;
+    seedBook(store, 'b1', [
+      ch(1, { state: 'in_progress', progress: 0.5 }),
+      ch(2, { state: 'queued' }),
+      ch(3, { state: 'queued' }),
+    ]);
+    /* generation_started already landed at open time. Count types so the
+       assertion is robust to that anchor. */
+    const countByType = (t: string) =>
+      store.getState().changeLog.events.filter(e => e.type === t).length;
+    const startedAtOpen = countByType('generation_started');
 
+    store.dispatch(chaptersSlice.actions.applyGenerationTick({
+      type: 'chapter_complete', chapterId: 1,
+    } as GenerationTick));
+    store.dispatch(chaptersSlice.actions.applyGenerationTick({
+      type: 'chapter_complete', chapterId: 2,
+    } as GenerationTick));
+
+    /* No per-chapter complete events written yet. */
+    expect(countByType('chapter_complete')).toBe(0);
+    expect(countByType('generation_run_complete')).toBe(0);
+
+    /* Complete chapter 3 too, then drain — the queue going idle closes
+       the handle and triggers the rollup flush. */
     store.dispatch(chaptersSlice.actions.applyGenerationTick({
       type: 'chapter_complete', chapterId: 3,
     } as GenerationTick));
-    const events = store.getState().changeLog.events;
-    expect(events.length).toBeGreaterThan(beforeCount);
-    expect(events[0].type).toBe('chapter_complete');
-    expect(events[0].chapterId).toBe(3);
-    expect(events[0].actor).toBe('system');
+    store.dispatch(chaptersSlice.actions.applyGenerationTick({ type: 'idle' } as GenerationTick));
 
-    /* And the per-chapter failure case. */
+    const events = store.getState().changeLog.events;
+    expect(countByType('chapter_complete')).toBe(0);
+    expect(countByType('generation_run_complete')).toBe(1);
+    expect(countByType('generation_started')).toBe(startedAtOpen);
+    expect(events[0].type).toBe('generation_run_complete');
+    expect(events[0].actor).toBe('system');
+    expect(events[0].title).toBe('Generated 3 chapters');
+    expect(events[0].note).toContain('Chapters 1');
+    expect(events[0].note).toContain('3');
+  });
+
+  it('still emits per-chapter chapter_failed events (failures stay individually actionable)', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     seedBook(store, 'b1', [ch(4, { state: 'in_progress', progress: 0.5 })]);
     store.dispatch(chaptersSlice.actions.applyGenerationTick({
       type: 'chapter_failed', chapterId: 4, errorReason: 'Voice not found',
     } as GenerationTick));
-    const after = store.getState().changeLog.events;
-    expect(after[0].type).toBe('chapter_failed');
-    expect(after[0].chapterId).toBe(4);
-    expect(after[0].note).toContain('Voice not found');
+    const events = store.getState().changeLog.events;
+    expect(events[0].type).toBe('chapter_failed');
+    expect(events[0].chapterId).toBe(4);
+    expect(events[0].note).toContain('Voice not found');
+  });
+
+  it('writes no rollup event when the run drains with zero chapter_complete ticks (empty run)', () => {
+    /* Pause-before-any-chapter-finishes path — the generation_started anchor
+       is enough; no synthetic "Generated 0 chapters" entry. */
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [ch(1, { state: 'in_progress', progress: 0.1 })]);
+    const beforeRollup = store.getState().changeLog.events.filter(
+      e => e.type === 'generation_run_complete',
+    ).length;
+
+    store.dispatch(chaptersSlice.actions.setPaused(true));
+
+    const afterRollup = store.getState().changeLog.events.filter(
+      e => e.type === 'generation_run_complete',
+    ).length;
+    expect(afterRollup).toBe(beforeRollup);
   });
 
   it('publishes an activeStream snapshot on open and clears it on close', () => {

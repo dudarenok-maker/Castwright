@@ -42,6 +42,7 @@ import { userSettingsRouter } from './routes/user-settings.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, ensureWorkspace } from './workspace/paths.js';
+import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
 import { readUserSettings, getResolvedSidecarUrl } from './workspace/user-settings.js';
 
 const app = express();
@@ -60,6 +61,24 @@ ensureWorkspace();
    a missing or malformed file falls through to defaults inside
    readUserSettings(). */
 void readUserSettings();
+
+/* One-shot wipe-and-fresh for change-logs written before the
+   generation_run_complete rollup landed. The pre-collapse middleware wrote
+   one event per chapter_complete tick, and books that ran a few times
+   accumulated 200+ near-identical rows. Migration renames the legacy
+   file to `.legacy.json` (kept for recovery) and replaces the live file
+   with `[]`. Fire-and-forget: never blocks listen, never crashes on a
+   malformed file. */
+void migrateLegacyChangeLogs()
+  .then(r => {
+    if (r.migrated.length > 0) {
+      console.log(
+        `[changelog] migrated ${r.migrated.length} book(s) to a fresh log ` +
+        `(originals saved alongside as change-log.legacy.json).`,
+      );
+    }
+  })
+  .catch(err => console.warn('[changelog] migration skipped:', err));
 app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, maxAge: '1h' }));
 
 app.get('/api/health', (_req, res) => {

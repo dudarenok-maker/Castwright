@@ -9,15 +9,27 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { CHANGE_LOG_EVENTS } from '../data/change-log';
 import { buildBoundaryMoveEvent } from '../lib/change-log';
-import type { ChangeLogEvent } from '../lib/types';
+import type { ChangeLogEvent, WorkspaceChangeLogCategoryCounts } from '../lib/types';
 
 export interface ChangeLogState {
   /** Newest first — appendLogEvent unshifts. Per-book log. */
   events: ChangeLogEvent[];
-  /** Workspace-wide aggregation fetched from the server. Each event carries
-      the bookId/bookTitle/author the aggregator attached at fetch time. Not
-      persisted — refetched whenever the global Change log view mounts. */
+  /** Workspace-wide aggregation fetched from the server, one page at a time.
+      Each event carries the bookId/bookTitle/author the aggregator attached
+      at fetch time. Not persisted — refetched whenever the global Change log
+      view mounts. The page is appended to (not replaced) on subsequent
+      infinite-scroll fetches; reset by `hydrateWorkspaceEvents`. */
   workspaceEvents: ChangeLogEvent[];
+  /** Cursor for the next page (`?before=` query). `null` means this view has
+      reached the tail and there are no more events to load. */
+  workspaceNextCursor: string | null;
+  /** Total events across the workspace, not just this page. Drives the
+      "All (N)" pill so it stays truthful while the user scrolls. */
+  workspaceTotalCount: number;
+  /** Per-category totals across the full workspace set. Drives the
+      Voice/Generation/Manuscript/Cast pills so they don't lie when only
+      part of the log is loaded. */
+  workspaceCategoryCounts: WorkspaceChangeLogCategoryCounts;
 }
 
 /* Starts empty. The Activity view shows a friendly empty-state card until
@@ -28,7 +40,17 @@ export interface ChangeLogState {
 const initialState: ChangeLogState = {
   events: CHANGE_LOG_EVENTS,
   workspaceEvents: [],
+  workspaceNextCursor: null,
+  workspaceTotalCount: 0,
+  workspaceCategoryCounts: { voice: 0, generation: 0, manuscript: 0, cast: 0 },
 };
+
+export interface WorkspacePagePayload {
+  events: ChangeLogEvent[];
+  nextCursor: string | null;
+  totalCount: number;
+  categoryCounts: WorkspaceChangeLogCategoryCounts;
+}
 
 export const changeLogSlice = createSlice({
   name: 'changeLog',
@@ -69,10 +91,42 @@ export const changeLogSlice = createSlice({
     hydrateFromBookState: (s, a: PayloadAction<ChangeLogEvent[] | null | undefined>) => {
       s.events = a.payload && a.payload.length > 0 ? a.payload : [];
     },
-    hydrateWorkspaceEvents: (s, a: PayloadAction<ChangeLogEvent[]>) => {
-      s.workspaceEvents = a.payload;
+    /* Replace the workspace cache — used for the first page fetch on mount.
+       Resets cursor + counts atomically with the events so a stale total
+       from a previous mount doesn't briefly render alongside the new page. */
+    hydrateWorkspaceFirstPage: (s, a: PayloadAction<WorkspacePagePayload>) => {
+      s.workspaceEvents         = a.payload.events;
+      s.workspaceNextCursor     = a.payload.nextCursor;
+      s.workspaceTotalCount     = a.payload.totalCount;
+      s.workspaceCategoryCounts = a.payload.categoryCounts;
     },
-    reset: (s) => { s.events = []; s.workspaceEvents = []; },
+    /* Append the next page to the workspace cache without disturbing the
+       totals (those reflect the FULL workspace and don't change between
+       pages). Cursor advances to whatever the server returned. */
+    appendWorkspacePage: (s, a: PayloadAction<WorkspacePagePayload>) => {
+      s.workspaceEvents.push(...a.payload.events);
+      s.workspaceNextCursor = a.payload.nextCursor;
+      /* Server's totals are authoritative — re-sync in case a write landed
+         between page fetches. */
+      s.workspaceTotalCount     = a.payload.totalCount;
+      s.workspaceCategoryCounts = a.payload.categoryCounts;
+    },
+    /* Legacy single-list hydrate — preserved so callers that only have a
+       bare event array (older tests, the ChangelogRoute pre-pagination
+       path) still compile. New code should prefer hydrateWorkspaceFirstPage
+       so counts + cursor stay in sync. */
+    hydrateWorkspaceEvents: (s, a: PayloadAction<ChangeLogEvent[]>) => {
+      s.workspaceEvents     = a.payload;
+      s.workspaceNextCursor = null;
+      s.workspaceTotalCount = a.payload.length;
+    },
+    reset: (s) => {
+      s.events                  = [];
+      s.workspaceEvents         = [];
+      s.workspaceNextCursor     = null;
+      s.workspaceTotalCount     = 0;
+      s.workspaceCategoryCounts = { voice: 0, generation: 0, manuscript: 0, cast: 0 };
+    },
   },
 });
 
