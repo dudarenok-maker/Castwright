@@ -203,6 +203,10 @@ export function GenerationView({
      this view rather than a global toast slice — see CLAUDE.md note about
      not building scaffolding the user can't see. */
   const [evictionNotice, setEvictionNotice] = useState<string | null>(null);
+  /* Rose banner shown when Load / Stop returns {status:'error', ...} or the
+     request itself throws. Without this the pill would just bounce back to
+     "Load model" after the probe — silent failures are the bug we're closing. */
+  const [loadErrorNotice, setLoadErrorNotice] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     const probe = () => {
@@ -235,6 +239,7 @@ export function GenerationView({
   const handleLoadTts = async () => {
     setPendingPillState('loading');
     setEvictionNotice(null);
+    setLoadErrorNotice(null);
     /* Auto-evict the analyzer before warming TTS — both models compete for
        the same VRAM on a single-GPU box. If the analyzer wasn't resident
        the call is a cheap no-op on Ollama's side; either way we surface a
@@ -257,10 +262,20 @@ export function GenerationView({
     } catch {
       /* Ollama down or no model loaded — proceed with TTS load anyway. */
     }
+    /* The /api/sidecar/load proxy returns {status:'error', error:'…'} with
+       a 5xx body on timeout or sidecar-side failure (e.g. weights missing,
+       DeepSpeed init crash); realLoadSidecar parses the body either way
+       and only throws if fetch itself fails. So we have to inspect the
+       result AND catch — both paths can be the failure. */
     try {
-      await api.loadSidecar();
-    } catch {
-      /* Surface as unreachable on the next probe cycle. */
+      const result = await api.loadSidecar();
+      if (result.status === 'error') {
+        setLoadErrorNotice(result.error || 'TTS model failed to load. Check the sidecar logs.');
+        setPendingPillState(null);
+      }
+    } catch (e) {
+      setLoadErrorNotice(`Couldn't reach the sidecar: ${(e as Error).message ?? 'fetch failed'}`);
+      setPendingPillState(null);
     }
     setHealthProbeKey(k => k + 1);
   };
@@ -268,10 +283,16 @@ export function GenerationView({
   const handleStopTts = async () => {
     setPendingPillState('idle');
     setEvictionNotice(null);
+    setLoadErrorNotice(null);
     try {
-      await api.unloadSidecar();
-    } catch {
-      /* Probe will reconcile. */
+      const result = await api.unloadSidecar();
+      if (result.status === 'error') {
+        setLoadErrorNotice(result.error || 'TTS model failed to unload.');
+        setPendingPillState(null);
+      }
+    } catch (e) {
+      setLoadErrorNotice(`Couldn't reach the sidecar: ${(e as Error).message ?? 'fetch failed'}`);
+      setPendingPillState(null);
     }
     setHealthProbeKey(k => k + 1);
   };
@@ -328,6 +349,21 @@ export function GenerationView({
             <p className="mt-2 inline-flex items-center gap-2 text-[11px] text-emerald-700">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>
               {evictionNotice}
+            </p>
+          )}
+          {loadErrorNotice && (
+            <p className="mt-2 inline-flex items-start gap-2 text-[11px] text-rose-700 max-w-prose"
+               role="alert">
+              <span className="w-1.5 h-1.5 mt-1 rounded-full bg-rose-500 shrink-0"/>
+              <span>{loadErrorNotice}</span>
+              <button
+                type="button"
+                onClick={() => setLoadErrorNotice(null)}
+                aria-label="Dismiss error"
+                className="ml-1 text-rose-600/70 hover:text-rose-800"
+              >
+                <IconClose className="w-3 h-3"/>
+              </button>
             </p>
           )}
         </div>

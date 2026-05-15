@@ -36,8 +36,8 @@ vi.mock('../lib/api', () => ({
        whether to surface the auto-evict banner — wire a controllable stub
        so each test can simulate "analyzer loaded" vs "nothing to evict". */
     getOllamaHealth:  () => getOllamaHealthSpy(),
-    loadSidecar:      () => { loadSidecarSpy(); return Promise.resolve({ status: 'ready' }); },
-    unloadSidecar:    () => { unloadSidecarSpy(); return Promise.resolve({ status: 'idle' }); },
+    loadSidecar:      () => loadSidecarSpy(),
+    unloadSidecar:    () => unloadSidecarSpy(),
     loadAnalyzer:     () => Promise.resolve({ status: 'ready' }),
     unloadAnalyzer:   () => { unloadAnalyzerSpy(); return Promise.resolve({ status: 'unloaded' }); },
   },
@@ -51,6 +51,8 @@ beforeEach(() => {
   getSidecarHealthSpy.mockReset();
   getOllamaHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', models: [], resident: [], modelResident: false });
   getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
+  loadSidecarSpy.mockResolvedValue({ status: 'ready' });
+  unloadSidecarSpy.mockResolvedValue({ status: 'idle' });
 });
 
 const characters: Character[] = [
@@ -644,5 +646,35 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
 
     await new Promise(r => setTimeout(r, 0));
     expect(unloadSidecarSpy).toHaveBeenCalledTimes(1);
+  });
+
+  /* Regression: before the fix, /api/sidecar/load returning a 5xx body
+     with {status:'error', error:'…'} (e.g. weights missing, DeepSpeed init
+     crash, 90s timeout) was silently discarded. The pill flipped back to
+     "Load model" on the next /health probe and the user had no clue
+     anything had failed. Surface the daemon's error string instead. */
+  it('surfaces the error message when loadSidecar resolves with status:error', async () => {
+    loadSidecarSpy.mockResolvedValue({
+      status: 'error',
+      error: 'Sidecar /load returned 500: weights missing',
+    });
+
+    renderView();
+    const loadBtn = await findLoadTtsButton();
+    fireEvent.click(loadBtn);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Sidecar \/load returned 500: weights missing/i,
+    );
+  });
+
+  it('surfaces a fetch failure when loadSidecar throws', async () => {
+    loadSidecarSpy.mockRejectedValue(new Error('Failed to fetch'));
+
+    renderView();
+    const loadBtn = await findLoadTtsButton();
+    fireEvent.click(loadBtn);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn't reach the sidecar/i);
   });
 });
