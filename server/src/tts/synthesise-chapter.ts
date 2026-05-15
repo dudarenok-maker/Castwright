@@ -9,6 +9,7 @@
 import type { SentenceOutput } from '../handoff/schemas.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from './voice-mapping.js';
 import type { TtsEngine, TtsModelKey, TtsProvider } from './index.js';
+import { normaliseForTts } from './text-normalize.js';
 import { pcmDurationSec } from './wav.js';
 
 /** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`
@@ -182,8 +183,15 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
       accumulatedSec: pcmDurationSec(runningBytes, sampleRate),
     });
 
+    /* Scrub all-caps runs and em/en-dashes immediately before the synth.
+       XTTS otherwise spells multi-word all-caps openers letter-by-letter
+       (chapter 1's "ONE" → "oh-en-ee" in 1.15s) and loops on em-dashes,
+       which together produced ~60s of garbled audio at the top of
+       chapter 2 of the canonical Keeper manuscript. The transform is
+       idempotent; segment metadata still references the original
+       SentenceOutput so UI captions and quote audits are unaffected. */
     const result = await provider.synthesize({
-      text: group.text,
+      text: normaliseForTts(group.text),
       voiceName,
       modelKey,
       signal,

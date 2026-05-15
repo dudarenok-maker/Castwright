@@ -248,6 +248,45 @@ describe('synthesiseChapter voice routing', () => {
     expect(events[5]).toBe('complete:elwin');
   });
 
+  it('scrubs all-caps openers and em-dashes before handing text to the provider (chapter-2 regression)', async () => {
+    /* The canonical Keeper of the Lost Cities chapter-2 opener fed XTTS
+       a 3-sentence narrator group whose first sentence was all-caps
+       ("THE NEXT SECOND WAS A BLUR.") with two em-dashes in the
+       follow-on. XTTS spelled the all-caps letter-by-letter and looped
+       around the dashes, producing ~60s of garbled audio for what
+       should have been ~13s of speech.
+
+       The synth path now runs `normaliseForTts` immediately before each
+       provider call. This test pins that contract end-to-end: assert on
+       what the provider actually received, not on the helper alone, so
+       a future refactor that bypasses the normalizer fails here. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+    ];
+    const provider = makeProvider();
+
+    await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'THE NEXT SECOND WAS A BLUR.'),
+        sentence(2, 'narrator', 'The car swerved right—missing Sophie by inches—then jumped the curb and sideswiped a streetlight.'),
+        sentence(3, 'narrator', 'The heavy steel lantern cracked from its base and plummeted toward Sophie.'),
+      ],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+    });
+
+    expect(provider.calls).toHaveLength(1);
+    const sentText = provider.calls[0].text;
+    expect(sentText, `provider received: ${sentText}`).not.toMatch(/[A-Z]{3,}/);
+    expect(sentText, `provider received: ${sentText}`).not.toMatch(/[—–]/);
+    /* Sanity check that the actual content survived — we only meant to
+       scrub the hazards, not drop the sentence. */
+    expect(sentText).toContain('The Next Second Was A Blur.');
+    expect(sentText).toContain('Sophie by inches, then');
+  });
+
   it('falls back to gendered inference from description when explicit gender is absent', async () => {
     /* Belt-and-braces: if the analyzer cached an older shape without
        `gender:`, the prose description still carries enough signal to land

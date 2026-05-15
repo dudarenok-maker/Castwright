@@ -1,7 +1,7 @@
 # Coqui XTTS sidecar
 
 > Status: KNOWN: operational dependency
-> Key files: `server/src/tts/sidecar.ts`, `server/src/tts/index.ts`, `server/tts-sidecar/`
+> Key files: `server/src/tts/sidecar.ts`, `server/src/tts/index.ts`, `server/src/tts/text-normalize.ts`, `server/src/tts/synthesise-chapter.ts`, `server/tts-sidecar/`
 > URL surface: none
 > OpenAPI ops: `POST /api/voices/:voiceId/sample`, `POST /api/books/:bookId/generation`
 
@@ -20,6 +20,7 @@ Default local TTS provider. A separate process (Python-based Coqui XTTS v2 serve
 - **`/synthesize` MUST offload to `asyncio.to_thread`** (`server/tts-sidecar/main.py`). XTTS inference is CPU-bound Python and blocks the event loop if run inline — `/health` then can't respond, and the Node-side proxy timeout flips the UI pill to "Sidecar unreachable" the moment generation starts even though the sidecar is healthy. Pinned by `tests/test_smoke.py::test_health_responsive_during_busy_synth`.
 - **Coqui preloads at process startup** (`@app.on_event("startup")`) so the first user `/synthesize` doesn't pay the 30–60s model-load cost on top of the synth. Opt out with `PRELOAD_COQUI=0`. Without preload, the first generate looks like a 120s hang on the Generate screen (stall banner fires at 30s).
 - **Device, fp16, and DeepSpeed are env-driven at first load** (`CoquiEngine._resolve_runtime_options` in `server/tts-sidecar/main.py`). `COQUI_DEVICE` (default `auto`) picks `cuda` vs `cpu`; `COQUI_HALF` and `COQUI_DEEPSPEED` default ON when device resolves to `cuda` and are **forced off on cpu** (fp16 ops crash on CPU torch; deepspeed-inference is CUDA-only). The chosen config is logged on the startup line (`Loading Coqui model=… on device=… half=… deepspeed=…`) so the user can confirm GPU mode from `logs/tts.log`. Pinned by `tests/test_smoke.py::test_resolve_runtime_options_*`.
+- **Group text is scrubbed by `normaliseForTts` before each provider call** (`server/src/tts/synthesise-chapter.ts`, helper at `server/src/tts/text-normalize.ts`). Two transforms, both idempotent: title-case any run of ≥3 capital letters (apostrophes count), and replace em/en-dashes with `, `. Without this, XTTS spells multi-word all-caps openers letter-by-letter (chapter 1 "ONE" → ~1.15s of "oh-en-ee") and loops on em-dashes — together they produced ~60s of garbled audio at the top of chapter 2 of the canonical Keeper manuscript on the first generation pass. Pinned by `text-normalize.test.ts` (unit) and `synthesise-chapter.test.ts` "scrubs all-caps openers and em-dashes…" (end-to-end). 2-letter caps like `MR`/`OK` are deliberately untouched so valid abbreviations stay intact.
 
 ## Acceptance walkthrough
 
