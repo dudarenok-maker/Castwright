@@ -700,7 +700,7 @@ function ChapterRow({
       )}
       {expanded && (
         <div className="px-5 pb-5 pt-1 fade-in">
-          <div className="ml-[100px] pl-4 border-l border-ink/10 space-y-2">
+          <div className="ml-[60px] pl-4 border-l border-ink/10 space-y-2">
             {Object.entries(chapter.characters).map(([cid, status]) => {
               const c = findChar(cid);
               const stat = charStats?.[cid];
@@ -725,7 +725,7 @@ function ChapterRow({
               const fullyDone = status === 'done' || chapter.state === 'done'
                 || (linesTotal > 0 && derivedDone >= linesTotal);
               return (
-                <div key={cid} className="grid grid-cols-[20px_1fr_140px_100px_28px] items-center gap-4 py-1.5 text-sm group">
+                <div key={cid} className="grid grid-cols-[20px_1fr_140px_128px_28px] items-center gap-4 py-1.5 text-sm group">
                   <ColorDot color={c.color as CharColor} size={8}/>
                   <span className="min-w-0 flex items-baseline gap-2">
                     <span className="font-medium text-ink/90 truncate">{c.name}</span>
@@ -769,12 +769,12 @@ function ChapterRow({
             })}
           </div>
           {chapter.state === 'in_progress' && assembling && (
-            <div className="mt-4 ml-[100px] text-xs text-ink/60">
+            <div className="mt-4 ml-[60px] text-xs text-ink/60">
               Writing chapter file… {chapter.totalLines ? `${chapter.totalLines} lines synthesised` : 'finalising audio'}.
             </div>
           )}
           {chapter.state === 'in_progress' && !assembling && chapter.currentLine != null && chapter.currentLine > 0 && (
-            <div className="mt-4 ml-[100px] flex items-center gap-3 text-xs text-ink/60">
+            <div className="mt-4 ml-[60px] flex items-center gap-3 text-xs text-ink/60">
               <span>Active: <span className="font-semibold text-ink">{findChar(Object.entries(chapter.characters).find(([, s]) => s === 'in_progress')?.[0] || '').name}</span> · line {chapter.currentLine.toLocaleString()} of {chapter.totalLines?.toLocaleString()}</span>
             </div>
           )}
@@ -871,7 +871,7 @@ function ChapterSegmentStrip({ chapter, bookId, characters }: { chapter: Chapter
   const findChar = (id: string) => characters.find(c => c.id === id);
 
   return (
-    <div className="mt-4 ml-[100px]">
+    <div className="mt-4 ml-[60px]">
       <p className="text-[10px] uppercase tracking-wider text-ink/50 font-semibold mb-1.5">Narrative order</p>
       <div className="flex h-2 rounded-full overflow-hidden bg-ink/[0.04]">
         {audio.segments.map((seg, i) => {
