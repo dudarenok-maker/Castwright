@@ -627,14 +627,14 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(screen.getAllByRole('button', { name: /retry chapter/i })).toHaveLength(2);
   });
 
-  it('retry button stays clickable while the main run is streaming (no Pause/Resume dance required)', async () => {
-    /* Regression: the panel originally disabled Retry while
-       conn === 'streaming' to avoid two concurrent Ollama chats.
-       Gemini users had no such conflict and ended up locked out
-       of the only recovery path — a transient 503 had to wait
-       until the whole run finished. The disabled-while-streaming
-       guard was dropped; only an in-flight retry of THIS chapter
-       disables the button now. */
+  it('clicking Retry while the main run is streaming aborts the main run, runs the subset alone, then resumes the main run on settle', async () => {
+    /* Regression for the "stage two does not pause" + "retry has no
+       persistence on reload" pair. Pre-fix the panel kept Retry
+       clickable while the main run was in flight; both SSEs raced
+       cache writes and one finisher's stale snapshot clobbered the
+       other's progress. New contract: Retry serialises against the
+       main run by pausing it for the duration of the subset call and
+       auto-resuming once the row settles. */
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
 
     const store = configureStore({
@@ -657,19 +657,96 @@ describe('AnalysingView — failed-chapter retry', () => {
     const startBtn = await screen.findByRole('button', { name: /start analysis/i });
     await act(async () => { fireEvent.click(startBtn); });
     await waitFor(() => expect(capturedOpts).toBeDefined());
+    const mainSignal = capturedOpts!.signal!;
+    expect(mainSignal.aborted).toBe(false);
     await act(async () => {
       capturedOpts!.onPhase!({ phaseId: 0, progress: 0.4 });
     });
 
-    /* Panel hydrated from book-state; button must NOT be disabled
-       even though the main run is mid-stream. */
+    /* Panel hydrated from book-state. Button is not disabled — the
+       new contract is that the click pauses the main run rather than
+       being blocked at the UI. */
     const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
     expect(retryBtn).not.toBeDisabled();
 
-    /* Clicking it fires the subset call — proves the click handler runs. */
+    /* Clicking Retry aborts the main run's signal before firing the
+       subset call. Without this the two SSEs race the disk-backed
+       analysis cache and the second finisher overwrites the first. */
+    capturedOpts = undefined;
     await act(async () => { fireEvent.click(retryBtn); });
+    expect(mainSignal.aborted).toBe(true);
     expect(capturedSubsetCall).toBeDefined();
     expect(capturedSubsetCall!.chapterIds).toEqual([44]);
+
+    /* Resolve the subset call as if the server succeeded. */
+    await act(async () => {
+      resolveSubset?.({
+        bookId: 'b1', manuscriptId: 'm1', title: '',
+        phaseTimings: [], characters: [], chapters: [], sentences: [],
+        libraryMatches: [],
+      } as AnalyseResponse);
+    });
+
+    /* Main run resumes automatically — a fresh analyseManuscript fetch
+       lands with a NEW (non-aborted) AbortController. The user never
+       has to click Resume. */
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+    expect(capturedOpts!.signal).not.toBe(mainSignal);
+    expect(capturedOpts!.signal!.aborted).toBe(false);
+  });
+
+  it('a chapter-resolved SSE event drops the matching panel row mid-stream', async () => {
+    /* Pre-fix the panel was hydrated once on mount from book-state and
+       never updated, so a chapter that the main run's Phase 0a re-
+       attempted successfully (cleared from cache.failedChapterIds
+       server-side) kept showing as failed until the user reloaded.
+       The user then clicked Retry on a row the server had already
+       resolved, kicking a duplicate subset run. The server now
+       broadcasts chapter-resolved on the SSE stream and this view
+       drops the row in response. */
+    getBookStateImpl = () => Promise.resolve(makeBookState([44, 49]));
+
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="Bonus Keefe Story"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    /* Hydrate the panel from book-state, then start the analysis so
+       the SSE callbacks bind to the running main run. */
+    await screen.findByText(/2 chapters failed cast detection/i);
+    const startBtn = screen.getByRole('button', { name: /start analysis/i });
+    await act(async () => { fireEvent.click(startBtn); });
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+
+    /* Server resolves chapter 44 during Phase 0a re-queue. */
+    await act(async () => {
+      capturedOpts!.onChapterResolved!({ chapterId: 44 });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+    });
+    /* The unresolved row stays. */
+    expect(screen.getByText('Chapter Forty-Seven')).toBeInTheDocument();
+    expect(screen.getByText(/1 chapter failed cast detection/i)).toBeInTheDocument();
+
+    /* Resolving the last row collapses the panel entirely. */
+    await act(async () => {
+      capturedOpts!.onChapterResolved!({ chapterId: 49 });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/chapter failed cast detection/i)).not.toBeInTheDocument();
+    });
   });
 
   it('clicking Retry calls runAnalysisForChapters with exactly [chapterId]; the row disappears when the subset call resolves', async () => {

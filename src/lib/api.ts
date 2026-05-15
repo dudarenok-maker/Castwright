@@ -118,6 +118,13 @@ export interface AnalyseOpts {
       per-chapter Retry button. Emitted by both the full and subset
       analysis routes. */
   onChapterFailed?: (e: { chapterId: number; message: string }) => void;
+  /** A previously-failed chapter just had its Phase 0a re-run succeed
+      (either via the main route re-queueing failedChapterIds on resume,
+      or via the subset retry route). The chapter id has been cleared
+      from cache.failedChapterIds server-side. The analysing view drops
+      the corresponding Retry row in response so the panel never lags
+      behind the cache. Emitted by both the full and subset routes. */
+  onChapterResolved?: (e: { chapterId: number }) => void;
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
       Sent as JSON body to POST /api/manuscripts/:id/analysis. Ignored when
       the server runs in ANALYZER=manual mode. */
@@ -530,7 +537,7 @@ async function realUploadManuscript({ text, file, fileName, format }: UploadArgs
 }
 
 interface AnalysisStreamEvent {
-  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update' | 'eta' | 'chapter-failed';
+  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update' | 'eta' | 'chapter-failed' | 'chapter-resolved';
   phaseId?: number;
   progress?: number;
   label?: string;
@@ -566,7 +573,7 @@ export class AnalysisError extends Error {
   }
 }
 
-async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
   const hasBody = model !== undefined || fresh !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
@@ -618,6 +625,10 @@ async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, on
     } else if (payload.kind === 'chapter-failed') {
       if (typeof payload.chapterId === 'number' && typeof payload.message === 'string') {
         onChapterFailed?.({ chapterId: payload.chapterId, message: payload.message });
+      }
+    } else if (payload.kind === 'chapter-resolved') {
+      if (typeof payload.chapterId === 'number') {
+        onChapterResolved?.({ chapterId: payload.chapterId });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
@@ -775,7 +786,7 @@ async function mockSetChapterExcluded(
 async function realRunAnalysisForChapters(
   manuscriptId: string,
   chapterIds: number[],
-  { onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, model }: AnalyseOpts = {},
+  { onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, model }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
   const res = await fetch(
     `/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis/chapters`,
@@ -831,6 +842,10 @@ async function realRunAnalysisForChapters(
     } else if (payload.kind === 'chapter-failed') {
       if (typeof payload.chapterId === 'number' && typeof payload.message === 'string') {
         onChapterFailed?.({ chapterId: payload.chapterId, message: payload.message });
+      }
+    } else if (payload.kind === 'chapter-resolved') {
+      if (typeof payload.chapterId === 'number') {
+        onChapterResolved?.({ chapterId: payload.chapterId });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;

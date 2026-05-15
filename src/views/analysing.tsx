@@ -497,6 +497,16 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
               return [...filtered, { chapterId, message }];
             });
           },
+          onChapterResolved: ({ chapterId }) => {
+            if (cancelled) return;
+            markEvent();
+            /* The main route just succeeded Phase 0a for a chapter that
+               had been in failedChapterIds. Drop the panel row so the
+               user doesn't click Retry on something the server has
+               already fixed (pre-fix that click kicked a duplicate
+               subset run and raced the main route's writes). */
+            setFailedChapters(prev => prev.filter(f => f.chapterId !== chapterId));
+          },
         });
         if (cancelled || completedRef.current) return;
         completedRef.current = true;
@@ -596,26 +606,49 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
     setRetry(r => ({ nonce: r.nonce + 1, fresh: false }));
   }, [castIncomplete, failedChapters.length, retryingChapterId]);
 
-  /* Per-chapter retry handler. Reuses the existing SSE-callback
-     wiring so the active phase / log / cast UI keeps updating during
-     the retry, then removes the row when the result event lands. Server
-     side this hits /api/manuscripts/:id/analysis/chapters, which on
-     success removes the id from cache.failedChapterIds (so a follow-up
-     book-state fetch sees it cleared too). */
+  /* Per-chapter retry handler. Hits POST /api/manuscripts/:id/analysis/
+     chapters, which on success removes the chapter id from
+     cache.failedChapterIds (also broadcast via chapter-resolved SSE so
+     this view's row clears in real time).
+
+     Concurrency contract — PAUSE-AND-RETRY. If the main /analysis/stream
+     run is in flight when the user clicks Retry, we abort it before
+     firing the subset call and re-arm it once the subset settles. The
+     previous implementation let the two SSEs run in parallel; both
+     routes load their own snapshot of the disk-backed analysis cache
+     and write back independently, so the second-finisher's stale view
+     of cache.failedChapterIds / cache.chapters silently clobbered the
+     first's progress. The symptom the user saw: after a successful
+     retry, reload restored the failed rows and showed previously-
+     attributed chapters as still-not-parsed. Serialising the two runs
+     on the client side is the smallest fix that closes the race
+     without forcing the user to Pause first. */
   const handleRetryChapter = (chapterId: number) => {
     if (!manuscriptId) return;
     if (retryingChapterId !== null) return;
     setRetryingChapterId(chapterId);
     const markEvent = () => setLastEventAt(Date.now());
-    /* Snapshot whether the main run owns the conn/phase indicators
-       right now. If it does, the retry runs alongside without
-       overwriting them — otherwise the user would see the conn
-       indicator flicker to 'connecting' / 'idle' as the retry
-       starts and ends even though the main run is still streaming.
-       Only updates this handler owns: failedChapters row, cast merges,
-       lastEventAt, retryingChapterId. */
-    const mainRunActive = analysisControllerRef.current !== null;
-    if (!mainRunActive) setConn('connecting');
+    /* Snapshot whether the main run is in flight RIGHT NOW. If yes,
+       abort it before firing subset (avoids the cache-write race) and
+       remember to resume it after subset settles.
+       Both conditions matter: analysisControllerRef.current is set
+       while the effect's controller is live, BUT the effect cleanup
+       only nulls it when deps change — so after a cast_incomplete
+       catch the ref can linger as a zombie even though no fetch is
+       streaming. Gate on conn too so we only pause real in-flight
+       runs and leave the cast_incomplete auto-resume effect to
+       handle that path on its own (it kicks once every failedChapter
+       row clears). */
+    const pausedMainForRetry =
+      analysisControllerRef.current !== null &&
+      (conn === 'streaming' || conn === 'connecting');
+    if (pausedMainForRetry) {
+      analysisControllerRef.current?.abort();
+      setAnalysisStarted(false);
+    }
+    /* Retry now owns the conn/phase indicators — main is either already
+       idle or just got paused. */
+    setConn('connecting');
     /* Track whether the server re-emitted chapter-failed for THIS id
        during the retry. We use this instead of relying on .then() vs
        .catch() because the subset route may end without a `result`
@@ -630,19 +663,17 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
       model,
       onPhase: ({ phaseId, progress, live }) => {
         markEvent();
-        if (mainRunActive) return;
         setConn('streaming');
         setPhase(phaseId); setPhaseProgress(progress);
         if (live) setLive(live);
       },
       onLog: ({ phaseId, message }) => {
         markEvent();
-        if (!mainRunActive) setConn('streaming');
+        setConn('streaming');
         setLogs(prev => ({ ...prev, [phaseId]: [...(prev[phaseId] ?? []), message] }));
       },
       onHeartbeat: (hb) => {
         markEvent();
-        if (mainRunActive) return;
         setConn('streaming');
         setHeartbeatByPhase(prev => ({ ...prev, [hb.phaseId]: { hb, receivedAt: Date.now() } }));
       },
@@ -658,12 +689,16 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
           return [...filtered, { chapterId: failedId, message }];
         });
       },
+      onChapterResolved: ({ chapterId: resolvedId }) => {
+        markEvent();
+        setFailedChapters(prev => prev.filter(f => f.chapterId !== resolvedId));
+      },
     })
       .then(() => {
         if (!retryReFailed) {
           setFailedChapters(prev => prev.filter(f => f.chapterId !== chapterId));
         }
-        if (!mainRunActive) setConn('idle');
+        setConn('idle');
       })
       .catch(err => {
         /* The subset route ends without a `result` event when other
@@ -675,11 +710,22 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
         } else {
           console.warn('[analysing] retry failed:', err);
         }
-        if (!mainRunActive) setConn('idle');
+        setConn('idle');
       })
       .finally(() => {
         setRetryingChapterId(null);
         setDroppedQuotesRefreshKey(k => k + 1);
+        /* Resume the main run if Retry paused it. The analysis effect
+           is keyed off (analysisStarted, retry.nonce, …) so we flip
+           analysisStarted back on and bump the nonce to re-enter — the
+           same idiom the manual Resume button uses below. The server
+           skips already-cached chapters, so resume picks up exactly
+           where the pause left off (plus the freshly-retried chapter,
+           which is now cached too). */
+        if (pausedMainForRetry) {
+          setAnalysisStarted(true);
+          setRetry(r => ({ nonce: r.nonce + 1, fresh: false }));
+        }
       });
   };
 
@@ -1110,17 +1156,13 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
         </div>
 
         {/* Failed-chapter retry panel. Survives reload via book-state
-            hydration (see the failed-chapters effect above). Retry stays
-            clickable while the main run is in flight so a transient
-            Gemini 503 (or any one-off failure) can be re-tried in
-            parallel with the rest of the book — the subset endpoint
-            takes its own SSE channel and the analyzer's per-request
-            state is independent. Earlier guard blocked this to avoid
-            two concurrent Ollama chats; Ollama just serialises them,
-            so the cost was never real. Only one chapter can be in
-            flight at a time (retryingChapterId tracks the active one)
-            so a slow Ollama load doesn't get hammered with N parallel
-            chats. */}
+            hydration (see the failed-chapters effect above).
+            Pause-and-retry: clicking Retry while the main run is in
+            flight pauses it for the duration of the subset call and
+            auto-resumes once the row resolves — see handleRetryChapter
+            for why running both SSEs in parallel races the analysis-
+            cache writes. Only one chapter can be in flight at a time
+            (retryingChapterId tracks the active one). */}
         {failedChapters.length > 0 && (
           <div className="mt-6 rounded-3xl border border-amber-200 bg-amber-50/60 px-6 py-4">
             <p className="text-sm font-semibold text-amber-900">
@@ -1135,7 +1177,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
             <p className="mt-1 text-xs text-amber-800/80">
               {castIncomplete
                 ? 'Phase 1 (sentence attribution) won\'t start until every chapter has a cast. Click Retry below — the rest of the analysis resumes automatically once they all clear.'
-                : 'The model produced malformed output on these chapters even after the analyzer\'s built-in retry. Retry runs them again on the currently-selected model — safe to click while the main run is still streaming other chapters.'}
+                : 'The model produced malformed output on these chapters even after the analyzer\'s built-in retry. Retry runs them again on the currently-selected model. If the main run is in flight, Retry pauses it for the duration of the subset call and resumes automatically when the row clears.'}
             </p>
             <ul className="mt-3 space-y-2">
               {failedChapters.map(f => {
