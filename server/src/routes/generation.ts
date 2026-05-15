@@ -61,6 +61,22 @@ interface RunningJob {
   controller: AbortController;
   subscribers: Set<Subscriber>;
   bookId: string;
+  /** The chapter the loop is currently synthesising. Set at the top of
+      each loop iteration and cleared on chapter_complete / break. Used
+      by the catch-up replay so a post-reload subscriber's UI immediately
+      knows which chapter is in flight, rather than waiting for the next
+      progress tick (which can be 30+ s away on a long narrator block). */
+  currentChapterId: number | null;
+  /** Last per-chapter progress emission, replayed for new subscribers so
+      they see something better than "queued" for the in-flight chapter
+      until the next live tick lands. Cleared on chapter_complete. */
+  lastProgressTick: {
+    chapterId: number;
+    characterId: string | null;
+    progress: number;
+    currentLine: number;
+    totalLines: number;
+  } | null;
 }
 
 const inFlightByBook: Map<string, RunningJob> = new Map();
@@ -255,6 +271,27 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     const subscriber: Subscriber = { send, res };
     existing.subscribers.add(subscriber);
     req.on('close', () => existing.subscribers.delete(subscriber));
+    /* Replay the in-flight chapter's last known tick so a post-reload UI
+       immediately flips that chapter to in_progress instead of staring at
+       a stale "queued" until the next group boundary lands (which on a
+       long narrator block can be 30+ s away). Without this the user sees
+       the in-progress chapter look "gone" for a beat after reload, which
+       was the visible symptom that prompted this fix. */
+    if (existing.lastProgressTick) {
+      send({ type: 'progress', ...existing.lastProgressTick });
+    } else if (existing.currentChapterId != null) {
+      /* Sub-second window where the loop just entered a chapter but hasn't
+         emitted a group-boundary tick yet. Send a minimal in-progress
+         marker so the row still flips out of "queued". */
+      send({
+        type: 'progress',
+        chapterId: existing.currentChapterId,
+        characterId: null,
+        progress: 0.01,
+        currentLine: 0,
+        totalLines: 0,
+      });
+    }
     /* Keep `res` open. The job's loop will end this response via
        endAllSubscribers() when it drains or is paused. */
     return;
@@ -266,6 +303,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     controller,
     subscribers: new Set([{ send, res }]),
     bookId,
+    currentChapterId: null,
+    lastProgressTick: null,
   };
   inFlightByBook.set(bookId, job);
 
@@ -293,6 +332,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   for (const chapter of targetChapters) {
     if (controller.signal.aborted) break;
 
+    /* Pin this chapter as in-flight on the job so the subscribe-side
+       catch-up replay has something to emit for a post-reload client.
+       Cleared on chapter_complete and on loop exit. */
+    job.currentChapterId = chapter.id;
+    job.lastProgressTick = null;
+
     const sentences = analysis.chapters[chapter.id] ?? [];
     if (sentences.length === 0) {
       broadcast(job, {
@@ -304,14 +349,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     }
 
     const totalLines = sentences.length;
-    broadcast(job, {
-      type: 'progress',
+    const initialTick = {
       chapterId: chapter.id,
       characterId: null,
       progress: 0.01,
       currentLine: 0,
       totalLines,
-    });
+    };
+    job.lastProgressTick = initialTick;
+    broadcast(job, { type: 'progress', ...initialTick });
 
     try {
       const result = await synthesiseChapter({
@@ -333,14 +379,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
              rather than (index+1)/total — so the bar doesn't visibly snap forward
              at start and then sit still while the call runs. */
           const progress = Math.min(0.99, group.index / Math.max(1, totalGroups));
-          broadcast(job, {
-            type: 'progress',
+          const tick = {
             chapterId: chapter.id,
             characterId: group.characterId,
             progress,
             currentLine: positional >= 0 ? positional + 1 : group.index + 1,
             totalLines,
-          });
+          };
+          job.lastProgressTick = tick;
+          broadcast(job, { type: 'progress', ...tick });
         },
         onGroupComplete: ({ group, totalGroups }) => {
           const progress = Math.min(0.99, (group.index + 1) / totalGroups);
@@ -348,14 +395,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           /* currentLine is positional; clamp to sentences.length so the UI's
              "line N of M" reads naturally even when sentence ids aren't 1..N. */
           const positional = sentences.findIndex(s => s.id === lastSentenceId);
-          broadcast(job, {
-            type: 'progress',
+          const tick = {
             chapterId: chapter.id,
             characterId: group.characterId,
             progress,
             currentLine: positional >= 0 ? positional + 1 : group.index + 1,
             totalLines,
-          });
+          };
+          job.lastProgressTick = tick;
+          broadcast(job, { type: 'progress', ...tick });
         },
       });
 
@@ -435,6 +483,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         await writeJsonAtomic(statePath, next);
       }
 
+      /* Chapter finished — clear the per-chapter tracking so a subscriber
+         that arrives between this chapter and the next doesn't see a stale
+         in-progress tick replayed against an already-done chapter. */
+      job.currentChapterId = null;
+      job.lastProgressTick = null;
       broadcast(job, {
         type: 'chapter_complete',
         chapterId: chapter.id,

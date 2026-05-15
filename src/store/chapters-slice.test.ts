@@ -553,11 +553,31 @@ describe('chaptersSlice — hydrateFromBookState', () => {
     expect(next.paused).toBe(false);
   });
 
-  it('forces paused=true when at least one chapter is already on disk (page-reload safety preserved)', () => {
-    /* The original "in-session only continuation" contract still holds
-       for partially-generated books: reopening such a book mid-run must
-       NOT silently resume generation behind the user's back. */
+  it('leaves paused untouched even when chapters are already on disk (sticky-generation contract)', () => {
+    /* Reversed from the original "force paused=true on hydrate" rule.
+       With the sticky-generation contract (plan 31, invariant 1a) the
+       server-side job survives browser reload, so the client should
+       always try to attach — forcing paused=true here would make the
+       Generate button display Resume and the middleware suppress
+       auto-attaching to the still-live job, exactly the symptom that
+       prompted this fix (pill disappeared, in-progress chapter looked
+       gone, button stuck on Resume). Pause is now an *explicit* signal
+       only — setPaused dispatched from the Stop button or the
+       local-analyzer guard — and is never inferred from disk state. */
     const start: ChaptersState = { ...baseState([]), paused: false };
+    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
+      chapters,
+      completedSlugs: ['01-chapter-one'],
+      characters: cast,
+    }));
+    expect(next.paused).toBe(false);
+  });
+
+  it('preserves a previously-set paused flag across hydrate (does not reset paused=true to false)', () => {
+    /* Symmetric to the case above — once the user has explicitly paused,
+       a follow-up hydrate (e.g. opening the same book again) must NOT
+       silently clear the pause and resume. */
+    const start: ChaptersState = { ...baseState([]), paused: true };
     const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
       chapters,
       completedSlugs: ['01-chapter-one'],
