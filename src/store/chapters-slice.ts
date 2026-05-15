@@ -6,6 +6,7 @@
    stream-level failures the per-chapter slot can't represent. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { formatDuration } from '../lib/time';
 /* `initialChapters` (from ../data/chapters) used to seed `chapters` here so
    the design fixture was visible in the demo. That was a footgun: between
    the moment the user clicks a real book and the moment `hydrateFromBookState`
@@ -293,6 +294,12 @@ export const chaptersSlice = createSlice({
         ch.progress = ev.progress ?? 0.995;
         if (ev.currentLine != null) ch.currentLine = ev.currentLine;
         if (ev.totalLines != null) ch.totalLines = ev.totalLines;
+        /* The assembling tick is the only place `durationSec` is carried —
+           capture it here so the row shows the real audio length the moment
+           chapter_complete lands. Without this the chapter sits at the
+           '00:00' seed from analysis until the next page reload (when
+           hydrateFromBookState reads state.json). */
+        if (ev.durationSec != null) ch.duration = formatDuration(ev.durationSec);
         return;
       }
 

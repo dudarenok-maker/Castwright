@@ -198,6 +198,32 @@ describe('chaptersSlice — applyGenerationTick', () => {
       ));
       expect(next.generationStartedAt).toBe(Date.now());
     });
+
+    it('captures durationSec into ch.duration so the completed row shows real audio length without a reload', () => {
+      /* Regression: previously the slice ignored durationSec on the
+         assembling tick, leaving ch.duration at the '00:00' seed from
+         analysis until hydrateFromBookState read state.json on the next
+         page load. The Generate row therefore reported every freshly-
+         finished chapter as 0:00. */
+      const start = baseState([makeChapter(3, { state: 'in_progress', duration: '00:00' })]);
+      const subMinute = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
+        tick({ type: 'chapter_assembling', chapterId: 3, durationSec: 42.4 }),
+      ));
+      expect(subMinute.chapters[0].duration).toBe('00:42');
+
+      const overHour = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
+        tick({ type: 'chapter_assembling', chapterId: 3, durationSec: 3725.6 }),
+      ));
+      expect(overHour.chapters[0].duration).toBe('01:02:06');
+    });
+
+    it('leaves ch.duration untouched when the assembling tick omits durationSec', () => {
+      const start = baseState([makeChapter(3, { state: 'in_progress', duration: '12:34' })]);
+      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
+        tick({ type: 'chapter_assembling', chapterId: 3 }),
+      ));
+      expect(next.chapters[0].duration).toBe('12:34');
+    });
   });
 
   describe('chapter_complete', () => {
