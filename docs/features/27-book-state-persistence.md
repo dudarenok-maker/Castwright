@@ -1,6 +1,6 @@
 # Book state persistence
 
-> Status: KNOWN: scaffolded (manuscript-edits hydration partial)
+> Status: stable for cast / manuscript-edits / change-log; revisions hydration still poll-driven (see KNOWN: scaffolded below)
 > Key files: `src/lib/api.ts` (`getBookState`, `putBookState`, `getWorkspaceChangelog`), `src/App.tsx` (hydrate effect), `server/src/routes/book-state.ts`, `server/src/routes/workspace.ts`, `src/lib/types.ts` (`BookStateResponse`, `PutStateRequest`, `ChangeLogEvent`)
 > URL surface: indirect (any URL that lands on a `ready`/`confirm`/`analysing` stage); `#/log` for the workspace change log
 > OpenAPI ops: `GET /api/books/:bookId/state`, `PUT /api/books/:bookId/state`, `GET /api/workspace/changelog`
@@ -17,6 +17,7 @@ When the app opens a previously-analysed book, it fetches `BookStateResponse` fr
 - `mockGetBookState` throws "Book state hydration is not available in mock mode (no disk workspace)." (`src/lib/api.ts:147-152`). App.tsx must catch this and fall back to in-memory defaults; do not crash.
 - Hydration effect runs in `App.tsx` whenever `stage.bookId` changes; failures log + fall back.
 - `castConfirmed: boolean` is the authoritative flag for "user has confirmed cast"; `openBook` derives the routed view from book status, but the state flag is what survives to disk.
+- Manuscript-edits round-trip: `setSentenceCharacter` / `setSentencesCharacter` / `splitSentence` → persistence-middleware fires PUT `slice='manuscript'` → server writes `manuscript-edits.json` atomically → on next book open, GET reads the file, the merge filter at `server/src/routes/book-state.ts:78-95` drops orphan ids whose value falls inside the analysis-cache id range, preserves ids > `maxCacheId` (split offspring), falls back to the raw cache only when no edits exist, and the slice's `hydrateFromBookState` overwrites `s.sentences` with the result. Pinned by `server/src/routes/book-state.hydrate.test.ts` (PUT→GET round-trip with and without cache) plus `book-state.reparse.test.ts` (GET-side reconcile cases).
 
 ## Acceptance walkthrough
 
@@ -26,7 +27,7 @@ Run with `VITE_USE_MOCKS=false`, server on `:8080`, with at least one book under
 2. **Open a book that's only `not_analysed`** → state file may be missing or minimal; response carries `state` only; cast/manuscript/revisions are null. UI shows the analysing flow.
 3. **Confirm cast** → PUT `{ slice: 'cast', patch: { characters: [...] } }` fires; on-disk `cast.json` updates.
 4. **Reload after confirm** → cast hydrates from disk; user lands in the same `ready` view.
-5. **Reassign a sentence** (per `12-manuscript-view.md`) → PUT `{ slice: 'manuscript', patch: { sentences: [...] } }` fires. CURRENT BEHAVIOR: the file is written but hydration on reload is partial; do not assert end-to-end round-trip until the gap is closed.
+5. **Reassign a sentence** (per `12-manuscript-view.md`) → PUT `{ slice: 'manuscript', patch: { sentences: [...] } }` fires. Reload the page: the reassignment survives. The merge filter only drops sentences whose id falls inside the analysis-cache id range without being present in it (orphans from a prior chapter shape); user-created split offspring with ids > `maxCacheId` round-trip intact.
 6. **Mock-mode regression** — `getBookState` throws; App.tsx catches and falls back to in-memory defaults (cast from analyser output, no manuscript edits). No crash, no infinite loop.
 
 ## Change-log invariants
@@ -43,8 +44,7 @@ Run with `VITE_USE_MOCKS=false`, server on `:8080`, with at least one book under
 
 ## KNOWN: scaffolded
 
-- `manuscriptEdits.sentences` is written by PUT but not fully hydrated by GET — sentence reassignments may reset to analyser output on reload. Document this gap; do not assert end-to-end persistence.
-- `revisions` hydration on GET is also partial today; the polling mechanism (per `20-revisions-and-drift.md`) drives the slice in practice.
+- `revisions` hydration on GET is partial today; the polling mechanism (per `20-revisions-and-drift.md`) drives the slice in practice. A reload between mount and the first 30 s poll briefly shows an empty pending/drift list before the poll re-populates it.
 
 ## Out of scope
 

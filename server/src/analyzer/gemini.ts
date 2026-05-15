@@ -439,39 +439,73 @@ export type ParseResult<T> =
   | { ok: false; kind: 'schema-validation'; detail: z.ZodIssue[] };
 
 export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseResult<T> {
-  /* Pre-pass: strip a wrapping ```json ... ``` markdown fence if present.
-     qwen3.5:4b occasionally ignores the system prompt's "no code fences"
-     rule and emits its JSON wrapped in a fenced block, even when Ollama's
-     `format:<schema>` constrained decoding is in effect (real failure:
-     ch13 returned "```json {...}```", causing JSON.parse to choke on the
-     leading backtick). The strip is a no-op on byte-clean JSON and on any
-     payload that doesn't start with a fence, so it's safe to run always. */
+  /* Repair pipeline. Each pass is a no-op on already-valid JSON, so we
+     can try several layered combinations and accept the first that
+     parses. Conservative passes (fence-strip, trailing-prose trim,
+     structural-punctuation repair) run BEFORE the aggressive
+     `repairUnescapedQuotes` walker — that walker is willing to insert
+     `\"` mid-string when it sees a `"` not followed by a value-end
+     token, which can wrongly corrupt a payload whose breakage is
+     actually a missing comma between two string-valued properties
+     (e.g. `{"a":"x" "b":"y"}` — the walker sees the close-quote of `x`
+     as an unescaped inner quote because the next non-ws char is `"`,
+     not `,`/`}`).
+
+     Order of candidates tried:
+     0. `stripped` — fence strip only.
+     1. `trimTrailingProse(stripped)` — Ch44 shape.
+     2. `repairStructuralPunctuation(...prev)` — Ch49 shape; missing
+        comma or close brace.
+     3. `repairUnescapedQuotes(stripped)` — ch8/ch10 dialogue-quote
+        shape; aggressive walker.
+     4. `trimTrailingProse(prev)` then `repairStructuralPunctuation(prev)`
+        on top of the quote-fixed seed — combination cases.
+
+     After all candidates fail, return `invalid-json` with the LATEST
+     error message so the operator can see what the surviving issue
+     actually is.
+
+     `stripCodeFences` ALWAYS runs first because backticks confuse every
+     downstream walker; it's deterministic and detects its own opt-out
+     (no leading fence → byte-identical return). */
   const stripped = stripCodeFences(raw);
+
+  /* Build the candidate list and dedupe so each parse is attempted at
+     most once. */
+  const trimmed = trimTrailingProse(stripped);
+  const trimThenStruct = repairStructuralPunctuation(trimmed);
+  const quoteFixed = repairUnescapedQuotes(stripped);
+  const quoteThenTrim = trimTrailingProse(quoteFixed);
+  const quoteThenTrimThenStruct = repairStructuralPunctuation(quoteThenTrim);
+
+  const candidates: string[] = [
+    stripped,
+    trimmed,
+    trimThenStruct,
+    quoteFixed,
+    quoteThenTrim,
+    quoteThenTrimThenStruct,
+  ];
+  const seen = new Set<string>();
   let parsed: unknown;
-  let repaired = stripped !== raw;
-  try {
-    parsed = JSON.parse(stripped);
-  } catch {
-    /* Targeted recovery for qwen3.5:4b's other signature failure mode:
-       unescaped double-quote inside a string value when transcribing
-       dialogue from the manuscript, e.g. `"quote": "Wren, let the dog
-       go," Mr. Casper ordered.",`. Ollama's `format:<schema>` enforces
-       JSON Schema shape but not string-content escaping — once the model
-       is inside a JSON string, the constrained decoder still lets a raw
-       `"` token close it. The repair pass walks the text, finds each `"`
-       inside a string, and escapes it iff the next non-whitespace char
-       isn't a valid post-value token (`,` `}` `]` `:` EOF). Verified
-       against the real failing raws (ch8 byte 2363, ch10 byte 1432). */
-    const repairedRaw = repairUnescapedQuotes(stripped);
+  let winner: string | null = null;
+  let lastErrorMessage = 'unknown parse error';
+  for (const c of candidates) {
+    if (seen.has(c)) continue;
+    seen.add(c);
     try {
-      parsed = JSON.parse(repairedRaw);
-      repaired = true;
-    } catch (e2) {
-      /* Neither cleanup helped — return the post-repair error message so
-         the operator sees the actual remaining issue. */
-      return { ok: false, kind: 'invalid-json', detail: (e2 as Error).message };
+      parsed = JSON.parse(c);
+      winner = c;
+      break;
+    } catch (e) {
+      lastErrorMessage = (e as Error).message;
     }
   }
+  if (winner === null) {
+    return { ok: false, kind: 'invalid-json', detail: lastErrorMessage };
+  }
+  const repaired = winner !== raw;
+
   const result = schema.safeParse(parsed);
   if (!result.success) {
     return { ok: false, kind: 'schema-validation', detail: result.error.issues };
@@ -549,6 +583,152 @@ export function repairUnescapedQuotes(raw: string): string {
     out += c;
     i += 1;
   }
+  return out;
+}
+
+/* Walks the text tracking brace/bracket depth, respecting JSON string
+   state (and escapes). When the OUTERMOST balanced close character is
+   found, slice up to and including it and return — any trailing prose
+   the model emitted after the object closed is dropped.
+
+   Real failure shape this handles: qwen3.5:4b occasionally completes a
+   structurally valid JSON object on long chapters and then continues
+   writing free-form prose after the closing `}` (e.g. "Note that this
+   chapter…"). JSON.parse rejects the whole payload because of the
+   trailing content. We can rescue that without round-tripping the model
+   by trimming everything after the outer close.
+
+   Returns the input unchanged when:
+   - There is no opening `{` or `[`.
+   - The outer container never closes (unbalanced depth at EOF) — in that
+     case `repairStructuralPunctuation` is the right next pass, not this
+     one.
+   - The string is empty. */
+export function trimTrailingProse(raw: string): string {
+  if (!raw) return raw;
+  let depth = 0;
+  let inString = false;
+  let started = false;
+  for (let i = 0; i < raw.length; i += 1) {
+    const c = raw[i];
+    if (inString) {
+      if (c === '\\') { i += 1; continue; }      /* skip escape target */
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === '{' || c === '[') { depth += 1; started = true; continue; }
+    if (c === '}' || c === ']') {
+      depth -= 1;
+      if (started && depth === 0) {
+        /* Outermost close. Slice up to and including this position. */
+        const trimmed = raw.slice(0, i + 1);
+        return trimmed;
+      }
+    }
+  }
+  /* Never closed cleanly — leave it for repairStructuralPunctuation. */
+  return raw;
+}
+
+/* Inserts at most `maxInserts` structural tokens (`,` between adjacent
+   values, or trailing `}` / `]` to close unbalanced containers) so a
+   payload broken only by a missing comma or missing close brace round-
+   trips through JSON.parse.
+
+   Heuristic, in order:
+   1. **Missing comma** — walk the text; when a value-end position (close
+      of string, number, `}`, `]`, or a `true`/`false`/`null` literal) is
+      followed by whitespace and then a property-start token (`"`, `{`,
+      `[`), insert a `,` at that boundary. We track JSON string state
+      with escapes so spaces inside strings don't trigger.
+   2. **Missing close braces/brackets at EOF** — after a single pass, if
+      depth > 0 append the closers in LIFO order (stack of opens).
+
+   Out of scope: unquoted identifiers, missing colons, extraneous commas,
+   structural errors that JSON.parse can't pinpoint with a position. For
+   anything outside the comma+close-brace window, this helper returns
+   whatever it managed to produce (which still won't parse) so the
+   caller's invalid-json branch fires.
+
+   `maxInserts` bounds the budget so a hopelessly-broken payload can't
+   loop the parser. Default 2 covers the documented realistic case (one
+   missing comma + one missing close brace at EOF). A deeply-truncated
+   payload — e.g. 3+ unclosed containers because the model was cut off
+   mid-string — stays unparseable, which is correct: those should fail
+   `invalid-json` so the retry policy drops the broken assistant turn
+   and bumps temperature, instead of replaying a half-rescued skeleton
+   that anchors the model to a wrong shape (see ollama.test.ts:352). */
+export function repairStructuralPunctuation(raw: string, maxInserts = 2): string {
+  if (!raw) return raw;
+  let out = '';
+  const openStack: Array<'}' | ']'> = [];
+  let inString = false;
+  let inserts = 0;
+  let lastNonWsWasValueEnd = false;
+
+  const isPropertyStart = (ch: string): boolean => ch === '"' || ch === '{' || ch === '[';
+
+  for (let i = 0; i < raw.length; i += 1) {
+    const c = raw[i];
+
+    if (inString) {
+      out += c;
+      if (c === '\\' && i + 1 < raw.length) {
+        out += raw[i + 1];
+        i += 1;
+        continue;
+      }
+      if (c === '"') {
+        inString = false;
+        lastNonWsWasValueEnd = true;
+      }
+      continue;
+    }
+
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+      out += c;
+      continue;
+    }
+
+    /* Decide whether we need to splice a comma BEFORE writing `c`. */
+    if (lastNonWsWasValueEnd && isPropertyStart(c) && inserts < maxInserts) {
+      out += ',';
+      inserts += 1;
+      lastNonWsWasValueEnd = false;
+    }
+
+    if (c === '"') {
+      out += c;
+      inString = true;
+      continue;
+    }
+    if (c === '{') { out += c; openStack.push('}'); lastNonWsWasValueEnd = false; continue; }
+    if (c === '[') { out += c; openStack.push(']'); lastNonWsWasValueEnd = false; continue; }
+    if (c === '}' || c === ']') {
+      out += c;
+      openStack.pop();
+      lastNonWsWasValueEnd = true;
+      continue;
+    }
+    if (c === ',' || c === ':') {
+      out += c;
+      lastNonWsWasValueEnd = false;
+      continue;
+    }
+    /* Number / literal / unknown — append. Treat digits and
+       alphanumeric runs as value-content; a value ends at the next
+       structural break. */
+    out += c;
+    lastNonWsWasValueEnd = /[\d\w]/.test(c) || c === '.' || c === '-' || c === '+';
+  }
+
+  /* Append any unclosed containers in LIFO order, bounded by maxInserts. */
+  while (openStack.length > 0 && inserts < maxInserts) {
+    out += openStack.pop()!;
+    inserts += 1;
+  }
+
   return out;
 }
 

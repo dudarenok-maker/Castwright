@@ -31,6 +31,13 @@ Opt-in analyzer mode that hits the Gemini free-tier API directly instead of the 
 - TPM is **input** tokens per minute (output doesn't count). Estimate is `Math.ceil(promptChars / 4) + 1_000`; reconciled against `usageMetadata.promptTokenCount` once the SDK returns it so persistent estimation drift doesn't accumulate.
 - When the limiter has to delay a call (>1 s wait), the analyzer's `onThrottle(waitMs, reason)` fires. The route layer maps that to an SSE `{ kind: 'throttle', model, waitMs, reason }` event; the analysing view renders a "Throttling Gemini … · resuming in Ns" pill on the affected per-chapter row (replaces the heartbeat row while active). Reasons: `'rpm' | 'tpm' | 'rpd' | 'retry-after'`.
 - Rate-limit / quota / auth errors are mapped to `AnalysisError` with a structured `detail` field carrying Google's `status` + `details[]` envelope (`src/lib/api.ts:407-410` consumes this and renders the collapsible detail block).
+- **`parseAndValidate` rescues four classes of malformed model output** (shared with the Ollama analyzer via `repairUnescapedQuotes` / `trimTrailingProse` / `repairStructuralPunctuation` exports from `gemini.ts`):
+  1. ```` ```json ... ``` ```` markdown fences (`stripCodeFences`) — model wrapped its JSON despite the system-prompt prohibition.
+  2. Unescaped inner double-quotes inside string values (`repairUnescapedQuotes`) — model emitted dialogue with raw `"` characters instead of `\"`. Verified against real failing raws ch8 byte 2363 / ch10 byte 1432.
+  3. Trailing prose after the outer closing brace (`trimTrailingProse`) — model finished its JSON and then continued writing free-form commentary. Ch44 pos 37588 shape in the the Coalfall Commission regression.
+  4. Single-token structural punctuation gaps (`repairStructuralPunctuation`, bounded at 2 inserts by default) — one missing comma between adjacent properties OR up to two missing close braces / brackets at EOF. Ch49 pos 32464 shape. Deeper truncation (3+ unclosed) stays unparseable so the retry policy in `ollama.ts:352` correctly drops the broken assistant turn instead of replaying a half-rescued skeleton.
+  
+  All four passes are no-ops on byte-clean JSON, so they layer without false positives. Coverage: `server/src/analyzer/parse-and-repair.test.ts` (47 cases).
 - The Gemini analyzer must override `model` from the request body when present (used by the UI re-parse dialog to A/B between models without restarting the server).
 
 ## Acceptance walkthrough
