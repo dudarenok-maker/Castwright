@@ -149,4 +149,20 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const card = screen.getByText('Marlow').closest('div.group')!;
     expect(card.getAttribute('role')).toBeNull();
   });
+
+  it('wraps the voice list in the inset-scrollbar utility so the thumb clears the card corners', () => {
+    /* The panel's outer is `rounded-3xl overflow-hidden`. The scrollable
+       inner sits flush with the card's bottom rounded corner, so without
+       `scrollbar-thin` the system scrollbar bleeds past the curve. */
+    render(
+      <VoiceLibraryPanel
+        library={[makeVoice('v_Marlow', 'Marlow')]}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+      />
+    );
+    const scroller = screen.getByTestId('voice-library-scroll');
+    expect(scroller.className).toMatch(/overflow-y-auto/);
+    expect(scroller.className).toMatch(/scrollbar-thin/);
+  });
 });

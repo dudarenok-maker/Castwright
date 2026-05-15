@@ -743,7 +743,7 @@ function SelectionPopover({ sel, characters, onAssign }: SelectionPopoverProps) 
             we read it inside onAssign. */
          onMouseDown={(e) => e.preventDefault()}>
       <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold px-2 pt-1">Assign selection to</p>
-      <div className="flex flex-col gap-0.5 mt-1 max-h-64 overflow-y-auto">
+      <div className="flex flex-col gap-0.5 mt-1 max-h-64 overflow-y-auto scrollbar-thin">
         {characters.map(c => (
           <button key={c.id}
                   onMouseDown={(e) => { e.preventDefault(); onAssign(c.id); }}
