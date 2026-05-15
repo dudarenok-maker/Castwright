@@ -11,6 +11,7 @@ import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from './voice-
 import type { TtsEngine, TtsModelKey, TtsProvider } from './index.js';
 import { normaliseForTts } from './text-normalize.js';
 import { pcmDurationSec } from './wav.js';
+import { resamplePcm16 } from './resample-pcm16.js';
 
 /** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`
     `CastJsonCharacter` and the analyzer's Character output). The hint fields
@@ -216,18 +217,24 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
       signal,
     });
 
-    /* All Gemini TTS responses come back at the same rate today, but defend
-       against a hypothetical mid-chapter switch — if it ever happens we'd
-       need to resample, which we're not doing in this slice. */
+    /* The chapter's output rate is anchored by the first group's response.
+       Subsequent groups at a mismatched rate get resampled to the anchor —
+       this happens in practice when a chapter mixes Kokoro (24 kHz) and
+       Coqui (22.05 kHz) characters, e.g. after a per-character engine
+       override. Anchoring on the first group keeps the chapter's output
+       rate stable regardless of who speaks first; rewriting the anchor
+       mid-chapter would force us to retroactively resample everything we
+       already concatenated. */
+    let pcmForGroup = result.pcm;
     if (chunks.length === 0) {
       sampleRate = result.sampleRate;
     } else if (result.sampleRate !== sampleRate) {
-      throw new Error(`Sample-rate change mid-chapter (${sampleRate} → ${result.sampleRate}). Resampling not implemented.`);
+      pcmForGroup = resamplePcm16(result.pcm, result.sampleRate, sampleRate);
     }
 
     const startSec = pcmDurationSec(runningBytes, sampleRate);
-    const groupBytes = result.pcm.length;
-    chunks.push(result.pcm);
+    const groupBytes = pcmForGroup.length;
+    chunks.push(pcmForGroup);
     runningBytes += groupBytes;
     const endSec = pcmDurationSec(runningBytes, sampleRate);
 

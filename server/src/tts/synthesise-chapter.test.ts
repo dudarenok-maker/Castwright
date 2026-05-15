@@ -287,6 +287,56 @@ describe('synthesiseChapter voice routing', () => {
     expect(sentText).toContain('Sophie by inches, then');
   });
 
+  it('resamples mid-chapter sample-rate mismatches to the first-group anchor (Kokoro/Coqui co-cast regression)', async () => {
+    /* Per-character engine overrides allow a chapter to mix Kokoro (24 kHz)
+       and Coqui (22.05 kHz) speakers. Before resampling landed, the synth
+       loop threw on the first mismatched group, bricking the chapter for a
+       recoverable condition. Pin: a chapter whose second group returns a
+       different sampleRate completes without throwing, and the segments
+       array stays monotonic. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+      { id: 'elwin', name: 'Elwin', gender: 'male', attributes: ['caring'] },
+    ];
+    let callIndex = 0;
+    const provider: TtsProvider = {
+      async synthesize(_input: SynthesizeInput): Promise<SynthesizeOutput> {
+        /* First group: 24 kHz (Kokoro anchor). Second group: 22.05 kHz —
+           the synth loop must resample group 2 to the 24 kHz anchor. The
+           PCM payload here is real enough to flow through the resampler
+           (10 samples each), so we exercise the actual resample path. */
+        const sampleRate = callIndex++ === 0 ? 24000 : 22050;
+        const pcm = Buffer.alloc(10 * 2);
+        for (let i = 0; i < 10; i++) pcm.writeInt16LE(1000 + i * 100, i * 2);
+        return { pcm, sampleRate, mimeType: 'audio/pcm' };
+      },
+    };
+
+    const result = await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'First group.'),
+        sentence(2, 'elwin',    'Second group with a different rate.'),
+      ],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+    });
+
+    /* No throw, chapter anchors on the first group's rate. */
+    expect(result.sampleRate).toBe(24000);
+    expect(result.segments).toHaveLength(2);
+    /* Segments are monotonic and contiguous — the resampled group's byte
+       count contributes to the second segment's endSec, which must be
+       strictly greater than the first segment's endSec. */
+    expect(result.segments[1].startSec).toBe(result.segments[0].endSec);
+    expect(result.segments[1].endSec).toBeGreaterThan(result.segments[1].startSec);
+    /* Concatenated PCM length is consistent with the duration at the
+       anchor rate (2 bytes per sample at 24 kHz). */
+    const expectedBytes = Math.round(result.durationSec * 24000) * 2;
+    expect(Math.abs(result.pcm.length - expectedBytes)).toBeLessThanOrEqual(2);
+  });
+
   it('falls back to gendered inference from description when explicit gender is absent', async () => {
     /* Belt-and-braces: if the analyzer cached an older shape without
        `gender:`, the prose description still carries enough signal to land
