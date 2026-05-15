@@ -203,8 +203,8 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
           Both cards share the vertical space equally (flex-1 + basis-0)
           so they're the same height regardless of how much content each
           holds. */}
-      <div className="self-start sticky top-24 h-[calc(100vh-100px)] flex flex-col gap-4 pr-1">
-        <aside className="bg-white rounded-3xl border border-ink/10 shadow-card flex-1 basis-0 min-h-0 flex flex-col">
+      <div className="self-start sticky top-24 h-[calc(100vh-100px)] flex flex-col gap-4">
+        <aside className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex-1 basis-0 min-h-0 flex flex-col">
           <div className="shrink-0 px-5 pt-5 pb-3">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-bold text-ink">Chapters</h2>
@@ -263,7 +263,7 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
           </ul>
         </aside>
 
-        <aside className="bg-white rounded-3xl border border-ink/10 shadow-card flex-1 basis-0 min-h-0 flex flex-col">
+        <aside className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex-1 basis-0 min-h-0 flex flex-col">
           <div className="shrink-0 px-5 pt-5 pb-3 flex items-center justify-between">
             <h2 className="text-sm font-bold text-ink">Detected</h2>
             <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
