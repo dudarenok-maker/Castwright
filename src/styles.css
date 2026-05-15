@@ -87,43 +87,30 @@ body       { font-family: var(--font-sans); -webkit-font-smoothing: antialiased;
 /* Reusable component classes ---------------------------------------------- */
 .ring-peach-2 { box-shadow: 0 0 0 2px var(--peach); }
 
-/* Thin inset scrollbar for in-card scroll regions. The default Chromium
-   scrollbar is wide and runs the full height of the scroll container,
-   so on a rounded-3xl card it visually extends INTO the rounded
-   top-right and bottom-right corners. Three layered techniques keep
-   the scrollbar contained:
+/* Thin inset scrollbar for in-card scroll regions. The thumb is a 4px
+   pill body painted on a transparent background with a 5px transparent
+   border (content-box clip), inset 5px from each side. `clip-path` on
+   the scrollable element pins both the content AND the scrollbar paint
+   to a rectangle with rounded bottom corners matching the parent card,
+   so the scrollbar can't render past the rounded curve. (Border-radius
+   on the element WOULD do the same clip, but it overrides explicit
+   `rounded-*` utility classes and Chromium ends up sliding the gutter
+   into the cut area where the curve sweeps the right edge — so the
+   scrollbar visibly tracks the curve outward instead of being clipped
+   by it. clip-path doesn't have that quirk.)
 
-   1. `border-radius: inherit` on the scroll element itself so its own
-      overflow clip matches the parent card's rounded shape. The parent's
-      `overflow-hidden + rounded-*` clip is rendered on a different
-      compositor layer than the scrollbar paint, so on some Chromium
-      versions the scrollbar bleeds past the rounded corner. Putting the
-      radius ON the scroll element forces the scrollbar into the same
-      clipped layer. Only the bottom corners are clipped — rounding the
-      top would cut into the first row (active/hover backgrounds visibly
-      clip at the corner) and is unnecessary because every site that uses
-      this utility either spans the full card (and the parent's clip
-      handles the top fine) or sits below a header (no top corner in
-      reach).
-   2. Transparent borders on the `::-webkit-scrollbar-track` to inset the
-      track 28px from top and bottom (one card-radius + a little).
-      `margin` on the track is unreliable in current Chromium and was
-      effectively dropped as a supported track property — transparent
-      borders with `background-clip: padding-box` produce the same visual
-      effect and survive across versions.
-   3. Thumb is painted on a transparent background with a 5px transparent
-      border (content-box clip) so the visible body is 4px wide and inset
-      5px from each side.
-
-   scrollbar-gutter:stable keeps the gutter reserved even when content
-   doesn't overflow, so the right edge of the rows doesn't jitter as the
-   user scrolls. */
+   The card-radius is parameterised via `--scrollbar-thin-radius`,
+   defaulting to the 24px (`rounded-3xl`) most call sites use. Call sites
+   inside smaller-radius parents (rounded-2xl = 16px) can override it
+   inline. scrollbar-gutter:stable keeps the gutter reserved even when
+   content doesn't overflow, so the right edge of the rows doesn't
+   jitter as the user scrolls. */
 .scrollbar-thin {
+  --scrollbar-thin-radius: 24px;
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--ink-rgb), 0.22) transparent;
   scrollbar-gutter: stable;
-  border-bottom-left-radius: inherit;
-  border-bottom-right-radius: inherit;
+  clip-path: inset(0 round 0 0 var(--scrollbar-thin-radius) var(--scrollbar-thin-radius));
 }
 .scrollbar-thin::-webkit-scrollbar {
   width: 14px;
@@ -131,7 +118,10 @@ body       { font-family: var(--font-sans); -webkit-font-smoothing: antialiased;
 }
 .scrollbar-thin::-webkit-scrollbar-track {
   background: transparent;
-  background-clip: padding-box;
+  /* Transparent top/bottom borders inset the visible thumb travel away from
+     the edges — purely cosmetic since clip-path already handles the rounded-
+     corner case, but it keeps the thumb from flush-touching the linear top
+     and bottom of the scroll region. */
   border-top: 28px solid transparent;
   border-bottom: 28px solid transparent;
 }
