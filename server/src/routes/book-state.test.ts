@@ -481,3 +481,108 @@ describe('book-state router — rehydrate on GET populates real chapter bodies',
     expect(res.body.manuscript.wordCount).toBeLessThan(rec!.byteSize / 4);
   });
 });
+
+describe('book-state router — chapterCharacters reflects the post-fold roster', () => {
+  /* Regression: the GET handler previously sourced chapterCharacters
+     from the raw analysis cache, which intentionally keeps pre-fold
+     descriptor ids ("the-jogger", "drooly-boy"). The synth pipeline
+     reads from manuscript-edits.json (post-fold), so on hydrate the
+     Generate-view chapter rows showed phantom Queued pills for
+     descriptor characters the synth job would never advance.
+     manuscript-edits.json is the source of truth for which ids will
+     actually be processed — derive chapterCharacters from it. */
+  const FOLD_TITLE = 'Fold Bug Test';
+  const FOLD_MANUSCRIPT_ID = 'm_fold_bug_test';
+  let foldBookId: string;
+  let foldBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    foldBookId = makeBookId(AUTHOR, SERIES, FOLD_TITLE);
+    foldBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, FOLD_TITLE);
+    mkdirSync(join(foldBookDir, '.audiobook'), { recursive: true });
+
+    writeFileSync(join(foldBookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(foldBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: foldBookId,
+        manuscriptId: FOLD_MANUSCRIPT_ID,
+        title: FOLD_TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 8, title: 'Chapter Eight', slug: '08-chapter-eight' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  afterAll(async () => {
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    await clearAnalysisCache(FOLD_MANUSCRIPT_ID);
+  });
+
+  it('uses post-fold ids from manuscript-edits.json even when the cache still holds the pre-fold descriptor', async () => {
+    /* Cache: simulate the analyzer's pre-fold output. Chapter 8 has
+       one descriptor speaker ("the-jogger") alongside named cast.
+       Sentence ids 1..3 will get rewritten by the fold; 4 stays. */
+    const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+    await saveAnalysisCache(FOLD_MANUSCRIPT_ID, {
+      chapters: {
+        8: [
+          { id: 1, chapterId: 8, characterId: 'the-jogger', text: 'Watch out!' },
+          { id: 2, chapterId: 8, characterId: 'the-jogger', text: 'Coming through!' },
+          { id: 3, chapterId: 8, characterId: 'the-jogger', text: 'Move!' },
+          { id: 4, chapterId: 8, characterId: 'Wren',     text: 'Sorry!' },
+        ],
+      },
+    });
+
+    /* manuscript-edits.json: the actual on-disk post-fold list the
+       synth pipeline reads. the-jogger has been collapsed into
+       unknown-male; the sentence ids remain stable so the cache-vs-
+       edits reconciliation in the GET handler treats them as live. */
+    writeFileSync(
+      join(foldBookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 8, characterId: 'unknown-male', text: 'Watch out!' },
+          { id: 2, chapterId: 8, characterId: 'unknown-male', text: 'Coming through!' },
+          { id: 3, chapterId: 8, characterId: 'unknown-male', text: 'Move!' },
+          { id: 4, chapterId: 8, characterId: 'Wren',       text: 'Sorry!' },
+        ],
+      }),
+    );
+
+    const res = await request(app).get(`/api/books/${foldBookId}/state`);
+    expect(res.status).toBe(200);
+    const speakers = (res.body.chapterCharacters?.[8] ?? []) as string[];
+    expect(speakers).toContain('unknown-male');
+    expect(speakers).toContain('Wren');
+    /* The pre-fold descriptor id must NOT leak through to the
+       Generate view — that's the phantom-Queued-row bug. */
+    expect(speakers).not.toContain('the-jogger');
+  });
+
+  it('falls back to the cache when manuscript-edits.json is absent (analysis in flight)', async () => {
+    /* Tear down the edits file from the previous case so we can
+       exercise the cache-only path. */
+    rmSync(join(foldBookDir, '.audiobook', 'manuscript-edits.json'), { force: true });
+
+    const res = await request(app).get(`/api/books/${foldBookId}/state`);
+    expect(res.status).toBe(200);
+    const speakers = (res.body.chapterCharacters?.[8] ?? []) as string[];
+    /* No edits on disk → cache is the only source. The Generate view
+       isn't reachable in this state (it requires manuscript-edits.json
+       to synthesise from), so showing the pre-fold roster on the
+       analysing view is the existing intended behaviour — pin it. */
+    expect(speakers).toContain('the-jogger');
+    expect(speakers).toContain('Wren');
+  });
+});
