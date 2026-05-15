@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   IconPlus, IconStar, IconCheck, IconSpinner, IconCheckCircle, IconWarning,
-  IconMore, IconTrash, IconRefresh, IconFolder, IconCopy,
+  IconMore, IconTrash, IconRefresh, IconFolder, IconCopy, IconPencil,
 } from '../lib/icons';
 import {
   SectionLabel, MixedHeading, PrimaryButton, Pill,
@@ -10,6 +10,7 @@ import { parseRuntime, formatHours } from '../lib/time';
 import { StatTile } from './voices';
 import { Stat } from './generation';
 import { ConfirmDialog } from '../modals/confirm-dialog';
+import { EditBookMetaModal, type EditBookMetaPatch } from '../modals/edit-book-meta';
 import { api, type WorkspaceInfo } from '../lib/api';
 import { useAppSelector } from '../store';
 import type { LibraryAuthor, LibraryBook, LibraryBookStatus } from '../lib/types';
@@ -22,6 +23,7 @@ interface Props {
   onOpenBook: (book: LibraryBook) => void;
   onDeleteBook: (book: LibraryBook) => void;
   onReparseBook: (book: LibraryBook) => void;
+  onEditBook: (book: LibraryBook, patch: EditBookMetaPatch) => Promise<void>;
   onStartNew: () => void;
 }
 
@@ -36,7 +38,7 @@ function matchesFilter(book: LibraryBook, filter: Filter): boolean {
   return true;
 }
 
-export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBook, onReparseBook, onStartNew }: Props) {
+export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBook, onReparseBook, onEditBook, onStartNew }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   /* First word of the user's display name → "Welcome back, Mike". Falls back
      to "back" when the user hasn't set a name (keeps the heading grammatical). */
@@ -122,7 +124,15 @@ export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBoo
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                         {series.books.map(b => (
-                          <BookCard key={b.bookId} book={b} active={b.bookId === activeBookId} onOpen={() => onOpenBook(b)} onDelete={() => onDeleteBook(b)} onReparse={() => onReparseBook(b)}/>
+                          <BookCard
+                            key={b.bookId}
+                            book={b}
+                            active={b.bookId === activeBookId}
+                            onOpen={() => onOpenBook(b)}
+                            onDelete={() => onDeleteBook(b)}
+                            onReparse={() => onReparseBook(b)}
+                            onEdit={(patch) => onEditBook(b, patch)}
+                          />
                         ))}
                       </div>
                     </div>
@@ -182,7 +192,7 @@ const STATUS_UI: Record<LibraryBookStatus, StatusMeta> = {
   orphaned:     { color: 'danger',  label: 'Manuscript missing',icon: <IconWarning className="w-3.5 h-3.5"/> },
 };
 
-function BookCard({ book, active, onOpen, onDelete, onReparse }: { book: LibraryBook; active: boolean; onOpen: () => void; onDelete: () => void; onReparse: () => void }) {
+function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit }: { book: LibraryBook; active: boolean; onOpen: () => void; onDelete: () => void; onReparse: () => void; onEdit: (patch: EditBookMetaPatch) => Promise<void> | void }) {
   const [from, to] = book.coverGradient;
   const grad = `linear-gradient(135deg, ${from}, ${to})`;
   const meta = STATUS_UI[book.status];
@@ -194,6 +204,7 @@ function BookCard({ book, active, onOpen, onDelete, onReparse }: { book: Library
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmReparse, setConfirmReparse] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!menuOpen) return;
@@ -232,6 +243,12 @@ function BookCard({ book, active, onOpen, onDelete, onReparse }: { book: Library
           </button>
           {menuOpen && (
             <div className="absolute right-0 mt-1.5 w-56 rounded-xl bg-white border border-ink/10 shadow-float overflow-hidden z-10" onClick={(e) => e.stopPropagation()}>
+              <button
+                onClick={() => { setMenuOpen(false); setEditOpen(true); }}
+                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/[0.04] inline-flex items-center gap-2 border-b border-ink/5"
+              >
+                <IconPencil className="w-4 h-4"/> Edit details
+              </button>
               <button
                 onClick={() => { setMenuOpen(false); setConfirmReparse(true); }}
                 className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/[0.04] inline-flex items-center gap-2 border-b border-ink/5"
@@ -314,6 +331,18 @@ function BookCard({ book, active, onOpen, onDelete, onReparse }: { book: Library
           backdrop stops propagation by being position:fixed and on a higher
           z-index). */}
       <div onClick={(e) => e.stopPropagation()}>
+        <EditBookMetaModal
+          open={editOpen}
+          book={book}
+          onClose={() => setEditOpen(false)}
+          onSave={async (patch) => {
+            /* Close optimistically and let the parent handler surface any
+               errors through the layout's showError toast. Mirrors the
+               delete/reparse pattern. */
+            setEditOpen(false);
+            await onEdit(patch);
+          }}
+        />
         <ConfirmDialog
           open={confirmReparse}
           eyebrow="Re-parse"

@@ -11,7 +11,7 @@
    module imports so paths.ts picks up WORKSPACE_DIR, supertest against
    the real router. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -178,6 +178,13 @@ describe('book-state router — state slice editable metadata', () => {
       .send({ slice: 'state', patch });
     expect(put.status).toBe(204);
 
+    /* Title/author/series changes move the on-disk folder. The seed book
+       in beforeAll set isStandalone: true, so the on-disk series folder
+       is forced to 'Standalones' regardless of the patch's `series`
+       value — state.series stays 'Renamed Series' inside state.json but
+       the folder is `Standalones/`. Update the shared bookDir variable
+       so subsequent cases read from the new location. */
+    bookDir = join(workspaceRoot, 'books', 'Different Author', 'Standalones', 'Renamed Title');
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.title).toBe('Renamed Title');
     expect(onDisk.author).toBe('Different Author');
@@ -584,5 +591,179 @@ describe('book-state router — chapterCharacters reflects the post-fold roster'
        analysing view is the existing intended behaviour — pin it. */
     expect(speakers).toContain('the-jogger');
     expect(speakers).toContain('sophie');
+  });
+});
+
+describe('book-state router — state slice series-membership + on-disk rename', () => {
+  /* Each case in this block creates its own book on disk so the test
+     observing the post-rename layout doesn't tread on the shared bookId
+     used by the earlier suites. The book is removed in afterEach so a
+     case can't leak its renamed folder into a sibling. */
+  const RENAME_AUTHOR = 'Rename Author';
+  const RENAME_INITIAL_SERIES = 'Initial Series';
+  const RENAME_INITIAL_TITLE = 'Initial Title';
+  let renameBookId: string;
+  let renameBookDir: string;
+  const RENAME_MANUSCRIPT_ID = 'm_rename_test';
+
+  async function seedBook(opts: {
+    author?: string;
+    series?: string;
+    title?: string;
+    seriesPosition?: number | null;
+    isStandalone?: boolean;
+  } = {}): Promise<void> {
+    const { makeBookId } = await import('../workspace/paths.js');
+    const author = opts.author ?? RENAME_AUTHOR;
+    const series = opts.series ?? RENAME_INITIAL_SERIES;
+    const title = opts.title ?? RENAME_INITIAL_TITLE;
+    renameBookId = makeBookId(author, series, title);
+    renameBookDir = join(workspaceRoot, 'books', author, series, title);
+    mkdirSync(join(renameBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(renameBookDir, 'manuscript.txt'), 'placeholder body for rename tests');
+    writeFileSync(
+      join(renameBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: renameBookId,
+        manuscriptId: RENAME_MANUSCRIPT_ID,
+        title,
+        author,
+        series,
+        seriesPosition: opts.seriesPosition ?? 1,
+        isStandalone: opts.isStandalone ?? false,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: '01-chapter-1' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  afterEach(async () => {
+    /* Walk the books root and wipe anything left behind so the next
+       case starts clean — rename tests scatter folders across new
+       author/series trees and we don't want stragglers to influence
+       findBookByBookId or scanLibrary. */
+    const booksRoot = join(workspaceRoot, 'books');
+    if (existsSync(booksRoot)) {
+      const { readdirSync } = await import('node:fs');
+      for (const author of readdirSync(booksRoot)) {
+        const dir = join(booksRoot, author);
+        if (author === AUTHOR) continue; // keep the shared test author tree
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('persists seriesPosition + isStandalone updates', async () => {
+    await seedBook({ seriesPosition: 1, isStandalone: false });
+    const res = await request(app)
+      .put(`/api/books/${renameBookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { seriesPosition: 4 } });
+    expect(res.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(renameBookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.seriesPosition).toBe(4);
+    expect(onDisk.isStandalone).toBe(false);
+  });
+
+  it('toggling isStandalone=true forces Standalones folder + clears seriesPosition', async () => {
+    await seedBook({ seriesPosition: 3, isStandalone: false });
+    const res = await request(app)
+      .put(`/api/books/${renameBookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { isStandalone: true } });
+    expect(res.status).toBe(204);
+    const newDir = join(workspaceRoot, 'books', RENAME_AUTHOR, 'Standalones', RENAME_INITIAL_TITLE);
+    expect(existsSync(newDir)).toBe(true);
+    expect(existsSync(renameBookDir)).toBe(false);
+    const onDisk = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.isStandalone).toBe(true);
+    expect(onDisk.seriesPosition).toBeNull();
+    /* Original series label kept in state.json so flipping back doesn't lose it. */
+    expect(onDisk.series).toBe(RENAME_INITIAL_SERIES);
+  });
+
+  it('renaming the title moves the on-disk folder and findBookByBookId resolves the new path', async () => {
+    await seedBook();
+    const res = await request(app)
+      .put(`/api/books/${renameBookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { title: 'Renamed Properly' } });
+    expect(res.status).toBe(204);
+
+    const newDir = join(workspaceRoot, 'books', RENAME_AUTHOR, RENAME_INITIAL_SERIES, 'Renamed Properly');
+    expect(existsSync(newDir)).toBe(true);
+    expect(existsSync(renameBookDir)).toBe(false);
+
+    /* bookId is unchanged — the rename preserves identity. */
+    const { findBookByBookId } = await import('../workspace/scan.js');
+    const located = await findBookByBookId(renameBookId);
+    expect(located?.bookDir).toBe(newDir);
+    expect(located?.state.bookId).toBe(renameBookId);
+    expect(located?.state.title).toBe('Renamed Properly');
+  });
+
+  it('renaming author + series creates the new tree and prunes the now-empty old parents', async () => {
+    await seedBook();
+    const res = await request(app)
+      .put(`/api/books/${renameBookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { author: 'Different Author', series: 'Different Series' } });
+    expect(res.status).toBe(204);
+
+    const newDir = join(workspaceRoot, 'books', 'Different Author', 'Different Series', RENAME_INITIAL_TITLE);
+    expect(existsSync(newDir)).toBe(true);
+    /* Original author tree was emptied by the rename — cleanup should
+       have removed both the empty series dir and the empty author dir. */
+    expect(existsSync(join(workspaceRoot, 'books', RENAME_AUTHOR))).toBe(false);
+  });
+
+  it('rename to an existing folder returns 409 and leaves state.json at the old path', async () => {
+    await seedBook();
+    /* Pre-create a colliding target so the rename refuses. */
+    const collidingDir = join(workspaceRoot, 'books', RENAME_AUTHOR, RENAME_INITIAL_SERIES, 'Existing Other');
+    mkdirSync(collidingDir, { recursive: true });
+
+    const res = await request(app)
+      .put(`/api/books/${renameBookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { title: 'Existing Other' } });
+    expect(res.status).toBe(409);
+
+    /* The original folder still holds the unchanged state.json. */
+    const stillThere = JSON.parse(readFileSync(join(renameBookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(stillThere.title).toBe(RENAME_INITIAL_TITLE);
+  });
+
+  it('rename refreshes the in-memory ManuscriptRecord.bookDir', async () => {
+    await seedBook();
+    /* Seed an in-memory record so the rename path takes the refresh
+       branch. Mirrors what the analysis route would have populated. */
+    const { putManuscript, getManuscript } = await import('../store/manuscripts.js');
+    putManuscript({
+      manuscriptId: RENAME_MANUSCRIPT_ID,
+      format: 'plaintext',
+      title: RENAME_INITIAL_TITLE,
+      wordCount: 5,
+      byteSize: 32,
+      uploadedAt: new Date().toISOString(),
+      sourceText: 'placeholder body for rename tests',
+      chapterHints: [{ id: 1, title: 'Chapter 1', body: 'placeholder body for rename tests' }],
+      bookId: renameBookId,
+      bookDir: renameBookDir,
+    });
+
+    const res = await request(app)
+      .put(`/api/books/${renameBookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { title: 'Refreshed Record Title' } });
+    expect(res.status).toBe(204);
+
+    const newDir = join(workspaceRoot, 'books', RENAME_AUTHOR, RENAME_INITIAL_SERIES, 'Refreshed Record Title');
+    const rec = getManuscript(RENAME_MANUSCRIPT_ID);
+    expect(rec?.bookDir).toBe(newDir);
   });
 });

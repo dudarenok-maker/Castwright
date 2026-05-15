@@ -32,6 +32,7 @@ const workspaceChangelogMock = vi.fn();
 const reparseBookMock = vi.fn();
 const getLibraryMock = vi.fn();
 const deleteBookMock = vi.fn();
+const putBookStateMock = vi.fn();
 const getWorkspaceInfoMock = vi.fn();
 
 vi.mock('../lib/api', () => ({
@@ -46,6 +47,7 @@ vi.mock('../lib/api', () => ({
     reparseBook: (bookId: string) => reparseBookMock(bookId),
     getLibrary: () => getLibraryMock(),
     deleteBook: (bookId: string) => deleteBookMock(bookId),
+    putBookState: (bookId: string, req: unknown) => putBookStateMock(bookId, req),
     getWorkspaceInfo: () => getWorkspaceInfoMock(),
     /* Local-model lifecycle stubs — AnalysingView polls /api/ollama/health
        when the selected analyzer is a local Ollama model (which is the
@@ -135,6 +137,7 @@ beforeEach(() => {
   reparseBookMock.mockReset();
   getLibraryMock.mockReset();
   deleteBookMock.mockReset();
+  putBookStateMock.mockReset();
   getWorkspaceInfoMock.mockReset();
 });
 
@@ -349,6 +352,156 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
        won't short-circuit when the user clicks "Analyse now". */
     expect(store.getState().manuscript.manuscriptId).toBeNull();
     expect(store.getState().manuscript.title).toBeNull();
+  });
+});
+
+describe('BooksRoute — edit book metadata from the card menu', () => {
+  /* Covers the "Edit details" entry in the card's "…" menu. The modal
+     collects the patch; the route handler routes it through
+     api.putBookState(bookId, { slice: 'state', patch }) and refreshes
+     the library so the card heading updates in place. Mirrors the
+     reparse/delete pattern — errors surface through showError and the
+     modal can be retried. */
+
+  function makeLibStore(bookOver: Partial<LibraryBook> = {}) {
+    const store = makeStore();
+    store.dispatch(libraryActions.hydrate({
+      authors: [{
+        name: 'Shannon Messenger',
+        series: [{
+          name: 'Standalones',
+          books: [makeBook({ status: 'complete', manuscriptId: 'mns-real', ...bookOver })],
+        }],
+      }],
+    }));
+    return store;
+  }
+
+  function renderBooks(store: ReturnType<typeof makeStore>) {
+    const showInfo = vi.fn();
+    const showError = vi.fn();
+    const ctx: LayoutContext = { showInfo, showError };
+    function OutletShim() { return <Outlet context={ctx}/>; }
+    const utils = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route element={<OutletShim/>}>
+              <Route path="/" element={<BooksRoute/>}/>
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    return { ...utils, showInfo, showError };
+  }
+
+  it('opens the modal seeded with the book\'s current title, then saves through api.putBookState and refreshes the library', async () => {
+    const store = makeLibStore();
+    getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+    putBookStateMock.mockResolvedValue(undefined);
+    getLibraryMock.mockResolvedValue({
+      authors: [{
+        name: 'Shannon Messenger',
+        series: [{
+          name: 'Standalones',
+          books: [makeBook({ status: 'complete', manuscriptId: 'mns-real', title: 'Renamed' })],
+        }],
+      }],
+    });
+
+    renderBooks(store);
+
+    fireEvent.click(screen.getByLabelText('Book options'));
+    fireEvent.click(screen.getByRole('button', { name: /Edit details/i }));
+
+    /* Modal seeded with the existing title. */
+    const titleInput = await screen.findByLabelText('Title') as HTMLInputElement;
+    expect(titleInput.value).toBe('Bonus Keefe Story');
+
+    /* Edit the title. The Standalone checkbox is already checked
+       (the seed sets isStandalone: true), so series/position stay
+       disabled — we exercise only the title rename path here. */
+    fireEvent.change(titleInput, { target: { value: 'Bonus Keefe Story (Director\'s Cut)' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => {
+      expect(putBookStateMock).toHaveBeenCalledTimes(1);
+    });
+    expect(putBookStateMock).toHaveBeenCalledWith('b1', {
+      slice: 'state',
+      patch: expect.objectContaining({
+        title: 'Bonus Keefe Story (Director\'s Cut)',
+        author: 'Shannon Messenger',
+        isStandalone: true,
+        seriesPosition: null,
+      }),
+    });
+    /* Library refetch is fired on success so the card reflects the new title. */
+    await waitFor(() => {
+      expect(getLibraryMock).toHaveBeenCalled();
+    });
+  });
+
+  it('flipping standalone off then setting seriesPosition writes both fields', async () => {
+    const store = makeLibStore();
+    getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+    putBookStateMock.mockResolvedValue(undefined);
+    getLibraryMock.mockResolvedValue({ authors: [] });
+
+    renderBooks(store);
+    fireEvent.click(screen.getByLabelText('Book options'));
+    fireEvent.click(screen.getByRole('button', { name: /Edit details/i }));
+
+    /* Uncheck Standalone to enable Series + Position inputs. */
+    const standaloneToggle = await screen.findByLabelText(/Standalone/i);
+    fireEvent.click(standaloneToggle);
+
+    /* Now fill in series + position. */
+    const seriesInput = screen.getByLabelText('Series') as HTMLInputElement;
+    fireEvent.change(seriesInput, { target: { value: 'Keeper of the Lost Cities' } });
+    const positionInput = screen.getByLabelText('Position in series') as HTMLInputElement;
+    fireEvent.change(positionInput, { target: { value: '8' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => {
+      expect(putBookStateMock).toHaveBeenCalledTimes(1);
+    });
+    expect(putBookStateMock.mock.calls[0][1]).toMatchObject({
+      slice: 'state',
+      patch: expect.objectContaining({
+        isStandalone: false,
+        series: 'Keeper of the Lost Cities',
+        seriesPosition: 8,
+      }),
+    });
+  });
+
+  it('surfaces an error toast and leaves the menu re-openable when putBookState rejects', async () => {
+    const store = makeLibStore();
+    getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+    putBookStateMock.mockRejectedValue(new Error('disk locked'));
+
+    const { showError } = renderBooks(store);
+
+    fireEvent.click(screen.getByLabelText('Book options'));
+    fireEvent.click(screen.getByRole('button', { name: /Edit details/i }));
+
+    const titleInput = await screen.findByLabelText('Title') as HTMLInputElement;
+    fireEvent.change(titleInput, { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => {
+      expect(showError).toHaveBeenCalledTimes(1);
+    });
+    expect(showError).toHaveBeenCalledWith(
+      expect.stringContaining('Bonus Keefe Story'),
+      'disk locked',
+      'Edit',
+    );
+    /* Library refetch must NOT have fired on the failure path. */
+    expect(getLibraryMock).not.toHaveBeenCalled();
   });
 });
 

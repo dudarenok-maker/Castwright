@@ -10,11 +10,13 @@
    middleware in Phase 5. */
 
 import { Router, type Request, type Response } from 'express';
-import { readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, rmdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
+  STANDALONES_SERIES,
   audioDir,
+  bookDirByDisplay,
   castJsonPath,
   changeLogJsonPath,
   manuscriptEditsJsonPath,
@@ -23,6 +25,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { putManuscript, getManuscript, getOrHydrateManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { clearAnalysisCache, loadAnalysisCache } from '../store/analysis-cache.js';
@@ -223,6 +226,26 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           const trimmed = incoming.trim();
           return trimmed ? trimmed : null;
         };
+        const pickSeriesPosition = (incoming: unknown, fallback: number | null): number | null => {
+          if (incoming === undefined) return fallback;
+          if (incoming === null) return null;
+          /* Empty string from a cleared number input — treat as null. */
+          if (typeof incoming === 'string' && incoming.trim() === '') return null;
+          const n = typeof incoming === 'number' ? incoming : Number(incoming);
+          if (!Number.isFinite(n)) return fallback;
+          return Math.trunc(n);
+        };
+        const pickStandalone = (incoming: unknown, fallback: boolean): boolean => {
+          if (typeof incoming === 'boolean') return incoming;
+          return fallback;
+        };
+
+        /* When the book is flipped to standalone, the on-disk series folder
+           must be the literal 'Standalones' (see workspace/paths.ts) and
+           seriesPosition is meaningless. We do NOT overwrite state.series —
+           the user-typed label is preserved in state.json so a future
+           "un-standalone" doesn't lose the series name they had. */
+        const nextIsStandalone = pickStandalone(patch.isStandalone, state.isStandalone);
         const next: BookStateJson = {
           ...state,
           castConfirmed: patch.castConfirmed ?? state.castConfirmed,
@@ -230,12 +253,62 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           title:           pickString(patch.title,  state.title),
           author:          pickString(patch.author, state.author),
           series:          pickString(patch.series, state.series),
+          seriesPosition:  nextIsStandalone ? null : pickSeriesPosition(patch.seriesPosition, state.seriesPosition),
+          isStandalone:    nextIsStandalone,
           narratorCredit:  pickNullable(patch.narratorCredit,  state.narratorCredit),
           genre:           pickNullable(patch.genre,           state.genre),
           publicationDate: pickNullable(patch.publicationDate, state.publicationDate),
           updatedAt: new Date().toISOString(),
         };
-        await writeJsonAtomic(stateJsonPath(bookDir), next);
+
+        /* On-disk folder layout follows the displayed metadata: Author/Series/
+           Title. When any of those changes (or isStandalone flips), move the
+           folder before writing state.json so the new state lands at its new
+           path atomically. The bookId itself is unchanged — it's persisted
+           inside state.json and findBookByBookId resolves it regardless of
+           where the folder sits. */
+        const folderSeries = nextIsStandalone ? STANDALONES_SERIES : next.series;
+        const newDir = bookDirByDisplay(next.author, folderSeries, next.title);
+        if (newDir !== bookDir) {
+          if (existsSync(newDir)) {
+            return res.status(409).json({
+              error: 'A book already exists at that Author/Series/Title path. Pick a different title or series.',
+            });
+          }
+          /* Make sure the new parent (and grandparent) directories exist
+             before the rename — fs.rename on Windows fails with ENOENT if
+             they don't. */
+          await mkdir(dirname(newDir), { recursive: true });
+          /* renameWithRetry handles OneDrive's EPERM/EBUSY/ENOENT windows
+             (atomic-rename.ts). Any other failure surfaces immediately. */
+          await renameWithRetry(bookDir, newDir);
+          /* Refresh the in-memory ManuscriptRecord so subsequent analysis /
+             generation requests find the manuscript file at the new path.
+             Direct mutation is safe — the store holds the record by
+             reference. */
+          if (state.manuscriptId) {
+            const rec = getManuscript(state.manuscriptId);
+            if (rec) {
+              rec.bookDir = newDir;
+              putManuscript(rec);
+            }
+          }
+          /* Write the new state.json to the post-rename location BEFORE
+             trying to clean up empty parents — writeJsonAtomic creates the
+             tmp file then renames into place, and we want the destination
+             stable on disk before we start removing sibling parent dirs.
+             Empty-parent cleanup is best-effort: rmdir refuses on non-
+             empty directories so it naturally leaves siblings alone, and
+             errors are swallowed (orphan empty dirs are cosmetic, not a
+             correctness problem). */
+          await writeJsonAtomic(stateJsonPath(newDir), next);
+          const oldSeriesDir = dirname(bookDir);
+          const oldAuthorDir = dirname(oldSeriesDir);
+          await rmdir(oldSeriesDir).catch(() => { /* not empty or locked → leave it */ });
+          await rmdir(oldAuthorDir).catch(() => { /* not empty or locked → leave it */ });
+        } else {
+          await writeJsonAtomic(stateJsonPath(bookDir), next);
+        }
         break;
       }
       default:
