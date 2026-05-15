@@ -22,8 +22,15 @@ without changing component code.
   - `ANALYZER=manual` (default) — writes prompts to `server/handoff/inbox/`, waits
     for the user to drop JSON into `server/handoff/outbox/` (file-drop cowork flow).
   - `ANALYZER=gemini` + `GEMINI_API_KEY=…` — calls the free-tier Gemini API
-    directly. Optional `GEMINI_MODEL` (default `gemini-2.5-flash`; flip to
-    `gemini-3-flash` without code changes). See `server/.env.example`.
+    directly. Optional `GEMINI_MODEL` (default `gemma-4-31b-it` — separate
+    free-tier bucket from `gemini-*` and 1,500 RPD; flip to
+    `gemini-3.1-flash-lite` etc. via env). Every outbound call (primary
+    AND retry) is gated through a per-model RPM/TPM/RPD limiter
+    (`server/src/analyzer/rate-limit.ts`) so retries can't compound into
+    429/500 storms. See `server/.env.example` for `GEMINI_RPM_*` /
+    `GEMINI_TPM_*` / `GEMINI_RPD_*` overrides and
+    [docs/features/06-analyzer-gemini.md](docs/features/06-analyzer-gemini.md)
+    for the limits table.
 
 ## Layout
 - `src/main.tsx` — entry; mounts `<App/>` inside `<Provider>`.

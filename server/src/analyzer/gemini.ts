@@ -20,6 +20,7 @@ import {
   type Stage2ChapterOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
+import { geminiRateLimiter, DailyQuotaExhaustedError } from './rate-limit.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_DIR = resolve(__dirname, '..', '..', '..', 'skills');
@@ -115,10 +116,10 @@ export class GeminiAnalyzer implements Analyzer {
       : null;
 
     try {
-      const firstText = await this.generateWithRetry(
+      const firstText = await this.generateWithLimiter(
         [{ role: 'user', parts: [{ text: promptMd }] }],
         systemInstruction,
-        call.onChunk,
+        call,
       );
 
       const firstAttempt = parseAndValidate(firstText, schema);
@@ -135,14 +136,14 @@ export class GeminiAnalyzer implements Analyzer {
       );
 
       const followup = buildRetryMessage(firstAttempt);
-      const secondText = await this.generateWithRetry(
+      const secondText = await this.generateWithLimiter(
         [
           { role: 'user', parts: [{ text: promptMd }] },
           { role: 'model', parts: [{ text: firstText }] },
           { role: 'user', parts: [{ text: followup }] },
         ],
         systemInstruction,
-        call.onChunk,
+        call,
       );
 
       const secondAttempt = parseAndValidate(secondText, schema);
@@ -173,40 +174,110 @@ export class GeminiAnalyzer implements Analyzer {
     }
   }
 
-  /* Single-retry policy for transient server errors (500/503/504). 429s are
-     deliberately *not* retried — both flavors are counterproductive:
-       • daily-quota 429s won't recover until reset; retries just confirm the
-         block.
-       • per-minute throttle 429s are best handled by letting the analysis
-         loop's natural per-chapter pacing drift past the window, not by
-         hammering with backoff inside one call.
-     The route layer surfaces 429s to the UI with the friendly "switch
-     model or wait" hint; the user retries explicitly when ready. */
-  private async generateWithRetry(
+  /* Retry policy: every attempt (primary + retries) goes through the
+     per-model rate limiter so retries can't push us over the RPM/TPM cap
+     and cause the very 429s we're retrying.
+
+     • 5xx (500/503/504) — bounded retries with exponential backoff +
+       jitter, limiter re-acquired before each.
+     • 429 per-minute throttle — parse Google's `retry-delay` from
+       `details[]`, feed it into the limiter via `recordRejection`, then
+       retry up to MAX_ATTEMPTS-1 times.
+     • 429 daily-quota — re-thrown as `DailyQuotaExhaustedError` (no
+       retry); also long-blocks the model in the limiter so other
+       in-flight workers stop hitting it.
+     • Anything else — re-thrown immediately. */
+  private async generateWithLimiter(
     contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
     systemInstruction: string,
-    onChunk?: (info: StageChunkInfo) => void,
+    call: StageCall,
   ): Promise<string> {
-    try {
-      return await this.generate(contents, systemInstruction, onChunk);
-    } catch (err) {
-      if (!isRetryable5xx(err)) throw err;
-      console.warn(`[gemini] transient ${describeStatus(err)} — retrying once in 3s`);
-      await sleep(3000);
-      return await this.generate(contents, systemInstruction, onChunk);
+    const MAX_ATTEMPTS = 3;
+    const MAX_TOTAL_MS = 90_000;
+    const BACKOFFS = [1500, 6000];
+    const estTokens = estimateInputTokens(systemInstruction, contents);
+    const start = Date.now();
+    let lastErr: unknown = null;
+
+    const onWaitForLimiter = (waitMs: number, reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after') => {
+      if (waitMs > 1000) call.onThrottle?.(waitMs, reason);
+    };
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+      if (Date.now() - start >= MAX_TOTAL_MS) break;
+
+      await geminiRateLimiter.acquire(this.model, estTokens, {
+        signal: call.signal,
+        onWait: onWaitForLimiter,
+      });
+
+      try {
+        const out = await this.generate(contents, systemInstruction, call.onChunk);
+        if (out.promptTokenCount && Number.isFinite(out.promptTokenCount)) {
+          geminiRateLimiter.recordActualTokens(this.model, out.promptTokenCount);
+        }
+        return out.text;
+      } catch (err) {
+        lastErr = err;
+        const status = (err as { status?: number })?.status;
+        const message = (err as Error)?.message ?? String(err);
+
+        if (status === 429) {
+          /* Daily-quota markers: same regex as routes/analysis.ts so
+             classification stays in lockstep. No retry. Also block the
+             limiter for the rest of the day so concurrent workers
+             short-circuit instead of round-tripping. */
+          if (/free[_-]?tier|quotaValue":"\d{1,3}"/i.test(message)) {
+            const resetAt = nextUtcMidnight();
+            geminiRateLimiter.recordRejection(this.model, resetAt.getTime() - Date.now());
+            throw new DailyQuotaExhaustedError(this.model, resetAt);
+          }
+          /* Per-minute throttle. Feed Google's retry-delay back into the
+             limiter, then back off (max of Google's hint and our local
+             exponential backoff) and retry if attempts remain. */
+          const retryAfterMs = parseRetryDelayMs(err);
+          geminiRateLimiter.recordRejection(this.model, retryAfterMs);
+          if (attempt >= MAX_ATTEMPTS - 1) break;
+          const backoff = jitterMs(Math.max(retryAfterMs ?? 0, BACKOFFS[attempt] ?? 6000));
+          console.warn(`[gemini] 429 — retrying in ${backoff}ms (attempt ${attempt + 2}/${MAX_ATTEMPTS})`);
+          if (backoff > 1000) call.onThrottle?.(backoff, 'retry-after');
+          await sleep(backoff, call.signal);
+          continue;
+        }
+
+        if (isRetryable5xx(err)) {
+          if (attempt >= MAX_ATTEMPTS - 1) break;
+          const backoff = jitterMs(BACKOFFS[attempt] ?? 6000);
+          console.warn(`[gemini] transient ${describeStatus(err)} — retrying in ${backoff}ms (attempt ${attempt + 2}/${MAX_ATTEMPTS})`);
+          if (backoff > 1000) call.onThrottle?.(backoff, 'retry-after');
+          await sleep(backoff, call.signal);
+          continue;
+        }
+
+        throw err;
+      }
     }
+
+    /* Retry budget exhausted — re-throw the last upstream error so the
+       route layer can classify it correctly (rate_limit / unavailable /
+       internal). */
+    throw lastErr ?? new Error('Gemini retry budget exhausted with no recorded error.');
   }
 
   /* Streamed generation. Iterating the stream gives us a per-chunk
      heartbeat — first chunk usually arrives within 1–3s, every subsequent
      chunk is hard proof the model is alive. The route layer surfaces this
      as a live "Receiving response · N KB · last chunk Ms ago" indicator and
-     a watchdog that warns when chunks stop arriving. */
+     a watchdog that warns when chunks stop arriving.
+
+     Returns the assembled text plus the prompt token count if the SDK
+     exposed it on any chunk's usageMetadata — the limiter reconciles its
+     TPM estimate against this. */
   private async generate(
     contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
     systemInstruction: string,
     onChunk?: (info: StageChunkInfo) => void,
-  ): Promise<string> {
+  ): Promise<{ text: string; promptTokenCount?: number }> {
     try {
       const stream = await this.client.models.generateContentStream({
         model: this.model,
@@ -219,8 +290,13 @@ export class GeminiAnalyzer implements Analyzer {
       const start = Date.now();
       let lastChunkAt = start;
       let buf = '';
+      let promptTokenCount: number | undefined;
       for await (const chunk of stream) {
         const text = chunk.text;
+        const usage = (chunk as { usageMetadata?: { promptTokenCount?: number } }).usageMetadata;
+        if (usage?.promptTokenCount && Number.isFinite(usage.promptTokenCount)) {
+          promptTokenCount = usage.promptTokenCount;
+        }
         if (!text) continue;
         buf += text;
         const now = Date.now();
@@ -235,7 +311,7 @@ export class GeminiAnalyzer implements Analyzer {
       if (!buf) {
         throw new Error(`Gemini ${this.model} returned an empty response.`);
       }
-      return buf;
+      return { text: buf, promptTokenCount };
     } catch (err) {
       /* The SDK's ApiError keeps the upstream body inside `.message` as a
          JSON envelope, so a bare console.error(err) only shows the stack +
@@ -273,8 +349,88 @@ function describeStatus(err: unknown): string {
   return String(status ?? 'unknown');
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
+/* Sleep `ms`, rejecting promptly if `signal` fires. Used between retry
+   attempts in `generateWithLimiter` so an aborted analysis tears down
+   the backoff immediately instead of waiting out the full delay. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('Aborted during gemini retry backoff.'));
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/* Estimate input tokens for an acquire. Sums the system instruction and
+   every text part across all turns of `contents`, divides by 4 (the
+   conventional chars-per-token approximation for English), plus a flat
+   +1,000 ceiling-margin for the schema overhead and any tokenisation
+   surprises. Reconciled against `usageMetadata.promptTokenCount` once
+   the call returns, so persistent under-/over-estimates don't drift the
+   limiter. */
+export function estimateInputTokens(
+  systemInstruction: string,
+  contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
+): number {
+  let chars = systemInstruction.length;
+  for (const turn of contents) {
+    for (const part of turn.parts) chars += part.text.length;
+  }
+  return Math.ceil(chars / 4) + 1_000;
+}
+
+/* Apply ±25% jitter to a backoff base. Keeps parallel workers from
+   re-entering the same RPM window in lockstep. */
+function jitterMs(baseMs: number): number {
+  const j = baseMs * 0.5 * (Math.random() - 0.5); // ±25% range
+  return Math.max(0, Math.round(baseMs + j));
+}
+
+/* Parse `retry-delay` from a Gemini SDK error's `details[]` array. The
+   error message wraps a JSON envelope with shape:
+     { error: { code, message, status, details: [{
+         "@type": "type.googleapis.com/google.rpc.RetryInfo",
+         "retryDelay": "15s"
+       }, ...] } }
+   Returns ms or null when the field isn't present. */
+export function parseRetryDelayMs(err: unknown): number | null {
+  const raw = (err as Error)?.message ?? String(err);
+  const start = raw.indexOf('{');
+  if (start < 0) return null;
+  try {
+    const obj = JSON.parse(raw.slice(start)) as {
+      error?: { details?: Array<{ '@type'?: string; retryDelay?: string }> };
+    };
+    const details = obj?.error?.details ?? [];
+    for (const d of details) {
+      const type = d['@type'] ?? '';
+      const delay = d.retryDelay;
+      if (typeof delay === 'string' && type.includes('RetryInfo')) {
+        /* Common shapes: "15s", "1.5s", "500ms", "0.5s". */
+        const m = delay.match(/^([\d.]+)(ms|s)?$/);
+        if (m) {
+          const n = Number(m[1]);
+          if (Number.isFinite(n)) return m[2] === 'ms' ? n : Math.round(n * 1000);
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/* Next UTC midnight from `now`. Used to report when a daily quota
+   resets; aligns with Google's free-tier reset boundary. */
+export function nextUtcMidnight(now: number = Date.now()): Date {
+  const d = new Date(now);
+  d.setUTCHours(24, 0, 0, 0);
+  return d;
 }
 
 export type ParseResult<T> =

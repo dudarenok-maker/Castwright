@@ -247,6 +247,40 @@ function HeartbeatRow({ hb, receivedAt, stallThresholdSec }: { hb: AnalysisHeart
   );
 }
 
+/* Live pill that replaces the "Receiving response" heartbeat while the
+   server-side limiter is sleeping (RPM/TPM/RPD cap hit, or honoring a
+   Google retry-delay after a 429). Countdown re-renders every second
+   without needing a new SSE event. Auto-hides at `until`, after which
+   the next heartbeat / chapter event takes over the row. */
+function ThrottleRow({ until, model, reason }: { until: number; model: string; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after' }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, []);
+  const remainingSec = Math.max(0, Math.ceil((until - now) / 1000));
+  const modelLabel = MODEL_OPTIONS.find(m => m.id === model)?.label ?? model;
+  const reasonText = (() => {
+    switch (reason) {
+      case 'rpm': return 'requests-per-minute cap';
+      case 'tpm': return 'tokens-per-minute cap';
+      case 'rpd': return 'daily request cap';
+      case 'retry-after': return 'upstream retry-delay';
+      default: return 'rate limit';
+    }
+  })();
+  return (
+    <div className="mt-2 inline-flex items-center gap-2 text-[11px] font-mono tabular-nums text-amber-700">
+      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"/>
+      <span className="font-semibold">Throttling {modelLabel}</span>
+      <span className="text-ink/30">·</span>
+      <span>resuming in {remainingSec}s</span>
+      <span className="text-ink/30">·</span>
+      <span className="text-ink/50">{reasonText}</span>
+    </div>
+  );
+}
+
 function ConnPill({ state, sinceLastSec }: { state: ConnState; sinceLastSec: number | null }) {
   const meta = (() => {
     if (state === 'idle')       return { label: 'Idle',                tone: 'text-ink/50',    dot: 'bg-ink/30' };
@@ -319,6 +353,12 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
      re-render every second between events advances the "last chunk Ns ago"
      counter so the indicator never visibly stalls. */
   const [heartbeatByPhase, setHeartbeatByPhase] = useState<Record<number, { hb: AnalysisHeartbeat; receivedAt: number }>>({});
+  /* Per-phase rate-limit throttle indicator. Set on `throttle` SSE
+     events from the limiter; the ThrottleRow re-renders a countdown
+     until `until` passes. The next heartbeat naturally overwrites the
+     visual; the state itself stays until cleared on phase change so a
+     replay or component re-render doesn't lose the pill mid-wait. */
+  const [throttleByPhase, setThrottleByPhase] = useState<Record<number, { until: number; model: string; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after' }>>({});
   /* Server-refined total-remaining-ms. Null until the first chapter
      completes — then the heading swaps from the static describeSize
      string (Gemini-calibrated 22ms/word) to a value that reflects the
@@ -453,6 +493,11 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                   const { [prev]: _drop, ...rest } = hbs;
                   return rest;
                 });
+                setThrottleByPhase(ts => {
+                  if (!(prev in ts)) return ts;
+                  const { [prev]: _drop, ...rest } = ts;
+                  return rest;
+                });
               }
               return phaseId;
             });
@@ -510,6 +555,14 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                already fixed (pre-fix that click kicked a duplicate
                subset run and raced the main route's writes). */
             setFailedChapters(prev => prev.filter(f => f.chapterId !== chapterId));
+          },
+          onThrottle: ({ phaseId, model: throttleModel, waitMs, reason }) => {
+            if (cancelled) return;
+            markEvent();
+            setThrottleByPhase(prev => ({
+              ...prev,
+              [phaseId]: { until: Date.now() + waitMs, model: throttleModel, reason },
+            }));
           },
         });
         if (cancelled || completedRef.current) return;
@@ -696,6 +749,13 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
       onChapterResolved: ({ chapterId: resolvedId }) => {
         markEvent();
         setFailedChapters(prev => prev.filter(f => f.chapterId !== resolvedId));
+      },
+      onThrottle: ({ phaseId, model: throttleModel, waitMs, reason }) => {
+        markEvent();
+        setThrottleByPhase(prev => ({
+          ...prev,
+          [phaseId]: { until: Date.now() + waitMs, model: throttleModel, reason },
+        }));
       },
     })
       .then(() => {
@@ -1161,7 +1221,13 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                           Reading the manuscript (parsing chapters)…
                         </p>
                       )}
-                      {heartbeatByPhase[p.id] && (
+                      {throttleByPhase[p.id] && throttleByPhase[p.id].until > Date.now() ? (
+                        <ThrottleRow
+                          until={throttleByPhase[p.id].until}
+                          model={throttleByPhase[p.id].model}
+                          reason={throttleByPhase[p.id].reason}
+                        />
+                      ) : heartbeatByPhase[p.id] && (
                         <HeartbeatRow
                           hb={heartbeatByPhase[p.id].hb}
                           receivedAt={heartbeatByPhase[p.id].receivedAt}

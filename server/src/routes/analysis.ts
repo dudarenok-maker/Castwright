@@ -9,6 +9,7 @@ import { Router, type Request, type Response } from 'express';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { selectAnalyzer, type AnalyzerSelection } from '../analyzer/index.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
+import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import { readUserSettings } from '../workspace/user-settings.js';
 import { clearAnalysisCache, loadAnalysisCache, saveAnalysisCache, type AnalysisCache } from '../store/analysis-cache.js';
@@ -1085,6 +1086,16 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
                   chapterIndex: i + 1,
                 });
               },
+              onThrottle: (waitMs, reason) => {
+                send({
+                  kind: 'throttle',
+                  phaseId: 0,
+                  chapterIndex: i + 1,
+                  model: activeModelId,
+                  waitMs,
+                  reason,
+                });
+              },
             },
           );
         } catch (chErr) {
@@ -1524,6 +1535,16 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
               chapterIndex: i + 1,
             });
           },
+          onThrottle: (waitMs, reason) => {
+            send({
+              kind: 'throttle',
+              phaseId: 1,
+              chapterIndex: i + 1,
+              model: activeModelId,
+              waitMs,
+              reason,
+            });
+          },
         },
       );
       for (const s of result.sentences) s.chapterId = ch.id;
@@ -1900,6 +1921,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   }
   const analyzer = selection.analyzer;
   const analyzerLabel = engineLabel(selection.engine, selection.model);
+  const subsetModelId = selection.model;
 
   try {
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
@@ -1957,7 +1979,12 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
           manuscriptId,
           ch.id,
           buildStage1ChapterInbox(manuscriptId, record.title, ch, Array.from(rebuildRoster().values())),
-          { signal: abortController.signal },
+          {
+            signal: abortController.signal,
+            onThrottle: (waitMs, reason) => {
+              send({ kind: 'throttle', phaseId: 0, chapterIndex: ch.id, model: subsetModelId, waitMs, reason });
+            },
+          },
         );
         chapterCast[ch.id] = result.characters;
         cache.chapterCast = chapterCast;
@@ -2060,7 +2087,12 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
         manuscriptId,
         ch.id,
         buildStage2ChapterInbox(manuscriptId, record.title, stage1, ch),
-        { signal: abortController.signal },
+        {
+          signal: abortController.signal,
+          onThrottle: (waitMs, reason) => {
+            send({ kind: 'throttle', phaseId: 1, chapterIndex: ch.id, model: subsetModelId, waitMs, reason });
+          },
+        },
       );
       for (const s of result.sentences) s.chapterId = ch.id;
       cachedChapters[ch.id] = result.sentences;
@@ -2174,6 +2206,17 @@ function describeError(
   err: unknown,
   modelLabel: string,
 ): { code: string; message: string; detail?: string } {
+  /* The limiter throws DailyQuotaExhaustedError when our own RPD counter
+     OR a Google daily-quota 429 trips. Route layer must classify these
+     uniformly so the UI shows a single "switch model or wait until N"
+     message regardless of which path detected it. */
+  if (err instanceof DailyQuotaExhaustedError) {
+    return {
+      code: 'daily_quota',
+      message: `${modelLabel} daily quota exhausted — resets at ${err.resetAt.toISOString()}.`,
+      detail: `resetAt: ${err.resetAt.toISOString()}`,
+    };
+  }
   const raw = (err as Error)?.message ?? String(err);
   const status = (err as { status?: number })?.status;
 

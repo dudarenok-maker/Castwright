@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { geminiRateLimiter } from './rate-limit.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HANDOFF_ROOT = resolve(__dirname, '..', '..', 'handoff');
@@ -49,6 +50,9 @@ vi.mock('@google/genai', () => {
 
 beforeEach(async () => {
   generateContentStream.mockReset();
+  /* The limiter is a module singleton; reset between tests so RPM/TPM
+     bookkeeping from a prior test doesn't bleed across. */
+  geminiRateLimiter._reset();
   /* writeInbox writes a real file under server/handoff/inbox/. Ensure the
      directory exists so the test doesn't trip over a missing parent. */
   await mkdir(resolve(HANDOFF_ROOT, 'inbox'),  { recursive: true });
@@ -162,13 +166,130 @@ describe('GeminiAnalyzer.runStage1Chapter — Phase 0a per-chapter cast detectio
   });
 });
 
+describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
+  /* Build an SDK-shaped ApiError so isRetryable5xx and parseRetryDelayMs
+     find what they expect. */
+  function apiError(status: number, body: object): Error {
+    const e = new Error(`got status: ${status}. ${JSON.stringify(body)}`) as Error & { status: number };
+    e.status = status;
+    return e;
+  }
+
+  it('retries on 5xx then succeeds, going through the limiter for each attempt', async () => {
+    /* Two transient 503s, then success on the third attempt. */
+    const ok = chunksOf(STAGE1_RESPONSE, 256);
+    generateContentStream
+      .mockRejectedValueOnce(apiError(503, { error: { code: 503, message: 'service unavailable', status: 'UNAVAILABLE' } }))
+      .mockRejectedValueOnce(apiError(503, { error: { code: 503, message: 'service unavailable', status: 'UNAVAILABLE' } }))
+      .mockResolvedValueOnce(asyncFromArray(ok.map(text => ({ text }))));
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+    const onThrottle = vi.fn();
+    const result = await analyzer.runStage1('m_retry_5xx', '# prompt', { onThrottle });
+
+    expect(generateContentStream).toHaveBeenCalledTimes(3);
+    expect(result.characters).toHaveLength(3);
+    /* Backoff between attempts must have been ≥1s on at least one,
+       so onThrottle fired. */
+    expect(onThrottle).toHaveBeenCalled();
+    /* Reason is 'retry-after' for explicit retry sleeps. */
+    expect(onThrottle.mock.calls.some(c => c[1] === 'retry-after')).toBe(true);
+  }, 30_000);
+
+  it('gives up after MAX_ATTEMPTS=3 of 5xx, re-throwing the upstream error', async () => {
+    const err = apiError(500, { error: { code: 500, message: 'oops', status: 'INTERNAL' } });
+    generateContentStream
+      .mockRejectedValueOnce(err)
+      .mockRejectedValueOnce(err)
+      .mockRejectedValueOnce(err);
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+    await expect(analyzer.runStage1('m_5xx_exhaust', '# prompt', {})).rejects.toMatchObject({ status: 500 });
+    expect(generateContentStream).toHaveBeenCalledTimes(3);
+  }, 30_000);
+
+  it('retries a per-minute 429 honoring retry-delay from details[]', async () => {
+    const throttle = apiError(429, {
+      error: {
+        code: 429,
+        message: 'Resource has been exhausted (e.g. check quota).',
+        status: 'RESOURCE_EXHAUSTED',
+        details: [
+          { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '2s' },
+        ],
+      },
+    });
+    const ok = chunksOf(STAGE1_RESPONSE, 256);
+    generateContentStream
+      .mockRejectedValueOnce(throttle)
+      .mockResolvedValueOnce(asyncFromArray(ok.map(text => ({ text }))));
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+    const onThrottle = vi.fn();
+    const t0 = Date.now();
+    const result = await analyzer.runStage1('m_429_retry', '# prompt', { onThrottle });
+    const elapsed = Date.now() - t0;
+
+    expect(generateContentStream).toHaveBeenCalledTimes(2);
+    expect(result.characters).toHaveLength(3);
+    /* Honored the 2-s retry-delay (real timers in this file). */
+    expect(elapsed).toBeGreaterThanOrEqual(1_500);
+    expect(onThrottle).toHaveBeenCalled();
+  }, 30_000);
+
+  it('throws DailyQuotaExhaustedError on a daily-quota 429, no retry', async () => {
+    const dailyQuota = apiError(429, {
+      error: {
+        code: 429,
+        message: 'You exceeded your current quota. free_tier ...',
+        status: 'RESOURCE_EXHAUSTED',
+        details: [{ '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [] }],
+      },
+    });
+    generateContentStream.mockRejectedValueOnce(dailyQuota);
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const { DailyQuotaExhaustedError } = await import('./rate-limit.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+    await expect(analyzer.runStage1('m_daily', '# prompt', {})).rejects.toBeInstanceOf(DailyQuotaExhaustedError);
+    /* Daily 429 must NOT retry — exactly one upstream call. */
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+  }, 10_000);
+
+  it('parseRetryDelayMs handles "Ns", "N.Ns", and "Nms" forms', async () => {
+    const { parseRetryDelayMs } = await import('./gemini.js');
+    function build(delay: string): Error {
+      return new Error(JSON.stringify({
+        error: { details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: delay }] },
+      }));
+    }
+    expect(parseRetryDelayMs(build('15s'))).toBe(15_000);
+    expect(parseRetryDelayMs(build('1.5s'))).toBe(1_500);
+    expect(parseRetryDelayMs(build('500ms'))).toBe(500);
+    expect(parseRetryDelayMs(new Error('no body here'))).toBeNull();
+  });
+});
+
 afterAll(async () => {
   /* Tidy the test inbox/outbox we touched so the workspace stays clean. */
   await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_test-stage1.md'),       { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_skip_empty-stage1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_empty-stage1.md'),      { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_test-stage1-ch7.md'),   { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_retry_5xx-stage1.md'),  { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_5xx_exhaust-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_429_retry-stage1.md'),  { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_daily-stage1.md'),      { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_test-stage1.json'),       { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_skip_empty-stage1.json'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_test-stage1-ch7.json'),   { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_retry_5xx-stage1.json'),  { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_429_retry-stage1.json'),  { force: true });
 });
