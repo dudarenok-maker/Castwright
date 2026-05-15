@@ -1,9 +1,9 @@
 # Profile drawer
 
 > Status: stable
-> Key files: `src/modals/profile-drawer.tsx`, `src/store/cast-slice.ts` (`updateCharacter`), `src/lib/tts-voice-mapping.ts` (`resolveTtsVoiceForCharacter`), `src/store/ui-slice.ts` (`setOpenProfileId`)
+> Key files: `src/modals/profile-drawer.tsx` (incl. `ModelVoiceOverridePicker`), `src/store/cast-slice.ts` (`updateCharacter`), `src/store/voices-slice.ts` (`setOverride`, `hydrateBaseVoices`), `src/lib/tts-voice-mapping.ts` (`resolveTtsVoiceForCharacter`), `src/lib/api.ts` (`setVoiceOverride`), `src/store/ui-slice.ts` (`setOpenProfileId`), `server/src/routes/voices.ts` (`applyOverrideToCastFiles`)
 > URL surface: `?profile=<characterId>` inside `#/books/:bookId/:view` and `#/books/:bookId/confirm`
-> OpenAPI ops: `POST /api/voices/:voiceId/sample`
+> OpenAPI ops: `POST /api/voices/:voiceId/sample`, `PUT /api/voices/:voiceId/override`
 
 ## What this covers
 
@@ -21,6 +21,12 @@ Edit drawer for a single character. Lets the user adjust identity (name, role, g
 - `VoiceSample` response shape: `{ url, durationSec, cached, modelKey }`. UI plays the URL via `<audio>` and shows the cached badge if `cached: true`.
 - **JIT TTS auto-load on Play** (`src/lib/play-sample-with-auto-load.ts`) — the Play button funnels through `playSampleWithAutoLoad`, NOT a direct `api.getVoiceSample` call. The helper probes `/api/sidecar/health`, evicts the analyzer (via `api.unloadAnalyzer` — and only when `/api/ollama/health` reports `modelResident: true`), loads the sidecar (`api.loadSidecar`), then synthesizes. Mirrors `generation.tsx` `handleLoadTts` so the "model lifecycle is button-driven, not eager" rule (CLAUDE.md) is preserved — the user's Play click is the load consent. Status sequence emitted via `onStatus`: `evicting` → `loading-tts` → `synthesizing`. Concurrent clicks share a single in-flight prep promise so a Drawer + Cast row click doesn't double-evict. An inline eviction banner ("Analyzer unloaded to free VRAM for TTS.") surfaces only when the analyzer was actually resident. The same helper backs `src/views/cast.tsx` per-row Play. Tested by `src/lib/play-sample-with-auto-load.test.ts`.
 - The drawer never directly mutates `cast.characters`; it dispatches `castActions.updateCharacter({ id, patch })` so the change is funneled through one reducer (Immer-friendly).
+- **Model-voice override picker** (`ModelVoiceOverridePicker`, `src/modals/profile-drawer.tsx:699-766`; rendered at `:319-347`) — sits beneath the Preview voice block and lets the user pin a specific base voice for this character, bypassing the attribute-driven match.
+  - The `<select>` round-trips through string values: `AUTO` or `${engine}|${name}`. Selected value is derived from `voice.overrideTtsVoice` — when null, the dropdown shows "Auto — currently Coqui · &lt;Name&gt;" (or whatever engine the auto resolution picked).
+  - Options group by engine via `<optgroup>` and are sourced from `state.voices.baseVoices`, hydrated by `api.getBaseVoices()` on Voices-view mount (see plan 22). The drawer is read-only on that hydrate — it does not trigger the fetch itself; until the catalog loads the picker is disabled and shows "Loading base voice catalog…".
+  - `onChange` is optimistic and uses **deferred rollback**: dispatch `voicesActions.setOverride({ voiceId, override })` first (slice mutation no-ops when no library Voice exists yet for this character), then `await api.setVoiceOverride(voiceId, override)`; on failure, restore the previous override value from the closed-over `voice.overrideTtsVoice` and surface the error inline (`src/modals/profile-drawer.tsx:328-346`).
+  - **Engine-mismatch warning** — when `currentOverride.engine !== activeEngine` (project's current synth engine, derived from `ui.ttsModelKey`), the picker renders: "⚠ Engine mismatch — this &lt;Engine&gt; voice won't be used while the project is on &lt;Engine&gt;." The override is still written and persists; `pickVoiceForEngine` (`server/src/tts/voice-mapping.ts`) ignores it at synth time until the engines match.
+  - **Server propagation** — `PUT /api/voices/:voiceId/override` walks every confirmed-cast `cast.json` and writes (or `delete`s, for `override: null`) the `overrideTtsVoice` field on every character whose `voiceId` matches (`server/src/routes/voices.ts:295-331`, `applyOverrideToCastFiles`). The same character recurring across a series stays in sync; one PUT updates them all atomically and 404s if no character matches.
 - **Merge / downgrade controls** — the Cast roster section renders two cohabiting affordances when `onMerge` is wired:
   - A picker (`Merge <name> into another character…`) for folding one identity into another real character. Hidden when `mergeCandidates` is empty.
   - Two direct buttons ("Unknown male" / "Unknown female") for downgrading the current character into a standing background bucket. Available even when the cast has no other candidates because `POST /api/books/:bookId/cast/merge` synthesises the bucket on the fly using `makeBucket()` from `server/src/analyzer/fold-minor-cast.ts` when the target id (`unknown-male` / `unknown-female`) isn't on `cast.json` yet.
@@ -39,13 +45,20 @@ Run `VITE_USE_MOCKS=true`, navigate to a book's cast view.
 6. **Click "Preview voice"** → POST `/api/voices/<voiceId>/sample` fires with the current `characterHint`. Response plays inline; second click within minutes returns `cached: true` and shows a "cached" badge.
 7. **Switch TTS model in the engine picker** (see `13-tts-engine-picker.md`) → next preview includes the new `modelKey` and bypasses cache for that key.
 8. **Edit gender from `'male'` to `'female'`** → `resolveTtsVoiceForCharacter` recomputes; the displayed mapped voice name updates. Preview fetches a new sample for the new voice.
-9. **Downgrade a descriptor-named speaker** (real backend only — mock returns an empty cast):
+9. **Override the model voice via the picker**:
+   - Open the drawer. The picker shows "Auto — currently &lt;Engine · Name&gt;" matching the current resolution.
+   - Pick a different speaker (e.g. flip the auto match → Coqui · Asya Anara). Network: `PUT /api/voices/<voiceId>/override` with `{ override: { engine: 'coqui', name: 'Asya Anara' } }`; response 204. The mapped-voice line above and the cast card's swatch update immediately (optimistic).
+   - Reload the page → override persists; the picker re-opens to the same selected value (read back through the library Voice's `overrideTtsVoice`).
+   - **Cross-book propagation**: open a different book that contains a character with the same `voiceId` (e.g. a series recurrence) → that character's profile drawer shows the same override pre-selected (server's `applyOverrideToCastFiles` updated both `cast.json` files).
+   - **Engine mismatch**: switch the project engine via the engine picker (plan 13) so it no longer matches the override's engine. Re-open the drawer → the warning line "⚠ Engine mismatch…" appears. Click Preview voice → the synth uses the project-engine auto resolution, not the cross-engine override.
+   - Select "Auto" to clear. Network: `PUT /api/voices/<voiceId>/override` with `{ override: null }`. The picker returns to "Auto — currently &lt;Engine · Name&gt;"; server-side the field is `delete`d from each cast.json entry (not stored as null).
+10. **Downgrade a descriptor-named speaker** (real backend only — mock returns an empty cast):
    - From the "Meet the cast" confirmation view, click a card like *Rescuer* (≥3 lines so the auto-fold left it alone).
    - In the drawer, scroll to **Cast roster** → click **Unknown male** or **Unknown female**.
    - Network: `POST /api/books/:bookId/cast/merge` with `{ sourceId, targetId: 'unknown-male' | 'unknown-female' }`. Response is the recomputed roster; the source disappears and the bucket gains the source's name in its `aliases` list.
    - Drawer closes; URL drops `?profile=`. The roster card for the bucket now reflects the merged line/scene count.
    - Re-open the bucket's profile → the downgrade buttons are HIDDEN for it (a bucket can't be downgraded into itself).
-10. **Close drawer** → `setOpenProfileId(null)`; URL drops `?profile=`.
+11. **Close drawer** → `setOpenProfileId(null)`; URL drops `?profile=`.
 
 ## Out of scope
 
