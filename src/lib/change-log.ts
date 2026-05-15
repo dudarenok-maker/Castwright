@@ -153,7 +153,48 @@ export function buildGenerationStartedEvent(args: {
   };
 }
 
-/** System-emitted event: a chapter just transitioned to `done`. */
+/** System-emitted event: a whole generation run finished. Rolls up every
+    chapter that transitioned to `done` during the run so the audit feed gets
+    one line per Generate click instead of one per chapter — a 14-chapter
+    book becomes one entry, not fourteen. Per-chapter completion still
+    streams to the UI via SSE; only persistence is collapsed.
+
+    Failures stay as their own per-chapter events (see buildChapterFailedEvent)
+    because they're low-volume and individually actionable. */
+export function buildGenerationRunCompleteEvent(args: {
+  chapterIds: number[];
+  now?: Date;
+}): ChangeLogEvent {
+  const { chapterIds } = args;
+  const now = args.now ?? new Date();
+  const n = chapterIds.length;
+  const sortedIds = [...chapterIds].sort((a, b) => a - b);
+  const rangeText = n === 0
+    ? ''
+    : n === 1
+      ? `Chapter ${sortedIds[0]}.`
+      : sortedIds[n - 1] - sortedIds[0] === n - 1
+        ? `Chapters ${sortedIds[0]}–${sortedIds[n - 1]}.`
+        : `Chapters ${sortedIds.slice(0, 4).join(', ')}${n > 4 ? `, +${n - 4} more` : ''}.`;
+  return {
+    id: now.getTime(),
+    at: now.toISOString(),
+    ts: 'Just now',
+    date: 'today',
+    type: 'generation_run_complete',
+    title: n === 1 ? 'Generated 1 chapter' : `Generated ${n} chapters`,
+    note: rangeText || 'Run finished with no chapter transitions.',
+    actor: 'system',
+    chapterId: n === 1 ? sortedIds[0] : undefined,
+  };
+}
+
+/** System-emitted event: a chapter just transitioned to `done`.
+
+    No longer dispatched by the generation-stream middleware — kept so legacy
+    persisted entries from before the rollup migration still render with the
+    right copy. Retained as a builder because per-book reparse paths and
+    other one-off flows may still emit a single chapter_complete. */
 export function buildChapterCompleteEvent(args: {
   chapter: Chapter;
   now?: Date;

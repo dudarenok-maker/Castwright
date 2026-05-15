@@ -29,8 +29,11 @@
    slice has drifted to a different book (see the cross-book guard at the
    top of applyGenerationTick).
 
-   Side responsibility: emit `generation_started` / `chapter_complete` /
-   `chapter_failed` change-log events from the same vantage point.
+   Side responsibility: emit `generation_started` / `generation_run_complete` /
+   `chapter_failed` change-log events from the same vantage point. The
+   per-chapter `chapter_complete` ticks are accumulated on the handle and
+   collapsed into a single rollup event on closeHandle — the activity feed
+   used to drown in per-chapter audit rows on long runs.
 
    Skipped under VITE_USE_MOCKS=true? — NO. The mock SSE depends on a long-
    lived caller; the whole point of this middleware is to BE that caller. */
@@ -39,7 +42,7 @@ import type { Dispatch, Middleware } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
 import {
   buildGenerationStartedEvent,
-  buildChapterCompleteEvent,
+  buildGenerationRunCompleteEvent,
   buildChapterFailedEvent,
 } from '../lib/change-log';
 import { chaptersActions } from './chapters-slice';
@@ -112,6 +115,12 @@ interface OpenHandle {
   cancel: () => void;
   bookId: string;
   modelKey: TtsModelKey;
+  /* Per-run rollup accumulator. Every chapter_complete tick pushes its
+     chapterId here; on run end (closeHandle) we emit one
+     generation_run_complete event with the full list. This is what keeps
+     the activity feed from getting flooded — a 14-chapter run used to write
+     14 chapter_complete entries; now it writes one rollup. */
+  completedChapterIds: number[];
 }
 
 export const generationStreamMiddleware: Middleware = (store) => {
@@ -121,6 +130,14 @@ export const generationStreamMiddleware: Middleware = (store) => {
 
   const closeHandle = () => {
     if (!handle) return;
+    /* Flush the per-run rollup before tearing down. Empty runs (pause before
+       any chapter finished, queue drained immediately) write nothing — there
+       was already a generation_started anchor for those. */
+    if (handle.completedChapterIds.length > 0) {
+      dispatch(changeLogActions.appendLogEvent(
+        buildGenerationRunCompleteEvent({ chapterIds: handle.completedChapterIds }),
+      ));
+    }
     handle.cancel();
     handle = null;
     dispatch(chaptersActions.clearActiveStream());
@@ -160,7 +177,7 @@ export const generationStreamMiddleware: Middleware = (store) => {
       getChapters: () => (store.getState() as StreamableRootState).chapters.chapters,
       onTick: (ev: GenerationTick) => dispatch(chaptersActions.applyGenerationTick(ev)),
     });
-    handle = { cancel, bookId, modelKey };
+    handle = { cancel, bookId, modelKey, completedChapterIds: [] };
     /* Drain the spec the instant the SSE owns it — same Pause→Resume rationale
        documented on the slice reducer: without this, an aborted SSE never
        delivers `idle` so `pendingRegen` would stick around forever and every
@@ -271,8 +288,12 @@ export const generationStreamMiddleware: Middleware = (store) => {
         ));
       }
       if (ev && ev.type === 'chapter_complete' && ev.chapterId != null && sliceMatchesHandle) {
-        const ch = after.chapters.chapters.find(c => c.id === ev.chapterId);
-        if (ch) dispatch(changeLogActions.appendLogEvent(buildChapterCompleteEvent({ chapter: ch })));
+        /* Accumulate — do NOT dispatch a per-chapter event. The rollup goes
+           out once on closeHandle (run drain / pause). De-dupe so a retry
+           tick or re-emitted SSE message doesn't double-count. */
+        if (!handle.completedChapterIds.includes(ev.chapterId)) {
+          handle.completedChapterIds.push(ev.chapterId);
+        }
       } else if (ev && ev.type === 'chapter_failed' && ev.chapterId != null && sliceMatchesHandle) {
         const ch = after.chapters.chapters.find(c => c.id === ev.chapterId);
         if (ch) {

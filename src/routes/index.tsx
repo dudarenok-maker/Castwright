@@ -199,21 +199,47 @@ function AccountRoute() {
 export function ChangelogRoute() {
   useHydrateStage({ kind: 'changelog' }, []);
   const dispatch = useAppDispatch();
-  const events = useAppSelector(s => s.changeLog.workspaceEvents);
+  const events         = useAppSelector(s => s.changeLog.workspaceEvents);
+  const nextCursor     = useAppSelector(s => s.changeLog.workspaceNextCursor);
+  const totalCount     = useAppSelector(s => s.changeLog.workspaceTotalCount);
+  const categoryCounts = useAppSelector(s => s.changeLog.workspaceCategoryCounts);
+  const [loadingMore, setLoadingMore] = useState(false);
+
   /* The workspace endpoint fans out across every book's
      .audiobook/change-log.json and tags each event with bookId/bookTitle.
-     Refetched on every mount so opening a book, taking an action, and
-     coming back here shows the new entry without a page refresh. */
+     First page is fetched on mount; further pages land via the
+     IntersectionObserver in ChangeLogView when the user scrolls within
+     reach of the tail. */
   useEffect(() => {
     let cancelled = false;
     api.getWorkspaceChangelog().then(res => {
-      if (!cancelled) dispatch(changeLogActions.hydrateWorkspaceEvents(res.events));
+      if (!cancelled) dispatch(changeLogActions.hydrateWorkspaceFirstPage(res));
     }).catch(err => {
       console.error('[changelog] workspace fetch failed', err);
     });
     return () => { cancelled = true; };
   }, [dispatch]);
-  return <ChangeLogView events={events}/>;
+
+  /* Fetch the next page when the view's sentinel intersects the viewport.
+     The loadingMore guard keeps a sub-200px scroll from firing two
+     overlapping requests for the same cursor. */
+  const loadMore = useMemo(() => () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    api.getWorkspaceChangelog({ before: nextCursor })
+      .then(res => dispatch(changeLogActions.appendWorkspacePage(res)))
+      .catch(err => console.error('[changelog] workspace page fetch failed', err))
+      .finally(() => setLoadingMore(false));
+  }, [dispatch, nextCursor, loadingMore]);
+
+  return <ChangeLogView
+    events={events}
+    totalCount={totalCount}
+    categoryCounts={categoryCounts}
+    onLoadMore={loadMore}
+    hasMore={nextCursor != null}
+    loadingMore={loadingMore}
+  />;
 }
 
 export function AnalysingRoute() {

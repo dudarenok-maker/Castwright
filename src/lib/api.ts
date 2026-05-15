@@ -12,11 +12,12 @@ import type {
   BookStateResponse, PutStateRequest, WorkspaceChangeLogResponse,
   UserSettings, UserSettingsPatch, DroppedQuotesResponse,
   BookExportRequest, BookExportJob, ExportLanInfo,
+  BaseVoice, TtsEngine,
 } from './types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
 import { MOCK_LIBRARY } from '../mocks/library';
-import { MOCK_VOICE_LIBRARY } from '../mocks/voices';
+import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
 import { MATCH_FACTORS } from '../data/match-factors';
 import { PENDING_REVISIONS } from '../data/revisions';
 import { VOICE_DRIFT_EVENTS } from '../data/drift';
@@ -194,6 +195,14 @@ export interface VoiceSampleArgs {
   };
 }
 
+export interface BaseVoiceSampleArgs {
+  engine: TtsEngine;
+  speakerName: string;
+  /** Caller's currently-selected modelKey. The server re-maps to a
+      compatible model when this doesn't route to `engine`. */
+  modelKey: TtsModelKey;
+}
+
 /* ── mock implementations ────────────────────────────────────────────── */
 
 async function mockGetLibrary(): Promise<LibraryResponse> {
@@ -207,6 +216,18 @@ async function mockGetVoices(_args?: { currentBookId?: string }): Promise<VoiceL
 }
 
 async function mockSetVoicePin(_voiceId: string, _pinned: boolean): Promise<void> {
+  await wait(20);
+}
+
+async function mockGetBaseVoices(): Promise<{ voices: BaseVoice[] }> {
+  await wait(40);
+  return { voices: MOCK_BASE_VOICES };
+}
+
+async function mockSetVoiceOverride(
+  _voiceId: string,
+  _override: BaseVoice | null,
+): Promise<void> {
   await wait(20);
 }
 
@@ -424,6 +445,11 @@ async function mockGetVoiceSample({ modelKey }: VoiceSampleArgs): Promise<VoiceS
   return { url: '', durationSec: 12, cached: false, modelKey };
 }
 
+async function mockGetBaseVoiceSample({ modelKey }: BaseVoiceSampleArgs): Promise<VoiceSample> {
+  await wait(200);
+  return { url: '', durationSec: 12, cached: false, modelKey };
+}
+
 async function mockPollRevisions(_args: PollArgs): Promise<RevisionsResponse> {
   await wait(200);
   return {
@@ -457,6 +483,21 @@ async function realSetVoicePin(voiceId: string, pinned: boolean): Promise<void> 
     body: JSON.stringify({ pinned }),
   });
   if (!res.ok) throw new Error(`Voice pin update failed (${res.status}): ${(await res.text()) || res.statusText}`);
+}
+
+async function realGetBaseVoices(): Promise<{ voices: BaseVoice[] }> {
+  const res = await fetch('/api/voices/base');
+  if (!res.ok) throw new Error(`Base-voice catalog fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function realSetVoiceOverride(voiceId: string, override: BaseVoice | null): Promise<void> {
+  const res = await fetch(`/api/voices/${encodeURIComponent(voiceId)}/override`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ override }),
+  });
+  if (!res.ok) throw new Error(`Voice override update failed (${res.status}): ${(await res.text()) || res.statusText}`);
 }
 
 async function realImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {
@@ -947,6 +988,25 @@ async function realGetVoiceSample({ voiceId, voice, modelKey, text, characterHin
   return res.json();
 }
 
+/* Raw-speaker audition — bypasses the attribute picker so the user can
+   preview an unmodified model voice (Base voices tab + family-header Play).
+   The synthetic voiceId in the URL is just a routing carrier; the server
+   caches by (engine, speakerName) regardless. */
+async function realGetBaseVoiceSample({ engine, speakerName, modelKey }: BaseVoiceSampleArgs): Promise<VoiceSample> {
+  const carrier = `raw-${engine}-${speakerName}`;
+  const res = await fetch(`/api/voices/${encodeURIComponent(carrier)}/sample`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ modelKey, rawEngine: engine, rawSpeaker: speakerName }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = ((await res.json()) as { message?: string }).message ?? ''; } catch { /* not json */ }
+    throw new Error(detail || `Base voice sample failed (${res.status}).`);
+  }
+  return res.json();
+}
+
 /* Real SSE reader for chapter generation. Mirrors the analysis-stream pattern
    above: open a long-running POST, parse `data: <json>` frames, dispatch each
    payload to onTick. Returns a canceller that aborts the fetch. */
@@ -1109,16 +1169,31 @@ async function mockGetWorkspaceInfo(): Promise<WorkspaceInfo> {
   return { root: '(mock)', booksRoot: '(mock)/books', source: 'default' };
 }
 
-async function realGetWorkspaceChangelog(): Promise<WorkspaceChangeLogResponse> {
-  const res = await fetch('/api/workspace/changelog');
+export interface GetWorkspaceChangelogArgs {
+  /** Page size — default 50, capped at 200 server-side. Omit on the first
+      request unless you specifically want a smaller/larger window. */
+  limit?: number;
+  /** ISO timestamp cursor. Pass the previous response's `nextCursor` to
+      fetch the next page. Omit on the first request. */
+  before?: string | null;
+}
+
+async function realGetWorkspaceChangelog(args: GetWorkspaceChangelogArgs = {}): Promise<WorkspaceChangeLogResponse> {
+  const qs = new URLSearchParams();
+  if (args.limit != null) qs.set('limit', String(args.limit));
+  if (args.before)        qs.set('before', args.before);
+  const url = qs.toString() ? `/api/workspace/changelog?${qs}` : '/api/workspace/changelog';
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`Workspace changelog fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
 
-async function mockGetWorkspaceChangelog(): Promise<WorkspaceChangeLogResponse> {
-  /* Surface the demo fixture tagged with a stub book so the workspace view
-     has something to render under VITE_USE_MOCKS=true. The real workspace
-     route fans out across every book's .audiobook/change-log.json. */
+async function mockGetWorkspaceChangelog(_args: GetWorkspaceChangelogArgs = {}): Promise<WorkspaceChangeLogResponse> {
+  /* CHANGE_LOG_EVENTS is intentionally empty (see src/data/change-log.ts).
+     The mock stays contract-correct so VITE_USE_MOCKS=true exercises the
+     same shape the real server returns; under mocks the Activity view sees
+     the empty state, which is exactly what the real server returns for a
+     fresh workspace. */
   await wait(60);
   return {
     events: CHANGE_LOG_EVENTS.map(e => ({
@@ -1127,6 +1202,9 @@ async function mockGetWorkspaceChangelog(): Promise<WorkspaceChangeLogResponse> 
       bookTitle: 'Northern Star',
       author: 'Demo Author',
     })),
+    nextCursor: null,
+    totalCount: 0,
+    categoryCounts: { voice: 0, generation: 0, manuscript: 0, cast: 0 },
   };
 }
 
@@ -1419,6 +1497,8 @@ const real = {
   getLibrary:        realGetLibrary,
   getVoices:         realGetVoices,
   setVoicePin:       realSetVoicePin,
+  getBaseVoices:     realGetBaseVoices,
+  setVoiceOverride:  realSetVoiceOverride,
   getBookState:      realGetBookState,
   putBookState:      realPutBookState,
   getDroppedQuotes:  realGetDroppedQuotes,
@@ -1434,6 +1514,7 @@ const real = {
   setChapterExcluded:      realSetChapterExcluded,
   runAnalysisForChapters:  realRunAnalysisForChapters,
   getVoiceSample:    realGetVoiceSample,
+  getBaseVoiceSample: realGetBaseVoiceSample,
   streamGeneration:  realStreamGeneration,
   pauseGeneration:   realPauseGeneration,
   getSidecarHealth:  realGetSidecarHealth,
@@ -1471,6 +1552,8 @@ const mock = {
   getLibrary:        mockGetLibrary,
   getVoices:         mockGetVoices,
   setVoicePin:       mockSetVoicePin,
+  getBaseVoices:     mockGetBaseVoices,
+  setVoiceOverride:  mockSetVoiceOverride,
   getBookState:      mockGetBookState,
   putBookState:      mockPutBookState,
   getDroppedQuotes:  mockGetDroppedQuotes,
@@ -1486,6 +1569,7 @@ const mock = {
   setChapterExcluded:      mockSetChapterExcluded,
   runAnalysisForChapters:  mockRunAnalysisForChapters,
   getVoiceSample:    mockGetVoiceSample,
+  getBaseVoiceSample: mockGetBaseVoiceSample,
   streamGeneration:  mockStreamGeneration,
   pauseGeneration:   mockPauseGeneration,
   getSidecarHealth:  mockGetSidecarHealth,

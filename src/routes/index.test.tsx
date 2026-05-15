@@ -369,7 +369,12 @@ describe('ChangelogRoute', () => {
         bookId: 'ns', bookTitle: 'Northern Star', author: 'Demo',
       },
     ];
-    workspaceChangelogMock.mockResolvedValue({ events });
+    workspaceChangelogMock.mockResolvedValue({
+      events,
+      nextCursor: null,
+      totalCount: events.length,
+      categoryCounts: { voice: 0, generation: 1, manuscript: 0, cast: 1 },
+    });
 
     const store = makeStore();
     render(

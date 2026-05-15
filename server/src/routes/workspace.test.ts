@@ -131,4 +131,51 @@ describe('workspace router', () => {
       '2026-05-13T10:00:00.000Z',
     ]);
   });
+
+  it('returns totalCount + categoryCounts computed over the FULL workspace, not just this page', async () => {
+    /* Drives the workspace Activity pills. Counts must reflect every event
+       in every book — not the page slice — so "All (N)" stays honest while
+       the user scrolls. */
+    const res = await request(app).get('/api/workspace/changelog');
+    expect(res.body.totalCount).toBe(3);
+    expect(res.body.categoryCounts).toEqual({
+      voice:      1, /* Alpha voice_tune */
+      generation: 1, /* Alpha regenerate */
+      manuscript: 0,
+      cast:       1, /* Beta cast_confirm */
+    });
+  });
+
+  it('paginates with limit + nextCursor, returning the boundary timestamp for the client to pass back', async () => {
+    const res = await request(app).get('/api/workspace/changelog?limit=2');
+    expect(res.body.events).toHaveLength(2);
+    expect(res.body.events[0].at).toBe('2026-05-13T15:00:00.000Z');
+    expect(res.body.events[1].at).toBe('2026-05-13T12:00:00.000Z');
+    /* Cursor is the timestamp of the LAST event in the page so the client
+       can pass it back as `before=` to fetch what's older. */
+    expect(res.body.nextCursor).toBe('2026-05-13T12:00:00.000Z');
+    /* Totals still describe the full set, not the page. */
+    expect(res.body.totalCount).toBe(3);
+  });
+
+  it('serves the next page when `before` is passed, with nextCursor=null once the tail is reached', async () => {
+    const res = await request(app)
+      .get('/api/workspace/changelog?limit=2&before=2026-05-13T12:00:00.000Z');
+    expect(res.body.events).toHaveLength(1);
+    expect(res.body.events[0].at).toBe('2026-05-13T10:00:00.000Z');
+    /* No more events after this — cursor is null so the client stops
+       firing follow-up requests. */
+    expect(res.body.nextCursor).toBeNull();
+  });
+
+  it('caps limit at 200 even when the client requests a larger page', async () => {
+    /* The whole point of pagination is preventing a browser-choking
+       response. The cap is enforced server-side so a misbehaving client
+       can't ask for everything by sending limit=999999. */
+    const res = await request(app).get('/api/workspace/changelog?limit=9999');
+    /* With only 3 events in the fixture the page would naturally contain
+       them all; what we're asserting here is that the limit clamp
+       doesn't crash on a huge value. */
+    expect(res.body.events).toHaveLength(3);
+  });
 });
