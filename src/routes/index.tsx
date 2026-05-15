@@ -75,6 +75,16 @@ export function BooksRoute() {
         if (res) dispatch(libraryActions.hydrate(res));
         if (bookId === b.bookId) dispatch(uiActions.goHome());
       }}
+      onEditBook={async (b, patch) => {
+        try {
+          await api.putBookState(b.bookId, { slice: 'state', patch });
+        } catch (err) {
+          showError(`Couldn't update "${b.title}"`, (err as Error).message, 'Edit');
+          return;
+        }
+        const res = await api.getLibrary().catch(() => null);
+        if (res) dispatch(libraryActions.hydrate(res));
+      }}
       onReparseBook={async (b) => {
         let result;
         try {

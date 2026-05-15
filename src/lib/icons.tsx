@@ -46,6 +46,7 @@ export const IconClock    = (p: IconProps) => Svg(<><circle cx="12" cy="12" r="1
 export const IconCheckCircle = (p: IconProps) => Svg(<><circle cx="12" cy="12" r="10"/><path d="M9 12l2 2 4-4"/></>, p);
 export const IconExternal = (p: IconProps) => Svg(<><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></>, p);
 export const IconTrash    = (p: IconProps) => Svg(<><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></>, p);
+export const IconPencil   = (p: IconProps) => Svg(<><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4 12.5-12.5z"/></>, p);
 export const IconShield   = (p: IconProps) => Svg(<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>, p);
 export const IconWifi     = (p: IconProps) => Svg(<><path d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0"/><circle cx="12" cy="20" r="0.5" fill="currentColor"/></>, p);
 export const IconFolder   = (p: IconProps) => Svg(<path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>, p);
