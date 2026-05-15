@@ -210,16 +210,18 @@ export const chaptersSlice = createSlice({
       s.generationStartedAt = null;
       s.pendingRegen = null;
       s.lastTickAt = null;
-      /* Land paused only when there's persisted progress to preserve — i.e.
-         at least one chapter already has audio on disk. For a freshly-
-         analysed book where everything is still queued, leaving paused
-         alone (default false) lets the SSE middleware kick off generation
-         the moment the user lands on the Generate view, instead of forcing
-         a redundant click of Resume. The "page reload during a long run"
-         safety still applies because any in-flight book has completed
-         chapters by the time the user reloads — those flip this back to
-         paused=true. */
-      if (done.size > 0) s.paused = true;
+      /* paused is deliberately NOT touched here. Pre-sticky-generation
+         this hydrate flipped paused=true whenever any chapter audio was
+         already on disk, on the assumption that "some progress + page
+         load" meant "user came back from a previous session." That made
+         sense when every reload tore down the SSE; with the post-reload
+         subscribe contract (see plan 31, invariant 1a) the server keeps
+         the run going across reloads, and forcing paused=true here would
+         make the Generate button display Resume + suppress the middleware
+         from auto-attaching to the still-live job. The new contract:
+         paused is ONLY set by an explicit chaptersActions.setPaused —
+         either the Generate-view Stop button or the local-analyzer
+         confirm — never as a side-effect of hydrate. */
     },
 
     applyGenerationTick: (s, a: PayloadAction<GenerationTick>) => {
