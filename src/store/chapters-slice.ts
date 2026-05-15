@@ -14,7 +14,7 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
    book — a confusing flash of wrong content. Start empty; hydration is the
    only legitimate source of chapter rows for a real book. The fixture still
    exists for the drift-report modal and the mock API. */
-import type { Chapter, Character, GenerationTick, AnalyseResponse, BookStateJson } from '../lib/types';
+import type { Chapter, Character, GenerationTick, AnalyseResponse, BookStateJson, TtsModelKey } from '../lib/types';
 
 /* When the SSE has produced no tick for this long while a chapter is
    in_progress, the Generate view flips that chapter to a "Stalled" amber
@@ -25,6 +25,25 @@ export const STALL_THRESHOLD_MS = 30_000;
 export interface PendingRegenSpec {
   chapterIds: number[];
   force: true;
+}
+
+/** Cross-book snapshot of the in-flight generation run. Set by the
+    generation-stream middleware on openHandle and updated on every non-idle
+    tick; cleared on closeHandle. Decouples the global header pill from
+    `chapters.chapters` so the pill keeps reflecting the *generating* book
+    even after the user navigates into a different book and the slice gets
+    re-hydrated with that other book's chapter rows. */
+export interface ActiveStreamSnapshot {
+  bookId: string;
+  modelKey: TtsModelKey;
+  done: number;
+  total: number;
+  inProgress: number;
+  /** Mirrors slice.lastTickAt at snapshot capture; preserved when the slice
+      gets rehydrated for a different book so stall detection still works. */
+  lastTickAt: number | null;
+  /** Mirrors slice.lastError at snapshot capture; "halted" pill state. */
+  halted: boolean;
 }
 
 export interface ChaptersState {
@@ -48,6 +67,16 @@ export interface ChaptersState {
       the matching variant on the global header pill. Cleared on idle so a
       drained queue isn't reported as stalled. */
   lastTickAt: number | null;
+  /** Which book the `chapters` array currently reflects. Maintained by
+      `setChapters` / `hydrateFromBookState` / `hydrateFromAnalysis`. The
+      middleware compares this with the open handle's bookId before applying
+      per-chapter ticks — when the user navigates into a different book
+      mid-run the slice gets repopulated with that book's rows, and ticks
+      from the still-running stream would otherwise clobber them. */
+  currentBookId: string | null;
+  /** Cross-book progress snapshot — see ActiveStreamSnapshot. Non-null
+      means a generation stream is open somewhere. */
+  activeStream: ActiveStreamSnapshot | null;
 }
 
 const initialState: ChaptersState = {
@@ -58,6 +87,8 @@ const initialState: ChaptersState = {
   pendingRegen: null,
   regenEpoch: 0,
   lastTickAt: null,
+  currentBookId: null,
+  activeStream: null,
 };
 
 export const chaptersSlice = createSlice({
@@ -67,6 +98,27 @@ export const chaptersSlice = createSlice({
     setChapters: (s, a: PayloadAction<Chapter[]>) => { s.chapters = a.payload; },
     setPaused:   (s, a: PayloadAction<boolean>)   => { s.paused = a.payload; },
     clearLastError: (s) => { s.lastError = null; },
+
+    /** Records which book's rows `chapters` currently reflects. Dispatched
+        by Layout's per-book hydration effect (immediately after
+        hydrateFromBookState/hydrateFromAnalysis seed the slice) and on
+        goHome (with null) so the middleware's tick guard can detect when
+        the slice has drifted from the still-streaming book. */
+    setCurrentBookId: (s, a: PayloadAction<string | null>) => {
+      s.currentBookId = a.payload;
+    },
+
+    /** Middleware → slice handshake: sets the cross-book snapshot when a
+        stream opens, and replaces it on every non-idle tick with a fresh
+        derive of done/total/inProgress/lastTickAt. */
+    setActiveStream: (s, a: PayloadAction<ActiveStreamSnapshot>) => {
+      s.activeStream = a.payload;
+    },
+
+    /** Middleware → slice handshake: cleared on closeHandle (pause,
+        queue drain, store teardown). The header pill hides entirely when
+        this is null. */
+    clearActiveStream: (s) => { s.activeStream = null; },
 
     /* Called by the Generate view the instant it opens an SSE with a regen
        spec, so a subsequent Pause → Resume cycle re-resumes "naturally"
@@ -78,8 +130,13 @@ export const chaptersSlice = createSlice({
     consumePendingRegen: (s) => { s.pendingRegen = null; },
 
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
-      const { chapters, sentences } = a.payload;
+      const { chapters, sentences, bookId } = a.payload;
       if (!chapters?.length) return;
+      /* Atomically claim the slice for this bookId so the cross-book tick
+         guard (top of applyGenerationTick) and the middleware's open/close
+         gating both have a truthful frame of reference the instant
+         chapters land. */
+      if (bookId) s.currentBookId = bookId;
       /* Server emits `chapters[i].characters = {}` from analysis; the
          per-chapter speaker map is recoverable from sentences. Without
          this seeding the Generate view's expanded chapter row shows no
@@ -103,6 +160,11 @@ export const chaptersSlice = createSlice({
     /* Rebuild chapters from a disk-resident state.json + the set of completed
        audio slugs. Used when opening a previously-analysed book. */
     hydrateFromBookState: (s, a: PayloadAction<{
+      /** Atomically claims the slice for this bookId so the cross-book
+          tick guard has a truthful frame of reference the instant chapters
+          land. Optional only because legacy test fixtures predate the
+          field; production callers always pass it. */
+      bookId?: string;
       chapters: BookStateJson['chapters'];
       completedSlugs: string[];
       characters: Character[];
@@ -112,7 +174,8 @@ export const chaptersSlice = createSlice({
           cache yet) — fall back to seeding every cast member as queued. */
       chapterCharacters?: Record<number, string[]>;
     }>) => {
-      const { chapters, completedSlugs, characters, chapterCharacters } = a.payload;
+      const { bookId, chapters, completedSlugs, characters, chapterCharacters } = a.payload;
+      if (bookId) s.currentBookId = bookId;
       const done = new Set(completedSlugs);
       const allCastQueued: Record<string, 'queued'> = {};
       for (const c of characters) allCastQueued[c.id] = 'queued';
@@ -161,6 +224,18 @@ export const chaptersSlice = createSlice({
     applyGenerationTick: (s, a: PayloadAction<GenerationTick>) => {
       const ev = a.payload;
       if (!ev) return;
+
+      /* Cross-book guard: when the user opens a different book mid-run, the
+         slice gets re-hydrated with that other book's chapter rows. The
+         middleware's still-open handle keeps streaming for the original
+         book, but its ticks must NOT mutate the now-irrelevant slice — the
+         cross-book progress snapshot (activeStream) keeps the header pill
+         alive instead. The middleware updates activeStream out-of-band. */
+      if (
+        s.activeStream &&
+        s.currentBookId &&
+        s.activeStream.bookId !== s.currentBookId
+      ) return;
 
       /* Start the ETA clock on the first real progress signal of a run. */
       if (s.generationStartedAt == null && (ev.type === 'progress' || ev.type === 'chapter_assembling')) {

@@ -22,6 +22,8 @@ const baseState = (chapters: Chapter[]): ChaptersState => ({
   pendingRegen: null,
   regenEpoch: 0,
   lastTickAt: null,
+  currentBookId: null,
+  activeStream: null,
 });
 
 const tick = (t: Partial<GenerationTick> & { type: GenerationTick['type'] }): GenerationTick =>
