@@ -108,16 +108,50 @@ describe('playSampleWithAutoLoad', () => {
     expect(statuses).toEqual(['loading-tts', 'synthesizing']);
   });
 
-  it('throws a user-actionable message when the sidecar daemon is unreachable', async () => {
+  it('throws a sidecar-specific recovery hint when the daemon is unreachable', async () => {
     vi.mocked(api.getSidecarHealth).mockResolvedValueOnce({
-      status: 'unreachable', url: '', error: 'ECONNREFUSED',
+      status: 'unreachable', url: 'http://localhost:9000',
+      proxy: 'sidecar', error: 'fetch failed: ECONNREFUSED',
     });
     const playback = { play: vi.fn() };
 
-    await expect(playSampleWithAutoLoad({ args: sampleArgs, playback })).rejects.toThrow(/start-app\.ps1/);
+    /* Inspect the thrown message once — both the recovery hint and the
+       appended underlying-error tag have to be present so power users
+       can copy the reason into a bug report. */
+    const message = await playSampleWithAutoLoad({ args: sampleArgs, playback }).catch(e => (e as Error).message);
+    expect(message).toMatch(/sidecar.*:9000.*unreachable/);
+    expect(message).toMatch(/ECONNREFUSED/);
     expect(api.loadSidecar).not.toHaveBeenCalled();
     expect(api.getVoiceSample).not.toHaveBeenCalled();
     expect(playback.play).not.toHaveBeenCalled();
+  });
+
+  it('throws a Node-specific recovery hint when the Express server (:8080) is unreachable', async () => {
+    vi.mocked(api.getSidecarHealth).mockResolvedValueOnce({
+      status: 'unreachable', url: '',
+      proxy: 'node', error: 'Node server (:8080) returned HTTP 502',
+    });
+    const playback = { play: vi.fn() };
+
+    /* The hint must point at the Node server, not the sidecar — the
+       failure preceded the Node → sidecar hop entirely. The old generic
+       message led the user to restart the (perfectly healthy) sidecar
+       and ignore the actual Node-side crash. */
+    await expect(playSampleWithAutoLoad({ args: sampleArgs, playback }))
+      .rejects.toThrow(/Node server.*:8080.*unreachable/);
+    expect(api.loadSidecar).not.toHaveBeenCalled();
+  });
+
+  it('falls back to sidecar wording when proxy field is absent (older Node server)', async () => {
+    /* Backwards-compat: a Node server built before the `proxy` tag exists
+       still answers /api/sidecar/health. The helper defaults to sidecar
+       wording since that's the historically more common failure mode. */
+    vi.mocked(api.getSidecarHealth).mockResolvedValueOnce({
+      status: 'unreachable', url: '', error: 'Sidecar fetch failed.',
+    });
+    const playback = { play: vi.fn() };
+    await expect(playSampleWithAutoLoad({ args: sampleArgs, playback }))
+      .rejects.toThrow(/sidecar.*:9000.*unreachable/);
   });
 
   it('propagates loadSidecar errors as a thrown Error so callers can render them', async () => {

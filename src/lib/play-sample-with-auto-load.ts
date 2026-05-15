@@ -77,10 +77,23 @@ async function prepareSidecar(
 ): Promise<{ analyzerEvicted: boolean }> {
   const health = await api.getSidecarHealth();
   if (health.status === 'unreachable') {
-    /* No daemon at all — distinct from "daemon up, model not loaded".
-       Start-app.ps1's preflight is the recovery path; surface a copy
-       the user can act on. */
-    throw new Error('TTS sidecar process is not running. Launch the app via start-app.ps1.');
+    /* Two distinct failure modes share `unreachable` status — the
+       `proxy` field tells us which hop died. Surface different copy so
+       the user runs the right recovery. The underlying error message
+       (Vite 502, ECONNREFUSED, sidecar timeout) is appended so power
+       users can copy-paste it into a bug report. */
+    const reason = health.error ?? 'no further detail';
+    if (health.proxy === 'node') {
+      throw new Error(
+        `Node server (:8080) is unreachable — restart it via \`npm --prefix server run dev\` (or scripts\\start-app.ps1). [${reason}]`,
+      );
+    }
+    /* Default to sidecar wording (covers older Node servers that don't
+       emit `proxy`) — they're the more common failure mode now that
+       :8080 is more stable than the Python sidecar's CUDA path. */
+    throw new Error(
+      `TTS sidecar (:9000) is unreachable — restart it via scripts\\start-app.ps1 (or kill any stale process holding :9000). [${reason}]`,
+    );
   }
   if (health.modelLoaded) {
     /* Fast path: model already warm. Nothing to evict or load. */

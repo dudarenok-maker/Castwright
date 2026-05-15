@@ -72,6 +72,26 @@ describe('GET /api/sidecar/health', () => {
     expect(res.body.status).toBe('unreachable');
     expect(res.body.error).toMatch(/503/);
   });
+
+  it('tags every response with proxy="sidecar" so the frontend can distinguish Node-layer failures', async () => {
+    /* `proxy` is the hop tag the frontend uses to choose between "restart
+       Node" and "restart sidecar" recovery copy. The Node layer always
+       emits 'sidecar' here — if the failure was on the Vite → Node hop,
+       this handler never runs and the frontend tags it 'node' itself. */
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ ok: true, engines: ['coqui'], model_loaded: false }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }));
+    const reachable = await request(makeApp()).get('/api/sidecar/health');
+    expect(reachable.body.proxy).toBe('sidecar');
+
+    fetchMock.mockResolvedValue(new Response('nope', { status: 503 }));
+    const unreachable = await request(makeApp()).get('/api/sidecar/health');
+    expect(unreachable.body.proxy).toBe('sidecar');
+
+    fetchMock.mockRejectedValue(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    const timeout = await request(makeApp()).get('/api/sidecar/health');
+    expect(timeout.body.proxy).toBe('sidecar');
+  });
 });
 
 describe('POST /api/sidecar/load', () => {
