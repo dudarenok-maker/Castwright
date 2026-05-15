@@ -64,6 +64,10 @@ vi.mock('../lib/api', () => ({
        per-chapter failed list. These tests don't exercise that surface;
        reject so the catch path silently skips hydration. */
     getBookState:      () => Promise.reject(new Error('not mocked')),
+    /* Same idea for the dropped-quotes panel — it fetches on mount.
+       Resolve with an empty envelope so the panel renders nothing
+       and these route tests stay focused on manuscriptId derivation. */
+    getDroppedQuotes:  () => Promise.resolve({ manuscriptId: 'm1', batches: [] }),
   },
   AnalysisError: class extends Error {
     code = 'unknown';

@@ -26,6 +26,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { putManuscript, getManuscript, getOrHydrateManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { clearAnalysisCache, loadAnalysisCache } from '../store/analysis-cache.js';
+import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { parseManuscript } from '../parsers/index.js';
 
 export const bookStateRouter = Router();
@@ -137,6 +138,26 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
   } catch (e) {
     console.error('[book-state] GET failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to read book state.' });
+  }
+});
+
+/* GET /api/books/:bookId/dropped-quotes
+   Returns the full dropped-quotes ledger (every batch ever recorded for
+   this book) so the analysing view can render the read-only audit
+   panel and PowerShell scripts can grep the file directly during
+   qwen3.5:4b reliability tuning. The envelope is append-only — see
+   server/src/store/dropped-quotes.ts for the shape. Empty envelope
+   when the file doesn't exist yet (book just uploaded, or all runs
+   had zero drops). */
+bookStateRouter.get('/:bookId/dropped-quotes', async (req: Request, res: Response) => {
+  try {
+    const located = await findBookByBookId(req.params.bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const file = await loadDroppedQuotes(located.bookDir, located.state.manuscriptId ?? '');
+    res.json(file);
+  } catch (e) {
+    console.error('[book-state] dropped-quotes GET failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Failed to read dropped-quotes.' });
   }
 });
 
