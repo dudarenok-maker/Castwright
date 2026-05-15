@@ -90,12 +90,37 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       } else if (cachedSentences.length > 0) {
         edits = { sentences: cachedSentences };
       }
-      for (const [chapterId, sentences] of Object.entries(cache.chapters ?? {})) {
-        const id = Number(chapterId);
-        if (Number.isNaN(id)) continue;
-        const ids = new Set<string>();
-        for (const sent of sentences) ids.add(sent.characterId);
-        chapterCharacters[id] = [...ids];
+      /* Prefer the post-fold sentence list (manuscript-edits.json, or the
+         cache-seeded fallback above) because the analysis cache intentionally
+         retains pre-fold descriptor ids ("the-jogger", "drooly-boy"). Those
+         ids never reach the synth pipeline — `foldMinorCast` rewrote them to
+         `unknown-male` / `unknown-female` before manuscript-edits.json was
+         written. Seeding the Generate-view chapter rows from the raw cache
+         would render phantom Queued pills for the descriptor ids, which the
+         synth job never advances. Fall back to the cache only when no edits
+         are available at all (analysis hasn't completed). */
+      const editsForSpeakers = (edits?.sentences ?? []) as Array<{
+        chapterId?: unknown;
+        characterId?: unknown;
+      }>;
+      if (editsForSpeakers.length > 0) {
+        const bucketByChapter = new Map<number, Set<string>>();
+        for (const sent of editsForSpeakers) {
+          if (typeof sent?.chapterId !== 'number') continue;
+          if (typeof sent?.characterId !== 'string') continue;
+          let bucket = bucketByChapter.get(sent.chapterId);
+          if (!bucket) { bucket = new Set(); bucketByChapter.set(sent.chapterId, bucket); }
+          bucket.add(sent.characterId);
+        }
+        for (const [id, ids] of bucketByChapter) chapterCharacters[id] = [...ids];
+      } else {
+        for (const [chapterId, sentences] of Object.entries(cache.chapters ?? {})) {
+          const id = Number(chapterId);
+          if (Number.isNaN(id)) continue;
+          const ids = new Set<string>();
+          for (const sent of sentences) ids.add(sent.characterId);
+          chapterCharacters[id] = [...ids];
+        }
       }
     }
 
