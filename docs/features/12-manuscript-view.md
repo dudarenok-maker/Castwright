@@ -19,6 +19,7 @@ Renders the manuscript a chapter at a time, sentence-by-sentence, with each sent
 - Audio tags (see `07-audio-tag-vocabulary.md`) render inline in the sentence text as badges, not stripped.
 - Chapter navigation is keyboard-friendly: left/right arrows step `currentChapterId`; URL updates via `setCurrentChapterId`.
 - The view is only mounted when `stage.kind === 'ready' && stage.view === 'manuscript'`. Other views never render it.
+- **Excluded chapters are visibly indicated.** Rows in the sidebar with `chapter.excluded === true` render the title in `line-through text-ink/40` and replace the duration line with `"Excluded"`; the per-state icon (spinner/check/warning) is suppressed because the chapter never queued. Selecting an excluded chapter swaps the main panel for an explanatory empty card ("This chapter was excluded at import. …") and a pill next to the title — never a blank `<article>` with `"0 segments · 0 speakers · 0 low-confidence"`. The user re-includes from the Generate view (see `16-generation-stream.md`).
 
 ## Acceptance walkthrough
 
@@ -31,6 +32,7 @@ Run `VITE_USE_MOCKS=true`, navigate to `#/books/<id>/manuscript`.
 5. **Real mode: reload the page** → reassignment persists via the PUT and is hydrated back on next book open. After reparse, surviving edits (whose sentence ids the next analysis pass also produced) carry through; orphaned ids are dropped silently and a `reparse` entry summarising the carry-forward count appears in the Activity log.
 6. **Audio tags in text** — sentence `"Are you sure? [hesitant]"` renders the `[hesitant]` badge inline.
 7. **Navigate chapters** — left/right arrow keys step `currentChapterId`; URL updates; sentence list rerenders for the new chapter.
+8. **Open an excluded chapter** — sidebar row shows a strikethrough title and the word `Excluded` in place of the duration. Click it: the main panel swaps to "This chapter was excluded at import. …" with an `Excluded` pill next to the title. No empty article, no `0 segments` counter.
 
 ## KNOWN: scaffolded
 
