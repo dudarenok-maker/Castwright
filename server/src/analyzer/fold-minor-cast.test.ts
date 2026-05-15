@@ -1,7 +1,7 @@
 /* Pairs with docs/features/06-analyzer-gemini.md — minor-cast fold pass. */
 
 import { describe, it, expect } from 'vitest';
-import { foldMinorCast } from './fold-minor-cast.js';
+import { foldMinorCast, isDescriptorName } from './fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 
 function makeChar(id: string, overrides: Partial<CharacterOutput> = {}): CharacterOutput {
@@ -307,6 +307,130 @@ describe('foldMinorCast', () => {
     expect(result.summary.droppedSilent).toBe(0);
     const bucket = result.characters.find(c => c.id === 'unknown-male')!;
     expect(bucket.aliases).toEqual(['Unknown Passer']);
+  });
+
+  it('folds descriptor-named characters even when they speak ≥ minLines (The Jogger, Drooly Boy, Old Man)', () => {
+    /* The Stage-1 prompt asks for "Unknown <descriptor>" but the model
+       routinely emits the descriptor forms it sees in the manuscript
+       ("The Jogger", "Drooly Boy", "Old Man"). Those are still
+       descriptors — they shouldn't get their own voice profile even
+       if they happen to clear the line-count threshold. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('sophie',     { name: 'Sophie',     gender: 'female' }),
+      makeChar('the-jogger', { name: 'The Jogger', gender: 'male'   }),
+      makeChar('drooly-boy', { name: 'Drooly Boy', gender: 'male'   }),
+      makeChar('old-man',    { name: 'Old Man',    gender: 'male'   }),
+      makeChar('tall-lady',  { name: 'Tall Lady',  gender: 'female' }),
+    ];
+    /* Each descriptor speaks 5 lines — past the minLines=3 threshold,
+       so without the descriptor-pattern rule they'd survive. */
+    const sentences = makeSentences([
+      [1, 'sophie'], [1, 'sophie'], [1, 'sophie'],
+      ...Array.from({ length: 5 }, () => [2, 'the-jogger'] as [number, string]),
+      ...Array.from({ length: 5 }, () => [3, 'drooly-boy'] as [number, string]),
+      ...Array.from({ length: 5 }, () => [4, 'old-man']    as [number, string]),
+      ...Array.from({ length: 5 }, () => [5, 'tall-lady']  as [number, string]),
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+
+    expect(result.rewrites).toEqual({
+      'the-jogger': 'unknown-male',
+      'drooly-boy': 'unknown-male',
+      'old-man':    'unknown-male',
+      'tall-lady':  'unknown-female',
+    });
+    const male   = result.characters.find(c => c.id === 'unknown-male')!;
+    const female = result.characters.find(c => c.id === 'unknown-female')!;
+    expect(male.aliases).toEqual(['The Jogger', 'Drooly Boy', 'Old Man']);
+    expect(female.aliases).toEqual(['Tall Lady']);
+    expect(male.lines).toBe(15);
+    expect(female.lines).toBe(5);
+  });
+
+  it('does NOT fold proper names that happen to share a tail word with a generic role ("Lady Galvin", "Sir Astin")', () => {
+    /* "Lady Galvin" has "Lady" at the START — a title prefix, not the
+       trailing role-word pattern. Same shape as "Sir Astin", "Dame
+       Alina", "Lord Cassius". These are proper names and must NOT
+       fold. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('lady-galvin', { name: 'Lady Galvin', gender: 'female' }),
+      makeChar('sir-astin',   { name: 'Sir Astin',   gender: 'male'   }),
+      makeChar('dame-alina',  { name: 'Dame Alina',  gender: 'female' }),
+    ];
+    const sentences = makeSentences([
+      [1, 'lady-galvin'], [1, 'lady-galvin'], [1, 'lady-galvin'],
+      [2, 'sir-astin'],   [2, 'sir-astin'],   [2, 'sir-astin'],
+      [3, 'dame-alina'],  [3, 'dame-alina'],  [3, 'dame-alina'],
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+
+    expect(result.rewrites).toEqual({});
+    expect(result.characters.map(c => c.id).sort()).toEqual(
+      ['dame-alina', 'lady-galvin', 'narrator', 'sir-astin'],
+    );
+  });
+
+  it('isDescriptorName matrix', () => {
+    /* Lock the patterns down individually so the matcher's contract is
+       readable from the test file. */
+    expect(isDescriptorName('Unknown Jogger')).toBe(true);
+    expect(isDescriptorName('UNKNOWN Intruder')).toBe(true);
+    expect(isDescriptorName('The Jogger')).toBe(true);
+    expect(isDescriptorName('the stranger')).toBe(true);
+    expect(isDescriptorName('The Old Man')).toBe(true);    // The <Word> <Word>
+    expect(isDescriptorName('Drooly Boy')).toBe(true);
+    expect(isDescriptorName('Ponytail Boy')).toBe(true);
+    expect(isDescriptorName('Old Man')).toBe(true);
+    expect(isDescriptorName('Tall Woman')).toBe(true);
+    expect(isDescriptorName('Shy Girl')).toBe(true);
+    /* Proper names — must NOT match. */
+    expect(isDescriptorName('Sophie')).toBe(false);
+    expect(isDescriptorName('Lady Galvin')).toBe(false);
+    expect(isDescriptorName('Sir Astin')).toBe(false);
+    expect(isDescriptorName('Dame Alina')).toBe(false);
+    expect(isDescriptorName('Mr. Sweeney')).toBe(false);
+    expect(isDescriptorName('Garwin Chang')).toBe(false);
+    expect(isDescriptorName('Sandor')).toBe(false);
+    /* Capped at two words after "The" so place-style names ("The
+       Council of Twelve") don't fold. */
+    expect(isDescriptorName('The Council of Twelve')).toBe(false);
+    expect(isDescriptorName('')).toBe(false);
+  });
+
+  it('nameOnly: true folds descriptor names without any sentence data and skips the zero-line drop', () => {
+    /* Preview-fold path used by the interim cast.json + live SSE
+       cast-update. Stage-2 sentences don't exist yet, so the
+       line-count fold and the zero-line drop have to stay off —
+       otherwise every character would either fold or get dropped
+       just because their `lines` count is 0. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('sophie',     { name: 'Sophie',         gender: 'female' }),
+      makeChar('the-jogger', { name: 'The Jogger',     gender: 'male'   }),
+      makeChar('drooly-boy', { name: 'Drooly Boy',     gender: 'male'   }),
+      makeChar('iggy',       { name: 'Iggy',           gender: 'neutral' }), // pet, 0 stage-2 lines but must SURVIVE in nameOnly mode
+    ];
+    const sentences: never[] = [];
+
+    const result = foldMinorCast(chars, sentences, { nameOnly: true });
+
+    expect(result.rewrites).toEqual({
+      'the-jogger': 'unknown-male',
+      'drooly-boy': 'unknown-male',
+    });
+    /* Iggy and Sophie both survive — nameOnly skips the zero-line
+       drop so a pet that the verifier will later kill (Phase 0b) is
+       still visible on the live roster until that point. */
+    expect(result.characters.map(c => c.id).sort()).toEqual(
+      ['iggy', 'narrator', 'sophie', 'unknown-male'],
+    );
+    const male = result.characters.find(c => c.id === 'unknown-male')!;
+    expect(male.aliases).toEqual(['The Jogger', 'Drooly Boy']);
+    expect(result.summary.droppedSilent).toBe(0);
   });
 
   it('dedups bucket aliases case-insensitively and never adds the bucket\'s own name', () => {

@@ -4,9 +4,13 @@
    "Unknown Jogger" / "Unknown Intruder" / throwaway named bystander.
 
    Two trigger conditions, OR-combined:
-     - Name starts with "unknown" (case-insensitive). The Stage-1 prompt
-       tells the model to use "Unknown <descriptor>" for nameless speakers,
-       so this catches the contract.
+     - Name matches a descriptor-as-name pattern (see `isDescriptorName`).
+       The Stage-1 prompt tells the model to use "Unknown <descriptor>"
+       for nameless speakers, but in practice the model also slips in
+       descriptor forms it wasn't told to ("The Jogger", "Drooly Boy",
+       "Old Man"). Treat all of these as the same kind of background
+       speaker — they have no proper name, so they don't warrant their
+       own voice slot.
      - Attributed line count is below `minLines`. Even a named character
        who speaks once or twice doesn't warrant its own voice profile —
        bake them into a generic bucket so library matching and voice-clone
@@ -37,6 +41,14 @@ export interface FoldOptions {
       "no point creating a voice profile for someone who may only say 2
       things in the whole book". */
   minLines?: number;
+  /** When true, only the descriptor-name trigger fires; the line-count
+      threshold and the zero-line drop are both skipped. Used at the
+      interim-cast write before stage-2 attribution exists — without
+      sentence data, every character has 0 lines and would otherwise
+      fall through to either the bucket or the drop set, neither of
+      which is correct mid-Phase-0. The final post-stage-2 pass runs
+      without this flag to apply the full set of rules. */
+  nameOnly?: boolean;
 }
 
 export interface FoldResult {
@@ -60,8 +72,47 @@ const MALE_BUCKET_ID   = 'unknown-male';
 const FEMALE_BUCKET_ID = 'unknown-female';
 const NARRATOR_ID      = 'narrator';
 
-function isUnknownName(name: string): boolean {
-  return /^unknown\b/i.test(name.trim());
+/* Generic-role nouns that, when they appear as the LAST word of a
+   character name preceded by at least one other word, indicate a
+   descriptor rather than a proper name: "Drooly Boy", "Old Man",
+   "Tall Woman". A bare "Boy" / "Man" alone is also descriptive but
+   rarely emitted by the model — those would be caught by the
+   line-count threshold downstream. Kept narrow on purpose: a future
+   "<adj> Doctor" / "<adj> Captain" extension is easy if observed in
+   real runs. */
+const GENERIC_ROLE_TAIL = new Set([
+  'boy', 'girl', 'man', 'woman', 'guy', 'lady', 'kid',
+  'person', 'figure', 'stranger', 'voice',
+]);
+
+/* Decides whether a character's `name` reads as a descriptor rather
+   than a proper name. The three patterns we catch in order:
+     1. `^Unknown\b...` — the Stage-1 contract ("Unknown <descriptor>"
+        for nameless speakers). Stable across analyzer engines.
+     2. `^The <Word>($| <Word>$)` — definite-article-led descriptor.
+        Models routinely emit "The Jogger", "The Stranger", "The
+        Shopkeeper" in spite of the Stage-1 instruction. Capped at
+        two words after "The" so multi-word proper titles
+        ("The Council of Twelve", "The Forbidden Cities") don't get
+        folded — those are usually places, not speakers, and the
+        skill drops them anyway.
+     3. Trailing generic-role word ("Drooly Boy", "Old Man",
+        "Ponytail Girl"). Requires at least one word before the
+        role tail so a bare proper name that happens to be a role
+        ("Boy" used as a nickname) doesn't get folded.
+   Trim + lowercase normalisation up front so the model's casing
+   choices don't matter. */
+export function isDescriptorName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  if (/^unknown\b/i.test(trimmed)) return true;
+  if (/^the\s+\S+(\s+\S+)?$/i.test(trimmed)) return true;
+  const parts = trimmed.split(/\s+/);
+  if (parts.length >= 2) {
+    const tail = parts[parts.length - 1].toLowerCase();
+    if (GENERIC_ROLE_TAIL.has(tail)) return true;
+  }
+  return false;
 }
 
 function pickBucket(c: CharacterOutput): string {
@@ -95,11 +146,16 @@ export function foldMinorCast(
   opts: FoldOptions = {},
 ): FoldResult {
   const minLines = opts.minLines ?? MIN_LINES_DEFAULT;
+  const nameOnly = opts.nameOnly === true;
 
-  /* Count attributed lines per character id. */
+  /* Count attributed lines per character id. In nameOnly mode the count
+     is unused (line-count rules are off) — keep the map empty rather
+     than walking the sentence list. */
   const lineCount = new Map<string, number>();
-  for (const s of sentences) {
-    lineCount.set(s.characterId, (lineCount.get(s.characterId) ?? 0) + 1);
+  if (!nameOnly) {
+    for (const s of sentences) {
+      lineCount.set(s.characterId, (lineCount.get(s.characterId) ?? 0) + 1);
+    }
   }
 
   /* Decide who folds, who drops, and where. Narrator is exempt from both.
@@ -109,7 +165,9 @@ export function foldMinorCast(
      detection prompt slipping pets, animals, or other non-speakers onto
      the roster. Characters with 1..(minLines-1) lines still fold into
      the unknown-male/female buckets (existing behaviour) so a single
-     one-off bystander doesn't get its own voice profile. */
+     one-off bystander doesn't get its own voice profile. In nameOnly
+     mode neither the line-count fold nor the zero-line drop fires —
+     only the descriptor-name fold remains active. */
   const rewrites: Record<string, string> = {};
   const foldedSources: CharacterOutput[] = [];
   const droppedIds = new Set<string>();
@@ -117,13 +175,14 @@ export function foldMinorCast(
   for (const c of characters) {
     if (c.id === NARRATOR_ID) continue;
     if (c.id === MALE_BUCKET_ID || c.id === FEMALE_BUCKET_ID) continue;
+    const isDescriptor = isDescriptorName(c.name);
     const lines = lineCount.get(c.id) ?? 0;
-    if (lines === 0 && !isUnknownName(c.name)) {
+    if (!nameOnly && lines === 0 && !isDescriptor) {
       droppedIds.add(c.id);
       droppedNames.push(c.name);
       continue;
     }
-    const triggered = isUnknownName(c.name) || lines < minLines;
+    const triggered = isDescriptor || (!nameOnly && lines < minLines);
     if (!triggered) continue;
     const target = pickBucket(c);
     if (target === c.id) continue;

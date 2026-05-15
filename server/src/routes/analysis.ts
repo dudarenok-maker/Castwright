@@ -177,6 +177,40 @@ export function verifyEvidenceAgainstSource(
   return { totalDropped, affectedCharacters, entries };
 }
 
+/* After verifyEvidenceAgainstSource has stripped fabricated quotes,
+   any non-narrator character left with zero surviving evidence failed
+   the Stage-1 skill's own inclusion test ("Test for inclusion: can you
+   copy a verbatim sentence … that is dialogue the entity speaks?").
+   That's the catch-net for the dominant failure mode the user sees in
+   the wild: the model lists a non-speaker (a pet hissing, an unnamed
+   bystander whose attribution the model invented, a one-line
+   placeholder it later admitted it couldn't quote) on the roster, the
+   verifier kills the invented quotes, and a hollow character slot
+   survives all the way into the cast view.
+
+   Drop them here so the post-Phase-0b cast.json + the SSE cast-update
+   only ever surface speakers with at least one verifiable line. The
+   narrator is exempt — the narrator's "lines" are prose, not dialogue,
+   and the Stage-1 prompt doesn't ask for verbatim quotes from prose. */
+export function dropEvidencelessCast(
+  characters: CharacterOutput[],
+  log: (message: string) => void,
+): CharacterOutput[] {
+  const kept: CharacterOutput[] = [];
+  const droppedNames: string[] = [];
+  for (const c of characters) {
+    if (c.id === 'narrator') { kept.push(c); continue; }
+    if ((c.evidence?.length ?? 0) === 0) { droppedNames.push(c.name); continue; }
+    kept.push(c);
+  }
+  if (droppedNames.length > 0) {
+    const sample = droppedNames.slice(0, 4).join(', ');
+    const more = droppedNames.length > 4 ? `, +${droppedNames.length - 4} more` : '';
+    log(`Dropped ${droppedNames.length} character${droppedNames.length === 1 ? '' : 's'} with no surviving evidence (${sample}${more}) — verifier killed every attributed quote.`);
+  }
+  return kept;
+}
+
 /* Persist a verify-pass's dropped entries to .audiobook/dropped-quotes.json.
    No-op when the pass had zero drops or when the book has no bookDir yet
    (e.g. uploaded but not confirmed) — the ledger lives next to cast.json
@@ -284,12 +318,13 @@ export function mergeRosterChapter(
 
 /* Build an "interim" cast suitable for writing to cast.json mid-run.
    Walks chapterCast in narrative chapter order, merges via the same
-   mergeRosterChapter the live SSE uses, applies deterministic palette
-   colours, and attaches `lines: 0, scenes: 0` placeholders — Phase 1
-   hasn't run yet so per-character line counts aren't known. The shape
-   matches the post-Phase-1 end-of-run write so frontend cast.json
-   readers tolerate it; the post-fold final write replaces this with the
-   authoritative version once Phase 1 + fold completes.
+   mergeRosterChapter the live SSE uses, applies the descriptor-name
+   fold (Unknown male / Unknown female collapse — see
+   `previewFoldForLiveView`), then deterministic palette colours and
+   `lines: 0, scenes: 0` placeholders since Phase 1 hasn't run yet.
+   The shape matches the post-Phase-1 end-of-run write so frontend
+   cast.json readers tolerate it; the post-fold final write replaces
+   this with the authoritative version once Phase 1 + fold completes.
    Returns `[]` when the roster is empty so callers can guard the
    cast.json write. */
 export function buildInterimCast(
@@ -302,10 +337,24 @@ export function buildInterimCast(
     if (cast?.length) mergeRosterChapter(roster, cast);
   }
   if (roster.size === 0) return [];
-  return attachLinesAndScenes(
-    assignPaletteColors(Array.from(roster.values())),
-    [],
-  );
+  const folded = previewFoldForLiveView(Array.from(roster.values()));
+  return attachLinesAndScenes(assignPaletteColors(folded), []);
+}
+
+/* Name-only descriptor fold used by both the interim cast.json write
+   and the live SSE cast-update payload. Collapses "The Jogger" /
+   "Drooly Boy" / "Unknown Intruder" into the Unknown male / Unknown
+   female buckets the moment they appear in a chapter's roster, so
+   the user sees the same buckets they'd see post-Phase-1 instead of
+   a churn of descriptor-named one-offs.
+
+   No line-count rule and no zero-line drop — both need stage-2 data
+   the verifier hasn't produced yet during Phase 0a, and applying
+   them prematurely would drop legitimate characters who simply
+   haven't been processed yet. The full fold runs at Phase 1's tail
+   with sentence counts in hand. */
+function previewFoldForLiveView(characters: CharacterOutput[]): CharacterOutput[] {
+  return foldMinorCast(characters, [], { nameOnly: true }).characters;
 }
 
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
@@ -416,6 +465,26 @@ function readStage2Concurrency(): number {
 
 function clampEst(ms: number): number {
   return Math.max(MIN_EST_MS, Math.min(MAX_EST_MS, Math.round(ms)));
+}
+
+/* Remove `chapterId` from `cache.failedChapterIds` if present, mutating
+   the cache in place. Returns whether the id was actually in the list —
+   the caller uses that to decide whether to emit a `chapter-resolved`
+   event on the SSE. Centralises the "is this a recovered chapter?"
+   check so the full-route Phase 0a success path and the subset
+   retry's success path stay in lockstep (both must clear AND notify;
+   either one alone leaks state to the FE). Idempotent: a second call
+   for the same id is a no-op and returns false. Exported for unit
+   testing. */
+export function clearFailedChapterId(
+  cache: { failedChapterIds?: number[] },
+  chapterId: number,
+): boolean {
+  const wasFailed = cache.failedChapterIds?.includes(chapterId) === true;
+  if (wasFailed) {
+    cache.failedChapterIds = cache.failedChapterIds!.filter(id => id !== chapterId);
+  }
+  return wasFailed;
 }
 
 /* Per-chapter ETA from observed pace. Once at least one chapter has
@@ -828,12 +897,14 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       stage1 = cache.stage1;
       sortEvidence(stage1.characters);
       const verified = verifyEvidenceAgainstSource(stage1.characters, record.sourceText, msg => log(0, msg));
-      if (verified.totalDropped > 0) {
+      const before = stage1.characters.length;
+      stage1.characters = dropEvidencelessCast(stage1.characters, msg => log(0, msg));
+      if (verified.totalDropped > 0 || stage1.characters.length !== before) {
         cache.stage1 = stage1;
         await saveAnalysisCache(manuscriptId, cache);
       }
       await persistDroppedQuotesBatch(recordRef.bookDir, manuscriptId, 'analysis-stream', verified);
-      send({ kind: 'cast-update', characters: stage1.characters });
+      send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters) });
     } else {
       /* Phase 0a — per-chapter cast detection. The chapterCast cache
          lets us resume mid-Phase-0a after a crash / rate-limit / model
@@ -860,7 +931,13 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       };
       const emitCastUpdate = (): void => {
         const roster = rebuildRoster();
-        send({ kind: 'cast-update', characters: Array.from(roster.values()) });
+        /* Name-only fold so descriptor speakers ("The Jogger", "Drooly
+           Boy", "Unknown Intruder") collapse into the Unknown male /
+           Unknown female buckets in the live view — same contract the
+           on-disk interim cast.json uses, kept in lockstep so the user
+           sees one consistent roster across SSE + .audiobook/. */
+        const folded = previewFoldForLiveView(Array.from(roster.values()));
+        send({ kind: 'cast-update', characters: folded });
       };
 
       const completedCast = new Set<number>(Object.keys(chapterCast).map(k => Number(k)));
@@ -1057,10 +1134,14 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         completedCast.add(i);
         cache.chapterCast = chapterCast;
         /* A previously-failed chapter just succeeded on resume — clear it
-           from the durable failed-id list so the analysing view's Retry
-           row disappears on the next book-state fetch. */
-        if (cache.failedChapterIds?.length) {
-          cache.failedChapterIds = cache.failedChapterIds.filter(id => id !== ch.id);
+           from the durable failed-id list AND notify the live view so the
+           Retry row disappears immediately, not just on the next book-state
+           fetch. Without the SSE event the panel keeps showing a row the
+           server has already resolved; the user then clicks "Retry" on a
+           ghost row, which kicks off a duplicate subset run and (pre-fix)
+           raced with this very loop's writes. */
+        if (clearFailedChapterId(cache, ch.id)) {
+          send({ kind: 'chapter-resolved', chapterId: ch.id });
         }
         const chDuration = Date.now() - startedChAt;
         /* Persist this chapter's wall-clock duration so a future resumed
@@ -1171,9 +1252,10 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
          sort+verify+colour. Always include 'narrator' so downstream
          (stage-2 attribution, voice picker) can rely on its presence. */
       const finalRoster = rebuildRoster();
-      const characters = Array.from(finalRoster.values());
-      sortEvidence(characters);
-      const verified = verifyEvidenceAgainstSource(characters, record.sourceText, msg => log(0, msg));
+      const rawCharacters = Array.from(finalRoster.values());
+      sortEvidence(rawCharacters);
+      const verified = verifyEvidenceAgainstSource(rawCharacters, record.sourceText, msg => log(0, msg));
+      const characters = dropEvidencelessCast(rawCharacters, msg => log(0, msg));
       stage1 = {
         characters,
         /* Carry the parser's chapter list verbatim — Phase 0a deliberately
@@ -1185,16 +1267,23 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       await saveAnalysisCache(manuscriptId, cache);
       await persistDroppedQuotesBatch(recordRef.bookDir, manuscriptId, 'analysis-stream', verified);
       stage1ActualMs = Date.now() - stage0Start;
-      send({ kind: 'cast-update', characters: stage1.characters });
-      /* Finalised-but-not-folded roster lands in cast.json so the file
-         reflects the verified Phase 0b state before Phase 1's attribution
-         pass starts (which can be the longest phase by far on a long
-         book). attachLinesAndScenes with no sentences gives lines:0 /
-         scenes:0 placeholders — the post-fold end-of-run write later
-         overwrites with the authoritative counts. */
+      send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters) });
+      /* Cast.json reflects the verified Phase 0b state before Phase 1's
+         attribution pass starts (which can be the longest phase by far
+         on a long book). We apply the name-only fold here too — the
+         live SSE just emitted the same shape, and the user's mental
+         model of "this is what we detected" needs to line up between
+         the streaming view and `.audiobook/cast.json` on disk.
+         stage1.characters itself stays un-folded for stage-2 attribution
+         — the descriptor names need to survive into the stage-2 prompt
+         so the model can map dialogue to them. The post-Phase-1 fold
+         later overwrites this file with the authoritative counts. */
       if (recordRef.bookDir && !clientGone) {
         try {
-          const stage1Cast = attachLinesAndScenes(assignPaletteColors(stage1.characters), []);
+          const stage1Cast = attachLinesAndScenes(
+            assignPaletteColors(previewFoldForLiveView(stage1.characters)),
+            [],
+          );
           await writeJsonAtomic(castJsonPath(recordRef.bookDir), { characters: stage1Cast });
         } catch (persistErr) {
           console.warn('[analysis] stage1 cast.json write failed', persistErr);
@@ -1851,7 +1940,8 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     };
     const emitCastUpdate = (): void => {
       const roster = rebuildRoster();
-      send({ kind: 'cast-update', characters: Array.from(roster.values()) });
+      const folded = previewFoldForLiveView(Array.from(roster.values()));
+      send({ kind: 'cast-update', characters: folded });
     };
 
     for (let idx = 0; idx < toRun.length; idx++) {
@@ -1871,10 +1961,14 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
         );
         chapterCast[ch.id] = result.characters;
         cache.chapterCast = chapterCast;
-        if (cache.failedChapterIds?.length) {
-          cache.failedChapterIds = cache.failedChapterIds.filter(id => id !== ch.id);
-        }
+        const wasFailed = clearFailedChapterId(cache, ch.id);
         await saveAnalysisCache(manuscriptId, cache);
+        /* Emit chapter-resolved so the analysing view's Retry row clears
+           in real time. The view used to rely on the next book-state
+           fetch (or on the .then() handler in the FE retry promise) to
+           hide the row, which left visible stale state during the
+           seconds between Phase 0a success and the route returning. */
+        if (wasFailed) send({ kind: 'chapter-resolved', chapterId: ch.id });
         /* Mirror the cache write into cast.json so a subset retry's
            progress is reflected on disk too — matches the full route's
            interim write contract. */
@@ -1917,9 +2011,10 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
        unset in that case; the main route's [[cast_incomplete]] gate
        will re-run Phase 0a once the user kicks it. */
     const finalRoster = rebuildRoster();
-    const characters = Array.from(finalRoster.values());
-    sortEvidence(characters);
-    const verified = verifyEvidenceAgainstSource(characters, record.sourceText, msg => log(0, msg));
+    const rawCharacters = Array.from(finalRoster.values());
+    sortEvidence(rawCharacters);
+    const verified = verifyEvidenceAgainstSource(rawCharacters, record.sourceText, msg => log(0, msg));
+    const characters = dropEvidencelessCast(rawCharacters, msg => log(0, msg));
     const stage1: Stage1Output = {
       characters,
       chapters: record.chapterHints.map(c => ({ id: c.id, title: c.title })),
@@ -1930,7 +2025,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     }
     await saveAnalysisCache(manuscriptId, cache);
     await persistDroppedQuotesBatch(record.bookDir, manuscriptId, 'analysis-chapters', verified);
-    send({ kind: 'cast-update', characters: stage1.characters });
+    send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters) });
     send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
 
     /* ── Phase 1 (subset). Sentence attribution for the new chapters only.
