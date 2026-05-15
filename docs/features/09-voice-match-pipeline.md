@@ -1,9 +1,9 @@
 # Voice match pipeline
 
 > Status: stable
-> Key files: `src/views/confirm-cast.tsx`, `src/store/cast-slice.ts`, `src/lib/api.ts` (`matchVoices`), `server/src/routes/voice-match.ts`, `server/src/workspace/library-cast-scan.ts`, `server/src/util/text-match.ts`, `src/modals/match-detail.tsx`
+> Key files: `src/views/confirm-cast.tsx`, `src/store/cast-slice.ts`, `src/lib/api.ts` (`matchVoices`, `overrideLibraryCast`), `server/src/routes/voice-match.ts`, `server/src/routes/library-cast-override.ts`, `server/src/workspace/library-cast-scan.ts`, `server/src/util/text-match.ts`, `src/modals/match-detail.tsx`
 > URL surface: `#/books/:bookId/confirm`
-> OpenAPI ops: `POST /api/books/:bookId/voice-match`
+> OpenAPI ops: `POST /api/books/:bookId/voice-match`, `POST /api/library-cast/override` (path not in openapi.yaml — mirrors `cast/merge`)
 
 ## What this covers
 
@@ -30,12 +30,24 @@ is `clamp01(0.65 * nameScore + 0.15 * gender + 0.10 * age_range + 0.10 * attribu
 
 ## Invariants to preserve
 
-- `POST /api/books/:bookId/voice-match` request body: `{ characters: Character[] }`. Response shape: `VoiceMatchResponse { bookId, matches: { characterId, candidates: { voiceId, fromBookTitle, score, factors: MatchFactor[] }[] }[] }`.
+- `POST /api/books/:bookId/voice-match` request body: `{ characters: Character[] }`. Response shape: `VoiceMatchResponse { bookId, matches: { characterId, candidates: { voiceId, fromBookId, fromBookTitle, fromCharacterId, score, factors: MatchFactor[] }[] }[] }`. `fromBookId` + `fromCharacterId` carry a stable handle on the library record so the override flow can address it without re-walking the books tree.
 - `MatchFactor`: `{ id, label, score, detail }`. Both `score` and per-factor `score` are 0–1 floats.
-- `castActions.applyVoiceMatches` merges into `state.cast` keyed by `characterId` — never drops characters that have no candidates (`src/store/cast-slice.ts`). An empty `candidates` array means "no suggestion," not "remove this character."
+- `castActions.applyVoiceMatches` merges into `state.cast` keyed by `characterId` — never drops characters that have no candidates (`src/store/cast-slice.ts`). An empty `candidates` array means "no suggestion," not "remove this character." Writes `matchedFrom: { bookId, characterId, bookTitle, confidence }` on the survivor.
 - `castActions.declineMatch` removes the suggestion (clears `voiceId` + `matchedFrom`) without removing the character.
 - The MatchDetail modal is opened via `setMatchDetailFor(characterId)`; closed via `setMatchDetailFor(null)` (`src/store/ui-slice.ts:111`). Survives navigation between confirm and other ready views.
-- In mock mode, `mockMatchVoices` only returns candidates for characters that have a `matchedFrom` + `voiceId` in the canned data (`src/lib/api.ts:222-237`). Characters with no canned match return an empty `candidates` array.
+- In mock mode, `mockMatchVoices` only returns candidates for characters that have a `matchedFrom` + `voiceId` in the canned data (`src/lib/api.ts:300-318`). Characters with no canned match return an empty `candidates` array. The mock forwards `bookId` / `characterId` from the canned `matchedFrom` so the override checkbox can be exercised in mock mode too.
+
+## Library-cast override (reverse of "Reuse")
+
+When the current book contains a richer profile of a recurring character than the library record it matched against (e.g. the current book is a full novel; the library record came from a novella that met the character only briefly), the user can push the current profile back onto the library record. This runs *in addition to* the normal Reuse decision — the source book still uses the library voice for continuity; the library record itself inherits the source's richer description/attributes/aliases.
+
+- **Endpoint:** `POST /api/library-cast/override`. Body: `{ sourceBookId, sourceCharacterId, targetBookId, targetCharacterId }`. Response: `{ character: CharacterOutput }`. Route at `server/src/routes/library-cast-override.ts`.
+- **Preserved on target:** `id`, `voiceId`, `name`, `color`, `voiceState`, `lines`, `scenes`, `evidence`. Audio identity must not move (chapter audio in the target book is bound to `voiceId`); per-book metrics + per-book quotes are not portable across manuscripts.
+- **Replaced on target (when source has a value):** `description`, `role`, `gender`, `ageRange`, `tone`, `attributes` (union, source first). `aliases` = target's aliases ∪ source.name (if it differs from target.name) ∪ source.aliases, case-insensitive dedup. Same alias contract as manual `cast/merge`.
+- **UI:** the "Continuity preserved" footer on the confirm-cast card grows an opt-in checkbox: "Update library profile from this manuscript." Default off. Renders only when (a) the parent route wired `onOverrideLibrary` and (b) `matchedFrom` carries both `bookId` and `characterId` (older voice-match cache entries without these are inert for this flow).
+- **Fire timing:** `ConfirmCastView` collects per-character override choices locally; the "Confirm cast" button fires all opted-in overrides via `Promise.allSettled` before dispatching `uiActions.confirmCast()`. A failing override does NOT block the cast confirm — it just logs to console (`[confirm-cast] library override failed`).
+- **Decline interaction:** if the user toggles override on and then switches the decision tile to "Generate fresh," the override is skipped (the toggle is only meaningful when `decision === 'match'`). The view's `handleConfirm` re-checks `decisions[c.id] === 'match'` before queueing the request.
+- **What it does NOT touch:** the target book's `manuscript-edits.json`, `analysis-cache`, or `chapterCast`. Override is profile-only; sentence attributions reference characters by `id`, which is preserved.
 
 ## Acceptance walkthrough
 
@@ -59,6 +71,7 @@ The canonical e2e manuscript for cross-book matching is `~/Downloads/Bonus Keefe
    - The continuity footer "Continuity preserved — Keefe from {prior book} will be used."
 3. **Open MatchDetail** on the Keefe row → factors include `name_exact` (score 1.0 when names match cleanly) or `name_tokens` (e.g. ½ when the prior book had "Keefe" and this one has "Keefe Sencen"). Plus gender/age_range/attributes when they contribute.
 4. **Non-recurring characters** (only in the new book) → render as Generated with no Matched pill.
+5. **Override toggle** (e.g. when the current book has a fuller portrait than the prior one): check "Update library profile from this manuscript" inside the continuity footer for any matched row, then click Confirm cast. The prior book's `cast.json` should now carry the richer `description` / `attributes` / `aliases` from this manuscript while its `voiceId` and chapter audio stay intact (`books/{author}/{series}/{prior-title}/.audiobook/cast.json`). Source's `name` lands in the library record's `aliases` if the names differed.
 
 ## Out of scope
 

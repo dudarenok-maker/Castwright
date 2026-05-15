@@ -6,7 +6,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { ConfirmCastView } from './confirm-cast';
 import type { Character, Voice } from '../lib/types';
@@ -23,7 +23,7 @@ const keefe: Character = {
   voiceState: 'reused',
   gender: 'male',
   ageRange: 'teen',
-  matchedFrom: { bookTitle: 'Book One', confidence: 0.95 },
+  matchedFrom: { bookTitle: 'Book One', bookId: 'book_one', characterId: 'keefe_lib', confidence: 0.95 },
   matchFactors: [
     { id: 'name_exact', label: 'Name match', score: 1, detail: 'Keefe ≡ Keefe' },
   ],
@@ -60,7 +60,11 @@ const library: Voice[] = [
   },
 ];
 
-function renderView(overrides: { onOpenProfile?: (id: string) => void } = {}) {
+function renderView(overrides: {
+  onOpenProfile?: (id: string) => void;
+  onConfirm?: () => void;
+  onOverrideLibrary?: (args: { sourceCharacterId: string; targetBookId: string; targetCharacterId: string }) => Promise<void>;
+} = {}) {
   const store = configureStore({
     reducer: { ui: uiSlice.reducer },
   });
@@ -71,7 +75,8 @@ function renderView(overrides: { onOpenProfile?: (id: string) => void } = {}) {
         library={library}
         title="Book Two"
         onOpenProfile={overrides.onOpenProfile ?? (() => {})}
-        onConfirm={() => {}}
+        onConfirm={overrides.onConfirm ?? (() => {})}
+        onOverrideLibrary={overrides.onOverrideLibrary}
         onReanalyse={() => {}}
       />
     </Provider>,
@@ -112,6 +117,107 @@ describe('ConfirmCastView — voice-match wiring', () => {
   });
 });
 
+describe('ConfirmCastView — library override toggle', () => {
+  it('renders the override checkbox only when matchedFrom carries bookId+characterId AND onOverrideLibrary is provided', () => {
+    /* Both conditions satisfied — checkbox visible. */
+    const { rerender } = renderView({ onOverrideLibrary: vi.fn(async () => {}) });
+    expect(screen.getByRole('checkbox', { name: /Sync profile with Book One/i }))
+      .toBeInTheDocument();
+
+    /* Without the handler, no checkbox even when the data is rich enough. */
+    rerender(
+      <Provider store={configureStore({ reducer: { ui: uiSlice.reducer } })}>
+        <ConfirmCastView
+          characters={[keefe, sophie]}
+          library={library}
+          title="Book Two"
+          onOpenProfile={() => {}}
+          onConfirm={() => {}}
+          onReanalyse={() => {}}
+        />
+      </Provider>,
+    );
+    expect(screen.queryByRole('checkbox', { name: /Sync profile/i })).toBeNull();
+  });
+
+  it('omits the override checkbox when matchedFrom lacks the cross-book identifiers', () => {
+    /* Older voice-match cache that predates fromBookId / fromCharacterId
+       lands here. The checkbox should not render because we have no way
+       to address the library record. */
+    const oldShape: Character = { ...keefe, matchedFrom: { bookTitle: 'Book One', confidence: 0.95 } };
+    const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+    render(
+      <Provider store={store}>
+        <ConfirmCastView
+          characters={[oldShape, sophie]}
+          library={library}
+          title="Book Two"
+          onOpenProfile={() => {}}
+          onConfirm={() => {}}
+          onOverrideLibrary={vi.fn(async () => {})}
+          onReanalyse={() => {}}
+        />
+      </Provider>,
+    );
+    expect(screen.queryByRole('checkbox', { name: /Sync profile/i })).toBeNull();
+  });
+
+  it('defaults the checkbox to off; toggling on fires onOverrideLibrary with the matched ids when Confirm is clicked', async () => {
+    const onOverrideLibrary = vi.fn(async () => {});
+    const onConfirm = vi.fn();
+    renderView({ onOverrideLibrary, onConfirm });
+
+    const checkbox = screen.getByRole('checkbox', { name: /Sync profile with Book One/i }) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(true);
+
+    const confirmBtn = screen.getByRole('button', { name: /Confirm cast and review manuscript/ });
+    fireEvent.click(confirmBtn);
+
+    /* handleConfirm awaits the override(s) before calling onConfirm; wait
+       for the trailing onConfirm to fire so the assertions run after the
+       full microtask chain settles. */
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+
+    expect(onOverrideLibrary).toHaveBeenCalledWith({
+      sourceCharacterId: 'keefe',
+      targetBookId: 'book_one',
+      targetCharacterId: 'keefe_lib',
+    });
+  });
+
+  it('skips override calls when the checkbox is left off and still confirms', async () => {
+    const onOverrideLibrary = vi.fn(async () => {});
+    const onConfirm = vi.fn();
+    renderView({ onOverrideLibrary, onConfirm });
+
+    const confirmBtn = screen.getByRole('button', { name: /Confirm cast and review manuscript/ });
+    fireEvent.click(confirmBtn);
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+
+    expect(onOverrideLibrary).not.toHaveBeenCalled();
+  });
+
+  it('skips overrides for characters where the decision was switched to "Generate fresh"', async () => {
+    const onOverrideLibrary = vi.fn(async () => {});
+    const onConfirm = vi.fn();
+    renderView({ onOverrideLibrary, onConfirm });
+
+    /* Tick the override checkbox on, THEN flip the decision back to
+       Generate fresh — the override is only meaningful when the decision
+       is Reuse, so it must NOT fire. */
+    fireEvent.click(screen.getByRole('checkbox', { name: /Sync profile with Book One/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Generate fresh/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Confirm cast and review manuscript/ }));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+
+    expect(onOverrideLibrary).not.toHaveBeenCalled();
+  });
+});
+
 describe('ConfirmCastView — card click opens profile drawer', () => {
   it('clicking an unmatched character card fires onOpenProfile with that character id', () => {
     /* Mirrors the ready-stage Cast view: clicking the row pops the
@@ -127,16 +233,27 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
 
   it('clicking a MATCHED character card also fires onOpenProfile — drawer opens for matched library reuses too', () => {
     /* Matched cards default to decision='match' and render the Reuse
-       DecisionTile + the Continuity footer. Those branches own their own
-       clicks (stopPropagation) so they don't open the drawer, but the
-       card body itself (avatar, name, role, chips, TTS line) must still
-       bubble up — otherwise the user can't inspect or correct the
-       matched profile before confirming. */
+       DecisionTile + the Continuity footer with the override checkbox.
+       Those branches own their own clicks (stopPropagation) so they don't
+       open the drawer, but the card body itself (avatar, name, role, chips,
+       TTS line) must still bubble up — otherwise the user can't inspect
+       or correct the matched profile before confirming. */
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
     const keefeHeading = screen.getByRole('heading', { name: 'Keefe' });
+    /* Click on the name node itself — the most natural target. */
     fireEvent.click(keefeHeading);
     expect(onOpenProfile).toHaveBeenCalledWith('keefe');
+  });
+
+  it('clicking the override checkbox on a matched card does NOT open the drawer', () => {
+    /* The "Sync profile" toggle lives inside the matched card
+       but is a separate intent — toggling it must stay local. */
+    const onOpenProfile = vi.fn();
+    renderView({ onOpenProfile, onOverrideLibrary: vi.fn(async () => {}) });
+    const checkbox = screen.getByRole('checkbox', { name: /Sync profile with Book One/i });
+    fireEvent.click(checkbox);
+    expect(onOpenProfile).not.toHaveBeenCalled();
   });
 
   it('clicking a DecisionTile does not bubble up to the card click', () => {
@@ -144,6 +261,7 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
        stay local so picking a tile doesn't also open the drawer. */
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
+    /* "Generate fresh" tile lives on the matched character (keefe) row. */
     const generateTile = screen.getByRole('button', { name: /Generate fresh/ });
     fireEvent.click(generateTile);
     expect(onOpenProfile).not.toHaveBeenCalled();

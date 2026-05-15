@@ -6,6 +6,12 @@ import { useAppSelector } from '../store';
 import { engineForModelKey } from '../lib/tts-models';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 
+interface OverrideArgs {
+  sourceCharacterId: string;
+  targetBookId: string;
+  targetCharacterId: string;
+}
+
 interface Props {
   characters: Character[];
   library: Voice[];
@@ -17,22 +23,70 @@ interface Props {
   onOpenProfile: (id: string) => void;
   onConfirm: () => void;
   onReanalyse: () => void;
+  /** Push the current book's richer profile back onto the matched library
+      record. Called by the view *before* onConfirm for each character whose
+      "Update library profile from this manuscript" checkbox is on. The
+      parent route binds sourceBookId from its own context; the view only
+      needs the per-character identifiers. Optional so existing call sites
+      (and mock-mode tests) can keep working without it — the override
+      checkbox simply won't render if it isn't provided. */
+  onOverrideLibrary?: (args: OverrideArgs) => Promise<void>;
 }
 
 type Decision = 'match' | 'generate';
 
-export function ConfirmCastView({ characters, library, title, onOpenProfile, onConfirm, onReanalyse }: Props) {
+export function ConfirmCastView({ characters, library, title, onOpenProfile, onConfirm, onReanalyse, onOverrideLibrary }: Props) {
   const [decisions, setDecisions] = useState<Record<string, Decision>>(() => {
     const d: Record<string, Decision> = {};
     for (const c of characters) if (c.matchedFrom) d[c.id] = 'match';
     return d;
   });
+  /* Per-character "also update the library record from this manuscript"
+     opt-in. Default off so the existing reuse-as-is flow is unchanged. The
+     toggle is only meaningful when decision === 'match' AND the matched
+     record carries bookId + characterId (older voice-match responses didn't
+     and we can't address the library record without them). */
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   /* Same engine the cast view + profile drawer use — keeps the previewed
      prebuilt-voice label here matching what the user will actually hear. */
   const ttsEngine = useAppSelector(s => engineForModelKey(s.ui.ttsModelKey));
   const findVoice = (id?: string) => library.find(v => v.id === id);
   const matchedCount = characters.filter(c => c.matchedFrom).length;
   const generatedCount = characters.length - matchedCount;
+
+  /* Fire any opted-in library-cast overrides before navigating off the
+     confirm view. allSettled so a single failing override (network blip,
+     library record renamed mid-flight) doesn't strand the user — the
+     primary "cast confirmed" action must still complete. Errors are
+     surfaced in the console so a regression is still visible. */
+  const handleConfirm = async () => {
+    if (onOverrideLibrary) {
+      const requests: Promise<unknown>[] = [];
+      for (const c of characters) {
+        const target = c.matchedFrom;
+        if (
+          decisions[c.id] === 'match' &&
+          overrides[c.id] &&
+          target?.bookId &&
+          target.characterId
+        ) {
+          requests.push(
+            onOverrideLibrary({
+              sourceCharacterId: c.id,
+              targetBookId: target.bookId,
+              targetCharacterId: target.characterId,
+            }).catch(err => {
+              console.error('[confirm-cast] library override failed', c.id, err);
+            }),
+          );
+        }
+      }
+      if (requests.length) {
+        await Promise.allSettled(requests);
+      }
+    }
+    onConfirm();
+  };
 
   return (
     <div className="relative min-h-[calc(100vh-64px)] py-12 px-6">
@@ -59,6 +113,13 @@ export function ConfirmCastView({ characters, library, title, onOpenProfile, onC
               ttsEngine={ttsEngine}
               decision={decisions[c.id]}
               onDecision={(d) => setDecisions({ ...decisions, [c.id]: d })}
+              overrideLibrary={!!overrides[c.id]}
+              canOverrideLibrary={
+                /* Only meaningful when both the decision is "reuse" and the
+                   matched record carries the library handle. */
+                !!onOverrideLibrary && !!c.matchedFrom?.bookId && !!c.matchedFrom?.characterId
+              }
+              onToggleOverride={(v) => setOverrides({ ...overrides, [c.id]: v })}
               onOpenProfile={() => onOpenProfile(c.id)}
             />
           ))}
@@ -66,7 +127,7 @@ export function ConfirmCastView({ characters, library, title, onOpenProfile, onC
 
         <div className="mt-10 flex items-center justify-between gap-3">
           <button onClick={onReanalyse} className="text-sm font-medium text-ink/60 hover:text-ink">Re-analyse manuscript</button>
-          <PrimaryButton variant="dark" onClick={onConfirm}>Confirm cast and review manuscript</PrimaryButton>
+          <PrimaryButton variant="dark" onClick={() => { void handleConfirm(); }}>Confirm cast and review manuscript</PrimaryButton>
         </div>
 
         <p className="text-center text-xs text-ink/40 mt-6 max-w-lg mx-auto">
@@ -83,13 +144,23 @@ interface CardProps {
   ttsEngine: 'coqui' | 'gemini' | 'piper' | 'kokoro';
   decision: Decision | undefined;
   onDecision: (d: Decision) => void;
+  /** Current state of the "Update library profile from this manuscript"
+      checkbox; only renders when canOverrideLibrary is true and the user
+      has picked the Reuse decision. */
+  overrideLibrary: boolean;
+  /** Whether the override checkbox is even available for this character.
+      False when the parent didn't pass onOverrideLibrary (mock environments)
+      or when matchedFrom is missing the bookId/characterId handle (older
+      voice-match cache without the cross-book identifiers). */
+  canOverrideLibrary: boolean;
+  onToggleOverride: (v: boolean) => void;
   /** Card-level click handler. Whole card is clickable; the DecisionTile
       column stops propagation so picking match/generate doesn't also pop
       the drawer. Mirrors the ready-stage Cast view's row click behavior. */
   onOpenProfile: () => void;
 }
 
-function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecision, onOpenProfile }: CardProps) {
+function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecision, overrideLibrary, canOverrideLibrary, onToggleOverride, onOpenProfile }: CardProps) {
   const matched = !!character.matchedFrom;
   /* Engine-aware prebuilt-voice pick — shown alongside identity so the user
      can sanity-check before confirming the cast. If the analyzer's gender /
@@ -181,9 +252,35 @@ function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecisio
       </div>
 
       {matched && decision === 'match' && (
-        <div className="border-t border-ink/5 px-5 py-3 bg-canvas/60 flex items-center gap-3 text-xs text-ink/60 fade-in" onClick={(e) => e.stopPropagation()}>
-          <span className="grid place-items-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-700"><IconCheck className="w-3 h-3"/></span>
-          <span>Continuity preserved — <span className="font-semibold text-ink">{voice?.character}</span> from <span className="font-semibold text-ink">{character.matchedFrom?.bookTitle}</span> will be used.</span>
+        <div className="border-t border-ink/5 px-5 py-3 bg-canvas/60 fade-in space-y-2" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-3 text-xs text-ink/60">
+            <span className="grid place-items-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-700"><IconCheck className="w-3 h-3"/></span>
+            <span>Continuity preserved — <span className="font-semibold text-ink">{voice?.character}</span> from <span className="font-semibold text-ink">{character.matchedFrom?.bookTitle}</span> will be used.</span>
+          </div>
+          {canOverrideLibrary && (
+            /* Symmetric "best-of-both" merge: this book's character and
+               the matched library record end up sharing the richer
+               profile (longest description, unioned attributes / aliases,
+               source wins on identity conflicts). Each side keeps its
+               own audio identity, per-book metrics, and evidence quotes.
+               Default off so the existing reuse-as-is flow is unchanged. */
+            <label
+              className="flex items-start gap-3 text-xs text-ink/60 pl-9 cursor-pointer select-none"
+              onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') e.stopPropagation(); }}
+            >
+              <input
+                type="checkbox"
+                className="mt-0.5 accent-peach"
+                checked={overrideLibrary}
+                onChange={(e) => onToggleOverride(e.target.checked)}
+                aria-label={`Sync profile with ${character.matchedFrom?.bookTitle}`}
+              />
+              <span>
+                Sync profile with <span className="font-semibold text-ink/60">{character.matchedFrom?.bookTitle}</span>.
+                <span className="text-ink/40"> Description, attributes, and aliases get merged — both books inherit the richer profile. Voices and already-generated chapter audio don't change.</span>
+              </span>
+            </label>
+          )}
         </div>
       )}
     </article>

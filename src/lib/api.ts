@@ -136,6 +136,22 @@ export interface AnalyseOpts {
 export interface MatchArgs { bookId: string; characters: Character[]; }
 export interface MergeCharactersArgs { bookId: string; sourceId: string; targetId: string; }
 export interface MergeCharactersResponse { characters: Character[]; }
+/* Symmetric "best-of-both" profile merge across the current book and a
+   matched library book: both end up with the same merged identity (longest
+   description wins, attributes / aliases unioned, source wins on identity
+   conflicts), while each side keeps its own audio identity, per-book
+   metrics, and per-book evidence. Server returns both merged records so
+   the confirm view can refresh its in-memory source character. */
+export interface OverrideLibraryCastArgs {
+  sourceBookId: string;
+  sourceCharacterId: string;
+  targetBookId: string;
+  targetCharacterId: string;
+}
+export interface OverrideLibraryCastResponse {
+  source: Character;
+  target: Character;
+}
 export interface StreamArgs {
   bookId: string;
   modelKey: TtsModelKey;
@@ -298,7 +314,9 @@ async function mockMatchVoices({ bookId, characters }: MatchArgs): Promise<Voice
       characterId: c.id,
       candidates: [{
         voiceId: c.voiceId,
+        fromBookId: c.matchedFrom.bookId ?? '',
         fromBookTitle: c.matchedFrom.bookTitle ?? '',
+        fromCharacterId: c.matchedFrom.characterId ?? c.id,
         score: c.matchedFrom.confidence ?? 0,
         factors: factors.map(f => ({ id: f.id, label: f.label, score: f.score, detail: f.detail })),
       }],
@@ -690,6 +708,33 @@ async function mockMergeCharacters({ sourceId, targetId }: MergeCharactersArgs):
   await wait(60);
   void sourceId; void targetId;
   return { characters: [] };
+}
+
+async function realOverrideLibraryCast(args: OverrideLibraryCastArgs): Promise<OverrideLibraryCastResponse> {
+  const res = await fetch('/api/library-cast/override', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    throw new Error(detail || `Library override failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockOverrideLibraryCast(args: OverrideLibraryCastArgs): Promise<OverrideLibraryCastResponse> {
+  /* Mock mode has no workspace to write back to; the override is only
+     meaningful against the real backend. Mirror mockMergeCharacters and
+     return synthetic records on both sides so the UI can fire the call
+     without crashing in the design-system environment. */
+  await wait(60);
+  const stub = (id: string): Character => ({ id, name: id, role: '', color: 'eliza' } as Character);
+  return {
+    source: stub(args.sourceCharacterId),
+    target: stub(args.targetCharacterId),
+  };
 }
 
 export interface ReparseBookResponse {
@@ -1203,6 +1248,7 @@ const real = {
   analyseManuscript: realAnalyseManuscript,
   matchVoices:       realMatchVoices,
   mergeCharacters:   realMergeCharacters,
+  overrideLibraryCast: realOverrideLibraryCast,
   deleteBook:        realDeleteBook,
   reparseBook:       realReparseBook,
   setChapterExcluded:      realSetChapterExcluded,
@@ -1250,6 +1296,7 @@ const mock = {
   analyseManuscript: mockAnalyseManuscript,
   matchVoices:       mockMatchVoices,
   mergeCharacters:   mockMergeCharacters,
+  overrideLibraryCast: mockOverrideLibraryCast,
   deleteBook:        mockDeleteBook,
   reparseBook:       mockReparseBook,
   setChapterExcluded:      mockSetChapterExcluded,

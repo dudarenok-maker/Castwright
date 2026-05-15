@@ -25,6 +25,11 @@ interface CharacterSnapshot {
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
   voiceId?: string;
   voiceEngine?: string;
+  /** Attribute list captured at synthesis time, sorted by
+      generation.ts. Compared against the current cast's attributes —
+      any non-empty symmetric difference fires a moderate-severity drift
+      event because attributes drive prebuilt-voice selection. */
+  attributes?: string[];
 }
 
 interface SegmentsFile {
@@ -41,6 +46,7 @@ interface CastCharacter {
   gender?: 'male' | 'female' | 'neutral';
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
   tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
+  attributes?: string[];
 }
 
 interface RevisionsPersisted {
@@ -127,6 +133,7 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
         for (const key of TONE_KEYS) {
           pushToneDrift(drift, ctx, key);
         }
+        pushAttributesDrift(drift, ctx);
       }
     }
 
@@ -171,6 +178,49 @@ function pushHardDrift(
     detected: ctx.detectedAt,
     suggestedAction: 'regenerate_chapter',
   });
+}
+
+/* Attribute-set drift. Compares lowercase-normalised sets so case-only
+   changes don't fire; computes the symmetric difference and surfaces
+   one event listing the added + removed terms. Severity is moderate,
+   not severe — attributes don't change voiceId outright but DO steer
+   the prebuilt-voice picker on future regenerations, so the user
+   should be nudged to regenerate if they care about audio matching the
+   new description. Severe would be appropriate if every prior attribute
+   was wiped out, but in practice the override merges with union
+   semantics so total wipes are rare; keep the threshold simple until a
+   real false-positive shows up. */
+function pushAttributesDrift(out: DriftEvent[], ctx: DriftContext): void {
+  const before = ctx.snapshot.attributes;
+  const after  = ctx.current.attributes;
+  if (!Array.isArray(before) || !Array.isArray(after)) return;   // no signal
+  const beforeSet = new Set(before.map(s => s.trim().toLowerCase()).filter(Boolean));
+  const afterSet  = new Set(after.map(s => s.trim().toLowerCase()).filter(Boolean));
+  const added: string[]   = [];
+  const removed: string[] = [];
+  for (const s of afterSet)  if (!beforeSet.has(s)) added.push(s);
+  for (const s of beforeSet) if (!afterSet.has(s))  removed.push(s);
+  if (added.length === 0 && removed.length === 0) return;
+  const parts: string[] = [];
+  if (added.length)   parts.push(`added ${formatList(added)}`);
+  if (removed.length) parts.push(`removed ${formatList(removed)}`);
+  out.push({
+    id: driftId(ctx, 'attributes'),
+    characterId: ctx.characterId,
+    chapterId: ctx.chapterId,
+    severity: 'moderate',
+    factor: 'attributes',
+    factorLabel: 'Attributes',
+    description: `Attributes ${parts.join('; ')} after this chapter rendered. Prebuilt-voice picker may now resolve to a different voice on regenerate.`,
+    detected: ctx.detectedAt,
+    suggestedAction: 'regenerate_chapter',
+  });
+}
+
+function formatList(items: string[]): string {
+  if (items.length === 1) return `"${items[0]}"`;
+  if (items.length === 2) return `"${items[0]}" and "${items[1]}"`;
+  return items.slice(0, -1).map(s => `"${s}"`).join(', ') + `, and "${items[items.length - 1]}"`;
 }
 
 function pushToneDrift(out: DriftEvent[], ctx: DriftContext, key: ToneKey): void {

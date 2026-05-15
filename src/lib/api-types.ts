@@ -636,7 +636,11 @@ export interface components {
                 characterId: string;
                 candidates: {
                     voiceId: string;
+                    /** @description Library book whose confirmed cast holds this voice. Lets the client target the exact library record for the override endpoint. */
+                    fromBookId?: string;
                     fromBookTitle?: string;
+                    /** @description Character id within fromBookId's cast.json. Stable handle for library-cast override. */
+                    fromCharacterId?: string;
                     score: number;
                     factors?: components["schemas"]["MatchFactor"][];
                 }[];
@@ -885,6 +889,10 @@ export interface components {
                 note?: string;
             }[];
             matchedFrom?: {
+                /** @description Library book whose confirmed cast holds the matched voice. Required for the library-cast override flow. */
+                bookId?: string;
+                /** @description Character id within bookId's cast.json. Required for the library-cast override flow. */
+                characterId?: string;
                 bookTitle?: string;
                 confidence?: number;
             } | null;

@@ -69,6 +69,13 @@ interface CharacterSnapshot {
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
   voiceId?: string;
   voiceEngine?: string;
+  /** Attribute list captured at synthesis time. The drift detector
+      compares this against the current cast's attributes — a non-empty
+      symmetric difference fires a drift event because attributes drive
+      prebuilt-voice selection in tts-voice-mapping.ts. Sorted so the
+      snapshot is stable across runs even when the analyzer emits the
+      same set in different orders. */
+  attributes?: string[];
 }
 
 interface ChapterSegmentsFile {
@@ -319,6 +326,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           ageRange: c.ageRange,
           voiceId: c.voiceId,
           voiceEngine: engine,
+          /* Sorted for stable comparison — the analyzer's attribute order
+             isn't deterministic across runs, so without the sort an
+             order-only change would look like drift to the detector. */
+          attributes: Array.isArray(c.attributes) && c.attributes.length
+            ? [...c.attributes].sort((a, b) => a.localeCompare(b))
+            : undefined,
         };
       }
 

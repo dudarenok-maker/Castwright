@@ -852,9 +852,11 @@ components:
                   type: object
                   required: [voiceId, score]
                   properties:
-                    voiceId:       { type: string }
-                    fromBookTitle: { type: string }
-                    score:         { type: number, minimum: 0, maximum: 1 }
+                    voiceId:         { type: string }
+                    fromBookId:      { type: string, description: "Library book whose confirmed cast holds this voice. Lets the client target the exact library record for the override endpoint." }
+                    fromBookTitle:   { type: string }
+                    fromCharacterId: { type: string, description: "Character id within fromBookId's cast.json. Stable handle for library-cast override." }
+                    score:           { type: number, minimum: 0, maximum: 1 }
                     factors:
                       type: array
                       items: { $ref: '#/components/schemas/MatchFactor' }
@@ -1163,8 +1165,10 @@ components:
           type: object
           nullable: true
           properties:
-            bookTitle:  { type: string }
-            confidence: { type: number, minimum: 0, maximum: 1 }
+            bookId:      { type: string, description: "Library book whose confirmed cast holds the matched voice. Required for the library-cast override flow." }
+            characterId: { type: string, description: "Character id within bookId's cast.json. Required for the library-cast override flow." }
+            bookTitle:   { type: string }
+            confidence:  { type: number, minimum: 0, maximum: 1 }
 
     Chapter:
       type: object

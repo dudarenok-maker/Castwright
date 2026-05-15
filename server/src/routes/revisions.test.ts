@@ -41,6 +41,7 @@ interface CharacterSnapshot {
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
   voiceId?: string;
   voiceEngine?: string;
+  attributes?: string[];
 }
 
 beforeAll(async () => {
@@ -104,7 +105,7 @@ interface SeedOpts {
   /** Current cast.json (what the user has now). */
   cast: Array<{ id: string; tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
                   gender?: 'male' | 'female' | 'neutral'; ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
-                  voiceId?: string }>;
+                  voiceId?: string; attributes?: string[] }>;
   dismissed?: string[];
 }
 
@@ -243,6 +244,93 @@ describe('GET /api/books/:bookId/revisions — tone-metric thresholds', () => {
     const drift = res.body.drift as DriftEventOut[];
     const factors = drift.map(d => d.factor).sort();
     expect(factors).toEqual(['pace', 'warmth']);            // emotion delta=0, no event
+  });
+});
+
+describe('GET /api/books/:bookId/revisions — attribute drift (set-symmetric-difference)', () => {
+  it('emits a moderate drift event when an attribute is added since synthesis', async () => {
+    /* This is the library-cast override case: a future book pushes its
+       richer profile (eccentric, reassuring, humorous) back onto the
+       novella's library record. The novella's already-rendered audio
+       was bound to a leaner attribute set; we want the drift report to
+       surface that change so the user can decide whether to regenerate. */
+    seed({
+      snapshots: { elwin: { attributes: ['kind'] } },
+      cast: [{ id: 'elwin', attributes: ['eccentric', 'kind', 'reassuring'] }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.status).toBe(200);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    expect(drift[0]).toMatchObject({
+      id: 'drift:1:elwin:attributes',
+      severity: 'moderate',
+      factor: 'attributes',
+      characterId: 'elwin',
+      chapterId: 1,
+    });
+    expect(drift[0]).toHaveProperty('description');
+    /* The description names the added attributes verbatim so the user can
+       judge whether the change matters for audio. */
+    expect((drift[0] as unknown as { description: string }).description).toMatch(/eccentric/);
+    expect((drift[0] as unknown as { description: string }).description).toMatch(/reassuring/);
+  });
+
+  it('emits a moderate drift event when an attribute is removed since synthesis', async () => {
+    seed({
+      snapshots: { elwin: { attributes: ['eccentric', 'kind', 'reassuring'] } },
+      cast: [{ id: 'elwin', attributes: ['kind'] }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    expect(drift[0]).toMatchObject({ severity: 'moderate', factor: 'attributes' });
+    expect((drift[0] as unknown as { description: string }).description).toMatch(/eccentric/);
+    expect((drift[0] as unknown as { description: string }).description).toMatch(/reassuring/);
+  });
+
+  it('does not emit drift when the only difference is attribute order', async () => {
+    /* Stable comparison: order is a normalisation artefact, not a real
+       drift signal. */
+    seed({
+      snapshots: { elwin: { attributes: ['eccentric', 'kind', 'reassuring'] } },
+      cast: [{ id: 'elwin', attributes: ['reassuring', 'eccentric', 'kind'] }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.body.drift).toEqual([]);
+  });
+
+  it('does not emit drift when the only difference is letter case', async () => {
+    /* Case-insensitive set comparison — the analyzer doesn't always
+       normalise casing, and the drift report would look noisy otherwise. */
+    seed({
+      snapshots: { elwin: { attributes: ['Kind'] } },
+      cast: [{ id: 'elwin', attributes: ['kind'] }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.body.drift).toEqual([]);
+  });
+
+  it('does not emit drift when either side is missing an attributes field', async () => {
+    /* Older segments file (pre-attributes-snapshot) → no signal to compare
+       against. Detector stays quiet rather than treating "added everything"
+       as drift on every previously-rendered character. */
+    seed({
+      snapshots: { elwin: { voiceId: 'v1' } },           // no attributes captured
+      cast: [{ id: 'elwin', voiceId: 'v1', attributes: ['kind'] }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.body.drift).toEqual([]);
+  });
+
+  it('respects the dismissed filter for the attribute factor', async () => {
+    seed({
+      snapshots: { elwin: { attributes: ['kind'] } },
+      cast: [{ id: 'elwin', attributes: ['eccentric', 'kind'] }],
+      dismissed: ['drift:1:elwin:attributes'],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.body.drift).toEqual([]);
   });
 });
 
