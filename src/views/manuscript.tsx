@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from 'react';
 import {
   IconChevR, IconChevL, IconPlus, IconCheck, IconClose, IconArrowDn,
-  IconSpinner, IconWarning, IconEye,
+  IconSpinner, IconWarning, IconEye, IconSearch,
 } from '../lib/icons';
 import { SectionLabel, ColorDot, Pill } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
@@ -33,6 +33,7 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
   const sentences: Sentence[] = sentencesFromStore ?? initialSentences;
   const [selectedSeg, setSelectedSeg] = useState<string | null>(null);
   const [filterChar, setFilterChar] = useState<string | null>(null);
+  const [chapterFilter, setChapterFilter] = useState<string>('');
   const [drag, setDrag] = useState<Drag | null>(null);
   const currentChapter = chapters.find(c => c.id === currentChapterId) || chapters[0];
   const currentIdx = chapters.findIndex(c => c.id === currentChapterId);
@@ -41,6 +42,34 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
   const containerRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLElement>(null);
   const selection = useSentenceSelection(articleRef);
+
+  /* Substring match on title plus "CH NN" / bare id so the user can jump
+     by either the chapter name or its index. Empty filter passes everything
+     through, so the regular flow is unchanged. */
+  const filteredChapters = useMemo(() => {
+    const q = chapterFilter.trim().toLowerCase();
+    if (!q) return chapters;
+    return chapters.filter(ch =>
+      ch.title.toLowerCase().includes(q) ||
+      String(ch.id).includes(q) ||
+      `ch ${String(ch.id).padStart(2, '0')}`.includes(q),
+    );
+  }, [chapters, chapterFilter]);
+
+  /* Keep the active chapter visible inside the chapter card's internal
+     scroller. Without this, Prev/Next on a 500-chapter book silently
+     moves the selection off-screen because the row sits below the
+     viewport of its scroll container. scrollIntoView({block:'nearest'})
+     is a no-op when the row is already visible, so no jitter.
+     scrollIntoView is missing in jsdom, so guard so tests don't crash. */
+  const chapterRowRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  useEffect(() => {
+    if (currentChapterId == null) return;
+    const el = chapterRowRefs.current.get(currentChapterId);
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  }, [currentChapterId]);
 
   /* Segments are scoped to the currently-selected chapter so the manuscript
      view shows only sentences from that chapter — clicking a chapter in
@@ -168,16 +197,35 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
 
   return (
     <div className="max-w-[1500px] mx-auto px-6 py-8 grid grid-cols-[280px_1fr_360px] gap-6" ref={containerRef}>
-      <div className="self-start sticky top-24 space-y-4 max-h-[calc(100vh-100px)] overflow-y-auto pr-1">
-        <aside className="bg-white rounded-3xl border border-ink/10 p-5 shadow-card">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-bold text-ink">Chapters</h2>
-            <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
-              {chapters.length}
-            </span>
+      {/* Sidebar shell — flex column with no outer scroll. Each card owns
+          its own internal scroll region (min-h-0 + overflow-y-auto on the
+          list) so a 500-chapter book never pushes the cast off-screen.
+          Both cards share the vertical space equally (flex-1 + basis-0)
+          so they're the same height regardless of how much content each
+          holds. */}
+      <div className="self-start sticky top-24 h-[calc(100vh-100px)] flex flex-col gap-4 pr-1">
+        <aside className="bg-white rounded-3xl border border-ink/10 shadow-card flex-1 basis-0 min-h-0 flex flex-col">
+          <div className="shrink-0 px-5 pt-5 pb-3">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold text-ink">Chapters</h2>
+              <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
+                {chapterFilter.trim() ? `${filteredChapters.length}/${chapters.length}` : chapters.length}
+              </span>
+            </div>
+            <label className="relative block">
+              <IconSearch className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-ink/40 pointer-events-none"/>
+              <input
+                type="text"
+                value={chapterFilter}
+                onChange={(e) => setChapterFilter(e.target.value)}
+                placeholder="Filter chapters…"
+                aria-label="Filter chapters"
+                className="w-full rounded-lg border border-ink/10 bg-canvas/40 pl-8 pr-2 py-1.5 text-xs focus:outline-none focus:border-peach"
+              />
+            </label>
           </div>
-          <ul className="space-y-0.5">
-            {chapters.map(ch => {
+          <ul className="flex-1 min-h-0 overflow-y-auto px-5 pb-5 space-y-0.5">
+            {filteredChapters.map(ch => {
               const active = currentChapterId === ch.id;
               const excluded = !!ch.excluded;
               const titleCls = excluded
@@ -186,6 +234,10 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
               return (
                 <li key={ch.id}>
                   <button onClick={() => setCurrentChapterId(ch.id)}
+                          ref={el => {
+                            if (el) chapterRowRefs.current.set(ch.id, el);
+                            else chapterRowRefs.current.delete(ch.id);
+                          }}
                           className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors relative ${active ? 'bg-ink/[0.05]' : 'hover:bg-ink/[0.03]'}`}
                           title={excluded ? 'Excluded — not analyzed, no audio will be generated.' : undefined}>
                     {active && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-peach"/>}
@@ -203,61 +255,71 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
                 </li>
               );
             })}
+            {filteredChapters.length === 0 && (
+              <li className="px-3 py-2 text-[11px] text-ink/45 italic">
+                No chapters match "{chapterFilter.trim()}".
+              </li>
+            )}
           </ul>
         </aside>
 
-        <aside className="bg-white rounded-3xl border border-ink/10 p-5 shadow-card">
-          <div className="flex items-center justify-between mb-4">
+        <aside className="bg-white rounded-3xl border border-ink/10 shadow-card flex-1 basis-0 min-h-0 flex flex-col">
+          <div className="shrink-0 px-5 pt-5 pb-3 flex items-center justify-between">
             <h2 className="text-sm font-bold text-ink">Detected</h2>
             <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
               {characters.length}
             </span>
           </div>
-          <ul className="space-y-1">
-            {characters.map(c => {
-              const active = filterChar === c.id;
-              const cc = CHAR_COLORS[c.color as CharColor] ?? CHAR_COLORS.narrator;
-              return (
-                <li key={c.id}>
-                  <div className={`group/char relative w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
-                       style={active ? { background: cc.tint, boxShadow: `inset 0 0 0 1px ${cc.ring}` } : undefined}>
-                    {active && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full" style={{ background: cc.hex }}/>}
-                    <button onClick={() => setFilterChar(active ? null : c.id)}
-                            className="flex-1 min-w-0 flex items-center gap-3 text-left"
-                            title={active ? 'Clear filter' : 'Filter manuscript to this character'}>
-                      <ColorDot color={c.color as CharColor} size={10}/>
-                      <span className="flex-1 min-w-0">
-                        <span className={`block text-sm truncate ${active ? 'font-bold' : 'font-medium text-ink'}`}
-                              style={active ? { color: cc.hex } : undefined}>
-                          {c.name}
+          {/* Single scroll region for the cast list + "Add character" +
+              help text, mirroring the prior in-card flow but bounded so
+              the chapter card next to it isn't crowded out. */}
+          <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-5">
+            <ul className="space-y-1">
+              {characters.map(c => {
+                const active = filterChar === c.id;
+                const cc = CHAR_COLORS[c.color as CharColor] ?? CHAR_COLORS.narrator;
+                return (
+                  <li key={c.id}>
+                    <div className={`group/char relative w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
+                         style={active ? { background: cc.tint, boxShadow: `inset 0 0 0 1px ${cc.ring}` } : undefined}>
+                      {active && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full" style={{ background: cc.hex }}/>}
+                      <button onClick={() => setFilterChar(active ? null : c.id)}
+                              className="flex-1 min-w-0 flex items-center gap-3 text-left"
+                              title={active ? 'Clear filter' : 'Filter manuscript to this character'}>
+                        <ColorDot color={c.color as CharColor} size={10}/>
+                        <span className="flex-1 min-w-0">
+                          <span className={`block text-sm truncate ${active ? 'font-bold' : 'font-medium text-ink'}`}
+                                style={active ? { color: cc.hex } : undefined}>
+                            {c.name}
+                          </span>
+                          <span className="block text-xs text-ink/50 truncate">{c.role}</span>
                         </span>
-                        <span className="block text-xs text-ink/50 truncate">{c.role}</span>
-                      </span>
-                      <span className={`text-xs tabular-nums ${active ? 'font-semibold' : 'text-ink/50'}`}
-                            style={active ? { color: cc.hex } : undefined}>
-                        {counts[c.id] || 0}
-                      </span>
-                    </button>
-                    {onOpenProfile && (
-                      <button onClick={() => onOpenProfile(c.id)}
-                              title={`Open ${c.name} profile`}
-                              className={`p-1.5 rounded-lg text-ink/40 hover:text-ink hover:bg-ink/[0.05] transition-opacity ${active ? 'opacity-100' : 'opacity-0 group-hover/char:opacity-100 focus:opacity-100'}`}>
-                        <IconEye className="w-4 h-4"/>
+                        <span className={`text-xs tabular-nums ${active ? 'font-semibold' : 'text-ink/50'}`}
+                              style={active ? { color: cc.hex } : undefined}>
+                          {counts[c.id] || 0}
+                        </span>
                       </button>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-          <button className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-dashed border-ink/20 text-sm text-ink/60 hover:border-peach hover:text-peach transition-colors">
-            <IconPlus className="w-4 h-4"/> Add character
-          </button>
-          <hr className="my-5 border-ink/10"/>
-          <div className="text-xs text-ink/50 leading-relaxed space-y-2">
-            <p><span className="font-semibold text-ink/70">Move a boundary:</span> drag the line between paragraphs and drop onto any sentence.</p>
-            <p><span className="font-semibold text-ink/70">Reassign:</span> hover any paragraph and use the dropdown.</p>
-            <p><span className="font-semibold text-ink/70">Profile:</span> click a character's name to open their full profile.</p>
+                      {onOpenProfile && (
+                        <button onClick={() => onOpenProfile(c.id)}
+                                title={`Open ${c.name} profile`}
+                                className={`p-1.5 rounded-lg text-ink/40 hover:text-ink hover:bg-ink/[0.05] transition-opacity ${active ? 'opacity-100' : 'opacity-0 group-hover/char:opacity-100 focus:opacity-100'}`}>
+                          <IconEye className="w-4 h-4"/>
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            <button className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-dashed border-ink/20 text-sm text-ink/60 hover:border-peach hover:text-peach transition-colors">
+              <IconPlus className="w-4 h-4"/> Add character
+            </button>
+            <hr className="my-5 border-ink/10"/>
+            <div className="text-xs text-ink/50 leading-relaxed space-y-2">
+              <p><span className="font-semibold text-ink/70">Move a boundary:</span> drag the line between paragraphs and drop onto any sentence.</p>
+              <p><span className="font-semibold text-ink/70">Reassign:</span> hover any paragraph and use the dropdown.</p>
+              <p><span className="font-semibold text-ink/70">Profile:</span> click a character's name to open their full profile.</p>
+            </div>
           </div>
         </aside>
       </div>
