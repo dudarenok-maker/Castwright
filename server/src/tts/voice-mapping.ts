@@ -47,7 +47,7 @@ type VoiceProfile =
 /* Hand-picked from Gemini's published prebuilt voice list. Each profile gets
    two options so close-together voices in the cast don't collide; we pick
    via a stable hash of the voice id. */
-const GEMINI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
+export const GEMINI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
   'male-deep':      ['Charon', 'Algieba'],
   'male-mid':       ['Puck', 'Orus'],
   'male-light':     ['Iapetus', 'Sadachbia'],

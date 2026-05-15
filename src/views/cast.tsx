@@ -12,6 +12,7 @@ import { useAppSelector } from '../store';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
+import { gradientForTtsVoice } from '../lib/voice-palette';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import type { VoiceSampleArgs } from '../lib/api';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
@@ -74,16 +75,17 @@ export function CastView({
       playback.stop();
       return;
     }
+    const stubTtsVoice = resolveTtsVoiceForCharacter(c, ttsEngine);
     const subject: Voice = voice ?? {
       id: sampleVoiceId,
       character: c.name,
       bookTitle: '',
       bookId: '',
       attributes: c.attributes ?? [],
-      gradient: ['#999999', '#666666'],
+      gradient: gradientForTtsVoice(stubTtsVoice.name, sampleVoiceId),
       usedIn: 0,
       source: 'current',
-      ttsVoice: resolveTtsVoiceForCharacter(c, ttsEngine),
+      ttsVoice: stubTtsVoice,
     };
     const characterHint = buildCharacterHint(c);
     setRow(c.id, { loading: true, error: undefined });
@@ -217,12 +219,15 @@ export function CastView({
                       <VoiceSwatch voice={voice} size="sm" showLabel={false}/>
                       <span className="min-w-0">
                         <span className="block text-ink/80 truncate font-medium">{voice.character}</span>
-                        {c.matchedFrom ? (
+                        {/* Voice profile line is identical for generated and
+                            reused rows — the match-source line stacks below
+                            it so the user still sees which prebuilt voice the
+                            reused character will speak with. */}
+                        <TtsVoiceLine ttsVoice={ttsVoice}/>
+                        {c.matchedFrom && (
                           <button onClick={(e) => { e.stopPropagation(); onShowMatchDetail(c.id); }} className="block text-[11px] text-purple-deep/70 hover:text-purple-deep truncate underline-offset-2 hover:underline">
                             From {c.matchedFrom.bookTitle} · {Math.round((c.matchedFrom.confidence ?? 0) * 100)}%
                           </button>
-                        ) : (
-                          <TtsVoiceLine ttsVoice={ttsVoice}/>
                         )}
                       </span>
                     </>

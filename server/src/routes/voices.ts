@@ -33,6 +33,7 @@ import {
   resolveVoiceAssignment,
   type TtsVoiceAssignment,
 } from '../tts/voice-mapping.js';
+import { gradientForTtsVoice } from '../tts/voice-palette.js';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine } from '../tts/index.js';
 
@@ -59,25 +60,6 @@ interface CastJson {
 interface VoicesMetaJson {
   pinned: string[];
   updatedAt: string;
-}
-
-/* 8-entry palette mirroring scan.ts:deterministicGradient. Keyed off voiceId
-   so the same voice always looks the same across renders and books. */
-const VOICE_PALETTE: Array<[string, string]> = [
-  ['#3C194F', '#0F0E0D'],
-  ['#F79A83', '#A43C6C'],
-  ['#7C5C8C', '#3C194F'],
-  ['#6B6663', '#1A1A1A'],
-  ['#4A6878', '#1F3441'],
-  ['#C28BA8', '#7A3A5C'],
-  ['#A8D5BA', '#4A7B6B'],
-  ['#D4A04E', '#7B5A26'],
-];
-
-function deterministicGradient(seed: string): [string, string] {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
-  return VOICE_PALETTE[Math.abs(h) % VOICE_PALETTE.length];
 }
 
 function isNarratorId(id: string, name?: string): boolean {
@@ -152,7 +134,7 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
             bookTitle: state.title,
             bookId: state.bookId,
             attributes: c.attributes ?? [],
-            gradient: deterministicGradient(id),
+            gradient: gradientForTtsVoice(ttsVoice.name, id),
             usedIn: 1,
             source: isCurrent ? 'current' : 'library',
             reusable: isNarratorId(id, c.name) || undefined,
