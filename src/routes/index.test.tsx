@@ -388,8 +388,11 @@ describe('ChangelogRoute', () => {
       expect(screen.getByText('Regenerated Chapter 3')).toBeInTheDocument();
     });
     expect(workspaceChangelogMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('Solway Bay')).toBeInTheDocument();
-    expect(screen.getByText('Northern Star')).toBeInTheDocument();
+    /* Compact rows inline the bookTitle into the header row as "· <title>"
+       so the text node is "· Solway Bay" — substring match keeps the
+       assertion robust against the separator. */
+    expect(screen.getByText(/Solway Bay/)).toBeInTheDocument();
+    expect(screen.getByText(/Northern Star/)).toBeInTheDocument();
     /* The per-book log seed fixture must NOT leak into the workspace view. */
     expect(screen.queryByText("Tuned Eliza Gray's voice")).toBeNull();
   });

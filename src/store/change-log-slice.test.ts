@@ -22,8 +22,9 @@ const makeEvent = (id: number, overrides: Partial<ChangeLogEvent> = {}): ChangeL
 });
 
 describe('changeLogSlice', () => {
-  it('seeds with the demo fixture so the workspace Activity view is non-empty on first run', () => {
+  it('starts empty — the workspace Activity view hydrates from disk, not from a demo fixture', () => {
     expect(changeLogSlice.getInitialState().events).toBe(CHANGE_LOG_EVENTS);
+    expect(changeLogSlice.getInitialState().events).toEqual([]);
   });
 
   it('appendLogEvent unshifts (newest first)', () => {

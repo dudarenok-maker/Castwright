@@ -20,8 +20,11 @@ export interface ChangeLogState {
   workspaceEvents: ChangeLogEvent[];
 }
 
-/* Demo seed so the Activity view isn't blank before the first real action.
-   Hydration from book-state overwrites this whenever a book opens. */
+/* Starts empty. The Activity view shows a friendly empty-state card until
+   real entries land via hydrateFromBookState (per-book) or
+   hydrateWorkspaceEvents (workspace fan-out). Demo fixtures used to seed
+   this slice; that polluted the workspace view on first run and hid the
+   zero-count paths, so the seed was removed (see src/data/change-log.ts). */
 const initialState: ChangeLogState = {
   events: CHANGE_LOG_EVENTS,
   workspaceEvents: [],
