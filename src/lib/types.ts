@@ -348,7 +348,7 @@ export type Stage =
   | { kind: 'books' }
   | { kind: 'upload' }
   | { kind: 'analysing'; bookId?: string; manuscriptId?: string | null }
-  | { kind: 'confirm';   bookId: string }
+  | { kind: 'confirm';   bookId: string; openProfileId: string | null }
   | { kind: 'ready';     bookId: string; view: View; currentChapterId: number; openProfileId: string | null }
   | { kind: 'voices' }
   | { kind: 'changelog' }

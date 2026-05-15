@@ -2,7 +2,7 @@
 
 > Status: stable
 > Key files: `src/lib/router.ts`, `src/store/index.ts` (RouterStore adapter)
-> URL surface: `#/`, `#/new`, `#/voices`, `#/log`, `#/books/:bookId/analysing`, `#/books/:bookId/confirm`, `#/books/:bookId/:view?chapter=&profile=`
+> URL surface: `#/`, `#/new`, `#/voices`, `#/log`, `#/books/:bookId/analysing`, `#/books/:bookId/confirm?profile=`, `#/books/:bookId/:view?chapter=&profile=`
 > OpenAPI ops: none
 
 ## What this covers
@@ -24,7 +24,7 @@ Run with `VITE_USE_MOCKS=true`. Open the app, then in DevTools console call `par
 
 1. **Cold boot at `/` (no hash)** — `installRouter` calls `replaceState` to `#/`. URL bar shows `#/`.
 2. **Hand-edit URL to `#/new`** → `stage = { kind: 'upload' }`. Edit to `#/voices` → `{ kind: 'voices' }`. Edit to `#/log` → `{ kind: 'changelog' }`.
-3. **Edit URL to `#/books/abc/analysing`** → `stage = { kind: 'analysing', bookId: 'abc' }` (manuscriptId is `null`/`undefined`). Edit to `#/books/abc/confirm` → `{ kind: 'confirm', bookId: 'abc' }`.
+3. **Edit URL to `#/books/abc/analysing`** → `stage = { kind: 'analysing', bookId: 'abc' }` (manuscriptId is `null`/`undefined`). Edit to `#/books/abc/confirm` → `{ kind: 'confirm', bookId: 'abc', openProfileId: null }`. Edit to `#/books/abc/confirm?profile=p1` → `{ kind: 'confirm', bookId: 'abc', openProfileId: 'p1' }` (opens ProfileDrawer on the Meet-the-cast screen).
 4. **Edit URL to `#/books/abc/manuscript?chapter=5&profile=p1`** → `stage = { kind: 'ready', bookId: 'abc', view: 'manuscript', currentChapterId: 5, openProfileId: 'p1' }`.
 5. **Edit URL to `#/books/abc/garbage`** → `stage = { kind: 'ready', bookId: 'abc', view: 'cast', currentChapterId: 3, openProfileId: null }` (fallback view).
 6. **Dispatch `setCurrentChapterId(7)` via DevTools while in ready stage** → URL becomes `#/books/abc/manuscript?chapter=7`.

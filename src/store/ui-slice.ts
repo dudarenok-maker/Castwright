@@ -82,7 +82,7 @@ export const uiSlice = createSlice({
     analysisComplete: (s, a: PayloadAction<{ bookId?: string }>) => {
       if (s.stage.kind !== 'analysing') return;
       const bookId = a.payload?.bookId || s.stage.bookId || 'ns';
-      s.stage = { kind: 'confirm', bookId };
+      s.stage = { kind: 'confirm', bookId, openProfileId: null };
     },
     confirmCast: (s) => {
       if (s.stage.kind !== 'confirm') return;
@@ -95,7 +95,7 @@ export const uiSlice = createSlice({
     openBook: (s, a: PayloadAction<{ id: string; status: string; manuscriptId?: string | null }>) => {
       const { id, status, manuscriptId } = a.payload;
       if (status === 'analysing')         s.stage = { kind: 'analysing', bookId: id, manuscriptId: manuscriptId ?? null };
-      else if (status === 'cast_pending') s.stage = { kind: 'confirm',   bookId: id };
+      else if (status === 'cast_pending') s.stage = { kind: 'confirm',   bookId: id, openProfileId: null };
       else {
         const view: View = status === 'complete' ? 'listen'
                          : status === 'generating' ? 'generate'
@@ -114,7 +114,10 @@ export const uiSlice = createSlice({
       s.stage.currentChapterId = a.payload;
     },
     setOpenProfileId: (s, a: PayloadAction<string | null>) => {
-      if (s.stage.kind !== 'ready') return;
+      /* Drawer is reachable from cast-confirmation too — clicking a card on
+         the "Meet the cast" screen opens the same ProfileDrawer that
+         hangs off the ready-stage cast view. */
+      if (s.stage.kind !== 'ready' && s.stage.kind !== 'confirm') return;
       s.stage.openProfileId = a.payload;
     },
 
@@ -174,5 +177,6 @@ export const uiSelectors = {
   bookId:    (s: RootState) => (s.ui.stage as { bookId?: string }).bookId ?? null,
   view:      (s: RootState) => s.ui.stage.kind === 'ready' ? s.ui.stage.view : null,
   chapterId: (s: RootState) => s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null,
-  profileId: (s: RootState) => s.ui.stage.kind === 'ready' ? s.ui.stage.openProfileId : null,
+  profileId: (s: RootState) =>
+    (s.ui.stage.kind === 'ready' || s.ui.stage.kind === 'confirm') ? s.ui.stage.openProfileId : null,
 };

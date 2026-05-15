@@ -40,7 +40,7 @@ describe('uiSlice — openBook status→stage routing', () => {
       baseState({ kind: 'books' }),
       uiActions.openBook({ id: 'ns', status: 'cast_pending' }),
     );
-    expect(next.stage).toEqual({ kind: 'confirm', bookId: 'ns' });
+    expect(next.stage).toEqual({ kind: 'confirm', bookId: 'ns', openProfileId: null });
   });
 
   it('complete → ready stage on listen view', () => {
@@ -84,7 +84,7 @@ describe('uiSlice — stage transition guards', () => {
       baseState({ kind: 'analysing', bookId: 'ns', manuscriptId: 'm1' }),
       uiActions.analysisComplete({ bookId: 'ns' }),
     );
-    expect(fromAnalysing.stage).toEqual({ kind: 'confirm', bookId: 'ns' });
+    expect(fromAnalysing.stage).toEqual({ kind: 'confirm', bookId: 'ns', openProfileId: null });
 
     const fromUpload = uiSlice.reducer(baseState({ kind: 'upload' }),
       uiActions.analysisComplete({ bookId: 'ns' }));
@@ -93,7 +93,7 @@ describe('uiSlice — stage transition guards', () => {
 
   it('confirmCast only fires from confirm stage', () => {
     const fromConfirm = uiSlice.reducer(
-      baseState({ kind: 'confirm', bookId: 'ns' }),
+      baseState({ kind: 'confirm', bookId: 'ns', openProfileId: null }),
       uiActions.confirmCast(),
     );
     expect(fromConfirm.stage).toMatchObject({ kind: 'ready', bookId: 'ns', view: 'manuscript', currentChapterId: 3 });
@@ -113,7 +113,8 @@ describe('uiSlice — hydrateFromUrl + stageToHash round-trip', () => {
     { kind: 'voices' },
     { kind: 'changelog' },
     { kind: 'account' },
-    { kind: 'confirm', bookId: 'ns' },
+    { kind: 'confirm', bookId: 'ns', openProfileId: null },
+    { kind: 'confirm', bookId: 'ns', openProfileId: 'halloran' },
     { kind: 'ready', bookId: 'ns', view: 'manuscript', currentChapterId: 3, openProfileId: null },
     { kind: 'ready', bookId: 'ns', view: 'cast', currentChapterId: 5, openProfileId: 'halloran' },
   ];
@@ -128,8 +129,32 @@ describe('uiSlice — hydrateFromUrl + stageToHash round-trip', () => {
   });
 
   it('hydrateFromUrl with a stage missing kind is rejected', () => {
-    const start = baseState({ kind: 'confirm', bookId: 'ns' });
+    const start = baseState({ kind: 'confirm', bookId: 'ns', openProfileId: null });
     const next = uiSlice.reducer(start, uiActions.hydrateFromUrl({} as Stage));
+    expect(next.stage).toEqual(start.stage);
+  });
+});
+
+describe('uiSlice — setOpenProfileId across stages', () => {
+  it('writes openProfileId on the confirm stage', () => {
+    /* "Meet the cast" cards open the same ProfileDrawer the ready-stage
+       cast view uses — so the reducer must let the field through here. */
+    const start = baseState({ kind: 'confirm', bookId: 'ns', openProfileId: null });
+    const next = uiSlice.reducer(start, uiActions.setOpenProfileId('halloran'));
+    expect(next.stage).toEqual({ kind: 'confirm', bookId: 'ns', openProfileId: 'halloran' });
+  });
+
+  it('writes openProfileId on the ready stage', () => {
+    const start = baseState({ kind: 'ready', bookId: 'ns', view: 'cast', currentChapterId: 3, openProfileId: null });
+    const next = uiSlice.reducer(start, uiActions.setOpenProfileId('halloran'));
+    expect(next.stage).toMatchObject({ kind: 'ready', openProfileId: 'halloran' });
+  });
+
+  it('is a no-op on stages that have no openProfileId slot', () => {
+    /* Guard rail — dispatching from books/upload/analysing/etc. must not
+       perturb the stage shape (which has no openProfileId field there). */
+    const start = baseState({ kind: 'analysing', bookId: 'ns', manuscriptId: 'm1' });
+    const next = uiSlice.reducer(start, uiActions.setOpenProfileId('halloran'));
     expect(next.stage).toEqual(start.stage);
   });
 });

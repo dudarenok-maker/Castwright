@@ -36,9 +36,14 @@ describe('stageToHash', () => {
       .toBe('#/new');
   });
 
-  it('confirm → #/books/:id/confirm', () => {
-    expect(stageToHash({ kind: 'confirm', bookId: 'ns' }))
+  it('confirm without openProfileId → #/books/:id/confirm', () => {
+    expect(stageToHash({ kind: 'confirm', bookId: 'ns', openProfileId: null }))
       .toBe('#/books/ns/confirm');
+  });
+
+  it('confirm with openProfileId → #/books/:id/confirm?profile=', () => {
+    expect(stageToHash({ kind: 'confirm', bookId: 'ns', openProfileId: 'halloran' }))
+      .toBe('#/books/ns/confirm?profile=halloran');
   });
 
   it('ready with default chapter=3 omits chapter query param', () => {
@@ -88,8 +93,15 @@ describe('stageEqual', () => {
 
   it('different bookId is not equal', () => {
     expect(stageEqual(
-      { kind: 'confirm', bookId: 'a' },
-      { kind: 'confirm', bookId: 'b' },
+      { kind: 'confirm', bookId: 'a', openProfileId: null },
+      { kind: 'confirm', bookId: 'b', openProfileId: null },
+    )).toBe(false);
+  });
+
+  it('confirm with differing openProfileId is not equal', () => {
+    expect(stageEqual(
+      { kind: 'confirm', bookId: 'ns', openProfileId: null },
+      { kind: 'confirm', bookId: 'ns', openProfileId: 'halloran' },
     )).toBe(false);
   });
 
@@ -117,7 +129,10 @@ describe('stageEqual', () => {
   });
 
   it('same kind + same bookId for non-ready stages are equal', () => {
-    expect(stageEqual({ kind: 'confirm', bookId: 'ns' }, { kind: 'confirm', bookId: 'ns' })).toBe(true);
+    expect(stageEqual(
+      { kind: 'confirm', bookId: 'ns', openProfileId: null },
+      { kind: 'confirm', bookId: 'ns', openProfileId: null },
+    )).toBe(true);
     expect(stageEqual({ kind: 'books' }, { kind: 'books' })).toBe(true);
   });
 });
