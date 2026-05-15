@@ -21,6 +21,7 @@ export const USER_SETTINGS_PATH = join(SERVER_ROOT, 'user-settings.json');
 export const TTS_ENGINE_VALUES = ['local', 'gemini'] as const;
 export const ANALYSIS_ENGINE_VALUES = ['local', 'gemini'] as const;
 export const TTS_MODEL_KEY_VALUES = [
+  'kokoro-v1',
   'coqui-xtts-v2',
   'gemini-2.5-flash',
   'gemini-3.1-flash',
@@ -67,7 +68,13 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      Llama explicitly from the dropdown for harder books. */
   defaultAnalysisModel: 'qwen3.5:4b',
   defaultTtsEngine:     'local',
-  defaultTtsModelKey:   'coqui-xtts-v2',
+  /* Kokoro v1 is the new default — TTS-Arena #1 for its size, ~1 GB
+     VRAM (vs ~3 GB for XTTS), and small enough to be eagerly preloaded
+     by the sidecar so the Load/Stop pill stops being a daily friction
+     point. XTTS stays available as an alternate in the picker for the
+     30-voice catalog and zero-shot cloning. Flip in lockstep with
+     src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
+  defaultTtsModelKey:   'kokoro-v1',
   sidecarUrl:           'http://localhost:9000',
   analysisEngine:       'local',
   ollamaUrl:            'http://localhost:11434',

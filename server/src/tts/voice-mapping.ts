@@ -15,10 +15,22 @@ export interface VoiceLike {
   id: string;
   character?: string;
   attributes?: string[];
-  /** User-set manual override: when present AND its engine matches the
-      synth engine, the picker bypasses attribute inference and returns
-      `overrideTtsVoice.name` directly. Cross-engine overrides are kept
-      but ignored at synth time (see `pickVoiceForEngine`). */
+  /** Per-engine user-set voice overrides. The synth engine reads its own
+      slot at render time; if present, the picker bypasses attribute
+      inference and returns the override name directly. Absent slots fall
+      through to engine-specific profile inference.
+
+      Why a map: switching the project's TTS engine (Coqui ↔ Kokoro) used
+      to lose all manual cast assignments because the old singular
+      `overrideTtsVoice: { engine, name }` field was ignored when its
+      engine didn't match the synth engine. With a map, each engine
+      carries its own assignment and switches preserve the cast. */
+  overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  /** @deprecated Legacy singular field. Read paths normalise this into
+      `overrideTtsVoices` at load time (see normaliseVoiceOverrides in
+      server/src/routes/voices.ts); writes always emit the plural form.
+      Kept on the type so older fixtures and in-flight cast.json files
+      still satisfy the type checker. */
   overrideTtsVoice?: { engine: TtsEngine; name: string } | null;
 }
 
@@ -84,6 +96,42 @@ export const COQUI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
   'narrator-cool':  ['Asya Anara', 'Gracie Wise'],
 };
 
+/* Kokoro v1 baked voice names — English subset only. Voice IDs are
+   prefixed `af_` (American female), `am_` (American male), `bf_`
+   (British female), and `bm_` (British male). Selection criteria:
+   surface high-quality narration voices first, spread across gender x
+   register so the profile inference upstream picks distinguishable
+   choices for neighbouring characters. The sidecar's English-only
+   filter (KokoroEngine.ENGLISH_VOICE_PREFIXES) keeps this table aligned
+   with what /speakers actually returns; auditEngineCatalog flags any
+   drift between the two. */
+export const KOKORO_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
+  'male-deep':      ['am_onyx', 'bm_george'],
+  'male-mid':       ['am_michael', 'am_adam'],
+  'male-light':     ['am_eric', 'am_liam'],
+  'female-deep':    ['af_sarah', 'bf_emma'],
+  'female-mid':     ['af_bella', 'af_jessica'],
+  'female-light':   ['af_nicole', 'af_aoede'],
+  'narrator-warm':  ['af_heart', 'af_kore'],
+  'narrator-cool':  ['af_alloy', 'af_river'],
+};
+
+/* Profile-coded labels for the Kokoro catalog — same shape as
+   COQUI_VOICE_DESCRIPTIONS (Kokoro doesn't publish personality
+   descriptors either). The accent suffix (`US` / `UK`) is the one piece
+   of information beyond gender/register that's actually visible in the
+   voice ID, so we surface it. */
+export const KOKORO_VOICE_DESCRIPTIONS: Record<string, string> = {
+  'am_onyx': 'Deep · Male · US', 'bm_george': 'Deep · Male · UK',
+  'am_michael': 'Mid · Male · US', 'am_adam': 'Mid · Male · US',
+  'am_eric': 'Light · Male · US', 'am_liam': 'Light · Male · US',
+  'af_sarah': 'Deep · Female · US', 'bf_emma': 'Deep · Female · UK',
+  'af_bella': 'Mid · Female · US', 'af_jessica': 'Mid · Female · US',
+  'af_nicole': 'Light · Female · US', 'af_aoede': 'Light · Female · US',
+  'af_heart': 'Warm narrator · US', 'af_kore': 'Warm narrator · US',
+  'af_alloy': 'Cool narrator · US', 'af_river': 'Cool narrator · US',
+};
+
 /* Public personality labels for Gemini's 30 prebuilt voices, as published in
    https://ai.google.dev/gemini-api/docs/speech-generation#voices. */
 export const GEMINI_VOICE_DESCRIPTIONS: Record<string, string> = {
@@ -123,16 +171,21 @@ export interface TtsVoiceAssignment {
     inside the synth pipeline only need the name; the UI-facing
     resolveVoiceAssignment wraps this with the description.
 
-    Override semantics: if `voice.overrideTtsVoice` is set and its engine
-    matches the requested engine, the override's name is returned verbatim
-    — attribute inference and the gender×register pipeline are skipped.
-    Cross-engine overrides are ignored (the caller would have to switch
-    engine first); the inference path handles it the same as no override. */
+    Override resolution order:
+    1. `overrideTtsVoices[engine].name` if set (and non-empty) → return
+       it verbatim. This is the per-engine slot — each character can
+       carry independent assignments for every engine.
+    2. Legacy `overrideTtsVoice` if it matches the engine → return its
+       name. Kept so cast.json files written by older clients still
+       resolve correctly until they're re-saved through the normaliser.
+    3. Profile inference against this engine's catalog. */
 export function pickVoiceForEngine(
   engine: TtsEngine,
   voice: VoiceLike,
   hint?: CharacterHint,
 ): string {
+  const slotName = voice.overrideTtsVoices?.[engine]?.name;
+  if (slotName) return slotName;
   if (voice.overrideTtsVoice && voice.overrideTtsVoice.engine === engine && voice.overrideTtsVoice.name) {
     return voice.overrideTtsVoice.name;
   }
@@ -161,16 +214,18 @@ export function resolveVoiceAssignment(
 
 function catalogForEngine(engine: TtsEngine): Record<VoiceProfile, string[]> {
   if (engine === 'coqui')  return COQUI_PROFILE_VOICES;
+  if (engine === 'kokoro') return KOKORO_PROFILE_VOICES;
   if (engine === 'gemini') return GEMINI_PROFILE_VOICES;
-  /* Piper/Kokoro fall back to the Coqui catalog until their own tables land
-     — keeps the picker total over the TtsEngine union while we incrementally
-     wire those engines in. */
+  /* Piper falls back to Coqui until/unless its own table lands — keeps
+     the picker total over the TtsEngine union without forcing inferred
+     voices that don't exist in Piper's manifest. */
   return COQUI_PROFILE_VOICES;
 }
 
 function describeVoice(engine: TtsEngine, name: string): string {
   if (engine === 'gemini') return GEMINI_VOICE_DESCRIPTIONS[name] ?? 'Prebuilt voice';
-  if (engine === 'coqui')  return COQUI_VOICE_DESCRIPTIONS[name] ?? 'Local voice';
+  if (engine === 'coqui')  return COQUI_VOICE_DESCRIPTIONS[name]  ?? 'Local voice';
+  if (engine === 'kokoro') return KOKORO_VOICE_DESCRIPTIONS[name] ?? 'Local voice';
   return 'Local voice';
 }
 
@@ -318,10 +373,12 @@ export function auditEngineCatalog(engine: TtsEngine): CatalogConsistency {
   const profiles =
     engine === 'gemini' ? GEMINI_PROFILE_VOICES :
     engine === 'coqui'  ? COQUI_PROFILE_VOICES  :
-    COQUI_PROFILE_VOICES; // piper/kokoro share Coqui's table (see catalogForEngine)
+    engine === 'kokoro' ? KOKORO_PROFILE_VOICES :
+    COQUI_PROFILE_VOICES; // piper still shares Coqui's table (see catalogForEngine)
   const descriptions =
     engine === 'gemini' ? GEMINI_VOICE_DESCRIPTIONS :
     engine === 'coqui'  ? COQUI_VOICE_DESCRIPTIONS  :
+    engine === 'kokoro' ? KOKORO_VOICE_DESCRIPTIONS :
     COQUI_VOICE_DESCRIPTIONS;
 
   const routed = new Set<string>();

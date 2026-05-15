@@ -330,16 +330,18 @@ describe('ProfileDrawer model-voice override picker', () => {
     { engine: 'gemini', name: 'Charon' },
   ];
 
-  it('renders an "Auto — currently …" default and the base catalog grouped by engine', async () => {
+  it('renders engine tabs (one per available engine) and shows the Coqui catalog by default', async () => {
     renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
     const picker = await screen.findByRole('combobox', { name: /Model voice override/i });
-    /* The auto label calls out the resolved voice so the user knows what
-       they'd be moving away from. */
+    /* Auto option labelled with the resolved voice so the user can
+       compare what they'd be moving away from. */
     expect(picker).toHaveValue('auto');
     expect(within(picker).getByRole('option', { name: /Auto — currently Coqui · Aaron Dreschner/i })).toBeTruthy();
-    /* Engine optgroups present. */
-    expect(picker.querySelector('optgroup[label="Coqui"]')).toBeTruthy();
-    expect(picker.querySelector('optgroup[label="Gemini"]')).toBeTruthy();
+    /* Coqui tab is active by default (matches the project's engine);
+       Gemini tab is also present. The tabs swap which engine's voices
+       the select shows; the single combobox is enough to pin behaviour. */
+    expect(screen.getByRole('tab', { name: /Coqui/i })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /Gemini/i })).toBeTruthy();
   });
 
   it('persists an override via api.setVoiceOverride when the user picks a base voice', async () => {
@@ -354,7 +356,7 @@ describe('ProfileDrawer model-voice override picker', () => {
 
   it('clears the override when the user picks "Auto"', async () => {
     setVoiceOverride.mockClear();
-    const overridden: Voice = { ...BrannVoice, overrideTtsVoice: { engine: 'coqui', name: 'Asya Anara' } };
+    const overridden: Voice = { ...BrannVoice, overrideTtsVoices: { coqui: { name: 'Asya Anara' } } };
     renderDrawer(Brann, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
     const picker = await screen.findByRole('combobox', { name: /Model voice override/i });
     expect(picker).toHaveValue('coqui|Asya Anara');
@@ -364,11 +366,30 @@ describe('ProfileDrawer model-voice override picker', () => {
     });
   });
 
-  it('warns about an engine mismatch when override engine differs from the active engine', async () => {
-    /* Default ui.ttsModelKey points at a Coqui model. A Gemini override
-       on top should surface the "engine mismatch" copy. */
-    const overridden: Voice = { ...BrannVoice, overrideTtsVoice: { engine: 'gemini', name: 'Charon' } };
+  it('shows a filled-slot indicator on the engine tab when that engine has an override', async () => {
+    /* The "dot" badge on a tab tells the user at a glance which engines
+       have a manual assignment without having to click each tab. */
+    const overridden: Voice = {
+      ...BrannVoice,
+      overrideTtsVoices: { gemini: { name: 'Charon' } },
+    };
     renderDrawer(Brann, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
-    expect(await screen.findByText(/Engine mismatch/i)).toBeTruthy();
+    const geminiTab = await screen.findByRole('tab', { name: /Gemini/i });
+    /* Filled-slot dot is added inside the tab button when that engine
+       has a non-empty slot. */
+    expect(geminiTab.querySelector('.bg-magenta')).toBeTruthy();
+  });
+
+  it('switching tabs swaps which engine\'s catalog the select shows', async () => {
+    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    /* Default tab (Coqui) — only Coqui voices listed (besides Auto). */
+    const coquiPicker = await screen.findByRole('combobox', { name: /Model voice override.*coqui/i });
+    expect(within(coquiPicker).queryByRole('option', { name: 'Charon' })).toBeNull();
+    expect(within(coquiPicker).getByRole('option', { name: 'Asya Anara' })).toBeTruthy();
+    /* Switch to Gemini tab — picker now lists Gemini's catalog. */
+    fireEvent.click(screen.getByRole('tab', { name: /Gemini/i }));
+    const geminiPicker = await screen.findByRole('combobox', { name: /Model voice override.*gemini/i });
+    expect(within(geminiPicker).getByRole('option', { name: 'Charon' })).toBeTruthy();
+    expect(within(geminiPicker).queryByRole('option', { name: 'Asya Anara' })).toBeNull();
   });
 });

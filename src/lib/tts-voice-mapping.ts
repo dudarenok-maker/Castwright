@@ -72,6 +72,34 @@ export const COQUI_VOICE_DESCRIPTIONS: Record<string, string> = {
   'Asya Anara': 'Cool narrator', 'Gracie Wise': 'Cool narrator',
 };
 
+/* Kokoro v1 English subset. Same shape as the Coqui catalog — voice IDs
+   are prefixed `af_` (American female), `am_` (American male), `bf_`
+   (British female), `bm_` (British male). Mirror of
+   server/src/tts/voice-mapping.ts KOKORO_PROFILE_VOICES; both must agree
+   on which name lives in which bucket so client-side stub Voices get
+   the same gradient the server stamps. */
+export const KOKORO_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
+  'male-deep':      ['am_onyx', 'bm_george'],
+  'male-mid':       ['am_michael', 'am_adam'],
+  'male-light':     ['am_eric', 'am_liam'],
+  'female-deep':    ['af_sarah', 'bf_emma'],
+  'female-mid':     ['af_bella', 'af_jessica'],
+  'female-light':   ['af_nicole', 'af_aoede'],
+  'narrator-warm':  ['af_heart', 'af_kore'],
+  'narrator-cool':  ['af_alloy', 'af_river'],
+};
+
+export const KOKORO_VOICE_DESCRIPTIONS: Record<string, string> = {
+  'am_onyx': 'Deep · Male · US', 'bm_george': 'Deep · Male · UK',
+  'am_michael': 'Mid · Male · US', 'am_adam': 'Mid · Male · US',
+  'am_eric': 'Light · Male · US', 'am_liam': 'Light · Male · US',
+  'af_sarah': 'Deep · Female · US', 'bf_emma': 'Deep · Female · UK',
+  'af_bella': 'Mid · Female · US', 'af_jessica': 'Mid · Female · US',
+  'af_nicole': 'Light · Female · US', 'af_aoede': 'Light · Female · US',
+  'af_heart': 'Warm narrator · US', 'af_kore': 'Warm narrator · US',
+  'af_alloy': 'Cool narrator · US', 'af_river': 'Cool narrator · US',
+};
+
 const MATCH_MALE_WORD   = /\b(male|man|boy|gentleman|sir|mr|mister)\b/;
 const MATCH_FEMALE_WORD = /\b(female|woman|girl|lady|miss|mrs|ms|madam)\b/;
 
@@ -171,11 +199,14 @@ function inferProfile(input: PickInput): VoiceProfile {
 
 function catalogForEngine(engine: TtsEngine): Record<VoiceProfile, string[]> {
   if (engine === 'gemini') return GEMINI_PROFILE_VOICES;
+  if (engine === 'kokoro') return KOKORO_PROFILE_VOICES;
+  /* coqui and piper share the Coqui catalog (piper has no static table yet). */
   return COQUI_PROFILE_VOICES;
 }
 
 function describeVoice(engine: TtsEngine, name: string): string {
   if (engine === 'gemini') return GEMINI_VOICE_DESCRIPTIONS[name] ?? 'Prebuilt voice';
+  if (engine === 'kokoro') return KOKORO_VOICE_DESCRIPTIONS[name] ?? 'Local voice';
   return COQUI_VOICE_DESCRIPTIONS[name] ?? 'Local voice';
 }
 

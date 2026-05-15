@@ -335,4 +335,8 @@ def test_speakers_endpoint_returns_manifest(monkeypatch):
     with TestClient(main.app) as client:
         r = client.get("/speakers")
     assert r.status_code == 200
-    assert r.json() == {"coqui": fake_speakers}
+    # /speakers now reports every registered engine; assert the Coqui slot
+    # specifically rather than full-dict equality so adding more engines
+    # (Kokoro etc.) doesn't churn this test.
+    body = r.json()
+    assert body["coqui"] == fake_speakers

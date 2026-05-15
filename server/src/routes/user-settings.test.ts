@@ -62,7 +62,7 @@ describe('user-settings router', () => {
     expect(res.body.displayName).toBe('Mike Dudarenok');
     expect(res.body.defaultAnalysisModel).toBe('qwen3.5:4b');
     expect(res.body.defaultTtsEngine).toBe('local');
-    expect(res.body.defaultTtsModelKey).toBe('coqui-xtts-v2');
+    expect(res.body.defaultTtsModelKey).toBe('kokoro-v1');
     expect(res.body.sidecarUrl).toBe('http://localhost:9000');
     expect(res.body.workspaceDirOverride).toBeNull();
     /* Minor-cast fold default — see server/src/analyzer/fold-minor-cast.ts. */

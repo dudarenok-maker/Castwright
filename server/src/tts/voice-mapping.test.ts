@@ -9,7 +9,7 @@
    side of the pair fails the test instead of shipping silently. */
 
 import { describe, it, expect } from 'vitest';
-import { auditEngineCatalog, pickVoiceForEngine } from './voice-mapping.js';
+import { auditEngineCatalog, pickVoiceForEngine, KOKORO_PROFILE_VOICES } from './voice-mapping.js';
 
 describe('voice-mapping catalogs are self-consistent', () => {
   it('coqui: every picker voice has a description and every described voice is routable', () => {
@@ -17,6 +17,36 @@ describe('voice-mapping catalogs are self-consistent', () => {
     expect(audit.missingDescriptions, `voices in COQUI_PROFILE_VOICES with no entry in COQUI_VOICE_DESCRIPTIONS — picker will choose them, cast view will say "Local voice"`).toEqual([]);
     expect(audit.unrouted, `voices in COQUI_VOICE_DESCRIPTIONS that PROFILE_VOICES never picks — orphan rows`).toEqual([]);
     expect(audit.routedCount).toBeGreaterThan(0);
+  });
+
+  it('kokoro: every picker voice has a description and every described voice is routable', () => {
+    /* Kokoro is English-only by project scope (sidecar filter at
+       KokoroEngine.ENGLISH_VOICE_PREFIXES). The picker tables must match
+       the same af_/am_/bf_/bm_ shape — anything else would route a voice
+       the sidecar will substitute, masking a real catalog drift. */
+    const audit = auditEngineCatalog('kokoro');
+    expect(audit.missingDescriptions, `voices in KOKORO_PROFILE_VOICES with no entry in KOKORO_VOICE_DESCRIPTIONS — picker will choose them, cast view will say "Local voice"`).toEqual([]);
+    expect(audit.unrouted, `voices in KOKORO_VOICE_DESCRIPTIONS that PROFILE_VOICES never picks — orphan rows`).toEqual([]);
+    expect(audit.routedCount).toBeGreaterThan(0);
+  });
+
+  it('kokoro: every routed voice has an af_/am_/bf_/bm_ prefix (English-only scope)', () => {
+    /* Load-bearing for this project: non-English Kokoro voices are
+       filtered out at the sidecar boundary (KokoroEngine.ENGLISH_VOICE_
+       PREFIXES). The picker tables must mirror that filter — a non-
+       English voice in KOKORO_PROFILE_VOICES would have the sidecar
+       silently substitute af_heart, masking a real catalog drift. */
+    const englishPrefixes = ['af_', 'am_', 'bf_', 'bm_'];
+    const names = new Set<string>();
+    for (const opts of Object.values(KOKORO_PROFILE_VOICES)) {
+      for (const n of opts) names.add(n);
+    }
+    for (const name of names) {
+      expect(
+        englishPrefixes.some(p => name.startsWith(p)),
+        `KOKORO_PROFILE_VOICES contains non-English voice '${name}' — must be af_/am_/bf_/bm_`,
+      ).toBe(true);
+    }
   });
 
   it('gemini: every picker voice has a description and every described voice is routable', () => {
@@ -97,6 +127,43 @@ describe('pickVoiceForEngine honours the per-cast overrideTtsVoice', () => {
     expect(picked).not.toBe('');
     /* Should land on a female-mid Coqui option. */
     expect(['Daisy Studious', 'Sofia Hellen']).toContain(picked);
+  });
+
+  it('routes the override verbatim for kokoro when the engine matches', () => {
+    /* Same shape as the coqui case: an explicit per-cast Kokoro override
+       takes precedence over profile inference. Different engine matrix
+       though — Kokoro names have af_/am_/bf_/bm_ prefixes, so a stray
+       Coqui-shaped name would be a clear bug. */
+    const picked = pickVoiceForEngine(
+      'kokoro',
+      {
+        id: 'char-Brann',
+        character: 'Brann',
+        attributes: [],
+        overrideTtsVoice: { engine: 'kokoro', name: 'am_onyx' },
+      },
+      { gender: 'male', ageRange: 'adult' },
+    );
+    expect(picked).toBe('am_onyx');
+  });
+
+  it('falls through to Kokoro profile inference when override engine is coqui', () => {
+    /* Cross-engine override is ignored at synth time — the synth engine
+       is kokoro, the override says coqui, so the picker must derive from
+       KOKORO_PROFILE_VOICES instead. Output should be one of the Kokoro
+       male-mid options, not the Coqui name from the override. */
+    const picked = pickVoiceForEngine(
+      'kokoro',
+      {
+        id: 'char-Brann',
+        character: 'Brann',
+        attributes: [],
+        overrideTtsVoice: { engine: 'coqui', name: 'Aaron Dreschner' },
+      },
+      { gender: 'male', ageRange: 'adult' },
+    );
+    expect(picked).not.toBe('Aaron Dreschner');
+    expect(['am_michael', 'am_adam']).toContain(picked);
   });
 
   it('null override is the same as no override', () => {

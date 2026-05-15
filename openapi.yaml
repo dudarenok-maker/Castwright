@@ -448,8 +448,8 @@ paths:
               properties:
                 modelKey:
                   type: string
-                  enum: [coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
-                  description: TTS model key. Local engines (coqui-*) route to the sidecar; gemini-* keys route to Google's TTS API.
+                  enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                  description: TTS model key. Local engines (kokoro-, coqui-) route to the sidecar; gemini-* keys route to Google's TTS API.
                 chapterIds:
                   type: array
                   items: { type: integer }
@@ -734,11 +734,11 @@ components:
             Used to filter the model dropdown's initial state.
         defaultTtsModelKey:
           type: string
-          enum: [coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
           description: |
             TTS model key from src/lib/tts-models.ts. Used as the initial
             value of ui.ttsModelKey when a book has no persisted TTS-model
-            choice (seed-only).
+            choice (seed-only). Default for new accounts is `kokoro-v1`.
         sidecarUrl:
           type: string
           description: |
@@ -825,7 +825,7 @@ components:
         defaultTtsEngine:     { type: string, enum: [local, gemini] }
         defaultTtsModelKey:
           type: string
-          enum: [coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
         sidecarUrl:           { type: string }
         analysisEngine:       { type: string, enum: [local, gemini] }
         ollamaUrl:            { type: string }
@@ -1129,8 +1129,8 @@ components:
       properties:
         modelKey:
           type: string
-          enum: [coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
-          description: UI-stable TTS model key. The engine prefix (coqui-, gemini-) drives provider selection server-side.
+          enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          description: UI-stable TTS model key. The engine prefix (kokoro-, coqui-, gemini-) drives provider selection server-side.
         voice:
           type: object
           description: Frontend Voice payload (attributes drive the prebuilt-voice picker).
@@ -1195,7 +1195,7 @@ components:
         cached:    { type: boolean }
         modelKey:
           type: string
-          enum: [coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
 
     # --- Voice library ---------------------------------------------
     TtsVoiceAssignment:
@@ -1260,16 +1260,43 @@ components:
         reusable:   { type: boolean, description: "Marker for narrator-like voices that span an entire book." }
         pinned:     { type: boolean, description: "Workspace-level pin flag from audiobook-workspace/voices.json." }
         ttsVoice:   { $ref: '#/components/schemas/TtsVoiceAssignment' }
+        overrideTtsVoices:
+          type: object
+          nullable: true
+          description: |
+            User-set TTS voice overrides per engine. Each entry pins a
+            specific speaker for that engine; the active synth engine
+            reads its own slot at render time and falls back to attribute
+            inference when absent. Engine switches preserve cast
+            assignments across engines (no need to re-cast every
+            character when toggling Coqui ↔ Kokoro).
+
+            Keyed by `TtsEngine` (`coqui`, `gemini`, `piper`, `kokoro`);
+            OpenAPI 3.0 can't constrain map keys to an enum, but the
+            server normalises unknown keys away at read time.
+          additionalProperties:
+            type: object
+            required: [name]
+            properties:
+              name:
+                type: string
+                description: "Engine-specific speaker handle for this engine's slot."
+          example:
+            coqui:  { name: "Asya Anara" }
+            kokoro: { name: "am_onyx" }
         overrideTtsVoice:
+          deprecated: true
           allOf:
             - $ref: '#/components/schemas/BaseVoice'
           nullable: true
           description: |
-            User-set override that wins over the attribute-driven picker.
-            When the override's engine matches the project's active engine,
-            `ttsVoice` will resolve to it and synthesis will use the named
-            speaker directly. Cross-engine overrides are kept but ignored at
-            synth time — the UI surfaces an "engine mismatch" badge.
+            DEPRECATED: superseded by `overrideTtsVoices` (plural) for
+            multi-engine support. Server-side reads still accept this
+            singular form for backwards compatibility with cast.json files
+            written by older clients — they get normalised into the
+            plural map at load time. Writes always emit `overrideTtsVoices`
+            and may omit this field. Will be removed once all in-flight
+            casts have been touched at least once.
         bookSeries:
           type: string
           nullable: true

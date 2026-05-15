@@ -18,13 +18,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function mockSpeakersResponse(speakers: string[]) {
+function mockSpeakersResponse(speakers: string[], kokoroVoices: string[] = []) {
   globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
     const target = typeof input === 'string'
       ? input
       : input instanceof URL ? input.toString() : (input as Request).url;
     if (target.endsWith('/speakers')) {
-      return new Response(JSON.stringify({ coqui: speakers }), {
+      return new Response(JSON.stringify({ coqui: speakers, kokoro: kokoroVoices }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
@@ -67,6 +67,31 @@ describe('listBaseVoices', () => {
     /* Gemini section is always static, unaffected by sidecar state. */
     const gemini = voices.filter(v => v.engine === 'gemini');
     expect(gemini.length).toBeGreaterThanOrEqual(30);
+  });
+
+  it('includes Kokoro English voices from the live sidecar /speakers response', async () => {
+    mockSpeakersResponse(
+      ['Damien Black'],
+      ['af_heart', 'am_michael', 'bf_emma'],
+    );
+    const voices = await listBaseVoices({ sidecarUrl: SIDECAR_URL });
+    const kokoro = voices.filter(v => v.engine === 'kokoro').map(v => v.name);
+    expect(kokoro).toEqual(['af_heart', 'am_michael', 'bf_emma']);
+  });
+
+  it('falls back to static KOKORO_PROFILE_VOICES when the sidecar omits the kokoro key', async () => {
+    /* Older sidecar / Kokoro weights not installed yet → sidecar returns
+       {coqui: [...]} with no kokoro key. The fallback uses the curated
+       catalog so the picker still has the English subset to offer. */
+    mockSpeakersResponse(['Damien Black']);  // no kokoro
+    const voices = await listBaseVoices({ sidecarUrl: SIDECAR_URL });
+    const kokoro = voices.filter(v => v.engine === 'kokoro').map(v => v.name);
+    expect(kokoro).toContain('af_heart');
+    expect(kokoro).toContain('am_onyx');
+    /* English-only invariant — must mirror the sidecar filter. */
+    for (const name of kokoro) {
+      expect(name).toMatch(/^[ab][fm]_/);
+    }
   });
 
   it('caches across calls — second call does not re-fetch /speakers', async () => {

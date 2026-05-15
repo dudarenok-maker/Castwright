@@ -13,9 +13,12 @@
      full published catalog, not just the 16 currently bucketed by
      GEMINI_PROFILE_VOICES). The user might want to override Brann to an
      unbucketed voice like Fenrir.
-   - piper, kokoro: empty for now — those engines don't have static
-     catalogs in voice-mapping.ts. The base-voice list grows as those
-     tables land.
+   - kokoro: live English-subset voice manifest from the sidecar's
+     `GET /speakers` `kokoro` key (filtered to af_/am_/bf_/bm_ at the
+     sidecar boundary). Falls back to KOKORO_PROFILE_VOICES + KOKORO_
+     VOICE_DESCRIPTIONS when the sidecar is unreachable, same shape as
+     the Coqui fallback.
+   - piper: empty for now — no static catalog yet.
 
    The catalog is cached in-process for the lifetime of the Node server.
    The cache is small (~50 entries today) and changes only when the
@@ -25,6 +28,8 @@ import {
   COQUI_PROFILE_VOICES,
   COQUI_VOICE_DESCRIPTIONS,
   GEMINI_VOICE_DESCRIPTIONS,
+  KOKORO_PROFILE_VOICES,
+  KOKORO_VOICE_DESCRIPTIONS,
 } from './voice-mapping.js';
 import type { TtsEngine } from './index.js';
 
@@ -70,13 +75,19 @@ async function refreshBaseVoices(opts: {
   sidecarUrl: string;
   probeTimeoutMs?: number;
 }): Promise<BaseVoiceEntry[]> {
-  const coqui = await listCoquiSpeakers(opts.sidecarUrl, opts.probeTimeoutMs ?? 2_000);
+  const timeoutMs = opts.probeTimeoutMs ?? 2_000;
+  /* Both Coqui and Kokoro share the same /speakers endpoint — fetch once
+     and split into the per-engine slots. Saves a round-trip and means a
+     stale/cold sidecar fails both engines together rather than racing. */
+  const speakers = await fetchSpeakersOnce(opts.sidecarUrl, timeoutMs);
+  const coqui = buildCoquiVoices(speakers?.coqui);
+  const kokoro = buildKokoroVoices(speakers?.kokoro);
   const merged: BaseVoiceEntry[] = [];
   merged.push(...coqui.voices);
+  merged.push(...kokoro.voices);
   merged.push(...listGeminiVoices());
-  /* Piper/Kokoro intentionally omitted — their catalogs aren't wired into
-     voice-mapping.ts yet. Adding them is a follow-up when those engines
-     land their own PROFILE_VOICES tables. */
+  /* Piper intentionally omitted — no static catalog yet. Adding it is a
+     follow-up when Piper lands its own PROFILE_VOICES table. */
   cache = {
     voices: merged,
     coquiFromSidecar: coqui.fromSidecar,
@@ -85,16 +96,15 @@ async function refreshBaseVoices(opts: {
   return merged;
 }
 
-interface CoquiResult {
+interface EngineFetchResult {
   voices: BaseVoiceEntry[];
   fromSidecar: boolean;
 }
 
-async function listCoquiSpeakers(sidecarUrl: string, timeoutMs: number): Promise<CoquiResult> {
-  const fromSidecar = await fetchSpeakersOnce(sidecarUrl, timeoutMs);
-  if (fromSidecar) {
+function buildCoquiVoices(liveSpeakers: string[] | undefined): EngineFetchResult {
+  if (liveSpeakers && liveSpeakers.length > 0) {
     return {
-      voices: fromSidecar.map(name => ({ engine: 'coqui' as TtsEngine, name })),
+      voices: [...liveSpeakers].sort().map(name => ({ engine: 'coqui' as TtsEngine, name })),
       fromSidecar: true,
     };
   }
@@ -112,17 +122,43 @@ async function listCoquiSpeakers(sidecarUrl: string, timeoutMs: number): Promise
   };
 }
 
-async function fetchSpeakersOnce(url: string, timeoutMs: number): Promise<string[] | null> {
+function buildKokoroVoices(liveVoices: string[] | undefined): EngineFetchResult {
+  if (liveVoices && liveVoices.length > 0) {
+    return {
+      voices: [...liveVoices].sort().map(name => ({ engine: 'kokoro' as TtsEngine, name })),
+      fromSidecar: true,
+    };
+  }
+  /* Sidecar unreachable or Kokoro weights not yet installed — fall back
+     to the static catalog tables so the picker still has the curated
+     English subset. The sidecar's English-only filter is the source of
+     truth for the *live* list; the static fallback mirrors what those
+     filtered names should be. */
+  const fallback = new Set<string>();
+  for (const opts of Object.values(KOKORO_PROFILE_VOICES)) {
+    for (const n of opts) fallback.add(n);
+  }
+  for (const n of Object.keys(KOKORO_VOICE_DESCRIPTIONS)) fallback.add(n);
+  return {
+    voices: [...fallback].sort().map(name => ({ engine: 'kokoro' as TtsEngine, name })),
+    fromSidecar: false,
+  };
+}
+
+interface SpeakersResponse {
+  coqui?: string[];
+  kokoro?: string[];
+}
+
+async function fetchSpeakersOnce(url: string, timeoutMs: number): Promise<SpeakersResponse | null> {
   const target = `${url.replace(/\/+$/, '')}/speakers`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const r = await fetch(target, { signal: controller.signal });
     if (!r.ok) return null;
-    const body = (await r.json().catch(() => null)) as { coqui?: string[] } | null;
-    const list = body?.coqui;
-    if (!Array.isArray(list) || list.length === 0) return null;
-    return [...list].sort();
+    const body = (await r.json().catch(() => null)) as SpeakersResponse | null;
+    return body ?? null;
   } catch {
     return null;
   } finally {

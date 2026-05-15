@@ -65,11 +65,35 @@ interface DerivedVoice {
   reusable?: boolean;
   pinned?: boolean;
   ttsVoice: TtsVoiceAssignment;
-  /** User-set manual voice override, when present. The `ttsVoice` field
-      above already reflects the override when its engine matches the
-      query's `engine` param; this field is surfaced separately so the UI
-      can show "Manual" / "Engine mismatch" badges and offer to clear it. */
+  /** Per-engine user-set voice overrides. The `ttsVoice` field above
+      resolves to the slot matching the query's `engine`; this map is
+      surfaced separately so the UI can render all engine assignments
+      across tabs and offer per-engine "Clear" buttons. */
+  overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  /** @deprecated Surfaced for one release so old clients still parse
+      the response. New clients read `overrideTtsVoices`. Populated from
+      the active engine's slot when present. */
   overrideTtsVoice?: { engine: TtsEngine; name: string } | null;
+}
+
+/* Read-time migration. Older cast.json files (pre-Kokoro) stored a
+   singular `overrideTtsVoice: { engine, name }`. The plural map is
+   strictly more expressive — fold the legacy field into the right slot
+   and drop it. New writes always emit `overrideTtsVoices`; the singular
+   field is removed once a cast is normalised so we don't carry both. */
+function normaliseCastCharacter(c: CastCharacter): CastCharacter {
+  const legacy = c.overrideTtsVoice;
+  if (!legacy || !legacy.name || !legacy.engine) return c;
+  const existing = c.overrideTtsVoices ?? {};
+  /* Don't clobber an explicit map entry — if the new field already names
+     a voice for the legacy field's engine, that's the authoritative one
+     (newer-format-wins). The legacy field is only load-bearing when the
+     new map has no slot for its engine. */
+  const merged = { ...existing };
+  if (!merged[legacy.engine]?.name) {
+    merged[legacy.engine] = { name: legacy.name };
+  }
+  return { ...c, overrideTtsVoices: merged, overrideTtsVoice: null };
 }
 
 interface CastJson {
@@ -134,10 +158,17 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
 
-        for (const c of cast.characters) {
+        for (const rawC of cast.characters) {
+          /* Apply read-time migration so the rest of this loop never
+             sees the legacy singular field. */
+          const c = normaliseCastCharacter(rawC);
           const id = c.voiceId ?? c.id;
           if (!id) continue;
-          const override = (c.overrideTtsVoice && c.overrideTtsVoice.name) ? c.overrideTtsVoice : null;
+          const overrideMap = c.overrideTtsVoices ?? null;
+          const overrideForEngine = overrideMap?.[engine] ?? null;
+          const legacyShape = overrideForEngine
+            ? { engine, name: overrideForEngine.name }
+            : null;
           const existing = acc.get(id);
           if (existing) {
             existing.books.add(state.bookId);
@@ -150,20 +181,33 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
               existing.bookId = state.bookId;
               existing.bookSeries = normaliseSeries(seriesName);
             }
-            /* If a previously-seen book left the override null and a later
-               book carries one, pick it up. Conflicting overrides across
-               books with the same voiceId are unlikely (the override write
-               loops every cast.json), but if it happens we keep the first
-               non-null value the aggregator sees. */
-            if (!existing.overrideTtsVoice && override) {
-              existing.overrideTtsVoice = override;
+            /* Merge override maps across books with the same voiceId.
+               Conflicts are unlikely (the override write loops every
+               cast.json), but if they happen, first-seen wins per
+               engine slot. */
+            if (overrideMap) {
+              const merged: Partial<Record<TtsEngine, { name: string }>> =
+                { ...(existing.overrideTtsVoices ?? {}) };
+              for (const [eng, val] of Object.entries(overrideMap)) {
+                const e = eng as TtsEngine;
+                if (val?.name && !merged[e]?.name) merged[e] = { name: val.name };
+              }
+              existing.overrideTtsVoices = merged;
+              existing.overrideTtsVoice = merged[engine]
+                ? { engine, name: merged[engine]!.name }
+                : null;
             }
             continue;
           }
           const isCurrent = !!currentBookId && state.bookId === currentBookId;
           const ttsVoice = resolveVoiceAssignment(
             engine,
-            { id, character: c.name, attributes: c.attributes ?? [], overrideTtsVoice: override },
+            {
+              id,
+              character: c.name,
+              attributes: c.attributes ?? [],
+              overrideTtsVoices: overrideMap,
+            },
             buildHintFromCast(c),
           );
           acc.set(id, {
@@ -179,7 +223,8 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
             reusable: isNarratorId(id, c.name) || undefined,
             pinned: pinned.has(id) || undefined,
             ttsVoice,
-            overrideTtsVoice: override,
+            overrideTtsVoices: overrideMap,
+            overrideTtsVoice: legacyShape,
             books: new Set([state.bookId]),
           });
         }
@@ -292,6 +337,18 @@ function parseOverrideField(value: unknown): { engine: TtsEngine; name: string }
   return { engine: v.engine, name: v.name.trim() };
 }
 
+/* Apply a per-engine override across every cast.json that contains a
+   character with this voiceId.
+     - override = { engine, name } → set `overrideTtsVoices[engine] = { name }`,
+       leaving other engine slots untouched.
+     - override = null → clear ALL engine slots (drop the map entirely).
+   Clearing one specific engine slot isn't in the API yet; if the UI
+   needs it, send `{ engine, name: '' }` — but parseOverrideField rejects
+   empty names, so we'd extend the parser to accept that as "delete slot".
+
+   Each touched character is also normalised: the legacy singular
+   `overrideTtsVoice` field is folded into the new map and removed,
+   so one user action upgrades the cast.json shape. */
 async function applyOverrideToCastFiles(
   voiceId: string,
   override: { engine: TtsEngine; name: string } | null,
@@ -306,14 +363,23 @@ async function applyOverrideToCastFiles(
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
         let dirty = false;
-        for (const c of cast.characters) {
-          const id = c.voiceId ?? c.id;
+        for (let i = 0; i < cast.characters.length; i++) {
+          const original = cast.characters[i];
+          const id = original.voiceId ?? original.id;
           if (id !== voiceId) continue;
-          if (override) {
-            c.overrideTtsVoice = override;
+          const normalised = normaliseCastCharacter(original);
+          const replacement: CastCharacter = { ...normalised };
+          if (override === null) {
+            delete replacement.overrideTtsVoices;
           } else {
-            delete c.overrideTtsVoice;
+            const map = { ...(normalised.overrideTtsVoices ?? {}) };
+            map[override.engine] = { name: override.name };
+            replacement.overrideTtsVoices = map;
           }
+          /* Always remove the legacy singular field — normaliseCastCharacter
+             already folded it into the map. */
+          delete replacement.overrideTtsVoice;
+          cast.characters[i] = replacement;
           dirty = true;
           updated += 1;
         }

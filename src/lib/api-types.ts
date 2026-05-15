@@ -573,10 +573,10 @@ export interface components {
             /**
              * @description TTS model key from src/lib/tts-models.ts. Used as the initial
              *     value of ui.ttsModelKey when a book has no persisted TTS-model
-             *     choice (seed-only).
+             *     choice (seed-only). Default for new accounts is `kokoro-v1`.
              * @enum {string}
              */
-            defaultTtsModelKey: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            defaultTtsModelKey: "kokoro-v1" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /**
              * @description Overrides the LOCAL_TTS_URL env var. Re-read on every request
              *     by the sidecar provider + health probe.
@@ -654,7 +654,7 @@ export interface components {
             /** @enum {string} */
             defaultTtsEngine?: "local" | "gemini";
             /** @enum {string} */
-            defaultTtsModelKey?: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            defaultTtsModelKey?: "kokoro-v1" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             sidecarUrl?: string;
             /** @enum {string} */
             analysisEngine?: "local" | "gemini";
@@ -861,10 +861,10 @@ export interface components {
         };
         VoiceSampleRequest: {
             /**
-             * @description UI-stable TTS model key. The engine prefix (coqui-, gemini-) drives provider selection server-side.
+             * @description UI-stable TTS model key. The engine prefix (kokoro-, coqui-, gemini-) drives provider selection server-side.
              * @enum {string}
              */
-            modelKey: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            modelKey: "kokoro-v1" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /** @description Frontend Voice payload (attributes drive the prebuilt-voice picker). */
             voice?: {
                 id?: string;
@@ -919,7 +919,7 @@ export interface components {
             durationSec?: number | null;
             cached: boolean;
             /** @enum {string} */
-            modelKey: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            modelKey: "kokoro-v1" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
         };
         /**
          * @description The TTS provider voice this Voice resolves to. Computed server-side by
@@ -978,11 +978,40 @@ export interface components {
             pinned?: boolean;
             ttsVoice: components["schemas"]["TtsVoiceAssignment"];
             /**
-             * @description User-set override that wins over the attribute-driven picker.
-             *     When the override's engine matches the project's active engine,
-             *     `ttsVoice` will resolve to it and synthesis will use the named
-             *     speaker directly. Cross-engine overrides are kept but ignored at
-             *     synth time — the UI surfaces an "engine mismatch" badge.
+             * @description User-set TTS voice overrides per engine. Each entry pins a
+             *     specific speaker for that engine; the active synth engine
+             *     reads its own slot at render time and falls back to attribute
+             *     inference when absent. Engine switches preserve cast
+             *     assignments across engines (no need to re-cast every
+             *     character when toggling Coqui ↔ Kokoro).
+             *
+             *     Keyed by `TtsEngine` (`coqui`, `gemini`, `piper`, `kokoro`);
+             *     OpenAPI 3.0 can't constrain map keys to an enum, but the
+             *     server normalises unknown keys away at read time.
+             * @example {
+             *       "coqui": {
+             *         "name": "Asya Anara"
+             *       },
+             *       "kokoro": {
+             *         "name": "am_onyx"
+             *       }
+             *     }
+             */
+            overrideTtsVoices?: {
+                [key: string]: {
+                    /** @description Engine-specific speaker handle for this engine's slot. */
+                    name: string;
+                };
+            } | null;
+            /**
+             * @deprecated
+             * @description DEPRECATED: superseded by `overrideTtsVoices` (plural) for
+             *     multi-engine support. Server-side reads still accept this
+             *     singular form for backwards compatibility with cast.json files
+             *     written by older clients — they get normalised into the
+             *     plural map at load time. Writes always emit `overrideTtsVoices`
+             *     and may omit this field. Will be removed once all in-flight
+             *     casts have been touched at least once.
              */
             overrideTtsVoice?: components["schemas"]["BaseVoice"] | null;
             /**
@@ -1670,10 +1699,10 @@ export interface operations {
             content: {
                 "application/json": {
                     /**
-                     * @description TTS model key. Local engines (coqui-*) route to the sidecar; gemini-* keys route to Google's TTS API.
+                     * @description TTS model key. Local engines (kokoro-, coqui-) route to the sidecar; gemini-* keys route to Google's TTS API.
                      * @enum {string}
                      */
-                    modelKey: "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                    modelKey: "kokoro-v1" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
                     /** @description Optional subset of chapters to (re)generate. Defaults to all chapters lacking an audio file. */
                     chapterIds?: number[];
                     /** @description Re-synthesise even if an audio file already exists on disk. */
