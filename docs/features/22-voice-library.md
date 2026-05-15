@@ -1,7 +1,7 @@
 # Voice library
 
 > Status: stable
-> Key files: `src/views/voices.tsx`, `src/store/voices-slice.ts` (`hydrate`, `setPinned`), `src/lib/api.ts` (`getVoices`, `setVoicePin`), `server/src/routes/voices.ts`
+> Key files: `src/views/voices.tsx`, `src/store/voices-slice.ts` (`hydrate`, `setPinned`), `src/lib/api.ts` (`getVoices`, `setVoicePin`), `server/src/routes/voices.ts`, `src/lib/voice-palette.ts`, `server/src/tts/voice-palette.ts`
 > URL surface: `#/voices`
 > OpenAPI ops: `GET /api/voices`, `PUT /api/voices/:id/pin`
 
@@ -20,6 +20,8 @@ Cross-book view of every voice the user has confirmed. Indexed by current book (
 - The voices view groups cards by `bookId` — one `<section>` per book with a book-title header; the current-source book renders first, library books follow alphabetically by title. There is no per-card "Used in N book — bookTitle" footer and the bookTitle subtitle is hidden inside cards (it lives only in the section header). Cards remain self-contained — no nested-card chrome around individual voice cards.
 - Inside each section, voices sort by line count descending — `Character.lines` from the analysis when available, otherwise a count of `state.manuscript.sentences` matched by `characterId`. Library-source voices that don't belong to the open book fall back to `usedIn` descending, then character name. Implementation: `src/views/voices.tsx` `linesByVoiceId` + `groups` `useMemo`.
 - The inline pin (star) lives on the voice card itself, next to the character name + reuse pill (`src/components/voice-library-panel.tsx::VoiceCard` `onTogglePin` prop). The sidebar `VoiceLibraryPanel` (cast view) does **not** render the pin.
+- **Voice swatch colour is derived from the resolved prebuilt TTS voice** (`ttsVoice.name`), not from a hash of the voice id. Two characters that route to the same prebuilt (e.g. both on `Viktor Menelaos`) get the same swatch gradient — at-a-glance signal that they will sound the same. The palette is 16 gradients arranged as 8 profile-bucket families × 2 slots (`male-deep`, `male-mid`, …, `narrator-cool`) in `BUCKET_GRADIENTS`. Coqui slot N and Gemini slot N within the same bucket share a gradient, so flipping the engine doesn't reshuffle the cast view. Unknown/custom voice names fall back to a stable hash of the voice id. The server stamps `Voice.gradient` at scan time (`server/src/tts/voice-palette.ts:gradientForTtsVoice`); the frontend mirrors the table at `src/lib/voice-palette.ts` for stub voices the cast view and profile drawer build before any library record exists. The two files MUST agree on per-voice gradient — if they drift, the swatch will jump when stub data flips to server-derived data. Both sides are covered by exhaustive Vitest specs that walk every entry in `COQUI_PROFILE_VOICES` / `GEMINI_PROFILE_VOICES`.
+- Character-avatar colour (`Character.color` → `CHAR_COLORS` in `src/lib/colors.ts`) is a separate axis: 30 slot colours allocated server-side by roster order during analysis. The avatar identifies the *character*; the swatch identifies the *voice*. Don't conflate the two palettes.
 
 ## Acceptance walkthrough
 

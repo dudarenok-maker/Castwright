@@ -8,6 +8,7 @@ import type { Character, Voice, CharColor } from '../lib/types';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad, type SampleStatus } from '../lib/play-sample-with-auto-load';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
+import { gradientForTtsVoice } from '../lib/voice-palette';
 import { useAppSelector } from '../store';
 
 interface Props {
@@ -124,16 +125,17 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
     gender: gender || undefined,
     ageRange: ageRange || undefined,
   };
+  const stubTtsVoice = resolveTtsVoiceForCharacter(editedCharacter, ttsEngine);
   const sampleSubject = voice ?? {
     id: sampleVoiceId,
     character: character.name,
     bookTitle: '',
     bookId: '',
     attributes: character.attributes ?? [],
-    gradient: ['#999999', '#666666'] as [string, string],
+    gradient: gradientForTtsVoice(stubTtsVoice.name, sampleVoiceId),
     usedIn: 0,
     source: 'current' as const,
-    ttsVoice: resolveTtsVoiceForCharacter(editedCharacter, ttsEngine),
+    ttsVoice: stubTtsVoice,
   };
   const samplePrefix = sampleUrlPrefixFor(sampleVoiceId, ttsModelKey);
   const isPlayingThis = playback.isPlaying && !!playback.currentUrl?.startsWith(samplePrefix);

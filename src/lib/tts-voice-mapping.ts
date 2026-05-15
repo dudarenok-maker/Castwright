@@ -21,12 +21,12 @@ export interface TtsVoiceAssignment {
 
 type Gender = 'male' | 'female' | 'unknown';
 type Register = 'deep' | 'mid' | 'light';
-type VoiceProfile =
+export type VoiceProfile =
   | 'male-deep' | 'male-mid' | 'male-light'
   | 'female-deep' | 'female-mid' | 'female-light'
   | 'narrator-warm' | 'narrator-cool';
 
-const GEMINI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
+export const GEMINI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
   'male-deep':      ['Charon', 'Algieba'],
   'male-mid':       ['Puck', 'Orus'],
   'male-light':     ['Iapetus', 'Sadachbia'],
@@ -37,7 +37,7 @@ const GEMINI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
   'narrator-cool':  ['Algenib', 'Achernar'],
 };
 
-const COQUI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
+export const COQUI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
   'male-deep':      ['Damien Black', 'Wulf Carlevaro'],
   'male-mid':       ['Aaron Dreschner', 'Viktor Menelaos'],
   'male-light':     ['Andrew Chipper', 'Royston Min'],
