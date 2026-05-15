@@ -227,17 +227,40 @@ export function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, stageKind, libraryBooks, bookMetaSavedKeys]);
 
-  /* Voice matching — fires once when analysis completes (stage becomes
-     'confirm'). Real backend: POST /api/books/:bookId/voice-match. */
+  /* Voice matching — fires once per (stage=confirm, bookId) once the cast
+     roster has actually been hydrated. The `characters.length > 0` guard +
+     the `voiceMatchFiredFor` ref together solve a race: on a fresh book
+     open, the hydrate effect above is still in flight when this effect
+     first runs, so `characters` is []. Without the guard we'd fire
+     voice-match with an empty roster, the response would carry no
+     candidates, and the stale `matchedFrom` already on disk would survive
+     unchallenged — keeping older books' cached matches from picking up
+     the new `bookId` / `characterId` fields the override flow depends
+     on. The ref guard then stops re-firing on every subsequent cast
+     mutation (Phase 0a snapshots, applyVoiceMatches itself, profile
+     edits). */
+  const voiceMatchFiredFor = useRef<string | null>(null);
   useEffect(() => {
-    if (stageKind !== 'confirm' || !bookId) return;
+    if (stageKind !== 'confirm') {
+      /* Clear the once-guard when leaving the confirm stage so a
+         subsequent re-analyse (books → analysing → confirm) gets a
+         fresh voice-match run for the same bookId. Without this, the
+         user could re-parse + re-analyse a book and never see updated
+         matches. */
+      voiceMatchFiredFor.current = null;
+      return;
+    }
+    if (!bookId) return;
+    if (characters.length === 0) return;
+    if (voiceMatchFiredFor.current === bookId) return;
+    voiceMatchFiredFor.current = bookId;
     let cancelled = false;
     api.matchVoices({ bookId, characters }).then(res => {
       if (!cancelled) dispatch(castActions.applyVoiceMatches(res));
     });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageKind, bookId]);
+  }, [stageKind, bookId, characters.length]);
 
   /* Revisions + drift poll — runs while the book is open ('ready'). */
   useEffect(() => {
