@@ -40,7 +40,7 @@ export function DriftReportModal({ events, characters, onClose, onRegenerateChap
             <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60"><IconClose className="w-4 h-4"/></button>
           </div>
 
-          <div className="p-6 space-y-6 overflow-y-auto">
+          <div className="p-6 space-y-6 overflow-y-auto scrollbar-thin">
             <p className="text-sm text-ink/70 leading-relaxed">
               We compared each chapter against the character's established voice profile. Severe and moderate findings are worth a listen — mild ones are usually within tolerance.
             </p>

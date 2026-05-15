@@ -90,23 +90,50 @@ body       { font-family: var(--font-sans); -webkit-font-smoothing: antialiased;
 /* Thin inset scrollbar for in-card scroll regions. The default Chromium
    scrollbar is wide and runs the full height of the scroll container,
    so on a rounded-3xl card it visually extends INTO the rounded
-   top-right and bottom-right corners. We paint the thumb on a transparent
-   background with a 5px transparent border (content-box clip) so the
-   visible thumb body is only 4px wide and inset 5px from each side, AND
-   we leave a 28px gap at the top/bottom of the track so the thumb's
-   travel ends BEFORE the 24px rounded-3xl corner begins. scrollbar-
-   gutter:stable keeps the gutter reserved even when content doesn't
-   overflow, so the right edge of the rows doesn't jitter as the user
-   scrolls. */
+   top-right and bottom-right corners. Three layered techniques keep
+   the scrollbar contained:
+
+   1. `border-radius: inherit` on the scroll element itself so its own
+      overflow clip matches the parent card's rounded shape. The parent's
+      `overflow-hidden + rounded-*` clip is rendered on a different
+      compositor layer than the scrollbar paint, so on some Chromium
+      versions the scrollbar bleeds past the rounded corner. Putting the
+      radius ON the scroll element forces the scrollbar into the same
+      clipped layer. Only the bottom corners are clipped — rounding the
+      top would cut into the first row (active/hover backgrounds visibly
+      clip at the corner) and is unnecessary because every site that uses
+      this utility either spans the full card (and the parent's clip
+      handles the top fine) or sits below a header (no top corner in
+      reach).
+   2. Transparent borders on the `::-webkit-scrollbar-track` to inset the
+      track 28px from top and bottom (one card-radius + a little).
+      `margin` on the track is unreliable in current Chromium and was
+      effectively dropped as a supported track property — transparent
+      borders with `background-clip: padding-box` produce the same visual
+      effect and survive across versions.
+   3. Thumb is painted on a transparent background with a 5px transparent
+      border (content-box clip) so the visible body is 4px wide and inset
+      5px from each side.
+
+   scrollbar-gutter:stable keeps the gutter reserved even when content
+   doesn't overflow, so the right edge of the rows doesn't jitter as the
+   user scrolls. */
 .scrollbar-thin {
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--ink-rgb), 0.22) transparent;
   scrollbar-gutter: stable;
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
 }
-.scrollbar-thin::-webkit-scrollbar { width: 14px; }
+.scrollbar-thin::-webkit-scrollbar {
+  width: 14px;
+  background: transparent;
+}
 .scrollbar-thin::-webkit-scrollbar-track {
   background: transparent;
-  margin: 28px 0;
+  background-clip: padding-box;
+  border-top: 28px solid transparent;
+  border-bottom: 28px solid transparent;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb {
   background-color: rgba(var(--ink-rgb), 0.22);
@@ -116,4 +143,7 @@ body       { font-family: var(--font-sans); -webkit-font-smoothing: antialiased;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background-color: rgba(var(--ink-rgb), 0.36);
+}
+.scrollbar-thin::-webkit-scrollbar-corner {
+  background: transparent;
 }

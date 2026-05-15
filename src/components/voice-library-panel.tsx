@@ -50,7 +50,8 @@ export function VoiceLibraryPanel({
           ))}
         </div>
       </div>
-      <div className="p-5 overflow-y-auto space-y-2">
+      <div data-testid="voice-library-scroll"
+           className="p-5 overflow-y-auto scrollbar-thin space-y-2">
         {filtered.map(v => (
           <VoiceCard key={v.id} voice={v} draggingVoiceId={draggingVoiceId} setDraggingVoiceId={setDraggingVoiceId}
             compact={compact}

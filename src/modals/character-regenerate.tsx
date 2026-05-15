@@ -64,7 +64,7 @@ export function CharacterRegenerateModal({ character, chapters, defaultChapterId
             <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60"><IconClose className="w-4 h-4"/></button>
           </div>
 
-          <div className="p-6 space-y-6 overflow-y-auto">
+          <div className="p-6 space-y-6 overflow-y-auto scrollbar-thin">
             <section>
               <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">Which chapters?</p>
               <div className="grid grid-cols-3 gap-2">
