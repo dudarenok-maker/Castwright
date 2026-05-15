@@ -1,15 +1,16 @@
 // Pairs with docs/features/10-profile-drawer.md
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { ProfileDrawer } from './profile-drawer';
+import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import type { Character } from '../lib/types';
 
-vi.mock('../lib/api', () => ({
-  api: { getVoiceSample: vi.fn() },
+vi.mock('../lib/play-sample-with-auto-load', () => ({
+  playSampleWithAutoLoad: vi.fn().mockResolvedValue({ analyzerEvicted: false }),
 }));
 
 vi.mock('../lib/use-sample-playback', () => ({
@@ -162,5 +163,123 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(await screen.findByText(/Server said no\./)).toBeTruthy();
+  });
+});
+
+describe('ProfileDrawer Play sample (auto-load path)', () => {
+  const Brann: Character = {
+    id: 'Brann', name: 'Brann', role: 'Telepath', color: 'halloran',
+    lines: 426, scenes: 12,
+    evidence: [{ quote: 'Brann provides the necessary pressure and support.', note: 'long' }],
+  };
+
+  it('routes Play through the auto-load helper, not raw api.getVoiceSample', async () => {
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockResolvedValueOnce({ analyzerEvicted: false });
+    render(
+      <Provider store={makeStore()}>
+        <ProfileDrawer character={Brann} voice={undefined} onClose={() => {}} onSave={() => {}} onLock={() => {}}/>
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Play 12s sample/i }));
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    /* The voiceId for an unmatched character is namespaced char-<id> so
+       cached sample files for the library voice can't collide with the
+       in-progress character voice. */
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('char-Brann');
+  });
+
+  it('surfaces the inline eviction banner when the helper reports the analyzer was unloaded', async () => {
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockImplementationOnce(async ({ onStatus }) => {
+      /* Drive the same status sequence prepareSidecar would emit on a
+         cold-start path: evict → load-tts → synth. */
+      onStatus?.('evicting',    { analyzerEvicted: false });
+      onStatus?.('loading-tts', { analyzerEvicted: true });
+      onStatus?.('synthesizing',{ analyzerEvicted: true });
+      return { analyzerEvicted: true };
+    });
+    render(
+      <Provider store={makeStore()}>
+        <ProfileDrawer character={Brann} voice={undefined} onClose={() => {}} onSave={() => {}} onLock={() => {}}/>
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Play 12s sample/i }));
+    expect(await screen.findByText(/Analyzer unloaded to free VRAM for TTS\./)).toBeTruthy();
+  });
+
+  it('renders the helper error in the drawer when prep or synth fails', async () => {
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockRejectedValueOnce(new Error('TTS sidecar process is not running. Launch the app via start-app.ps1.'));
+    render(
+      <Provider store={makeStore()}>
+        <ProfileDrawer character={Brann} voice={undefined} onClose={() => {}} onSave={() => {}} onLock={() => {}}/>
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Play 12s sample/i }));
+    expect(await screen.findByText(/TTS sidecar process is not running\./)).toBeTruthy();
+  });
+});
+
+describe('ProfileDrawer downgrade to background bucket', () => {
+  /* Rescuer-shaped fixture mirroring the screenshot the user filed: a
+     descriptor-named speaker the auto-fold missed (≥3 lines) that the user
+     wants to manually downgrade. */
+  const rescuer: Character = {
+    id: 'rescuer', name: 'Rescuer', role: 'background', color: 'halloran',
+    lines: 26, scenes: 2,
+  };
+  const unknownMale: Character = {
+    id: 'unknown-male', name: 'Unknown male', role: 'background', color: 'narrator',
+    lines: 129, scenes: 6,
+  };
+
+  it('fires onMerge with the bucket id when "Unknown male" is clicked', async () => {
+    const onMerge = vi.fn().mockResolvedValueOnce(undefined);
+    renderDrawer(rescuer, { onMerge });
+    fireEvent.click(screen.getByRole('button', { name: /Downgrade to Unknown male/i }));
+    /* Flush the awaited onMerge call. */
+    await Promise.resolve();
+    expect(onMerge).toHaveBeenCalledWith('rescuer', 'unknown-male');
+  });
+
+  it('fires onMerge with the female bucket id when "Unknown female" is clicked', async () => {
+    const onMerge = vi.fn().mockResolvedValueOnce(undefined);
+    renderDrawer(rescuer, { onMerge });
+    fireEvent.click(screen.getByRole('button', { name: /Downgrade to Unknown female/i }));
+    await Promise.resolve();
+    expect(onMerge).toHaveBeenCalledWith('rescuer', 'unknown-female');
+  });
+
+  it('shows the downgrade buttons even when the cast has no other merge candidates', () => {
+    const onMerge = vi.fn();
+    /* No mergeCandidates → the regular merge picker is hidden. Downgrade
+       buttons must still be reachable, because the server creates the
+       bucket on the fly. */
+    renderDrawer(rescuer, { onMerge });
+    expect(screen.queryByRole('button', { name: /Merge Rescuer into another character/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /Downgrade to Unknown male/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Downgrade to Unknown female/i })).toBeTruthy();
+  });
+
+  it('hides the downgrade buttons for the bucket character itself', () => {
+    const onMerge = vi.fn();
+    renderDrawer(unknownMale, { onMerge });
+    expect(screen.queryByRole('button', { name: /Downgrade to Unknown male/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Downgrade to Unknown female/i })).toBeNull();
+  });
+
+  it('hides the downgrade buttons when no onMerge handler is wired', () => {
+    renderDrawer(rescuer);
+    expect(screen.queryByRole('button', { name: /Downgrade to Unknown male/i })).toBeNull();
+  });
+
+  it('surfaces the server error when the downgrade merge rejects', async () => {
+    const onMerge = vi.fn().mockRejectedValueOnce(new Error('Disk full.'));
+    renderDrawer(rescuer, { onMerge });
+    fireEvent.click(screen.getByRole('button', { name: /Downgrade to Unknown male/i }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(await screen.findByText(/Disk full\./)).toBeTruthy();
   });
 });

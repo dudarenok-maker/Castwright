@@ -5,8 +5,8 @@ import type { TtsModelKey } from '../lib/types';
 import { Avatar, VoiceSwatch, Pill, PrimaryButton } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
 import type { Character, Voice, CharColor } from '../lib/types';
-import { api } from '../lib/api';
 import { useSamplePlayback } from '../lib/use-sample-playback';
+import { playSampleWithAutoLoad, type SampleStatus } from '../lib/play-sample-with-auto-load';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { useAppSelector } from '../store';
 
@@ -33,6 +33,14 @@ interface Props {
 
 type CharGender   = NonNullable<Character['gender']>;
 type CharAgeRange = NonNullable<Character['ageRange']>;
+
+/* Standing background buckets the analyser's fold step creates and the
+   cast-merge route auto-synthesises on first downgrade. Keep in sync with
+   server/src/analyzer/fold-minor-cast.ts's MALE_BUCKET_ID /
+   FEMALE_BUCKET_ID. */
+const UNKNOWN_MALE_ID   = 'unknown-male';
+const UNKNOWN_FEMALE_ID = 'unknown-female';
+const NARRATOR_ID       = 'narrator';
 const GENDER_OPTIONS: Array<{ value: CharGender; label: string }> = [
   { value: 'male',    label: 'Male' },
   { value: 'female',  label: 'Female' },
@@ -58,8 +66,14 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
   const playback = useSamplePlayback();
   const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
   const ttsEngine = engineForModelKey(ttsModelKey);
-  const [sampleLoading, setSampleLoading] = useState(false);
+  const [sampleStatus, setSampleStatus] = useState<SampleStatus | 'idle'>('idle');
   const [sampleError, setSampleError] = useState<string | null>(null);
+  /* Surfaces the auto-evict banner inline above the sample row when the
+     JIT model-load path actually unloaded the analyzer. Stays visible
+     through synth and the brief moment after playback starts so the
+     user has time to read it. Cleared on the next click. */
+  const [evictionBanner, setEvictionBanner] = useState<string | null>(null);
+  const sampleLoading = sampleStatus !== 'idle';
   /* The analyzer ships ≥3 evidence quotes sorted longest-first
      (server/src/routes/analysis.ts sortEvidence). The drawer shows the
      first 3 by default — index 0 is also the voice-cloning sample, so
@@ -69,11 +83,33 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
   const [showAllEvidence, setShowAllEvidence] = useState(false);
   const EVIDENCE_PREVIEW_LIMIT = 3;
   /* Merge UI state. The picker is collapsed by default — opening it reveals
-     the list of candidates; selecting one shows a confirm row. */
+     the list of candidates; selecting one shows a confirm row. The same
+     busy/error pair backs the direct downgrade buttons below so two clicks
+     can't fire concurrently. */
   const [mergeTargetId, setMergeTargetId] = useState<string | ''>('');
   const [mergeBusy, setMergeBusy] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [showMergePicker, setShowMergePicker] = useState(false);
+  const isBucket    = character.id === UNKNOWN_MALE_ID || character.id === UNKNOWN_FEMALE_ID;
+  const isNarrator  = character.id === NARRATOR_ID;
+  /* "Downgrade" — fold this character into a standing background bucket.
+     Reuses the merge transport: server auto-synthesises the bucket if the
+     book hasn't accumulated one yet. Disabled when the source character is
+     itself a bucket or the narrator — neither downgrade makes sense. */
+  async function runMergeTo(targetId: string) {
+    if (!onMerge) return;
+    setMergeBusy(true);
+    setMergeError(null);
+    try {
+      await onMerge(character.id, targetId);
+      setShowMergePicker(false);
+      setMergeTargetId('');
+    } catch (e) {
+      setMergeError((e as Error).message || 'Merge failed.');
+    } finally {
+      setMergeBusy(false);
+    }
+  }
 
   /* Sample subject: a library voice when one is matched, otherwise a
      character-derived stub so brand-new (unmatched) characters can still
@@ -138,7 +174,12 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
   async function playSample() {
     if (isPlayingThis) { playback.stop(); return; }
     setSampleError(null);
-    setSampleLoading(true);
+    setEvictionBanner(null);
+    /* `synthesizing` is the most common starting status — for a warm model
+       the helper jumps straight to it. Set it eagerly so the button label
+       flips on click; the onStatus callback below upgrades it to
+       `evicting` / `loading-tts` when those phases actually fire. */
+    setSampleStatus('synthesizing');
     const evidence = (character.evidence ?? []).map(e => e.quote).filter((q): q is string => typeof q === 'string' && q.length > 0);
     /* Live edits — read from drawer state, not the (stale) character prop,
        so the user can preview an attribute change before committing it
@@ -155,15 +196,20 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
     // eslint-disable-next-line no-console
     console.log('[sample] requesting', { voiceId: sampleVoiceId, modelKey: ttsModelKey });
     try {
-      const res = await api.getVoiceSample({ voiceId: sampleVoiceId, voice: sampleSubject, modelKey: ttsModelKey, characterHint });
-      // eslint-disable-next-line no-console
-      console.log('[sample] server returned', res);
-      if (!res.url) throw new Error('Voice samples need the live server (VITE_USE_MOCKS=false).');
-      await playback.play(res.url);
+      await playSampleWithAutoLoad({
+        args: { voiceId: sampleVoiceId, voice: sampleSubject, modelKey: ttsModelKey, characterHint },
+        playback,
+        onStatus: (status, { analyzerEvicted }) => {
+          setSampleStatus(status);
+          if (analyzerEvicted && !evictionBanner) {
+            setEvictionBanner('Analyzer unloaded to free VRAM for TTS.');
+          }
+        },
+      });
     } catch (err) {
       setSampleError((err as Error).message);
     } finally {
-      setSampleLoading(false);
+      setSampleStatus('idle');
     }
   }
 
@@ -232,7 +278,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                     {sampleLoading ? (
                       <>
                         <IconSpinner className="w-3.5 h-3.5"/>
-                        <span>Generating with {ttsModelLabel(ttsModelKey)}… <span className="font-normal text-magenta/70">(5–10s)</span></span>
+                        <span>{sampleLoadingLabel(sampleStatus, ttsModelKey)}</span>
                       </>
                     ) : isPlayingThis ? (
                       <>
@@ -248,6 +294,12 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                   </button>
                   {!voice && (
                     <p className="mt-1 text-[11px] text-ink/50">No library voice matched yet — sampling directly from {character.name}'s attributes.</p>
+                  )}
+                  {evictionBanner && (
+                    <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-emerald-700">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>
+                      {evictionBanner}
+                    </p>
                   )}
                   {sampleError && (
                     <p className="mt-1 text-[11px] text-red-600/90 font-medium">⚠ {sampleError}</p>
@@ -421,23 +473,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                   >Cancel</button>
                   <button
                     disabled={!mergeTargetId || mergeBusy}
-                    onClick={async () => {
-                      if (!mergeTargetId || !onMerge) return;
-                      setMergeBusy(true);
-                      setMergeError(null);
-                      try {
-                        await onMerge(character.id, mergeTargetId);
-                        /* Drawer is closed by the layout's onMerge — but
-                           reset our local state defensively in case the
-                           caller chose not to close. */
-                        setShowMergePicker(false);
-                        setMergeTargetId('');
-                      } catch (e) {
-                        setMergeError((e as Error).message || 'Merge failed.');
-                      } finally {
-                        setMergeBusy(false);
-                      }
-                    }}
+                    onClick={() => { if (mergeTargetId) void runMergeTo(mergeTargetId); }}
                     className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
                       mergeBusy
                         ? 'bg-magenta/20 text-magenta cursor-wait'
@@ -447,6 +483,42 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                     {mergeBusy ? 'Merging…' : 'Merge'}
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* Downgrade affordance — fold a descriptor-named or otherwise
+                minor character into the standing background bucket so the
+                cast roster doesn't have to carry its own voice slot. Works
+                even when no other characters exist in the cast (server
+                synthesises the bucket on the fly). Hidden for the narrator
+                and for buckets themselves. */}
+            {onMerge && !isBucket && !isNarrator && (
+              <div className="mt-3">
+                <p className="text-xs text-ink/55 mb-1.5">Downgrade to a background voice</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    aria-label="Downgrade to Unknown male"
+                    disabled={mergeBusy}
+                    onClick={() => void runMergeTo(UNKNOWN_MALE_ID)}
+                    className="px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/[0.04] text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait"
+                  >
+                    Unknown male
+                  </button>
+                  <button
+                    aria-label="Downgrade to Unknown female"
+                    disabled={mergeBusy}
+                    onClick={() => void runMergeTo(UNKNOWN_FEMALE_ID)}
+                    className="px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/[0.04] text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait"
+                  >
+                    Unknown female
+                  </button>
+                </div>
+                <p className="mt-2 text-[11px] text-ink/50 leading-relaxed">
+                  Folds {character.name.split(' ')[0]} into the matching background bucket — every line they speak shares one generic voice with other one-off bystanders.
+                </p>
+                {mergeError && !showMergePicker && (
+                  <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {mergeError}</p>
+                )}
               </div>
             )}
           </section>
@@ -503,6 +575,20 @@ function sampleUrlPrefixFor(voiceId: string, modelKey: string): string {
 
 function ttsModelLabel(key: TtsModelKey): string {
   return TTS_MODEL_OPTIONS.find(o => o.id === key)?.label ?? key;
+}
+
+/* Button label per phase of the auto-load + synth pipeline. Mirrors the
+   inline copy on the Generation view's pill so a user moving between
+   surfaces sees consistent terminology. */
+function sampleLoadingLabel(status: SampleStatus | 'idle', modelKey: TtsModelKey): string {
+  switch (status) {
+    case 'evicting':    return 'Evicting analyzer to free VRAM…';
+    case 'loading-tts': return 'Loading TTS model (~30s)…';
+    case 'synthesizing':
+    case 'idle':
+    default:
+      return `Generating with ${ttsModelLabel(modelKey)}… (5–10s)`;
+  }
 }
 
 function capitalise(s: string): string {

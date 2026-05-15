@@ -10,9 +10,10 @@ import { VoiceLibraryPanel } from '../components/voice-library-panel';
 import type { Character, Voice, DriftEvent, CharColor, TtsModelKey } from '../lib/types';
 import { useAppSelector } from '../store';
 import { useSamplePlayback } from '../lib/use-sample-playback';
+import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
-import { api, type VoiceSampleArgs } from '../lib/api';
+import type { VoiceSampleArgs } from '../lib/api';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
 
 interface Props {
@@ -43,6 +44,11 @@ export function CastView({
      "playing" indicator is derived from the singleton playback hook by
      comparing currentUrl, so multiple rows can't show as "playing" at once. */
   const [rowState, setRowState] = useState<Record<string, { loading?: boolean; error?: string }>>({});
+  /* Inline auto-evict banner. Surfaces above the cast table the first
+     time a Play click triggers the JIT TTS load and actually unloads the
+     analyzer. One-shot per view mount — the user reads it once and the
+     pill on the Generation view takes over as the authoritative state. */
+  const [evictionBanner, setEvictionBanner] = useState<string | null>(null);
   const setRow = (id: string, patch: { loading?: boolean; error?: string } | null) =>
     setRowState(prev => {
       const next = { ...prev };
@@ -82,9 +88,19 @@ export function CastView({
     const characterHint = buildCharacterHint(c);
     setRow(c.id, { loading: true, error: undefined });
     try {
-      const res = await api.getVoiceSample({ voiceId: sampleVoiceId, voice: subject, modelKey: ttsModelKey, characterHint });
-      if (!res.url) throw new Error('Voice samples need the live server (VITE_USE_MOCKS=false).');
-      await playback.play(res.url);
+      await playSampleWithAutoLoad({
+        args: { voiceId: sampleVoiceId, voice: subject, modelKey: ttsModelKey, characterHint },
+        playback,
+        /* The row's spinner already signals "something's happening"; the
+           per-row label is too cramped for the full status word. So we
+           only surface the eviction banner globally — and only when the
+           helper confirms the analyzer was actually unloaded. */
+        onStatus: (_status, { analyzerEvicted }) => {
+          if (analyzerEvicted && !evictionBanner) {
+            setEvictionBanner('Analyzer unloaded to free VRAM for TTS.');
+          }
+        },
+      });
       setRow(c.id, { loading: false, error: undefined });
     } catch (err) {
       setRow(c.id, { loading: false, error: (err as Error).message });
@@ -121,6 +137,14 @@ export function CastView({
             <IconLink className="w-4 h-4"/>{showLibrary ? 'Hide' : 'Show'} library
           </button>
         </div>
+
+        {evictionBanner && (
+          <div role="status" className="w-full mb-4 px-4 py-2.5 rounded-2xl border border-emerald-200 bg-emerald-50/70 inline-flex items-center gap-2 text-xs text-emerald-700">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>
+            <span>{evictionBanner}</span>
+            <button onClick={() => setEvictionBanner(null)} className="ml-auto text-[11px] text-emerald-700/60 hover:text-emerald-700 font-medium" aria-label="Dismiss notice">Dismiss</button>
+          </div>
+        )}
 
         {totalDriftEvents > 0 && (
           <button onClick={onShowDrift} className="w-full mb-4 p-4 rounded-3xl border border-amber-200 bg-amber-50/60 hover:bg-amber-50 transition-colors flex items-center gap-4 text-left">

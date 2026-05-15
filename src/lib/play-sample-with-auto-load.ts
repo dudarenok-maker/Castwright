@@ -1,0 +1,126 @@
+/* Voice-sample request orchestrator — bridges the "model lifecycle is
+   button-driven, not eager" rule (CLAUDE.md) with the user's expectation
+   that clicking Play just plays.
+
+   Without this, clicking Play in the profile drawer or a cast row hits
+   /api/voices/:id/sample directly. If the TTS sidecar has no weights
+   loaded (the default since we removed PRELOAD_COQUI), or if the
+   analyzer is still resident from a recent analysis run, the synth
+   fails with "Workspace can't be allocated, no enough memory" — the
+   screenshot the user filed.
+
+   Treat the Play click as the user's load consent (same shape as the
+   Generation view's handleLoadTts, just inline): probe sidecar health,
+   evict the analyzer when it's resident, load the sidecar, then synth.
+   The caller drives per-row UI from the onStatus callback. */
+
+import { api } from './api';
+import type { VoiceSampleArgs } from './api';
+
+export type SampleStatus = 'evicting' | 'loading-tts' | 'synthesizing';
+
+export interface PlaySampleOptions {
+  args: VoiceSampleArgs;
+  /* Minimal subset of useSamplePlayback's return — accepting a structural
+     type keeps the helper testable without pulling the DOM Audio element
+     into unit tests. */
+  playback: { play: (url: string) => Promise<void> };
+  /* Called each time the orchestrator advances a step so the caller can
+     update its button label / inline banner. `analyzerEvicted` flips to
+     true the moment we unload Ollama and stays true for the rest of the
+     run, so callers can keep the eviction banner visible through the
+     load + synth phases. */
+  onStatus?: (status: SampleStatus, opts: { analyzerEvicted: boolean }) => void;
+}
+
+export interface PlaySampleResult {
+  analyzerEvicted: boolean;
+}
+
+/* Single-flight gate so a second click while an evict+load is mid-flight
+   awaits the same preparation instead of firing a duplicate one. The
+   sidecar's /load is already locked server-side, but doubling up the
+   client-side eviction probe is just noise. Resolves once the model is
+   ready (or rejects when prep fails); the synth itself is not coalesced
+   — each click still synthesizes its own (potentially different) sample. */
+let prepInFlight: Promise<{ analyzerEvicted: boolean }> | null = null;
+
+export async function playSampleWithAutoLoad(opts: PlaySampleOptions): Promise<PlaySampleResult> {
+  const { args, playback, onStatus } = opts;
+
+  /* Phase 1: ensure the sidecar model is resident. Shared across concurrent
+     callers so a Drawer click + a Cast row click don't both fire evict+load. */
+  const prep = prepInFlight ?? (prepInFlight = prepareSidecar(onStatus));
+  let analyzerEvicted = false;
+  try {
+    ({ analyzerEvicted } = await prep);
+  } finally {
+    /* Only the caller that started prepInFlight should clear it. Cheap to
+       just clear unconditionally — the next click rebuilds it if needed. */
+    if (prepInFlight === prep) prepInFlight = null;
+  }
+
+  /* Phase 2: synth + play. Each call is independent — different voiceId /
+     characterHint produces different audio, so coalescing here would be
+     wrong. */
+  onStatus?.('synthesizing', { analyzerEvicted });
+  const res = await api.getVoiceSample(args);
+  if (!res.url) {
+    throw new Error('Voice samples need the live server (VITE_USE_MOCKS=false).');
+  }
+  await playback.play(res.url);
+  return { analyzerEvicted };
+}
+
+async function prepareSidecar(
+  onStatus: PlaySampleOptions['onStatus'],
+): Promise<{ analyzerEvicted: boolean }> {
+  const health = await api.getSidecarHealth();
+  if (health.status === 'unreachable') {
+    /* No daemon at all — distinct from "daemon up, model not loaded".
+       Start-app.ps1's preflight is the recovery path; surface a copy
+       the user can act on. */
+    throw new Error('TTS sidecar process is not running. Launch the app via start-app.ps1.');
+  }
+  if (health.modelLoaded) {
+    /* Fast path: model already warm. Nothing to evict or load. */
+    return { analyzerEvicted: false };
+  }
+
+  /* Mirror generation.tsx handleLoadTts: only claim "evicted" when the
+     analyzer was actually resident. unloadAnalyzer on an idle Ollama is
+     a no-op; lying about the eviction confuses the banner copy. */
+  let analyzerResident = false;
+  try {
+    const ollama = await api.getOllamaHealth();
+    analyzerResident = ollama.status === 'reachable' && ollama.modelResident === true;
+  } catch {
+    /* /api/ps flaky — still attempt the unload so a stuck analyzer
+       doesn't poison the load. analyzerEvicted stays false because we
+       can't confirm anything was actually freed. */
+  }
+
+  if (analyzerResident) {
+    onStatus?.('evicting', { analyzerEvicted: false });
+    try {
+      await api.unloadAnalyzer();
+    } catch {
+      /* Server-side unload failures fall through — the subsequent
+         loadSidecar will surface the real allocation error if VRAM is
+         still held. */
+    }
+  }
+
+  onStatus?.('loading-tts', { analyzerEvicted: analyzerResident });
+  const result = await api.loadSidecar();
+  if (result.status === 'error') {
+    throw new Error(result.error ?? 'TTS sidecar failed to load.');
+  }
+  return { analyzerEvicted: analyzerResident };
+}
+
+/* Test-only escape hatch — exported so the unit tests can reset the
+   single-flight gate between cases. Not part of the public surface. */
+export function __resetPrepInFlightForTests(): void {
+  prepInFlight = null;
+}
