@@ -364,6 +364,7 @@ export function Layout() {
       {ui.regenChapter && (
         <RegenerateModal chapter={ui.regenChapter}
           defaultScope={ui.regenInitialScope ?? 'this'}
+          forwardCount={chapters.filter(c => c.id >= ui.regenChapter!.id).length}
           onClose={() => dispatch(uiActions.setRegenChapter(null))}
           onConfirm={({ reason, scope, note }) => {
             const chapter = ui.regenChapter;

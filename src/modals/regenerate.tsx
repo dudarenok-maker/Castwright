@@ -13,16 +13,24 @@ interface Props {
       scope picker starts on "this and all subsequent" — i.e. every chapter
       from the first one onward. Defaults to 'this' for the per-chapter flow. */
   defaultScope?: RegenScope;
+  /** Number of chapters that would be regenerated if scope='forward' — i.e.
+      this chapter plus every later one. Defaults to 1 so callers that forget
+      to pass it get a sensible (if unhelpful) ETA rather than a stale "4". */
+  forwardCount?: number;
   onClose: () => void;
   onConfirm: (args: { reason: string; scope: RegenScope; note: string }) => void;
 }
 
-export function RegenerateModal({ chapter, defaultScope = 'this', onClose, onConfirm }: Props) {
+const MINUTES_PER_CHAPTER = 3.5;
+
+export function RegenerateModal({ chapter, defaultScope = 'this', forwardCount = 1, onClose, onConfirm }: Props) {
   const [reason, setReason] = useState('voice');
   const [scope, setScope]   = useState<RegenScope>(defaultScope);
   const [note, setNote]     = useState('');
   if (!chapter) return null;
-  const eta = scope === 'this' ? '≈3 min' : '≈14 min for 4 chapters';
+  const forwardMinutes = Math.max(1, Math.round(forwardCount * MINUTES_PER_CHAPTER));
+  const forwardChaptersLabel = `${forwardCount} chapter${forwardCount === 1 ? '' : 's'}`;
+  const eta = scope === 'this' ? '≈3 min' : `≈${forwardMinutes} min for ${forwardChaptersLabel}`;
   return (
     <>
       <div onClick={onClose} className="fixed inset-0 bg-ink/40 z-50 fade-in"/>
