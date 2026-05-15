@@ -308,14 +308,14 @@ export function GenerationView({
   const linesCounter = useMemo(() => {
     let done = 0;
     let total = 0;
-    for (const ch of chapters) {
+    for (const ch of activeChapters) {
       const chTotal = ch.totalLines ?? manuscriptCounts[ch.id] ?? 0;
       total += chTotal;
       if (ch.state === 'done') done += chTotal;
       else if (ch.state === 'in_progress') done += ch.currentLine ?? 0;
     }
     return { done, total };
-  }, [chapters, manuscriptCounts]);
+  }, [activeChapters, manuscriptCounts]);
 
   return (
     <div className="max-w-[1100px] mx-auto px-6 py-10">
@@ -326,7 +326,7 @@ export function GenerationView({
             <MixedHeading regular="Generating" bold={title || 'your audiobook'} level="h1"/>
           </div>
           <p className="mt-3 text-ink/60">
-            {completed} of {chapters.length} chapters complete
+            {completed} of {activeChapters.length} chapters complete
             {etaSec != null && <> · approx. {formatTime(etaSec)} remaining</>}
           </p>
           {linesCounter.total > 0 && (

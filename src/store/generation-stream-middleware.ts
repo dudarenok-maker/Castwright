@@ -70,13 +70,17 @@ function snapshotFromChapters(
   modelKey: TtsModelKey,
   state: ChaptersState,
 ): ActiveStreamSnapshot {
-  const chapters = state.chapters;
+  /* Counters mirror the active-subset filter used in the Generate view
+     (`activeChapters` in src/views/generation.tsx): excluded chapters
+     never queue or synthesise, so they must not inflate `total` or
+     stall the cross-book top-bar pill's done/total readout. */
+  const active = state.chapters.filter(c => !c.excluded);
   return {
     bookId,
     modelKey,
-    done: chapters.filter(c => c.state === 'done').length,
-    total: chapters.length,
-    inProgress: chapters.filter(c => c.state === 'in_progress').length,
+    done: active.filter(c => c.state === 'done').length,
+    total: active.length,
+    inProgress: active.filter(c => c.state === 'in_progress').length,
     lastTickAt: state.lastTickAt,
     halted: state.lastError != null,
   };
