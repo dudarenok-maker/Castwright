@@ -267,3 +267,135 @@ describe('cast-merge router', () => {
     expect(res.status).toBe(404);
   });
 });
+
+/* Downgrade flow — seeds a second book into the SAME workspace (BOOKS_ROOT
+   is frozen at module load, so spawning a fresh mkdtemp here would just be
+   invisible to the route). The book has a descriptor-named speaker
+   ("Rescuer") with enough lines to escape the auto-fold, plus a real
+   survivor. POST a merge with targetId='unknown-female' — a bucket id NOT
+   on the roster yet — and assert the route synthesises the bucket on the
+   fly, folds source into it, and remaps every sentence. */
+describe('cast-merge downgrade to bucket', () => {
+  const D_AUTHOR = 'Downgrade Author';
+  const D_SERIES = 'Standalones';
+  const D_TITLE  = 'Downgrade Book';
+  const D_MANUSCRIPT_ID = 'm_downgrade_test';
+
+  let dBookDir: string;
+  let dBookId: string;
+  let dCachePath: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    dBookId = makeBookId(D_AUTHOR, D_SERIES, D_TITLE);
+    dBookDir = join(workspaceRoot, 'books', D_AUTHOR, D_SERIES, D_TITLE);
+    mkdirSync(join(dBookDir, '.audiobook'), { recursive: true });
+
+    writeFileSync(join(dBookDir, '.audiobook', 'state.json'), JSON.stringify({
+      bookId: dBookId, manuscriptId: D_MANUSCRIPT_ID, title: D_TITLE,
+      author: D_AUTHOR, series: D_SERIES, seriesPosition: null, isStandalone: true,
+      manuscriptFile: 'manuscript.txt', castConfirmed: true,
+      chapters: [
+        { id: 1, title: 'One', slug: '01-one' },
+        { id: 2, title: 'Two', slug: '02-two' },
+      ],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }));
+    writeFileSync(join(dBookDir, 'manuscript.txt'), 'placeholder');
+
+    /* Cast: one descriptor-named character + one real character. No bucket
+       on the roster — the downgrade endpoint must synthesise it. */
+    writeFileSync(join(dBookDir, '.audiobook', 'cast.json'), JSON.stringify({
+      characters: [
+        {
+          id: 'rescuer', name: 'Rescuer', role: 'background', color: 'halloran',
+          lines: 26, scenes: 2, gender: 'female',
+          attributes: ['restrained', 'wry'],
+          evidence: [{ quote: 'Get behind me.', note: 'protective' }],
+        },
+        {
+          id: 'Garrow', name: 'Garrow', role: 'Goblin Bodyguard', color: 'eliza',
+          lines: 9, scenes: 2, gender: 'male',
+        },
+      ],
+    }));
+
+    const sents = [
+      { id: 1, chapterId: 1, characterId: 'rescuer', text: 'Get behind me.' },
+      { id: 2, chapterId: 2, characterId: 'rescuer', text: 'Stay quiet.' },
+      { id: 3, chapterId: 1, characterId: 'Garrow',  text: 'On it.' },
+    ];
+    writeFileSync(join(dBookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({ sentences: sents }));
+
+    const testFileDir = dirname(fileURLToPath(import.meta.url));
+    dCachePath = resolve(testFileDir, '..', '..', 'handoff', 'cache', `${D_MANUSCRIPT_ID}.json`);
+    mkdirSync(dirname(dCachePath), { recursive: true });
+    writeFileSync(dCachePath, JSON.stringify({
+      stage1: {
+        characters: [
+          { id: 'rescuer', name: 'Rescuer', role: 'background', color: 'halloran', gender: 'female' },
+          { id: 'Garrow',  name: 'Garrow',  role: 'Goblin Bodyguard', color: 'eliza', gender: 'male' },
+        ],
+        chapters: [{ id: 1, title: 'One' }, { id: 2, title: 'Two' }],
+      },
+      chapters: {
+        1: [sents[0], sents[2]],
+        2: [sents[1]],
+      },
+      updatedAt: new Date().toISOString(),
+    }));
+  });
+
+  afterAll(() => {
+    if (dCachePath) rmSync(dCachePath, { force: true });
+  });
+
+  it('synthesises the unknown-female bucket when missing and folds source into it', async () => {
+    const res = await request(app)
+      .post(`/api/books/${dBookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: 'rescuer', targetId: 'unknown-female' });
+
+    expect(res.status).toBe(200);
+    const body = res.body as { characters: Array<Record<string, unknown>> };
+    /* Garrow preserved, rescuer folded into a newly-minted unknown-female. */
+    const ids = body.characters.map(c => c.id);
+    expect(ids).toContain('Garrow');
+    expect(ids).toContain('unknown-female');
+    expect(ids).not.toContain('rescuer');
+
+    const bucket = body.characters.find(c => c.id === 'unknown-female')!;
+    /* Bucket name + role come from the shared makeBucket factory. */
+    expect(bucket.name).toBe('Unknown female');
+    expect(bucket.role).toBe('background');
+    expect(bucket.gender).toBe('female');
+    /* Source's name lands in the bucket's aliases — same contract as the
+       per-character manual merge. */
+    expect(bucket.aliases).toContain('Rescuer');
+    /* Lines/scenes recomputed against the remapped sentence list (2 lines
+       across 2 chapters). */
+    expect(bucket.lines).toBe(2);
+    expect(bucket.scenes).toBe(2);
+
+    /* manuscript-edits.json: rescuer sentences now point at unknown-female. */
+    const editsRaw = readFileSync(join(dBookDir, '.audiobook', 'manuscript-edits.json'), 'utf8');
+    const edits = JSON.parse(editsRaw) as { sentences: Array<{ id: number; characterId: string }> };
+    expect(edits.sentences.find(s => s.id === 1)!.characterId).toBe('unknown-female');
+    expect(edits.sentences.find(s => s.id === 2)!.characterId).toBe('unknown-female');
+    expect(edits.sentences.find(s => s.id === 3)!.characterId).toBe('Garrow');
+
+    /* Analysis cache stage1 also gained the bucket. */
+    const cache = JSON.parse(readFileSync(dCachePath, 'utf8')) as {
+      stage1: { characters: Array<{ id: string }> };
+      chapters: Record<string, Array<{ characterId: string }>>;
+    };
+    const cacheIds = cache.stage1.characters.map(c => c.id);
+    expect(cacheIds).toContain('unknown-female');
+    expect(cacheIds).not.toContain('rescuer');
+    for (const arr of Object.values(cache.chapters)) {
+      for (const s of arr) expect(s.characterId).not.toBe('rescuer');
+    }
+  });
+});

@@ -22,6 +22,7 @@ import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { normaliseForMatch } from './analysis.js';
+import { makeBucket, MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 
 export const castMergeRouter = Router();
@@ -66,8 +67,20 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
   }
 
   const source = cast.characters.find(c => c.id === sourceId);
-  const target = cast.characters.find(c => c.id === targetId);
+  let target = cast.characters.find(c => c.id === targetId);
   if (!source) return res.status(404).json({ error: `Character "${sourceId}" not found.` });
+  /* Downgrade-to-bucket path: when the caller targets one of the standing
+     `unknown-male` / `unknown-female` buckets and that bucket doesn't yet
+     exist in cast.json (the book had no auto-folded background speakers),
+     synthesise it on the fly using the same factory the analyser's
+     post-stage-2 fold uses. Keeps the manual downgrade UI from having to
+     special-case "book has never had a background voice before". */
+  let createdBucket: CharacterOutput | null = null;
+  if (!target && (targetId === MALE_BUCKET_ID || targetId === FEMALE_BUCKET_ID)) {
+    createdBucket = makeBucket(targetId, targetId === MALE_BUCKET_ID ? 'male' : 'female');
+    cast.characters.push(createdBucket);
+    target = createdBucket;
+  }
   if (!target) return res.status(404).json({ error: `Character "${targetId}" not found.` });
 
   /* Build the merged target. Field rules mirror mergeRosterChapter, with
@@ -165,10 +178,18 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
   const cache = await loadAnalysisCache(state.manuscriptId);
   if (cache.stage1?.characters?.length) {
     const before = cache.stage1.characters.length;
-    cache.stage1.characters = cache.stage1.characters
+    let next = cache.stage1.characters
       .filter(c => c.id !== sourceId)
       .map(c => c.id === targetId ? merged : c);
-    if (cache.stage1.characters.length !== before) cacheTouched = true;
+    /* Auto-created bucket: the cache wouldn't have known about it yet, so
+       append the merged entry so a Phase-1 cache replay sees the same
+       roster as cast.json. */
+    if (createdBucket && !next.some(c => c.id === targetId)) {
+      next = [...next, merged];
+      cacheTouched = true;
+    }
+    if (next.length !== before) cacheTouched = true;
+    cache.stage1.characters = next;
   }
   if (cache.chapters) {
     for (const [chapterId, sentences] of Object.entries(cache.chapters)) {

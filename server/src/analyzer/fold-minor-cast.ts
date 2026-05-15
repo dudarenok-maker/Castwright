@@ -68,8 +68,8 @@ export interface FoldResult {
 
 const MIN_LINES_DEFAULT = 3;
 
-const MALE_BUCKET_ID   = 'unknown-male';
-const FEMALE_BUCKET_ID = 'unknown-female';
+export const MALE_BUCKET_ID   = 'unknown-male';
+export const FEMALE_BUCKET_ID = 'unknown-female';
 const NARRATOR_ID      = 'narrator';
 
 /* Generic-role nouns that, when they appear as the LAST word of a
@@ -123,7 +123,7 @@ function pickBucket(c: CharacterOutput): string {
   return c.gender === 'female' ? FEMALE_BUCKET_ID : MALE_BUCKET_ID;
 }
 
-function makeBucket(id: string, gender: 'male' | 'female'): CharacterOutput {
+export function makeBucket(id: string, gender: 'male' | 'female'): CharacterOutput {
   const label = gender === 'male' ? 'male' : 'female';
   const title = gender === 'male' ? 'Unknown male' : 'Unknown female';
   return {
