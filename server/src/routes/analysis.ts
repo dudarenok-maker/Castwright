@@ -16,7 +16,7 @@ import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/s
 import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { BookStateJson } from '../workspace/scan.js';
-import { normaliseForMatch as normaliseForMatchShared } from '../util/text-match.js';
+import { normaliseForMatch as normaliseForMatchShared, matchQuoteInSource } from '../util/text-match.js';
 import {
   appendBatch,
   loadDroppedQuotes,
@@ -95,14 +95,24 @@ export function sortEvidence(characters: CharacterOutput[]): void {
    it directly from the util. */
 export const normaliseForMatch = normaliseForMatchShared;
 
-/* Drops evidence quotes that aren't a substring of the source text. The
-   skill prompt asks the model to copy quotes verbatim, but some models
-   stitch separate utterances together to hit a length target — the
-   stitched "quote" won't appear as a contiguous run anywhere in the
-   source, so it's dropped here. Mutates characters in place so the
-   cleaned arrays flow into the cache + SSE payload. `log` is invoked
-   once per character that had drops, surfacing the catch in the
-   analysing-view log.
+/* Drops evidence quotes that don't match the source under any of three
+   tiers (see util/text-match.ts → matchQuoteInSource):
+     1. verbatim       — pure substring after typography normalisation
+     2. terminal_punct — same, after trimming trailing `.,;:!?` (handles
+                         the dominant false positive: model closes the
+                         utterance with `.` because it's a complete
+                         sentence, source closes with `,` because a
+                         dialogue tag follows)
+     3. segments       — split on sentence-final punctuation; every
+                         surviving segment (≥ 8 chars, ≥ 2 segments)
+                         must appear in source (handles "stitched"
+                         same-speaker dialogue with the narration tag
+                         removed between halves)
+
+   Mutates characters in place so the cleaned arrays flow into the
+   cache + SSE payload. `log` is invoked once per character that had
+   drops, plus once globally with per-tier kept-counts when the looser
+   tiers actually fired — useful for tuning the thresholds later.
 
    The `entries` field on the return value lets callers persist a
    batch to .audiobook/dropped-quotes.json — quotes are truncated at
@@ -119,6 +129,9 @@ export function verifyEvidenceAgainstSource(
   let totalDropped = 0;
   let affectedCharacters = 0;
   const entries: DroppedQuoteEntry[] = [];
+  let keptVerbatim = 0;
+  let keptTerminalPunct = 0;
+  let keptSegments = 0;
   for (const c of characters) {
     if (!c.evidence?.length) continue;
     const kept: typeof c.evidence = [];
@@ -126,8 +139,12 @@ export function verifyEvidenceAgainstSource(
     const droppedReasons: DropReason[] = [];
     for (const e of c.evidence) {
       const norm = normaliseForMatch(e.quote);
-      if (norm.length > 0 && normalisedSource.includes(norm)) {
+      const tier = matchQuoteInSource(norm, normalisedSource);
+      if (tier) {
         kept.push(e);
+        if (tier === 'verbatim') keptVerbatim++;
+        else if (tier === 'terminal_punct') keptTerminalPunct++;
+        else keptSegments++;
       } else {
         dropped.push(e);
         droppedReasons.push(norm.length === 0 ? 'empty_after_normalisation' : 'not_in_source');
@@ -153,6 +170,9 @@ export function verifyEvidenceAgainstSource(
       }
     }
     c.evidence = kept;
+  }
+  if (keptTerminalPunct > 0 || keptSegments > 0) {
+    log(`Quote-match tiers: verbatim=${keptVerbatim}, terminal-punct=${keptTerminalPunct}, segments=${keptSegments}.`);
   }
   return { totalDropped, affectedCharacters, entries };
 }

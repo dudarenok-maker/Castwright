@@ -14,6 +14,67 @@ export function normaliseForMatch(s: string): string {
     .replace(/\s+/g, ' ');
 }
 
+/** Strip trailing terminal-sentence punctuation (`.,;:!?`) from an already-
+    normalised candidate quote. Used by the verifier's tier-2 match to
+    bridge "model wrote `.`, source wrote `,` because a dialogue tag
+    follows" — the dominant false-positive pattern on Gemini and the
+    qwen3.5 family. */
+export function stripTerminalSentencePunct(s: string): string {
+  return s.replace(/[.,;:!?]+$/, '');
+}
+
+/** Split a normalised candidate quote into sentence-shaped segments on
+    internal `[.!?]+` followed by whitespace; strip terminal punct from
+    each. Segments shorter than `minLen` (default 8) are filtered out —
+    fragments like "yeah" or "no" appear so often in any source that
+    matching on them gives almost no evidence-of-authenticity signal. */
+export function splitSentenceSegments(s: string, minLen = 8): string[] {
+  return s
+    .split(/[.!?]+\s+/)
+    .map(stripTerminalSentencePunct)
+    .map(seg => seg.trim())
+    .filter(seg => seg.length >= minLen);
+}
+
+export type QuoteMatchTier = 'verbatim' | 'terminal_punct' | 'segments';
+
+/** Three-tier substring match for evidence quotes against an already-
+    normalised source.
+
+    1. **verbatim**       — pure `String.includes` on the normalised candidate.
+    2. **terminal_punct** — retry after stripping trailing `.,;:!?`.
+                            Handles the model writing `extinct.` where the
+                            source has `extinct,` (closing comma before a
+                            dialogue tag).
+    3. **segments**       — split the candidate on sentence-final punctuation
+                            and require EVERY surviving segment (≥ 8 chars,
+                            and ≥ 2 segments overall) to appear in source.
+                            Handles "stitched" dialogue where the model
+                            joined two same-speaker utterances and dropped
+                            the narration tag between them.
+
+    Returns `null` when no tier passes — the verifier then drops the quote
+    and the ledger records the reason. */
+export function matchQuoteInSource(
+  norm: string,
+  normalisedSource: string,
+): QuoteMatchTier | null {
+  if (norm.length === 0) return null;
+  if (normalisedSource.includes(norm)) return 'verbatim';
+
+  const trimmed = stripTerminalSentencePunct(norm);
+  if (trimmed.length > 0 && trimmed !== norm && normalisedSource.includes(trimmed)) {
+    return 'terminal_punct';
+  }
+
+  const segments = splitSentenceSegments(norm);
+  if (segments.length >= 2 && segments.every(seg => normalisedSource.includes(seg))) {
+    return 'segments';
+  }
+
+  return null;
+}
+
 /* Token set for fuzzy name matching: lowercase, split on whitespace + a few
    common name punctuation marks, drop single-letter tokens (initials,
    particles like "de", "le" that produce noisy matches across unrelated
