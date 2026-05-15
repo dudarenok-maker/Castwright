@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { parseAndValidate, repairUnescapedQuotes, stripCodeFences } from './gemini.js';
+import { parseAndValidate, repairUnescapedQuotes, repairStructuralPunctuation, stripCodeFences, trimTrailingProse } from './gemini.js';
 
 describe('repairUnescapedQuotes', () => {
   it('is a no-op on already-valid JSON', () => {
@@ -227,8 +227,12 @@ describe('parseAndValidate — repair integration', () => {
   });
 
   it('returns invalid-json when even the repair cannot salvage the raw', () => {
-    /* Structurally broken in a way the walker can't fix — missing closing
-       brace and orphan content. The invalid-json detail comes from the
+    /* Structurally broken in a way no repair pass can fix — value is a
+       bare unquoted identifier mid-object. trimTrailingProse can't find a
+       balanced outer close (the structure never closes cleanly because
+       the parse fails before the object ends), and
+       repairStructuralPunctuation only inserts missing commas/braces, not
+       unquote-fix identifiers. The invalid-json detail comes from the
        POST-repair parse so the operator sees the actual remaining issue. */
     const unrepairable = '{"quote": broken, no closing';
     const r = parseAndValidate(unrepairable, schema);
@@ -246,5 +250,208 @@ describe('parseAndValidate — repair integration', () => {
     if (!r.ok) {
       expect(r.kind).toBe('schema-validation');
     }
+  });
+
+  it('returns ok with repaired:true when the raw had trailing prose after the closing brace (Ch44 shape)', () => {
+    /* Real failure raw from the Bonus Keefe Story run: qwen3.5:4b emitted
+       its JSON correctly but appended a free-form sentence after the
+       closing brace. trimTrailingProse must locate the outermost balanced
+       `}` and slice up to it. */
+    const broken = '{"quote":"hi","note":"n"}\n\nNote that this chapter has heavy dialogue.';
+    expect(() => JSON.parse(broken)).toThrow();
+    const r = parseAndValidate(broken, schema);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.repaired).toBe(true);
+      expect(r.value).toEqual({ quote: 'hi', note: 'n' });
+    }
+  });
+
+  it('returns ok with repaired:true when the raw had a missing comma between properties (Ch49 shape)', () => {
+    /* Real failure raw: "Expected `,` or `}` after property value" —
+       qwen3.5:4b dropped a comma mid-object. repairStructuralPunctuation
+       must detect the missing-comma shape (value <ws> then `"`) and
+       insert it. */
+    const broken = '{"quote":"hi" "note":"n"}';
+    expect(() => JSON.parse(broken)).toThrow();
+    const r = parseAndValidate(broken, schema);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.repaired).toBe(true);
+      expect(r.value).toEqual({ quote: 'hi', note: 'n' });
+    }
+  });
+
+  it('returns ok with repaired:true when the raw was missing the outer closing brace', () => {
+    const broken = '{"quote":"hi","note":"n"';
+    expect(() => JSON.parse(broken)).toThrow();
+    const r = parseAndValidate(broken, schema);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.repaired).toBe(true);
+      expect(r.value).toEqual({ quote: 'hi', note: 'n' });
+    }
+  });
+
+  it('returns ok with repaired:true when fence + unescaped quote + trailing prose ALL apply (composition)', () => {
+    /* Every repair pass engages, in order: stripCodeFences →
+       repairUnescapedQuotes → trimTrailingProse → repairStructuralPunctuation. */
+    const fenced =
+      '```json\n' +
+      '{"quote":"Sophie, let the dog go," Mr. Forkle ordered.","note":"x"}\n' +
+      '```\n\nNote: this run was on chapter 8.';
+    expect(() => JSON.parse(fenced)).toThrow();
+    const r = parseAndValidate(fenced, schema);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.repaired).toBe(true);
+      expect(r.value.quote).toBe('Sophie, let the dog go," Mr. Forkle ordered.');
+      expect(r.value.note).toBe('x');
+    }
+  });
+});
+
+describe('trimTrailingProse', () => {
+  it('is a no-op on valid JSON with no trailing content', () => {
+    const ok = '{"a":"hi","b":42}';
+    expect(trimTrailingProse(ok)).toBe(ok);
+  });
+
+  it('strips trailing prose after a top-level object close', () => {
+    const broken = '{"a":1,"b":2}\n\nNote about chapter 44 and how the dialogue is heavy.';
+    const trimmed = trimTrailingProse(broken);
+    expect(trimmed).toBe('{"a":1,"b":2}');
+    expect(JSON.parse(trimmed)).toEqual({ a: 1, b: 2 });
+  });
+
+  it('strips trailing prose for a top-level array close', () => {
+    const broken = '[1,2,3] trailing notes go here';
+    const trimmed = trimTrailingProse(broken);
+    expect(trimmed).toBe('[1,2,3]');
+    expect(JSON.parse(trimmed)).toEqual([1, 2, 3]);
+  });
+
+  it('tracks nested braces correctly (outermost close wins)', () => {
+    const broken = '{"a":{"b":{"c":1}}} note: deeply nested';
+    const trimmed = trimTrailingProse(broken);
+    expect(trimmed).toBe('{"a":{"b":{"c":1}}}');
+    expect(JSON.parse(trimmed)).toEqual({ a: { b: { c: 1 } } });
+  });
+
+  it('respects braces inside string values (no false close)', () => {
+    const broken = '{"a":"text with } and { braces inside","b":1} trailing';
+    const trimmed = trimTrailingProse(broken);
+    expect(trimmed).toBe('{"a":"text with } and { braces inside","b":1}');
+    expect(JSON.parse(trimmed)).toEqual({ a: 'text with } and { braces inside', b: 1 });
+  });
+
+  it('respects escaped quotes inside string values', () => {
+    const broken = '{"a":"he said \\"hi\\""} trailing';
+    const trimmed = trimTrailingProse(broken);
+    expect(trimmed).toBe('{"a":"he said \\"hi\\""}');
+    expect(JSON.parse(trimmed)).toEqual({ a: 'he said "hi"' });
+  });
+
+  it('is idempotent — running twice equals running once', () => {
+    const broken = '{"a":1} prose';
+    expect(trimTrailingProse(trimTrailingProse(broken))).toBe(trimTrailingProse(broken));
+  });
+
+  it('is a no-op when no outer balanced close exists (unbalanced JSON)', () => {
+    /* Missing close brace — there's no point where depth returns to 0,
+       so we can't find a safe trim point. Return the input unchanged and
+       let repairStructuralPunctuation try to close it instead. */
+    const broken = '{"a":1';
+    expect(trimTrailingProse(broken)).toBe(broken);
+  });
+
+  it('is a no-op on the empty string', () => {
+    expect(trimTrailingProse('')).toBe('');
+  });
+});
+
+describe('repairStructuralPunctuation', () => {
+  it('is a no-op on already-valid JSON', () => {
+    const ok = '{"a":1,"b":2}';
+    expect(repairStructuralPunctuation(ok)).toBe(ok);
+  });
+
+  it('inserts a missing comma between two string-value properties', () => {
+    const broken = '{"a":"x" "b":"y"}';
+    const repaired = repairStructuralPunctuation(broken);
+    expect(JSON.parse(repaired)).toEqual({ a: 'x', b: 'y' });
+  });
+
+  it('inserts a missing comma between number-then-property', () => {
+    const broken = '{"a":1 "b":2}';
+    const repaired = repairStructuralPunctuation(broken);
+    expect(JSON.parse(repaired)).toEqual({ a: 1, b: 2 });
+  });
+
+  it('inserts a missing comma between }-then-property (nested objects)', () => {
+    const broken = '{"a":{"x":1} "b":2}';
+    const repaired = repairStructuralPunctuation(broken);
+    expect(JSON.parse(repaired)).toEqual({ a: { x: 1 }, b: 2 });
+  });
+
+  it('appends a single missing close brace at EOF', () => {
+    const broken = '{"a":1,"b":2';
+    const repaired = repairStructuralPunctuation(broken);
+    expect(JSON.parse(repaired)).toEqual({ a: 1, b: 2 });
+  });
+
+  it('appends two missing close braces at EOF (within default maxInserts=2)', () => {
+    const broken = '{"a":{"b":1';
+    const repaired = repairStructuralPunctuation(broken);
+    expect(JSON.parse(repaired)).toEqual({ a: { b: 1 } });
+  });
+
+  it('refuses to over-rescue deeply-truncated payloads (3+ unclosed → still invalid)', () => {
+    /* 3 unclosed containers needs 3 inserts, exceeding the default
+       maxInserts=2. Helper appends what it can and bails; the result is
+       still unparseable, which is correct: the ollama retry policy
+       drops the broken assistant turn for invalid-json (not
+       schema-validation), giving the sampler real room to escape. */
+    const truncated = '{"characters":[{"id":"narrator"';
+    const repaired = repairStructuralPunctuation(truncated);
+    expect(() => JSON.parse(repaired)).toThrow();
+  });
+
+  it('appends a missing close bracket at EOF for arrays', () => {
+    const broken = '{"a":[1,2,3';
+    const repaired = repairStructuralPunctuation(broken);
+    expect(JSON.parse(repaired)).toEqual({ a: [1, 2, 3] });
+  });
+
+  it('does not touch JSON broken in ways outside its scope (unquoted identifier)', () => {
+    /* The narrow heuristic only handles missing commas/braces. An
+       unquoted value mid-object stays broken — repair returns the input
+       (possibly with a speculative close, which still fails to parse) so
+       the caller's invalid-json branch fires. */
+    const broken = '{"a": broken';
+    const repaired = repairStructuralPunctuation(broken);
+    /* Either the helper returns the input unchanged OR appends a `}` —
+       both are fine; the contract is "don't crash and don't lie that
+       JSON.parse will succeed." */
+    expect(() => JSON.parse(repaired)).toThrow();
+  });
+
+  it('respects strings — does not insert commas inside string values', () => {
+    /* A space-then-quote pattern that looks like missing-comma but is
+       INSIDE a string must not trigger insertion. */
+    const ok = '{"a":"he said \\"hi\\" then left"}';
+    const repaired = repairStructuralPunctuation(ok);
+    expect(repaired).toBe(ok);
+    expect(JSON.parse(repaired)).toEqual({ a: 'he said "hi" then left' });
+  });
+
+  it('is bounded by maxInserts so a hopelessly-broken payload cannot loop', () => {
+    /* Bound the recursion depth at maxInserts. After the budget runs out
+       the helper returns whatever it has — caller's invalid-json branch
+       picks it up. */
+    const hopelessly = '{xxxxx';
+    const repaired = repairStructuralPunctuation(hopelessly, 2);
+    expect(typeof repaired).toBe('string');
+    expect(() => JSON.parse(repaired)).toThrow();
   });
 });
