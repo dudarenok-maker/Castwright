@@ -179,19 +179,26 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
           <ul className="space-y-0.5">
             {chapters.map(ch => {
               const active = currentChapterId === ch.id;
+              const excluded = !!ch.excluded;
+              const titleCls = excluded
+                ? 'font-medium text-ink/40 line-through decoration-1'
+                : (active ? 'font-semibold text-ink' : 'font-medium text-ink/80');
               return (
                 <li key={ch.id}>
                   <button onClick={() => setCurrentChapterId(ch.id)}
-                          className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors relative ${active ? 'bg-ink/[0.05]' : 'hover:bg-ink/[0.03]'}`}>
+                          className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors relative ${active ? 'bg-ink/[0.05]' : 'hover:bg-ink/[0.03]'}`}
+                          title={excluded ? 'Excluded — not analyzed, no audio will be generated.' : undefined}>
                     {active && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-peach"/>}
-                    <span className={`text-[11px] font-bold tabular-nums w-7 ${active ? 'text-magenta' : 'text-ink/40'}`}>CH {String(ch.id).padStart(2, '0')}</span>
+                    <span className={`text-[11px] font-bold tabular-nums w-7 ${excluded ? 'text-ink/30' : (active ? 'text-magenta' : 'text-ink/40')}`}>CH {String(ch.id).padStart(2, '0')}</span>
                     <span className="flex-1 min-w-0">
-                      <span className={`block text-sm truncate ${active ? 'font-semibold text-ink' : 'font-medium text-ink/80'}`}>{ch.title}</span>
-                      <span className="block text-[11px] text-ink/50 tabular-nums">{ch.duration}</span>
+                      <span className={`block text-sm truncate ${titleCls}`}>{ch.title}</span>
+                      <span className={`block text-[11px] tabular-nums ${excluded ? 'text-ink/45 italic' : 'text-ink/50'}`}>
+                        {excluded ? 'Excluded' : ch.duration}
+                      </span>
                     </span>
-                    {ch.state === 'in_progress' && <IconSpinner className="w-3 h-3 text-magenta shrink-0"/>}
-                    {ch.state === 'done'        && <IconCheck    className="w-3 h-3 text-emerald-600 shrink-0"/>}
-                    {ch.state === 'failed'      && <IconWarning  className="w-3 h-3 text-rose-600 shrink-0"/>}
+                    {!excluded && ch.state === 'in_progress' && <IconSpinner className="w-3 h-3 text-magenta shrink-0"/>}
+                    {!excluded && ch.state === 'done'        && <IconCheck    className="w-3 h-3 text-emerald-600 shrink-0"/>}
+                    {!excluded && ch.state === 'failed'      && <IconWarning  className="w-3 h-3 text-rose-600 shrink-0"/>}
                   </button>
                 </li>
               );
@@ -261,6 +268,11 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
           <div className="mt-4 flex items-start gap-6">
             <h1 className="flex-1 text-3xl md:text-4xl font-medium leading-[1.1] tracking-tight">
               Chapter {currentChapter.id} — <span className="font-bold">{currentChapter.title}</span>
+              {currentChapter.excluded && (
+                <span className="ml-3 align-middle inline-block">
+                  <Pill>Excluded</Pill>
+                </span>
+              )}
             </h1>
             {onStartGenerating && (
               <button onClick={onStartGenerating}
@@ -271,9 +283,15 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
             )}
           </div>
           <div className="mt-3 flex items-center gap-4 text-sm text-ink/60">
-            <span>{segments.length} segments</span><span>·</span>
-            <span>{Object.keys(counts).length} speakers</span><span>·</span>
-            <span className="text-amber-700">{chapterSentences.filter(s => s.confidence != null && s.confidence < 0.75).length} low-confidence</span>
+            {currentChapter.excluded ? (
+              <span className="text-ink/55">Excluded at import — not analyzed, no audio will be generated.</span>
+            ) : (
+              <>
+                <span>{segments.length} segments</span><span>·</span>
+                <span>{Object.keys(counts).length} speakers</span><span>·</span>
+                <span className="text-amber-700">{chapterSentences.filter(s => s.confidence != null && s.confidence < 0.75).length} low-confidence</span>
+              </>
+            )}
             <span className="ml-auto flex items-center gap-1">
               <button onClick={() => prevChapter && setCurrentChapterId(prevChapter.id)} disabled={!prevChapter}
                       className="px-2 py-1 rounded-lg border border-ink/10 bg-white text-ink/70 hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center gap-1 text-xs font-medium">
@@ -287,6 +305,16 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
           </div>
         </div>
 
+        {currentChapter.excluded ? (
+          <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
+            <p className="text-base font-semibold text-ink/70">This chapter was excluded at import.</p>
+            <p className="mt-2 text-sm text-ink/55 max-w-md mx-auto leading-relaxed">
+              It wasn't sent to the analyzer, so there are no sentences or speakers to review here.
+              The chapter won't be voiced. To bring it back, open the <span className="font-semibold text-ink/70">Generate</span> view
+              and click <span className="font-semibold text-ink/70">Include in book</span> on this row.
+            </p>
+          </div>
+        ) : (
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10">
           <article ref={articleRef} className="font-serif text-[17px] leading-[1.8] text-ink/90">
             {segments.map((seg, segIdx) => (
@@ -309,6 +337,7 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
             ))}
           </article>
         </div>
+        )}
       </main>
 
       <aside className="self-start sticky top-24">
