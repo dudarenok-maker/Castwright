@@ -14,6 +14,7 @@ import { librarySlice } from './library-slice';
 import { voicesSlice } from './voices-slice';
 import { changeLogSlice } from './change-log-slice';
 import { bookMetaSlice } from './book-meta-slice';
+import { exportsSlice } from './exports-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 
@@ -29,6 +30,7 @@ export const store = configureStore({
     voices:     voicesSlice.reducer,
     changeLog:  changeLogSlice.reducer,
     bookMeta:   bookMetaSlice.reducer,
+    exports:    exportsSlice.reducer,
   },
   middleware: (getDefault) => getDefault().concat(persistenceMiddleware, generationStreamMiddleware),
 });

@@ -1,22 +1,28 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   IconPlay, IconPause, IconHeadphones, IconWaveform, IconShare, IconShield,
-  IconExternal, IconDownload, IconEye, IconRefresh, IconUpload, IconCheckCircle,
-  IconSpinner, IconWarning, IconClock, IconCopy, IconTrash,
+  IconExternal, IconDownload, IconEye, IconRefresh, IconUpload,
 } from '../lib/icons';
 import {
   SectionLabel, MixedHeading, PrimaryButton, Pill, ComingSoonBadge, MockedPreviewBanner,
 } from '../components/primitives';
 import { Waveform } from '../components/waveform';
+import { ExportQueueRow } from '../components/export-queue-row';
+import { ExportAudiobookModal } from '../modals/export-audiobook';
 import { parseDuration, formatTime } from '../lib/time';
 import { SUPPORTED_APPS } from '../data/listener-apps';
 import { EXPORT_QUEUE } from '../data/export-queue';
+import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
+import { useAppSelector } from '../store';
 import type {
   Chapter, Character, Voice, ListenerApp, ExportQueueItem,
 } from '../lib/types';
 import type { EditableBookMeta, EditableBookMetaField } from '../store/book-meta-slice';
 
 interface Props {
+  /** Required so the Export modal can target the right book on POST.
+      Plumbed through from the ListenRoute via state.ui.stage. */
+  bookId: string;
   chapters: Chapter[];
   characters: Character[];
   library: Voice[];
@@ -37,10 +43,26 @@ interface Props {
 }
 
 export function ListenView({
+  bookId,
   chapters, characters, currentTrack, setCurrentTrack, onSendApp, onRegenerate, onEnterPreview,
   bookMeta, bookCoverGradient,
   onEditMetaField, onCommitMeta, onCancelMeta, isMetaDirty,
 }: Props) {
+  /* Local modal state for the export flow. Two entry points open it:
+     - The "Export audiobook" pill in the cover-art row (download tab).
+     - The PocketBook tile in ListenerApps (also download tab — sideload
+       to the user's Android phone is the primary PocketBook story). */
+  const [exportModal, setExportModal] = useState<{ tab: 'download' | 'sync-folder' } | null>(null);
+
+  /* Live job list from the store, with the visual fixtures as a fallback
+     so design-system mode (VITE_USE_MOCKS=true with no live exports) keeps
+     showing the demo content the prototype shipped with. */
+  const liveJobs = useAppSelector(s => s.exports.byBookId[bookId] ?? []);
+  const useMockFallback = import.meta.env.VITE_USE_MOCKS === 'true' && liveJobs.length === 0;
+  const queueItems = useMemo<ExportQueueItem[]>(
+    () => useMockFallback ? EXPORT_QUEUE : liveJobs.map(bookExportJobToQueueItem),
+    [liveJobs, useMockFallback],
+  );
   /* Excluded chapters (front/back-matter the user opted out of at the
      confirm-metadata stage) never get audio, so they have no business in
      the "ready to listen" rail or the runtime/chapter-count math — they'd
@@ -90,7 +112,13 @@ export function ListenView({
               <span className="w-8 h-8 rounded-full bg-canvas text-ink grid place-items-center"><IconPlay className="w-3.5 h-3.5 ml-0.5"/></span>
               Play from the start
             </button>
-            <button disabled title="Download — coming soon" className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/40 inline-flex items-center gap-2 cursor-not-allowed"><IconDownload className="w-4 h-4"/> Download <ComingSoonBadge/></button>
+            <button
+              onClick={() => setExportModal({ tab: 'download' })}
+              data-testid="open-export-modal"
+              className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
+            >
+              <IconDownload className="w-4 h-4"/> Export audiobook
+            </button>
             <button onClick={onEnterPreview} className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"><IconEye className="w-4 h-4"/> Preview as listener</button>
             <button disabled title="Share — coming soon" className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/40 inline-flex items-center gap-2 cursor-not-allowed"><IconShare className="w-4 h-4"/> Share <ComingSoonBadge/></button>
           </div>
@@ -117,18 +145,19 @@ export function ListenView({
         </div>
       </section>
 
-      <ListenerApps onSend={onSendApp}/>
-      <ExportQueue items={EXPORT_QUEUE}/>
+      <ListenerApps
+        onSend={onSendApp}
+        onOpenPocketBookExport={() => setExportModal({ tab: 'download' })}
+      />
+      <ExportQueue items={queueItems}/>
 
       <section className="mb-12">
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <SectionLabel>Or download a file</SectionLabel>
           <span className="text-xs text-ink/50">For sideloading or archival</span>
         </div>
-        <MockedPreviewBanner>export pipeline is coming soon; these tiles are visual placeholders.</MockedPreviewBanner>
-        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4">
-          <DownloadCard title="Full audiobook" format="m4b chaptered" size="287 MB" description="Single file with chapter markers. Works with every app above."/>
-          <DownloadCard title="MP3 by chapter" format="ZIP archive"   size="312 MB" description="One MP3 per chapter. Universal compatibility."/>
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <DownloadCard title="Full audiobook" format="m4b chaptered" size="—" description="Single file with embedded chapter markers. Coming in Phase B."/>
           <DownloadCard title="Streaming link" format="Shareable URL"  size="Hosted" description="Send a link to listeners. Optional password protection."/>
         </div>
       </section>
@@ -140,6 +169,13 @@ export function ListenView({
                         onCancel={onCancelMeta}
                         isDirty={isMetaDirty}/>
       </section>
+
+      <ExportAudiobookModal
+        open={exportModal != null}
+        bookId={bookId}
+        initialTab={exportModal?.tab ?? 'download'}
+        onClose={() => setExportModal(null)}
+      />
     </div>
   );
 }
@@ -315,28 +351,49 @@ function MetaField({ label, value, onChange, type = 'text' }: MetaFieldProps) {
   );
 }
 
-function ListenerApps({ onSend }: { onSend: (app: ListenerApp) => void }) {
+interface ListenerAppsProps {
+  onSend: (app: ListenerApp) => void;
+  /** PocketBook is now live: clicking its tile opens the export modal on
+      the Download-to-phone tab rather than queuing a deferred handoff. */
+  onOpenPocketBookExport: () => void;
+}
+function ListenerApps({ onSend, onOpenPocketBookExport }: ListenerAppsProps) {
   return (
     <section className="mb-12">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <SectionLabel>Listen on your favourite app</SectionLabel>
         <span className="text-xs text-ink/50 inline-flex items-center gap-1.5"><IconShield className="w-3.5 h-3.5"/> Open-format export · DRM-free</span>
       </div>
-      <MockedPreviewBanner>direct handoff to each app is coming soon. PocketBook is first up.</MockedPreviewBanner>
+      <MockedPreviewBanner>direct handoff to other apps is coming soon. PocketBook is live — click it to sideload.</MockedPreviewBanner>
       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {SUPPORTED_APPS.map(a => <ListenerAppCard key={a.id} app={a} onSend={onSend}/>)}
+        {SUPPORTED_APPS.map(a => (
+          <ListenerAppCard
+            key={a.id}
+            app={a}
+            onSend={onSend}
+            onOpenPocketBookExport={a.id === 'pocketbook' ? onOpenPocketBookExport : undefined}
+          />
+        ))}
       </div>
-      <p className="mt-4 text-xs text-ink/50 text-center">Don't see your app? Any player that supports M4B with chapter markers will work — use the manual download below.</p>
+      <p className="mt-4 text-xs text-ink/50 text-center">Don't see your app? Any player that supports MP3.ZIP or M4B with chapter markers will work — use the manual download below.</p>
     </section>
   );
 }
 
-function ListenerAppCard({ app, onSend: _onSend }: { app: ListenerApp; onSend: (a: ListenerApp) => void }) {
+interface ListenerAppCardProps {
+  app: ListenerApp;
+  onSend: (a: ListenerApp) => void;
+  /** Present only for PocketBook — turns the disabled-placeholder pill into
+      a real button that opens the export modal. */
+  onOpenPocketBookExport?: () => void;
+}
+function ListenerAppCard({ app, onSend: _onSend, onOpenPocketBookExport }: ListenerAppCardProps) {
   const [from, to] = app.gradient;
-  /* onSend is intentionally not wired while integrations are mocked. Keep the
-     prop for forward-compat so the route doesn't have to change when we flip
-     individual cards to live. */
+  /* onSend is intentionally not wired while non-PocketBook integrations are
+     mocked. Keep the prop for forward-compat so flipping each card to live
+     only touches the tile, not the route. */
   void _onSend;
+  const isLive = onOpenPocketBookExport != null;
   return (
     <article data-testid={`listener-app-${app.id}`}
              className="bg-white rounded-3xl border border-ink/10 shadow-card p-5 flex flex-col">
@@ -347,7 +404,7 @@ function ListenerAppCard({ app, onSend: _onSend }: { app: ListenerApp; onSend: (
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="font-bold text-ink leading-tight">{app.name}</h3>
-            <ComingSoonBadge/>
+            {isLive ? null : <ComingSoonBadge/>}
           </div>
           <p className="text-xs text-ink/55 mt-0.5">{app.tagline}</p>
         </div>
@@ -356,11 +413,19 @@ function ListenerAppCard({ app, onSend: _onSend }: { app: ListenerApp; onSend: (
         {app.platforms.map(p => <Pill key={p}>{p}</Pill>)}
       </div>
       <p className="text-xs text-ink/65 leading-relaxed mb-5 flex-1">{app.description}</p>
-      <button disabled title={`${app.sendVerb} — coming soon`}
-              data-testid={`listener-app-action-${app.id}`}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-ink/[0.03] text-ink/40 cursor-not-allowed">
-        <IconExternal className="w-4 h-4"/> {app.sendVerb}
-      </button>
+      {isLive ? (
+        <button onClick={onOpenPocketBookExport}
+                data-testid={`listener-app-action-${app.id}`}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-ink text-canvas hover:bg-ink-soft">
+          <IconExternal className="w-4 h-4"/> {app.sendVerb}
+        </button>
+      ) : (
+        <button disabled title={`${app.sendVerb} — coming soon`}
+                data-testid={`listener-app-action-${app.id}`}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-ink/[0.03] text-ink/40 cursor-not-allowed">
+          <IconExternal className="w-4 h-4"/> {app.sendVerb}
+        </button>
+      )}
     </article>
   );
 }
@@ -392,66 +457,18 @@ function ExportQueue({ items }: { items: ExportQueueItem[] }) {
           ))}
         </div>
       </div>
-      <MockedPreviewBanner>these entries are demo fixtures — your real exports will appear here once the export pipeline lands.</MockedPreviewBanner>
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden divide-y divide-ink/5">
         {visible.length === 0 && <p className="px-6 py-8 text-sm text-ink/50 text-center">No exports match this filter.</p>}
-        {visible.map(it => <ExportQueueRow key={it.id} item={it}/>)}
+        {visible.map(it => (
+          <ExportQueueRow
+            key={it.id}
+            item={it}
+            onDownload={it.url
+              ? (clicked) => { if (clicked.url) window.location.assign(clicked.url); }
+              : undefined}
+          />
+        ))}
       </div>
     </section>
-  );
-}
-
-function ExportQueueRow({ item }: { item: ExportQueueItem }) {
-  const formatBadge = ({
-    m4b:  { color: '#A43C6C', label: 'M4B'  },
-    m4a:  { color: '#F79A83', label: 'M4A'  },
-    mp3:  { color: '#6B6663', label: 'MP3'  },
-    zip:  { color: '#7C5C8C', label: 'ZIP'  },
-    link: { color: '#3C194F', label: 'URL'  },
-  } as Record<string, { color: string; label: string }>)[item.format] || { color: '#6B6663', label: item.format.toUpperCase() };
-
-  const statusUI = {
-    done:        <span className="inline-flex items-center gap-1.5 text-emerald-700"><IconCheckCircle className="w-3.5 h-3.5"/> Done</span>,
-    in_progress: <span className="inline-flex items-center gap-1.5 text-magenta"><IconSpinner className="w-3.5 h-3.5"/> Running…</span>,
-    failed:      <span className="inline-flex items-center gap-1.5 text-rose-600"><IconWarning className="w-3.5 h-3.5"/> Failed</span>,
-  }[item.status];
-
-  return (
-    <div className="grid grid-cols-[44px_1fr_120px_120px_140px_120px] items-center gap-4 px-5 py-3.5 text-sm hover:bg-ink/[0.02] transition-colors">
-      <span className="w-10 h-10 rounded-xl grid place-items-center text-white font-bold text-[10px] tracking-wider" style={{ background: formatBadge.color }}>
-        {formatBadge.label}
-      </span>
-      <span className="min-w-0">
-        <span className="block font-semibold text-ink truncate">{item.filename}</span>
-        {item.errorReason ? (
-          <span className="block text-[11px] text-rose-600 truncate mt-0.5">{item.errorReason}</span>
-        ) : (
-          <span className="block text-[11px] text-ink/55 truncate mt-0.5">{item.destination}</span>
-        )}
-        {item.status === 'in_progress' && (
-          <div className="mt-1.5 h-1 rounded-full bg-ink/[0.06] overflow-hidden max-w-[280px] relative">
-            <div className="h-full rounded-full bg-gradient-progress pulse-bar" style={{ width: `${(item.progress || 0) * 100}%` }}>
-              <div className="absolute inset-0 stripe-travel"/>
-            </div>
-          </div>
-        )}
-      </span>
-      <span className="text-xs tabular-nums text-ink/60">{item.size}</span>
-      <span className="text-xs text-ink/55 inline-flex items-center gap-1.5"><IconClock className="w-3 h-3"/>{item.timestamp}</span>
-      <span className="text-xs">{statusUI}</span>
-      <span className="flex items-center justify-end gap-1">
-        {item.status === 'done' && (
-          item.url ? (
-            <button disabled title="Copy link — coming soon" className="p-1.5 rounded-full text-ink/30 cursor-not-allowed"><IconCopy className="w-4 h-4"/></button>
-          ) : (
-            <button disabled title="Download — coming soon" className="p-1.5 rounded-full text-ink/30 cursor-not-allowed"><IconDownload className="w-4 h-4"/></button>
-          )
-        )}
-        {item.status === 'failed' && (
-          <button disabled title="Retry — coming soon" className="p-1.5 rounded-full text-ink/30 cursor-not-allowed"><IconRefresh className="w-4 h-4"/></button>
-        )}
-        <button disabled title="Remove — coming soon" className="p-1.5 rounded-full text-ink/30 cursor-not-allowed"><IconTrash className="w-4 h-4"/></button>
-      </span>
-    </div>
   );
 }

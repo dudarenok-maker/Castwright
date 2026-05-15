@@ -40,6 +40,12 @@ export const userSettingsSchema = z.object({
      and then http://localhost:11434 in getResolvedOllamaUrl. */
   ollamaUrl:            z.string().min(1).max(2000),
   workspaceDirOverride: z.string().max(2000).nullable(),
+  /* Optional folder the export pipeline copies finished audiobooks into,
+     e.g. a OneDrive / Syncthing watch path so the file lands on the user's
+     phone automatically. Null = "save-to-folder" tab is disabled in the
+     export modal until the user picks one. Path is not validated for
+     existence here — the writer mkdirs on demand. */
+  exportSyncFolder:     z.string().max(2000).nullable(),
   /* Threshold for the minor-cast fold pass — see
      server/src/analyzer/fold-minor-cast.ts. A character with FEWER than
      this many attributed sentences gets folded into Unknown male /
@@ -66,6 +72,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   analysisEngine:       'local',
   ollamaUrl:            'http://localhost:11434',
   workspaceDirOverride: null,
+  exportSyncFolder:     null,
   minorCastMinLines:    3,
 };
 

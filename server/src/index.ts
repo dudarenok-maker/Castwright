@@ -32,6 +32,8 @@ import { importRouter } from './routes/import.js';
 import { bookStateRouter } from './routes/book-state.js';
 import { generationRouter } from './routes/generation.js';
 import { chapterAudioRouter } from './routes/chapter-audio.js';
+import { exportRouter } from './routes/export.js';
+import { exportLanRouter, enumerateLanUrls } from './routes/export-lan.js';
 import { revisionsRouter } from './routes/revisions.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
 import { ollamaHealthRouter } from './routes/ollama-health.js';
@@ -76,6 +78,8 @@ app.use('/api/books', castMergeRouter);      // mounts /:bookId/cast/merge
 app.use('/api', libraryCastOverrideRouter);  // mounts /library-cast/override (cross-book; not under /:bookId)
 app.use('/api/books', generationRouter);     // mounts /:bookId/generation (SSE)
 app.use('/api/books', chapterAudioRouter);   // mounts /:bookId/chapters/:chapterId/audio(.mp3|.wav)
+app.use('/api/books', exportRouter);         // mounts /:bookId/exports (POST + GET status + GET download)
+app.use('/api/export', exportLanRouter);     // mounts /lan (LAN URL enumeration for the export modal)
 app.use('/api/books', revisionsRouter);      // mounts /:bookId/revisions (drift diff over segments snapshots)
 app.use('/api/voices', voicesRouter);        // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter);   // mounts POST /:voiceId/sample
@@ -88,6 +92,15 @@ app.listen(PORT, () => {
   console.log(`[server] listening on http://localhost:${PORT}`);
   // eslint-disable-next-line no-console
   console.log(`[server] workspace root: ${WORKSPACE_ROOT}`);
+
+  /* Log the LAN URLs so the user can spot which IP to point their phone's
+     browser at for the audiobook export sideload flow. Node's app.listen
+     already binds all interfaces, so every URL here genuinely reaches us. */
+  const lan = enumerateLanUrls(PORT);
+  for (const url of lan.urls) {
+    // eslint-disable-next-line no-console
+    console.log(`[server] LAN URL: ${url}`);
+  }
 
   /* Static catalog self-consistency check (instant, no I/O). Catches
      "wrong voices used for wrong models" at its source — the per-engine

@@ -2,7 +2,12 @@
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
+import { configureStore } from '@reduxjs/toolkit';
+import { Provider } from 'react-redux';
 import { ListenView } from './listen';
+import { exportsSlice } from '../store/exports-slice';
+import { accountSlice } from '../store/account-slice';
+import { uiSlice } from '../store/ui-slice';
 import type { Chapter, Character, Voice } from '../lib/types';
 import type { EditableBookMeta } from '../store/book-meta-slice';
 
@@ -42,6 +47,16 @@ const baseHandlers = () => ({
 
 beforeEach(() => vi.clearAllMocks());
 
+function makeStore() {
+  return configureStore({
+    reducer: {
+      exports: exportsSlice.reducer,
+      account: accountSlice.reducer,
+      ui:      uiSlice.reducer,
+    },
+  });
+}
+
 function renderView(overrides: {
   meta?: EditableBookMeta | null;
   gradient?: [string, string] | null;
@@ -50,12 +65,14 @@ function renderView(overrides: {
 } = {}) {
   const handlers = baseHandlers();
   render(
-    <ListenView chapters={chapters} characters={characters} library={voices}
-      currentTrack={overrides.currentTrack ?? null}
-      bookMeta={overrides.meta === undefined ? baseMeta() : overrides.meta}
-      bookCoverGradient={overrides.gradient ?? ['#2C7A4B', '#0F3A23']}
-      isMetaDirty={overrides.isDirty ?? false}
-      {...handlers}/>
+    <Provider store={makeStore()}>
+      <ListenView bookId="demo__sa__test" chapters={chapters} characters={characters} library={voices}
+        currentTrack={overrides.currentTrack ?? null}
+        bookMeta={overrides.meta === undefined ? baseMeta() : overrides.meta}
+        bookCoverGradient={overrides.gradient ?? ['#2C7A4B', '#0F3A23']}
+        isMetaDirty={overrides.isDirty ?? false}
+        {...handlers}/>
+    </Provider>
   );
   return handlers;
 }
@@ -136,40 +153,53 @@ describe('ListenView — coming-soon affordances', () => {
     expect(screen.getByTestId('listener-app-pocketbook')).toBeInTheDocument();
   });
 
-  it('disables the action button on every listener-app card', () => {
+  it('disables non-PocketBook listener-app cards while PocketBook is live', () => {
     renderView();
-    const ids = ['audiobookshelf', 'bookplayer', 'smart_audiobook', 'apple_books', 'plex', 'pocketbook'];
-    for (const id of ids) {
-      const btn = screen.getByTestId(`listener-app-action-${id}`);
-      expect(btn).toBeDisabled();
+    const stillDeferred = ['audiobookshelf', 'bookplayer', 'smart_audiobook', 'apple_books', 'plex'];
+    for (const id of stillDeferred) {
+      expect(screen.getByTestId(`listener-app-action-${id}`)).toBeDisabled();
     }
+    /* PocketBook is now an active sideload entry-point. */
+    expect(screen.getByTestId('listener-app-action-pocketbook')).not.toBeDisabled();
   });
 
-  it('does NOT dispatch onSendApp when a disabled listener-app button is clicked', () => {
-    const h = renderView();
+  it('opens the export modal when the PocketBook tile is clicked', () => {
+    renderView();
+    expect(screen.queryByTestId('export-audiobook-modal')).toBeNull();
     fireEvent.click(screen.getByTestId('listener-app-action-pocketbook'));
-    expect(h.onSendApp).not.toHaveBeenCalled();
+    expect(screen.getByTestId('export-audiobook-modal')).toBeInTheDocument();
   });
 
-  it('marks every listener-app card with a Soon badge', () => {
+  it('opens the export modal when the "Export audiobook" pill is clicked', () => {
+    renderView();
+    fireEvent.click(screen.getByTestId('open-export-modal'));
+    expect(screen.getByTestId('export-audiobook-modal')).toBeInTheDocument();
+  });
+
+  it('marks deferred listener-app cards with a Soon badge but omits it on PocketBook', () => {
     renderView();
     const pocketBookCard = screen.getByTestId('listener-app-pocketbook');
-    expect(within(pocketBookCard).getByTestId('coming-soon-badge')).toBeInTheDocument();
+    expect(within(pocketBookCard).queryByTestId('coming-soon-badge')).toBeNull();
+    const audiobookshelfCard = screen.getByTestId('listener-app-audiobookshelf');
+    expect(within(audiobookshelfCard).getByTestId('coming-soon-badge')).toBeInTheDocument();
   });
 
-  it('disables all three download tiles and tags them with Soon', () => {
+  it('disables the two remaining "Or download a file" tiles and tags them with Soon', () => {
     renderView();
-    /* All three Download buttons in the download-tile section should be disabled. */
+    /* Phase A removed the per-chapter MP3 zip tile — the modal supersedes it.
+       Two future-affordance tiles remain (M4B + streaming link). */
     const downloads = screen.getAllByRole('button', { name: /^Download$/ });
-    expect(downloads.length).toBe(3);
+    expect(downloads.length).toBe(2);
     for (const btn of downloads) expect(btn).toBeDisabled();
   });
 
-  it('shows mocked-preview banners on the integrations, exports, and downloads sections', () => {
+  it('shows the one remaining mocked-preview banner (listener apps)', () => {
     renderView();
     const banners = screen.getAllByTestId('mocked-preview-banner');
-    /* Three sections wear the banner: listener-apps, export queue, downloads. */
-    expect(banners.length).toBe(3);
+    /* The exports rail + the download-tile section both lost their banners
+       once the export pipeline went live; only the non-PocketBook listener-
+       app handoffs still wear the placeholder. */
+    expect(banners.length).toBe(1);
   });
 
   it('keeps the "Play from the start" button enabled when chapters exist', () => {
@@ -201,12 +231,14 @@ describe('ListenView — excluded chapters are filtered out of the listen rail',
   function renderWithMix() {
     const handlers = baseHandlers();
     render(
-      <ListenView chapters={mixedChapters} characters={characters} library={voices}
-        currentTrack={null}
-        bookMeta={baseMeta()}
-        bookCoverGradient={['#2C7A4B', '#0F3A23']}
-        isMetaDirty={false}
-        {...handlers}/>
+      <Provider store={makeStore()}>
+        <ListenView bookId="demo__sa__test" chapters={mixedChapters} characters={characters} library={voices}
+          currentTrack={null}
+          bookMeta={baseMeta()}
+          bookCoverGradient={['#2C7A4B', '#0F3A23']}
+          isMetaDirty={false}
+          {...handlers}/>
+      </Provider>
     );
     return handlers;
   }
