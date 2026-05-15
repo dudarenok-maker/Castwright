@@ -242,3 +242,73 @@ describe('ManuscriptView — large book sidebar structure', () => {
     expect(screen.getByText('Char 25')).toBeInTheDocument();
   });
 });
+
+/* Right-pane SegmentInspector — same shape of bug as the left sidebar.
+   The "Reassign whole segment to" list and the help-text footer used to
+   flow without bound, so a 30-character cast pushed the help line below
+   the viewport. The fix gives the inspector card its own bounded flex
+   column with sticky header + sticky footer + scrollable middle, so the
+   help line and segment header stay anchored regardless of cast size. */
+describe('ManuscriptView — inspector with large cast', () => {
+  it('mounts the inspector header, the full reassign character list, and the help footer at the same time with 30 characters', async () => {
+    const user = userEvent.setup();
+    const manyCharacters: Character[] = Array.from({ length: 30 }, (_, i) => ({
+      id: `c${i + 1}`,
+      name: `Char ${i + 1}`,
+      role: 'Cast',
+      color: 'narrator',
+    }));
+    const chapter: Chapter = {
+      id: 1,
+      title: 'Ch 1',
+      duration: '10:00',
+      state: 'queued',
+      progress: 0,
+      characters: {},
+    };
+    const sentence: Sentence = {
+      id: 1,
+      chapterId: 1,
+      characterId: 'c1',
+      text: 'A line of dialogue.',
+    };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog:  changeLogSlice.reducer,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={manyCharacters}
+          chapters={[chapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[sentence]}
+        />
+      </Provider>,
+    );
+
+    /* Empty state until a segment is selected. Click the rendered
+       sentence to set selectedSeg and surface the full inspector card. */
+    expect(screen.getByText(/Select a paragraph to inspect/)).toBeInTheDocument();
+    await user.click(screen.getByText('A line of dialogue.'));
+    expect(screen.queryByText(/Select a paragraph to inspect/)).toBeNull();
+
+    /* The inspector now renders header + reassign list + help footer
+       in the same tree. The footer line was the regression — it used
+       to fall below the viewport on tall casts. */
+    expect(screen.getByText('Reassign whole segment to')).toBeInTheDocument();
+    expect(screen.getByText(/Highlight text/)).toBeInTheDocument();
+    expect(screen.getByText(/Drag a boundary/)).toBeInTheDocument();
+
+    /* And all 30 reassign targets must mount — the structural concern
+       behind the height bound. The character names also appear in the
+       Detected sidebar, so use queryAllByText and assert at least one
+       per name (the inspector copy). */
+    for (let i = 1; i <= 30; i++) {
+      expect(screen.queryAllByText(`Char ${i}`).length).toBeGreaterThan(0);
+    }
+  });
+});

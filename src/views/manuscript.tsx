@@ -548,8 +548,13 @@ function SegmentInspector({ seg, characters, findChar, onClose, onReassignSegmen
   const cc = CHAR_COLORS[c.color as CharColor] ?? CHAR_COLORS.narrator;
   const minConf = Math.min(...seg.sentences.map(s => s.confidence ?? 1));
   return (
-    <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
-      <div className="p-5 pb-0 flex items-center gap-3">
+    /* Inspector card — flex column bounded to viewport. Segment name +
+       confidence stay pinned at the top, the long character / per-sentence
+       lists scroll in the middle, the help text stays pinned at the bottom.
+       Without this the 30-character "Reassign whole segment to" list spills
+       past the viewport on large casts. */
+    <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex flex-col max-h-[calc(100vh-100px)]">
+      <div className="shrink-0 p-5 pb-0 flex items-center gap-3">
         <span className="w-1 h-8 rounded-full" style={{ background: cc.hex }}/>
         <div className="flex-1 min-w-0">
           <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">Selected segment</p>
@@ -564,7 +569,7 @@ function SegmentInspector({ seg, characters, findChar, onClose, onReassignSegmen
         )}
         <button onClick={onClose} className="p-1.5 rounded-full hover:bg-ink/5 text-ink/60"><IconClose className="w-4 h-4"/></button>
       </div>
-      <div className="px-5 mt-4">
+      <div className="shrink-0 px-5 mt-4">
         <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">Confidence</p>
         <div className="flex items-center gap-3">
           <div className="flex-1 h-1.5 rounded-full bg-ink/10 overflow-hidden">
@@ -573,53 +578,56 @@ function SegmentInspector({ seg, characters, findChar, onClose, onReassignSegmen
           <span className="text-sm font-semibold text-ink tabular-nums">{Math.round(minConf * 100)}%</span>
         </div>
       </div>
-      <div className="px-5 mt-5">
-        <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">Reassign whole segment to</p>
-        <div className="flex flex-col gap-1">
-          {characters.map(cand => {
-            const active = cand.id === seg.characterId;
-            const candCc = CHAR_COLORS[cand.color as CharColor] ?? CHAR_COLORS.narrator;
-            return (
-              <button key={cand.id} onClick={() => onReassignSegment(seg, cand.id)}
-                      className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
-                      style={active ? { background: candCc.tint, boxShadow: `inset 0 0 0 1px ${candCc.ring}` } : undefined}>
-                {active && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full" style={{ background: candCc.hex }}/>}
-                <ColorDot color={cand.color as CharColor}/>
-                <span className={`text-sm flex-1 ${active ? 'font-bold' : 'text-ink'}`}
-                      style={active ? { color: candCc.hex } : undefined}>
-                  {cand.name}
-                </span>
-                {active && <IconCheck className="w-4 h-4" style={{ color: candCc.hex }}/>}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      {seg.sentences.length > 1 && (
+      <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="px-5 mt-5">
-          <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">Per-sentence reassign</p>
-          <ul className="space-y-2">
-            {seg.sentences.map(s => (
-              <li key={s.id} className="bg-canvas/60 rounded-xl p-3">
-                <p className="text-xs text-ink/80 leading-snug line-clamp-3 font-serif">{renderSentenceText(s.text)}</p>
-                <details className="mt-2">
-                  <summary className="text-[11px] text-ink/60 cursor-pointer hover:text-ink">Reassign just this one</summary>
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {characters.map(cand => (
-                      <button key={cand.id} onClick={() => onReassignSentence(s.id, cand.id)}
-                              className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] ${cand.id === seg.characterId ? 'bg-ink/[0.06] text-ink/60' : 'bg-white border border-ink/10 hover:border-ink/30'}`}>
-                        <ColorDot color={cand.color as CharColor} size={8}/>
-                        <span>{cand.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                </details>
-              </li>
-            ))}
-          </ul>
+          <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">Reassign whole segment to</p>
+          <div className="flex flex-col gap-1">
+            {characters.map(cand => {
+              const active = cand.id === seg.characterId;
+              const candCc = CHAR_COLORS[cand.color as CharColor] ?? CHAR_COLORS.narrator;
+              return (
+                <button key={cand.id} onClick={() => onReassignSegment(seg, cand.id)}
+                        className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
+                        style={active ? { background: candCc.tint, boxShadow: `inset 0 0 0 1px ${candCc.ring}` } : undefined}>
+                  {active && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full" style={{ background: candCc.hex }}/>}
+                  <ColorDot color={cand.color as CharColor}/>
+                  <span className={`text-sm flex-1 ${active ? 'font-bold' : 'text-ink'}`}
+                        style={active ? { color: candCc.hex } : undefined}>
+                    {cand.name}
+                  </span>
+                  {active && <IconCheck className="w-4 h-4" style={{ color: candCc.hex }}/>}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      )}
-      <div className="p-5 mt-4 border-t border-ink/10 text-xs text-ink/50 leading-relaxed space-y-1">
+        {seg.sentences.length > 1 && (
+          <div className="px-5 mt-5">
+            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">Per-sentence reassign</p>
+            <ul className="space-y-2">
+              {seg.sentences.map(s => (
+                <li key={s.id} className="bg-canvas/60 rounded-xl p-3">
+                  <p className="text-xs text-ink/80 leading-snug line-clamp-3 font-serif">{renderSentenceText(s.text)}</p>
+                  <details className="mt-2">
+                    <summary className="text-[11px] text-ink/60 cursor-pointer hover:text-ink">Reassign just this one</summary>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {characters.map(cand => (
+                        <button key={cand.id} onClick={() => onReassignSentence(s.id, cand.id)}
+                                className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] ${cand.id === seg.characterId ? 'bg-ink/[0.06] text-ink/60' : 'bg-white border border-ink/10 hover:border-ink/30'}`}>
+                          <ColorDot color={cand.color as CharColor} size={8}/>
+                          <span>{cand.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </details>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="h-5"/>
+      </div>
+      <div className="shrink-0 p-5 border-t border-ink/10 text-xs text-ink/50 leading-relaxed space-y-1">
         <p><span className="font-semibold text-ink/70">Highlight text</span> inside any sentence to split it and assign that piece elsewhere.</p>
         <p><span className="font-semibold text-ink/70">Drag a boundary</span> onto a sentence to move the whole-paragraph cut.</p>
       </div>
