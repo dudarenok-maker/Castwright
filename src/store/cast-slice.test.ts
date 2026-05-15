@@ -28,16 +28,25 @@ describe('castSlice — applyVoiceMatches', () => {
       {
         characterId: 'halloran',
         candidates: [
-          { voiceId: 'v_authority', fromBookTitle: 'Solway Bay', score: 0.91,
+          { voiceId: 'v_authority', fromBookId: 'solway_bay_book', fromBookTitle: 'Solway Bay',
+            fromCharacterId: 'halloran_lib', score: 0.91,
             factors: [{ id: 'register', label: 'Register', score: 0.9 }] },
-          { voiceId: 'v_runner-up', fromBookTitle: 'Other', score: 0.6 },
+          { voiceId: 'v_runner-up', fromBookId: 'other_book', fromBookTitle: 'Other',
+            fromCharacterId: 'halloran_lib_alt', score: 0.6 },
         ],
       },
     ])));
     const halloran = next.characters.find(c => c.id === 'halloran')!;
     expect(halloran.voiceId).toBe('v_authority');
     expect(halloran.voiceState).toBe('reused');
-    expect(halloran.matchedFrom).toEqual({ bookTitle: 'Solway Bay', confidence: 0.91 });
+    /* matchedFrom carries the cross-book identifiers needed by the
+       library-cast override flow on the confirm page. */
+    expect(halloran.matchedFrom).toEqual({
+      bookId: 'solway_bay_book',
+      characterId: 'halloran_lib',
+      bookTitle: 'Solway Bay',
+      confidence: 0.91,
+    });
     expect(halloran.matchFactors).toEqual([{ id: 'register', label: 'Register', score: 0.9 }]);
   });
 

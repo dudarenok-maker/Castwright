@@ -107,7 +107,9 @@ export const castSlice = createSlice({
         };
       });
     },
-    /* From POST /api/books/:bookId/voice-match. */
+    /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
+       through to matchedFrom so the confirm view's override toggle has a
+       stable handle on the library record (POST /api/library-cast/override). */
     applyVoiceMatches: (s, a: PayloadAction<VoiceMatchResponse>) => {
       const { matches } = a.payload;
       const byId = Object.fromEntries((matches || []).map(m => [m.characterId, m]));
@@ -118,7 +120,12 @@ export const castSlice = createSlice({
         return {
           ...c,
           voiceId: top.voiceId,
-          matchedFrom: { bookTitle: top.fromBookTitle, confidence: top.score },
+          matchedFrom: {
+            bookId: top.fromBookId,
+            characterId: top.fromCharacterId,
+            bookTitle: top.fromBookTitle,
+            confidence: top.score,
+          },
           matchFactors: top.factors,
           voiceState: 'reused',
         };

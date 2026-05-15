@@ -171,6 +171,10 @@ describe('voice-match router', () => {
     /* Top candidate is Book One's Marlow (exact name match wins over token-overlap). */
     expect(top.voiceId).toBe('v_Marlow');
     expect(top.fromBookTitle).toBe('Book One');
+    /* fromBookId + fromCharacterId carry the library record handle so the
+       override endpoint can address it without re-walking the tree. */
+    expect(top.fromBookId).toBe(makeBookIdFn(AUTHOR, SERIES, 'Book One'));
+    expect(top.fromCharacterId).toBe('Marlow');
   });
 
   it('token-overlap hit: "Marlow Halden" vs library "Marlow" → name_tokens, no name_exact', async () => {

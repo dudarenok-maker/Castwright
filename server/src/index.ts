@@ -24,6 +24,7 @@ import { manuscriptsRouter } from './routes/manuscripts.js';
 import { analysisRouter } from './routes/analysis.js';
 import { voiceMatchRouter } from './routes/voice-match.js';
 import { castMergeRouter } from './routes/cast-merge.js';
+import { libraryCastOverrideRouter } from './routes/library-cast-override.js';
 import { voiceSampleRouter } from './routes/voice-sample.js';
 import { voicesRouter } from './routes/voices.js';
 import { libraryRouter } from './routes/library.js';
@@ -72,6 +73,7 @@ app.use('/api/manuscripts', analysisRouter); // analysisRouter mounts /:id/analy
 app.use('/api/books', bookStateRouter);      // mounts /:bookId/state (GET/PUT)
 app.use('/api/books', voiceMatchRouter);     // mounts /:bookId/voice-match
 app.use('/api/books', castMergeRouter);      // mounts /:bookId/cast/merge
+app.use('/api', libraryCastOverrideRouter);  // mounts /library-cast/override (cross-book; not under /:bookId)
 app.use('/api/books', generationRouter);     // mounts /:bookId/generation (SSE)
 app.use('/api/books', chapterAudioRouter);   // mounts /:bookId/chapters/:chapterId/audio(.mp3|.wav)
 app.use('/api/books', revisionsRouter);      // mounts /:bookId/revisions (drift diff over segments snapshots)

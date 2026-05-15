@@ -16,14 +16,15 @@ Two related surfaces. **Revisions** are pending audio re-renders awaiting user a
 - `mockPollRevisions` returns `PENDING_REVISIONS` + `VOICE_DRIFT_EVENTS` fixtures. The real backend computes drift live from segments-file snapshots vs current cast.
 - `acceptAllPending` / `rejectAllPending` clear the pending list atomically. Per-item accept/reject not in v1.
 - `dismissDrift(id)` removes the event from the slice AND records the id in `revisions-slice.dismissed`. The persistence middleware writes `{ pending, drift, dismissed }` to `.audiobook/revisions.json`; the backend detector filters its output by `dismissed` so the same event does not re-emerge on subsequent polls. `hydrateFromBookState` reloads the dismissed list on book open so dismissals union with subsequent ones rather than overwriting them.
-- Drift event ids are stable: `drift:<chapterId>:<characterId>:<factor>` (`factor` ∈ `voice`, `gender`, `ageRange`, `warmth`, `pace`, `authority`, `emotion`). This means a dismiss is durable across polls — the same signal hashes to the same id.
+- Drift event ids are stable: `drift:<chapterId>:<characterId>:<factor>` (`factor` ∈ `voice`, `gender`, `ageRange`, `attributes`, `warmth`, `pace`, `authority`, `emotion`). This means a dismiss is durable across polls — the same signal hashes to the same id.
 - **Drift sensitivity** (`server/src/routes/revisions.ts`):
   - Hard signals (`voiceId`, `gender`, `ageRange` change) always emit `severity: 'severe'`.
   - Tone metric deltas: `< 25` → no event, `25–39` → `moderate`, `≥ 40` → `severe`. Threshold constants are `TONE_MODERATE = 25` and `TONE_SEVERE = 40` — change them in one place if the user reports false positives.
-  - Missing fields on either side (snapshot omits a value, current cast doesn't set it) skip the comparison rather than treat it as drift.
+  - Attributes drift: any non-empty symmetric difference between the snapshot's attribute set and the current cast's (case-insensitive, order-insensitive) emits a single `moderate` event with factor `attributes`. Attributes drive prebuilt-voice selection in `src/lib/tts-voice-mapping.ts`, so a regenerate after the override may pick a different voice — moderate (not severe) because the existing audio remains bound to the recorded `voiceId` and isn't *wrong*, just potentially out of step with the new profile.
+  - Missing fields on either side (snapshot omits a value, current cast doesn't set it) skip the comparison rather than treat it as drift. Applies uniformly to hard signals, tone, and attributes.
   - Engine drift is intentionally not surfaced as its own factor: engine isn't in `cast.json` (the user selects an engine per generation run, not per character), so there's no current value to compare against. A voiceId swap covers the cross-engine case in practice because voice ids are engine-scoped.
 - The drift report modal is shown via `setShowDriftReport(true)`; closed via `setShowDriftReport(false)` (`src/store/ui-slice.ts:29, 117`).
-- Generation writes `characterSnapshots` into `audio/<slug>.segments.json` for every speaking character, capturing `tone`, `gender`, `ageRange`, `voiceId`, and `voiceEngine` at synthesis time. Older segments files written before this field landed are treated as "no signal" by the detector.
+- Generation writes `characterSnapshots` into `audio/<slug>.segments.json` for every speaking character, capturing `tone`, `gender`, `ageRange`, `voiceId`, `voiceEngine`, and `attributes` at synthesis time. Attributes are sorted before write so an order-only re-analysis doesn't look like drift. Older segments files written before any given snapshot field landed are treated as "no signal" for that field by the detector — the detector skips per-field rather than failing fast.
 
 ## Acceptance walkthrough
 
@@ -42,6 +43,7 @@ Run `VITE_USE_MOCKS=true`, navigate to a `ready` book view.
 8. In the Cast view, swap a character's `voiceId`. Within 30 s the drift report surfaces a severe `voice` drift event for that character / chapter.
 9. Adjust a character's `tone.warmth` by ≤ 24 → no event. By 25–39 → moderate event. By ≥ 40 → severe event.
 10. Dismiss a drift event. Reload the page. Wait < 30 s. The event does NOT reappear (dismissed id is filtered server-side).
+11. **Attribute drift via library-cast override** (paired with `09-voice-match-pipeline.md`). After confirming cast with the "Sync profile with …" checkbox ticked, open the library (target) book. Within 30 s a `moderate` drift event with factor `attributes` should appear in the drift report for each character whose attribute set differs from the synthesis-time snapshot. Dismissing it stays dismissed across reloads. Changing only attribute ORDER or case (e.g. via a future re-analysis) must NOT re-fire the event.
 
 ## KNOWN: scaffolded
 

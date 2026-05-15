@@ -54,6 +54,7 @@ interface ChapterSegmentsFile {
     ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
     voiceId?: string;
     voiceEngine?: string;
+    attributes?: string[];
   }>;
 }
 

@@ -50,18 +50,23 @@ interface MatchFactor {
 
 interface Candidate {
   voiceId: string;
+  fromBookId: string;
   fromBookTitle: string;
+  fromCharacterId: string;
   score: number;
   factors?: MatchFactor[];
 }
 
 /* Library voice projection — flattens a LibraryCharacterRecord into the
    exact fields the scorer needs. Keyed by `voiceId ?? id`, the same id the
-   TTS pipeline hashes against (see voices.ts). */
+   TTS pipeline hashes against (see voices.ts). `characterId` is carried so
+   the library-cast override endpoint can address the exact record without
+   re-walking the books tree. */
 interface LibraryVoice {
   voiceId: string;
   bookId: string;
   bookTitle: string;
+  characterId: string;
   name: string;
   aliases: string[];
   gender?: 'male' | 'female' | 'neutral';
@@ -77,6 +82,7 @@ function projectLibraryVoice(rec: LibraryCharacterRecord): LibraryVoice | null {
     voiceId,
     bookId: rec.bookId,
     bookTitle: rec.bookTitle,
+    characterId: c.id,
     name: c.name ?? c.id,
     aliases: Array.isArray(c.aliases) ? c.aliases.filter(a => typeof a === 'string') : [],
     gender: c.gender,
@@ -185,7 +191,9 @@ function scoreOne(input: CharacterMatchInput, voice: LibraryVoice): Candidate | 
 
   return {
     voiceId: voice.voiceId,
+    fromBookId: voice.bookId,
     fromBookTitle: voice.bookTitle,
+    fromCharacterId: voice.characterId,
     score: overall,
     factors,
   };
