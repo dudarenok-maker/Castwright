@@ -225,6 +225,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         progress: 1,
         currentLine: cachedSentences.length,
         totalLines: cachedSentences.length,
+        /* Replay the engine stamp so a reconnecting client gets drift
+           signal without a separate state hydrate. State.chapters here
+           was already lazy-backfilled by findBookByBookId for legacy
+           audio. */
+        ...(ch.audioModelKey ? { audioModelKey: ch.audioModelKey as TtsModelKey } : {}),
       });
     }
   }
@@ -468,7 +473,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       await rename(tmpMp3, mp3Path);
 
       /* Update state.json with the freshly-measured duration so the library
-         + future playback slice can render it without re-reading the audio. */
+         + future playback slice can render it without re-reading the audio.
+         Also stamp the TTS model key + render timestamp so the frontend
+         can surface engine-drift badges without reading every segments
+         file on chapter-list hydrate (see docs/features/35-engine-drift). */
       const statePath = stateJsonPath(bookDir);
       const prev = await readJson<BookStateJson>(statePath);
       if (prev) {
@@ -476,7 +484,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         const next: BookStateJson = {
           ...prev,
           chapters: prev.chapters.map(c =>
-            c.id === chapter.id ? { ...c, duration: formatted } : c,
+            c.id === chapter.id
+              ? {
+                  ...c,
+                  duration: formatted,
+                  audioModelKey: modelKey,
+                  audioRenderedAt: segmentsFile.synthesizedAt,
+                }
+              : c,
           ),
           updatedAt: new Date().toISOString(),
         };
@@ -485,7 +500,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
 
       /* Chapter finished — clear the per-chapter tracking so a subscriber
          that arrives between this chapter and the next doesn't see a stale
-         in-progress tick replayed against an already-done chapter. */
+         in-progress tick replayed against an already-done chapter. The
+         audioModelKey rides along so the slice can stamp the chapter
+         immediately without waiting for a state.json reload (otherwise
+         an in-session engine switch wouldn't flag drift until the user
+         navigates away and back). */
       job.currentChapterId = null;
       job.lastProgressTick = null;
       broadcast(job, {
@@ -495,6 +514,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         progress: 1,
         currentLine: totalLines,
         totalLines,
+        audioModelKey: modelKey,
       });
     } catch (e) {
       /* AbortError = our own controller fired (regen displacement or

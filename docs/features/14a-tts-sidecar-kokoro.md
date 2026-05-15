@@ -55,6 +55,12 @@ the cast UI ever surfaces "upload a reference clip per character").
    (singular) is migrated lazily at cast.json read time
    (`normaliseCastCharacter` in `server/src/routes/voices.ts`).
 
+6. **Engine drift across already-rendered chapters is surfaced
+   separately** — see `35-engine-drift-detection.md`. Switching the
+   project engine after some chapters have been generated stamps those
+   chapters as drifted in the Generation view so the user knows to
+   regenerate for book-wide voice consistency.
+
 ## Critical files
 
 - `server/tts-sidecar/main.py` — `KokoroEngine` class, `/speakers`

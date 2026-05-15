@@ -15,7 +15,7 @@ import {
   makeBookId,
   stateJsonPath,
 } from './paths.js';
-import { readJson } from './state-io.js';
+import { readJson, writeJsonAtomic } from './state-io.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 
 export type LibraryBookStatus =
@@ -37,7 +37,25 @@ export interface BookStateJson {
   isStandalone: boolean;
   manuscriptFile: string;       // e.g. 'manuscript.epub'
   castConfirmed: boolean;
-  chapters: Array<{ id: number; title: string; slug: string; duration?: string; excluded?: boolean }>;
+  chapters: Array<{
+    id: number;
+    title: string;
+    slug: string;
+    duration?: string;
+    excluded?: boolean;
+    /** TTS model key that produced this chapter's audio file. Stamped on
+        successful render (server/src/routes/generation.ts post-render
+        block) and backfilled lazily from audio/<slug>.segments.json on
+        scan for chapters that pre-date this field. Used by the frontend
+        to surface "engine drift" — chapters generated with a different
+        engine than the project's current `ui.ttsModelKey`. Optional so
+        unrendered chapters and very old state.json files load cleanly. */
+    audioModelKey?: string;
+    /** ISO timestamp when the audio was rendered. Mirrors segments file's
+        `synthesizedAt`. Used as a tie-breaker for cast-drift detection
+        (was the cast confirmed before or after the audio was made?). */
+    audioRenderedAt?: string;
+  }>;
   coverGradient: [string, string];
   createdAt: string;
   updatedAt: string;
@@ -92,9 +110,14 @@ interface CastJsonForScan {
   characters?: Array<{ id?: string; voiceId?: string }>;
 }
 
-/* Segments file shape — only durationSec matters for runtime totals. */
+/* Segments file shape — durationSec for runtime totals; modelKey +
+   synthesizedAt for lazy backfill of state.json's audioModelKey /
+   audioRenderedAt fields on legacy chapters that pre-date those fields
+   landing in state.json (see backfillAudioModelKeys below). */
 interface SegmentsJsonForScan {
   durationSec?: number;
+  modelKey?: string;
+  synthesizedAt?: string;
 }
 
 function formatRuntime(totalSec: number): string {
@@ -225,18 +248,21 @@ async function scanBook(author: string, series: string, title: string): Promise<
      by the synthesis pipeline). We sum every chapter that has one — a
      partially-generated book reports the runtime it has so far. Returning
      undefined when the total is 0 keeps the card showing '—' rather than
-     '0m' for books that haven't generated yet. */
+     '0m' for books that haven't generated yet.
+
+     Side mission on the same loop: lazy-backfill `audioModelKey` and
+     `audioRenderedAt` onto state.chapters from each segments file. These
+     fields landed in state.json with the engine-drift work (plan 35) but
+     pre-existing books only have them inside segments.json — bringing
+     them up to state.json on the next scan means subsequent chapter-list
+     reads don't have to re-open every segments file just to compute
+     drift. Shared helper because findBookBy also benefits when the
+     book-state route is hit before a library scan has run. */
   let totalSec = 0;
   if (state) {
-    for (const ch of activeChapters) {
-      const segPath = join(audioDir(bookDir), `${ch.slug}.segments.json`);
-      try {
-        const meta = await readJson<SegmentsJsonForScan>(segPath);
-        if (meta && typeof meta.durationSec === 'number' && Number.isFinite(meta.durationSec)) {
-          totalSec += meta.durationSec;
-        }
-      } catch { /* malformed segments file → skip */ }
-    }
+    const result = await backfillAudioModelKeysFromSegments(bookDir, state);
+    state = result.state;
+    totalSec = result.totalSec;
   }
   const runtime = totalSec > 0 ? formatRuntime(totalSec) : undefined;
 
@@ -409,12 +435,77 @@ async function findBookBy(predicate: (state: BookStateJson) => boolean): Promise
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(join(dir, '.audiobook', 'state.json')).catch(() => null);
-        if (state && predicate(state)) {
+        const raw = await readJson<BookStateJson>(join(dir, '.audiobook', 'state.json')).catch(() => null);
+        if (raw && predicate(raw)) {
+          /* Apply the same lazy backfill we run during library scan — so
+             a user opening a specific book's detail page (without going
+             through the library first) still gets the engine-drift
+             upgrade. Cheap on books that have already been upgraded:
+             the helper short-circuits to a no-op once every chapter
+             carries audioModelKey. */
+          const { state } = await backfillAudioModelKeysFromSegments(dir, raw);
           return { bookDir: dir, author: authorName, series: seriesName, title: titleName, state };
         }
       }
     }
   }
   return null;
+}
+
+/** Lazy-migrate `audioModelKey` and `audioRenderedAt` onto every chapter
+    in `state.chapters` by reading the corresponding `audio/<slug>.segments.json`
+    file. Used by both the library-scan path (where the segments read is
+    free because we're already computing runtime) and the per-book detail
+    path. Returns the (possibly upgraded) state and the total runtime
+    seconds derived from the segments files. Writes state.json back to
+    disk via writeJsonAtomic when any chapter actually changed, so steady-
+    state callers pay no I/O.
+
+    Skips excluded chapters. Tolerates missing segments files (chapter
+    not rendered yet) and malformed JSON (skip silently — the next scan
+    will retry). updatedAt is intentionally not bumped because the
+    backfill is a lossless metadata migration, not a user-driven change. */
+export async function backfillAudioModelKeysFromSegments(
+  bookDir: string,
+  state: BookStateJson,
+): Promise<{ state: BookStateJson; totalSec: number }> {
+  let totalSec = 0;
+  let backfillNeeded = false;
+  const next: BookStateJson['chapters'] = [...state.chapters];
+  for (let i = 0; i < state.chapters.length; i++) {
+    const ch = state.chapters[i];
+    if (ch.excluded) continue;
+    const segPath = join(audioDir(bookDir), `${ch.slug}.segments.json`);
+    try {
+      const meta = await readJson<SegmentsJsonForScan>(segPath);
+      if (!meta) continue;
+      if (typeof meta.durationSec === 'number' && Number.isFinite(meta.durationSec)) {
+        totalSec += meta.durationSec;
+      }
+      const needsModelKey   = !ch.audioModelKey   && typeof meta.modelKey       === 'string' && meta.modelKey.length       > 0;
+      const needsRenderedAt = !ch.audioRenderedAt && typeof meta.synthesizedAt  === 'string' && meta.synthesizedAt.length  > 0;
+      if (needsModelKey || needsRenderedAt) {
+        next[i] = {
+          ...ch,
+          ...(needsModelKey   ? { audioModelKey:   meta.modelKey }      : {}),
+          ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
+        };
+        backfillNeeded = true;
+      }
+    } catch { /* malformed segments file → skip */ }
+  }
+  if (backfillNeeded) {
+    const upgraded: BookStateJson = { ...state, chapters: next };
+    try {
+      await writeJsonAtomic(stateJsonPath(bookDir), upgraded);
+      return { state: upgraded, totalSec };
+    } catch {
+      /* Best-effort upgrade — a failed write just means the next call
+         will try again. Return the upgraded shape in-memory so the
+         current caller sees the fields even though disk hasn't caught
+         up yet. */
+      return { state: upgraded, totalSec };
+    }
+  }
+  return { state, totalSec };
 }

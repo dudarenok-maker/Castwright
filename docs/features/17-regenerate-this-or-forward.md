@@ -16,6 +16,7 @@ Two scoped regeneration modals. **Chapter regen** offers `'this' | 'forward'` â€
 - Both modals close on confirm; cancel never enqueues. State transitions are flat overlays (not stage-guarded).
 - `chaptersActions.regenerateChapter` takes scope + chapter id; expands `'forward'` into the chapter id list and dispatches; `regenerateCharacter` takes character id + chapter range.
 - Results land as `pending` revisions in `revisions.pending[]` (see `20-revisions-and-drift.md`), NOT as direct chapter audio replacements. The user accepts/rejects per draft.
+- A successful chapter regen overwrites the chapter's `audioModelKey` / `audioRenderedAt` stamp with the active engine (see plan 35). So regenerating a drifted chapter clears its drift caption + banner contribution automatically â€” no separate "clear drift" affordance is needed.
 
 ## Acceptance walkthrough
 

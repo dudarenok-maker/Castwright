@@ -857,6 +857,16 @@ export interface components {
             totalGroups?: number;
             /** @description Only on `chapter_assembling` — measured audio length about to be written. */
             durationSec?: number;
+            /**
+             * @description Only on `chapter_complete` — the TTS model key that produced
+             *     this chapter's audio. Carries the engine forward so the
+             *     frontend can update `chapter.audioModelKey` without waiting
+             *     for a state.json reload (which would otherwise let an
+             *     engine-drift badge appear only after page navigation). See
+             *     `docs/features/35-engine-drift-detection.md`.
+             * @enum {string}
+             */
+            audioModelKey?: "kokoro-v1" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             errorReason?: string | null;
         };
         VoiceSampleRequest: {
@@ -1176,6 +1186,24 @@ export interface components {
             errorReason?: string | null;
             /** @description When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author. */
             excluded?: boolean;
+            /**
+             * @description TTS model key that produced this chapter's existing audio
+             *     file. Stamped at render time and backfilled from the
+             *     segments file for legacy chapters. Absent on never-rendered
+             *     chapters. The frontend compares against the project's
+             *     current `ui.ttsModelKey` to surface engine-drift badges (see
+             *     `docs/features/35-engine-drift-detection.md`).
+             * @enum {string}
+             */
+            audioModelKey?: "kokoro-v1" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            /**
+             * Format: date-time
+             * @description ISO timestamp from when the audio was synthesised. Mirrors
+             *     the segments file's `synthesizedAt`. Surfaces alongside the
+             *     drift badge so the user can see how stale the rendered audio
+             *     is.
+             */
+            audioRenderedAt?: string;
         };
         Sentence: {
             id: number;

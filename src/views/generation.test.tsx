@@ -751,3 +751,111 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn't reach the sidecar/i);
   });
 });
+
+describe('GenerationView — engine drift detection (plan 35)', () => {
+  /* When a chapter's recorded `audioModelKey` differs from the project's
+     current `modelKey`, the row surfaces a drift caption and the view
+     summarises across all chapters with a top-of-view banner. Drift is
+     symmetric — switching engines exposes whichever side is now stale. */
+
+  function renderWithChapters(chapters: Chapter[], modelKey: 'coqui-xtts-v2' | 'kokoro-v1'): void {
+    const store = configureStore({
+      reducer: {
+        ui:         uiSlice.reducer,
+        chapters:   chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog:  changeLogSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters(chapters));
+    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
+      bookId: 'b1',
+      characters,
+      chapters,
+      sentences,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any));
+    render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={chapters}
+          characters={characters}
+          paused
+          title="Drift Fixture"
+          bookId="b1"
+          modelKey={modelKey}
+          setPaused={() => {}}
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('no banner and no row caption when every done chapter matches the active engine', () => {
+    const ch1: Chapter = {
+      ...chapter1,
+      audioModelKey: 'kokoro-v1',
+    };
+    renderWithChapters([ch1, chapter2], 'kokoro-v1');
+    /* Banner copy is unique to the drift surface — its absence here is
+       the load-bearing assertion. */
+    expect(screen.queryByText(/generated with a different engine/i)).toBeNull();
+    expect(screen.queryByText(/Generated with .* · current engine is/i)).toBeNull();
+  });
+
+  it('surfaces a per-row drift caption when a done chapter\'s audioModelKey differs from the active engine', () => {
+    const drifted: Chapter = {
+      ...chapter1,
+      audioModelKey: 'coqui-xtts-v2',
+    };
+    renderWithChapters([drifted, chapter2], 'kokoro-v1');
+    expect(screen.getByText(/Generated with Coqui XTTS v2 · current engine is Kokoro v1/i)).toBeTruthy();
+  });
+
+  it('top-of-view banner counts every drifted done chapter', () => {
+    const drifted1: Chapter = { ...chapter1, audioModelKey: 'coqui-xtts-v2' };
+    const drifted2: Chapter = {
+      id: 3,
+      title: 'Chapter 3',
+      duration: '01:23',
+      state: 'done',
+      progress: 1,
+      characters: { narrator: 'done' },
+      audioModelKey: 'coqui-xtts-v2',
+    };
+    renderWithChapters([drifted1, drifted2, chapter2], 'kokoro-v1');
+    /* Singular vs plural copy: assert the plural form fires for 2. */
+    expect(screen.getByText(/2 chapters generated with a different engine/i)).toBeTruthy();
+  });
+
+  it('banner uses singular copy when only one chapter has drifted', () => {
+    const drifted: Chapter = { ...chapter1, audioModelKey: 'coqui-xtts-v2' };
+    renderWithChapters([drifted, chapter2], 'kokoro-v1');
+    expect(screen.getByText(/1 chapter generated with a different engine/i)).toBeTruthy();
+  });
+
+  it('chapters with no audioModelKey stamp (legacy / never-rendered) do not contribute drift signal', () => {
+    /* Unstamped done chapter: silent. The opportunistic backfill runs
+       on the server; until it lands we don't nag the user. */
+    const unstamped: Chapter = { ...chapter1 /* no audioModelKey */ };
+    renderWithChapters([unstamped, chapter2], 'kokoro-v1');
+    expect(screen.queryByText(/generated with a different engine/i)).toBeNull();
+  });
+
+  it('excluded chapters do not contribute to drift even when their audioModelKey would mismatch', () => {
+    /* Edge case: a previously-rendered chapter that the user later
+       excluded shouldn't surface drift — the chapter is no longer in
+       the active book, so its rendered engine is irrelevant. The
+       counter computation filters on activeChapters first. */
+    const excludedDrifted: Chapter = {
+      ...chapter1,
+      audioModelKey: 'coqui-xtts-v2',
+      excluded: true,
+    };
+    renderWithChapters([excludedDrifted, chapter2], 'kokoro-v1');
+    expect(screen.queryByText(/generated with a different engine/i)).toBeNull();
+  });
+});
