@@ -45,10 +45,19 @@ async function renameWithRetry(src: string, dest: string): Promise<void> {
     } catch (e) {
       const code = (e as { code?: string }).code;
       /* EPERM / EBUSY on Windows is almost always a transient handle held
-         by AV / OneDrive / Defender / indexer. Retry. Anything else (ENOENT
-         on src, EACCES from a permissions misconfig, EXDEV cross-device) is
-         a real fault — surface immediately. */
-      if (code !== 'EPERM' && code !== 'EBUSY') throw e;
+         by AV / OneDrive / Defender / indexer. Retry.
+         ENOENT is also transient under OneDrive: the sync client briefly
+         moves the just-written tmp file into its own staging dir to scan
+         it, then drops it back — if the rename lands during the move
+         window we see ENOENT on src even though writeFile resolved cleanly
+         milliseconds earlier. Treat it the same as EPERM/EBUSY: retry
+         with backoff. A real "file doesn't exist" caller error would have
+         failed at writeFile, not here. Crashed the Node server on
+         2026-05-15 from a library-cast-override call landing inside a
+         OneDrive scan window.
+         Anything else (EACCES, EXDEV cross-device) is a real fault —
+         surface immediately. */
+      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'ENOENT') throw e;
       lastErr = e;
       if (attempt === RENAME_RETRY_DELAYS_MS.length) break;
       await new Promise(r => setTimeout(r, RENAME_RETRY_DELAYS_MS[attempt]));

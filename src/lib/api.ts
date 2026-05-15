@@ -1015,6 +1015,18 @@ export interface SidecarHealth {
   url: string;
   engines?: string[];
   error?: string;
+  /* Which layer reported the failure. The frontend's fetch can't reach the
+     sidecar daemon directly — it always goes through the Node Express
+     proxy at :8080. So an `unreachable` can mean two different things:
+     - `proxy: 'node'`  — Vite couldn't reach :8080 (Node server crashed,
+                          5xx from Vite, network error). Recovery: restart Node.
+     - `proxy: 'sidecar'` — Node reached :8080 fine but :8080 couldn't
+                            reach :9000. Recovery: restart sidecar.
+     Reachable responses always come from `proxy: 'sidecar'` since the
+     payload is the daemon's own self-report. Older Node servers don't
+     emit this field, so the frontend tolerates absence and falls back
+     to a generic "unreachable" message. */
+  proxy?: 'node' | 'sidecar';
   /* Load-state surface added when the sidecar grew /load + /unload endpoints
      (see server/tts-sidecar/main.py). Older sidecars don't ship these, so
      the proxy defaults them to `false` / `null` and the UI can treat them
@@ -1088,15 +1100,44 @@ async function mockGetWorkspaceChangelog(): Promise<WorkspaceChangeLogResponse> 
 }
 
 async function realGetSidecarHealth(): Promise<SidecarHealth> {
-  const res = await fetch('/api/sidecar/health');
-  if (!res.ok) {
+  /* Two layers can fail here:
+     1. The frontend → Node proxy hop (Vite proxy to :8080). A crashed Node
+        process surfaces as a fetch-thrown TypeError or a Vite 502/504.
+        Tag it `proxy: 'node'` so the UI can say "restart Node," not
+        "restart sidecar."
+     2. The Node → sidecar hop (Node fetch to :9000). Node returns a JSON
+        body with its own status; the daemon reports `proxy: 'sidecar'`
+        (or omits the field on older servers, which we backfill). */
+  let res: Response;
+  try {
+    res = await fetch('/api/sidecar/health');
+  } catch (e) {
+    /* fetch threw — typically TypeError: Failed to fetch when Vite can't
+       reach the Node upstream. Distinguishes "Node :8080 down" from
+       "sidecar :9000 down." */
     return {
       status: 'unreachable',
       url: '',
-      error: `Sidecar probe HTTP ${res.status}`,
+      proxy: 'node',
+      error: `Node server (:8080) unreachable: ${(e as Error).message}`,
     };
   }
-  return res.json();
+  if (!res.ok) {
+    /* Vite proxy returned a 5xx — most commonly because the upstream Node
+       process died after start. Same Node-down semantics as the throw
+       path; route through the same banner copy. */
+    return {
+      status: 'unreachable',
+      url: '',
+      proxy: 'node',
+      error: `Node server (:8080) returned HTTP ${res.status}`,
+    };
+  }
+  const body = (await res.json()) as SidecarHealth;
+  /* Backfill: older Node servers don't emit `proxy`. Treat any successful
+     parse from the Node route as having come from the sidecar layer, so
+     the UI's distinguisher logic stays clean. */
+  return { ...body, proxy: body.proxy ?? 'sidecar' };
 }
 
 /* ── User settings ─────────────────────────────────────────────────────

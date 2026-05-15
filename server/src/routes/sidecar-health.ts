@@ -42,6 +42,7 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       return res.json({
         status: 'unreachable',
         url,
+        proxy: 'sidecar',
         error: `Sidecar returned ${response.status} ${response.statusText}`,
       });
     }
@@ -49,6 +50,7 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
     return res.json({
       status: 'reachable',
       url,
+      proxy: 'sidecar',
       engines: Array.isArray(body.engines) ? body.engines : undefined,
       modelLoaded: body.model_loaded === true,
       loading: body.loading === true,
@@ -61,6 +63,10 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
     return res.json({
       status: 'unreachable',
       url,
+      /* Hop tag — we reached Node fine (this handler ran), the failure was
+         in the Node → sidecar fetch. Frontend uses it to surface the right
+         "restart X" message. */
+      proxy: 'sidecar',
       /* Distinguish "process down / unreachable host" from "process up but
          not responding" — both leave the user stuck but the remediation
          differs (start the process vs. wait or restart). */
