@@ -11,7 +11,7 @@ import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
 import type { TtsModelKey, UserSettingsPatch } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
-import { saveAccountSettings } from '../store/account-slice';
+import { fetchAccountSettings, saveAccountSettings } from '../store/account-slice';
 
 export function AccountView() {
   const dispatch = useAppDispatch();
@@ -99,6 +99,62 @@ export function AccountView() {
   };
 
   const saving = account.status === 'saving';
+
+  /* Hydration gate: until the server payload lands, rendering the form
+     would silently show the FRONTEND_ACCOUNT_DEFAULTS instead of the
+     user's persisted choices — we used to mislead users into thinking
+     their saved value got reset (it hadn't; the backend was just down).
+     Block the form on the unhydrated states and surface the actual
+     reason. Once the slice has hydrated at least once (initial fetch or
+     a successful save), keep rendering the form even on subsequent
+     errors so a save failure doesn't blow the form away. */
+  if (!account.hydrated) {
+    return (
+      <div className="max-w-[960px] mx-auto px-6 py-10">
+        <div className="mb-8">
+          <SectionLabel>Account</SectionLabel>
+          <div className="mt-4">
+            <MixedHeading regular="Your" bold="defaults" level="h1"/>
+          </div>
+        </div>
+        {account.status === 'error' ? (
+          <section
+            role="alert"
+            className="rounded-2xl border border-rose-200 bg-rose-50 p-6 shadow-card">
+            <h2 className="text-base font-semibold text-rose-900">
+              Couldn't load your settings
+            </h2>
+            <p className="mt-2 text-sm text-rose-900/85">
+              The analysis backend at <code className="font-mono">/api/user/settings</code> isn't
+              reachable. Your saved choices are still on disk in
+              {' '}<code className="font-mono">server/user-settings.json</code> — the form is
+              hidden so it doesn't render the built-in defaults as if they were
+              your saved values.
+            </p>
+            <p className="mt-2 text-xs text-rose-900/70">
+              Start the server with{' '}
+              <code className="font-mono">cd server &amp;&amp; npm run dev</code>, then retry.
+            </p>
+            {account.error && (
+              <p className="mt-3 text-xs font-mono text-rose-900/70 break-all">
+                {account.error}
+              </p>
+            )}
+            <div className="mt-4">
+              <PrimaryButton
+                variant="dark"
+                icon={false}
+                onClick={() => { void dispatch(fetchAccountSettings()); }}>
+                Retry
+              </PrimaryButton>
+            </div>
+          </section>
+        ) : (
+          <p className="text-sm text-ink/60">Loading your settings…</p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-[960px] mx-auto px-6 py-10">

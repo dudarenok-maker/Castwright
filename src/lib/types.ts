@@ -173,7 +173,15 @@ export interface BookStateResponse {
       ETA without loading the full sourceText. */
   manuscript: { wordCount: number; format: UploadResponse['format'] } | null;
   manuscriptEdits: { sentences?: Sentence[] } | null;
-  revisions: { pending?: Revision[]; drift?: DriftEvent[]; dismissed?: string[] } | null;
+  revisions: {
+    pending?: Revision[];
+    drift?: DriftEvent[];
+    dismissed?: string[];
+    /** Per-revision A/B segment selections captured at accept time. Written
+        by `revisionsActions.acceptRevision`; not yet consumed in-app
+        (future per-segment TTS regen). */
+    acceptedSelections?: Record<string, Record<number, 'A' | 'B'>>;
+  } | null;
   /** Slugs of chapters that already have an audio file on disk. */
   completedSlugs: string[];
   /** chapterId → analysed speaker ids. Derived from the analysis cache and

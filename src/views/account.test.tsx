@@ -202,4 +202,43 @@ describe('AccountView — hydration sync', () => {
       expect((screen.getByLabelText('Display name') as HTMLInputElement).value).toBe('Hydrated Name');
     });
   });
+
+  it('hides the form and shows a loud retryable error when the initial fetch fails', async () => {
+    /* Regression: previously, when the backend was unreachable, the
+       slice kept its built-in FRONTEND_ACCOUNT_DEFAULTS and the form
+       rendered them as if they were the user's saved values — making it
+       look like the saved analysis-model choice had been silently
+       reverted. Hydration gate replaces that with an alert + retry. */
+    (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('User settings fetch failed (502): Bad Gateway'),
+    );
+    const store = configureStore({
+      reducer: { account: accountSlice.reducer },
+    });
+    render(<Provider store={store}><AccountView/></Provider>);
+    await store.dispatch(fetchAccountSettings());
+
+    /* The form's controls must NOT be rendered — otherwise the picker
+       would silently show the wrong default. */
+    expect(screen.queryByLabelText('Display name')).toBeNull();
+    expect(screen.queryByLabelText('Analysis model')).toBeNull();
+
+    /* The alert panel surfaces the failure verbatim so the user can see
+       why their saved choice isn't showing. */
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/Couldn't load your settings/i);
+    expect(alert).toHaveTextContent(/cd server && npm run dev/);
+    expect(alert).toHaveTextContent(/Bad Gateway/);
+
+    /* Retry re-fires the thunk; once it resolves, the form renders. */
+    (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ...SERVER_FIXTURE,
+      displayName: 'Recovered',
+    });
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    await waitFor(() => {
+      expect((screen.getByLabelText('Display name') as HTMLInputElement).value).toBe('Recovered');
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });

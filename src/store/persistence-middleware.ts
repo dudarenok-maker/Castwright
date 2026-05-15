@@ -56,6 +56,13 @@ const PERSIST_RULES: Record<string, { slice: StateSlice; build: (s: PersistableR
   'revisions/acceptAllPending': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
   'revisions/rejectAllPending': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
   'revisions/dismissDrift':     { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
+  /* Per-item accept also persists acceptedSelections — the slice records
+     the user's per-segment A/B choices at accept time and this patch is
+     the only way they survive a reload. Reject doesn't capture selection
+     (see revisions-slice.rejectRevision), so its patch is the same as the
+     bulk variants. */
+  'revisions/acceptRevision':   { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed, acceptedSelections: s.revisions.acceptedSelections }) },
+  'revisions/rejectRevision':   { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
 
   /* Editorial audit trail. Persists the whole `events` array on every
      append — the log is small (one entry per user action) and the server

@@ -23,7 +23,13 @@ const drift = (id: string, overrides: Partial<DriftEvent> = {}): DriftEvent => (
 
 describe('revisionsSlice — initial state', () => {
   it('starts empty and not loaded', () => {
-    expect(revisionsSlice.getInitialState()).toEqual({ pending: [], drift: [], dismissed: [], loaded: false });
+    expect(revisionsSlice.getInitialState()).toEqual({
+      pending: [],
+      drift: [],
+      dismissed: [],
+      acceptedSelections: {},
+      loaded: false,
+    });
   });
 });
 
@@ -54,6 +60,51 @@ describe('revisionsSlice — applyPoll', () => {
     }));
     expect(s.pending.map(r => r.id)).toEqual(['r2']);
     expect(s.drift).toEqual([]);
+  });
+});
+
+describe('revisionsSlice — acceptRevision / rejectRevision (per-item)', () => {
+  it('acceptRevision removes only the named revision from pending', () => {
+    const start = revisionsSlice.reducer(undefined, revisionsActions.applyPoll({
+      pending: [rev('r1'), rev('r2'), rev('r3')], drift: [],
+    }));
+    const next = revisionsSlice.reducer(start,
+      revisionsActions.acceptRevision({ revisionId: 'r2', selection: { 7: 'B', 8: 'A' } }));
+    expect(next.pending.map(r => r.id)).toEqual(['r1', 'r3']);
+  });
+
+  it('acceptRevision records the per-segment selection map keyed by revision id', () => {
+    const start = revisionsSlice.reducer(undefined, revisionsActions.applyPoll({
+      pending: [rev('r1')], drift: [],
+    }));
+    const selection = { 12: 'B' as const, 13: 'A' as const };
+    const next = revisionsSlice.reducer(start,
+      revisionsActions.acceptRevision({ revisionId: 'r1', selection }));
+    expect(next.acceptedSelections).toEqual({ r1: selection });
+  });
+
+  it('rejectRevision removes only the named revision from pending and records no selection', () => {
+    const start = revisionsSlice.reducer(undefined, revisionsActions.applyPoll({
+      pending: [rev('r1'), rev('r2')], drift: [],
+    }));
+    const next = revisionsSlice.reducer(start, revisionsActions.rejectRevision('r1'));
+    expect(next.pending.map(r => r.id)).toEqual(['r2']);
+    /* Reject is wholesale "throw this away" — no selection to remember. */
+    expect(next.acceptedSelections).toEqual({});
+  });
+
+  it('acceptRevision is a no-op on pending when the id is unknown but still records the selection', () => {
+    /* If the user's last poll didn't carry r-stale but they're acting on an
+       in-memory copy they had before, the reducer should leave pending alone
+       and still record the selection (so a future PUT carries it). Belt-and-
+       braces — happens in practice if the modal stays open across a poll. */
+    const start = revisionsSlice.reducer(undefined, revisionsActions.applyPoll({
+      pending: [rev('r1')], drift: [],
+    }));
+    const next = revisionsSlice.reducer(start,
+      revisionsActions.acceptRevision({ revisionId: 'r-stale', selection: { 1: 'A' } }));
+    expect(next.pending.map(r => r.id)).toEqual(['r1']);
+    expect(next.acceptedSelections).toEqual({ 'r-stale': { 1: 'A' } });
   });
 });
 
@@ -132,30 +183,34 @@ describe('revisionsSlice — applyPoll preserves dismissed', () => {
 });
 
 describe('revisionsSlice — hydrateFromBookState', () => {
-  it('loads pending, drift, and dismissed from disk', () => {
+  it('loads pending, drift, dismissed, and acceptedSelections from disk', () => {
     const next = revisionsSlice.reducer(undefined, revisionsActions.hydrateFromBookState({
       pending: [rev('r1')],
       drift: [drift('d1')],
       dismissed: ['old-id'],
+      acceptedSelections: { 'r-prev': { 4: 'B', 5: 'A' } },
     }));
     expect(next.pending.map(r => r.id)).toEqual(['r1']);
     expect(next.drift.map(d => d.id)).toEqual(['d1']);
     expect(next.dismissed).toEqual(['old-id']);
+    expect(next.acceptedSelections).toEqual({ 'r-prev': { 4: 'B', 5: 'A' } });
     expect(next.loaded).toBe(true);
   });
 
-  it('a null payload flips loaded but leaves slice arrays empty', () => {
+  it('a null payload flips loaded but leaves slice fields empty', () => {
     const next = revisionsSlice.reducer(undefined, revisionsActions.hydrateFromBookState(null));
     expect(next.pending).toEqual([]);
     expect(next.drift).toEqual([]);
     expect(next.dismissed).toEqual([]);
+    expect(next.acceptedSelections).toEqual({});
     expect(next.loaded).toBe(true);
   });
 
-  it('absent dismissed defaults to empty array', () => {
+  it('absent dismissed and acceptedSelections default to empty', () => {
     const next = revisionsSlice.reducer(undefined, revisionsActions.hydrateFromBookState({
       pending: [], drift: [],
     }));
     expect(next.dismissed).toEqual([]);
+    expect(next.acceptedSelections).toEqual({});
   });
 });
