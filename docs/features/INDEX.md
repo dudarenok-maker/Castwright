@@ -67,6 +67,9 @@ PRs that change behavior cited in a plan MUST update the relevant plan in the sa
 ### L. Book state persistence
 - [27 — Book state persistence](27-book-state-persistence.md) — `.audiobook/state.json` hydration + slice PUT patches.
 
+### M. Deferred / future work
+- [30 — Global model-control affordance](30-global-model-control.md) — Hoist the TTS pill into the top bar once a third surface needs JIT warm. Pairs with the JIT auto-load helper in `src/lib/play-sample-with-auto-load.ts`.
+
 ## Status legend
 
 - **stable** — feature is end-to-end functional; assert real behavior.
