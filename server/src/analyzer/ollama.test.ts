@@ -106,6 +106,13 @@ describe('OllamaAnalyzer — happy path streaming', () => {
        keep_alive: 0. */
     expect(body.keep_alive).toBe(0);
     expect(body.options.num_ctx).toBe(16384);
+    /* Pin all layers to GPU — see ANALYZER_NUM_GPU in ollama.ts. 999 is
+       the standard "all layers" idiom; without this, Ollama auto-splits
+       and silently offloads layers to CPU under VRAM pressure. The
+       in-app /load endpoint threads the same value (covered in its own
+       test in ollama-health.test.ts) so warm-then-chat doesn't trigger
+       a mid-stream reload. */
+    expect(body.options.num_gpu).toBe(999);
     /* DEFAULT_TEMPERATURE on the first attempt — invalid-json retries bump
        to INVALID_JSON_RETRY_TEMPERATURE (covered in its own test below). */
     expect(body.options.temperature).toBe(0.2);

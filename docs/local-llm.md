@@ -84,6 +84,67 @@ then running analysis at 16384 triggers a silent full reload mid-stream,
 which used to surface as "Analysis stream ended without a result event" with
 no other signal. The reasoning is at `server/src/routes/ollama-health.ts:161`.
 
+## Pinning the analyzer to 100% GPU
+
+By default Ollama makes its own GPU-vs-CPU layer-split decision on every model
+load, based on a headroom heuristic. The heuristic is twitchy on an 8 GB card
+under real load. After moving to `llama3.1:8b` at `num_ctx 16384`, `ollama ps`
+reported `8.0 GB, 8%/92% CPU/GPU` — Ollama had silently offloaded ~8% of
+layers (~640 MB) to system RAM. That offload is the largest single drag on
+stage-2 wall-clock at that model size, and the UI gives no signal it's
+happening.
+
+Two complementary levers pin the analyzer to GPU-only:
+
+1. **Daemon env vars** — KV-cache quantisation. Set as Windows system env
+   vars (not session env), then restart the Ollama service so the daemon
+   picks them up:
+   - `OLLAMA_FLASH_ATTENTION=1`
+   - `OLLAMA_KV_CACHE_TYPE=q8_0`
+
+   `q8_0` halves the KV cache footprint vs. the default `f16` — at
+   `num_ctx 16384` for an 8B model, that's roughly 2.0 GB → 1.0 GB, well
+   above the ~640 MB we needed to recover. Flash-attention is a
+   prerequisite for the KV-quant code path on most Ollama builds, so set
+   them together. Both can be undone by deleting the env vars and
+   restarting Ollama; neither bakes anything into the model weights.
+
+2. **`ANALYZER_NUM_GPU` in the request body** — see
+   `server/src/analyzer/ollama.ts` (the constant lives next to
+   `ANALYZER_NUM_CTX`). We thread `num_gpu: 999` into both
+   `/api/chat` (analyzer calls) and `/api/generate` (the in-app `/load`
+   warm-up). 999 is the standard "all layers" idiom — Ollama clamps to the
+   real layer count per model (32 for llama3.1:8b, 40 for qwen3.5:9b). We
+   prefer this over a hard-coded `32` so the knob stays correct if the
+   default model swaps to a tag with a different layer count.
+
+   Without this hint, Ollama keeps making the auto-split decision and the
+   recovered VRAM from `q8_0` just becomes more headroom for the heuristic
+   to leave unused. With it, Ollama either loads every layer to GPU or
+   returns a clean OOM at load time — exactly the failure mode we want
+   (visible, actionable) instead of silent slowdown.
+
+**Verification.** After setting the env vars + restarting Ollama, click Load
+on the in-app analyzer pill, then in PowerShell:
+
+```
+ollama ps
+```
+
+Expect roughly:
+
+```
+NAME           SIZE      PROCESSOR    CONTEXT
+llama3.1:8b    ~7.0 GB   100% GPU     16384
+```
+
+SIZE should drop ~1 GB (KV cache halved). PROCESSOR should read `100% GPU`,
+not `X% CPU/Y% GPU`. If it still shows a split, the daemon didn't pick up
+the env vars — most commonly because they were set in a user shell rather
+than as system env vars, or because the Ollama service was restarted before
+the env vars were saved. `Get-Item Env:OLLAMA_KV_CACHE_TYPE` in a fresh
+PowerShell window after restart is the quickest sanity check.
+
 ## Why qwen3.5:4b is the default
 
 Three reasons, in order of weight:

@@ -143,11 +143,13 @@ describe('POST /api/ollama/load', () => {
     const body = JSON.parse(init.body);
     expect(body.prompt).toBe('');
     expect(body.stream).toBe(false);
-    /* CRITICAL: warming must use the same num_ctx the analyzer's runStage
-       path passes (ANALYZER_NUM_CTX in server/src/analyzer/ollama.ts). If
-       these drift, the first real analysis call triggers a model reload
-       and the SSE dies mid-stream — the "Try Again" infinite-loop bug. */
+    /* CRITICAL: warming must use the same num_ctx AND num_gpu the
+       analyzer's runStage path passes (ANALYZER_NUM_CTX, ANALYZER_NUM_GPU
+       in server/src/analyzer/ollama.ts). Either drifting triggers a
+       full model reload on the first real analysis call and the SSE
+       dies mid-stream — the "Try Again" infinite-loop bug. */
     expect(body.options?.num_ctx).toBe(16384);
+    expect(body.options?.num_gpu).toBe(999);
   });
 
   it('surfaces the upstream error envelope when Ollama returns non-2xx', async () => {
