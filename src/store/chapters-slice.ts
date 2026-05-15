@@ -403,6 +403,43 @@ export const chaptersSlice = createSlice({
       }
     },
 
+    /* Bulk regenerate — re-queue an explicit, possibly non-contiguous list
+       of chapters on the active engine. Used by the engine-drift banner's
+       "Regenerate all" affordance (plan 35) where the targets are every
+       chapter whose recorded audioModelKey differs from the project's
+       current TTS engine, but the API is generic enough to drive any
+       future bulk-regen entry point. Excluded chapters are silently
+       skipped — drift only matters for chapters that participate in the
+       book, and re-queuing an excluded one would re-include it in the
+       bargain. The first id in the resolved list flips to in_progress
+       so the row has an immediate affordance; everything else queues. */
+    regenerateChapterIds: (s, a: PayloadAction<{ chapterIds: number[] }>) => {
+      const targetSet = new Set(a.payload.chapterIds);
+      const targetIds: number[] = [];
+      s.chapters = s.chapters.map(c => {
+        if (!targetSet.has(c.id) || c.excluded) return c;
+        targetIds.push(c.id);
+        const isHead = targetIds.length === 1;
+        return {
+          ...c,
+          state:    isHead ? 'in_progress' : 'queued',
+          progress: isHead ? 0.05 : 0,
+          phase:    null,
+          errorReason: undefined,
+          currentLine: 0,
+          characters: Object.fromEntries(
+            Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v])
+          ) as Chapter['characters'],
+        };
+      });
+      if (targetIds.length) {
+        s.pendingRegen = { chapterIds: targetIds, force: true };
+        s.regenEpoch += 1;
+        s.lastError = null;
+        s.generationStartedAt = null;
+      }
+    },
+
     regenerateCharacter: (s, a: PayloadAction<{ characterId: string; chapterIds: number[] }>) => {
       const { characterId, chapterIds } = a.payload;
       const targetIds: number[] = [];

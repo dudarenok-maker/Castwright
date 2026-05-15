@@ -65,6 +65,16 @@ read, and surface the mismatch in the Generation view.
 9. **`updatedAt` is NOT bumped by the backfill.** It's a lossless metadata
    migration, not a user-driven change.
 
+10. **Bulk regenerate of every drifted chapter is a single action.** The
+    drift banner carries a "Regenerate all" button that dispatches
+    `chaptersActions.regenerateChapterIds` with the full set of drifted
+    chapter ids. The middleware (`generation-stream-middleware.ts`)
+    closes any live handle and opens a fresh stream with `chapterIds`
+    + `force=true`, queueing the bulk run as one SSE rather than 27
+    sequential clicks. Excluded chapters are filtered out by the slice
+    reducer defensively even though the banner-derived list already
+    excludes them — see invariant 6.
+
 ## Critical files
 
 - `server/src/workspace/scan.ts` — `BookStateJson.chapters[]` schema,
@@ -79,7 +89,17 @@ read, and surface the mismatch in the Generation view.
   the field; `applyGenerationTick` captures it on `chapter_complete`
 - `src/views/generation.tsx` — per-row drift caption (replaces the
   static word/line/speaker meta when drifted); top-of-view banner
-  counting drifted chapters
+  counting drifted chapters; banner "Regenerate all" button + the
+  `ConfirmDialog` mount that confirms and dispatches the bulk action
+- `src/modals/confirm-dialog.tsx` — destructive-action confirm reused
+  for the bulk regen flow (variant="danger")
+- `src/store/chapters-slice.ts` — `regenerateChapterIds` reducer that
+  re-queues an explicit list of chapter ids; mirrors `regenerateChapter`
+  but takes an arbitrary, possibly non-contiguous set
+- `src/store/generation-stream-middleware.ts` — `regenerateChapterIds`
+  appears in both `TRIGGER_TYPES` and `REGEN_TYPES` so the action
+  drives reconcile AND closes any in-flight handle before opening a
+  fresh stream with the new spec
 
 ## Acceptance walkthrough
 
@@ -109,6 +129,20 @@ read, and surface the mismatch in the Generation view.
    completion, the `chapter_complete` SSE tick carries the new
    `audioModelKey`, the row caption returns to the normal word/line/
    speaker stats, and the banner count decrements by 1.
+
+### Clearing all drift in one click
+
+6. Click "Regenerate all" on the drift banner. A `ConfirmDialog`
+   (danger variant) opens with the count, source engine(s), and target
+   engine. If a generation run is already alive, the body also carries
+   a "This will interrupt the current run" line.
+7. Confirm. Every drifted row flips state (head id → in_progress,
+   the rest → queued); a fresh SSE opens with `chapterIds` + `force=true`
+   carrying the full list. As each chapter completes, its
+   `audioModelKey` matches the active engine and the banner count
+   decrements. The banner disappears at zero.
+8. Cancel from the dialog closes it without dispatching anything; no
+   chapter state changes.
 
 ### Switching engines back
 
@@ -143,9 +177,6 @@ read, and surface the mismatch in the Generation view.
 
 ## Out of scope
 
-- **Bulk "Regenerate all drifted chapters" action**: the existing
-  per-chapter regenerate path handles this at the user's pace. If demand
-  emerges, add a separate banner button later.
 - **Per-character engine drift inside chapters**: the existing
   per-character drift pipeline (revisions.ts) covers within-engine voice
   swaps; cross-engine swaps are caught at chapter level by this signal.

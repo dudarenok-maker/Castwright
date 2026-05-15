@@ -94,6 +94,31 @@ describe('generationStreamMiddleware', () => {
     expect(args.force).toBe(true);
   });
 
+  it('opens the SSE with the full list when regenerateChapterIds dispatches mid-run', () => {
+    /* Bulk-regen path (plan 35): the drift banner's "Regenerate all"
+       button dispatches regenerateChapterIds with a non-contiguous list.
+       Same middleware contract as per-chapter regen — close the live
+       handle, open a fresh one with chapterIds + force=true. */
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [
+      ch(1, { state: 'done', progress: 1, audioModelKey: 'coqui-xtts-v2' }),
+      ch(2, { state: 'done', progress: 1, audioModelKey: 'coqui-xtts-v2' }),
+      ch(3, { state: 'queued' }),
+      ch(4, { state: 'done', progress: 1, audioModelKey: 'coqui-xtts-v2' }),
+    ]);
+    streamGenerationMock.mockClear();
+    cancelMock.mockClear();
+
+    store.dispatch(chaptersSlice.actions.regenerateChapterIds({ chapterIds: [1, 2, 4] }));
+
+    expect(cancelMock).toHaveBeenCalled();
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    const args = streamGenerationMock.mock.calls[0][0] as { chapterIds?: number[]; force?: boolean };
+    expect(args.chapterIds).toEqual([1, 2, 4]);
+    expect(args.force).toBe(true);
+  });
+
   it('cancels the SSE on setPaused(true) and reopens on setPaused(false)', () => {
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
