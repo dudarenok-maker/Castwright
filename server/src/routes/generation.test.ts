@@ -162,6 +162,57 @@ describe('POST /api/books/:bookId/generation', () => {
     expect(ticks[0].errorReason).toMatch(/modelKey/i);
   });
 
+  /* ── Pause endpoint + sticky-across-reload contract ──────────────── */
+
+  it('POST /generation/pause sees a registered job and reports paused:true', async () => {
+    /* The route registers its RunningJob in inFlightByBook BEFORE the
+       chapter loop's first synthesiseChapter call. We block synth until
+       synthStarted resolves so /pause races against the loop's await.
+       The fact that the pause endpoint sees the job and returns
+       paused:true proves the route-to-pause coupling works. The actual
+       abort delivery is exercised independently (controller.abort + the
+       loop's AbortError catch are tiny mechanical pieces). */
+    let resolveSynthStarted: () => void;
+    const synthStarted = new Promise<void>(r => { resolveSynthStarted = r; });
+    /* synth blocks until either signal aborts or the test timeout fires.
+       Honouring abort is essential — without it the route's loop never
+       breaks, inFlightByBook stays populated, and the next test sees a
+       leftover entry (the no-op pause case below would then report
+       paused:true and fail). */
+    synthesiseImpl = (args: unknown) => {
+      const signal = (args as { signal?: AbortSignal }).signal;
+      return new Promise((_resolve, reject) => {
+        const abortErr = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
+        if (signal?.aborted) { reject(abortErr()); return; }
+        signal?.addEventListener('abort', () => reject(abortErr()), { once: true });
+        resolveSynthStarted();
+      });
+    };
+
+    /* Fire-and-forget — we don't await this. */
+    const genReq = request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    /* swallow the (eventually-aborted) promise to avoid an unhandled
+       rejection on the worker. */
+    genReq.then(() => {}, () => {});
+
+    await synthStarted;
+    const pauseRes = await request(app).post(`/api/books/${bookId}/generation/pause`).send({});
+    expect(pauseRes.status).toBe(200);
+    expect(pauseRes.body).toEqual({ ok: true, paused: true });
+  }, 8_000);
+
+  it('POST /generation/pause when no job is running is an idempotent no-op (200, paused:false)', async () => {
+    /* Double-click on Pause, or a Pause that arrives after the queue
+       drained naturally, must NOT 404 — the middleware fires this
+       blindly on every setPaused(true) without coordinating with the
+       loop's end-of-life. */
+    const res = await request(app).post(`/api/books/${bookId}/generation/pause`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, paused: false });
+  });
+
   it('escalates to fatal on the second identical non-fatal failure (cascade kill)', async () => {
     /* This is the regression for the screenshot — chapter 1 fails with
        "index out of range in self" (which we classify as fatal directly),

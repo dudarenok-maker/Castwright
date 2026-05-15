@@ -1011,6 +1011,36 @@ function realStreamGeneration({ bookId, modelKey, chapterIds, force, onTick: raw
   return () => controller.abort();
 }
 
+/* Real Pause endpoint. Posted by generation-stream-middleware on
+   setPaused(true) so the server stops the in-flight run cleanly — the
+   server-side abort flips synthesiseChapter's signal, the loop breaks,
+   and all attached SSE subscribers receive a final `idle` tick.
+
+   Decoupled from closing the SSE on purpose: browser reload also closes
+   the SSE, but the user has not paused. Server treats SSE close as
+   "unsubscribe this observer" and only stops the job when this explicit
+   POST arrives. */
+async function realPauseGeneration({ bookId }: { bookId: string }): Promise<void> {
+  /* Fire-and-forget — we don't block the UI on the response. If the
+     request fails, the worst case is the run keeps going for an extra
+     few seconds until the SSE finishes naturally; the user can hit
+     Pause again. */
+  await fetch(`/api/books/${encodeURIComponent(bookId)}/generation/pause`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  }).catch(err => {
+    console.warn('[api] pauseGeneration failed:', err);
+  });
+}
+
+/* Mock counterpart — no server to talk to, but we still want the test
+   harness to verify the middleware calls this on setPaused. Resolves
+   instantly. */
+async function mockPauseGeneration(_: { bookId: string }): Promise<void> {
+  return Promise.resolve();
+}
+
 export interface SidecarHealth {
   status: 'reachable' | 'unreachable';
   url: string;
@@ -1405,6 +1435,7 @@ const real = {
   runAnalysisForChapters:  realRunAnalysisForChapters,
   getVoiceSample:    realGetVoiceSample,
   streamGeneration:  realStreamGeneration,
+  pauseGeneration:   realPauseGeneration,
   getSidecarHealth:  realGetSidecarHealth,
   getOllamaHealth:   realGetOllamaHealth,
   loadSidecar:       realLoadSidecar,
@@ -1456,6 +1487,7 @@ const mock = {
   runAnalysisForChapters:  mockRunAnalysisForChapters,
   getVoiceSample:    mockGetVoiceSample,
   streamGeneration:  mockStreamGeneration,
+  pauseGeneration:   mockPauseGeneration,
   getSidecarHealth:  mockGetSidecarHealth,
   getOllamaHealth:   mockGetOllamaHealth,
   loadSidecar:       mockLoadSidecar,

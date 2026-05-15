@@ -15,12 +15,17 @@ import type { Chapter, GenerationTick } from '../lib/types';
 
 const streamGenerationMock = vi.fn();
 const cancelMock = vi.fn();
+const pauseGenerationMock = vi.fn();
 
 vi.mock('../lib/api', () => ({
   api: {
     streamGeneration: (args: unknown) => {
       streamGenerationMock(args);
       return cancelMock;
+    },
+    pauseGeneration: (args: unknown) => {
+      pauseGenerationMock(args);
+      return Promise.resolve();
     },
   },
 }));
@@ -64,6 +69,7 @@ describe('generationStreamMiddleware', () => {
   beforeEach(() => {
     streamGenerationMock.mockClear();
     cancelMock.mockClear();
+    pauseGenerationMock.mockClear();
   });
 
   it('opens the SSE when a regenerate spec lands and a book is in scope', () => {
