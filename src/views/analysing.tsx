@@ -282,6 +282,14 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
      chapter-failed event; cleared per id when a Retry succeeds. */
   const [failedChapters, setFailedChapters] = useState<Array<{ chapterId: number; message: string }>>([]);
   const [retryingChapterId, setRetryingChapterId] = useState<number | null>(null);
+  /* True after the server emits `kind: 'error', code: 'cast_incomplete'`
+     — the run finished Phase 0a but at least one chapter is still in
+     failedChapterIds, so Phase 1 hasn't started. The view treats this
+     as "paused awaiting retry" rather than a fatal error: no red error
+     banner, retry buttons in the panel are active, and once
+     failedChapters drains to 0 we auto-resume the main run so Phase 1+
+     start without the user having to re-click "Try again". */
+  const [castIncomplete, setCastIncomplete] = useState(false);
 
   /* Explicit "Start analysis" gate. The previous auto-fire path was hard
      to reason about — auto-load fires, probe re-runs, isAnalyzerReady
@@ -349,6 +357,11 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
     setLive(null);
     setHeartbeatByPhase({});
     setRemainingMs(null);
+    /* Clear castIncomplete on every re-entry so an old "paused" state
+       doesn't linger when the user clicks Try again / Start fresh /
+       model switch. If the server still has unresolved failures this
+       run will re-set it via the cast_incomplete catch below. */
+    setCastIncomplete(false);
     const markEvent = () => setLastEventAt(Date.now());
     (async () => {
       try {
@@ -433,6 +446,15 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
            Analysis aborted" right before the new attempt renders. */
         if ((e as Error)?.name === 'AbortError') return;
         if (e instanceof AnalysisError && e.code === 'aborted') return;
+        /* cast_incomplete is the server's "Phase 0 done but at least one
+           chapter still needs retry" signal. Not a failure — the user
+           sees the failed-chapter panel and can retry below. The
+           auto-resume effect picks up once every row resolves. */
+        if (e instanceof AnalysisError && e.code === 'cast_incomplete') {
+          setConn('idle');
+          setCastIncomplete(true);
+          return;
+        }
         setConn('error');
         const code = e instanceof AnalysisError ? e.code : 'unknown';
         const detail = e instanceof AnalysisError ? e.detail : undefined;
@@ -492,6 +514,20 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
     return () => { cancelled = true; };
   }, [bookId]);
 
+  /* Auto-resume the main run after the user resolves every failed
+     chapter. The server's cast_incomplete gate stops the run before
+     Phase 1; once failedChapters drains to 0 we re-enter
+     /analysis/stream which discovers the cache is complete and
+     advances. Without this the user would have to click "Try again"
+     themselves after the final retry — easy to miss when the panel
+     has just disappeared. */
+  useEffect(() => {
+    if (!castIncomplete) return;
+    if (failedChapters.length > 0) return;
+    if (retryingChapterId !== null) return;
+    setRetry(r => ({ nonce: r.nonce + 1, fresh: false }));
+  }, [castIncomplete, failedChapters.length, retryingChapterId]);
+
   /* Per-chapter retry handler. Reuses the existing SSE-callback
      wiring so the active phase / log / cast UI keeps updating during
      the retry, then removes the row when the result event lands. Server
@@ -503,20 +539,43 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
     if (retryingChapterId !== null) return;
     setRetryingChapterId(chapterId);
     const markEvent = () => setLastEventAt(Date.now());
-    setConn('connecting');
+    /* Snapshot whether the main run owns the conn/phase indicators
+       right now. If it does, the retry runs alongside without
+       overwriting them — otherwise the user would see the conn
+       indicator flicker to 'connecting' / 'idle' as the retry
+       starts and ends even though the main run is still streaming.
+       Only updates this handler owns: failedChapters row, cast merges,
+       lastEventAt, retryingChapterId. */
+    const mainRunActive = analysisControllerRef.current !== null;
+    if (!mainRunActive) setConn('connecting');
+    /* Track whether the server re-emitted chapter-failed for THIS id
+       during the retry. We use this instead of relying on .then() vs
+       .catch() because the subset route may end without a `result`
+       event when other chapters still need retry (Phase 1 won't run
+       for a partial roster — see the subset-route gate in
+       server/src/routes/analysis.ts). In that case api.ts throws "no
+       result" and .catch fires even though our retried chapter
+       succeeded. The retryReFailed flag lets us correctly drop the
+       row on success regardless of which promise branch we land in. */
+    let retryReFailed = false;
     api.runAnalysisForChapters(manuscriptId, [chapterId], {
       model,
       onPhase: ({ phaseId, progress, live }) => {
-        setConn('streaming'); markEvent();
+        markEvent();
+        if (mainRunActive) return;
+        setConn('streaming');
         setPhase(phaseId); setPhaseProgress(progress);
         if (live) setLive(live);
       },
       onLog: ({ phaseId, message }) => {
-        setConn('streaming'); markEvent();
+        markEvent();
+        if (!mainRunActive) setConn('streaming');
         setLogs(prev => ({ ...prev, [phaseId]: [...(prev[phaseId] ?? []), message] }));
       },
       onHeartbeat: (hb) => {
-        setConn('streaming'); markEvent();
+        markEvent();
+        if (mainRunActive) return;
+        setConn('streaming');
         setHeartbeatByPhase(prev => ({ ...prev, [hb.phaseId]: { hb, receivedAt: Date.now() } }));
       },
       onCastUpdate: ({ characters }) => {
@@ -525,6 +584,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
       },
       onChapterFailed: ({ chapterId: failedId, message }) => {
         markEvent();
+        if (failedId === chapterId) retryReFailed = true;
         setFailedChapters(prev => {
           const filtered = prev.filter(f => f.chapterId !== failedId);
           return [...filtered, { chapterId: failedId, message }];
@@ -532,16 +592,22 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
       },
     })
       .then(() => {
-        /* Subset call resolved without re-emitting chapter-failed for
-           this id — treat as success and drop the row. (If the retry
-           re-failed, onChapterFailed already replaced the message and
-           the row stays visible.) */
-        setFailedChapters(prev => prev.filter(f => f.chapterId !== chapterId));
-        setConn('idle');
+        if (!retryReFailed) {
+          setFailedChapters(prev => prev.filter(f => f.chapterId !== chapterId));
+        }
+        if (!mainRunActive) setConn('idle');
       })
       .catch(err => {
-        console.warn('[analysing] retry failed:', err);
-        setConn('idle');
+        /* The subset route ends without a `result` event when other
+           chapters still need retry (Phase 1 gate). api.ts throws
+           "no result" in that case — not a real failure, drop the
+           row if this chapter itself succeeded. */
+        if (!retryReFailed) {
+          setFailedChapters(prev => prev.filter(f => f.chapterId !== chapterId));
+        } else {
+          console.warn('[analysing] retry failed:', err);
+        }
+        if (!mainRunActive) setConn('idle');
       })
       .finally(() => {
         setRetryingChapterId(null);
@@ -974,26 +1040,38 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
         </div>
 
         {/* Failed-chapter retry panel. Survives reload via book-state
-            hydration (see the failed-chapters effect above). Retries are
-            disabled while the main run is in flight to avoid two
-            concurrent Ollama chats fighting for the same model — the
-            user can Pause the main run, retry, then Resume. */}
+            hydration (see the failed-chapters effect above). Retry stays
+            clickable while the main run is in flight so a transient
+            Gemini 503 (or any one-off failure) can be re-tried in
+            parallel with the rest of the book — the subset endpoint
+            takes its own SSE channel and the analyzer's per-request
+            state is independent. Earlier guard blocked this to avoid
+            two concurrent Ollama chats; Ollama just serialises them,
+            so the cost was never real. Only one chapter can be in
+            flight at a time (retryingChapterId tracks the active one)
+            so a slow Ollama load doesn't get hammered with N parallel
+            chats. */}
         {failedChapters.length > 0 && (
           <div className="mt-6 rounded-3xl border border-amber-200 bg-amber-50/60 px-6 py-4">
             <p className="text-sm font-semibold text-amber-900">
-              {failedChapters.length === 1
-                ? '1 chapter failed cast detection'
-                : `${failedChapters.length} chapters failed cast detection`}
+              {castIncomplete
+                ? (failedChapters.length === 1
+                    ? 'Paused — 1 chapter still needs cast detection'
+                    : `Paused — ${failedChapters.length} chapters still need cast detection`)
+                : (failedChapters.length === 1
+                    ? '1 chapter failed cast detection'
+                    : `${failedChapters.length} chapters failed cast detection`)}
             </p>
             <p className="mt-1 text-xs text-amber-800/80">
-              The model produced malformed output on these chapters even after the analyzer's built-in retry.
-              Retry runs them again on the currently-selected model.
+              {castIncomplete
+                ? 'Phase 1 (sentence attribution) won\'t start until every chapter has a cast. Click Retry below — the rest of the analysis resumes automatically once they all clear.'
+                : 'The model produced malformed output on these chapters even after the analyzer\'s built-in retry. Retry runs them again on the currently-selected model — safe to click while the main run is still streaming other chapters.'}
             </p>
             <ul className="mt-3 space-y-2">
               {failedChapters.map(f => {
                 const isRetrying = retryingChapterId === f.chapterId;
-                const isRunning = conn === 'streaming' || conn === 'connecting';
-                const disabled = isRetrying || (isRunning && retryingChapterId === null);
+                const anotherRetryInFlight = retryingChapterId !== null && !isRetrying;
+                const disabled = isRetrying || anotherRetryInFlight;
                 const title = chapterTitleById[f.chapterId] ?? `Chapter ${f.chapterId}`;
                 return (
                   <li key={f.chapterId} className="flex items-start gap-3 rounded-2xl bg-white px-4 py-3 border border-amber-200/70">

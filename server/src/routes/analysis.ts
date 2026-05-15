@@ -1066,11 +1066,27 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       }
       await Promise.all(castWorkers);
 
-      /* Phase 0a summary — visibility into the skip-on-failure flow so a
-         silent reduction in roster size doesn't pass unnoticed. */
+      /* Phase 1+ MUST NOT advance while any chapter is missing its cast —
+         otherwise attribution / voice matching run against a partial
+         roster and the user gets a degraded book without ever being
+         asked to retry. Stop here, leave cache.stage1 unset so the
+         next /analysis/stream re-enters Phase 0a's resume path
+         (failedChapterIds is re-queued automatically), and surface a
+         `cast_incomplete` error code the analysing view treats as
+         "paused, awaiting retry" rather than a fatal error.
+         Per-chapter failure markers (cache.chapterCast[id]=[] and
+         cache.failedChapterIds) are already on disk via the per-failure
+         write at the catch site above. */
       if (failedCastChapters.size > 0) {
         const failedCount = failedCastChapters.size;
-        log(0, `Phase 0 finished with ${failedCount} chapter${failedCount === 1 ? '' : 's'} skipped due to per-chapter failures (see log lines above). Roster built from the remaining ${activeCastChapters - failedCount}.`);
+        log(0, `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? '' : 's'} still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.`);
+        send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
+        send({
+          kind: 'error',
+          code: 'cast_incomplete',
+          message: `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? '' : 's'} failed cast detection. Retry below to continue.`,
+        });
+        return res.end();
       }
 
       /* ── Phase 0b — finalise the roster.
@@ -1722,6 +1738,22 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
     const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
     const cachedChapters = cache.chapters ?? {};
+    /* The subset route serves two flows: (a) un-exclude an
+       excluded chapter from a finished book (Phase 0a + Phase 1
+       attribution land here), (b) retry a chapter that failed Phase
+       0a in a still-paused run (cast_incomplete gate). They have
+       different needs:
+       - (a) main pipeline is finished; subset attributes the new
+         chapter and emits a fresh result.
+       - (b) main pipeline never ran Phase 1; subset must NOT
+         attribute piecemeal because the global cast may still grow
+         (the user could retry more chapters next) and Phase 1's
+         folding/lines/scenes pass needs the whole sentence set.
+       The clean signal: did cache.stage1 exist BEFORE this batch?
+       Yes → flow (a). No → flow (b); skip Phase 1, end after
+       cast-update so the analysing view's auto-resume kicks the
+       full /analysis/stream which runs Phase 1 globally. */
+    const stage1Existed = !!cache.stage1;
 
     /* ── Phase 0a (subset). Re-run cast detection only for the targeted
        chapters. The running roster passed into each prompt is rebuilt
@@ -1797,7 +1829,15 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
 
     /* Finalise stage1: rebuild the roster, sort + verify, and refresh the
        cache.stage1 entry so subsequent runs (or a full-book resume) see
-       the merged roster. */
+       the merged roster.
+
+       BUT only when every chapter cast is in. If `cache.failedChapterIds`
+       still has entries after this batch (e.g. user retried 1 of 3
+       failed chapters), stage1 is a PARTIAL roster — writing it would
+       short-circuit the main /analysis/stream's Phase 0a resume path
+       and let Phase 1 run against the partial roster. Leave stage1
+       unset in that case; the main route's [[cast_incomplete]] gate
+       will re-run Phase 0a once the user kicks it. */
     const finalRoster = rebuildRoster();
     const characters = Array.from(finalRoster.values());
     sortEvidence(characters);
@@ -1806,14 +1846,38 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       characters,
       chapters: record.chapterHints.map(c => ({ id: c.id, title: c.title })),
     };
-    cache.stage1 = stage1;
+    const remainingFailedCastIds = cache.failedChapterIds ?? [];
+    if (remainingFailedCastIds.length === 0) {
+      cache.stage1 = stage1;
+    }
     await saveAnalysisCache(manuscriptId, cache);
     send({ kind: 'cast-update', characters: stage1.characters });
     send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
 
     /* ── Phase 1 (subset). Sentence attribution for the new chapters only.
        Cached chapters are left alone — their sentences stay in
-       cache.chapters as-is. */
+       cache.chapters as-is.
+       Skip Phase 1 entirely when cast is still incomplete — the
+       subset route can't safely attribute sentences without a final
+       roster, and writing partial sentences to cache.chapters would
+       have to be re-done after the next retry batch finalises stage1.
+       The main /analysis/stream gate will run Phase 1 for these
+       chapters once the user resolves the remaining failures. */
+    if (remainingFailedCastIds.length > 0) {
+      log(0, `Cast retry done. ${remainingFailedCastIds.length} chapter${remainingFailedCastIds.length === 1 ? '' : 's'} still need retry before Phase 1 can run.`);
+      return res.end();
+    }
+    /* Retry-after-cast-incomplete flow: the main pipeline hasn't run
+       Phase 1 globally, so attributing JUST `toRun` here would emit a
+       result with only those chapters' sentences and the view's
+       onComplete would advance to the confirm screen with a near-empty
+       book. End cleanly instead — the client's auto-resume effect
+       will fire /analysis/stream which discovers cache.stage1 is set
+       and runs Phase 1 across every chapter. */
+    if (!stage1Existed) {
+      log(0, 'All cast detection retries succeeded — resuming full analysis to run Phase 1 globally.');
+      return res.end();
+    }
     send({ kind: 'phase', phaseId: 1, progress: 0.02, label: PHASES[1].label });
     for (let idx = 0; idx < toRun.length; idx++) {
       const ch = toRun[idx];

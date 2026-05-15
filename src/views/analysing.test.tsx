@@ -621,6 +621,51 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(screen.getAllByRole('button', { name: /retry chapter/i })).toHaveLength(2);
   });
 
+  it('retry button stays clickable while the main run is streaming (no Pause/Resume dance required)', async () => {
+    /* Regression: the panel originally disabled Retry while
+       conn === 'streaming' to avoid two concurrent Ollama chats.
+       Gemini users had no such conflict and ended up locked out
+       of the only recovery path — a transient 503 had to wait
+       until the whole run finished. The disabled-while-streaming
+       guard was dropped; only an in-flight retry of THIS chapter
+       disables the button now. */
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    /* Start the analysis so the effect captures opts, then drive a
+       phase event so the view transitions to conn === 'streaming'. */
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => { fireEvent.click(startBtn); });
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+    await act(async () => {
+      capturedOpts!.onPhase!({ phaseId: 0, progress: 0.4 });
+    });
+
+    /* Panel hydrated from book-state; button must NOT be disabled
+       even though the main run is mid-stream. */
+    const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+    expect(retryBtn).not.toBeDisabled();
+
+    /* Clicking it fires the subset call — proves the click handler runs. */
+    await act(async () => { fireEvent.click(retryBtn); });
+    expect(capturedSubsetCall).toBeDefined();
+    expect(capturedSubsetCall!.chapterIds).toEqual([44]);
+  });
+
   it('clicking Retry calls runAnalysisForChapters with exactly [chapterId]; the row disappears when the subset call resolves', async () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
 
