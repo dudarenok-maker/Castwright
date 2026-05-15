@@ -137,6 +137,58 @@ describe('persistenceMiddleware — payload shape', () => {
     });
   });
 
+  it('sends acceptedSelections alongside pending+drift+dismissed for revisions/acceptRevision', async () => {
+    /* Per-item accept is the only path that records selection on the slice;
+       its patch must carry acceptedSelections so the user's choices survive
+       a reload. Reject's patch does NOT need acceptedSelections (no
+       selection captured) — covered by the next test. */
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      revisions: {
+        pending: [{ id: 'r1' }],
+        drift: [{ id: 'd1' }],
+        dismissed: ['d2'],
+        acceptedSelections: { 'r-prev': { 4: 'B' } },
+      },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/acceptRevision' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'revisions',
+      patch: {
+        pending: [{ id: 'r1' }],
+        drift: [{ id: 'd1' }],
+        dismissed: ['d2'],
+        acceptedSelections: { 'r-prev': { 4: 'B' } },
+      },
+    });
+  });
+
+  it('sends pending+drift+dismissed (NO acceptedSelections) for revisions/rejectRevision', async () => {
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      revisions: {
+        pending: [{ id: 'r1' }],
+        drift: [{ id: 'd1' }],
+        dismissed: ['d2'],
+        acceptedSelections: { 'r-prev': { 4: 'B' } },
+      },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/rejectRevision' });
+    await advance(500);
+    /* Patch shape is the same shape the existing bulk reject sends — reject
+       intentionally drops the selection, even though one might exist on the
+       slice from a prior accept. */
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'revisions',
+      patch: {
+        pending: [{ id: 'r1' }],
+        drift: [{ id: 'd1' }],
+        dismissed: ['d2'],
+      },
+    });
+  });
+
   it('sends castConfirmed=true for ui/confirmCast (slice="state")', async () => {
     const next = vi.fn((x) => x);
     persistenceMiddleware(makeStore(baseState()))(next)({ type: 'ui/confirmCast' });
