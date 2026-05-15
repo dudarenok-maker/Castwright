@@ -89,7 +89,8 @@ export function ChapterExclusionList({
               Reset suggestions
             </button>
           </div>
-          <div className="max-h-[300px] overflow-y-auto pr-1 space-y-1">
+          <div data-testid="chapter-exclusion-scroll"
+               className="max-h-[300px] overflow-y-auto scrollbar-thin space-y-1">
             {chapters.map(ch => {
               const slug = chapterSlug(ch.id, ch.title);
               const included = !excludedSlugs.has(slug);

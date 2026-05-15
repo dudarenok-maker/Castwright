@@ -180,3 +180,85 @@ describe('ListenView — coming-soon affordances', () => {
     expect(h.setCurrentTrack).toHaveBeenCalledWith(1);
   });
 });
+
+describe('ListenView — excluded chapters are filtered out of the listen rail', () => {
+  /* Excluded chapters (front/back-matter the user opted out of at the
+     confirm-metadata stage) have no audio, so they'd otherwise surface as
+     00:00 rows in the "ready to listen" card and bloat the chapter total. */
+  const mixedChapters: Chapter[] = [
+    { id: 1, title: 'Dedication', duration: '00:00', state: 'done',
+      excluded: true,
+      characters: { narrator: 'voiced' as never }, progress: 1 } as Chapter,
+    { id: 2, title: 'Preface', duration: '00:00', state: 'done',
+      excluded: true,
+      characters: { narrator: 'voiced' as never }, progress: 1 } as Chapter,
+    { id: 3, title: 'Chapter One', duration: '11:32', state: 'done',
+      characters: { narrator: 'voiced' as never }, progress: 1 } as Chapter,
+    { id: 4, title: 'Chapter Two', duration: '06:35', state: 'done',
+      characters: { narrator: 'voiced' as never }, progress: 1 } as Chapter,
+  ];
+
+  function renderWithMix() {
+    const handlers = baseHandlers();
+    render(
+      <ListenView chapters={mixedChapters} characters={characters} library={voices}
+        currentTrack={null}
+        bookMeta={baseMeta()}
+        bookCoverGradient={['#2C7A4B', '#0F3A23']}
+        isMetaDirty={false}
+        {...handlers}/>
+    );
+    return handlers;
+  }
+
+  it('hides excluded chapter rows from the chapter list', () => {
+    renderWithMix();
+    const scroller = screen.getByTestId('listen-chapters-scroll');
+    expect(within(scroller).queryByText('Dedication')).toBeNull();
+    expect(within(scroller).queryByText('Preface')).toBeNull();
+    expect(within(scroller).getByText('Chapter One')).toBeInTheDocument();
+    expect(within(scroller).getByText('Chapter Two')).toBeInTheDocument();
+  });
+
+  it('omits excluded chapters from the header chapter count and runtime', () => {
+    renderWithMix();
+    /* Header span renders as "<2> chapters" with the count in a nested
+       <span>. Match against the combined textContent so we don't catch
+       the CH-XX badges in the row list. 18:07 is the runtime sum of the
+       two non-excluded chapters (11:32 + 06:35). */
+    const headerLine = screen.getByText((_, el) =>
+      el?.tagName === 'SPAN' && /^2 chapters$/.test(el.textContent ?? ''));
+    expect(headerLine).toBeInTheDocument();
+    expect(screen.queryByText((_, el) =>
+      el?.tagName === 'SPAN' && /^4 chapters$/.test(el.textContent ?? ''))).toBeNull();
+    expect(screen.getByText('18:07')).toBeInTheDocument();
+  });
+
+  it('"Play from the start" jumps to the first non-excluded chapter, not the first slot', () => {
+    const h = renderWithMix();
+    fireEvent.click(screen.getByRole('button', { name: /play from the start/i }));
+    /* First listenable chapter is id 3 (Chapter One), not id 1 (Dedication). */
+    expect(h.setCurrentTrack).toHaveBeenCalledWith(3);
+  });
+});
+
+describe('ListenView — chapter list scroll cap', () => {
+  /* Long books (59 chapters in The Hollow Tide) would otherwise
+     stretch the chapters card across pages. The list is wrapped in a
+     capped, scrollable inner div so the rest of the Listen view stays
+     reachable. */
+  it('wraps the chapter list in a max-height scroll container with the inset thumb', () => {
+    renderView();
+    const scroller = screen.getByTestId('listen-chapters-scroll');
+    expect(scroller.className).toMatch(/max-h-\[560px\]/);
+    expect(scroller.className).toMatch(/overflow-y-auto/);
+    expect(scroller.className).toMatch(/scrollbar-thin/);
+  });
+
+  it('still renders every chapter row inside the scroller', () => {
+    renderView();
+    const scroller = screen.getByTestId('listen-chapters-scroll');
+    expect(within(scroller).getByText('The Approach')).toBeInTheDocument();
+    expect(within(scroller).getByText('Into the Fog')).toBeInTheDocument();
+  });
+});

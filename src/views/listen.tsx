@@ -41,8 +41,14 @@ export function ListenView({
   bookMeta, bookCoverGradient,
   onEditMetaField, onCommitMeta, onCancelMeta, isMetaDirty,
 }: Props) {
-  const completed = chapters.filter(c => c.state === 'done').length;
-  const totalSec = chapters.reduce((s, c) => s + parseDuration(c.duration), 0);
+  /* Excluded chapters (front/back-matter the user opted out of at the
+     confirm-metadata stage) never get audio, so they have no business in
+     the "ready to listen" rail or the runtime/chapter-count math — they'd
+     surface as 00:00 rows and inflate the chapter total. The Generation
+     view is the place to revisit exclusion choices. */
+  const listenable = chapters.filter(c => !c.excluded);
+  const completed = listenable.filter(c => c.state === 'done').length;
+  const totalSec = listenable.reduce((s, c) => s + parseDuration(c.duration), 0);
   const findChar = (id: string) => characters.find(c => c.id === id);
   /* Narrator credit precedence: explicit override from bookMeta (or '' if the
      user cleared it) → the cast's narrator character → null. The header
@@ -74,12 +80,12 @@ export function ListenView({
           </p>
           <div className="mt-5 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-ink/60">
             <span><span className="font-semibold text-ink tabular-nums">{formatTime(totalSec)}</span> total runtime</span>
-            <span>·</span><span><span className="font-semibold text-ink">{chapters.length}</span> chapters</span>
+            <span>·</span><span><span className="font-semibold text-ink">{listenable.length}</span> chapters</span>
             <span>·</span><span>FLAC + MP3</span>
             <span>·</span><span><span className="font-semibold text-ink">{completed}</span> chapters voiced</span>
           </div>
           <div className="mt-7 flex flex-wrap items-center gap-3">
-            <button onClick={() => chapters.length && setCurrentTrack(chapters[0].id)} disabled={chapters.length === 0}
+            <button onClick={() => listenable.length && setCurrentTrack(listenable[0].id)} disabled={listenable.length === 0}
                     className="inline-flex items-center gap-3 rounded-full bg-ink text-canvas hover:bg-ink-soft pl-5 pr-6 py-3 text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
               <span className="w-8 h-8 rounded-full bg-canvas text-ink grid place-items-center"><IconPlay className="w-3.5 h-3.5 ml-0.5"/></span>
               Play from the start
@@ -96,11 +102,18 @@ export function ListenView({
           <SectionLabel>Chapters</SectionLabel>
           <span className="text-xs text-ink/50">Click any chapter to play from there</span>
         </div>
-        <div className="bg-white rounded-3xl border border-ink/10 shadow-card divide-y divide-ink/5 overflow-hidden">
-          {chapters.map(ch => {
-            const charsIn = Object.entries(ch.characters).filter(([, st]) => st !== 'skipped').map(([id]) => findChar(id)).filter(Boolean) as Character[];
-            return <ChapterListenRow key={ch.id} chapter={ch} charactersIn={charsIn} isPlaying={currentTrack === ch.id} onPlay={() => setCurrentTrack(currentTrack === ch.id ? null : ch.id)} onRegenerate={onRegenerate}/>;
-          })}
+        <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
+          {/* Cap the list so a 59-chapter book doesn't push the rest of the
+              Listen view off-screen. Inner div owns the scroll so the card's
+              rounded corners stay clean; scrollbar-thin paints an inset thumb
+              that clears those corners. */}
+          <div data-testid="listen-chapters-scroll"
+               className="max-h-[560px] overflow-y-auto scrollbar-thin divide-y divide-ink/5">
+            {listenable.map(ch => {
+              const charsIn = Object.entries(ch.characters).filter(([, st]) => st !== 'skipped').map(([id]) => findChar(id)).filter(Boolean) as Character[];
+              return <ChapterListenRow key={ch.id} chapter={ch} charactersIn={charsIn} isPlaying={currentTrack === ch.id} onPlay={() => setCurrentTrack(currentTrack === ch.id ? null : ch.id)} onRegenerate={onRegenerate}/>;
+            })}
+          </div>
         </div>
       </section>
 
