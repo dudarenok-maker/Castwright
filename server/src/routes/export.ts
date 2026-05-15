@@ -24,6 +24,7 @@ import { dotAudiobook, slug as slugify } from '../workspace/paths.js';
 import { writeJsonAtomic } from '../workspace/state-io.js';
 import { readUserSettings } from '../workspace/user-settings.js';
 import { buildMp3Zip, ExportIncompleteError } from '../export/build-mp3-zip.js';
+import { buildM4b } from '../export/build-m4b.js';
 import { writeToSyncFolder } from '../export/sync-folder.js';
 
 /* Mirrors the OpenAPI BookExportJob schema. Kept in sync by hand — the
@@ -87,9 +88,10 @@ function bookFilename(state: BookStateJson, format: BookExportJob['format']): st
 
 exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { format?: string; destination?: string };
-  if (body.format !== 'mp3-zip') {
-    return res.status(400).json({ error: 'unsupported_format', message: `Phase A only supports format=mp3-zip; got ${body.format ?? '(missing)'}.` });
+  if (body.format !== 'mp3-zip' && body.format !== 'm4b') {
+    return res.status(400).json({ error: 'unsupported_format', message: `format must be 'mp3-zip' or 'm4b'; got ${body.format ?? '(missing)'}.` });
   }
+  const format: BookExportJob['format'] = body.format;
   if (body.destination !== 'download' && body.destination !== 'sync-folder') {
     return res.status(400).json({ error: 'invalid_destination', message: `destination must be 'download' or 'sync-folder'.` });
   }
@@ -111,7 +113,7 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
   }
 
   const exportId = `exp_${nanoid(10)}`;
-  const filename = bookFilename(located.state, 'mp3-zip');
+  const filename = bookFilename(located.state, format);
   const stagingDir = join(exportsDir(located.bookDir), exportId);
   await mkdir(stagingDir, { recursive: true });
   const outPath = join(stagingDir, filename);
@@ -119,7 +121,7 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
   const job: BookExportJob = {
     id: exportId,
     bookId: located.state.bookId,
-    format: 'mp3-zip',
+    format,
     destination: body.destination,
     status: 'in_progress',
     filename,
@@ -193,15 +195,13 @@ async function runExportJob(
   syncFolder: string | null,
 ): Promise<void> {
   try {
-    const result = await buildMp3Zip({
-      bookDir,
-      state,
-      outPath,
-      onProgress: (ratio) => {
-        job.progress = ratio;
-        jobs.set(job.id, { ...job });
-      },
-    });
+    const onProgress = (ratio: number) => {
+      job.progress = ratio;
+      jobs.set(job.id, { ...job });
+    };
+    const result = job.format === 'mp3-zip'
+      ? await buildMp3Zip({ bookDir, state, outPath, onProgress })
+      : await buildM4b({ bookDir, state, outPath, onProgress });
     job.sizeBytes = result.sizeBytes;
     job.progress = 1;
 

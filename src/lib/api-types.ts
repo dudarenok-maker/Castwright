@@ -1158,13 +1158,16 @@ export interface components {
         };
         BookExportRequest: {
             /**
-             * @description Container format. Phase A ships `mp3-zip` only — a zip of
-             *     per-chapter MP3s the way PocketBook (and every other
-             *     audiobook app) accepts as a "MP3.ZIP" sideload. Phase B
-             *     adds `m4b` (single-file AAC with chapter atoms).
+             * @description Container format. `mp3-zip` packages per-chapter MP3s into
+             *     a zip — universal compatibility, no re-encode (the LAME
+             *     VBR V2 frames round-trip byte-identical). `m4b` produces
+             *     a single AAC-LC file at 96 kbps mono 44.1 kHz with
+             *     QuickTime chapter atoms; PocketBook surfaces it under
+             *     Audiobooks with chapter UI + resume position. M4B
+             *     re-encodes from MP3 → AAC.
              * @enum {string}
              */
-            format: "mp3-zip";
+            format: "mp3-zip" | "m4b";
             /**
              * @description `download` stages the file under the book's `.audiobook/exports/`
              *     for the user to pull via `downloadBookExport`. `sync-folder`

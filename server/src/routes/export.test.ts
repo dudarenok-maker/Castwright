@@ -139,6 +139,27 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     expect(dl.body.length ?? dl.text?.length ?? 0).toBeGreaterThan(0);
   });
 
+  it('creates an M4B job, finishes successfully, and streams audio/mp4', async () => {
+    const create = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'm4b', destination: 'download' });
+    expect(create.status).toBe(201);
+    expect(create.body.format).toBe('m4b');
+    expect(create.body.filename).toMatch(/\.m4b$/);
+
+    const exportId = create.body.id as string;
+    const { body: done } = await waitForDone(exportId);
+    expect(done.status).toBe('done');
+    expect(done.format).toBe('m4b');
+    expect(typeof done.sizeBytes).toBe('number');
+    expect(done.sizeBytes).toBeGreaterThan(0);
+
+    const dl = await request(app).get(`/api/books/${bookId}/exports/${exportId}/download`);
+    expect(dl.status).toBe(200);
+    expect(dl.headers['content-type']).toMatch(/audio\/mp4/);
+    expect(dl.headers['content-disposition']).toMatch(/attachment; filename=/);
+  }, 30_000);
+
   it('refuses with 409 export_incomplete when a chapter has no MP3', async () => {
     /* Delete chapter 2's MP3 to simulate a partially-generated book. */
     const ch2 = join(audioRoot, '02-chapter-two.mp3');

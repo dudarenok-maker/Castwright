@@ -39,12 +39,14 @@ interface Props {
 }
 
 type TabId = 'download' | 'sync-folder';
+type FormatId = 'm4b' | 'mp3-zip';
 
 export function ExportAudiobookModal({ open, bookId, initialTab = 'download', onClose }: Props) {
   const dispatch = useAppDispatch();
   const lanUrls = useAppSelector(s => s.exports.lanUrls);
   const account = useAppSelector(s => s.account);
   const [tab, setTab] = useState<TabId>(initialTab);
+  const [format, setFormat] = useState<FormatId>('m4b');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [missing, setMissing] = useState<string[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -68,6 +70,7 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', on
   useEffect(() => {
     if (open) {
       setTab(initialTab);
+      setFormat('m4b');
       setActiveJobId(null);
       setMissing(null);
       setSubmitting(false);
@@ -121,7 +124,7 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', on
     setSubmitting(true);
     try {
       const body: BookExportRequest = {
-        format: 'mp3-zip',
+        format,
         destination: tab === 'sync-folder' ? 'sync-folder' : 'download',
       };
       const job = await api.createBookExport(bookId, body);
@@ -174,8 +177,8 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', on
             </button>
           </header>
 
-          <div className="px-6 pt-4">
-            <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs w-fit">
+          <div className="px-6 pt-4 flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
               {([
                 { id: 'download',     label: 'Download to phone' },
                 { id: 'sync-folder',  label: 'Save to sync folder' },
@@ -187,6 +190,22 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', on
                   {t.label}
                 </button>
               ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">Format</span>
+              <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
+                {([
+                  { id: 'm4b',     label: 'M4B' },
+                  { id: 'mp3-zip', label: 'MP3.ZIP' },
+                ] as Array<{ id: FormatId; label: string }>).map(f => (
+                  <button key={f.id}
+                          data-testid={`export-format-${f.id}`}
+                          onClick={() => setFormat(f.id)}
+                          className={`px-3 py-1.5 rounded-full font-medium transition-colors ${format === f.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}>
+                    {f.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -230,9 +249,9 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', on
 
           <footer className="px-6 py-4 border-t border-ink/10 flex items-center justify-between gap-3">
             <p className="text-xs text-ink/55">
-              {tab === 'download'
-                ? 'Phase A: zipped MP3 chapters with embedded tags. PocketBook reads it.'
-                : 'File lands atomically; sync clients pick it up on their next scan.'}
+              {format === 'm4b'
+                ? 'M4B: one file, chapter markers, resumes where you stop. PocketBook lists it under Audiobooks.'
+                : 'MP3.ZIP: a folder of tagged MP3s. Universal compatibility; any audiobook app reads it.'}
             </p>
             <div className="flex items-center gap-3">
               <button onClick={onClose} className="text-sm font-medium text-ink/60 hover:text-ink">Close</button>
