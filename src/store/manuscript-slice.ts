@@ -9,6 +9,14 @@ import type {
 } from '../lib/types';
 
 export interface ManuscriptState {
+  /** Which book the rest of this slice currently reflects. Set whenever a
+      hydrate reducer lands (analysis complete or disk hydrate); cleared by
+      reset. Layout uses this to detect stale state across cross-book
+      navigation — e.g. analysing Book A then clicking the generation pill
+      to open Book B's Generate view: without bookId tracking the slice
+      title selector falls through to Book A's stale title because the
+      manuscriptId+title guard short-circuited the per-book disk hydrate. */
+  bookId: string | null;
   manuscriptId: string | null;
   title: string | null;
   format: UploadResponse['format'] | null;
@@ -20,6 +28,7 @@ export interface ManuscriptState {
 }
 
 const initialState: ManuscriptState = {
+  bookId: null,
   manuscriptId: null,
   title: null,
   format: null,
@@ -65,6 +74,11 @@ export const manuscriptSlice = createSlice({
        and the final chapter accumulated copies of every prior chapter
        starting at sentence 1. */
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
+      /* Stamp the slice's bookId from the analysis payload BEFORE the
+         no-sentences early return so the analysing-route hand-off (which
+         lands the full AnalyseResponse) anchors this slice to its book
+         even if the response trivially has no sentences. */
+      if (a.payload.bookId) s.bookId = a.payload.bookId;
       const incoming = a.payload.sentences as unknown as Sentence[] | undefined;
       if (!incoming?.length) return;
       if (s.manuscriptId === null) { s.sentences = incoming; return; }
@@ -103,6 +117,7 @@ export const manuscriptSlice = createSlice({
       format?: UploadResponse['format'] | null;
     }>) => {
       const { state, sentences, wordCount, format } = a.payload;
+      s.bookId = state.bookId;
       s.manuscriptId = state.manuscriptId;
       s.title = state.title;
       s.importCandidate = null;
@@ -111,6 +126,7 @@ export const manuscriptSlice = createSlice({
       if (sentences?.length) s.sentences = sentences;
     },
     reset: (s) => {
+      s.bookId = null;
       s.manuscriptId = null;
       s.title = null;
       s.format = null;

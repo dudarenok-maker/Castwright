@@ -364,7 +364,7 @@ function ConfirmRoute() {
   );
 }
 
-function ReadyRoute() {
+export function ReadyRoute() {
   const { bookId = '', view: rawView } = useParams<{ bookId: string; view: string }>();
   const [searchParams] = useSearchParams();
   const view: View = (VALID_VIEWS as string[]).includes(rawView ?? '') ? (rawView as View) : 'cast';
@@ -397,7 +397,13 @@ function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookI
   const changeLogEvents = useAppSelector(s => s.changeLog.events);
 
   const activeBook   = library.books.find(b => b.bookId === bookId);
-  const projectTitle = manuscript.title || activeBook?.title || null;
+  /* Anchored to the manuscript slice's bookId so cross-book navigation —
+     e.g. analysing Book A → clicking the generation pill to open Book B's
+     Generate view — doesn't render Book A's stale title under
+     "Generating …" until the disk re-hydrate lands. See manuscript-slice
+     bookId tracking + Layout's matching projectTitle/hydration guards. */
+  const manuscriptMatchesBook = manuscript.bookId === bookId;
+  const projectTitle = (manuscriptMatchesBook ? manuscript.title : null) || activeBook?.title || null;
 
   const setCharacters = (next: Character[] | ((prev: Character[]) => Character[])) =>
     dispatch(castActions.setCharacters(typeof next === 'function' ? next(characters) : next));
