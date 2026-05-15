@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   sortEvidence, normaliseForMatch, verifyEvidenceAgainstSource, mergeRosterChapter,
-  chapterEstFromObserved, projectRemainingMs, buildInterimCast,
+  chapterEstFromObserved, projectRemainingMs, buildInterimCast, clearFailedChapterId,
+  dropEvidencelessCast,
 } from './analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
@@ -591,6 +592,53 @@ describe('AnalysisCache schema — persisted durations', () => {
   });
 });
 
+/* clearFailedChapterId centralises the "did a previously-failed chapter
+   just recover?" check used by both the full /analysis/stream route
+   (Phase 0a re-queue success path) and the subset /analysis/chapters
+   route. The two routes were duplicating the check inline, and they
+   drifted: the full route's clear was wrapped in a truthy-length
+   guard that re-saved a defined `failedChapterIds: []` even when the
+   id wasn't actually in the list, while the subset route's path missed
+   the SSE emission entirely. Promoting it to a tested helper keeps the
+   emit-on-recovery invariant ("chapter-resolved fires iff the id was
+   in the list") on a single line that both routes share. */
+describe('clearFailedChapterId — recovery detection helper', () => {
+  it('returns true and removes the id when it was in the list', () => {
+    const cache = { failedChapterIds: [44, 49] };
+    expect(clearFailedChapterId(cache, 44)).toBe(true);
+    expect(cache.failedChapterIds).toEqual([49]);
+  });
+
+  it('returns false and leaves the list intact when the id was not present', () => {
+    const cache = { failedChapterIds: [44, 49] };
+    expect(clearFailedChapterId(cache, 999)).toBe(false);
+    expect(cache.failedChapterIds).toEqual([44, 49]);
+  });
+
+  it('returns false when the field is undefined (legacy cache); does not initialise it', () => {
+    const cache: { failedChapterIds?: number[] } = {};
+    expect(clearFailedChapterId(cache, 44)).toBe(false);
+    expect(cache.failedChapterIds).toBeUndefined();
+  });
+
+  it('returns false when the field is an empty array; does not flip the empty array', () => {
+    const cache = { failedChapterIds: [] as number[] };
+    expect(clearFailedChapterId(cache, 44)).toBe(false);
+    expect(cache.failedChapterIds).toEqual([]);
+  });
+
+  it('is idempotent — a second call for the same id returns false (no double-emit)', () => {
+    /* The route emits chapter-resolved on a true return. A double-call
+       (e.g. retry-of-already-recovered-chapter) must not double-fire
+       the event or the FE would see the row "resolve twice" and could
+       race the panel state with a chapter-failed re-add. */
+    const cache = { failedChapterIds: [44] };
+    expect(clearFailedChapterId(cache, 44)).toBe(true);
+    expect(clearFailedChapterId(cache, 44)).toBe(false);
+    expect(cache.failedChapterIds).toEqual([]);
+  });
+});
+
 /* buildInterimCast underpins the mid-run cast.json writes — the helper
    must produce a deduped, palette-coloured roster with lines:0/scenes:0
    placeholders so the file shape matches the post-Phase-1 end-of-run
@@ -662,5 +710,100 @@ describe('buildInterimCast — mid-run cast snapshot', () => {
 
     const interim = buildInterimCast(chapterCast, [1, 2, 3]);
     expect(interim.map(c => c.id)).toEqual(['Wren', 'Marlow']);
+  });
+
+  it('folds descriptor names ("The Jogger", "Drooly Boy", "Unknown Intruder") into Unknown male/female buckets so the mid-run snapshot matches the post-Phase-1 fold', () => {
+    /* Stage-1 detection emits descriptor names the user never wants to
+       see as standalone cast entries. The on-disk cast.json mid-run
+       must collapse them into the Unknown male / Unknown female
+       buckets — same contract the live SSE cast-update uses — so the
+       user inspecting `.audiobook/cast.json` while Phase 0a is still
+       running sees the same shape they'll see at end-of-run. */
+    const chapterCast: Record<number, CharacterOutput[]> = {
+      1: [
+        makeChar('narrator',   'Narrator'),
+        makeChar('Wren',     'Wren',         { gender: 'female' }),
+        makeChar('the-jogger', 'The Jogger',     { gender: 'male'   }),
+      ],
+      2: [
+        makeChar('drooly-boy', 'Drooly Boy',     { gender: 'male'   }),
+        makeChar('tall-lady',  'Tall Lady',      { gender: 'female' }),
+        makeChar('unknown-1',  'Unknown Intruder', { gender: 'male' }),
+      ],
+    };
+
+    const interim = buildInterimCast(chapterCast, [1, 2]);
+
+    expect(interim.map(c => c.id).sort()).toEqual(
+      ['narrator', 'Wren', 'unknown-female', 'unknown-male'],
+    );
+    const male   = interim.find(c => c.id === 'unknown-male')!;
+    const female = interim.find(c => c.id === 'unknown-female')!;
+    expect(male.aliases).toEqual(['The Jogger', 'Drooly Boy', 'Unknown Intruder']);
+    expect(female.aliases).toEqual(['Tall Lady']);
+  });
+});
+
+/* Phase 0b finalise drops non-narrator characters whose verifier
+   killed every attributed quote — they failed the Stage-1 skill's
+   own inclusion test ("can you copy a verbatim sentence … that is
+   dialogue the entity speaks?"). Without this catch-net, pets +
+   non-speakers that the model invented quotes for survive all the
+   way to the cast view. */
+describe('dropEvidencelessCast — Phase 0b drop of characters with no verifiable dialogue', () => {
+  const makeChar = (id: string, name: string, evidence?: Array<{ quote: string }>): CharacterOutput => ({
+    id, name, role: 'character', color: 'unset', evidence,
+  });
+
+  it('drops non-narrator characters left with zero evidence after the verifier ran', () => {
+    const logs: string[] = [];
+    const chars: CharacterOutput[] = [
+      makeChar('narrator', 'Narrator', []),                                    // narrator is exempt
+      makeChar('Wren',   'Wren',   [{ quote: 'Real line' }]),               // kept
+      makeChar('Pib',     'Pib',     []),                                     // pet — verifier killed everything
+      makeChar('rescuer',  'Rescuer'),                                          // never had evidence
+    ];
+
+    const kept = dropEvidencelessCast(chars, msg => logs.push(msg));
+
+    expect(kept.map(c => c.id)).toEqual(['narrator', 'Wren']);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('Dropped 2 characters');
+    expect(logs[0]).toContain('Pib');
+    expect(logs[0]).toContain('Rescuer');
+  });
+
+  it('is a no-op (no log) when every non-narrator character has surviving evidence', () => {
+    const logs: string[] = [];
+    const chars: CharacterOutput[] = [
+      makeChar('narrator', 'Narrator'),
+      makeChar('Wren',   'Wren', [{ quote: 'Line' }]),
+      makeChar('Marlow',    'Marlow',  [{ quote: 'Line' }]),
+    ];
+
+    const kept = dropEvidencelessCast(chars, msg => logs.push(msg));
+
+    expect(kept.map(c => c.id)).toEqual(['narrator', 'Wren', 'Marlow']);
+    expect(logs).toEqual([]);
+  });
+
+  it('NEVER drops the narrator even when it has zero evidence (narrator lines are prose, not dialogue)', () => {
+    const chars: CharacterOutput[] = [
+      makeChar('narrator', 'Narrator'),                          // no evidence
+      makeChar('Wren',   'Wren', [{ quote: 'Hi.' }]),
+    ];
+
+    const kept = dropEvidencelessCast(chars, () => {});
+    expect(kept.map(c => c.id)).toEqual(['narrator', 'Wren']);
+  });
+
+  it('singularises the log message when exactly one character is dropped', () => {
+    const logs: string[] = [];
+    dropEvidencelessCast(
+      [{ id: 'lone', name: 'Lone', role: 'r', color: 'c', evidence: [] }],
+      msg => logs.push(msg),
+    );
+    expect(logs[0]).toContain('Dropped 1 character ');
+    expect(logs[0]).not.toContain('Dropped 1 characters');
   });
 });
