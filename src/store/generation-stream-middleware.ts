@@ -178,8 +178,17 @@ export const generationStreamMiddleware: Middleware = (store) => {
        from contexts that mean "stop the active stream": the Generate-view
        Stop button (current book is the streaming book), or the
        local-analyzer confirm prompt (handles cross-book pause). Either
-       way, close. */
-    if (handle && paused) { closeHandle(); return; }
+       way: fire an explicit /pause to the server so the run stops
+       server-side (closing the SSE alone is no longer enough — the server
+       now treats SSE close as "unsubscribe this observer", which is what
+       lets a browser reload survive without killing the run), then close
+       our local handle. */
+    if (handle && paused) {
+      const pauseBookId = handle.bookId;
+      void api.pauseGeneration({ bookId: pauseBookId });
+      closeHandle();
+      return;
+    }
 
     /* Sticky semantics: once a handle is open for book X, it stays open
        across goHome, openBook(otherBook), changeView, setTtsModelKey, and

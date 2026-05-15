@@ -39,18 +39,54 @@ import { describeSynthesisError, newCascadeState, recordNonFatal } from './gener
 
 export const generationRouter = Router();
 
-/* Per-bookId mutex. A second POST for the same book aborts the first — the
-   in-flight handler's `synthesiseChapter` loop checks `signal.aborted` between
-   groups and the sidecar fetch receives the same signal, so a stale handler
-   stops within seconds rather than running to the end of the chapter.
+/* Per-bookId job tracker. Each entry is a RunningJob: one AbortController +
+   a Set of currently-attached SSE subscribers. Designed so the server-side
+   work outlives any single client connection — a browser reload closes the
+   client's SSE but the job keeps generating, and the post-reload client
+   re-subscribes to receive subsequent ticks. The audio that's already on
+   disk shows up in the catch-up replay every new subscriber gets at attach
+   time, so a user who reloads mid-run sees both the completed chapters
+   AND the live progression of the in-flight one.
 
-   Without this, the client's regenerate flow can stack handlers: Pause aborts
-   the client SSE but the server keeps processing; a subsequent Resume opens
-   a fresh handler against the same book, the sidecar serialises both, and the
-   user sits through duplicate work. With the mutex, "newest request wins" —
-   the prior handler shuts down cleanly (emits a final `idle` from the
-   AbortError catch) and the new one runs alone. */
-const inFlightByBook: Map<string, AbortController> = new Map();
+   Pause semantics live on POST /pause now, not on SSE close. SSE close
+   only unsubscribes the closing observer; the job keeps running until
+   either (a) the queue drains, (b) /pause is called, or (c) a regen POST
+   (chapterIds + force) displaces the job. */
+interface Subscriber {
+  send: (ev: unknown) => void;
+  res: Response;
+}
+
+interface RunningJob {
+  controller: AbortController;
+  subscribers: Set<Subscriber>;
+  bookId: string;
+}
+
+const inFlightByBook: Map<string, RunningJob> = new Map();
+
+function broadcast(job: RunningJob, ev: unknown): void {
+  for (const sub of job.subscribers) {
+    try {
+      sub.send(ev);
+    } catch {
+      /* A subscriber whose socket already died is harmless to skip — the
+         cleanup hook on req.on('close') will drop it from the Set on its
+         own tick. We don't want one dead socket to abort the broadcast
+         for the rest of the room. */
+    }
+  }
+}
+
+function endAllSubscribers(job: RunningJob, finalEv?: unknown): void {
+  for (const sub of job.subscribers) {
+    if (finalEv) {
+      try { sub.send(finalEv); } catch { /* see broadcast() */ }
+    }
+    try { sub.res.end(); } catch { /* socket already closed */ }
+  }
+  job.subscribers.clear();
+}
 
 interface GenerationRequestBody {
   modelKey?: unknown;
@@ -195,22 +231,56 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     return res.end();
   }
 
-  /* Per-bookId mutex: if a previous handler is still running for this book,
-     abort it. Its synthesiseChapter loop will see signal.aborted between
-     groups (and the sidecar fetch will reject with AbortError mid-call),
-     bail out via the AbortError catch below, and end its response. We then
-     register our own controller for the next caller to displace if needed. */
-  const previousController = inFlightByBook.get(bookId);
-  if (previousController) previousController.abort();
-  const controller = new AbortController();
-  inFlightByBook.set(bookId, controller);
+  /* Two dispatch modes for this POST:
+       - "Subscribe": no chapterIds + no force, AND a non-aborted job is
+         already running for this book. The connection joins the existing
+         job's subscriber set; the loop is NOT re-entered. The catch-up
+         replay above has already snapped this client to the current
+         on-disk state, so subsequent broadcast ticks bring it the rest.
+         Browser-reload survival lives here — the page-reload's new POST
+         lands in this branch and the original run keeps generating
+         untouched.
+       - "Start / displace": chapterIds + force (regen) OR no existing
+         job. We abort any existing job (regen explicitly wants a fresh
+         run with the new spec; a duplicate Resume against a still-live
+         job is benign because the existing branch handles that). The
+         loop runs in this request's lexical scope.
+     Pause used to piggyback on SSE close; it doesn't any more — see the
+     dedicated POST /pause endpoint below. SSE close ONLY unsubscribes
+     this observer now; the job carries on for other observers (or for
+     no observers at all). */
+  const isDisplacing = (requestedIds !== null && requestedIds.length > 0) || force;
+  const existing = inFlightByBook.get(bookId);
+  if (existing && !existing.controller.signal.aborted && !isDisplacing) {
+    const subscriber: Subscriber = { send, res };
+    existing.subscribers.add(subscriber);
+    req.on('close', () => existing.subscribers.delete(subscriber));
+    /* Keep `res` open. The job's loop will end this response via
+       endAllSubscribers() when it drains or is paused. */
+    return;
+  }
 
-  /* Pause = client closes the SSE. We abort our own controller so the
-     synth loop bails between groups instead of running the chapter to
-     completion. (The pre-mutex behaviour was to let the in-flight chapter
-     finish — but with the mutex we want a "newest request wins" semantics
-     and the user gets faster feedback on Pause.) */
-  req.on('close', () => controller.abort());
+  if (existing) existing.controller.abort();
+  const controller = new AbortController();
+  const job: RunningJob = {
+    controller,
+    subscribers: new Set([{ send, res }]),
+    bookId,
+  };
+  inFlightByBook.set(bookId, job);
+
+  /* SSE close on the starter connection is just an unsubscribe — the job
+     keeps running for any other observers. If the starter was the only
+     subscriber, the loop generates audio to disk silently; the next
+     subscriber to attach picks up via the catch-up replay. */
+  req.on('close', () => {
+    for (const sub of job.subscribers) {
+      if (sub.res === res) {
+        job.subscribers.delete(sub);
+        break;
+      }
+    }
+  });
 
   /* Cascade detector — if the same non-fatal reason fails two chapters in
      a row, the failure is deterministic (e.g. sidecar mis-routing every
@@ -225,7 +295,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
 
     const sentences = analysis.chapters[chapter.id] ?? [];
     if (sentences.length === 0) {
-      send({
+      broadcast(job, {
         type: 'chapter_failed',
         chapterId: chapter.id,
         errorReason: 'No sentences available for this chapter — analysis cache is incomplete.',
@@ -234,7 +304,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     }
 
     const totalLines = sentences.length;
-    send({
+    broadcast(job, {
       type: 'progress',
       chapterId: chapter.id,
       characterId: null,
@@ -263,7 +333,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
              rather than (index+1)/total — so the bar doesn't visibly snap forward
              at start and then sit still while the call runs. */
           const progress = Math.min(0.99, group.index / Math.max(1, totalGroups));
-          send({
+          broadcast(job, {
             type: 'progress',
             chapterId: chapter.id,
             characterId: group.characterId,
@@ -278,7 +348,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           /* currentLine is positional; clamp to sentences.length so the UI's
              "line N of M" reads naturally even when sentence ids aren't 1..N. */
           const positional = sentences.findIndex(s => s.id === lastSentenceId);
-          send({
+          broadcast(job, {
             type: 'progress',
             chapterId: chapter.id,
             characterId: group.characterId,
@@ -293,7 +363,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          work (encode MP3 → temp file → segments JSON → atomic rename →
          state.json update). Tell the client so it stops looking like a
          frozen 99 %. */
-      send({
+      broadcast(job, {
         type: 'chapter_assembling',
         chapterId: chapter.id,
         characterId: null,
@@ -365,7 +435,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         await writeJsonAtomic(statePath, next);
       }
 
-      send({
+      broadcast(job, {
         type: 'chapter_complete',
         chapterId: chapter.id,
         characterId: null,
@@ -374,9 +444,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         totalLines,
       });
     } catch (e) {
-      /* AbortError = our own controller fired (mutex displacement or client
-         close). Don't report it as a chapter failure — silently break the
-         loop; the outer `idle` + cleanup below handles the rest. */
+      /* AbortError = our own controller fired (regen displacement or
+         explicit /pause). Don't report it as a chapter failure — silently
+         break the loop; the outer `idle` + cleanup below handles the rest. */
       if ((e as { name?: string })?.name === 'AbortError') break;
       const initial = describeSynthesisError(e);
       let { errorReason, fatal } = initial;
@@ -388,7 +458,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           errorReason = `${errorReason} (Stopping run — same failure repeated across chapters; fix the upstream cause before retrying.)`;
         }
       }
-      send({
+      broadcast(job, {
         type: 'chapter_failed',
         chapterId: chapter.id,
         errorReason,
@@ -397,15 +467,36 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     }
   }
 
-  /* Only deregister if we're still the current controller — a newer request
-     may have already displaced us, and removing its entry would defeat the
-     mutex for a third caller. */
-  if (inFlightByBook.get(bookId) === controller) {
+  /* Only deregister if we're still the current job — a newer regen may have
+     already displaced us, and removing its entry would defeat the dispatcher
+     for a third caller. */
+  if (inFlightByBook.get(bookId) === job) {
     inFlightByBook.delete(bookId);
   }
 
-  send({ type: 'idle' });
-  res.end();
+  /* Broadcast idle + end every attached response (the starter + any
+     subscribers that joined via page reload / mid-run open). After this
+     point the job is dead; the next /generation POST sees no existing
+     entry and starts a fresh run. */
+  endAllSubscribers(job, { type: 'idle' });
+});
+
+/* POST /api/books/:bookId/generation/pause — explicit pause signal.
+   Browser reload also closes the SSE, so we can't piggyback on that any
+   more (see RunningJob comment block above). This endpoint is the single
+   signal the route uses to stop a running job: middleware POSTs here on
+   setPaused(true), the loop's AbortError catch fires, all subscribers
+   get an `idle` tick and their responses end.
+
+   Idempotent: returns 200 even when no job is running (treats it as a
+   no-op so a double-click on Pause doesn't 404). */
+generationRouter.post('/:bookId/generation/pause', (req: Request, res: Response) => {
+  const { bookId } = req.params;
+  const job = inFlightByBook.get(bookId);
+  if (job && !job.controller.signal.aborted) {
+    job.controller.abort();
+  }
+  res.status(200).json({ ok: true, paused: job != null });
 });
 
 /** Format seconds as MM:SS or HH:MM:SS — matches the existing `duration`

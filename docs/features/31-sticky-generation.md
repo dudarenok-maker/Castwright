@@ -35,6 +35,29 @@ remote APIs and don't touch local VRAM.
    - `ui.ttsModelKey` switching — the new model only takes effect on
      the NEXT generation start.
 
+1a. **Browser reload also survives.** The server-side run is owned by a
+   `RunningJob` keyed on `bookId` in
+   `server/src/routes/generation.ts`. Each POST to `/generation`
+   attaches a `Subscriber` (`{ send, res }`) to the job's broadcast
+   set; `req.on('close')` unsubscribes ONLY (does NOT abort the
+   controller). When the browser reloads, the old SSE closes →
+   subscriber unsubscribes → the job keeps running. The post-reload
+   page POSTs again with no `chapterIds` → the new request attaches as
+   a fresh subscriber to the same job and receives the catch-up
+   `chapter_complete` replay for everything already on disk, then
+   live ticks from there.
+
+   Pause is no longer a side-effect of SSE close — it has its own
+   endpoint: `POST /api/books/:bookId/generation/pause`. The
+   middleware fires this via `api.pauseGeneration` on
+   `setPaused(true)` BEFORE closing the local handle, so the server
+   gets an explicit "stop" signal that the loop's AbortError catch
+   surfaces as a final `idle` tick to every subscriber.
+
+   Regenerate stays as displacement: a POST with `chapterIds + force`
+   aborts the existing job before starting a fresh one with the new
+   spec.
+
 2. **The `chapters.activeStream` snapshot is the source of truth for
    the global header pill.** It is set on `openHandle`, refreshed on
    every non-idle `applyGenerationTick`, and cleared on `closeHandle`.
@@ -102,6 +125,18 @@ analyzer + the TTS sidecar must all be up.
      the slice drifted) and clicking it must navigate back to
      `/books/<bookA>/generate`. The Network tab still shows the
      original stream alive.
+
+2a. **Sticky across browser reload.**
+   - With generation running, hit F5 / Ctrl+R / browser reload.
+   - The previous SSE in the Network tab closes; the page re-mounts;
+     a fresh POST `/generation` lands. On the server it attaches as a
+     subscriber to the existing in-flight job (the run is keyed on
+     bookId, not on the connection), receives the catch-up replay,
+     and continues ticking live. The Generate view shows the
+     completed chapter count tick up where it left off.
+   - Confirm via `server/logs/server.log` that the second POST does
+     NOT trigger a fresh `synthesiseChapter` walk — just a subscribe
+     + catch-up.
 
 3. **Sticky across TTS model switch.**
    - Open Account; flip the TTS model picker to a different option.
