@@ -20,6 +20,7 @@ Renders the manuscript a chapter at a time, sentence-by-sentence, with each sent
 - Chapter navigation is keyboard-friendly: left/right arrows step `currentChapterId`; URL updates via `setCurrentChapterId`.
 - The view is only mounted when `stage.kind === 'ready' && stage.view === 'manuscript'`. Other views never render it.
 - **Excluded chapters are visibly indicated.** Rows in the sidebar with `chapter.excluded === true` render the title in `line-through text-ink/40` and replace the duration line with `"Excluded"`; the per-state icon (spinner/check/warning) is suppressed because the chapter never queued. Selecting an excluded chapter swaps the main panel for an explanatory empty card ("This chapter was excluded at import. …") and a pill next to the title — never a blank `<article>` with `"0 segments · 0 speakers · 0 low-confidence"`. The user re-includes from the Generate view (see `16-generation-stream.md`).
+- **Sidebar scales to large books.** The Chapters and Detected (cast) cards live in a fixed-height flex column with no outer scroll. Each card owns its own `overflow-y-auto` scroll region, so a 500-chapter book never pushes the cast list off the bottom of the viewport. Both cards split the vertical space equally (`flex-1 basis-0` on each) so they're the same height regardless of how many chapters or characters each holds — small books leave both cards short of their bound, large books scroll internally. A `Filter chapters…` input at the top of the Chapters card narrows the list by case-insensitive substring against the title or `CH NN` form; the active chapter remains the active chapter even when filtered out of the sidebar (filter is a view, not a selection mutation). When the active chapter changes (via Prev/Next or external `setCurrentChapterId`), the matching sidebar row is `scrollIntoView({ block: 'nearest' })`-ed inside the chapter scroll region.
 
 ## Acceptance walkthrough
 
@@ -33,6 +34,7 @@ Run `VITE_USE_MOCKS=true`, navigate to `#/books/<id>/manuscript`.
 6. **Audio tags in text** — sentence `"Are you sure? [hesitant]"` renders the `[hesitant]` badge inline.
 7. **Navigate chapters** — left/right arrow keys step `currentChapterId`; URL updates; sentence list rerenders for the new chapter.
 8. **Open an excluded chapter** — sidebar row shows a strikethrough title and the word `Excluded` in place of the duration. Click it: the main panel swaps to "This chapter was excluded at import. …" with an `Excluded` pill next to the title. No empty article, no `0 segments` counter.
+9. **Large-book sidebar** — load a 500-chapter book (e.g. the new bulk fixture, 509 chapters / 30 cast). The Detected card is visible at the bottom of the sidebar without scrolling. Mouse-wheel over the Chapters card scrolls the chapter list in place; the cast card does not move. Type `epilogue` into `Filter chapters…` and the list collapses to matching rows. Clear the filter and all rows return. Click Next from chapter 200 and the active row is scrolled into the chapter scroll region on its own.
 
 ## KNOWN: scaffolded
 
