@@ -15,6 +15,7 @@ import {
   isTtsModelKey,
   selectTtsProvider,
   TTS_MODEL_LABELS,
+  type TtsEngine,
   type TtsModelKey,
 } from '../tts/index.js';
 import { encodePcmToMp3 } from '../tts/mp3.js';
@@ -74,9 +75,41 @@ function djb2(s: string): number {
   return Math.abs(h);
 }
 
+/* Fixed neutral preview script used by the "Base voices" tab and the
+   family-header Play buttons. Same text for every (engine, speaker)
+   combination so the user can A/B compare without the prompt changing
+   under them. Kept short (~12s spoken) to stay under the sidecar's
+   synth budget. */
+const RAW_SAMPLE_TEXT =
+  'Hello — this is the unmodified model voice. ' +
+  'Listen for tone, pacing, and pronunciation; ' +
+  'no profile attributes have been applied.';
+
+function isTtsEngine(value: unknown): value is TtsEngine {
+  return value === 'coqui' || value === 'gemini' || value === 'piper' || value === 'kokoro';
+}
+
+/* Pick a sensible modelKey for a given engine when the caller didn't supply
+   one that matches. Used by the raw-sample branch: a client clicking Play
+   on a Gemini base voice while the project is set to a Coqui modelKey
+   shouldn't have to know to re-pick — the server routes via the engine. */
+function defaultModelKeyForEngine(engine: TtsEngine): TtsModelKey {
+  if (engine === 'gemini') return 'gemini-2.5-flash';
+  if (engine === 'piper')  return 'piper-en-us-medium';
+  if (engine === 'kokoro') return 'kokoro-v1';
+  return 'coqui-xtts-v2';
+}
+
 voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) => {
   const { voiceId } = req.params;
-  const body = (req.body ?? {}) as { modelKey?: unknown; voice?: VoiceLike; text?: string; characterHint?: CharacterHint };
+  const body = (req.body ?? {}) as {
+    modelKey?: unknown;
+    voice?: VoiceLike;
+    text?: string;
+    characterHint?: CharacterHint;
+    rawEngine?: unknown;
+    rawSpeaker?: unknown;
+  };
 
   if (!isTtsModelKey(body.modelKey)) {
     return res.status(400).json({
@@ -90,13 +123,46 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
   /* Compute the synthesis inputs up front so the cache filename can include
      a hash of (text, voiceName). Otherwise an attribute edit (gender, age,
      tone) that picks a different prebuilt voice or evidence line would
-     silently return the previous run's audio. */
-  const engine = engineForModelKey(modelKey);
-  const text = (body.text && body.text.trim()) || buildSampleText(voice, body.characterHint);
-  const voiceName = pickVoiceForEngine(engine, voice, body.characterHint);
+     silently return the previous run's audio.
+
+     Raw-sample branch: when the client sets `rawEngine` + `rawSpeaker`, the
+     picker is bypassed entirely and the named speaker is synthesised
+     directly with the fixed neutral script. The cache key drops the voiceId
+     and shifts onto `raw-<engine>-<speaker>` so unused base voices share
+     one cache slot across every voiceId path the request happened to land
+     on, and so toggling between auto-resolved and raw samples for the same
+     voiceId doesn't trample each other. */
+  const isRawSample =
+    isTtsEngine(body.rawEngine) &&
+    typeof body.rawSpeaker === 'string' &&
+    body.rawSpeaker.trim().length > 0;
+
+  let engine: TtsEngine;
+  let text: string;
+  let voiceName: string;
+  let cacheScope: string;
+  let effectiveModelKey: TtsModelKey = modelKey;
+  if (isRawSample) {
+    engine = body.rawEngine as TtsEngine;
+    voiceName = (body.rawSpeaker as string).trim();
+    text = (body.text && body.text.trim()) || RAW_SAMPLE_TEXT;
+    cacheScope = `raw-${engine}-${djb2(voiceName).toString(36).slice(0, 6)}`;
+    /* The client may have passed any modelKey it had handy (whatever the
+       project's currently set to). Re-pick one that actually routes to the
+       requested engine, otherwise selectTtsProvider would send a Coqui
+       speaker name to the Gemini provider or vice versa. */
+    if (engineForModelKey(modelKey) !== engine) {
+      effectiveModelKey = defaultModelKeyForEngine(engine);
+    }
+  } else {
+    engine = engineForModelKey(modelKey);
+    text = (body.text && body.text.trim()) || buildSampleText(voice, body.characterHint);
+    voiceName = pickVoiceForEngine(engine, voice, body.characterHint);
+    cacheScope = voiceId;
+  }
   const paramHash = djb2(`${text}|${voiceName}`).toString(36).slice(0, 8);
 
-  const fileName = `${voiceId}-${modelKey}-${paramHash}.mp3`;
+  const fileName = `${cacheScope}-${effectiveModelKey}-${paramHash}.mp3`;
   const filePath = resolve(AUDIO_DIR, fileName);
   const publicUrl = `/audio/voices/${fileName}`;
 
@@ -108,7 +174,7 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
 
   let provider;
   try {
-    provider = selectTtsProvider(modelKey);
+    provider = selectTtsProvider(effectiveModelKey);
   } catch (err) {
     return res.status(500).json({
       code: 'provider_unavailable',
@@ -116,10 +182,10 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     });
   }
 
-  console.info(`[tts] ${voiceId} → ${voiceName} (engine=${engine}, model=${modelKey}, ${text.length} chars, hash=${paramHash})`);
+  console.info(`[tts] ${cacheScope} → ${voiceName} (engine=${engine}, model=${effectiveModelKey}, ${text.length} chars, hash=${paramHash})`);
 
   try {
-    const { pcm, sampleRate } = await provider.synthesize({ text, voiceName, modelKey });
+    const { pcm, sampleRate } = await provider.synthesize({ text, voiceName, modelKey: effectiveModelKey });
     /* Compute duration from raw PCM before encode — MP3 frame counting would
        force a probe step. PCM bytes/sec is exact for 16-bit mono. */
     const durationSec = pcmDurationSec(pcm.length, sampleRate);

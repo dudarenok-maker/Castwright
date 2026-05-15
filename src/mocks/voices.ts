@@ -7,7 +7,7 @@
    gradients are derived from those names so two voices on the same prebuilt
    share a palette — same rule the server applies in real mode. */
 
-import type { VoiceLibraryResponse, Voice } from '../lib/types';
+import type { VoiceLibraryResponse, Voice, BaseVoice } from '../lib/types';
 import { gradientForTtsVoice } from '../lib/voice-palette';
 
 const tts = (name: string, description: string) => ({ provider: 'gemini' as const, name, description });
@@ -30,3 +30,25 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
     withGradient({ id: 'v_navigator', character: 'First Mate Greene',     bookTitle: "Carrick's Compass",  bookId: 'cc', attributes: ['Female','Mezzo','Irish','40s','Pragmatic'],                  usedIn: 2,  source: 'library',                  ttsVoice: tts('Leda',       'Youthful') }),
   ],
 };
+
+/* Base-voice catalog used when VITE_USE_MOCKS=true. Mirrors what the live
+   server's GET /api/voices/base would return after a Coqui sidecar load and
+   merges in the Gemini side. Kept small and representative — the test
+   fixtures only care about the (engine, name) shape, not exhaustiveness. */
+export const MOCK_BASE_VOICES: BaseVoice[] = [
+  /* Coqui XTTS speakers — sample of the manifest. */
+  { engine: 'coqui', name: 'Asya Anara' },
+  { engine: 'coqui', name: 'Damien Black' },
+  { engine: 'coqui', name: 'Ana Florence' },
+  { engine: 'coqui', name: 'Aaron Dreschner' },
+  { engine: 'coqui', name: 'Brenda Stern' },
+  { engine: 'coqui', name: 'Claribel Dervla' },
+  { engine: 'coqui', name: 'Sofia Hellen' },
+  /* Gemini prebuilt voices — sample from the 30-voice published catalog. */
+  { engine: 'gemini', name: 'Charon' },
+  { engine: 'gemini', name: 'Kore' },
+  { engine: 'gemini', name: 'Iapetus' },
+  { engine: 'gemini', name: 'Aoede' },
+  { engine: 'gemini', name: 'Sulafat' },
+  { engine: 'gemini', name: 'Zephyr' },
+];
