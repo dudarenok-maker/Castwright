@@ -21,6 +21,7 @@ import { api } from '../lib/api';
 import { stageEqual } from '../lib/router';
 import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { Layout, type LayoutContext } from '../components/layout';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { UploadView } from '../views/upload';
 import { AnalysingView } from '../views/analysing';
 import { ConfirmCastView } from '../views/confirm-cast';
@@ -243,6 +244,10 @@ export function AnalysingRoute() {
       model={ui.selectedModel}
       onComplete={(payload) => {
         dispatch(castActions.hydrateFromAnalysis(payload));
+        /* hydrateFromAnalysis atomically pins the chapters slice to
+           payload.bookId via its currentBookId reducer field, so the
+           cross-book tick guard in applyGenerationTick has a truthful
+           frame the instant chapter rows land. */
         dispatch(chaptersActions.hydrateFromAnalysis(payload));
         dispatch(manuscriptActions.hydrateFromAnalysis(payload));
         dispatch(uiActions.analysisComplete({ bookId: payload.bookId }));
@@ -260,8 +265,13 @@ function ConfirmRoute() {
   const characters = useAppSelector(s => s.cast.characters);
   const voices     = useAppSelector(s => s.voices.voices);
   const manuscript = useAppSelector(s => s.manuscript);
+  /* Re-analyse fires a fresh local-analyzer pass; guard it the same way
+     book imports do so it can't evict TTS mid-chapter. Gemini/Gemma
+     engines pass through unguarded. */
+  const { guard, modal: guardModal } = useLocalAnalyzerGuard();
 
   return (
+    <>
     <ConfirmCastView characters={characters} library={voices}
       title={manuscript.title}
       onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
@@ -298,9 +308,13 @@ function ConfirmRoute() {
            chapter_failed, boundary_move) because the upcoming reparse
            reshuffles chapter ids. Cast/voice prefs survive — those are
            still meaningful after a reparse. */
-        dispatch(changeLogActions.wipeBookShapeEvents());
-        dispatch(uiActions.reanalyse());
+        guard(() => {
+          dispatch(changeLogActions.wipeBookShapeEvents());
+          dispatch(uiActions.reanalyse());
+        });
       }}/>
+    {guardModal}
+    </>
   );
 }
 
@@ -405,7 +419,7 @@ function ListenRoute({ bookId }: { bookId: string }) {
   const isDirty    = useAppSelector(selectIsDirty);
   const coverGradient = useAppSelector(s => s.library.books.find(b => b.bookId === bookId)?.coverGradient ?? null);
   return (
-    <ListenView chapters={chapters} characters={characters} library={voices}
+    <ListenView bookId={bookId} chapters={chapters} characters={characters} library={voices}
       currentTrack={currentTrack}
       setCurrentTrack={(t) => dispatch(uiActions.setCurrentTrack(t))}
       onSendApp={(app) => dispatch(uiActions.setHandoffApp(app))}

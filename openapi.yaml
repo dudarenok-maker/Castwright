@@ -480,6 +480,111 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RevisionsResponse' }
 
+  /api/books/{bookId}/exports:
+    post:
+      summary: Build a sideloadable audiobook artifact (Phase A — MP3.ZIP)
+      operationId: createBookExport
+      description: |
+        Packages a finished book's per-chapter MP3 files into a single
+        zip archive (PocketBook Reader Android sideloads MP3.ZIP, the
+        e-reader's audiobook app on every platform accepts it). The
+        zip carries one MP3 per non-excluded chapter, two-digit-prefixed
+        and ID3v2.4-tagged (TIT2, TALB, TPE1, TPE2, TRCK) so PocketBook
+        sorts and labels them correctly. Chapter audio is copied byte-
+        for-byte via `ffmpeg -c:a copy` — no re-encode of the existing
+        LAME VBR V2 frames.
+
+        Returns immediately with the freshly-created job; clients poll
+        `getBookExport` for progress and follow `downloadUrl` once
+        `status === 'done'`. With `destination: 'sync-folder'`, the
+        finished archive is also copied to the user's configured
+        `exportSyncFolder` via an atomic tmp+rename (same OneDrive-safe
+        backoff as state.json). Refuses with `409 export_incomplete`
+        when any non-excluded chapter lacks an `.mp3` audio file.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BookExportRequest' }
+      responses:
+        '201':
+          description: Export job created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookExportJob' }
+        '404':
+          description: Book not found
+        '409':
+          description: One or more non-excluded chapters lack a `.mp3` audio file
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, missing]
+                properties:
+                  error: { type: string, enum: [export_incomplete] }
+                  missing:
+                    type: array
+                    items: { type: string, description: "Chapter slug or title" }
+
+  /api/books/{bookId}/exports/{exportId}:
+    get:
+      summary: Poll the status of an in-flight or completed export
+      operationId: getBookExport
+      parameters:
+        - { in: path, name: bookId,   required: true, schema: { type: string } }
+        - { in: path, name: exportId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Current job state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookExportJob' }
+        '404':
+          description: Job id unknown
+
+  /api/books/{bookId}/exports/{exportId}/download:
+    get:
+      summary: Stream the export archive bytes
+      operationId: downloadBookExport
+      description: |
+        Range-aware `application/zip` (Phase A) or `audio/mp4`
+        (Phase B M4B) stream. Phone Chrome can hit this URL directly
+        over the LAN; the browser saves into Downloads/ and a tap
+        opens it with PocketBook Reader.
+      parameters:
+        - { in: path, name: bookId,   required: true, schema: { type: string } }
+        - { in: path, name: exportId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Archive bytes
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: Partial content (Range request)
+        '404':
+          description: Job id unknown or staging file missing
+
+  /api/export/lan:
+    get:
+      summary: Enumerate the server's reachable LAN URLs
+      operationId: getExportLanUrls
+      description: |
+        Returns non-loopback IPv4 addresses the Node server is reachable
+        on so the export modal can render a sideload URL + QR for the
+        user's phone. Loopback (127.x) and link-local v6 (fe80::) are
+        filtered out — they're useless for sideloading. Order matches
+        `os.networkInterfaces()` enumeration; the modal picks the first.
+      responses:
+        '200':
+          description: LAN URL list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportLanInfo' }
+
 # ---------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------
@@ -556,6 +661,15 @@ components:
             Optional override for the WORKSPACE_DIR env var. Read once at
             server startup — changes require a server restart to apply
             (UI flags this with a "restart required" badge).
+        exportSyncFolder:
+          type: string
+          nullable: true
+          description: |
+            Optional destination folder the audiobook-export pipeline copies
+            finished files into (e.g. a OneDrive or Syncthing watch path
+            mirrored to the user's phone). Null disables the "save to sync
+            folder" tab in the export modal. The writer mkdirs on demand
+            and uses the same OneDrive-safe atomic-rename retry as state.json.
         minorCastMinLines:
           type: integer
           minimum: 0
@@ -610,6 +724,9 @@ components:
         analysisEngine:       { type: string, enum: [local, gemini] }
         ollamaUrl:            { type: string }
         workspaceDirOverride:
+          type: string
+          nullable: true
+        exportSyncFolder:
           type: string
           nullable: true
         minorCastMinLines:
@@ -1199,3 +1316,56 @@ components:
         characterId: { type: string }
         startMs:     { type: integer }
         endMs:       { type: integer }
+
+    # --- Audiobook export ------------------------------------------
+    BookExportRequest:
+      type: object
+      required: [format, destination]
+      properties:
+        format:
+          type: string
+          enum: [mp3-zip]
+          description: |
+            Container format. Phase A ships `mp3-zip` only — a zip of
+            per-chapter MP3s the way PocketBook (and every other
+            audiobook app) accepts as a "MP3.ZIP" sideload. Phase B
+            adds `m4b` (single-file AAC with chapter atoms).
+        destination:
+          type: string
+          enum: [download, sync-folder]
+          description: |
+            `download` stages the file under the book's `.audiobook/exports/`
+            for the user to pull via `downloadBookExport`. `sync-folder`
+            additionally copies the finished archive into the user's
+            configured `exportSyncFolder` (e.g. a OneDrive watch path) so
+            it lands on their phone via sync. Requires `exportSyncFolder`
+            to be set; the request 400s otherwise.
+
+    BookExportJob:
+      type: object
+      required: [id, bookId, format, destination, status, filename, createdAt]
+      properties:
+        id:          { type: string, description: "Server-generated export id" }
+        bookId:      { type: string }
+        format:      { type: string, enum: [mp3-zip, m4b] }
+        destination: { type: string, enum: [download, sync-folder] }
+        status:
+          type: string
+          enum: [queued, in_progress, done, failed]
+        filename:    { type: string, description: "e.g. 'The Northern Star.zip'" }
+        sizeBytes:   { type: integer, nullable: true, description: "Final size once status === 'done'." }
+        progress:    { type: number, minimum: 0, maximum: 1, nullable: true, description: "0..1 while in_progress; null otherwise." }
+        downloadUrl: { type: string, nullable: true, description: "Set once status === 'done' AND destination === 'download'." }
+        syncPath:    { type: string, nullable: true, description: "Absolute path the archive was copied to when destination === 'sync-folder'." }
+        errorReason: { type: string, nullable: true, description: "Human-readable failure reason; populated when status === 'failed'." }
+        createdAt:   { type: string, description: "ISO timestamp" }
+        completedAt: { type: string, nullable: true, description: "ISO timestamp once status leaves in_progress." }
+
+    ExportLanInfo:
+      type: object
+      required: [urls, port]
+      properties:
+        port: { type: integer, description: "The Node server's listening port (8080 by default)." }
+        urls:
+          type: array
+          items: { type: string, description: "Reachable URL, e.g. 'http://192.168.1.42:8080'" }

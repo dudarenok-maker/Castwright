@@ -11,6 +11,7 @@ import type {
   ImportResponse, ConfirmBookRequest, ConfirmBookResponse,
   BookStateResponse, PutStateRequest, WorkspaceChangeLogResponse,
   UserSettings, UserSettingsPatch, DroppedQuotesResponse,
+  BookExportRequest, BookExportJob, ExportLanInfo,
 } from './types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
@@ -1178,13 +1179,121 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
   /* Strip read-only fields a misbehaving caller might submit so the mock
      path enforces the same invariant as the server. */
   const { displayName, defaultAnalysisModel, defaultTtsEngine, defaultTtsModelKey,
-          sidecarUrl, workspaceDirOverride } = patch;
+          sidecarUrl, workspaceDirOverride, exportSyncFolder } = patch;
   Object.assign(MOCK_USER_SETTINGS, Object.fromEntries(
     Object.entries({ displayName, defaultAnalysisModel, defaultTtsEngine,
-                     defaultTtsModelKey, sidecarUrl, workspaceDirOverride })
+                     defaultTtsModelKey, sidecarUrl, workspaceDirOverride, exportSyncFolder })
       .filter(([, v]) => v !== undefined),
   ));
   return { ...MOCK_USER_SETTINGS };
+}
+
+/* ── Audiobook export ───────────────────────────────────────────────────
+   POST /api/books/:bookId/exports creates a job. The modal polls
+   getBookExport until status === 'done' and follows downloadUrl. The
+   `exportIncomplete` field of the throwable error gives the modal a
+   per-chapter list so it can render a "Regenerate missing chapters"
+   CTA inline. */
+export class ExportIncompleteError extends Error {
+  readonly missing: string[];
+  constructor(missing: string[]) {
+    super(`Export incomplete: ${missing.length} chapter(s) need audio first.`);
+    this.name = 'ExportIncompleteError';
+    this.missing = missing;
+  }
+}
+
+async function realCreateBookExport(bookId: string, body: BookExportRequest): Promise<BookExportJob> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/exports`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 409) {
+    const err = (await res.json().catch(() => ({}))) as { missing?: string[] };
+    throw new ExportIncompleteError(err.missing ?? []);
+  }
+  if (!res.ok) throw new Error(`Export request failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function realGetBookExport(bookId: string, exportId: string): Promise<BookExportJob> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/exports/${encodeURIComponent(exportId)}`);
+  if (!res.ok) throw new Error(`Export poll failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function realGetExportLanUrls(): Promise<ExportLanInfo> {
+  const res = await fetch(`/api/export/lan`);
+  if (!res.ok) throw new Error(`LAN URL probe failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+/* Mock path: simulate a ~3 s build by ticking a fake job through three
+   progress phases. The "downloadUrl" points at a data: URL so a real
+   click does fire a browser download under VITE_USE_MOCKS=true (it'll
+   just be a tiny stub zip). */
+const MOCK_EXPORT_JOBS = new Map<string, BookExportJob>();
+const MOCK_EXPORT_TIMERS = new Map<string, ReturnType<typeof setTimeout>[]>();
+
+async function mockCreateBookExport(bookId: string, body: BookExportRequest): Promise<BookExportJob> {
+  await wait(120);
+  const id = `exp_${Math.random().toString(36).slice(2, 12)}`;
+  const job: BookExportJob = {
+    id,
+    bookId,
+    format: body.format,
+    destination: body.destination,
+    status: 'in_progress',
+    filename: `Mock audiobook.${body.format === 'mp3-zip' ? 'zip' : 'm4b'}`,
+    sizeBytes: null,
+    progress: 0,
+    downloadUrl: null,
+    syncPath: null,
+    errorReason: null,
+    createdAt: new Date().toISOString(),
+    completedAt: null,
+  };
+  MOCK_EXPORT_JOBS.set(id, job);
+
+  /* Tick progress so a real poller observes the same lifecycle as live. */
+  const timers: ReturnType<typeof setTimeout>[] = [];
+  timers.push(setTimeout(() => {
+    const j = MOCK_EXPORT_JOBS.get(id);
+    if (j) MOCK_EXPORT_JOBS.set(id, { ...j, progress: 0.25 });
+  }, 700));
+  timers.push(setTimeout(() => {
+    const j = MOCK_EXPORT_JOBS.get(id);
+    if (j) MOCK_EXPORT_JOBS.set(id, { ...j, progress: 0.6 });
+  }, 1500));
+  timers.push(setTimeout(() => {
+    const j = MOCK_EXPORT_JOBS.get(id);
+    if (!j) return;
+    const blob = new Blob([new Uint8Array([0x50, 0x4b, 0x05, 0x06].concat(Array(18).fill(0)))], { type: 'application/zip' });
+    MOCK_EXPORT_JOBS.set(id, {
+      ...j,
+      status: 'done',
+      progress: 1,
+      sizeBytes: 22,
+      downloadUrl: URL.createObjectURL(blob),
+      syncPath: body.destination === 'sync-folder' ? 'C:\\Users\\dudar\\OneDrive\\Audiobooks\\Mock.zip' : null,
+      completedAt: new Date().toISOString(),
+    });
+  }, 2400));
+  MOCK_EXPORT_TIMERS.set(id, timers);
+  return job;
+}
+
+async function mockGetBookExport(_bookId: string, exportId: string): Promise<BookExportJob> {
+  await wait(40);
+  const job = MOCK_EXPORT_JOBS.get(exportId);
+  if (!job) throw new Error('Mock export not found.');
+  return job;
+}
+
+async function mockGetExportLanUrls(): Promise<ExportLanInfo> {
+  await wait(20);
+  return { urls: ['http://192.168.1.42:8080'], port: 8080 };
 }
 
 async function mockGetSidecarHealth(): Promise<SidecarHealth> {
@@ -1304,6 +1413,9 @@ const real = {
   unloadAnalyzer:    realUnloadAnalyzer,
   getWorkspaceInfo:  realGetWorkspaceInfo,
   getWorkspaceChangelog: realGetWorkspaceChangelog,
+  createBookExport:  realCreateBookExport,
+  getBookExport:     realGetBookExport,
+  getExportLanUrls:  realGetExportLanUrls,
   getChapterAudio:   async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
     if (!res.ok) {
@@ -1352,6 +1464,9 @@ const mock = {
   unloadAnalyzer:    mockUnloadAnalyzer,
   getWorkspaceInfo:  mockGetWorkspaceInfo,
   getWorkspaceChangelog: mockGetWorkspaceChangelog,
+  createBookExport:  mockCreateBookExport,
+  getBookExport:     mockGetBookExport,
+  getExportLanUrls:  mockGetExportLanUrls,
   getChapterAudio:   mockGetChapterAudio,
   pollRevisions:     mockPollRevisions,
 };

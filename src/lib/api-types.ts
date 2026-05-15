@@ -371,6 +371,105 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Build a sideloadable audiobook artifact (Phase A — MP3.ZIP)
+         * @description Packages a finished book's per-chapter MP3 files into a single
+         *     zip archive (PocketBook Reader Android sideloads MP3.ZIP, the
+         *     e-reader's audiobook app on every platform accepts it). The
+         *     zip carries one MP3 per non-excluded chapter, two-digit-prefixed
+         *     and ID3v2.4-tagged (TIT2, TALB, TPE1, TPE2, TRCK) so PocketBook
+         *     sorts and labels them correctly. Chapter audio is copied byte-
+         *     for-byte via `ffmpeg -c:a copy` — no re-encode of the existing
+         *     LAME VBR V2 frames.
+         *
+         *     Returns immediately with the freshly-created job; clients poll
+         *     `getBookExport` for progress and follow `downloadUrl` once
+         *     `status === 'done'`. With `destination: 'sync-folder'`, the
+         *     finished archive is also copied to the user's configured
+         *     `exportSyncFolder` via an atomic tmp+rename (same OneDrive-safe
+         *     backoff as state.json). Refuses with `409 export_incomplete`
+         *     when any non-excluded chapter lacks an `.mp3` audio file.
+         */
+        post: operations["createBookExport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/exports/{exportId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Poll the status of an in-flight or completed export */
+        get: operations["getBookExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/exports/{exportId}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream the export archive bytes
+         * @description Range-aware `application/zip` (Phase A) or `audio/mp4`
+         *     (Phase B M4B) stream. Phone Chrome can hit this URL directly
+         *     over the LAN; the browser saves into Downloads/ and a tap
+         *     opens it with PocketBook Reader.
+         */
+        get: operations["downloadBookExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/export/lan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate the server's reachable LAN URLs
+         * @description Returns non-loopback IPv4 addresses the Node server is reachable
+         *     on so the export modal can render a sideload URL + QR for the
+         *     user's phone. Loopback (127.x) and link-local v6 (fe80::) are
+         *     filtered out — they're useless for sideloading. Order matches
+         *     `os.networkInterfaces()` enumeration; the modal picks the first.
+         */
+        get: operations["getExportLanUrls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -430,6 +529,14 @@ export interface components {
              */
             workspaceDirOverride?: string | null;
             /**
+             * @description Optional destination folder the audiobook-export pipeline copies
+             *     finished files into (e.g. a OneDrive or Syncthing watch path
+             *     mirrored to the user's phone). Null disables the "save to sync
+             *     folder" tab in the export modal. The writer mkdirs on demand
+             *     and uses the same OneDrive-safe atomic-rename retry as state.json.
+             */
+            exportSyncFolder?: string | null;
+            /**
              * @description Threshold for the minor-cast fold pass at analysis time. A
              *     character whose number of attributed sentences (not words —
              *     each sentence the model assigns to that speaker counts as one
@@ -477,6 +584,7 @@ export interface components {
             analysisEngine?: "local" | "gemini";
             ollamaUrl?: string;
             workspaceDirOverride?: string | null;
+            exportSyncFolder?: string | null;
             minorCastMinLines?: number;
         };
         LibraryResponse: {
@@ -921,6 +1029,58 @@ export interface components {
             characterId: string;
             startMs?: number;
             endMs?: number;
+        };
+        BookExportRequest: {
+            /**
+             * @description Container format. Phase A ships `mp3-zip` only — a zip of
+             *     per-chapter MP3s the way PocketBook (and every other
+             *     audiobook app) accepts as a "MP3.ZIP" sideload. Phase B
+             *     adds `m4b` (single-file AAC with chapter atoms).
+             * @enum {string}
+             */
+            format: "mp3-zip";
+            /**
+             * @description `download` stages the file under the book's `.audiobook/exports/`
+             *     for the user to pull via `downloadBookExport`. `sync-folder`
+             *     additionally copies the finished archive into the user's
+             *     configured `exportSyncFolder` (e.g. a OneDrive watch path) so
+             *     it lands on their phone via sync. Requires `exportSyncFolder`
+             *     to be set; the request 400s otherwise.
+             * @enum {string}
+             */
+            destination: "download" | "sync-folder";
+        };
+        BookExportJob: {
+            /** @description Server-generated export id */
+            id: string;
+            bookId: string;
+            /** @enum {string} */
+            format: "mp3-zip" | "m4b";
+            /** @enum {string} */
+            destination: "download" | "sync-folder";
+            /** @enum {string} */
+            status: "queued" | "in_progress" | "done" | "failed";
+            /** @description e.g. 'The Northern Star.zip' */
+            filename: string;
+            /** @description Final size once status === 'done'. */
+            sizeBytes?: number | null;
+            /** @description 0..1 while in_progress; null otherwise. */
+            progress?: number | null;
+            /** @description Set once status === 'done' AND destination === 'download'. */
+            downloadUrl?: string | null;
+            /** @description Absolute path the archive was copied to when destination === 'sync-folder'. */
+            syncPath?: string | null;
+            /** @description Human-readable failure reason; populated when status === 'failed'. */
+            errorReason?: string | null;
+            /** @description ISO timestamp */
+            createdAt: string;
+            /** @description ISO timestamp once status leaves in_progress. */
+            completedAt?: string | null;
+        };
+        ExportLanInfo: {
+            /** @description The Node server's listening port (8080 by default). */
+            port: number;
+            urls: string[];
         };
     };
     responses: never;
@@ -1461,6 +1621,139 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RevisionsResponse"];
+                };
+            };
+        };
+    };
+    createBookExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BookExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Export job created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookExportJob"];
+                };
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more non-excluded chapters lack a `.mp3` audio file */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        error: "export_incomplete";
+                        missing: string[];
+                    };
+                };
+            };
+        };
+    };
+    getBookExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                exportId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current job state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookExportJob"];
+                };
+            };
+            /** @description Job id unknown */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    downloadBookExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                exportId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Archive bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Partial content (Range request) */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Job id unknown or staging file missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getExportLanUrls: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description LAN URL list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportLanInfo"];
                 };
             };
         };

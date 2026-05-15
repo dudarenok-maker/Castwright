@@ -46,10 +46,12 @@ PRs that change behavior cited in a plan MUST update the relevant plan in the sa
 - [16 — Generation stream](16-generation-stream.md) — Chapter audio SSE stream. Cross-links to plan 28 for the on-disk format.
 - [17 — Regenerate this/forward](17-regenerate-this-or-forward.md) — Per-chapter + per-character regen.
 - [28 — Audio output format](28-chapter-audio-format.md) — Chapter audio + voice samples both MP3 VBR V2 via ffmpeg; legacy `.wav` fallback for chapters; ffmpeg preflight in `start-app.ps1`.
+- [31 — Sticky generation across navigation](31-sticky-generation.md) — Generation survives every navigation except an explicit Stop or queue drain; local-analyzer triggers prompt for pause-and-analyse when a run is alive.
 
 ### H. Playback & listen
 - [18 — Listen view](18-listen-view.md) — Cover, chapter list, mini-player, handoff queue.
 - [19 — Listener preview](19-preview-listener.md) — Listener-POV full-screen preview.
+- [32 — Audiobook export](32-audiobook-export.md) — Sideload to PocketBook Reader (Phase A: MP3.ZIP) via LAN download or sync folder; per-chapter ID3v2.4 tags, no re-encode, atomic writes.
 
 ### I. Revisions & drift
 - [20 — Revisions & drift](20-revisions-and-drift.md) — Pending drafts + drift events + dismissal.

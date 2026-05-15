@@ -340,6 +340,13 @@ export interface ExportQueueItem {
   errorReason?: string;
 }
 
+/* Audiobook export job + request schemas, sourced from the OpenAPI spec.
+   The export modal polls `BookExportJob` until status === 'done' and
+   then triggers a download via `downloadUrl`. */
+export type BookExportRequest = components['schemas']['BookExportRequest'];
+export type BookExportJob     = components['schemas']['BookExportJob'];
+export type ExportLanInfo     = components['schemas']['ExportLanInfo'];
+
 /* ── UI stage discriminated union ─────────────────────────────────────── */
 
 export type View = 'manuscript' | 'cast' | 'library' | 'generate' | 'listen' | 'log';
