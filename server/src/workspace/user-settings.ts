@@ -60,13 +60,14 @@ export type UserSettings = z.infer<typeof userSettingsSchema>;
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   displayName:          'Mike Dudarenok',
-  /* Default to the 4B variant — small enough (~3 GB VRAM) to keep
-     resident across the analysis loop (see RESIDENT_MODELS in
-     server/src/analyzer/ollama.ts), leaves headroom for XTTS on an
-     8 GB box, and fast enough to iterate without paying the 9B's
-     ~6.6 GB load tax on every chapter. Users can still pick 9B or
-     Llama explicitly from the dropdown for harder books. */
-  defaultAnalysisModel: 'qwen3.5:4b',
+  /* Default to Gemini 3.1 Flash Lite over a Google API key — the free
+     tier (15 RPM, 250K TPM, 500/day) comfortably parses a full novel,
+     dispatch is async-friendly so it doesn't tax the local GPU, and
+     no `ollama pull` is required before first run. Local Ollama
+     models stay one click away in the picker for users who want to
+     run analysis on-device. Flip in lockstep with
+     src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
+  defaultAnalysisModel: 'gemini-3.1-flash-lite',
   defaultTtsEngine:     'local',
   /* Kokoro v1 is the new default — TTS-Arena #1 for its size, ~1 GB
      VRAM (vs ~3 GB for XTTS), and small enough to be eagerly preloaded
@@ -76,7 +77,10 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   defaultTtsModelKey:   'kokoro-v1',
   sidecarUrl:           'http://localhost:9000',
-  analysisEngine:       'local',
+  /* Gemini matches the analysis-model default. Picking 'local' falls
+     through to the Ollama daemon — kept as an opt-in for users who
+     want analysis on-device. */
+  analysisEngine:       'gemini',
   ollamaUrl:            'http://localhost:11434',
   workspaceDirOverride: null,
   exportSyncFolder:     null,
@@ -167,18 +171,28 @@ export function getResolvedOllamaUrl(): string {
   return raw.replace(/\/+$/, '');
 }
 
-/** Ollama model tag passed to /api/chat. The single source of truth for
-    which model the local engine uses is `defaultAnalysisModel` from the
-    top "Analysis model" picker — when it has Ollama tag shape (contains
-    ':'), use it directly. Otherwise fall back to OLLAMA_MODEL env, then
-    DEFAULT_USER_SETTINGS.defaultAnalysisModel (one source of truth — no
-    duplicated literal). The per-request `model` override (see
-    selectAnalyzer) trumps both. */
+/** Hardcoded Ollama tag used as the terminal fallback in
+    getResolvedOllamaModel. Cannot be derived from
+    DEFAULT_USER_SETTINGS.defaultAnalysisModel any more — that default
+    is now a Gemini id (no colon, see DEFAULT_USER_SETTINGS above), and
+    Ollama's /api/chat would 404 on it. Keep this in sync with
+    src/lib/models.ts MODEL_OPTIONS local entries (qwen3.5:4b is still
+    the smallest local option). */
+export const DEFAULT_OLLAMA_MODEL = 'qwen3.5:4b';
+
+/** Ollama model tag passed to /api/chat. Resolution chain:
+      1. cached `defaultAnalysisModel` if it has Ollama tag shape (':')
+      2. process.env.OLLAMA_MODEL
+      3. DEFAULT_OLLAMA_MODEL ('qwen3.5:4b')
+    The per-request `model` override (see selectAnalyzer) trumps all
+    three. We intentionally do NOT fall through to
+    DEFAULT_USER_SETTINGS.defaultAnalysisModel any more, because that
+    default is now a Gemini id and would break Ollama dispatch. */
 export function getResolvedOllamaModel(): string {
   const c = cached;
   const fromSettings = c?.defaultAnalysisModel;
   if (fromSettings && fromSettings.includes(':')) return fromSettings;
-  return process.env.OLLAMA_MODEL ?? DEFAULT_USER_SETTINGS.defaultAnalysisModel;
+  return process.env.OLLAMA_MODEL ?? DEFAULT_OLLAMA_MODEL;
 }
 
 /** Analyzer engine selector: cached settings → ANALYZER env → 'local'.

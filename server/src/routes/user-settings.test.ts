@@ -60,7 +60,12 @@ describe('user-settings router', () => {
     const res = await request(app).get('/api/user/settings');
     expect(res.status).toBe(200);
     expect(res.body.displayName).toBe('Mike Dudarenok');
-    expect(res.body.defaultAnalysisModel).toBe('qwen3.5:4b');
+    /* Default flipped to Gemini (was qwen3.5:4b). The analysis-model
+       and analysis-engine defaults must travel together so a fresh
+       install routes the first analysis through the Gemini API rather
+       than asking the user to `ollama pull` something first. */
+    expect(res.body.defaultAnalysisModel).toBe('gemini-3.1-flash-lite');
+    expect(res.body.analysisEngine).toBe('gemini');
     expect(res.body.defaultTtsEngine).toBe('local');
     expect(res.body.defaultTtsModelKey).toBe('kokoro-v1');
     expect(res.body.sidecarUrl).toBe('http://localhost:9000');

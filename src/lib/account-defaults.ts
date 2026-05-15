@@ -24,12 +24,13 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<UserSettings,
   | 'minorCastMinLines'
 > = {
   displayName:          'Mike Dudarenok',
-  /* 4B is small enough (~3 GB) to stay resident across the analysis
-     loop without crowding XTTS — see RESIDENT_MODELS in
-     server/src/analyzer/ollama.ts. Bigger models work but reload
-     between chapters by design. Flip in lockstep with
+  /* Gemini 3.1 Flash Lite over the Google API key is the new default
+     for analysis — free tier (15 RPM, 250K TPM, 500/day) handles a
+     full novel without saturating the local GPU. Local Ollama models
+     stay one click away in the picker for users who want analysis to
+     run on-device. Flip in lockstep with
      server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
-  defaultAnalysisModel: 'qwen3.5:4b',
+  defaultAnalysisModel: 'gemini-3.1-flash-lite',
   defaultTtsEngine:     'local',
   /* Kokoro v1 is the new default — quality-tuned, ~1 GB VRAM (vs ~3 GB
      for XTTS), eagerly loaded by the sidecar. XTTS stays available as
@@ -38,7 +39,8 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<UserSettings,
      server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   defaultTtsModelKey:   'kokoro-v1',
   sidecarUrl:           'http://localhost:9000',
-  analysisEngine:       'local',
+  /* Gemini matches the analysis-model default; Local stays an opt-in. */
+  analysisEngine:       'gemini',
   ollamaUrl:            'http://localhost:11434',
   workspaceDirOverride: null,
   minorCastMinLines:    3,

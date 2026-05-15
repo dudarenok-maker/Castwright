@@ -253,14 +253,14 @@ export function AccountView() {
           </FieldRow>
           <FieldRow label="Analyzer engine"
             sublabel={
-              'Local routes through the Ollama daemon — with Gemini as automatic fallback only when the daemon is unreachable, assuming a Gemini key is configured below. Gemini sends every chapter straight to the Gemini API.'
+              'Default — Gemini API sends every chapter straight to Google using the GEMINI_API_KEY in server/.env. Local routes analysis through the Ollama daemon on this machine instead (with Gemini as automatic fallback only when the daemon is unreachable, assuming GEMINI_API_KEY is configured). Pick Local only if you want analysis to run on-device.'
             }>
             <select
               value={analysisEngine}
               onChange={(e) => setAnalysisEngine(e.target.value as 'local' | 'gemini')}
               className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30">
-              <option value="local">Local (Ollama, with Gemini fallback)</option>
-              <option value="gemini">Gemini API (direct)</option>
+              <option value="gemini">Gemini API (default — direct)</option>
+              <option value="local">Local Ollama (on-device, with Gemini fallback)</option>
             </select>
           </FieldRow>
           <FieldRow label="Ollama URL"
