@@ -120,6 +120,93 @@ def test_synthesize_returns_500_when_engine_raises(monkeypatch) -> None:
     assert "model load went sideways" in r.json()["detail"]
 
 
+# ── CUDA poison fence ────────────────────────────────────────────────────
+
+def test_synthesize_flags_engine_as_poisoned_on_cuda_assert(monkeypatch) -> None:
+    """A `CUDA error: device-side assert triggered` corrupts the whole CUDA
+    context for the lifetime of the process — no recovery short of a
+    sidecar restart will get further /synthesize calls working. The route
+    must (a) return 503 (not 500) with `"poisoned": true` in the body so
+    the Node classifier can surface a "restart" banner, and (b) set the
+    engine's _poisoned flag so subsequent /synthesize calls fast-fail
+    without re-triggering the failing inference."""
+
+    class _CudaPoisonedEngine(_FakeEngine):
+        def synthesize(self, model: str, voice: str, text: str):
+            raise RuntimeError(
+                "CUDA error: device-side assert triggered\n"
+                "CUDA kernel errors might be asynchronously reported…"
+            )
+
+    engine = _CudaPoisonedEngine()
+    monkeypatch.setitem(main.ENGINES, "coqui", engine)
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/synthesize",
+            json={"engine": "coqui", "model": "xtts_v2", "voice": "v", "text": "hi"},
+        )
+    assert r.status_code == 503
+    body = r.json()
+    assert body.get("poisoned") is True
+    assert "device-side assert" in body["detail"].lower()
+    # Engine must self-flag so cross-request fence works on call #2.
+    assert engine._poisoned is True
+    assert engine._poison_reason is not None and "device-side assert" in engine._poison_reason
+
+
+def test_synthesize_fast_fails_503_when_engine_already_poisoned(monkeypatch) -> None:
+    """Once _poisoned is set, the route MUST refuse to call .synthesize()
+    again — re-entering would either replay the same CUDA error (wasting
+    seconds on a guaranteed failure) or worse, mutate Python-level state
+    on the doomed context. The fast-fail path returns the same 503 shape
+    so the Node classifier sees consistent error JSON across attempts."""
+
+    class _SpyEngine(_FakeEngine):
+        def __init__(self) -> None:
+            super().__init__()
+            self.call_count = 0
+
+        def synthesize(self, model: str, voice: str, text: str):
+            self.call_count += 1
+            return super().synthesize(model, voice, text)
+
+    engine = _SpyEngine()
+    engine._poisoned = True
+    engine._poison_reason = "CUDA error: device-side assert triggered (synthetic)"
+    monkeypatch.setitem(main.ENGINES, "coqui", engine)
+
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/synthesize",
+            json={"engine": "coqui", "model": "xtts_v2", "voice": "v", "text": "hi"},
+        )
+    assert r.status_code == 503
+    body = r.json()
+    assert body.get("poisoned") is True
+    assert "restart" in body["detail"].lower()
+    # The crucial assertion: the engine's synthesize was NEVER invoked.
+    assert engine.call_count == 0
+
+
+def test_health_reports_poisoned_flag(monkeypatch) -> None:
+    """/health surfaces `poisoned: true` once an engine is flagged so the
+    in-app Load/Stop pill can render a "needs restart" state. Without this,
+    the pill would still say "ready" while every /synthesize fast-fails 503
+    — a confusing mixed signal for the user."""
+    engine = _FakeEngine()
+    engine._tts = object()  # sentinel: model is "loaded"
+    engine._resolved_device = "cuda"
+    engine._poisoned = True
+    engine._poison_reason = "CUDA error: device-side assert triggered"
+    monkeypatch.setitem(main.ENGINES, "coqui", engine)
+    with TestClient(main.app) as client:
+        r = client.get("/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["poisoned"] is True
+    assert "device-side assert" in body["poison_reason"]
+
+
 # ── /synthesize wire format ──────────────────────────────────────────────
 
 def test_synthesize_returns_pcm_payload_with_matching_rate_header(client: TestClient) -> None:

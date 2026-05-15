@@ -9,7 +9,7 @@
    half regressed. */
 
 import { describe, it, expect } from 'vitest';
-import { denormaliseAllCaps, softenDashes, normaliseForTts } from './text-normalize.js';
+import { denormaliseAllCaps, softenDashes, stripUnsafeForTts, normaliseForTts } from './text-normalize.js';
 
 describe('denormaliseAllCaps', () => {
   it('title-cases a multi-word all-caps chapter opener', () => {
@@ -76,6 +76,59 @@ describe('softenDashes', () => {
   });
 });
 
+describe('stripUnsafeForTts', () => {
+  /* Each of these cases corresponds to a class of byte that has, end-to-end,
+     produced a `CUDA error: device-side assert triggered` from XTTS v2's
+     embedding lookup — once that fires the CUDA context is corrupted for
+     the rest of the sidecar process and every subsequent chapter fails
+     with the same 500 until the user manually restarts the sidecar. The
+     fix is to never let these bytes reach the model. */
+
+  it('strips zero-width spaces and joiners that survived a PDF / HTML copy-paste', () => {
+    const input = 'The​car‌swerved‍right.';
+    expect(stripUnsafeForTts(input)).toBe('Thecarswervedright.');
+  });
+
+  it('strips the BOM and word-joiner that some Windows editors prepend', () => {
+    expect(stripUnsafeForTts('﻿Once upon a time⁠.')).toBe('Once upon a time.');
+  });
+
+  it('strips bidi format chars (LRM, RLM, embedding overrides)', () => {
+    const input = 'left‎to‏right‪and‮back';
+    expect(stripUnsafeForTts(input)).toBe('lefttorightandback');
+  });
+
+  it('strips C0 control chars (except TAB and LF) and C1 control chars', () => {
+    const input = 'line1\nline2\tindented\x01\x07\x1Bend\x7F\x9F.';
+    /* TAB (\\t) and LF (\\n) are preserved; everything else is wiped. */
+    expect(stripUnsafeForTts(input)).toBe('line1\nline2\tindentedend.');
+  });
+
+  it('strips unpaired surrogates from a busted UTF-16 round-trip', () => {
+    /* U+D800 alone (no low surrogate after) is invalid. */
+    const input = 'broken\uD800text';
+    expect(stripUnsafeForTts(input)).toBe('brokentext');
+  });
+
+  it('preserves valid surrogate pairs (emoji etc.) — only unpaired halves are stripped', () => {
+    /* 🎙 is U+1F399 → high D83C + low DF99; a valid pair must round-trip. */
+    expect(stripUnsafeForTts('hello 🎙 world')).toBe('hello 🎙 world');
+  });
+
+  it('composes NFD diacritics to NFC so the tokenizer sees the trained form', () => {
+    /* "é" as U+0065 + U+0301 (NFD) → "é" as U+00E9 (NFC). */
+    const nfd = 'café';
+    const nfc = 'café';
+    expect(stripUnsafeForTts(nfd)).toBe(nfc);
+  });
+
+  it('is idempotent on clean ASCII', () => {
+    const clean = 'A quick brown fox.';
+    expect(stripUnsafeForTts(clean)).toBe(clean);
+    expect(stripUnsafeForTts(stripUnsafeForTts(clean))).toBe(clean);
+  });
+});
+
 describe('normaliseForTts (composed)', () => {
   it('cleans the chapter-2 opener (the real regression case)', () => {
     /* This is the literal text that produced ~60s of garbled audio at the
@@ -99,5 +152,14 @@ describe('normaliseForTts (composed)', () => {
   it('is idempotent across the composed pipeline', () => {
     const once = normaliseForTts('THE BLUR—then.');
     expect(normaliseForTts(once)).toBe(once);
+  });
+
+  it('strips unsafe bytes AND title-cases AND softens dashes in a single pass', () => {
+    /* The integration regression: a PDF copy-paste that smuggled a
+       zero-width space into the middle of a SHOUTED word, with an em-dash
+       chaser. Each transform individually fixes its slice; the composed
+       pipeline has to deliver clean text to XTTS in one go. */
+    const input = 'HE​LLO—world.';
+    expect(normaliseForTts(input)).toBe('Hello, world.');
   });
 });
