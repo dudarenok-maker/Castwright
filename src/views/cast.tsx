@@ -14,8 +14,9 @@ import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
-import type { VoiceSampleArgs } from '../lib/api';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
+import { buildCharacterHint } from '../lib/build-character-hint';
+import { CompareCastModal } from '../modals/compare-cast-modal';
 
 interface Props {
   characters: Character[];
@@ -38,6 +39,7 @@ export function CastView({
   const [draggingVoiceId, setDraggingVoiceId] = useState<string | null>(null);
   const [dropTargetCharId, setDropTargetCharId] = useState<string | null>(null);
   const [selectedCharIds, setSelectedCharIds] = useState<string[]>([]);
+  const [compareIds, setCompareIds] = useState<[string, string] | null>(null);
   const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
   const ttsEngine = engineForModelKey(ttsModelKey);
   const playback = useSamplePlayback();
@@ -291,6 +293,14 @@ export function CastView({
                 })}
               </span>
               <span className="w-px h-5 bg-canvas/20"/>
+              <button
+                onClick={() => { if (selectedCharIds.length === 2) setCompareIds([selectedCharIds[0], selectedCharIds[1]]); }}
+                disabled={selectedCharIds.length !== 2}
+                title={selectedCharIds.length === 2 ? 'Compare these two cast members' : 'Select exactly 2 to compare'}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Compare
+              </button>
               <button onClick={() => onBatchRegenerate(selectedCharIds)} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-peach text-ink text-xs font-bold hover:bg-peach/90">
                 <IconRefresh className="w-3.5 h-3.5"/> Regenerate
               </button>
@@ -298,6 +308,23 @@ export function CastView({
             </div>
           </div>
         )}
+
+        {compareIds && (() => {
+          const [aId, bId] = compareIds;
+          const a = characters.find(c => c.id === aId);
+          const b = characters.find(c => c.id === bId);
+          if (!a || !b) return null;
+          return (
+            <CompareCastModal
+              characters={[a, b]}
+              library={library}
+              ttsModelKey={ttsModelKey}
+              onSaveSide={(next) => setCharacters(prev => prev.map(c => c.id === next.id ? next : c))}
+              onClose={() => setCompareIds(null)}
+              onOpenProfile={(id) => { setCompareIds(null); onOpenProfile(id); }}
+            />
+          );
+        })()}
       </div>
 
       {showLibrary && (
@@ -311,25 +338,6 @@ export function CastView({
 
     </div>
   );
-}
-
-/* Pack the Character payload into the shape the server's voice-mapping
-   wants. Evidence quotes drive the sample script (so each voice reads a
-   real line from the manuscript); gender/ageRange/tone/description steer
-   the prebuilt-voice picker. Any fields that the analyzer didn't fill in
-   are simply omitted — server handles missing data. */
-function buildCharacterHint(c: Character): VoiceSampleArgs['characterHint'] {
-  const evidence = (c.evidence ?? []).map(e => e.quote).filter((q): q is string => typeof q === 'string' && q.length > 0);
-  const gender = (c as Character & { gender?: 'male' | 'female' | 'neutral' }).gender;
-  const ageRange = (c as Character & { ageRange?: 'child' | 'teen' | 'adult' | 'elderly' }).ageRange;
-  return {
-    description: c.description,
-    role: c.role,
-    gender,
-    ageRange,
-    tone: c.tone,
-    evidence: evidence.length ? evidence : undefined,
-  };
 }
 
 function ttsLabel(key: TtsModelKey): string {

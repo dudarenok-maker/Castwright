@@ -163,7 +163,7 @@ function inferRegister(attrs: string[], age: Character['ageRange'] | undefined, 
   return 'mid';
 }
 
-interface PickInput {
+export interface PickInput {
   id: string;
   name?: string;
   attributes?: string[];
@@ -174,7 +174,7 @@ interface PickInput {
   tone?: Character['tone'];
 }
 
-function inferProfile(input: PickInput): VoiceProfile {
+export function inferProfile(input: PickInput): VoiceProfile {
   const lid = input.id.toLowerCase();
   const isNarrator = lid === 'narrator' || lid === 'char-narrator' || (input.name ?? '').toLowerCase() === 'narrator';
   /* Narrator only short-circuits to the warm/cool buckets when the user
@@ -214,9 +214,23 @@ function describeVoice(engine: TtsEngine, name: string): string {
    modelKey — callers that know the selected engine should pass it
    explicitly so the labels match what the user will actually hear. */
 export function resolveTtsVoiceForCharacter(c: Character, engine: TtsEngine = 'coqui'): TtsVoiceAssignment {
+  const profile = resolveProfileForCharacter(c);
   const id = c.voiceId ?? c.id;
-  const profile = inferProfile({
-    id,
+  const options = catalogForEngine(engine)[profile];
+  const name = options[stableHash(id) % options.length];
+  return {
+    provider: engine,
+    name,
+    description: describeVoice(engine, name),
+  };
+}
+
+/* Profile-only resolver — same mapping as resolveTtsVoiceForCharacter,
+   exposed so the compare modal can label the inferred bucket
+   ('male-deep', 'narrator-warm', etc.) on each side. */
+export function resolveProfileForCharacter(c: Character): VoiceProfile {
+  return inferProfile({
+    id: c.voiceId ?? c.id,
     name: c.name,
     attributes: c.attributes,
     description: c.description,
@@ -225,11 +239,4 @@ export function resolveTtsVoiceForCharacter(c: Character, engine: TtsEngine = 'c
     ageRange: c.ageRange,
     tone: c.tone,
   });
-  const options = catalogForEngine(engine)[profile];
-  const name = options[stableHash(id) % options.length];
-  return {
-    provider: engine,
-    name,
-    description: describeVoice(engine, name),
-  };
 }
