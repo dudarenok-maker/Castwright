@@ -341,4 +341,27 @@ describe('generationStreamMiddleware', () => {
     store.dispatch(chaptersSlice.actions.setPaused(true));
     expect(store.getState().chapters.activeStream).toBeNull();
   });
+
+  it('counts only non-excluded chapters in the activeStream snapshot (top-bar pill regression)', () => {
+    /* The top-bar GenerationPill renders `{done}/{total}` straight from
+       this snapshot. Excluded chapters never queue or synthesise, so they
+       must not inflate `total` — otherwise the pill freezes at e.g. 8/10
+       and the user reads it as "still 2 to go" when the run has actually
+       finished everything in scope. Mirrors `activeChapters` in
+       src/views/generation.tsx. */
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+
+    seedBook(store, 'b1', [
+      ch(1, { state: 'done', progress: 1, characters: { narrator: 'done' } }),
+      ch(2, { state: 'in_progress', progress: 0.5 }),
+      ch(3, { state: 'queued', excluded: true }),
+      ch(4, { state: 'queued', excluded: true }),
+    ]);
+    const snap = store.getState().chapters.activeStream;
+    expect(snap).not.toBeNull();
+    expect(snap!.total).toBe(2);
+    expect(snap!.done).toBe(1);
+    expect(snap!.inProgress).toBe(1);
+  });
 });

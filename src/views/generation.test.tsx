@@ -155,6 +155,76 @@ describe('GenerationView — chapter & character metadata (regression for screen
   });
 });
 
+describe('GenerationView — counters exclude ignored chapters (regression)', () => {
+  /* Pre-fix the header counter and the "lines synthesised" sub-counter
+     used `chapters.length` / iterated all chapters, so an excluded
+     chapter inflated the denominator. An 8-of-10-done book with 2
+     excluded chapters would have shown "8 of 10" forever and never
+     reached the all-complete state visible in the header copy. */
+  it('reports counters using only non-excluded chapters', () => {
+    const ch1Done: Chapter = { ...chapter1 };
+    const ch2Queued: Chapter = { ...chapter2 };
+    const ch3Excluded: Chapter = {
+      id: 3,
+      title: 'Chapter 3',
+      duration: '00:00',
+      state: 'queued',
+      progress: 0,
+      excluded: true,
+      characters: { narrator: 'queued' },
+    };
+    /* Chapter 3 contributes 2 manuscript sentences; pre-fix those lines
+       would have leaked into the "lines synthesised" denominator. */
+    const ch3Sentences: Sentence[] = [
+      { id: 100, chapterId: 3, characterId: 'narrator', text: 'excluded one.' },
+      { id: 101, chapterId: 3, characterId: 'narrator', text: 'excluded two.' },
+    ];
+    const store = configureStore({
+      reducer: {
+        ui:         uiSlice.reducer,
+        chapters:   chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog:  changeLogSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([ch1Done, ch2Queued, ch3Excluded]));
+    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
+      bookId: 'b1',
+      characters,
+      chapters: [ch1Done, ch2Queued, ch3Excluded],
+      sentences: [...sentences, ...ch3Sentences],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any));
+    render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={[ch1Done, ch2Queued, ch3Excluded]}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          setPaused={() => {}}
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+
+    /* 1 of the 2 active chapters is done. Pre-fix: "1 of 3". */
+    expect(screen.getByText(/1 of 2 chapters complete/)).toBeInTheDocument();
+    /* Manuscript-derived lines: ch1=3 sentences (done → all 3 sung),
+       ch2=1 sentence (queued → 0 sung), ch3 excluded → not counted.
+       Pre-fix denominator would have been 6 (3+1+2). The "done" number
+       lives in its own <span>, so match the surrounding text only and
+       inspect the paragraph for the complete readout. */
+    const linesNode = screen.getByText(/of 4 lines synthesised/);
+    expect(linesNode.textContent).toMatch(/3\s+of 4 lines synthesised/);
+  });
+});
+
 describe('GenerationView — early-tick render guards (regression)', () => {
   it('does not render a stray "0" in the expanded row when currentLine is 0 at the start of a run', () => {
     /* Regression: `chapter.currentLine && (...)` short-circuits with `0`,
