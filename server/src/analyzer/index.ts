@@ -39,6 +39,11 @@ export interface StageCall {
       tear down the in-flight Ollama/Gemini request instead of running on
       as a zombie that holds the model busy for the next session. */
   signal?: AbortSignal;
+  /** Fired when the limiter has to delay this request — RPM/TPM cap hit
+      locally, or `retry-delay` honored after a 429. Only emitted when
+      the wait exceeds ~1s so sub-second jitter doesn't spam the UI.
+      The route layer converts these to SSE `throttle` events. */
+  onThrottle?: (waitMs: number, reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after') => void;
 }
 
 export interface Analyzer {

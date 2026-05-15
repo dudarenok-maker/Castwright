@@ -127,6 +127,12 @@ export interface AnalyseOpts {
       the corresponding Retry row in response so the panel never lags
       behind the cache. Emitted by both the full and subset routes. */
   onChapterResolved?: (e: { chapterId: number }) => void;
+  /** The Gemini rate limiter delayed a request to stay under RPM/TPM/RPD
+      or to honor a 429 retry-delay. The analysing view renders a
+      "Throttling Gemini … · resuming in Ns" pill on the affected
+      per-chapter row instead of letting it look like a hang. Only
+      emitted when the wait exceeds ~1s. */
+  onThrottle?: (e: { phaseId: number; chapterIndex: number; model: string; waitMs: number; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after' }) => void;
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
       Sent as JSON body to POST /api/manuscripts/:id/analysis. Ignored when
       the server runs in ANALYZER=manual mode. */
@@ -597,7 +603,7 @@ async function realUploadManuscript({ text, file, fileName, format }: UploadArgs
 }
 
 interface AnalysisStreamEvent {
-  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update' | 'eta' | 'chapter-failed' | 'chapter-resolved';
+  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update' | 'eta' | 'chapter-failed' | 'chapter-resolved' | 'throttle';
   phaseId?: number;
   progress?: number;
   label?: string;
@@ -620,6 +626,13 @@ interface AnalysisStreamEvent {
   characters?: import('./types').Character[];
   /* eta field — server's refined total remaining wall-clock ms. */
   remainingMs?: number;
+  /* throttle fields. `waitMs` is how long the analyzer is sleeping
+     before its next attempt; `reason` is which of RPM/TPM/RPD/Google's
+     retry-delay forced the wait. `model` lets the UI name the model in
+     the pill copy ("Throttling Gemini 3.1 Flash Lite · resuming in 4s"). */
+  model?: string;
+  waitMs?: number;
+  reason?: 'rpm' | 'tpm' | 'rpd' | 'retry-after';
 }
 
 export class AnalysisError extends Error {
@@ -633,7 +646,7 @@ export class AnalysisError extends Error {
   }
 }
 
-async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
   const hasBody = model !== undefined || fresh !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
@@ -689,6 +702,22 @@ async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, on
     } else if (payload.kind === 'chapter-resolved') {
       if (typeof payload.chapterId === 'number') {
         onChapterResolved?.({ chapterId: payload.chapterId });
+      }
+    } else if (payload.kind === 'throttle') {
+      if (
+        typeof payload.phaseId === 'number' &&
+        typeof payload.chapterIndex === 'number' &&
+        typeof payload.model === 'string' &&
+        typeof payload.waitMs === 'number' &&
+        (payload.reason === 'rpm' || payload.reason === 'tpm' || payload.reason === 'rpd' || payload.reason === 'retry-after')
+      ) {
+        onThrottle?.({
+          phaseId: payload.phaseId,
+          chapterIndex: payload.chapterIndex,
+          model: payload.model,
+          waitMs: payload.waitMs,
+          reason: payload.reason,
+        });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
@@ -873,7 +902,7 @@ async function mockSetChapterExcluded(
 async function realRunAnalysisForChapters(
   manuscriptId: string,
   chapterIds: number[],
-  { onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, model }: AnalyseOpts = {},
+  { onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, model }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
   const res = await fetch(
     `/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis/chapters`,
@@ -933,6 +962,22 @@ async function realRunAnalysisForChapters(
     } else if (payload.kind === 'chapter-resolved') {
       if (typeof payload.chapterId === 'number') {
         onChapterResolved?.({ chapterId: payload.chapterId });
+      }
+    } else if (payload.kind === 'throttle') {
+      if (
+        typeof payload.phaseId === 'number' &&
+        typeof payload.chapterIndex === 'number' &&
+        typeof payload.model === 'string' &&
+        typeof payload.waitMs === 'number' &&
+        (payload.reason === 'rpm' || payload.reason === 'tpm' || payload.reason === 'rpd' || payload.reason === 'retry-after')
+      ) {
+        onThrottle?.({
+          phaseId: payload.phaseId,
+          chapterIndex: payload.chapterIndex,
+          model: payload.model,
+          waitMs: payload.waitMs,
+          reason: payload.reason,
+        });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;

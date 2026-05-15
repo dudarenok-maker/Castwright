@@ -205,6 +205,38 @@ describe('AnalysingView — streaming heartbeat indicator', () => {
     expect(screen.queryByText(/Receiving response/i)).not.toBeInTheDocument();
   });
 
+  it('renders a "Throttling …" pill on a throttle SSE event and replaces the heartbeat while active', async () => {
+    /* Limiter just blocked an outbound call for 5s. The pill replaces
+       the heartbeat row so the user knows the wait is *intentional*,
+       not a hang — fixes the "is it stuck?" question the old silent
+       wait raised. */
+    await renderViewWaitingForAnalysis();
+
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 1, progress: 0.4 });
+      capturedOpts?.onHeartbeat?.({
+        phaseId: 1, receivedBytes: 1024, charsPerSec: 100,
+        elapsedMs: 2_000, sinceLastChunkMs: 200,
+      });
+    });
+    expect(screen.getByText(/Receiving response/i)).toBeInTheDocument();
+
+    act(() => {
+      capturedOpts?.onThrottle?.({
+        phaseId: 1,
+        chapterIndex: 3,
+        model: 'gemini-3.1-flash-lite',
+        waitMs: 5_000,
+        reason: 'rpm',
+      });
+    });
+
+    expect(screen.getByText(/Throttling Gemini 3.1 Flash Lite/i)).toBeInTheDocument();
+    expect(screen.getByText(/requests-per-minute cap/i)).toBeInTheDocument();
+    /* Heartbeat row hides while the pill is active. */
+    expect(screen.queryByText(/Receiving response/i)).not.toBeInTheDocument();
+  });
+
   it('shows "Reading the manuscript…" while the SSE is connecting and no log lines have arrived yet', async () => {
     /* On a cold server the first 2-3s after click are spent in
        getOrHydrateManuscript re-parsing the EPUB. The screen used to
