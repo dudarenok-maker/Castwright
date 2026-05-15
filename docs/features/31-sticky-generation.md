@@ -126,6 +126,19 @@ analyzer + the TTS sidecar must all be up.
      `/books/<bookA>/generate`. The Network tab still shows the
      original stream alive.
 
+2b. **Cross-book title doesn't smear.**
+   - Open book A and start (or land mid-) analysing. The Analysing
+     view's H1 says `Analysing <A>`; the top-bar breadcrumb says `A`.
+   - With analysis still running on book A, click the header
+     generation pill (which is anchored to book B's still-streaming
+     run).
+   - URL becomes `/books/<bookB>/generate`. The Generate view's H1
+     must say `Generating <B>` (NOT `Generating <A>`) and the top-bar
+     breadcrumb must say `B`. Pre-fix the manuscript slice short-
+     circuited Layout's per-book hydrate, so book A's title leaked
+     into book B's screen until the user manually re-opened B from
+     the library.
+
 2a. **Sticky across browser reload.**
    - With generation running, hit F5 / Ctrl+R / browser reload.
    - The previous SSE in the Network tab closes; the page re-mounts;
@@ -176,6 +189,13 @@ analyzer + the TTS sidecar must all be up.
   activeStream lifecycle, cross-book guard.
 - `src/store/chapters-slice.test.ts` — `applyGenerationTick`
   cross-book early-return.
+- `src/store/manuscript-slice.test.ts` — `bookId` anchoring (hydrate
+  reducers stamp it, `reset` clears it). Pre-fix the slice carried
+  title + manuscriptId across book switches with no way to detect
+  staleness.
+- `src/routes/index.test.tsx` — cross-book Generate H1 (regression
+  for step 2b): rendering `/books/<B>/generate` with the manuscript
+  slice still pinned to book A must surface B's title, not A's.
 - `src/hooks/use-local-analyzer-guard.test.tsx` — engine routing
   (Gemini/local), modal open/close, Confirm dispatches setPaused.
 

@@ -8,6 +8,7 @@ const sentences = (xs: Array<Partial<Sentence> & { id: number; text: string; cha
   xs.map(x => ({ chapterId: 1, ...x } as Sentence));
 
 const baseState = (initial: Sentence[]) => ({
+  bookId: null,
   manuscriptId: null,
   title: null,
   format: null,
@@ -291,5 +292,51 @@ describe('manuscriptSlice — hydrateFromAnalysis merge', () => {
       manuscriptActions.hydrateFromAnalysis({ sentences: [] } as unknown as import('../lib/types').AnalyseResponse),
     );
     expect(next.sentences).toEqual(start.sentences);
+  });
+});
+
+describe('manuscriptSlice — bookId anchoring', () => {
+  /* Cross-book navigation guard. The slice must record which book its
+     current contents reflect so Layout can detect stale state when the
+     user navigates between books — e.g. analysing Book A then opening
+     Book B's Generate view from the global generation pill. Without
+     this anchor, the title selector falls through to the stale Book A
+     title. See src/components/layout.tsx and routes/index.tsx. */
+  it('hydrateFromAnalysis stamps bookId from the payload', () => {
+    const start = baseState([]);
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.hydrateFromAnalysis({
+        bookId: 'bk_a',
+        sentences: sentences([{ id: 1, text: 'a', characterId: 'narrator' }]),
+      } as unknown as import('../lib/types').AnalyseResponse),
+    );
+    expect(next.bookId).toBe('bk_a');
+  });
+
+  it('hydrateFromBookState stamps bookId from state.bookId', () => {
+    const start = baseState([]);
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.hydrateFromBookState({
+        state: {
+          bookId: 'bk_b',
+          manuscriptId: 'mns_b',
+          title: 'Book B',
+        } as unknown as import('../lib/types').BookStateJson,
+        sentences: null,
+      }),
+    );
+    expect(next.bookId).toBe('bk_b');
+    expect(next.title).toBe('Book B');
+    expect(next.manuscriptId).toBe('mns_b');
+  });
+
+  it('reset clears bookId alongside the rest of the slice', () => {
+    const start = { ...baseState([]), bookId: 'bk_a', manuscriptId: 'mns_a', title: 'Book A' };
+    const next = manuscriptSlice.reducer(start, manuscriptActions.reset());
+    expect(next.bookId).toBeNull();
+    expect(next.manuscriptId).toBeNull();
+    expect(next.title).toBeNull();
   });
 });

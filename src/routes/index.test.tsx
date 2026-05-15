@@ -23,9 +23,10 @@ import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { router as appRouter } from './index';
-import { AnalysingRoute, BooksRoute, ChangelogRoute } from './index';
+import { AnalysingRoute, BooksRoute, ChangelogRoute, ReadyRoute } from './index';
+import { chaptersActions } from '../store/chapters-slice';
 import type { LayoutContext } from '../components/layout';
-import type { Character, LibraryBook, ChangeLogEvent } from '../lib/types';
+import type { Chapter, Character, LibraryBook, ChangeLogEvent } from '../lib/types';
 
 const analyseMock = vi.fn();
 const workspaceChangelogMock = vi.fn();
@@ -70,6 +71,11 @@ vi.mock('../lib/api', () => ({
        Resolve with an empty envelope so the panel renders nothing
        and these route tests stay focused on manuscriptId derivation. */
     getDroppedQuotes:  () => Promise.resolve({ manuscriptId: 'm1', batches: [] }),
+    /* GenerationView's ChapterSegmentStrip lazy-fetches segments for
+       done chapters when their row is expanded. Never resolve so the
+       state update doesn't flush outside React's `act()` after a test
+       asserts. */
+    getChapterAudio:   () => new Promise(() => {}),
   },
   AnalysisError: class extends Error {
     code = 'unknown';
@@ -553,5 +559,68 @@ describe('ChangelogRoute', () => {
     expect(screen.getByText(/Northern Star/)).toBeInTheDocument();
     /* The per-book log seed fixture must NOT leak into the workspace view. */
     expect(screen.queryByText("Tuned Eliza Gray's voice")).toBeNull();
+  });
+});
+
+describe('ReadyRoute — cross-book Generate view title (regression)', () => {
+  /* Bug: user analysing Book A clicks the global generation pill to jump
+     to Book B's Generate view (still streaming). The manuscript slice is
+     pinned to Book A (its title, manuscriptId, sentences). Pre-fix the
+     Generate H1 read `manuscript.title || activeBook?.title || null`
+     unguarded, so the user saw "Generating <BookA>" on Book B's screen
+     until the per-book disk hydrate completed (or forever, since
+     Layout's hydration short-circuit skipped re-fetching when manuscript
+     was already populated). Fix: anchor the manuscript slice to a
+     bookId and prefer the library entry's title whenever the slice
+     points at a different book. */
+  it('renders Book B\'s title on Book B\'s /generate even when the manuscript slice is still pinned to Book A', () => {
+    const store = makeStore();
+    /* Library has both books — the user is meant to see Book B's title. */
+    store.dispatch(libraryActions.hydrate({
+      authors: [{
+        name: 'Demo Author',
+        series: [{
+          name: 'Standalones',
+          books: [
+            makeBook({ bookId: 'b1', title: 'the Coalfall Commission', manuscriptId: 'mns-a', status: 'analysing' }),
+            makeBook({ bookId: 'b2', title: 'Mystery Novel',     manuscriptId: 'mns-b', status: 'generating' }),
+          ],
+        }],
+      }],
+    }));
+    /* Manuscript slice still holds Book A's data because the user just
+       came from the analysing view for Book A. */
+    store.dispatch(manuscriptActions.hydrateFromBookState({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      state: { bookId: 'b1', manuscriptId: 'mns-a', title: 'the Coalfall Commission' } as any,
+      sentences: null,
+      wordCount: 1000,
+      format: 'plaintext',
+    }));
+    /* Need at least one chapter row in the chapters slice or
+       GenerationView's allComplete math + "X of Y complete" header
+       wouldn't have anything to render. */
+    const chapter: Chapter = {
+      id: 1, title: 'Chapter 1', duration: '00:30',
+      state: 'queued', progress: 0, characters: {},
+    };
+    store.dispatch(chaptersActions.setChapters([chapter]));
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b2/generate']}>
+          <Routes>
+            <Route path="/books/:bookId/:view" element={<ReadyRoute/>}/>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* The Generate H1 reads "Generating <title>" via MixedHeading.
+       Both halves render in the same heading element, so a substring
+       match against the title alone is enough. */
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(heading.textContent).toContain('Mystery Novel');
+    expect(heading.textContent).not.toContain('the Coalfall Commission');
   });
 });

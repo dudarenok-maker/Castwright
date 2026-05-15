@@ -77,9 +77,18 @@ export function Layout() {
   const profileVoice     = profileCharacter ? voices.find(v => v.id === profileCharacter.voiceId) ?? null : null;
   const regenCharacter = ui.regenCharacterCtx ? characters.find(c => c.id === ui.regenCharacterCtx!.characterId) ?? null : null;
   const activeBook     = library.books.find(b => b.bookId === bookId);
+  /* Prefer the manuscript slice's title only when it actually reflects the
+     book the user is looking at. When the user navigates from analysing
+     Book A → generating Book B (via the global generation pill, say),
+     the manuscript slice still holds Book A's title until the per-book
+     disk hydrate below completes. Reading `manuscript.title` unguarded
+     would render "A" on Book B's screen for the duration of that gap;
+     anchoring on `manuscript.bookId === bookId` and falling back to the
+     library entry keeps the top-bar honest. */
+  const manuscriptMatchesBook = bookId != null && manuscript.bookId === bookId;
   const projectTitle   = (stageKind === 'upload' || stageKind === 'books')
     ? null
-    : (manuscript.title || activeBook?.title || null);
+    : ((manuscriptMatchesBook ? manuscript.title : null) || activeBook?.title || null);
   const trackChapter   = ui.currentTrack != null ? chapters.find(c => c.id === ui.currentTrack) ?? null : null;
   const trackIdx       = trackChapter ? chapters.indexOf(trackChapter) : -1;
   const prevTrackAvailable = trackIdx > 0;
@@ -171,7 +180,12 @@ export function Layout() {
   useEffect(() => {
     if (!bookId) return;
     if (stageKind !== 'analysing' && stageKind !== 'confirm' && stageKind !== 'ready') return;
-    if (manuscript.manuscriptId && manuscript.title) return;
+    /* Short-circuit only when the slice already reflects THIS book. Without
+       the bookId check, navigating from analysing Book A to generating Book B
+       (e.g. the user clicks the global generation pill) would skip the disk
+       hydrate and leave every per-book slice — manuscript title, chapters,
+       cast, revisions, change log, book meta — pinned to Book A. */
+    if (manuscript.bookId === bookId && manuscript.manuscriptId && manuscript.title) return;
     let cancelled = false;
     api.getBookState(bookId)
       .then(res => {
@@ -472,8 +486,14 @@ export function Layout() {
           chapter={chapters.find(c => c.id === pending[0].chapterId)}
           character={characters.find(c => c.id === pending[0].characterId)}
           onClose={() => dispatch(uiActions.setShowRevisionPlayer(false))}
-          onAccept={() => { dispatch(revisionsActions.acceptAllPending()); dispatch(uiActions.setShowRevisionPlayer(false)); }}
-          onReject={() => { dispatch(revisionsActions.rejectAllPending()); dispatch(uiActions.setShowRevisionPlayer(false)); }}/>
+          onAccept={(selection) => {
+            dispatch(revisionsActions.acceptRevision({ revisionId: pending[0].id, selection }));
+            dispatch(uiActions.setShowRevisionPlayer(false));
+          }}
+          onReject={() => {
+            dispatch(revisionsActions.rejectRevision(pending[0].id));
+            dispatch(uiActions.setShowRevisionPlayer(false));
+          }}/>
       )}
       {resultDialog && (
         <ConfirmDialog
