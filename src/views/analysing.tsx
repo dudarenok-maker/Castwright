@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { IconCheck, IconRefresh, IconSpinner } from '../lib/icons';
+import { IconCheck, IconClose, IconRefresh, IconSpinner } from '../lib/icons';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import { api, AnalysisError, type AnalysisLiveInfo, type AnalysisLiveChapter, type AnalysisHeartbeat, type OllamaHealth } from '../lib/api';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
@@ -379,6 +379,10 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
   const [pendingAnalyzerPill, setPendingAnalyzerPill] = useState<ModelControlState | null>(null);
   const [analyzerProbeKey, setAnalyzerProbeKey] = useState(0);
   const [analyzerEvictionNotice, setAnalyzerEvictionNotice] = useState<string | null>(null);
+  /* Rose banner shown when Load / Stop returns {status:'error', ...} or
+     throws. Without it the auto-load path looks stuck on "Loading…" and
+     the manual Load click silently bounces the pill back to idle. */
+  const [analyzerLoadError, setAnalyzerLoadError] = useState<string | null>(null);
   const isAnalyzerReady = !isLocalAnalyzer || (
     ollamaHealth?.status === 'reachable' && ollamaHealth?.modelResident === true
   );
@@ -794,6 +798,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
   const handleLoadAnalyzer = async () => {
     setPendingAnalyzerPill('loading');
     setAnalyzerEvictionNotice(null);
+    setAnalyzerLoadError(null);
     /* Auto-evict the TTS sidecar before warming the analyzer — they fight
        for the same VRAM. Only surface the banner when the unload actually
        freed something so we don't lie about state. */
@@ -806,18 +811,37 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
       await api.unloadSidecar();
       if (sidecarHadModel) setAnalyzerEvictionNotice('TTS unloaded to free VRAM for the analyzer.');
     } catch {}
+    /* loadAnalyzer's HTTP-level failures land in the result body
+       (status:'error') with a 5xx — only fetch-itself failures throw.
+       Check both paths so a silent error doesn't strand the pill on
+       "Loading…" until the probe ticks. */
     try {
-      await api.loadAnalyzer();
-    } catch {}
+      const result = await api.loadAnalyzer();
+      if (result.status === 'error') {
+        setAnalyzerLoadError(result.error || 'Analyzer failed to load. Check Ollama is running.');
+        setPendingAnalyzerPill(null);
+      }
+    } catch (e) {
+      setAnalyzerLoadError(`Couldn't reach Ollama: ${(e as Error).message ?? 'fetch failed'}`);
+      setPendingAnalyzerPill(null);
+    }
     setAnalyzerProbeKey(k => k + 1);
   };
 
   const handleStopAnalyzer = async () => {
     setPendingAnalyzerPill('idle');
     setAnalyzerEvictionNotice(null);
+    setAnalyzerLoadError(null);
     try {
-      await api.unloadAnalyzer();
-    } catch {}
+      const result = await api.unloadAnalyzer();
+      if (result.status === 'error') {
+        setAnalyzerLoadError(result.error || 'Analyzer failed to unload.');
+        setPendingAnalyzerPill(null);
+      }
+    } catch (e) {
+      setAnalyzerLoadError(`Couldn't reach Ollama: ${(e as Error).message ?? 'fetch failed'}`);
+      setPendingAnalyzerPill(null);
+    }
     setAnalyzerProbeKey(k => k + 1);
   };
 
@@ -990,6 +1014,21 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
             <p className="mt-3 inline-flex items-center gap-2 text-[11px] text-emerald-700">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>
               {analyzerEvictionNotice}
+            </p>
+          )}
+          {analyzerLoadError && (
+            <p className="mt-3 inline-flex items-start gap-2 text-[11px] text-rose-700 max-w-prose mx-auto text-left"
+               role="alert">
+              <span className="w-1.5 h-1.5 mt-1 rounded-full bg-rose-500 shrink-0"/>
+              <span>{analyzerLoadError}</span>
+              <button
+                type="button"
+                onClick={() => setAnalyzerLoadError(null)}
+                aria-label="Dismiss error"
+                className="ml-1 text-rose-600/70 hover:text-rose-800"
+              >
+                <IconClose className="w-3 h-3"/>
+              </button>
             </p>
           )}
           {!manuscriptId && (

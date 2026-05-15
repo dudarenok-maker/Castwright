@@ -47,7 +47,7 @@ vi.mock('../lib/api', async () => {
           : Promise.resolve({ manuscriptId: 'm1', batches: [] }),
       getOllamaHealth: () => getOllamaHealthSpy(),
       getSidecarHealth: () => getSidecarHealthSpy(),
-      loadAnalyzer:    () => { loadAnalyzerSpy(); return Promise.resolve({ status: 'ready' as const }); },
+      loadAnalyzer:    () => loadAnalyzerSpy(),
       unloadAnalyzer:  () => Promise.resolve({ status: 'unloaded' as const }),
       loadSidecar:     () => Promise.resolve({ status: 'ready' as const }),
       unloadSidecar:   () => { unloadSidecarSpy(); return Promise.resolve({ status: 'idle' as const }); },
@@ -66,6 +66,7 @@ beforeEach(() => {
   getSidecarHealthSpy.mockReset();
   getOllamaHealthSpy.mockReset();
   getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
+  loadAnalyzerSpy.mockResolvedValue({ status: 'ready' as const });
   /* Default to "reachable AND model resident" — the analysis effect is
      gated on isAnalyzerReady, so tests that drive phase/log events
      through capturedOpts need the analysis to actually have fired.
@@ -428,6 +429,43 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
 
     await waitFor(() => expect(loadAnalyzerSpy).toHaveBeenCalled());
     expect(screen.queryByText(/TTS unloaded to free VRAM/i)).not.toBeInTheDocument();
+  });
+
+  /* Regression: before the fix, loadAnalyzer returning {status:'error', …}
+     was silently discarded. The pill stayed on "Loading…" until the probe
+     ticked it back to idle, and the user never learned why. Surface the
+     daemon's error string so the failure is visible. */
+  it('surfaces the error message when loadAnalyzer resolves with status:error', async () => {
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b', modelPulled: true, resident: [], modelResident: false,
+    });
+    loadAnalyzerSpy.mockResolvedValue({
+      status: 'error' as const,
+      error: 'Ollama /api/generate returned 503',
+    });
+
+    renderNoManuscript();
+    const loadBtn = await screen.findByRole('button', { name: /load model \(analyzer\)/i });
+    await act(async () => { fireEvent.click(loadBtn); });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Ollama \/api\/generate returned 503/i,
+    );
+  });
+
+  it('surfaces a fetch failure when loadAnalyzer throws', async () => {
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b', modelPulled: true, resident: [], modelResident: false,
+    });
+    loadAnalyzerSpy.mockRejectedValue(new Error('Failed to fetch'));
+
+    renderNoManuscript();
+    const loadBtn = await screen.findByRole('button', { name: /load model \(analyzer\)/i });
+    await act(async () => { fireEvent.click(loadBtn); });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn't reach Ollama/i);
   });
 
   it('hides the analyzer pill when a cloud (Gemini) model is selected — nothing to load locally', () => {
