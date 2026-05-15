@@ -2,12 +2,11 @@
 must lead with `YYYY-MM-DD HH:mm:ss.SSS [sidecar] ` so cross-sink (server
 + sidecar + frontend) timeline reconstruction works without guesswork.
 
-The format string lives at server/tts-sidecar/main.py:33 — if it drifts
-(format= or datefmt= changed) this regression catches it before a user
-notices the un-timestamped log."""
+The format string lives at server/tts-sidecar/main.py (LOG_FORMAT /
+LOG_DATEFMT constants) — if it drifts this regression catches it before a
+user notices the un-timestamped log."""
 from __future__ import annotations
 
-import io
 import logging
 import re
 import sys
@@ -17,7 +16,7 @@ SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:
     sys.path.insert(0, str(SIDECAR_ROOT))
 
-import main  # noqa: E402  — triggers logging.basicConfig at import time
+import main  # noqa: E402
 
 
 _TS_LINE = re.compile(
@@ -25,23 +24,22 @@ _TS_LINE = re.compile(
 )
 
 
-def test_root_handler_emits_timestamped_sidecar_prefix() -> None:
-    """basicConfig configures the ROOT handler with our format. Reproduce its
-    Formatter (same format= + datefmt= the sidecar uses) and run a record
-    through it — that's what the user sees on disk. Direct stream-capture
-    on the root handler is brittle because pytest's caplog hooks intercept
-    the records earlier in the pipeline."""
-    root = logging.getLogger()
-    assert root.handlers, "basicConfig should have installed a root handler"
-    handler = root.handlers[0]
-    formatter = handler.formatter
-    assert formatter is not None, "root handler must carry a Formatter"
+def test_format_emits_timestamped_sidecar_prefix() -> None:
+    """Construct a Formatter with main's published constants and run a
+    record through it — that's the line shape that lands on disk in
+    production (basicConfig installs a handler with this same Formatter
+    when uvicorn imports main first).
 
-    record = main.log.makeRecord(
+    Reading `handlers[0].formatter` directly is brittle under pytest:
+    caplog installs its own root handler before main is imported, so
+    `logging.basicConfig` becomes a no-op and handler[0] is pytest's,
+    not ours. The format-constant assertion below is what matters."""
+    formatter = logging.Formatter(fmt=main.LOG_FORMAT, datefmt=main.LOG_DATEFMT)
+    record = logging.LogRecord(
         name="sidecar",
         level=logging.INFO,
-        fn=__file__,
-        lno=0,
+        pathname=__file__,
+        lineno=0,
         msg="hello-from-test",
         args=(),
         exc_info=None,
@@ -55,11 +53,7 @@ def test_format_includes_milliseconds() -> None:
     explicit `.%(msecs)03d` (i.e. relying on default asctime), the format
     would miss sub-second resolution — and high-rate progress events
     would all timestamp the same second. Pin it."""
-    handler = logging.getLogger().handlers[0]
-    formatter = handler.formatter
-    assert formatter is not None
-    fmt = formatter._fmt or ""
-    assert "%(asctime)s" in fmt
-    assert "%(msecs)03d" in fmt
-    assert "[sidecar]" in fmt
-    assert formatter.datefmt == "%Y-%m-%d %H:%M:%S"
+    assert "%(asctime)s" in main.LOG_FORMAT
+    assert "%(msecs)03d" in main.LOG_FORMAT
+    assert "[sidecar]" in main.LOG_FORMAT
+    assert main.LOG_DATEFMT == "%Y-%m-%d %H:%M:%S"

@@ -152,10 +152,6 @@ the cast UI ever surfaces "upload a reference clip per character").
 
 ## Known gaps
 
-- **`server/tts-sidecar/tests/` is not yet wired into `npm run
-  test:all`** — Kokoro pytest cases run via
-  `python -m pytest server/tts-sidecar/tests/` but the top-level gate
-  doesn't see them. Tracked in CLAUDE.md "Suggested follow-ups."
 - **No auto-fill "fill Kokoro voices from Coqui assignments"** action
   yet. The profile-drawer per-engine tabs let users set the Kokoro slot
   manually; profile inference fills in the gap at synth time. If users

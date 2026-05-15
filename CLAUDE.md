@@ -12,7 +12,10 @@ without changing component code.
 - `npm run test:scripts` — Pester 5 single-run for `scripts/lib/` PowerShell helpers
   (log rotation/pruning). Requires Pester >= 5.0; install once with
   `Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck`.
-- `npm run test:all` — frontend + server + PowerShell-scripts tests (matches the pre-commit hook).
+- `npm run test:sidecar` — pytest single-run for `server/tts-sidecar/tests/`.
+  Uses the sidecar venv at `server/tts-sidecar/.venv\Scripts\python.exe`; emits
+  a SKIP banner and exits 0 when the venv isn't bootstrapped yet (fresh clone).
+- `npm run test:all` — frontend + server + PowerShell-scripts + sidecar tests (matches the pre-commit hook).
 - `npm run verify` — full battery: typecheck + all tests + build (matches the pre-push hook).
 - `npm run verify:quick` — all tests, no typecheck/build (alias for `test:all`).
 - `npm run build` — production build into `dist/`.
@@ -79,9 +82,11 @@ not replace them.
 Harnesses:
 - Frontend: `npm run test` (Vitest + jsdom + React Testing Library). Tests live next to the unit (`*.test.ts(x)`).
 - Server: `cd server && npm run test` (Vitest + node env, real-ffmpeg integration where relevant). Same colocation.
-- Sidecar (`server/tts-sidecar/`): pytest scaffold is the next coverage milestone; any new sidecar code MUST add it.
+- Sidecar (`server/tts-sidecar/`): pytest harness at `server/tts-sidecar/tests/`,
+  invoked via `server/tts-sidecar/run-tests.ps1` or `npm run test:sidecar`.
+  Any new sidecar code MUST add cases here.
 - PowerShell helpers (`scripts/lib/`): Pester 5 tests in `scripts/tests/`, invoked via `scripts/tests/run.ps1` or `npm run test:scripts`.
-- Top-level `npm run test:all` runs all three harnesses (Vitest frontend + Vitest server + Pester scripts).
+- Top-level `npm run test:all` runs all four harnesses (Vitest frontend + Vitest server + Pester scripts + pytest sidecar).
 
 Canonical end-to-end manuscript for full-pipeline regression:
 `C:\Users\dudar\Downloads\Bonus Keefe Story.txt` (do not commit — copyrighted).
@@ -154,11 +159,12 @@ Working practice:
   issue (or update the regression doc + paired test if behavior intentionally
   changed — see `docs/features/INDEX.md`).
 - Sidecar pytest coverage lives at `server/tts-sidecar/tests/` —
-  `test_smoke.py`, `test_synthesize.py`, `test_runtime_wiring.py`
-  (33 cases). `test_runtime_wiring.py` pins the CUDA+DeepSpeed+fp16
-  primary path: DeepSpeed init reaches the model and runs before
-  `tts.to(device)`, init failure is swallowed, fp16 autocast wraps the
-  synth call, `_float_audio_to_int16_le` handles clipping / stereo
-  downmix / list input, and speaker-manifest enumeration tolerates
-  API drift. Next milestones: wire pytest into `npm run test:all` so
-  the gate covers it; concurrent-synthesis / thread-pool saturation.
+  `test_smoke.py`, `test_synthesize.py`, `test_runtime_wiring.py`,
+  `test_kokoro.py`, `test_logging_format.py`. `test_runtime_wiring.py`
+  pins the CUDA+DeepSpeed+fp16 primary path: DeepSpeed init reaches the
+  model and runs before `tts.to(device)`, init failure is swallowed,
+  fp16 autocast wraps the synth call, `_float_audio_to_int16_le` handles
+  clipping / stereo downmix / list input, and speaker-manifest
+  enumeration tolerates API drift. Wired into `npm run test:all` via
+  `npm run test:sidecar` (skips with a banner on an unbootstrapped venv).
+  Next milestone: concurrent-synthesis / thread-pool saturation.
