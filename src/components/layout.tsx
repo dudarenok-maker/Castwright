@@ -70,7 +70,10 @@ export function Layout() {
   const stageKind   = stage.kind;
   const bookId      = (stage as { bookId?: string }).bookId ?? null;
   const view        = stage.kind === 'ready' ? stage.view : null;
-  const openProfileId = stage.kind === 'ready' ? stage.openProfileId : null;
+  /* Drawer is also reachable from the cast-confirmation stage — clicking a
+     card on "Meet the cast" sets stage.openProfileId there, so we must read
+     it from either stage variant. */
+  const openProfileId = (stage.kind === 'ready' || stage.kind === 'confirm') ? stage.openProfileId : null;
 
   const matchCharacter = ui.matchDetailFor ? characters.find(c => c.id === ui.matchDetailFor) ?? null : null;
   const matchVoice     = matchCharacter ? voices.find(v => v.id === matchCharacter.voiceId) ?? null : null;

@@ -10,13 +10,18 @@ interface Props {
   characters: Character[];
   library: Voice[];
   title?: string | null;
+  /** Open the shared ProfileDrawer for this character. Wired by ConfirmRoute
+      to dispatch setOpenProfileId — same drawer the ready-stage Cast view
+      uses, so identity edits at the confirmation step land in the same
+      character record and survive into generation. */
+  onOpenProfile: (id: string) => void;
   onConfirm: () => void;
   onReanalyse: () => void;
 }
 
 type Decision = 'match' | 'generate';
 
-export function ConfirmCastView({ characters, library, title, onConfirm, onReanalyse }: Props) {
+export function ConfirmCastView({ characters, library, title, onOpenProfile, onConfirm, onReanalyse }: Props) {
   const [decisions, setDecisions] = useState<Record<string, Decision>>(() => {
     const d: Record<string, Decision> = {};
     for (const c of characters) if (c.matchedFrom) d[c.id] = 'match';
@@ -54,6 +59,7 @@ export function ConfirmCastView({ characters, library, title, onConfirm, onReana
               ttsEngine={ttsEngine}
               decision={decisions[c.id]}
               onDecision={(d) => setDecisions({ ...decisions, [c.id]: d })}
+              onOpenProfile={() => onOpenProfile(c.id)}
             />
           ))}
         </div>
@@ -77,16 +83,28 @@ interface CardProps {
   ttsEngine: 'coqui' | 'gemini' | 'piper' | 'kokoro';
   decision: Decision | undefined;
   onDecision: (d: Decision) => void;
+  /** Card-level click handler. Whole card is clickable; the DecisionTile
+      column stops propagation so picking match/generate doesn't also pop
+      the drawer. Mirrors the ready-stage Cast view's row click behavior. */
+  onOpenProfile: () => void;
 }
 
-function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecision }: CardProps) {
+function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecision, onOpenProfile }: CardProps) {
   const matched = !!character.matchedFrom;
   /* Engine-aware prebuilt-voice pick — shown alongside identity so the user
      can sanity-check before confirming the cast. If the analyzer's gender /
      age guess is wrong, the user can open the profile drawer and edit. */
   const ttsVoice = voice?.ttsVoice ?? resolveTtsVoiceForCharacter(character, ttsEngine);
   return (
-    <article className={`bg-white rounded-3xl border shadow-card overflow-hidden transition-colors ${matched ? 'border-purple-deep/15' : 'border-ink/10'}`}>
+    <article
+      role="button"
+      tabIndex={0}
+      aria-label={`Open profile for ${character.name}`}
+      onClick={onOpenProfile}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenProfile(); }
+      }}
+      className={`bg-white rounded-3xl border shadow-card overflow-hidden transition-colors cursor-pointer hover:border-ink/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-peach/60 ${matched ? 'border-purple-deep/15' : 'border-ink/10'}`}>
       <div className="p-5 grid grid-cols-[auto_1fr_auto] items-start gap-5">
         <Avatar name={character.name} color={character.color as CharColor} size={48}/>
         <div className="min-w-0">
@@ -126,8 +144,11 @@ function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecisio
           </p>
         </div>
 
+        {/* Decision tiles own their own clicks — stopPropagation so picking
+            match/generate doesn't bubble up to the card-level
+            "open profile" handler. */}
         {matched ? (
-          <div className="grid grid-cols-2 gap-2 w-[340px]">
+          <div className="grid grid-cols-2 gap-2 w-[340px]" onClick={(e) => e.stopPropagation()}>
             <DecisionTile
               active={decision === 'match'}
               onClick={() => onDecision('match')}
@@ -146,7 +167,7 @@ function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecisio
             />
           </div>
         ) : (
-          <div className="w-[340px]">
+          <div className="w-[340px]" onClick={(e) => e.stopPropagation()}>
             <DecisionTile
               active={true}
               swatch={voice}
@@ -160,7 +181,7 @@ function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecisio
       </div>
 
       {matched && decision === 'match' && (
-        <div className="border-t border-ink/5 px-5 py-3 bg-canvas/60 flex items-center gap-3 text-xs text-ink/60 fade-in">
+        <div className="border-t border-ink/5 px-5 py-3 bg-canvas/60 flex items-center gap-3 text-xs text-ink/60 fade-in" onClick={(e) => e.stopPropagation()}>
           <span className="grid place-items-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-700"><IconCheck className="w-3 h-3"/></span>
           <span>Continuity preserved — <span className="font-semibold text-ink">{voice?.character}</span> from <span className="font-semibold text-ink">{character.matchedFrom?.bookTitle}</span> will be used.</span>
         </div>

@@ -3,10 +3,10 @@
    the "Reuse" decision tile by default. Pairs with
    docs/features/09-voice-match-pipeline.md. */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { ConfirmCastView } from './confirm-cast';
 import type { Character, Voice } from '../lib/types';
@@ -60,7 +60,7 @@ const library: Voice[] = [
   },
 ];
 
-function renderView() {
+function renderView(overrides: { onOpenProfile?: (id: string) => void } = {}) {
   const store = configureStore({
     reducer: { ui: uiSlice.reducer },
   });
@@ -70,6 +70,7 @@ function renderView() {
         characters={[Marlow, Wren]}
         library={library}
         title="Book Two"
+        onOpenProfile={overrides.onOpenProfile ?? (() => {})}
         onConfirm={() => {}}
         onReanalyse={() => {}}
       />
@@ -108,5 +109,52 @@ describe('ConfirmCastView — voice-match wiring', () => {
     /* The continuity footer renders only when decision === 'match' (the
        initial state for any character with matchedFrom — see view init). */
     expect(screen.getByText(/Continuity preserved/)).toBeInTheDocument();
+  });
+});
+
+describe('ConfirmCastView — card click opens profile drawer', () => {
+  it('clicking an unmatched character card fires onOpenProfile with that character id', () => {
+    /* Mirrors the ready-stage Cast view: clicking the row pops the
+       ProfileDrawer. Without this the user can't fix gender/age inferences
+       before confirming the cast. */
+    const onOpenProfile = vi.fn();
+    renderView({ onOpenProfile });
+    const WrenHeading = screen.getByRole('heading', { name: 'Wren' });
+    const WrenCard = WrenHeading.closest('article')!;
+    fireEvent.click(WrenCard);
+    expect(onOpenProfile).toHaveBeenCalledWith('Wren');
+  });
+
+  it('clicking a MATCHED character card also fires onOpenProfile — drawer opens for matched library reuses too', () => {
+    /* Matched cards default to decision='match' and render the Reuse
+       DecisionTile + the Continuity footer. Those branches own their own
+       clicks (stopPropagation) so they don't open the drawer, but the
+       card body itself (avatar, name, role, chips, TTS line) must still
+       bubble up — otherwise the user can't inspect or correct the
+       matched profile before confirming. */
+    const onOpenProfile = vi.fn();
+    renderView({ onOpenProfile });
+    const MarlowHeading = screen.getByRole('heading', { name: 'Marlow' });
+    fireEvent.click(MarlowHeading);
+    expect(onOpenProfile).toHaveBeenCalledWith('Marlow');
+  });
+
+  it('clicking a DecisionTile does not bubble up to the card click', () => {
+    /* The match/generate picker lives inside the card — its clicks must
+       stay local so picking a tile doesn't also open the drawer. */
+    const onOpenProfile = vi.fn();
+    renderView({ onOpenProfile });
+    const generateTile = screen.getByRole('button', { name: /Generate fresh/ });
+    fireEvent.click(generateTile);
+    expect(onOpenProfile).not.toHaveBeenCalled();
+  });
+
+  it('pressing Enter on a focused card opens the profile drawer', () => {
+    const onOpenProfile = vi.fn();
+    renderView({ onOpenProfile });
+    const MarlowHeading = screen.getByRole('heading', { name: 'Marlow' });
+    const MarlowCard = MarlowHeading.closest('article')!;
+    fireEvent.keyDown(MarlowCard, { key: 'Enter' });
+    expect(onOpenProfile).toHaveBeenCalledWith('Marlow');
   });
 });

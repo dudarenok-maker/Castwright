@@ -9,7 +9,8 @@ import type { Stage } from './types';
      #/log                               → { kind: 'changelog' }
      #/account                           → { kind: 'account' }
      #/books/:bookId/analysing           → { kind: 'analysing', bookId }
-     #/books/:bookId/confirm             → { kind: 'confirm',   bookId }
+     #/books/:bookId/confirm?profile=    → { kind: 'confirm',   bookId,
+                                             openProfileId }
      #/books/:bookId/:view?chapter=&profile=
                                          → { kind: 'ready', bookId, view,
                                              currentChapterId, openProfileId } */
@@ -23,7 +24,10 @@ export function stageToHash(stage: Stage | null | undefined): string {
     case 'changelog': return '#/log';
     case 'account':   return '#/account';
     case 'analysing': return stage.bookId ? `#/books/${stage.bookId}/analysing` : '#/new';
-    case 'confirm':   return `#/books/${stage.bookId}/confirm`;
+    case 'confirm': {
+      const qs = stage.openProfileId ? `?profile=${stage.openProfileId}` : '';
+      return `#/books/${stage.bookId}/confirm${qs}`;
+    }
     case 'ready': {
       const q = new URLSearchParams();
       if (stage.currentChapterId != null && stage.currentChapterId !== 3) q.set('chapter', String(stage.currentChapterId));
@@ -43,6 +47,9 @@ export function stageEqual(a: Stage | null | undefined, b: Stage | null | undefi
     return a.view === b.view
         && a.currentChapterId === b.currentChapterId
         && a.openProfileId === b.openProfileId;
+  }
+  if (a.kind === 'confirm' && b.kind === 'confirm') {
+    return a.openProfileId === b.openProfileId;
   }
   return true;
 }

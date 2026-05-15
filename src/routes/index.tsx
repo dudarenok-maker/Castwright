@@ -252,7 +252,9 @@ export function AnalysingRoute() {
 
 function ConfirmRoute() {
   const { bookId = '' } = useParams<{ bookId: string }>();
-  useHydrateStage({ kind: 'confirm', bookId }, [bookId]);
+  const [searchParams] = useSearchParams();
+  const openProfileId = searchParams.get('profile');
+  useHydrateStage({ kind: 'confirm', bookId, openProfileId }, [bookId, openProfileId]);
 
   const dispatch = useAppDispatch();
   const characters = useAppSelector(s => s.cast.characters);
@@ -262,6 +264,28 @@ function ConfirmRoute() {
   return (
     <ConfirmCastView characters={characters} library={voices}
       title={manuscript.title}
+      onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
+      onOverrideLibrary={async ({ sourceCharacterId, targetBookId, targetCharacterId }) => {
+        /* Binds sourceBookId from the route's bookId — the view doesn't
+           need to know about the source side beyond per-character ids.
+           Server returns the merged record for both sides; we patch the
+           source-side record into redux so the confirm card immediately
+           reflects the unioned attributes / aliases / longer description
+           the user just opted into. The target-side change lives on disk
+           in the matched book's cast.json; we don't carry the rest of
+           the workspace's cast state in this slice, so no client-side
+           dispatch is needed for it — the next time that book opens it
+           will hydrate from the updated file. */
+        const res = await api.overrideLibraryCast({
+          sourceBookId: bookId,
+          sourceCharacterId,
+          targetBookId,
+          targetCharacterId,
+        });
+        if (res?.source) {
+          dispatch(castActions.updateCharacter(res.source));
+        }
+      }}
       onConfirm={() => {
         dispatch(uiActions.confirmCast());
         dispatch(changeLogActions.appendLogEvent(buildCastConfirmEvent({
