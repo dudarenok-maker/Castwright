@@ -119,6 +119,26 @@ export function keepAliveFor(model: string): string | number {
    while Ollama re-paged the model. */
 export const ANALYZER_NUM_CTX = 16384;
 
+/* Force Ollama to load every layer of the model onto the GPU. 999 is
+   the standard idiom for "all layers" — it exceeds any model's actual
+   layer count, so Ollama clamps to the real value (32 for llama3.1:8b,
+   40 for qwen3.5:9b, etc.). Hard-coding to 999 means this knob is
+   correct for every supported tag without a per-model lookup.
+   Without this hint, Ollama makes its own auto-split decision based on
+   a VRAM-headroom heuristic that turns out to be twitchy under
+   pressure: at llama3.1:8b + num_ctx 16384, ollama ps reported
+   "8.0 GB, 8%/92% CPU/GPU" — ~640 MB silently offloaded to system RAM,
+   which dragged stage-2 wall-clock measurably. Combined with the
+   daemon's OLLAMA_FLASH_ATTENTION=1 + OLLAMA_KV_CACHE_TYPE=q8_0 env
+   pair (see docs/local-llm.md "Pinning the analyzer to 100% GPU"),
+   this pins the analyzer to GPU-only and produces a clean OOM if the
+   budget is ever exceeded, instead of a silent slowdown the user can't
+   diagnose from the UI. Exported for the in-app Load button to thread
+   the same value (Ollama treats num_gpu as part of the load-time cache
+   key the same way num_ctx is — mismatching values between /load and
+   the first /api/chat call triggers a silent reload mid-stream). */
+export const ANALYZER_NUM_GPU = 999;
+
 export class OllamaAnalyzer implements Analyzer {
   private readonly url: string;
   private readonly model: string;
@@ -303,9 +323,9 @@ export class OllamaAnalyzer implements Analyzer {
          against semantic violations the schema can't express. */
       format: responseFormat,
       /* Per-model keep_alive — see keepAliveFor + RESIDENT_MODELS above.
-         Small models (4B) stay resident across the analysis loop; larger
-         ones (9B, Llama-8B) unload immediately so they don't squat on
-         VRAM that XTTS needs after analysis. */
+         The 4B and Llama-8B stay resident across the analysis loop; the
+         9B unloads immediately so its 6.6 GB doesn't squat on VRAM that
+         XTTS needs after analysis. */
       keep_alive: keepAliveFor(this.model),
       /* Suppress qwen3.5's thinking tokens — they'd appear as
          `<think>…</think>` ahead of the JSON and break the parser. Ollama
@@ -324,6 +344,10 @@ export class OllamaAnalyzer implements Analyzer {
            weights (~3 GB) leave enough headroom on an 8 GB box for the
            larger KV cache. */
         num_ctx: ANALYZER_NUM_CTX,
+        /* Pin every layer to GPU — see ANALYZER_NUM_GPU above for the
+           full rationale (was: Ollama silently offloading ~8% of
+           llama3.1:8b layers to CPU under 16K-context pressure). */
+        num_gpu: ANALYZER_NUM_GPU,
       },
     };
 

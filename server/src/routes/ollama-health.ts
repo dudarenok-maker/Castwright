@@ -9,7 +9,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../workspace/user-settings.js';
-import { ANALYZER_NUM_CTX } from '../analyzer/ollama.js';
+import { ANALYZER_NUM_CTX, ANALYZER_NUM_GPU } from '../analyzer/ollama.js';
 
 export const ollamaHealthRouter = Router();
 
@@ -157,13 +157,15 @@ async function callOllamaGenerate(
    the next analysis run skips the cold-load tax. Used by the Analysing
    screen's Load button.
 
-   CRITICAL: pass the exact same num_ctx the analyzer's runStage path uses
-   (ANALYZER_NUM_CTX, 16K). Ollama treats (model, num_ctx) as the cache key
-   — warming with the default 2048 and then running analysis with 16384
-   forces a full model reload on the first analyzer chat call, which
-   surfaces to the UI as "Analysis stream ended without a result event"
-   mid-reload. The user sees the pill go green ("Analyzer ready") but
-   every Try Again triggers the same reload-and-die loop. */
+   CRITICAL: pass the exact same num_ctx AND num_gpu the analyzer's
+   runStage path uses (ANALYZER_NUM_CTX, ANALYZER_NUM_GPU). Ollama
+   treats both as part of the load-time cache key — warming with the
+   default num_ctx 2048 and then running analysis with 16384 forces a
+   full model reload on the first analyzer chat call, and the same is
+   true if num_gpu differs between warm and chat. The reload surfaces
+   to the UI as "Analysis stream ended without a result event" while
+   the pill stays green ("Analyzer ready"), so every Try Again triggers
+   the same reload-and-die loop. */
 ollamaHealthRouter.post('/load', async (_req: Request, res: Response) => {
   const url = getResolvedOllamaUrl();
   const model = getResolvedOllamaModel();
@@ -174,7 +176,7 @@ ollamaHealthRouter.post('/load', async (_req: Request, res: Response) => {
       prompt: '',
       keep_alive: '5m',
       stream: false,
-      options: { num_ctx: ANALYZER_NUM_CTX },
+      options: { num_ctx: ANALYZER_NUM_CTX, num_gpu: ANALYZER_NUM_GPU },
     },
     LOAD_TIMEOUT_MS,
   );
