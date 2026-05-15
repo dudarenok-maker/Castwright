@@ -137,16 +137,57 @@ describe('verifyEvidenceAgainstSource', () => {
     warn.mockRestore();
   });
 
-  it('drops fabricated quotes that stitch separate utterances and emits a log line naming the character', () => {
+  it('keeps stitched same-speaker quotes via the segment tier when every segment is in source', () => {
+    /* Regression for the KOTLC false-positive class: the model joins two
+       consecutive same-speaker utterances and drops the narration tag
+       between them. The pure-substring check used to drop these; the
+       three-tier match now keeps them as `segments`. */
+    const log = vi.fn();
+    const chars: CharacterOutput[] = [{
+      id: 'halloran', name: 'Halloran', role: 'captain', color: 'halloran',
+      evidence: [
+        /* "Hard to starboard" and "Cold supper it is, then" are two
+           separate utterances in SOURCE. The 3-char "aye." segment
+           gets filtered by the ≥ 8-char rule so isn't required. */
+        { quote: 'Hard to starboard. Cold supper it is, then. Aye.' },
+      ],
+    }];
+
+    const result = verifyEvidenceAgainstSource(chars, SOURCE, log);
+
+    expect(result.totalDropped).toBe(0);
+    expect(chars[0].evidence).toHaveLength(1);
+    /* The aggregate match-tier log line fires when the looser tiers
+       actually carried a quote. */
+    expect(log.mock.calls.some(call => /Quote-match tiers:.*segments=1/.test(String(call[0])))).toBe(true);
+  });
+
+  it('keeps quotes whose only difference is terminal-punct drift (period for comma before a dialogue tag)', () => {
+    /* The other half of the KOTLC false-positive class. Source punctuates
+       the utterance with `,` because a dialogue tag follows; the model
+       emits `.` because it treats the line as a complete sentence. */
+    const src = '"Mammoths are extinct," she interrupted. The dog barked.';
+    const chars: CharacterOutput[] = [{
+      id: 'sophie', name: 'Sophie', role: 'protagonist', color: 'sophie',
+      evidence: [{ quote: 'Mammoths are extinct.' }],
+    }];
+    const log = vi.fn();
+    const result = verifyEvidenceAgainstSource(chars, src, log);
+
+    expect(result.totalDropped).toBe(0);
+    expect(chars[0].evidence).toHaveLength(1);
+    expect(log.mock.calls.some(call => /terminal-punct=1/.test(String(call[0])))).toBe(true);
+  });
+
+  it('drops stitched quotes when at least one segment is genuinely fabricated', () => {
+    /* "Cold supper it is, then" is in source, but "He winked" is NOT —
+       so the segment tier must NOT accept the joined form. */
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const log = vi.fn();
     const chars: CharacterOutput[] = [{
       id: 'halloran', name: 'Halloran', role: 'captain', color: 'halloran',
       evidence: [
-        { quote: 'Hard to starboard' }, // real
-        /* Stitched: the words exist in the source but never as one
-           continuous run. The verifier must drop this. */
-        { quote: 'Hard to starboard. Cold supper it is, then. Aye.' },
+        { quote: 'Cold supper it is, then. He winked at the parrot.' },
       ],
     }];
 
@@ -154,11 +195,31 @@ describe('verifyEvidenceAgainstSource', () => {
 
     expect(result.totalDropped).toBe(1);
     expect(result.affectedCharacters).toBe(1);
-    expect(chars[0].evidence).toHaveLength(1);
-    expect(chars[0].evidence![0].quote).toBe('Hard to starboard');
-    expect(log).toHaveBeenCalledTimes(1);
+    expect(chars[0].evidence).toHaveLength(0);
     expect(log.mock.calls[0][0]).toContain('halloran');
     expect(log.mock.calls[0][0]).toMatch(/fabricated quote/i);
+    warn.mockRestore();
+  });
+
+  it('does not keep a quote when only one segment survives the ≥ 8-char filter', () => {
+    /* A single long segment that wasn't matched by tier 1 or 2 cannot
+       be rescued by tier 3 — segment-tier requires ≥ 2 surviving
+       segments so it can't degenerate into "any substring matches". */
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const chars: CharacterOutput[] = [{
+      id: 'halloran', name: 'Halloran', role: 'captain', color: 'halloran',
+      evidence: [
+        /* Two halves, but only one is ≥ 8 chars after stripping. The
+           short "No." segment is filtered out so we're left with a
+           single segment — tier 3 must refuse it. */
+        { quote: 'A fabricated long sentence never in the source. No.' },
+      ],
+    }];
+
+    const result = verifyEvidenceAgainstSource(chars, SOURCE, () => {});
+
+    expect(result.totalDropped).toBe(1);
+    expect(chars[0].evidence).toHaveLength(0);
     warn.mockRestore();
   });
 
@@ -201,7 +262,9 @@ describe('verifyEvidenceAgainstSource', () => {
     const chars: CharacterOutput[] = [{
       id: 'halloran', name: 'Halloran', role: 'captain', color: 'c',
       evidence: [
-        { quote: 'Hard to starboard. Cold supper it is, then. Aye.', note: 'stitched' },
+        /* Genuine fabrication (one segment is invented) — drops at all
+           three tiers, preserves the note in the ledger entry. */
+        { quote: 'Cold supper it is, then. The kraken danced a jig.', note: 'stitched' },
         { quote: 'Halloran said something profound.' },
       ],
     }];
