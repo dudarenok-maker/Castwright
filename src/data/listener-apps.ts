@@ -2,14 +2,20 @@ import type { ListenerApp } from '../lib/types';
 
 export const SUPPORTED_APPS: ListenerApp[] = [
   {
+    /* Fifth live integration target — Audiobookshelf (self-hosted server).
+       Scans a configured library root and treats each subfolder as one
+       book; iOS / Android / web clients stream from it. Defaults to
+       mp3-folder + sync-folder so the chapters mirror into the
+       Audiobookshelf scan root, then appear after the server's next
+       library rescan. */
     id: 'audiobookshelf',
     name: 'Audiobookshelf',
     glyph: 'AB',
     gradient: ['#6E5BD2', '#3C194F'],
     platforms: ['iOS', 'Android', 'Web', 'Self-host'],
     tagline: 'Open-source library — your books, your server.',
-    description: 'Stream from your own server with full chapter support. Perfect for power users and series archivists.',
-    sendVerb: 'Send to server',
+    description: 'Self-hosted; folder-per-book library, chapter support, cross-device sync. Drops per-chapter MP3s into your library root; Audiobookshelf picks them up on the next scan.',
+    sendVerb: 'Send to Audiobookshelf library',
   },
   {
     /* Fourth live integration target — BookPlayer (iOS). Imports a folder
