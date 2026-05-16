@@ -35,18 +35,39 @@ interface Props {
       modal pre-set to the download path since that's the primary
       sideload story on Android. */
   initialTab?: TabId;
+  /** Optional per-app specialisation. When `appHint` is set, the modal
+      collapses to that app's single supported shape — the format and
+      destination toggles are hidden and the submit button copy adapts.
+      The generic header pill + non-app-specific entry points pass
+      `prefill={undefined}` to keep the full UX. */
+  prefill?: ExportPrefill;
   onClose: () => void;
+}
+
+export interface ExportPrefill {
+  format?: FormatId;
+  destination?: TabId;
+  /** Per-app key. Today only `'voice'` triggers a specialised UX (M4B +
+      sync-folder forced); other values fall back to the generic flow
+      with the format/destination still applied as defaults. */
+  appHint?: 'voice' | 'pocketbook' | string;
 }
 
 type TabId = 'download' | 'sync-folder';
 type FormatId = 'm4b' | 'mp3-zip';
 
-export function ExportAudiobookModal({ open, bookId, initialTab = 'download', onClose }: Props) {
+export function ExportAudiobookModal({ open, bookId, initialTab = 'download', prefill, onClose }: Props) {
   const dispatch = useAppDispatch();
   const lanUrls = useAppSelector(s => s.exports.lanUrls);
   const account = useAppSelector(s => s.account);
-  const [tab, setTab] = useState<TabId>(initialTab);
-  const [format, setFormat] = useState<FormatId>('m4b');
+  /* prefill (when set) overrides the initialTab/default-format on open and
+     on each open-toggle reset. Voice tile callers pass
+     `{ format: 'm4b', destination: 'sync-folder', appHint: 'voice' }` so
+     the modal opens with the right shape and the appHint branch can
+     collapse the format/destination toggles. */
+  const isVoice = prefill?.appHint === 'voice';
+  const [tab, setTab] = useState<TabId>(prefill?.destination ?? initialTab);
+  const [format, setFormat] = useState<FormatId>(prefill?.format ?? 'm4b');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [missing, setMissing] = useState<string[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -66,17 +87,20 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', on
     return () => { cancelled = true; };
   }, [open, lanUrls.length, dispatch]);
 
-  /* Reset transient UI state on close so the next open is a clean slate. */
+  /* Reset transient UI state on close so the next open is a clean slate.
+     Prefill (when set) overrides the per-open defaults — so the Voice tile
+     reopening the modal lands on M4B + sync-folder regardless of what the
+     previous open left selected. */
   useEffect(() => {
     if (open) {
-      setTab(initialTab);
-      setFormat('m4b');
+      setTab(prefill?.destination ?? initialTab);
+      setFormat(prefill?.format ?? 'm4b');
       setActiveJobId(null);
       setMissing(null);
       setSubmitting(false);
       setSyncFolderDraft(account.exportSyncFolder ?? '');
     }
-  }, [open, initialTab, account.exportSyncFolder]);
+  }, [open, initialTab, prefill?.destination, prefill?.format, account.exportSyncFolder]);
 
   /* QR render of the first LAN URL. Stays null until both the URL and
      the tab agree it's worth drawing. */
@@ -170,47 +194,59 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', on
             </span>
             <div className="flex-1 min-w-0">
               <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">Export audiobook</p>
-              <h3 className="text-base font-bold text-ink truncate">Sideload to your phone or sync folder</h3>
+              <h3 className="text-base font-bold text-ink truncate">
+                {isVoice ? 'Send to Voice library' : 'Sideload to your phone or sync folder'}
+              </h3>
             </div>
             <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60" aria-label="Close">
               <IconClose className="w-4 h-4"/>
             </button>
           </header>
 
-          <div className="px-6 pt-4 flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
-              {([
-                { id: 'download',     label: 'Download to phone' },
-                { id: 'sync-folder',  label: 'Save to sync folder' },
-              ] as Array<{ id: TabId; label: string }>).map(t => (
-                <button key={t.id}
-                        data-testid={`export-tab-${t.id}`}
-                        onClick={() => setTab(t.id)}
-                        className={`px-3 py-1.5 rounded-full font-medium transition-colors ${tab === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}>
-                  {t.label}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">Format</span>
+          {!isVoice && (
+            <div className="px-6 pt-4 flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
                 {([
-                  { id: 'm4b',     label: 'M4B' },
-                  { id: 'mp3-zip', label: 'MP3.ZIP' },
-                ] as Array<{ id: FormatId; label: string }>).map(f => (
-                  <button key={f.id}
-                          data-testid={`export-format-${f.id}`}
-                          onClick={() => setFormat(f.id)}
-                          className={`px-3 py-1.5 rounded-full font-medium transition-colors ${format === f.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}>
-                    {f.label}
+                  { id: 'download',     label: 'Download to phone' },
+                  { id: 'sync-folder',  label: 'Save to sync folder' },
+                ] as Array<{ id: TabId; label: string }>).map(t => (
+                  <button key={t.id}
+                          data-testid={`export-tab-${t.id}`}
+                          onClick={() => setTab(t.id)}
+                          className={`px-3 py-1.5 rounded-full font-medium transition-colors ${tab === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}>
+                    {t.label}
                   </button>
                 ))}
               </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">Format</span>
+                <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
+                  {([
+                    { id: 'm4b',     label: 'M4B' },
+                    { id: 'mp3-zip', label: 'MP3.ZIP' },
+                  ] as Array<{ id: FormatId; label: string }>).map(f => (
+                    <button key={f.id}
+                            data-testid={`export-format-${f.id}`}
+                            onClick={() => setFormat(f.id)}
+                            className={`px-3 py-1.5 rounded-full font-medium transition-colors ${format === f.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}>
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="px-6 py-5 text-sm text-ink/75 leading-relaxed">
-            {tab === 'download' ? (
+            {isVoice ? (
+              <VoiceTab
+                draft={syncFolderDraft}
+                setDraft={setSyncFolderDraft}
+                saved={syncFolder}
+                saving={syncFolderSaving}
+                onSave={handleSaveSyncFolder}
+              />
+            ) : tab === 'download' ? (
               <DownloadTab url={lanUrl} qrDataUrl={qrDataUrl}/>
             ) : (
               <SyncFolderTab
@@ -249,9 +285,11 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', on
 
           <footer className="px-6 py-4 border-t border-ink/10 flex items-center justify-between gap-3">
             <p className="text-xs text-ink/55">
-              {format === 'm4b'
-                ? 'M4B: one file, chapter markers, resumes where you stop. PocketBook lists it under Audiobooks.'
-                : 'MP3.ZIP: a folder of tagged MP3s. Universal compatibility; any audiobook app reads it.'}
+              {isVoice
+                ? 'Voice on the device picks up the new .m4b once your sync folder finishes pushing it.'
+                : format === 'm4b'
+                  ? 'M4B: one file, chapter markers, resumes where you stop. PocketBook lists it under Audiobooks.'
+                  : 'MP3.ZIP: a folder of tagged MP3s. Universal compatibility; any audiobook app reads it.'}
             </p>
             <div className="flex items-center gap-3">
               <button onClick={onClose} className="text-sm font-medium text-ink/60 hover:text-ink">Close</button>
@@ -261,7 +299,11 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', on
                 data-testid="export-submit"
                 className="px-5 py-2 rounded-full font-semibold text-sm bg-ink text-canvas hover:bg-ink-soft disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {submitting ? 'Starting…' : (tab === 'download' ? 'Build download' : 'Build and save')}
+                {submitting
+                  ? 'Starting…'
+                  : isVoice
+                    ? 'Export to Voice library'
+                    : (tab === 'download' ? 'Build download' : 'Build and save')}
               </button>
             </div>
           </footer>
@@ -329,6 +371,51 @@ function SyncFolderTab({ draft, setDraft, saved, saving, onSave }: SyncFolderTab
           placeholder="C:\Users\you\OneDrive\Audiobooks"
           className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30 font-mono"
           aria-label="Sync folder"
+          data-testid="sync-folder-input"
+        />
+      </label>
+      <div className="flex items-center justify-end">
+        <button
+          onClick={onSave}
+          disabled={!isDirty || saving}
+          className="text-xs font-semibold px-3 py-1.5 rounded-full bg-ink/[0.04] text-ink hover:bg-ink/[0.08] disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {saving ? 'Saving…' : isDirty ? 'Save folder' : 'Saved'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* Voice-specialised body. Same SyncFolderTab interaction (the user sets
+   their Voice library folder once, then re-uses it across exports) but
+   with copy that names the Voice flow directly and a caption surfacing
+   the saved path when one is configured. Format and destination toggles
+   are hidden by the parent — Voice's contract is M4B + sync-folder, full
+   stop. */
+function VoiceTab({ draft, setDraft, saved, saving, onSave }: SyncFolderTabProps) {
+  const isDirty = (saved ?? '') !== draft;
+  return (
+    <div className="space-y-3" data-testid="export-voice-body">
+      <p>
+        Voice scans a folder on your Android device for new audiobooks. Point this at the same
+        folder your sync app (Syncthing, OneDrive, Google Drive desktop) keeps mirrored to the
+        phone — your M4B lands there and Voice picks it up on its next library scan.
+      </p>
+      {saved && !isDirty ? (
+        <p className="text-xs text-ink/55" data-testid="export-voice-caption">
+          Saves to your Voice library at <span className="font-mono text-ink/80">{saved}</span>.
+        </p>
+      ) : null}
+      <label className="block">
+        <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">Voice library folder</span>
+        <input
+          type="text"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          placeholder="C:\Users\you\OneDrive\Audiobooks"
+          className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30 font-mono"
+          aria-label="Voice library folder"
           data-testid="sync-folder-input"
         />
       </label>

@@ -63,4 +63,19 @@ export const SUPPORTED_APPS: ListenerApp[] = [
     description: 'Side-load M4B into the PocketBook Reader app — works on PocketBook e-readers with audio support and on the phone apps. Chapter markers and cover art are honoured.',
     sendVerb: 'Send to PocketBook',
   },
+  {
+    /* Second live integration target — Voice (formerly Material Audiobook
+       Player). GPLv3, F-Droid + Play Store, Android-only. Folder-scan
+       library, per-book resume + custom bookmarks (Voice-side database
+       keyed by file path), Android Auto. Defaults to M4B + sync-folder so
+       the file lands directly in the Voice library folder via Syncthing. */
+    id: 'voice',
+    name: 'Voice',
+    glyph: 'VO',
+    gradient: ['#3C5BA9', '#1B2A52'],
+    platforms: ['Android'],
+    tagline: 'Open-source Android audiobook player.',
+    description: 'GPLv3, F-Droid + Play Store. Folder-based library, per-book resume, custom bookmarks, Android Auto. Drops a chaptered M4B into your sync folder; Voice picks it up on the next scan.',
+    sendVerb: 'Send to Voice',
+  },
 ];
