@@ -161,3 +161,102 @@ describe('TopBar — AnalysisPill (B3 sticky analysis)', () => {
     expect(screen.getByText(/Generating/)).toBeInTheDocument();
   });
 });
+
+describe('TopBar — AnalysisPill subset variant (plan 32 D2)', () => {
+  it('renders the running variant as "Retrying N chapters · 42%" when kind === subset', () => {
+    /* Plan 32 D2: subset retries swap the headline label from
+       "Analysing" to "Retrying" and surface the chapter count in
+       place of the per-phase label. The percent still tracks the
+       phase-weighted overall progress so the user sees the retry
+       advance. */
+    render(<TopBar {...makeProps({
+      analysisPill: {
+        state: 'running',
+        phaseLabel: 'Detecting characters',
+        percent: 42,
+        kind: 'subset',
+        subsetChapterCount: 3,
+        onClick: vi.fn(),
+      },
+    })}/>);
+    const pill = screen.getByTestId('analysis-pill');
+    expect(pill).toHaveAttribute('data-pill-kind', 'subset');
+    expect(pill.textContent).toContain('Retrying');
+    expect(pill.textContent).toContain('3 chapters');
+    expect(pill.textContent).toContain('42%');
+    /* The phase-label fallback must NOT render in subset mode — the
+       chapter-count copy is the more useful signal. */
+    expect(pill.textContent).not.toContain('Detecting characters');
+  });
+
+  it('singularises the chapter count for a one-chapter retry', () => {
+    render(<TopBar {...makeProps({
+      analysisPill: {
+        state: 'running',
+        phaseLabel: 'Detecting characters',
+        percent: 12,
+        kind: 'subset',
+        subsetChapterCount: 1,
+        onClick: vi.fn(),
+      },
+    })}/>);
+    const pill = screen.getByTestId('analysis-pill');
+    expect(pill.textContent).toContain('1 chapter');
+    expect(pill.textContent).not.toContain('1 chapters');
+  });
+
+  it('falls back to the phase label when kind === subset but subsetChapterCount is missing', () => {
+    /* Defensive default — if a cold-boot snapshot omits the chapter ids
+       (legacy file, or an in-flight glitch where the count's not on the
+       snapshot yet), the pill still renders rather than NaN-ing out. */
+    render(<TopBar {...makeProps({
+      analysisPill: {
+        state: 'running',
+        phaseLabel: 'Detecting characters',
+        percent: 5,
+        kind: 'subset',
+        onClick: vi.fn(),
+      },
+    })}/>);
+    const pill = screen.getByTestId('analysis-pill');
+    expect(pill.textContent).toContain('Retrying');
+    expect(pill.textContent).toContain('Detecting characters');
+  });
+
+  it('renders the main variant ("Analysing") when kind is undefined or "main"', () => {
+    /* Regression guard — a pill with no `kind` field on the data (e.g.
+       from a pre-D2 snapshot) must keep the main rendering. The
+       data-pill-kind attribute also defaults to "main" so tests can
+       target either kind explicitly. */
+    render(<TopBar {...makeProps({
+      analysisPill: {
+        state: 'running',
+        phaseLabel: 'Detecting characters',
+        percent: 30,
+        onClick: vi.fn(),
+      },
+    })}/>);
+    const pill = screen.getByTestId('analysis-pill');
+    expect(pill).toHaveAttribute('data-pill-kind', 'main');
+    expect(pill.textContent).toContain('Analysing');
+    expect(pill.textContent).toContain('Detecting characters');
+  });
+
+  it('subset paused / halted variants keep the standard terminal copy (not the retrying label)', () => {
+    render(<TopBar {...makeProps({
+      analysisPill: {
+        state: 'paused',
+        phaseLabel: 'Detecting characters',
+        percent: 0,
+        kind: 'subset',
+        subsetChapterCount: 2,
+        onClick: vi.fn(),
+      },
+    })}/>);
+    const pill = screen.getByTestId('analysis-pill');
+    expect(pill.textContent).toContain('Paused');
+    /* Paused subset jobs still surface as "Paused · <phase>" so the
+       Resume affordance reads the same as a paused main run. */
+    expect(pill.textContent).not.toContain('Retrying');
+  });
+});

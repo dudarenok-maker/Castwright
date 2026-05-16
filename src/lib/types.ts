@@ -258,6 +258,15 @@ export interface AnalysisStateResponse {
       right engine on a cold-boot rehydrated pill. Undefined for
       pre-E1 snapshots — guard defaults to "do not prompt". */
   engine?: 'local' | 'gemini';
+  /** Discriminator for the in-flight job's shape (plan 32 D1).
+      `'main'` = full-book sticky run; `'subset'` = per-chapter retry
+      via POST /:id/analysis/chapters. Optional — pre-D1 snapshots
+      omit it and the pill falls back to main semantics. */
+  kind?: 'main' | 'subset';
+  /** Set only when `kind === 'subset'`. The chapter ids being
+      retried, used by the AnalysisPill to render "Retrying N
+      chapters" copy. */
+  subsetChapterIds?: number[];
   haltCode?: string;
   haltReason?: string;
   lastTickAt: number;

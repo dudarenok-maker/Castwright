@@ -29,6 +29,14 @@ export interface AnalysisPillData {
   /** Reason text rendered on the halted variant — usually the server's
       structured error message (attribution_drift, cast_incomplete, etc.). */
   haltReason?: string;
+  /** Discriminator for the in-flight job's shape (plan 32 D2).
+      `'subset'` swaps the pill label from "Analysing" to "Retrying"
+      and renders the chapter count instead of the generic phase
+      label. Undefined / `'main'` keeps the existing rendering. */
+  kind?: 'main' | 'subset';
+  /** Number of chapters being retried — only meaningful when
+      `kind === 'subset'`. Drives the "Retrying N chapters" copy. */
+  subsetChapterCount?: number;
   onClick: () => void;
 }
 
@@ -154,12 +162,19 @@ export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClic
 }
 
 function AnalysisPill({ data }: { data: AnalysisPillData }) {
-  const { state, phaseLabel, percent, haltReason, onClick } = data;
+  const { state, phaseLabel, percent, haltReason, kind, subsetChapterCount, onClick } = data;
+  /* Plan 32 D2: subset retries swap the label from "Analysing" to
+     "Retrying" so the user knows they're watching a subset re-run
+     rather than a fresh whole-book analysis. Halted / paused
+     variants for a subset job keep the standard error/pause copy —
+     those terminal states are about the same regardless of whether
+     the run was a full one or a per-chapter retry. */
+  const isSubset = kind === 'subset';
   const variants: Record<AnalysisPillState, { className: string; icon: ReactNode; label: string }> = {
     running: {
       className: 'bg-peach/15 hover:bg-peach/25 text-magenta',
       icon:      <IconSpinner className="w-3.5 h-3.5"/>,
-      label:     'Analysing',
+      label:     isSubset ? 'Retrying' : 'Analysing',
     },
     stalled: {
       className: 'bg-amber-100 hover:bg-amber-200 text-amber-800',
@@ -182,14 +197,23 @@ function AnalysisPill({ data }: { data: AnalysisPillData }) {
      doesn't blow out the header layout — the analysing view shows
      the full reason in its own banner. */
   const haltTrim = haltReason && haltReason.length > 32 ? haltReason.slice(0, 32) + '…' : haltReason;
+  /* Subset secondary copy: "Retrying 3 chapters · 42%" beats
+     "Retrying · Detecting characters · 42%" — the user already knows
+     it's analysis, they want to know what scope. Fall back to the
+     standard phase label when subsetChapterCount is missing (shouldn't
+     happen in practice, but tolerant defaults beat NaN displays). */
+  const subsetSecondary = isSubset && subsetChapterCount && subsetChapterCount > 0
+    ? `${subsetChapterCount} chapter${subsetChapterCount === 1 ? '' : 's'}`
+    : phaseLabel;
   return (
     <button onClick={onClick}
             className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${v.className}`}
             title={haltReason && haltReason.length > 32 ? haltReason : undefined}
-            data-testid="analysis-pill">
+            data-testid="analysis-pill"
+            data-pill-kind={isSubset ? 'subset' : 'main'}>
       {v.icon}
       <span className="tabular-nums">
-        {v.label} · {phaseLabel}
+        {v.label} · {state === 'running' && isSubset ? subsetSecondary : phaseLabel}
         {state === 'running' && ` · ${percent}%`}
         {state === 'halted' && haltTrim && ` · ${haltTrim}`}
       </span>

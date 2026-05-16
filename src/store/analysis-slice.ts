@@ -67,6 +67,17 @@ export interface AnalysisStreamSnapshot {
     count: number;
     names: string[];
   };
+  /** Discriminator for the in-flight job's shape (plan 32 D1).
+      `'main'` = full-book sticky analysis run; `'subset'` = per-
+      chapter retry. The pill renders "Retrying N chapters" copy
+      when `kind === 'subset'` so the user knows they're watching a
+      retry rather than a fresh analysis. Optional — undefined
+      means main (cold-boot snapshots written before D1 omit it). */
+  kind?: 'main' | 'subset';
+  /** Set only when `kind === 'subset'`. The chapter ids being
+      retried, captured at job creation. The pill reads `.length`
+      for the retry count. */
+  subsetChapterIds?: number[];
 }
 
 export interface AnalysisState {
