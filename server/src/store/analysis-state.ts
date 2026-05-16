@@ -50,6 +50,18 @@ export interface AnalysisStateFile {
       didn't capture it — guard defaults to "do not prompt" on
       undefined, which is conservative. */
   engine?: 'local' | 'gemini';
+  /** Discriminator for the in-flight job's shape (plan 32 D1). `'main'`
+      is the full-book sticky analysis run (the existing path); `'subset'`
+      is a per-chapter retry (POST /:id/analysis/chapters). Optional /
+      defaults to `'main'` for backwards compatibility with snapshots
+      written before D1 — the cold-boot rehydration path falls back to
+      main semantics on undefined. */
+  kind?: 'main' | 'subset';
+  /** Set only when `kind === 'subset'` — the chapter ids being retried.
+      The AnalysisPill uses the count to render "Retrying N chapters"
+      copy instead of the generic phase label. Optional / unset for
+      `'main'` snapshots. */
+  subsetChapterIds?: number[];
   /** Error code from the terminal event when state === 'halted'.
       Carried so the pill / view can route to the right banner. */
   haltCode?: string;

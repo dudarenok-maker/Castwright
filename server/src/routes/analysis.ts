@@ -928,6 +928,17 @@ interface AnalysisJob {
   controller: AbortController;
   subscribers: Set<AnalysisSubscriber>;
   manuscriptId: string;
+  /** Discriminator for the job's shape (plan 32 D1). `'main'` is the
+      full-book sticky analysis run; `'subset'` is a per-chapter retry
+      (POST /:id/analysis/chapters). Each kind lives in its own map
+      slot so a subset retry doesn't displace an active main run and
+      vice versa — both can coexist per manuscript. */
+  kind: 'main' | 'subset';
+  /** Set only on `kind === 'subset'` jobs. The chapter ids being
+      retried, captured at job creation, persisted into
+      `analysis-state.json` (`subsetChapterIds`) so the cold-boot
+      rehydrated AnalysisPill can show "Retrying N chapters" copy. */
+  subsetChapterIds?: number[];
   /** Path to the book directory the analyzer is writing into. Set
       from the manuscript record at job creation, used by the
       cold-boot rehydration writes (`writeAnalysisState` / `deleteAnalysisState`).
@@ -952,14 +963,28 @@ interface AnalysisJob {
 }
 
 const inFlightAnalysisByManuscript: Map<string, AnalysisJob> = new Map();
+/* Plan 32 D1: subset-retry sticky map. Keyed by manuscriptId; only one
+   subset retry per manuscript may be live at a time (a re-POST with the
+   same manuscriptId while a subset is running attaches as a subscriber
+   via catch-up replay, same shape as the main route). Lives in its own
+   map so a main run can keep ticking alongside a subset retry. */
+const inFlightSubsetByManuscript: Map<string, AnalysisJob> = new Map();
 
-/* Exported for tests + the future B2 frontend that wants a cheap "is a
-   job running?" probe before opening an SSE. Returns false when the
-   map entry is present but its controller has been aborted — that
-   entry will be cleared at the end of the current loop iteration. */
+function jobMapFor(kind: 'main' | 'subset'): Map<string, AnalysisJob> {
+  return kind === 'subset' ? inFlightSubsetByManuscript : inFlightAnalysisByManuscript;
+}
+
+/* Exported for tests + the B2 frontend's cheap "is a job running?" probe
+   before opening an SSE. Returns false when the map entry is present but
+   its controller has been aborted — that entry will be cleared at the
+   end of the current loop iteration. Plan 32 D1: a subset-retry counts
+   as "running" too (callers that need to differentiate look at the
+   cold-boot snapshot's `kind` field). */
 export function isAnalysisJobRunning(manuscriptId: string): boolean {
-  const job = inFlightAnalysisByManuscript.get(manuscriptId);
-  return !!job && !job.controller.signal.aborted;
+  const main = inFlightAnalysisByManuscript.get(manuscriptId);
+  if (main && !main.controller.signal.aborted) return true;
+  const subset = inFlightSubsetByManuscript.get(manuscriptId);
+  return !!subset && !subset.controller.signal.aborted;
 }
 
 /** Snapshot the in-flight analyzer's state for the cold-boot
@@ -967,10 +992,19 @@ export function isAnalysisJobRunning(manuscriptId: string): boolean {
     Returns null when no job is running OR the job's controller has
     been aborted — both cases fall back to disk in the GET handler.
     The synthesised file shape matches what the disk writer produces,
-    so the discovery endpoint can return either source unchanged. */
+    so the discovery endpoint can return either source unchanged.
+
+    Plan 32 D1: subset retries win over main when both are live for the
+    same manuscript, because the subset's progress reflects the more
+    recent user action and matches what the user expects to see on the
+    pill (they kicked off the retry). If only main is live, return it. */
 export function snapshotInFlightAnalysis(manuscriptId: string): AnalysisStateFile | null {
-  const job = inFlightAnalysisByManuscript.get(manuscriptId);
-  if (!job || job.controller.signal.aborted) return null;
+  const subset = inFlightSubsetByManuscript.get(manuscriptId);
+  const main = inFlightAnalysisByManuscript.get(manuscriptId);
+  const job = (subset && !subset.controller.signal.aborted) ? subset
+            : (main && !main.controller.signal.aborted)     ? main
+            : null;
+  if (!job) return null;
   const phase = job.replay.lastPhase;
   return {
     manuscriptId,
@@ -979,6 +1013,8 @@ export function snapshotInFlightAnalysis(manuscriptId: string): AnalysisStateFil
     phaseProgress: phase?.progress ?? 0,
     state: 'running',
     engine: job.engine,
+    kind: job.kind,
+    subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
     lastTickAt: job.lastDiskWriteAt || Date.now(),
     writtenAt: Date.now(),
   };
@@ -1004,6 +1040,8 @@ async function persistRunningSnapshot(job: AnalysisJob, force: boolean): Promise
       phaseProgress: phase.progress,
       state: 'running',
       engine: job.engine,
+      kind: job.kind,
+      subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
       lastTickAt: now,
     });
   } catch (err) {
@@ -1029,6 +1067,8 @@ async function persistTerminalSnapshot(
       phaseProgress: phase?.progress ?? 0,
       state,
       engine: job.engine,
+      kind: job.kind,
+      subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
       haltCode: state === 'halted' ? finalEv?.code : undefined,
       haltReason: state === 'halted' ? finalEv?.message : undefined,
       lastTickAt: Date.now(),
@@ -1107,15 +1147,27 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
   if (finalEv) broadcastToJob(job, finalEv);
   /* Cold-boot snapshot transition. Fire-and-forget; we still tear
      down subscribers + deregister synchronously below so the route
-     response isn't held up by the disk write. */
+     response isn't held up by the disk write.
+
+     Plan 32 D1: subset jobs DON'T delete the on-disk snapshot on
+     terminal success because the main run may still be alive and
+     using it. The subset's own state isn't load-bearing for cold-
+     boot once it's done (the pill drops back to the main run's
+     state), so leaving the file in whatever state main left it in
+     is correct. Subset's paused/halted snapshots still land for
+     mid-flight aborts so the pill can render the Resume affordance. */
   const kind = (finalEv as { kind?: string } | undefined)?.kind;
   const code = (finalEv as { code?: string } | undefined)?.code;
   if (job.bookDir) {
     if (!finalEv || kind === 'result') {
-      /* Terminal success OR a clean teardown with no final event:
-         the analysis is complete (no pill should appear). Delete
-         the snapshot file. */
-      void deleteAnalysisState(job.bookDir);
+      /* Terminal success OR a clean teardown with no final event.
+         Main: the analysis is complete (no pill should appear) —
+         delete the snapshot file. Subset: leave the file alone so
+         any main run's snapshot survives a sibling subset
+         completing successfully. */
+      if (job.kind === 'main') {
+        void deleteAnalysisState(job.bookDir);
+      }
     } else if (kind === 'error' && code === 'aborted') {
       /* Paused or displaced. Write paused state so the cold-boot
          endpoint returns paused, and the pill renders the Resume
@@ -1134,8 +1186,9 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
     try { sub.res.end(); } catch { /* socket already gone */ }
   }
   job.subscribers.clear();
-  if (inFlightAnalysisByManuscript.get(job.manuscriptId) === job) {
-    inFlightAnalysisByManuscript.delete(job.manuscriptId);
+  const targetMap = jobMapFor(job.kind);
+  if (targetMap.get(job.manuscriptId) === job) {
+    targetMap.delete(job.manuscriptId);
   }
 }
 
@@ -1241,6 +1294,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     controller: new AbortController(),
     subscribers: new Set(),
     manuscriptId,
+    kind: 'main',
     bookDir: record.bookDir ?? null,
     engine: selection.engine,
     replay: {
@@ -2445,8 +2499,16 @@ async function runMainAnalyzerJob(
    no job is running so a double-click on Pause doesn't 404. */
 analysisRouter.post('/:id/analysis/pause', async (req: Request, res: Response) => {
   const manuscriptId = req.params.id;
-  const job = inFlightAnalysisByManuscript.get(manuscriptId);
-  if (job && !job.controller.signal.aborted) {
+  /* Plan 32 D1: a pause request abort BOTH a live main run AND a live
+     subset retry for this manuscript. The user's mental model is
+     "stop the analysis on this book"; whether the work is the full
+     run or a per-chapter retry is an implementation detail. Each is
+     aborted independently; either could be absent. */
+  const main = inFlightAnalysisByManuscript.get(manuscriptId);
+  const subset = inFlightSubsetByManuscript.get(manuscriptId);
+  let paused = false;
+  for (const job of [main, subset]) {
+    if (!job || job.controller.signal.aborted) continue;
     /* Write the paused snapshot BEFORE aborting so a cold-boot
        fetch right after pause is guaranteed to see paused state.
        The analyzer's catch-block fires endJob({code:'aborted'})
@@ -2454,8 +2516,9 @@ analysisRouter.post('/:id/analysis/pause', async (req: Request, res: Response) =
        is idempotent with this one (same phase + state). */
     await persistTerminalSnapshot(job, 'paused', { code: 'aborted', message: 'Analysis paused.' });
     job.controller.abort();
+    paused = true;
   }
-  res.status(200).json({ ok: true, paused: job != null });
+  res.status(200).json({ ok: true, paused });
 });
 
 /* POST /api/manuscripts/:id/analysis/chapters — subset re-analysis.
@@ -2481,36 +2544,22 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
-
-  /* Mirror the full-route disconnect guard — see the comment on the parent
-     analysis route. The subset route writes cast.json on completion too,
-     so the same "no premature confirm-screen flip on navigate-away"
-     contract applies. Same abort plumbing too: a navigate-away aborts
-     the in-flight Ollama fetch via the StageCall.signal threaded into
-     runStage2Chapter below. Same critical detail: must use
-     res.on('close'), not req.on('close') — the latter fires
-     immediately after Express's body-parser consumes the POST body,
-     which is NOT a client disconnect. See the comment on the full
-     analysis route above. */
-  let clientGone = false;
-  const abortController = new AbortController();
-  res.on('close', () => {
-    if (res.writableEnded) return;
-    clientGone = true;
-    abortController.abort();
-  });
+  /* Vite dev-proxy keep-alive shim — see the comment on the parent
+     analysis route. Same hazard (silence during getOrHydrateManuscript)
+     applies on a cold subset retry. */
+  res.write(':ok\n\n');
+  const keepAlive = setInterval(() => {
+    try { res.write(':ka\n\n'); } catch { /* socket gone */ }
+  }, 15_000);
 
   const send = (payload: unknown) => {
-    if (clientGone) return;
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
-  };
-  const log = (phaseId: number, message: string) => {
-    send({ kind: 'log', phaseId, message });
+    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { /* dead socket */ }
   };
 
   const record = await getOrHydrateManuscript(manuscriptId);
   if (!record) {
     send({ kind: 'error', code: 'unknown_manuscript', message: `No manuscript found for id "${manuscriptId}".` });
+    clearInterval(keepAlive);
     return res.end();
   }
 
@@ -2524,6 +2573,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   ));
   if (requestedIds.length === 0) {
     send({ kind: 'error', code: 'bad_request', message: 'chapterIds is required and must be a non-empty array of integers.' });
+    clearInterval(keepAlive);
     return res.end();
   }
 
@@ -2535,6 +2585,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     .filter((h): h is NonNullable<typeof h> => !!h);
   if (targets.length === 0) {
     send({ kind: 'error', code: 'bad_request', message: 'None of the requested chapter ids match this manuscript.' });
+    clearInterval(keepAlive);
     return res.end();
   }
   const skippedExcluded = targets.filter(h => h.excluded);
@@ -2548,9 +2599,34 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       code: 'chapter_excluded',
       message: `Cannot run analysis on excluded chapter${skippedExcluded.length === 1 ? '' : 's'}: ${skippedExcluded.map(c => c.title).join(', ')}. Flip the exclude flag first via POST /api/books/.../chapters/:chapterId/exclude.`,
     });
+    clearInterval(keepAlive);
     return res.end();
   }
   const toRun = targets.filter(h => !h.excluded);
+
+  /* ── Plan 32 D1 subscribe-vs-start dispatch.
+     Mirrors the main /:id/analysis route's pattern. If a non-aborted
+     subset job is already running for this manuscript, the new request
+     joins the existing job's subscriber set and catches up on the
+     replay state — same shape as a browser-reload or navigate-back
+     reattach for the main run. Otherwise we register a new sticky job
+     and spawn the analyzer work detached so the user can navigate
+     away without aborting the retry. */
+  const existing = inFlightSubsetByManuscript.get(manuscriptId);
+  if (existing && !existing.controller.signal.aborted) {
+    const subscriber: AnalysisSubscriber = { send, res, keepAlive };
+    existing.subscribers.add(subscriber);
+    replayCatchUp(existing, send);
+    res.on('close', () => {
+      if (res.writableEnded) return;
+      existing.subscribers.delete(subscriber);
+      clearInterval(keepAlive);
+      /* Do NOT abort — sticky semantics. The retry keeps running until
+         /pause or terminal completion. */
+    });
+    res.on('finish', () => clearInterval(keepAlive));
+    return;
+  }
 
   const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
   let selection: AnalyzerSelection;
@@ -2558,11 +2634,87 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     selection = selectAnalyzer({ model: requestedModel });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });
+    clearInterval(keepAlive);
     return res.end();
   }
+
+  /* Plan 32 D1: the analyzer/label/modelId derivations moved into the
+     detached `runSubsetAnalyzerJob` body — keeping them here would
+     re-derive the same values twice and produce TS unused-locals
+     errors. The selection object travels into the function as-is. */
+
+  /* Create the sticky subset job and register before spawning the
+     analyzer work so a concurrent re-POST attaches as a subscriber
+     instead of racing into a second registration. */
+  const job: AnalysisJob = {
+    controller: new AbortController(),
+    subscribers: new Set(),
+    manuscriptId,
+    kind: 'subset',
+    subsetChapterIds: toRun.map(t => t.id),
+    bookDir: record.bookDir ?? null,
+    engine: selection.engine,
+    replay: {
+      logs: [],
+      lastPhase: null,
+      lastEta: null,
+      lastCastUpdate: null,
+      failedByChapterId: new Map(),
+      lastSeriesPrior: null,
+    },
+    lastDiskWriteAt: 0,
+  };
+  inFlightSubsetByManuscript.set(manuscriptId, job);
+  const subscriber: AnalysisSubscriber = { send, res, keepAlive };
+  job.subscribers.add(subscriber);
+  res.on('close', () => {
+    if (res.writableEnded) return;
+    job.subscribers.delete(subscriber);
+    clearInterval(keepAlive);
+    /* Sticky: do NOT abort. The retry keeps running for any other
+       subscribers (or none — its writes still land on disk). Only
+       /pause aborts. */
+  });
+  res.on('finish', () => clearInterval(keepAlive));
+
+  /* Run the subset analyzer in the background. The route response is
+     held open by the detached promise's broadcast loop until endJob
+     fires res.end() on every subscriber. */
+  void runSubsetAnalyzerJob(job, record, selection, toRun, allowStage1ShrinkSubset);
+});
+
+/* Detached subset-retry analyzer body. Extracted from the request
+   handler in plan 32 D1 so the work survives a client disconnect
+   (sticky semantics). Broadcasts every event to job.subscribers and
+   tracks replay state via trackForReplay; endJob handles teardown +
+   map deregistration on every exit path. */
+async function runSubsetAnalyzerJob(
+  job: AnalysisJob,
+  record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
+  selection: AnalyzerSelection,
+  toRun: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>['chapterHints'],
+  allowStage1ShrinkSubset: boolean,
+): Promise<void> {
+  const manuscriptId = job.manuscriptId;
+  const abortController = job.controller;
   const analyzer = selection.analyzer;
   const analyzerLabel = engineLabel(selection.engine, selection.model);
   const subsetModelId = selection.model;
+
+  const send = (payload: unknown) => {
+    broadcastToJob(job, payload);
+    trackForReplay(job, payload);
+  };
+  const log = (phaseId: number, message: string) => {
+    send({ kind: 'log', phaseId, message });
+  };
+
+  /* Used inside the persist guards below in place of the old `clientGone`
+     flag. The detached job survives the original requester disconnecting,
+     but it still respects an explicit /pause via abortController.signal —
+     a paused retry shouldn't keep writing cast.json out from under the
+     user's hands. */
+  const isAborted = (): boolean => abortController.signal.aborted;
 
   try {
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
@@ -2657,8 +2809,9 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
         if (wasFailed) send({ kind: 'chapter-resolved', chapterId: ch.id });
         /* Mirror the cache write into cast.json so a subset retry's
            progress is reflected on disk too — matches the full route's
-           interim write contract. */
-        if (record.bookDir && !clientGone) {
+           interim write contract. Skipped on abort: a paused retry
+           shouldn't keep writing cast.json out from under the user. */
+        if (record.bookDir && !isAborted()) {
           const interim = buildInterimCast(chapterCast, record.chapterHints.map(h => h.id));
           if (interim.length > 0) {
             try {
@@ -2721,15 +2874,15 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     const subsetNextStage1Count = stage1.characters.length;
     if (remainingFailedCastIds.length === 0 && coverage.complete && stage1ShrinkRefused(subsetPrevStage1Count, subsetNextStage1Count) && !allowStage1ShrinkSubset) {
       log(0, `Stage 1 shrink refused — rebuild would drop from ${subsetPrevStage1Count} to ${subsetNextStage1Count} characters. Re-run with allowStage1Shrink:true to confirm.`);
-      send({
+      await saveAnalysisCache(manuscriptId, cache);
+      endJob(job, {
         kind: 'error',
         code: 'stage1_shrink_refused',
         message: `Cast finalisation would drop from ${subsetPrevStage1Count} to ${subsetNextStage1Count} characters. Confirm via allowStage1Shrink to accept the smaller roster.`,
         prevCharCount: subsetPrevStage1Count,
         nextCharCount: subsetNextStage1Count,
       });
-      await saveAnalysisCache(manuscriptId, cache);
-      return res.end();
+      return;
     }
     if (remainingFailedCastIds.length === 0 && coverage.complete) {
       cache.stage1 = stage1;
@@ -2759,10 +2912,15 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
        the coverage gap via a full /analysis/stream). */
     if (remainingFailedCastIds.length > 0) {
       log(0, `Cast retry done. ${remainingFailedCastIds.length} chapter${remainingFailedCastIds.length === 1 ? '' : 's'} still need retry before Phase 1 can run.`);
-      return res.end();
+      /* No final event — clean end without a kind:'error' branch.
+         endJob skips the on-disk paused/halted write in this path,
+         which matches the "soft" semantics this exit had pre-D1. */
+      endJob(job);
+      return;
     }
     if (!coverage.complete) {
-      return res.end();
+      endJob(job);
+      return;
     }
     /* Retry-after-cast-incomplete flow: the main pipeline hasn't run
        Phase 1 globally, so attributing JUST `toRun` here would emit a
@@ -2773,7 +2931,8 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
        and runs Phase 1 across every chapter. */
     if (!stage1Existed) {
       log(0, 'All cast detection retries succeeded — resuming full analysis to run Phase 1 globally.');
-      return res.end();
+      endJob(job);
+      return;
     }
     send({ kind: 'phase', phaseId: 1, progress: 0.02, label: PHASES[1].label });
     for (let idx = 0; idx < toRun.length; idx++) {
@@ -2861,13 +3020,12 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
 
     /* Persist cast.json + manuscript-edits.json + state.json so a refresh
        (or a follow-up generation pass) sees the merged state.
-       Skipped when the SSE client has disconnected — see the parent
-       analysis route comment for why we don't flip the library status
-       in the background.
+       Skipped when the job was aborted via /pause — a paused retry
+       shouldn't flip the library status out from under the user.
        Also skipped (for cast.json / state.json) when attribution drift
        exceeded the threshold — same reasoning as the main route's
        persist block. */
-    if (record.bookDir && !clientGone) {
+    if (record.bookDir && !isAborted()) {
       try {
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: subsetReconciled.sentences });
         if (subsetDriftExceeded) {
@@ -2901,31 +3059,35 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     }
 
     if (subsetDriftExceeded) {
-      send({
+      endJob(job, {
         kind: 'error',
         code: 'attribution_drift',
         message: `Phase 1 demoted ${subsetReconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round(100 * subsetReconciled.demotedCount / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute.`,
       });
-      return res.end();
+      return;
     }
 
-    send({ kind: 'result', response });
-    res.end();
+    endJob(job, { kind: 'result', response });
   } catch (e) {
     if (e instanceof AnalysisAbortedError) {
-      console.log(`[analysis-subset] aborted ${manuscriptId} (client disconnected)`);
-      try {
-        res.write(`data: ${JSON.stringify({ kind: 'error', code: 'aborted', message: 'Analysis aborted (client disconnected or server restarted).' })}\n\n`);
-      } catch { /* connection already torn down */ }
-      try { res.end(); } catch { /* already ended */ }
+      /* Plan 32 D1: subset retries now survive a client disconnect,
+         so AnalysisAbortedError here means an EXPLICIT /pause
+         aborted the run. Broadcast paused state to every still-
+         attached subscriber via endJob — the cold-boot snapshot
+         the pause endpoint already wrote will agree. */
+      console.log(`[analysis-subset] aborted ${manuscriptId} (pause)`);
+      endJob(job, {
+        kind: 'error',
+        code: 'aborted',
+        message: 'Analysis aborted (paused or displaced).',
+      });
       return;
     }
     const { code, message, detail } = describeError(e, analyzerLabel);
     console.error('[analysis-subset] failed', { manuscriptId, code, message });
-    send({ kind: 'error', code, message, detail });
-    res.end();
+    endJob(job, { kind: 'error', code, message, detail });
   }
-});
+}
 
 /* The Gemini SDK throws `ApiError` instances whose `.message` is the raw
    JSON envelope (e.g. `{"error":{"code":503,"message":"...","status":"...","details":[...]}}`).
