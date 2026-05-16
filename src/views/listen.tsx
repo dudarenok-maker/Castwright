@@ -48,11 +48,16 @@ export function ListenView({
   bookMeta, bookCoverGradient,
   onEditMetaField, onCommitMeta, onCancelMeta, isMetaDirty,
 }: Props) {
-  /* Local modal state for the export flow. Two entry points open it:
+  /* Local modal state for the export flow. Three entry points open it:
      - The "Export audiobook" pill in the cover-art row (download tab).
-     - The PocketBook tile in ListenerApps (also download tab — sideload
-       to the user's Android phone is the primary PocketBook story). */
-  const [exportModal, setExportModal] = useState<{ tab: 'download' | 'sync-folder' } | null>(null);
+     - The PocketBook tile (download tab — LAN/QR sideload story).
+     - The Voice tile (sync-folder + M4B + appHint='voice', so the modal
+       hides the format/destination toggles and points the user at their
+       configured exportSyncFolder). */
+  const [exportModal, setExportModal] = useState<{
+    tab: 'download' | 'sync-folder';
+    appHint?: 'voice';
+  } | null>(null);
 
   /* Live job list from the store, with the visual fixtures as a fallback
      so design-system mode (VITE_USE_MOCKS=true with no live exports) keeps
@@ -148,6 +153,7 @@ export function ListenView({
       <ListenerApps
         onSend={onSendApp}
         onOpenPocketBookExport={() => setExportModal({ tab: 'download' })}
+        onOpenVoiceExport={() => setExportModal({ tab: 'sync-folder', appHint: 'voice' })}
       />
       <ExportQueue items={queueItems}/>
 
@@ -174,6 +180,9 @@ export function ListenView({
         open={exportModal != null}
         bookId={bookId}
         initialTab={exportModal?.tab ?? 'download'}
+        prefill={exportModal?.appHint === 'voice'
+          ? { format: 'm4b', destination: 'sync-folder', appHint: 'voice' }
+          : undefined}
         onClose={() => setExportModal(null)}
       />
     </div>
@@ -353,25 +362,35 @@ function MetaField({ label, value, onChange, type = 'text' }: MetaFieldProps) {
 
 interface ListenerAppsProps {
   onSend: (app: ListenerApp) => void;
-  /** PocketBook is now live: clicking its tile opens the export modal on
-      the Download-to-phone tab rather than queuing a deferred handoff. */
+  /** PocketBook is live: clicking its tile opens the export modal on the
+      Download-to-phone tab. */
   onOpenPocketBookExport: () => void;
+  /** Voice is live: clicking its tile opens the export modal pre-set to
+      M4B + sync-folder with appHint='voice' so the format and destination
+      toggles are hidden. */
+  onOpenVoiceExport: () => void;
 }
-function ListenerApps({ onSend, onOpenPocketBookExport }: ListenerAppsProps) {
+function ListenerApps({ onSend, onOpenPocketBookExport, onOpenVoiceExport }: ListenerAppsProps) {
+  /* Per-app live handlers. Tiles not in this map render as disabled
+     coming-soon placeholders. */
+  const liveHandlers: Record<string, () => void> = {
+    pocketbook: onOpenPocketBookExport,
+    voice:      onOpenVoiceExport,
+  };
   return (
     <section className="mb-12">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <SectionLabel>Listen on your favourite app</SectionLabel>
         <span className="text-xs text-ink/50 inline-flex items-center gap-1.5"><IconShield className="w-3.5 h-3.5"/> Open-format export · DRM-free</span>
       </div>
-      <MockedPreviewBanner>direct handoff to other apps is coming soon. PocketBook is live — click it to sideload.</MockedPreviewBanner>
+      <MockedPreviewBanner>direct handoff to other apps is coming soon. PocketBook and Voice are live — click either to sideload.</MockedPreviewBanner>
       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {SUPPORTED_APPS.map(a => (
           <ListenerAppCard
             key={a.id}
             app={a}
             onSend={onSend}
-            onOpenPocketBookExport={a.id === 'pocketbook' ? onOpenPocketBookExport : undefined}
+            onOpenLiveExport={liveHandlers[a.id]}
           />
         ))}
       </div>
@@ -383,17 +402,17 @@ function ListenerApps({ onSend, onOpenPocketBookExport }: ListenerAppsProps) {
 interface ListenerAppCardProps {
   app: ListenerApp;
   onSend: (a: ListenerApp) => void;
-  /** Present only for PocketBook — turns the disabled-placeholder pill into
-      a real button that opens the export modal. */
-  onOpenPocketBookExport?: () => void;
+  /** Present only for live tiles (PocketBook, Voice). When set, turns the
+      disabled-placeholder pill into a real button. */
+  onOpenLiveExport?: () => void;
 }
-function ListenerAppCard({ app, onSend: _onSend, onOpenPocketBookExport }: ListenerAppCardProps) {
+function ListenerAppCard({ app, onSend: _onSend, onOpenLiveExport }: ListenerAppCardProps) {
   const [from, to] = app.gradient;
-  /* onSend is intentionally not wired while non-PocketBook integrations are
+  /* onSend is intentionally not wired while non-live integrations are
      mocked. Keep the prop for forward-compat so flipping each card to live
      only touches the tile, not the route. */
   void _onSend;
-  const isLive = onOpenPocketBookExport != null;
+  const isLive = onOpenLiveExport != null;
   return (
     <article data-testid={`listener-app-${app.id}`}
              className="bg-white rounded-3xl border border-ink/10 shadow-card p-5 flex flex-col">
@@ -414,7 +433,7 @@ function ListenerAppCard({ app, onSend: _onSend, onOpenPocketBookExport }: Liste
       </div>
       <p className="text-xs text-ink/65 leading-relaxed mb-5 flex-1">{app.description}</p>
       {isLive ? (
-        <button onClick={onOpenPocketBookExport}
+        <button onClick={onOpenLiveExport}
                 data-testid={`listener-app-action-${app.id}`}
                 className="w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-ink text-canvas hover:bg-ink-soft">
           <IconExternal className="w-4 h-4"/> {app.sendVerb}

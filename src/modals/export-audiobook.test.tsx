@@ -50,6 +50,26 @@ function makeStore() {
   });
 }
 
+/* Seeds account.exportSyncFolder via preloadedState so the Voice-mode tests
+   can drive canSubmit=true without a real PUT to /api/account/settings. */
+function makeStoreWithSyncFolder(folder: string) {
+  return configureStore({
+    reducer: {
+      exports: exportsSlice.reducer,
+      account: accountSlice.reducer,
+      ui:      uiSlice.reducer,
+    },
+    preloadedState: {
+      exports: exportsSlice.getInitialState(),
+      account: {
+        ...accountSlice.getInitialState(),
+        exportSyncFolder: folder,
+      },
+      ui:      uiSlice.getInitialState(),
+    },
+  });
+}
+
 function renderModal(overrides: Partial<React.ComponentProps<typeof ExportAudiobookModal>> = {}) {
   const props = {
     open: true,
@@ -158,6 +178,86 @@ describe('ExportAudiobookModal', () => {
     });
     expect(screen.getByText('02-chapter-two')).toBeInTheDocument();
     expect(screen.getByText('07-epilogue')).toBeInTheDocument();
+  });
+});
+
+/* Plan 33 — Voice tile opens the modal in Voice mode: format radio
+   hidden, destination tab strip hidden, Voice body in place of the
+   SyncFolderTab, submit forces { format: 'm4b', destination: 'sync-folder' }.
+   When no sync folder is configured the submit stays disabled (the
+   existing canSubmit path reused as the empty-sync-folder error path);
+   typing + saving a folder unlocks submission. */
+describe('ExportAudiobookModal — Voice mode (prefill.appHint === "voice")', () => {
+  it('hides the destination tab strip and format toggle', () => {
+    renderModal({ prefill: { format: 'm4b', destination: 'sync-folder', appHint: 'voice' } });
+    expect(screen.queryByTestId('export-tab-download')).toBeNull();
+    expect(screen.queryByTestId('export-tab-sync-folder')).toBeNull();
+    expect(screen.queryByTestId('export-format-m4b')).toBeNull();
+    expect(screen.queryByTestId('export-format-mp3-zip')).toBeNull();
+    expect(screen.getByTestId('export-voice-body')).toBeInTheDocument();
+  });
+
+  it('renames the submit button to "Export to Voice library"', async () => {
+    render(
+      <Provider store={makeStoreWithSyncFolder('C:\\Users\\me\\OneDrive\\Audiobooks')}>
+        <ExportAudiobookModal
+          open={true}
+          bookId="demo__sa__test"
+          prefill={{ format: 'm4b', destination: 'sync-folder', appHint: 'voice' }}
+          onClose={vi.fn()}
+        />
+      </Provider>,
+    );
+    const submit = screen.getByTestId('export-submit');
+    expect(submit).toHaveTextContent('Export to Voice library');
+  });
+
+  it('keeps the submit button disabled until a sync folder is configured', async () => {
+    /* Mirrors the existing empty-sync-folder error path — submit is
+       gated by canSubmit, which requires a non-empty exportSyncFolder
+       for the sync-folder destination. Voice exports forced to
+       sync-folder inherit that gate without a new banner. */
+    renderModal({ prefill: { format: 'm4b', destination: 'sync-folder', appHint: 'voice' } });
+    const submit = screen.getByTestId('export-submit') as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+  });
+
+  it('submits with { format: "m4b", destination: "sync-folder" } regardless of any prior state', async () => {
+    mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
+    mockedApi.getBookExport.mockResolvedValue(makeJob({ status: 'done', progress: 1, sizeBytes: 4096, downloadUrl: 'blob:demo' }));
+
+    render(
+      <Provider store={makeStoreWithSyncFolder('C:\\Users\\me\\OneDrive\\Audiobooks')}>
+        <ExportAudiobookModal
+          open={true}
+          bookId="demo__sa__test"
+          prefill={{ format: 'm4b', destination: 'sync-folder', appHint: 'voice' }}
+          onClose={vi.fn()}
+        />
+      </Provider>,
+    );
+    const submit = screen.getByTestId('export-submit') as HTMLButtonElement;
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() => {
+      expect(mockedApi.createBookExport).toHaveBeenCalledWith(
+        'demo__sa__test',
+        expect.objectContaining({ format: 'm4b', destination: 'sync-folder' }),
+      );
+    });
+  });
+
+  it('still renders the full toggle surface when prefill is undefined (regression guard)', async () => {
+    /* Make sure the appHint branch hasn't accidentally collapsed the
+       generic flow's UX. The header "Export audiobook" pill in the
+       Listen view opens the modal with no prefill — those callers must
+       still see both tab strip pills and both format toggles. */
+    renderModal();
+    expect(screen.getByTestId('export-tab-download')).toBeInTheDocument();
+    expect(screen.getByTestId('export-tab-sync-folder')).toBeInTheDocument();
+    expect(screen.getByTestId('export-format-m4b')).toBeInTheDocument();
+    expect(screen.getByTestId('export-format-mp3-zip')).toBeInTheDocument();
+    expect(screen.queryByTestId('export-voice-body')).toBeNull();
   });
 });
 

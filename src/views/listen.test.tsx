@@ -153,14 +153,17 @@ describe('ListenView — coming-soon affordances', () => {
     expect(screen.getByTestId('listener-app-pocketbook')).toBeInTheDocument();
   });
 
-  it('disables non-PocketBook listener-app cards while PocketBook is live', () => {
+  it('disables non-live listener-app cards while PocketBook and Voice are live', () => {
     renderView();
+    /* After plan 33, Voice graduates from coming-soon to a live sideload
+       target, leaving five mocked-handoff tiles. */
     const stillDeferred = ['audiobookshelf', 'bookplayer', 'smart_audiobook', 'apple_books', 'plex'];
     for (const id of stillDeferred) {
       expect(screen.getByTestId(`listener-app-action-${id}`)).toBeDisabled();
     }
-    /* PocketBook is now an active sideload entry-point. */
+    /* PocketBook + Voice are active sideload entry-points. */
     expect(screen.getByTestId('listener-app-action-pocketbook')).not.toBeDisabled();
+    expect(screen.getByTestId('listener-app-action-voice')).not.toBeDisabled();
   });
 
   it('opens the export modal when the PocketBook tile is clicked', () => {
@@ -170,16 +173,32 @@ describe('ListenView — coming-soon affordances', () => {
     expect(screen.getByTestId('export-audiobook-modal')).toBeInTheDocument();
   });
 
+  it('opens the export modal in Voice mode when the Voice tile is clicked', () => {
+    renderView();
+    expect(screen.queryByTestId('export-audiobook-modal')).toBeNull();
+    fireEvent.click(screen.getByTestId('listener-app-action-voice'));
+    /* Voice-mode modal: no destination tab strip, no format toggle, and
+       the Voice-specific body is rendered in place of the SyncFolderTab. */
+    expect(screen.getByTestId('export-audiobook-modal')).toBeInTheDocument();
+    expect(screen.queryByTestId('export-tab-download')).toBeNull();
+    expect(screen.queryByTestId('export-tab-sync-folder')).toBeNull();
+    expect(screen.queryByTestId('export-format-m4b')).toBeNull();
+    expect(screen.queryByTestId('export-format-mp3-zip')).toBeNull();
+    expect(screen.getByTestId('export-voice-body')).toBeInTheDocument();
+  });
+
   it('opens the export modal when the "Export audiobook" pill is clicked', () => {
     renderView();
     fireEvent.click(screen.getByTestId('open-export-modal'));
     expect(screen.getByTestId('export-audiobook-modal')).toBeInTheDocument();
   });
 
-  it('marks deferred listener-app cards with a Soon badge but omits it on PocketBook', () => {
+  it('marks deferred listener-app cards with a Soon badge but omits it on live tiles (PocketBook, Voice)', () => {
     renderView();
     const pocketBookCard = screen.getByTestId('listener-app-pocketbook');
     expect(within(pocketBookCard).queryByTestId('coming-soon-badge')).toBeNull();
+    const voiceCard = screen.getByTestId('listener-app-voice');
+    expect(within(voiceCard).queryByTestId('coming-soon-badge')).toBeNull();
     const audiobookshelfCard = screen.getByTestId('listener-app-audiobookshelf');
     expect(within(audiobookshelfCard).getByTestId('coming-soon-badge')).toBeInTheDocument();
   });
