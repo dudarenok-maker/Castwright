@@ -1,7 +1,7 @@
 # Book state persistence
 
-> Status: stable for cast / manuscript-edits / change-log; revisions hydration still poll-driven (see KNOWN: scaffolded below)
-> Key files: `src/lib/api.ts` (`getBookState`, `putBookState`, `getWorkspaceChangelog`), `src/App.tsx` (hydrate effect), `server/src/routes/book-state.ts`, `server/src/routes/workspace.ts`, `src/lib/types.ts` (`BookStateResponse`, `PutStateRequest`, `ChangeLogEvent`)
+> Status: stable
+> Key files: `src/lib/api.ts` (`getBookState`, `putBookState`, `getWorkspaceChangelog`), `src/components/layout.tsx` (per-book hydrate effect), `server/src/routes/book-state.ts`, `server/src/routes/workspace.ts`, `src/lib/types.ts` (`BookStateResponse`, `PutStateRequest`, `ChangeLogEvent`)
 > URL surface: indirect (any URL that lands on a `ready`/`confirm`/`analysing` stage); `#/log` for the workspace change log
 > OpenAPI ops: `GET /api/books/:bookId/state`, `PUT /api/books/:bookId/state`, `GET /api/workspace/changelog`
 
@@ -18,6 +18,7 @@ When the app opens a previously-analysed book, it fetches `BookStateResponse` fr
 - Hydration effect runs in `App.tsx` whenever `stage.bookId` changes; failures log + fall back.
 - `castConfirmed: boolean` is the authoritative flag for "user has confirmed cast"; `openBook` derives the routed view from book status, but the state flag is what survives to disk.
 - Manuscript-edits round-trip: `setSentenceCharacter` / `setSentencesCharacter` / `splitSentence` → persistence-middleware fires PUT `slice='manuscript'` → server writes `manuscript-edits.json` atomically → on next book open, GET reads the file, the merge filter at `server/src/routes/book-state.ts:78-95` drops orphan ids whose value falls inside the analysis-cache id range, preserves ids > `maxCacheId` (split offspring), falls back to the raw cache only when no edits exist, and the slice's `hydrateFromBookState` overwrites `s.sentences` with the result. Pinned by `server/src/routes/book-state.hydrate.test.ts` (PUT→GET round-trip with and without cache) plus `book-state.reparse.test.ts` (GET-side reconcile cases).
+- Revisions hydrate-then-poll: the per-book hydration effect in `src/components/layout.tsx` dispatches `revisionsActions.hydrateFromBookState(res.revisions ?? null)` synchronously after `getBookState` resolves, seeding `pending` / `drift` / `dismissed` / `acceptedSelections` from `revisions.json` BEFORE the 30 s `pollRevisions` interval starts. The poll is the in-session live-update path (server-side drift detection or backend-pushed regen results since the page opened); the GET hydrate is the cold-load path. Removing the hydrate dispatch from the per-book effect would reopen the brief empty-state flash window that used to render between mount and the first poll tick. Pinned by `src/components/layout.test.tsx`.
 
 ## Acceptance walkthrough
 
@@ -41,10 +42,6 @@ Run with `VITE_USE_MOCKS=false`, server on `:8080`, with at least one book under
   - Each manuscript boundary edit (`setSentenceCharacter` / `setSentencesCharacter` / `splitSentence`) → `changeLog/bumpBoundaryMove({ chapterId, count })`. The reducer aggregates consecutive edits in the same chapter into a single entry at the list head so a drag gesture is one audit line, not dozens.
 - **Reparse selective wipe**: `ConfirmRoute.onReanalyse` dispatches `changeLog/wipeBookShapeEvents` BEFORE `uiActions.reanalyse`. The wipe drops every event with a defined `chapterId` (regenerate, chapter_complete, chapter_failed, boundary_move). Cast/voice prefs (voice_tune, voice_lock, voice_reuse, cast_confirm) and historical markers (import, analysis_complete, library_add, generation_started) survive — those are either still accurate after a reparse or remain informative.
 - Workspace endpoint MUST skip books that have no `.audiobook/change-log.json` rather than failing the whole response. A freshly imported book without any logged actions is normal state.
-
-## KNOWN: scaffolded
-
-- `revisions` hydration on GET is partial today; the polling mechanism (per `20-revisions-and-drift.md`) drives the slice in practice. A reload between mount and the first 30 s poll briefly shows an empty pending/drift list before the poll re-populates it.
 
 ## Out of scope
 
