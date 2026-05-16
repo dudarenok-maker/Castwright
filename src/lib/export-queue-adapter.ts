@@ -9,8 +9,12 @@
 import type { BookExportJob, ExportQueueItem } from './types';
 
 const FORMAT_TO_VIEW: Record<BookExportJob['format'], ExportQueueItem['format']> = {
-  'mp3-zip': 'zip',
-  'm4b':     'm4b',
+  'mp3-zip':    'zip',
+  'm4b':        'm4b',
+  /* mp3-folder artifacts are a directory tree on disk; the queue row's
+     format badge surfaces 'mp3' (the per-file container) since the user
+     thinks in terms of "this is a folder of MP3s". */
+  'mp3-folder': 'mp3',
 };
 
 export function bookExportJobToQueueItem(job: BookExportJob): ExportQueueItem {

@@ -56,6 +56,7 @@ PRs that change behavior cited in a plan MUST update the relevant plan in the sa
 - [19 — Listener preview](19-preview-listener.md) — Listener-POV full-screen preview.
 - [32 — Audiobook export](32-audiobook-export.md) — Sideload to PocketBook Reader (Phase A: MP3.ZIP) via LAN download or sync folder; per-chapter ID3v2.4 tags, no re-encode, atomic writes.
 - [33 — Voice export](33-voice-export.md) — Live Voice (Android audiobook player) tile on the Listen tab; M4B-standards conformance (`stik = 2`) regression-guarded; defaults to M4B + sync-folder.
+- [34 — MP3-folder export](34-mp3-folder-export.md) — Per-chapter MP3s in a sub-folder for folder-scanning audiobook apps (Smart AudioBook Player, BookPlayer, Audiobookshelf). Sync-folder destination only; APIC cover travels with each chapter.
 
 ### I. Revisions & drift
 - [20 — Revisions & drift](20-revisions-and-drift.md) — Pending drafts + drift events + dismissal.
