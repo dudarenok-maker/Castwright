@@ -116,6 +116,9 @@ rather than inventing new fixtures.
 
 ## Out of scope (follow-ups)
 
+- **(Follow-up filed)** [Plan 39 — Purge WAV](39-purge-wav.md) will
+  remove the legacy-WAV fallback documented above. Tracked as Must #1
+  in [`../BACKLOG.md`](../BACKLOG.md).
 - AAC/M4A or Opus output. The encoder boundary in `encodePcmToMp3` is
   small enough that swapping `libmp3lame` for `aac`/`libopus` is the only
   change needed; left for a future PR with a deliberate codec choice.

@@ -27,13 +27,23 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 5 · Should 12 · Could 11 · Won't 13
+**Counts as of 2026-05-17:** Must 6 · Should 12 · Could 11 · Won't 13
 
 ---
 
 ## Must — blocks v1 ship or hurts existing users
 
-### 1. Voice-tab compare-two-cast-members affordance
+### 1. Purge WAV from the codebase (MP3 is the only format)
+
+Source: [`39-purge-wav.md`](features/39-purge-wav.md) (draft).
+
+- *What:* Delete every WAV branch, route, type literal, comment, UI label, mock fixture, and doc reference. Locator probes `.mp3` only; `audio.wav` + `audio/previous.wav` routes deleted; `ChapterAudioExt` narrows to `'mp3'`; `preserve-previous-audio` returns `{ preserved }` (no `ext`); audio-file regexes drop `wav`; `server/src/tts/wav.ts` deleted, `pcmDurationSec` moved to `server/src/tts/pcm.ts`; Generation view footer reads "Output: MP3 (VBR V2)"; mock `stub-a.wav` / `stub-b.wav` transcoded to MP3; sidecar `import wave` + `_wav_bytes` removed; `openapi.yaml` + 8 feature docs reworded; legacy on-disk `.wav` files become invisible (no migration).
+- *Acceptance:* `grep -rin 'wav\|WAV' src/ server/src/ openapi.yaml docs/features/` returns only `Waveform` component imports and the `peaks` "waveform envelope" description (visualization terms — not the format). `npm run verify` green. New tests pin `GET …/audio.wav` → 404 and `findChapterAudio` ignores `.wav` files on disk.
+- *Key files:* see the plan's "Key files" header — `chapter-audio-file.ts`, `chapter-audio.ts`, `preserve-previous-audio.ts`, `scan.ts`, `book-state.ts`, `tts/wav.ts`, `voice-sample.ts`, `synthesise-chapter.ts`, `generation.ts`, `build-mp3-zip.ts`, `index.ts`, sidecar `main.py`, `src/views/generation.tsx`, `src/lib/api.ts`, `use-sample-playback.test.ts`, `src/mocks/audio/stub-{a,b}.wav`, `openapi.yaml`, and the eight doc files enumerated in the plan.
+- *Depends on:* none — pure subtraction on existing surfaces.
+- *Benefit (architectural):* locks "chapter audio is MP3" as a one-format invariant; deletes ~150 lines of dead branches; removes the misleading "Output: WAV (16-bit PCM)" UI label that contradicts actual output.
+
+### 2. Voice-tab compare-two-cast-members affordance
 
 Source: [`22a-voice-library-compare.md`](features/22a-voice-library-compare.md) (draft).
 
@@ -43,17 +53,17 @@ Source: [`22a-voice-library-compare.md`](features/22a-voice-library-compare.md) 
 - *Depends on:* none — pure additive on existing surface.
 - *Benefit (user):* the highest-signal compare today — two characters routed to the same base voice but sounding subtly different — requires bouncing Voices → Cast → select → Compare. Putting the entry point next to the family grouping collapses that into a single tab, where the user is already looking at the "same voice" cohort.
 
-### 2. Diff audio playback for revisions (a/b same-sentence)
+### 3. Diff audio playback for revisions (a/b same-sentence)
 
 Source: [`20-revisions-and-drift.md`](features/20-revisions-and-drift.md) (KNOWN: scaffolded).
 
 - *What:* Wire an a/b audio compare on each pending revision so users can audition the proposed take against the current production before accepting or dismissing.
 - *Acceptance:* On the Revisions surface, opening a pending revision shows two playback controls labelled current vs. proposed; clicking one stops the other; the accept/dismiss verbs already in the slice persist the user's choice. An e2e spec (paired with Should #8) clicks through accept on one revision and asserts the slice's `acceptedSelections` map updates.
-- *Key files:* `src/store/revisions-slice.ts` (`acceptedSelections: Record<string, Record<number, 'A' | 'B'>>` already exists, line 19); revisions UI (search for `RevisionsView` / `pendingRevisions`); `api.getChapterAudio` is the audio fetcher and currently returns `url: null` in mock mode (see Must #4 — they pair).
-- *Depends on:* Must #4 (mock-mode audio URL) for any meaningful local exercise; the real backend already returns playable URLs.
+- *Key files:* `src/store/revisions-slice.ts` (`acceptedSelections: Record<string, Record<number, 'A' | 'B'>>` already exists, line 19); revisions UI (search for `RevisionsView` / `pendingRevisions`); `api.getChapterAudio` is the audio fetcher and currently returns `url: null` in mock mode (see Must #5 — they pair).
+- *Depends on:* Must #5 (mock-mode audio URL) for any meaningful local exercise; the real backend already returns playable URLs.
 - *Benefit (user):* the revisions feature is half-shipped — users see drift metadata but can't audition the change. Decision-without-evidence is worse than no surface at all because the surface implies the user has enough to choose.
 
-### 3. `mockGetBookState` mock implementation
+### 4. `mockGetBookState` mock implementation
 
 Source: [`12-manuscript-view.md`](features/12-manuscript-view.md) (KNOWN: scaffolded).
 
@@ -62,16 +72,16 @@ Source: [`12-manuscript-view.md`](features/12-manuscript-view.md) (KNOWN: scaffo
 - *Key files:* `src/lib/api.ts:276-285` (mockGetBookState + mockPutBookState); `src/store/persistence-middleware.ts`; `docs/features/27-book-state-persistence.md` for the round-trip contract.
 - *Benefit (technical):* mock mode is the only environment that boots without a Node backend + sidecar. A throwing mock breaks design fixtures, demo recordings, and any Vitest+jsdom test that hits the persistence path.
 
-### 4. `mockGetChapterAudio` mock implementation
+### 5. `mockGetChapterAudio` mock implementation
 
 Source: [`18-listen-view.md`](features/18-listen-view.md) (KNOWN: scaffolded).
 
 - *What:* Return a valid audio URL from `mockGetChapterAudio` (`src/lib/api.ts:445-460`) — either a data: URL with a tiny synthesized tone, or a static asset bundled under `src/mocks/`. Same for `mockGetVoiceSample` and `mockGetBaseVoiceSample` which currently return empty-string URLs.
 - *Acceptance:* Listen view in mock mode plays a sound when play is clicked. Voice library "play sample" plays a sound. An e2e spec (Should #8) asserts a `<audio>` element with a non-empty `src` and non-error `readyState`.
 - *Key files:* `src/lib/api.ts:445-472` (the three mock audio functions); optional `src/mocks/audio/stub.wav` (~1 s of 440Hz tone, ~88 KB).
-- *Benefit (user):* completes the mock-mode demo path through Listen and Voice library so the entire stage machine can be exercised without booting the sidecar. Pairs with Must #2 (revisions a/b player).
+- *Benefit (user):* completes the mock-mode demo path through Listen and Voice library so the entire stage machine can be exercised without booting the sidecar. Pairs with Must #3 (revisions a/b player).
 
-### 5. Cancel / dismiss / retry on running export jobs
+### 6. Cancel / dismiss / retry on running export jobs
 
 Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 
@@ -153,10 +163,10 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
 - *What:* Add a Playwright spec that opens a `ready`-state book under mocks, navigates to Listen, clicks play on the first chapter, and asserts the mini-player shows a play/pause toggle and a progressing duration.
-- *Acceptance:* New file `e2e/listen-playback.spec.ts`. Asserts the `<audio>` element has a non-empty `src` (depends on Must #4) and `paused` flips false after the play click.
+- *Acceptance:* New file `e2e/listen-playback.spec.ts`. Asserts the `<audio>` element has a non-empty `src` (depends on Must #5) and `paused` flips false after the play click.
 - *Key files:* `e2e/smoke.spec.ts`; `src/views/listen.tsx` for the playback affordances.
-- *Depends on:* Must #4 (mock audio URL); meaningless until that lands.
-- *Benefit (technical):* listen + playback is the second-highest-blast-radius surface. Pairs with Must #4.
+- *Depends on:* Must #5 (mock audio URL); meaningless until that lands.
+- *Benefit (technical):* listen + playback is the second-highest-blast-radius surface. Pairs with Must #5.
 
 ### 9. Slice unit tests: `applyGenerationTick`, `applyVoiceMatches`
 
@@ -234,7 +244,7 @@ Source: CLAUDE.md "Suggested follow-ups".
 - *What:* Replace the visual stub mini-player with a real `<audio>` element wired to `getChapterAudio({ chapterId })`; respond to spacebar pause-play and arrow seek.
 - *Acceptance:* Clicking play on the mini-player plays the chapter audio in real mode; the Listen e2e spec (Should #8) asserts playback state.
 - *Key files:* `src/components/MiniPlayer.tsx` (or wherever `MiniPlayer` is defined).
-- *Depends on:* Must #4 (mock audio URL) for local exercise + Should #8 (e2e coverage).
+- *Depends on:* Must #5 (mock audio URL) for local exercise + Should #8 (e2e coverage).
 - *Benefit (user):* listen view becomes actually-listenable.
 
 ### 5. ESLint + Prettier + axe-core a11y pass
