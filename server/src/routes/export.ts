@@ -23,16 +23,17 @@ import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { dotAudiobook, slug as slugify } from '../workspace/paths.js';
 import { writeJsonAtomic } from '../workspace/state-io.js';
 import { readUserSettings } from '../workspace/user-settings.js';
-import { buildMp3Zip, ExportIncompleteError } from '../export/build-mp3-zip.js';
+import { buildMp3Zip, ExportIncompleteError, sanitiseForZip } from '../export/build-mp3-zip.js';
 import { buildM4b } from '../export/build-m4b.js';
-import { writeToSyncFolder } from '../export/sync-folder.js';
+import { buildMp3Folder } from '../export/build-mp3-folder.js';
+import { writeFolderToSyncFolder, writeToSyncFolder } from '../export/sync-folder.js';
 
 /* Mirrors the OpenAPI BookExportJob schema. Kept in sync by hand — the
    server doesn't import the generated frontend types. */
 export interface BookExportJob {
   id: string;
   bookId: string;
-  format: 'mp3-zip' | 'm4b';
+  format: 'mp3-zip' | 'm4b' | 'mp3-folder';
   destination: 'download' | 'sync-folder';
   status: 'queued' | 'in_progress' | 'done' | 'failed';
   filename: string;
@@ -44,6 +45,8 @@ export interface BookExportJob {
   createdAt: string;
   completedAt: string | null;
 }
+
+const ALLOWED_FORMATS: ReadonlySet<BookExportJob['format']> = new Set(['mp3-zip', 'm4b', 'mp3-folder']);
 
 export const exportRouter = Router();
 
@@ -81,19 +84,33 @@ async function rehydrateBook(bookDir: string, bookId: string): Promise<void> {
 }
 
 function bookFilename(state: BookStateJson, format: BookExportJob['format']): string {
-  const ext = format === 'mp3-zip' ? 'zip' : 'm4b';
   const base = slugify(state.title);
-  return `${base}.${ext}`;
+  if (format === 'mp3-zip') return `${base}.zip`;
+  if (format === 'm4b')     return `${base}.m4b`;
+  /* mp3-folder: the "filename" is actually the folder name the per-chapter
+     MP3s land in (under both the staging dir and the sync target). The
+     download endpoint refuses this format so the lack of a single-file
+     extension never surfaces to the client. */
+  return base;
 }
 
 exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { format?: string; destination?: string };
-  if (body.format !== 'mp3-zip' && body.format !== 'm4b') {
-    return res.status(400).json({ error: 'unsupported_format', message: `format must be 'mp3-zip' or 'm4b'; got ${body.format ?? '(missing)'}.` });
+  if (typeof body.format !== 'string' || !ALLOWED_FORMATS.has(body.format as BookExportJob['format'])) {
+    return res.status(400).json({ error: 'unsupported_format', message: `format must be 'mp3-zip', 'm4b', or 'mp3-folder'; got ${body.format ?? '(missing)'}.` });
   }
-  const format: BookExportJob['format'] = body.format;
+  const format = body.format as BookExportJob['format'];
   if (body.destination !== 'download' && body.destination !== 'sync-folder') {
     return res.status(400).json({ error: 'invalid_destination', message: `destination must be 'download' or 'sync-folder'.` });
+  }
+  /* Folder export only makes sense for an app that scans a folder on the
+     device — the download endpoint serves a single file, so a folder +
+     download combo would either need an inline zip (which is just
+     mp3-zip) or a multi-file HTTP response (out of scope). Refuse the
+     combo at the route layer so the frontend surfaces a clear error
+     rather than a confusing 404 on the download endpoint later. */
+  if (format === 'mp3-folder' && body.destination !== 'sync-folder') {
+    return res.status(400).json({ error: 'invalid_destination', message: `mp3-folder exports require destination='sync-folder'; the folder is mirrored into the configured sync folder, not served via the download endpoint.` });
   }
 
   const located = await findBookByBookId(req.params.bookId);
@@ -158,6 +175,15 @@ exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res
   const job = jobs.get(req.params.exportId);
   if (!job || job.bookId !== located.state.bookId) return res.status(404).json({ error: 'export_not_found' });
   if (job.status !== 'done') return res.status(409).json({ error: 'export_not_ready', status: job.status });
+  if (job.format === 'mp3-folder') {
+    /* mp3-folder artifacts live as a directory tree; the download
+       endpoint serves single files. The route refuses the
+       mp3-folder+download combo at create time, but a direct hit on
+       this endpoint (e.g. somebody curling a manifest URL from an
+       earlier release) gets a clear 409 instead of a 500 from sendFile
+       trying to stream a directory. */
+    return res.status(409).json({ error: 'format_not_downloadable', message: 'mp3-folder exports are mirrored into the sync folder, not served via the download endpoint.' });
+  }
 
   const path = join(exportsDir(located.bookDir), job.id, job.filename);
   if (!existsSync(path)) return res.status(404).json({ error: 'export_artifact_missing' });
@@ -199,17 +225,38 @@ async function runExportJob(
       job.progress = ratio;
       jobs.set(job.id, { ...job });
     };
-    const result = job.format === 'mp3-zip'
-      ? await buildMp3Zip({ bookDir, state, outPath, onProgress })
-      : await buildM4b({ bookDir, state, outPath, onProgress });
-    job.sizeBytes = result.sizeBytes;
-    job.progress = 1;
+    if (job.format === 'mp3-folder') {
+      /* outPath is actually the staging folder for this format (one
+         sub-directory per book under the export id). The builder writes
+         per-chapter MP3s into it; the sync-folder branch then mirrors
+         each file into the user's target via writeFolderToSyncFolder. */
+      const folderResult = await buildMp3Folder({ bookDir, state, outDir: outPath, onProgress });
+      job.sizeBytes = folderResult.totalBytes;
+      job.progress = 1;
 
-    if (job.destination === 'sync-folder' && syncFolder) {
-      const synced = await writeToSyncFolder(outPath, syncFolder, job.filename);
-      job.syncPath = synced.syncPath;
+      if (syncFolder) {
+        const bookSubfolder = sanitiseForZip(state.title);
+        const synced = await writeFolderToSyncFolder(outPath, syncFolder, bookSubfolder);
+        job.syncPath = synced.syncPath;
+      }
+      /* No downloadUrl for folder exports — the route-layer guard
+         already refuses the format + download combo, so leaving the
+         field null is the honest signal that the artifact lives under
+         the sync folder, not behind a single-file download. */
+      job.downloadUrl = null;
+    } else {
+      const result = job.format === 'mp3-zip'
+        ? await buildMp3Zip({ bookDir, state, outPath, onProgress })
+        : await buildM4b({ bookDir, state, outPath, onProgress });
+      job.sizeBytes = result.sizeBytes;
+      job.progress = 1;
+
+      if (job.destination === 'sync-folder' && syncFolder) {
+        const synced = await writeToSyncFolder(outPath, syncFolder, job.filename);
+        job.syncPath = synced.syncPath;
+      }
+      job.downloadUrl = `/api/books/${encodeURIComponent(job.bookId)}/exports/${encodeURIComponent(job.id)}/download`;
     }
-    job.downloadUrl = `/api/books/${encodeURIComponent(job.bookId)}/exports/${encodeURIComponent(job.id)}/download`;
     job.status = 'done';
     job.completedAt = new Date().toISOString();
   } catch (e) {

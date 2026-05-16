@@ -1304,17 +1304,26 @@ export interface components {
              *     a single AAC-LC file at 96 kbps mono 44.1 kHz with
              *     QuickTime chapter atoms; PocketBook surfaces it under
              *     Audiobooks with chapter UI + resume position. M4B
-             *     re-encodes from MP3 → AAC.
+             *     re-encodes from MP3 → AAC. `mp3-folder` writes the per-
+             *     chapter MP3s into a sub-folder named after the book
+             *     (each tagged with the same ID3v2 + optional APIC cover
+             *     as the zip variant) — the folder-scanning audiobook apps
+             *     (Smart AudioBook Player, Audiobookshelf, BookPlayer via
+             *     Files import) pick up a folder per book. `mp3-folder` is
+             *     only valid with `destination: sync-folder` since the
+             *     download endpoint serves single files.
              * @enum {string}
              */
-            format: "mp3-zip" | "m4b";
+            format: "mp3-zip" | "m4b" | "mp3-folder";
             /**
              * @description `download` stages the file under the book's `.audiobook/exports/`
              *     for the user to pull via `downloadBookExport`. `sync-folder`
              *     additionally copies the finished archive into the user's
              *     configured `exportSyncFolder` (e.g. a OneDrive watch path) so
              *     it lands on their phone via sync. Requires `exportSyncFolder`
-             *     to be set; the request 400s otherwise.
+             *     to be set; the request 400s otherwise. `mp3-folder` requires
+             *     this to be `sync-folder` (the download endpoint serves single
+             *     files, not directory trees).
              * @enum {string}
              */
             destination: "download" | "sync-folder";
@@ -1324,7 +1333,7 @@ export interface components {
             id: string;
             bookId: string;
             /** @enum {string} */
-            format: "mp3-zip" | "m4b";
+            format: "mp3-zip" | "m4b" | "mp3-folder";
             /** @enum {string} */
             destination: "download" | "sync-folder";
             /** @enum {string} */

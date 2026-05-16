@@ -199,6 +199,20 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     expect(res.body.error).toBe('sync_folder_unset');
   });
 
+  it('rejects mp3-folder + download combo at create time (plan 34 B1)', async () => {
+    /* mp3-folder artifacts live as a directory tree; the download
+       endpoint serves single files. The route must refuse this combo
+       BEFORE allocating an export id so the client gets a clear 400
+       rather than a confused 409 on the download endpoint later. */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'mp3-folder', destination: 'download' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_destination');
+    expect(res.body.message).toMatch(/mp3-folder/);
+    expect(res.body.message).toMatch(/sync-folder/);
+  });
+
   it('404s an unknown export id', async () => {
     const res = await request(app).get(`/api/books/${bookId}/exports/exp_doesnotexist`);
     expect(res.status).toBe(404);
