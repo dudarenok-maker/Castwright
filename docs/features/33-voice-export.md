@@ -43,7 +43,7 @@ Voice scan the library folder.
 | `aART` (album_artist) | Author                                             | Optional                   |
 | `©gen` (genre)    | Genre                                                  | Optional                   |
 | `©day` (date)     | Publication date                                       | Optional                   |
-| `covr`            | Cover art (embedded JPEG/PNG)                          | Optional (Voice falls back to default tile); parked under plan 36 export-embedding (A2). |
+| `covr`            | Cover art (embedded JPEG/PNG)                          | Optional. Now embedded via plan 36 A2 when `<bookDir>/.audiobook/cover.jpg` exists; absent → Voice falls back to the default tile. |
 | `stik = 2`        | iTunes "audiobook" media kind                          | Not required by Voice on Android specifically — Voice treats every file in its library as an audiobook regardless. **Still worth keeping** for cross-app library moves (Apple Books, Plex, BookPlayer) and as a stable signal of "this is an audiobook." |
 | `pgap = 1`        | Gapless playback flag                                  | No effect on Voice-Android with single-file M4B |
 | `soal` / series   | Sort fields                                            | Voice groups by folder, not album tag — no effect |
@@ -145,12 +145,6 @@ Negative path:
 
 ## Known gaps (deferred but harmless to add later)
 
-- **Cover art (`covr`)** — parked under plan 36's export-embedding follow-up
-  (tracked separately from the main cover pipeline, which already ships
-  card + Listen-header artwork). Voice tolerates missing covers (default
-  tile). When the export-embedding follow-up ships, `build-m4b.ts` will
-  pick up `<bookDir>/.audiobook/cover.jpg` via ffmpeg `-disposition:v:0
-  attached_pic`.
 - **Long-form description (`desc` / `ldes`)** — the state model carries no
   description field, so there's no source data. Adding the field is a
   separate small UX task.
@@ -158,6 +152,13 @@ Negative path:
   single-file M4B (no inter-file gap to suppress).
 - **Series-aware `album = series` mapping** — Voice groups books by folder,
   not by album tag. No observable effect.
+
+## Shipped follow-ups
+
+- **Cover art (`covr`)** — plan 36 A2 wired `buildM4b` to read
+  `<bookDir>/.audiobook/cover.jpg` and embed it as the iTunes `covr`
+  atom with `attached_pic` disposition. Absent cover → no video stream,
+  export still ships. Voice picks the embedded image up automatically.
 
 ## Out of scope (intentional)
 
