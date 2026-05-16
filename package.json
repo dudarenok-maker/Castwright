@@ -20,9 +20,12 @@
     "test:server": "npm --prefix server run test",
     "test:scripts": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/tests/run.ps1",
     "test:sidecar": "powershell -ExecutionPolicy Bypass -NoProfile -File server/tts-sidecar/run-tests.ps1",
+    "test:e2e": "playwright test",
+    "test:fast": "npm run test && npm run test:server",
     "test:all": "npm run test && npm run test:server && npm run test:scripts && npm run test:sidecar",
-    "verify": "npm run typecheck && npm run test:all && npm run build",
+    "verify": "npm run typecheck && npm run test:all && npm run test:e2e && npm run build",
     "verify:quick": "npm run test:all",
+    "verify:fast": "npm run test:fast",
     "openapi:types": "openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts",
     "reconcile-cast": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/reconcile-broken-cast.ps1",
     "prepare": "husky"
@@ -37,6 +40,7 @@
     "react-router-dom": "^6.26.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
