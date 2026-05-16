@@ -17,6 +17,7 @@ import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/s
 import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { BookStateJson } from '../workspace/scan.js';
+import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { normaliseForMatch as normaliseForMatchShared, matchQuoteInSource } from '../util/text-match.js';
 import {
   appendBatch,
@@ -679,6 +680,24 @@ function humanSeconds(ms: number): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
+/* Compact identity prior carried in from prior books in the same series.
+   The route assembles this via scanSeriesCharactersForBookId (C1) and
+   passes it through to buildStage1ChapterInbox; the per-chapter prompt
+   renders a "Known characters from prior books in this series" section
+   so the model reuses existing ids by name/alias rather than
+   re-inventing them. Distinct from voice-match (plan 09): the prior
+   is detection-time, not confirm-time. */
+export interface SeriesPriorCharacter {
+  id: string;
+  name?: string;
+  aliases?: string[];
+  description?: string;
+  /** Display title of the book this character is carried from. The
+      prompt shows it as provenance so the model can disambiguate if
+      the same name appears in two different sibling books. */
+  fromBookTitle?: string;
+}
+
 /* Build the per-chapter Phase 0a inbox markdown that drives the manual /
    Gemini / Ollama analyzer. Exported for unit testing — the test asserts
    that the template includes the broadened first-person guidance so
@@ -689,6 +708,7 @@ export function buildStage1ChapterInbox(
   title: string,
   chapter: { id: number; title: string; body: string },
   runningRoster: CharacterOutput[],
+  seriesPrior: SeriesPriorCharacter[] = [],
 ): string {
   /* Compact roster format — only the identity fields the model needs to
      reuse ids verbatim. Skipping evidence/tone/description keeps each
@@ -701,6 +721,39 @@ export function buildStage1ChapterInbox(
   const rosterBlock = runningRoster.length === 0
     ? '_No characters detected yet — this is the first chapter being processed. Use kebab-case ids that will be stable across the rest of the book._'
     : `\`\`\`json\n${rosterJson}\n\`\`\``;
+
+  /* Series-cast prior (C2). Rendered only when sibling books exist so
+     standalones / first-in-series books don't carry a useless empty
+     section. The prompt instructs the model to REUSE existing ids when
+     a chapter speaker matches a known series character by name or
+     alias — without this guidance Unlocked's per-chapter detector
+     would invent fresh ids like `Marlow-2` instead of recognising the
+     `Marlow` already confirmed in the Coalfall Commission / the Hollow Tide. */
+  const priorJson = seriesPrior.length > 0
+    ? JSON.stringify(
+        seriesPrior.map(p => ({
+          id: p.id,
+          name: p.name,
+          aliases: p.aliases?.length ? p.aliases : undefined,
+          description: p.description,
+          fromBookTitle: p.fromBookTitle,
+        })),
+        null,
+        2,
+      )
+    : null;
+  const priorBlock = priorJson === null
+    ? ''
+    : `
+## Known characters from prior books in this series
+
+The user has already confirmed these characters in earlier books in this series. If a speaker in this chapter matches one of them by **name** or **alias** (case-insensitive, ignoring punctuation), reuse their \`id\` **verbatim** — do not invent a new id. Mis-attributing a series-regular as a fresh character creates duplicate voice profiles and breaks downstream voice-match scoring. New characters introduced in this book that are NOT in the list should still get fresh kebab-case ids.
+
+\`\`\`json
+${priorJson}
+\`\`\`
+`;
+
   return `---
 manuscriptId: ${manuscriptId}
 stage: 1-ch${chapter.id}
@@ -757,7 +810,7 @@ For any character below who appears in this chapter, use the existing \`id\`
 duplicate roster entry.
 
 ${rosterBlock}
-
+${priorBlock}
 ## Chapter
 
 ${chapter.body}
@@ -1154,6 +1207,46 @@ async function runMainAnalyzerJob(
     markPhase(0);
     log(0, `Manuscript: ${wordCount.toLocaleString()} words, ${sourceChars.toLocaleString()} characters, ${record.chapterHints.length} chapter${record.chapterHints.length === 1 ? '' : 's'}`);
     log(0, `Estimated total time: ~${humanSeconds(stage1EstMs + stage2EstMs)} (refined after stage 1)`);
+
+    /* Series-cast prior (C2). Resolves the source book's series-mates'
+       confirmed characters via scanSeriesCharactersForBookId so the
+       per-chapter detector recognises them by name/alias rather than
+       re-detecting as fresh entities. Standalones / first-in-series
+       books resolve to an empty list -- the prompt simply omits the
+       section in that case. Resolved ONCE per analysis (not per
+       chapter); the prior doesn't change mid-run. */
+    let seriesPrior: SeriesPriorCharacter[] = [];
+    if (recordRef.bookId) {
+      try {
+        const siblingRecords = await scanSeriesCharactersForBookId(recordRef.bookId);
+        seriesPrior = siblingRecords.map(r => ({
+          id: r.character.id,
+          name: r.character.name,
+          aliases: r.character.aliases,
+          /* library-cast-scan strips description from its projection;
+             leaving it undefined is fine -- the prompt renders without
+             it when absent. */
+          fromBookTitle: r.bookTitle,
+        }));
+        if (seriesPrior.length > 0) {
+          /* Distinct book sources, first three names, surfaced for the
+             analysing view's "Carried from <series>" pill (C3) and for
+             a one-line log entry the user can see on phase 0 entry. */
+          const firstNames = seriesPrior.slice(0, 3).map(p => p.name).filter(Boolean).join(', ');
+          const more = seriesPrior.length > 3 ? ` +${seriesPrior.length - 3}` : '';
+          log(0, `Carrying in ${seriesPrior.length} character${seriesPrior.length === 1 ? '' : 's'} from prior books in this series (${firstNames}${more}).`);
+          send({
+            kind: 'series-prior',
+            count: seriesPrior.length,
+            names: seriesPrior.slice(0, 3).map(p => p.name).filter((n): n is string => typeof n === 'string'),
+          });
+        }
+      } catch (priorErr) {
+        /* Non-fatal -- a broken series scan must not block analysis.
+           Log + carry on with an empty prior. */
+        console.warn('[analysis] series prior scan failed:', priorErr);
+      }
+    }
     let stage1: Stage1Output;
     let stage1ActualMs = 0;
     const totalCastChapters = record.chapterHints.length;
@@ -1386,7 +1479,7 @@ async function runMainAnalyzerJob(
           result = await analyzer.runStage1Chapter(
             manuscriptId,
             ch.id,
-            buildStage1ChapterInbox(manuscriptId, recordRef.title, ch, Array.from(rebuildRoster().values())),
+            buildStage1ChapterInbox(manuscriptId, recordRef.title, ch, Array.from(rebuildRoster().values()), seriesPrior),
             {
               signal: abortController.signal,
               onWaiting: (elapsed) => {
@@ -2342,6 +2435,24 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     log(0, `Re-analyzing ${toRun.length} chapter${toRun.length === 1 ? '' : 's'} via ${analyzerLabel}.`);
     send({ kind: 'phase', phaseId: 0, progress: 0.02, label: PHASES[0].label });
 
+    /* Same series-cast prior the main route uses (C2). Resolved once
+       per subset retry so the prompt still recognises series-regulars
+       even on a one-chapter un-exclude re-analysis. */
+    let subsetSeriesPrior: SeriesPriorCharacter[] = [];
+    if (record.bookId) {
+      try {
+        const siblings = await scanSeriesCharactersForBookId(record.bookId);
+        subsetSeriesPrior = siblings.map(r => ({
+          id: r.character.id,
+          name: r.character.name,
+          aliases: r.character.aliases,
+          fromBookTitle: r.bookTitle,
+        }));
+      } catch (priorErr) {
+        console.warn('[analysis-subset] series prior scan failed:', priorErr);
+      }
+    }
+
     const rebuildRoster = (): Map<string, CharacterOutput> => {
       const r = new Map<string, CharacterOutput>();
       for (const ch of record.chapterHints) {
@@ -2368,7 +2479,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
         const result = await analyzer.runStage1Chapter(
           manuscriptId,
           ch.id,
-          buildStage1ChapterInbox(manuscriptId, record.title, ch, Array.from(rebuildRoster().values())),
+          buildStage1ChapterInbox(manuscriptId, record.title, ch, Array.from(rebuildRoster().values()), subsetSeriesPrior),
           {
             signal: abortController.signal,
             onThrottle: (waitMs, reason) => {
