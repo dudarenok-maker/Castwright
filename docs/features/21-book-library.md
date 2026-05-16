@@ -50,8 +50,22 @@ Run with `VITE_USE_MOCKS=false`, server on `:8080` with at least one book per st
 13. **Empty workspace** → tree renders an empty state; "New book" CTA visible.
 14. **Mock mode** → `getLibrary` returns `MOCK_LIBRARY` (`src/lib/api.ts:112-115`) — covers the same statuses; delete + reparse + edit are no-ops (mock `putBookState` just resolves).
 
+## Loading affordance (initial app open)
+
+The view renders one of three states based on `library.loaded` and
+`authors.length`, in that order — never collapse this back into a binary check:
+
+| `library.loaded` | `authors.length` | Renders |
+|---|---|---|
+| `false` | (any) | `<LibrarySkeleton/>` — placeholder shelves, no copy |
+| `true` | `0` | `<EmptyLibrary/>` — "Your library is empty" + import CTA |
+| `true` | `>0` | populated author / series / book grid |
+
+The skeleton mirrors the populated grid shape (`grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5`, `min-h-[180px]` cards) so the layout doesn't shift when real data swaps in. Reason for the `loaded` check: without it, the first paint flashes `<EmptyLibrary>` for the duration of the `api.getLibrary()` round-trip (mock = 120 ms; real backend = whatever the disk scan takes), reading as "library wiped." `library-slice.ts` always tracks `loaded`; `book-library.tsx` is the only consumer.
+
 ## Out of scope
 
 - Search / filter inside the library — v1 is full tree only.
 - Bulk delete or bulk re-parse.
 - Drag-to-reorganise across series.
+- Replicating the same skeleton pattern on the voices / cast / chapters lists. Their flash window is shorter (they only mount after a book is opened, by which time `library.loaded` is true). Copy this pattern if real flicker is reported on those surfaces.

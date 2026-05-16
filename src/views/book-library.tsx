@@ -44,6 +44,11 @@ export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBoo
      to "back" when the user hasn't set a name (keeps the heading grammatical). */
   const displayName = useAppSelector(s => s.account.displayName);
   const firstName = displayName.trim().split(/\s+/)[0] || 'back';
+  /* Distinguish "fetch hasn't resolved yet" from "fetched and genuinely empty".
+     Without this, the first paint flashes <EmptyLibrary> for the duration of
+     the api.getLibrary() round-trip — reads as "library wiped." Skeleton stays
+     up until libraryActions.hydrate fires (set by src/components/layout.tsx). */
+  const loaded = useAppSelector(s => s.library.loaded);
   /* Surface the active workspace root so a stale `WORKSPACE_DIR` override
      (or worse: silently falling back to the in-repo default) is obvious at
      a glance. Page-local state — only the Books page needs this; widening
@@ -103,7 +108,9 @@ export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBoo
         ))}
       </div>
 
-      {authors.length === 0 ? (
+      {!loaded ? (
+        <LibrarySkeleton/>
+      ) : authors.length === 0 ? (
         <EmptyLibrary onStartNew={onStartNew}/>
       ) : (
         <div className="space-y-10">
@@ -412,6 +419,33 @@ function EmptyLibrary({ onStartNew }: { onStartNew: () => void }) {
           <span className="inline-flex items-center gap-2"><IconPlus className="w-4 h-4"/>Import your first book</span>
         </PrimaryButton>
       </div>
+    </div>
+  );
+}
+
+/* Placeholder rendered while `library.loaded` is false. Mirrors the populated
+   grid shape (one author block, one series row, three cards) so the layout
+   doesn't shift when real data swaps in. Height matches `min-h-[180px]` on
+   NewBookCard/BookCard. Reads as "loading" via Tailwind animate-pulse. */
+function LibrarySkeleton() {
+  return (
+    <div className="space-y-10" data-testid="library-skeleton" aria-hidden="true">
+      <section>
+        <div className="h-6 w-40 rounded bg-ink/[0.06] animate-pulse mb-3"/>
+        <div className="mt-4 space-y-8">
+          <div>
+            <div className="flex items-baseline justify-between mb-3">
+              <div className="h-3 w-28 rounded bg-ink/[0.06] animate-pulse"/>
+              <div className="h-3 w-14 rounded bg-ink/[0.04] animate-pulse"/>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              <div className="min-h-[180px] rounded-3xl bg-ink/[0.04] animate-pulse"/>
+              <div className="min-h-[180px] rounded-3xl bg-ink/[0.04] animate-pulse"/>
+              <div className="min-h-[180px] rounded-3xl bg-ink/[0.04] animate-pulse"/>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
