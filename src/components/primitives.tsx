@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { CHAR_COLORS, shade } from '../lib/colors';
-import { IconArrow, IconPlay } from '../lib/icons';
+import { IconArrow, IconPlay, IconSpinner } from '../lib/icons';
 import type { CharColor, Voice } from '../lib/types';
 
 type ButtonVariant = 'dark' | 'light' | 'ghost' | 'danger' | 'peach';
@@ -77,17 +77,33 @@ interface VoiceSwatchProps {
   selected?: boolean;
   showLabel?: boolean;
   onSelect?: (id?: string) => void;
+  /* Sample is being generated for this swatch. Forces the play overlay
+     visible with a spinner in place of the play icon so the user gets
+     immediate feedback after clicking — same affordance as the row-level
+     "Generating…" pill, but on the swatch itself for parity wherever this
+     primitive renders. Pointer events are suppressed so the busy state
+     can't fire a second concurrent request. */
+  loading?: boolean;
 }
-export function VoiceSwatch({ voice, size = 'md', selected = false, showLabel = true, onSelect }: VoiceSwatchProps) {
+export function VoiceSwatch({ voice, size = 'md', selected = false, showLabel = true, onSelect, loading = false }: VoiceSwatchProps) {
   const [hovered, setHovered] = useState(false);
   const dim = { sm: 36, md: 64, lg: 96 }[size];
   const ringSize = dim + 10;
   const [from, to] = voice?.gradient ?? ['#A43C6C', '#3C194F'];
+  const overlayVisible = loading || hovered;
+  const accessibleLabel = onSelect
+    ? (loading
+        ? `Generating sample for ${voice?.character ?? 'voice'}`
+        : `Play sample for ${voice?.character ?? 'voice'}`)
+    : undefined;
   return (
     <div className="inline-flex flex-col items-start">
       <button type="button" onClick={() => onSelect?.(voice?.id)}
+        disabled={loading}
+        aria-busy={loading || undefined}
+        aria-label={accessibleLabel}
         onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
-        className="relative inline-grid place-items-center transition-transform hover:scale-[1.02]"
+        className={`relative inline-grid place-items-center transition-transform hover:scale-[1.02] ${loading ? 'cursor-wait' : ''}`}
         style={{ width: ringSize, height: ringSize }}>
         <span className={`absolute inset-0 rounded-full transition-opacity ring-peach-2 ${selected ? 'opacity-100' : 'opacity-0'}`}/>
         <span className="rounded-full shadow-[0_8px_24px_rgba(15,14,13,0.12)] relative overflow-hidden"
@@ -95,8 +111,10 @@ export function VoiceSwatch({ voice, size = 'md', selected = false, showLabel = 
           <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full opacity-40">
             <circle cx="50" cy="50" r="44" fill="none" stroke="white" strokeWidth="1" strokeDasharray="2 4"/>
           </svg>
-          <span className={`absolute inset-0 grid place-items-center bg-ink/35 transition-opacity ${hovered ? 'opacity-100' : 'opacity-0'}`}>
-            <IconPlay className="w-5 h-5 text-white"/>
+          <span className={`absolute inset-0 grid place-items-center bg-ink/35 transition-opacity ${overlayVisible ? 'opacity-100' : 'opacity-0'}`}>
+            {loading
+              ? <IconSpinner className="w-5 h-5 text-white"/>
+              : <IconPlay className="w-5 h-5 text-white"/>}
           </span>
         </span>
       </button>

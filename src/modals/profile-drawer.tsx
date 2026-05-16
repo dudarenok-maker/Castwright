@@ -246,7 +246,9 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
 
             <div className="flex items-center gap-4 p-4 rounded-2xl bg-canvas border border-ink/10">
               <div className={regenerating ? 'pulse-ring rounded-full' : ''}>
-                <VoiceSwatch voice={voice} size="md" showLabel={false}/>
+                <VoiceSwatch voice={voice} size="md" showLabel={false}
+                  onSelect={() => { void playSample(); }}
+                  loading={sampleLoading}/>
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-base font-bold text-ink truncate">{voice?.character ?? character.name}</p>

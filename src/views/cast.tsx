@@ -218,7 +218,14 @@ export function CastView({
                 <span className="flex items-center gap-3 min-w-0">
                   {voice ? (
                     <>
-                      <VoiceSwatch voice={voice} size="sm" showLabel={false}/>
+                      {/* Swatch click intentionally bubbles to the row's
+                          onClick — so a single click opens the profile drawer
+                          AND fires the sample play. The drawer's own swatch
+                          coalesces with this play via the in-flight gate in
+                          play-sample-with-auto-load. */}
+                      <VoiceSwatch voice={voice} size="sm" showLabel={false}
+                        onSelect={() => { void playSampleFor(c, voice); }}
+                        loading={!!rowState[c.id]?.loading}/>
                       <span className="min-w-0">
                         <span className="block text-ink/80 truncate font-medium">{voice.character}</span>
                         {/* Voice profile line is identical for generated and
