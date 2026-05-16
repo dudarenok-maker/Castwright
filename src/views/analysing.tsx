@@ -9,7 +9,7 @@ import type { AnalyseResponse, DroppedQuotesResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
-import { analysisActions } from '../store/analysis-slice';
+import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
 
 /* Heuristic estimate matched to the server's analysis pacing (server/src/
    routes/analysis.ts: STAGE1_BASELINE_RATE × STAGE2_STRETCH ≈ 4 ms per input
@@ -447,6 +447,41 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
      an explicit click the user controls when the analysis kicks off,
      and the server log shows exactly one [analysis] entry per click. */
   const [analysisStarted, setAnalysisStarted] = useState(false);
+
+  /* Cold-boot rehydration of the view's local "have we started?" state
+     from the cross-navigation analysis slice. Without this, a browser
+     reload during an in-flight run lands the user on Analysing with
+     the top-bar pill correctly showing live progress (layout.tsx
+     populates the slice via api.getAnalysisState) but the view itself
+     stuck on "Start analysis" — clicking it then fires a fresh POST
+     that the server routes via the subscribe path, masking the bug
+     as "I had to click before things appeared to run".
+     - state='running' → server is actively producing; flip
+       analysisStarted on so the analysis useEffect opens its
+       subscribe SSE without a click.
+     - state='paused' or 'halted' → user must explicitly Resume /
+       acknowledge the halt; only mark hasStartedOnceRef so the
+       button reads "Resume analysis" instead of "Start analysis".
+     One-shot per mount so a user's explicit Pause (which keeps the
+     paused snapshot in the slice) is never auto-undone. */
+  /* Defensive read mirroring SeriesPriorPill — some legacy test
+     harnesses construct configureStore without the analysis slice.
+     Production always has it. */
+  const activeStreamSnapshot = useAppSelector(
+    s => (s as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } }).analysis?.activeStream ?? null,
+  );
+  const coldBootRehydratedRef = useRef(false);
+  useEffect(() => {
+    if (coldBootRehydratedRef.current) return;
+    if (!manuscriptId) return;
+    if (!activeStreamSnapshot) return;
+    if (activeStreamSnapshot.manuscriptId !== manuscriptId) return;
+    coldBootRehydratedRef.current = true;
+    hasStartedOnceRef.current = true;
+    if (activeStreamSnapshot.state === 'running') {
+      setAnalysisStarted(true);
+    }
+  }, [manuscriptId, activeStreamSnapshot]);
 
   /* Analyzer readiness gate — declared up here (above the analysis
      useEffect) because the analysis effect depends on it. The full

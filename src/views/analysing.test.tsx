@@ -1198,3 +1198,75 @@ describe('AnalysingView — series-cast carry-over pill (C3)', () => {
     expect(screen.queryByTestId('series-prior-pill')).not.toBeInTheDocument();
   });
 });
+
+/* Regression: a browser reload during an in-flight analysis must NOT
+   strand the view on "Start analysis" — layout.tsx populates
+   s.analysis.activeStream from api.getAnalysisState on mount, and the
+   view's local analysisStarted state must rehydrate from that snapshot
+   so the SSE subscribe path opens without a button click. Previously
+   the user had to click "Start analysis" before the running run became
+   visible in the view (the top-bar pill was correct; the view itself
+   wasn't), because the new POST took the server's subscribe path. */
+describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
+  function renderViewWithActiveStream(state: 'running' | 'paused' | 'halted') {
+    const store = configureStore({
+      reducer: {
+        ui:       uiSlice.reducer,
+        cast:     castSlice.reducer,
+        analysis: analysisSlice.reducer,
+      },
+      preloadedState: {
+        analysis: {
+          activeStream: {
+            bookId: 'book-1',
+            manuscriptId: 'm1',
+            bookTitle: 'the Coalfall Commission',
+            engine: 'gemini' as const,
+            phaseId: 1,
+            phaseLabel: 'Parsing & attribution',
+            phaseProgress: 0.32,
+            remainingMs: 45_000,
+            lastTickAt: Date.now() - 2_000,
+            state,
+          },
+        },
+      },
+    });
+    return {
+      store,
+      ...render(
+        <Provider store={store}>
+          <AnalysingView
+            manuscriptId="m1"
+            title="the Coalfall Commission"
+            wordCount={2440}
+            onComplete={() => {}}
+          />
+        </Provider>,
+      ),
+    };
+  }
+
+  it('auto-subscribes the SSE when the slice snapshot says state=running (no click needed)', async () => {
+    renderViewWithActiveStream('running');
+    /* The fetch fires without anyone clicking Start — proving the view
+       reconnected from the cross-navigation snapshot on its own. */
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+    /* And the button now reads Pause (running), not Start. */
+    expect(await screen.findByRole('button', { name: /pause analysis/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /start analysis/i })).not.toBeInTheDocument();
+  });
+
+  it('does NOT auto-subscribe when state=paused but labels the button "Resume analysis"', async () => {
+    renderViewWithActiveStream('paused');
+    /* Button reads Resume — proving hasStartedOnceRef was set from the
+       snapshot even though analysisStarted stayed false. The
+       findByRole flushes the cold-boot effect's microtasks, so by the
+       time the assertion lands the analysis effect has had its chance
+       to (incorrectly) fire and demonstrably hasn't — capturedOpts is
+       still undefined. */
+    expect(await screen.findByRole('button', { name: /resume analysis/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /start analysis/i })).not.toBeInTheDocument();
+    expect(capturedOpts).toBeUndefined();
+  });
+});
