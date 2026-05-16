@@ -16,11 +16,11 @@
    disk. Callers turn that into a 409 with a clickable "Regenerate missing
    chapters" hint in the export modal. */
 
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { mkdir, stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ZipFile } from 'yazl';
-import { audioDir } from '../workspace/paths.js';
+import { audioDir, coverImagePath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import { applyId3v24Tags, type Id3Tags } from './id3-tags.js';
 import type { BookStateJson } from '../workspace/scan.js';
@@ -81,6 +81,13 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
   const artist = (state.narratorCredit && state.narratorCredit.trim()) || state.author;
   const album = state.title;
 
+  /* Plan 36 A3: embed the cached OpenLibrary cover into each chapter's
+     ID3v2 header as an APIC frame when one exists. Absent → no APIC
+     frame, ID3 round-trip is otherwise unchanged. Probed once per export
+     (the file doesn't change mid-export). */
+  const coverDiskPath = coverImagePath(bookDir);
+  const coverJpegPath: string | null = existsSync(coverDiskPath) ? coverDiskPath : null;
+
   /* Stage each tagged MP3 in a temp dir alongside the output, then zip
      them. We can't pipe ffmpeg-stdout straight into yazl because yazl
      wants Readable streams with a known content-length, and ffmpeg's
@@ -117,7 +124,7 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
         genre:       state.genre ?? null,
         date:        state.publicationDate ?? null,
       };
-      await applyId3v24Tags(mp3Path, taggedPath, tags);
+      await applyId3v24Tags(mp3Path, taggedPath, tags, { coverJpegPath });
       const taggedStat = await stat(taggedPath);
 
       /* `compress: false` keeps entries "stored" — MP3 is already

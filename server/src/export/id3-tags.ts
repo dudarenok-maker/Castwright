@@ -15,7 +15,8 @@
      album_artist → TPE2 (author)
      track        → TRCK ("N/total")
      genre        → TCON
-     date         → TDRC (YYYY or YYYY-MM-DD) */
+     date         → TDRC (YYYY or YYYY-MM-DD)
+     cover (opt)  → APIC (embedded JPEG/PNG, attached_pic disposition) */
 
 import { spawn } from 'node:child_process';
 
@@ -30,16 +31,27 @@ export interface Id3Tags {
   date?: string | null;
 }
 
+export interface ApplyId3Options {
+  /** Optional path to a JPEG/PNG cover. When present, ffmpeg adds it as
+      a second input and writes the ID3v2 APIC frame + attached_pic
+      disposition. Stream-copied — source bytes preserved verbatim. */
+  coverJpegPath?: string | null;
+}
+
 export async function applyId3v24Tags(
   srcPath: string,
   destPath: string,
   tags: Id3Tags,
+  options: ApplyId3Options = {},
 ): Promise<void> {
+  const coverPath = options.coverJpegPath ?? null;
   const args: string[] = [
     '-loglevel', 'error',
     '-y', /* overwrite dest if a previous run left one behind */
     '-i', srcPath,
+    ...(coverPath ? ['-i', coverPath] : []),
     '-map', '0:a',           /* keep only the audio stream — skip embedded cover/data */
+    ...(coverPath ? ['-map', '1:v', '-c:v', 'copy', '-disposition:v:0', 'attached_pic'] : []),
     '-c:a', 'copy',
     '-id3v2_version', '4',
     '-write_id3v1', '0',

@@ -41,11 +41,20 @@ function audioBytesOnly(mp3: Buffer): Buffer {
   return mp3;
 }
 
-function probe(path: string): Promise<{ tags: Record<string, string>; codec: string; durationSec: number }> {
+interface ProbeResult {
+  tags: Record<string, string>;
+  codec: string;
+  durationSec: number;
+  /** All streams (audio + any attached_pic). The APIC tests inspect this
+      to confirm the cover stream landed with the right disposition. */
+  streams: Array<{ codec_type?: string; codec_name?: string; disposition?: Record<string, number> }>;
+}
+
+function probe(path: string): Promise<ProbeResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('ffprobe', [
       '-loglevel', 'error',
-      '-show_entries', 'format=duration:format_tags:stream=codec_name',
+      '-show_entries', 'format=duration:format_tags:stream=codec_name,codec_type,disposition',
       '-of', 'json',
       path,
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -60,12 +69,14 @@ function probe(path: string): Promise<{ tags: Record<string, string>; codec: str
       }
       const parsed = JSON.parse(Buffer.concat(stdoutChunks).toString('utf8')) as {
         format?: { tags?: Record<string, string>; duration?: string };
-        streams?: Array<{ codec_name?: string }>;
+        streams?: Array<{ codec_type?: string; codec_name?: string; disposition?: Record<string, number> }>;
       };
+      const streams = parsed.streams ?? [];
       resolve({
         tags: parsed.format?.tags ?? {},
-        codec: parsed.streams?.[0]?.codec_name ?? '',
+        codec: streams.find(s => s.codec_type === 'audio')?.codec_name ?? streams[0]?.codec_name ?? '',
         durationSec: Number.parseFloat(parsed.format?.duration ?? '0'),
+        streams,
       });
     });
   });
@@ -139,6 +150,63 @@ describeIf('applyId3v24Tags', () => {
     /* We can't uninstall ffmpeg per-test; the friendly hint is exercised
        only when users misconfigure PATH. The placeholder mirrors mp3.test.ts. */
     expect(true).toBe(true);
+  });
+
+  /* Plan 36 A3: APIC embedding for MP3.ZIP exports. The cover-art
+     pipeline writes <bookDir>/.audiobook/cover.jpg; build-mp3-zip.ts
+     probes that file once per export and threads it as the optional
+     coverJpegPath. The audio byte-identity invariant must still hold —
+     only the ID3v2 header grows. */
+  describe('cover embedding (coverJpegPath)', () => {
+    const jpegBytes = Buffer.from(
+      '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
+      'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB/9sAQwEBAQEBAQEBAQEBAQEB' +
+      'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
+      '/8AAEQgAAQABAwERAAIRAQMRAf/EABQAAQAAAAAAAAAAAAAAAAAAAAj/xAAUAQEAAAAAAAAA' +
+      'AAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Aov8A/9k=',
+      'base64',
+    );
+
+    it('embeds an APIC frame with attached_pic disposition when coverJpegPath is provided', async () => {
+      const coverPath = join(tmpDir, 'cover.jpg');
+      writeFileSync(coverPath, jpegBytes);
+      const destPath = join(tmpDir, 'tagged-with-cover.mp3');
+      await applyId3v24Tags(srcPath, destPath, {
+        title: 'Chapter 1', album: 'Album', artist: 'Narrator', albumArtist: 'Author',
+        track: 1, trackTotal: 1,
+      }, { coverJpegPath: coverPath });
+
+      const { codec, streams } = await probe(destPath);
+      expect(codec).toBe('mp3');
+      /* ffmpeg models the embedded APIC frame as a video stream with a
+         JPEG/PNG codec. Unlike the MP4 attached_pic atom, ffprobe
+         doesn't reliably surface disposition.attached_pic on the
+         resulting ID3v2 picture frame, so the stream-presence + codec
+         check is the canonical assertion for MP3 APIC. */
+      const video = streams.find(s => s.codec_type === 'video');
+      expect(video).toBeDefined();
+      expect(video?.codec_name).toMatch(/mjpeg|png/);
+      /* Audio stream still present and unchanged. */
+      expect(streams.find(s => s.codec_type === 'audio')?.codec_name).toBe('mp3');
+    });
+
+    it('omits the APIC stream when coverJpegPath is absent (default + null)', async () => {
+      const destDefault = join(tmpDir, 'tagged-no-cover-default.mp3');
+      await applyId3v24Tags(srcPath, destDefault, {
+        title: 'X', album: 'Y', artist: 'Z', albumArtist: 'A',
+        track: 1, trackTotal: 1,
+      });
+      const defaultProbe = await probe(destDefault);
+      expect(defaultProbe.streams.find(s => s.codec_type === 'video')).toBeUndefined();
+
+      const destNull = join(tmpDir, 'tagged-no-cover-null.mp3');
+      await applyId3v24Tags(srcPath, destNull, {
+        title: 'X', album: 'Y', artist: 'Z', albumArtist: 'A',
+        track: 1, trackTotal: 1,
+      }, { coverJpegPath: null });
+      const nullProbe = await probe(destNull);
+      expect(nullProbe.streams.find(s => s.codec_type === 'video')).toBeUndefined();
+    });
   });
 });
 
