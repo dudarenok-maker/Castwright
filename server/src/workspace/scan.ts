@@ -71,6 +71,13 @@ export interface BookStateJson {
   };
   createdAt: string;
   updatedAt: string;
+  /** Chapter-title parser version that produced the current titles.
+      When less than `CHAPTER_TITLE_PARSER_VERSION` (or absent), the
+      book-state GET handler runs a non-destructive title refresh
+      against the saved source file and bumps this field. Slug, audio,
+      analysis state, etc. are all preserved across the refresh. See
+      `server/src/parsers/version.ts`. */
+  chapterTitleParserVersion?: number;
   /* Editable audiobook metadata surfaced by the Listen view's metadata editor.
      Optional so older state.json files keep loading; absent fields fall back
      to library/cast defaults on the frontend. */

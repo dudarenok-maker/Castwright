@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { IconClose, IconCheck, IconRefresh } from '../lib/icons';
 import { Avatar, PrimaryButton } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
+import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { REGEN_REASONS } from '../data/regen-reasons';
 import type { Character, Chapter, CharColor } from '../lib/types';
 
@@ -95,7 +96,7 @@ export function CharacterRegenerateModal({ character, chapters, defaultChapterId
                           {isOn && <IconCheck className="w-2.5 h-2.5 text-white"/>}
                         </span>
                         <span className="text-[11px] tabular-nums font-bold text-ink/50">CH {String(ch.id).padStart(2, '0')}</span>
-                        <span className="text-sm font-medium text-ink truncate">{ch.title}</span>
+                        <span className="text-sm font-medium text-ink truncate">{stripChapterPrefix(ch.title)}</span>
                         <span className="text-[11px] text-ink/55 tabular-nums text-right">{lineCounts[ch.id] || 0} lines</span>
                       </button>
                     );

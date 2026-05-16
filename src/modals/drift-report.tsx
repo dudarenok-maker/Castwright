@@ -1,6 +1,7 @@
 import { IconAlertTri, IconClose, IconRefresh, IconWaveform } from '../lib/icons';
 import { Avatar, Pill } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
+import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { initialChapters } from '../data/chapters';
 import type { DriftEvent, Character, CharColor } from '../lib/types';
 
@@ -76,7 +77,7 @@ export function DriftReportModal({
                               <div className="flex items-center gap-2 flex-wrap mb-1">
                                 <h4 className="text-sm font-bold text-ink">{char?.name || e.characterId}</h4>
                                 <span className="text-xs text-ink/50">in</span>
-                                <span className="text-xs font-semibold text-ink">CH {String(e.chapterId).padStart(2, '0')} · {chap.title}</span>
+                                <span className="text-xs font-semibold text-ink">CH {String(e.chapterId).padStart(2, '0')} · {stripChapterPrefix(chap.title)}</span>
                               </div>
                               <p className="text-[11px] uppercase tracking-wider font-bold mb-2"
                                  style={{ color: (CHAR_COLORS[(char?.color as CharColor) || 'narrator']).hex }}>

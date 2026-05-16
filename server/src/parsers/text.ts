@@ -32,6 +32,51 @@ const CHAPTER_HEADING_RE = new RegExp(
   'i',
 );
 
+/* "Bare" heading detection — used to decide whether to look ahead for a
+   subtitle on the next non-empty line. A bare heading is just `Chapter 3`,
+   `Day Two`, or `Prologue` with no descriptive text; books commonly put
+   the chapter name on a separate line below. A heading like
+   `Chapter 3: The Beginning` is already self-descriptive — no merge. */
+const BARE_NUMBERED_HEADING_RE = new RegExp(
+  `^${HEADING_KEYWORDS}\\s+${NUMBER_PART}\\s*$`,
+  'i',
+);
+const BARE_STANDALONE_HEADING_RE = new RegExp(
+  `^${STANDALONE_HEADINGS}\\s*$`,
+  'i',
+);
+
+/* Cap on subtitle line length. Real chapter names rarely exceed 80 chars;
+   anything longer is almost certainly a body sentence. */
+const MAX_SUBTITLE_LEN = 80;
+
+/* Words that are conventionally lowercased mid-title. A title-cased
+   candidate is allowed to drop these without disqualifying. */
+const TITLE_STOPWORDS = new Set([
+  'a','an','the','and','or','of','at','in','on','by','to','for','but',
+  'with','from','into','over','under','as','vs','via',
+]);
+
+/* A subtitle must "look like a title" — first word capitalised, every
+   subsequent word either capitalised or a known stopword. Rules out body
+   prose like "First body" (capital + lowercase non-stopword) without
+   rejecting real titles like "The Cook's Particular Soup" or "Storms,
+   In Practice". Numeric/punctuation-only tokens are skipped. */
+function looksLikeTitle(s: string): boolean {
+  const words = s.split(/\s+/);
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i].replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9']+$/g, '');
+    if (word.length === 0) continue;
+    const first = word[0];
+    if (first >= 'A' && first <= 'Z') continue;
+    if (first >= '0' && first <= '9') continue;
+    if (i === 0) return false;
+    if (TITLE_STOPWORDS.has(word.toLowerCase())) continue;
+    return false;
+  }
+  return true;
+}
+
 /* Heading lines are short. Anything longer than this is almost certainly a
    sentence that just happens to begin with a heading-keyword token (e.g.
    "Day after day, she returned to the lighthouse..."). */
@@ -82,6 +127,36 @@ export function parseFilenameMetadata(fileName?: string): {
   };
 }
 
+/* Look ahead from `startIdx` for a line that looks like a chapter
+   subtitle following a bare numbered/standalone heading. Skips blank
+   lines, then validates the next non-empty line.
+
+   Returns { text, consumedIndex } on hit (caller advances past
+   consumedIndex so the subtitle doesn't bleed into the chapter body),
+   or null when no subtitle is detected.
+
+   Heuristics — a candidate qualifies as a subtitle when it is:
+   - ≤ MAX_SUBTITLE_LEN chars
+   - Not itself a chapter heading (don't eat the next chapter)
+   - Doesn't end with `.` or `!` (those signal a full sentence). `?`
+     and `:` are allowed — chapter titles like "Who Killed Roger
+     Ackroyd?" and "An Encounter: First Light" are legitimate.
+   - Looks like a title (title-case-with-stopwords rule — see
+     `looksLikeTitle`). This is the key filter that distinguishes a
+     real subtitle from a sentence that happens to be short. */
+function findSubtitle(lines: string[], startIdx: number): { text: string; consumedIndex: number } | null {
+  let i = startIdx;
+  while (i < lines.length && lines[i].trim() === '') i++;
+  if (i >= lines.length) return null;
+  const candidate = lines[i].trim();
+  if (candidate.length === 0 || candidate.length > MAX_SUBTITLE_LEN) return null;
+  const norm = normaliseHeading(candidate);
+  if (norm.length > 0 && CHAPTER_HEADING_RE.test(norm)) return null;
+  if (/[.!]$/.test(candidate)) return null;
+  if (!looksLikeTitle(candidate)) return null;
+  return { text: candidate, consumedIndex: i };
+}
+
 export function parseText(text: string, opts: { fileName?: string; format: 'markdown' | 'plaintext' }): ParsedManuscript {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   let title = '';
@@ -98,7 +173,8 @@ export function parseText(text: string, opts: { fileName?: string; format: 'mark
     buf = [];
   }
 
-  for (const raw of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
     const line = raw.trim();
 
     // First H1 captures the book title.
@@ -118,7 +194,24 @@ export function parseText(text: string, opts: { fileName?: string; format: 'mark
          so `+ DAY ONE +` displays as `DAY ONE`, and `## Day One` as
          `Day One`. Falls back to `Chapter N` only when normalisation left
          nothing meaningful behind. */
-      currentTitle = norm.replace(/^#{1,2}\s+/, '').trim() || `Chapter ${chapters.length + 1}`;
+      const headingText = norm.replace(/^#{1,2}\s+/, '').trim() || `Chapter ${chapters.length + 1}`;
+      /* Subtitle merge: when the heading is a "bare" numbered or
+         standalone form (just `Chapter 3` or `Prologue` with nothing
+         after), look at the next non-empty line. If it passes the
+         subtitle heuristics, merge into `Chapter 3 — The Beginning`
+         and consume the subtitle line so it doesn't show up in body.
+         Headings that already carry descriptive text
+         (`Chapter 3: The Beginning`, markdown `## Day One`) are left
+         alone. */
+      if (BARE_NUMBERED_HEADING_RE.test(headingText) || BARE_STANDALONE_HEADING_RE.test(headingText)) {
+        const subtitle = findSubtitle(lines, i + 1);
+        if (subtitle) {
+          currentTitle = `${headingText} — ${subtitle.text}`;
+          i = subtitle.consumedIndex;
+          continue;
+        }
+      }
+      currentTitle = headingText;
       continue;
     }
 

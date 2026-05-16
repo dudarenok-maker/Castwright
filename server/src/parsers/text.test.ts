@@ -116,6 +116,89 @@ describe('parseText — chapter splitting', () => {
   });
 });
 
+describe('parseText — subtitle merge', () => {
+  it('merges a title-cased next-line subtitle into the bare numbered heading', () => {
+    const out = parseText(
+      'Chapter 3\nThe Beginning\n\nOnce upon a time, the wind blew softly.',
+      { format: 'plaintext' },
+    );
+    expect(out.chapters).toHaveLength(1);
+    expect(out.chapters[0].title).toBe('Chapter 3 — The Beginning');
+    expect(out.chapters[0].body).toContain('Once upon a time');
+    expect(out.chapters[0].body).not.toContain('The Beginning');
+  });
+
+  it('also merges across a blank line between heading and subtitle', () => {
+    const out = parseText(
+      'Chapter 3\n\nThe Beginning\n\nBody text here.',
+      { format: 'plaintext' },
+    );
+    expect(out.chapters[0].title).toBe('Chapter 3 — The Beginning');
+    expect(out.chapters[0].body).not.toContain('The Beginning');
+  });
+
+  it('merges with standalone Prologue / Epilogue when followed by a title', () => {
+    const out = parseText(
+      'Prologue\nFirst Light\n\nThe sun rose over the bay.',
+      { format: 'plaintext' },
+    );
+    expect(out.chapters[0].title).toBe('Prologue — First Light');
+  });
+
+  it('does NOT merge when heading is already descriptive (`Chapter 3: The Beginning`)', () => {
+    const out = parseText(
+      'Chapter 3: The Beginning\nFirst Light Of Dawn\n\nBody.',
+      { format: 'plaintext' },
+    );
+    expect(out.chapters[0].title).toBe('Chapter 3: The Beginning');
+    expect(out.chapters[0].body).toContain('First Light Of Dawn');
+  });
+
+  it('does NOT merge when next line looks like body prose (capital + lowercase non-stopword)', () => {
+    const out = parseText(
+      'Chapter 1\nFirst body line here.\n\nMore body.',
+      { format: 'plaintext' },
+    );
+    expect(out.chapters[0].title).toBe('Chapter 1');
+    expect(out.chapters[0].body).toContain('First body line here.');
+  });
+
+  it('does NOT merge when next line is the next chapter heading', () => {
+    const out = parseText(
+      'Chapter 1\n\nChapter 2\nbody.',
+      { format: 'plaintext' },
+    );
+    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 2']);
+  });
+
+  it('does NOT merge when next line ends with a period', () => {
+    const out = parseText(
+      'Chapter 1\nThe Beginning.\n\nBody.',
+      { format: 'plaintext' },
+    );
+    expect(out.chapters[0].title).toBe('Chapter 1');
+    expect(out.chapters[0].body).toContain('The Beginning.');
+  });
+
+  it('does NOT merge when next line exceeds the 80-char subtitle cap', () => {
+    const longLine = 'A Beginning That Sprawls Across Many Words And Will Not Stop Anytime Soon Indeed Lengthy';
+    expect(longLine.length).toBeGreaterThan(80);
+    const out = parseText(
+      `Chapter 1\n${longLine}\n\nBody.`,
+      { format: 'plaintext' },
+    );
+    expect(out.chapters[0].title).toBe('Chapter 1');
+  });
+
+  it('preserves stopwords in subtitle titles ("The Cook\'s Particular Soup")', () => {
+    const out = parseText(
+      "Chapter 4\nThe Cook's Particular Soup\n\nBody.",
+      { format: 'plaintext' },
+    );
+    expect(out.chapters[0].title).toBe("Chapter 4 — The Cook's Particular Soup");
+  });
+});
+
 describe('parseText — filename metadata propagation', () => {
   it('populates author / series / seriesPosition when filename matches', () => {
     const out = parseText('# Title from doc\n\nbody', {

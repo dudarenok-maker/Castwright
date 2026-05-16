@@ -8,6 +8,7 @@ import { parseEpub } from './epub.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturePath = resolve(here, '__fixtures__/sample.epub');
+const titleFallbackFixturePath = resolve(here, '__fixtures__/sample-title-fallback.epub');
 
 describe('parseEpub', () => {
   it('returns format: "epub"', async () => {
@@ -74,6 +75,29 @@ describe('parseEpub', () => {
     expect(out.series).toBe('Solway Bay');
     expect(out.seriesPosition).toBe(2);
     expect(out.author).toBe('Jane Doe');
+  });
+
+  /* Title-fallback fixture: chapter1 has generic NCX label ("Chapter 1")
+     + descriptive body <h1>; chapter2 has empty NCX label + body <h2>;
+     chapter3 has descriptive NCX matching the body (NCX should win). */
+  describe('parseEpub — chapter title extraction', () => {
+    it('merges generic NCX label with descriptive body <h1> ("Chapter 1 — The Berth at Liverpool")', async () => {
+      const buf = await readFile(titleFallbackFixturePath);
+      const out = await parseEpub(buf, { fileName: 'sample-title-fallback.epub' });
+      expect(out.chapters[0].title).toBe('Chapter 1 — The Berth at Liverpool');
+    });
+
+    it('uses body <h2> as title when NCX label is empty', async () => {
+      const buf = await readFile(titleFallbackFixturePath);
+      const out = await parseEpub(buf, { fileName: 'sample-title-fallback.epub' });
+      expect(out.chapters[1].title).toBe('A Manifest Two Names Short');
+    });
+
+    it('keeps descriptive NCX label as-is (does not duplicate body heading)', async () => {
+      const buf = await readFile(titleFallbackFixturePath);
+      const out = await parseEpub(buf, { fileName: 'sample-title-fallback.epub' });
+      expect(out.chapters[2].title).toBe('What the Captain Knew');
+    });
   });
 
   /* Re-parse path: when sourcePath is supplied, parseEpub reads directly

@@ -2,6 +2,7 @@ import { IconEye, IconArrowLeft, IconPlay, IconPause, IconLock, IconShare } from
 import { SectionLabel, PrimaryButton, Pill } from '../components/primitives';
 import { Waveform } from '../components/waveform';
 import { parseDuration, formatTime } from '../lib/time';
+import { stripChapterPrefix } from '../lib/format-chapter-title';
 import type { Chapter, Character } from '../lib/types';
 
 interface Props {
@@ -70,7 +71,7 @@ export function PreviewListenerView({ chapters, characters, onExit, currentTrack
                 </button>
                 <span className="text-sm font-bold text-ink/50 tabular-nums">CH {String(ch.id).padStart(2, '0')}</span>
                 <span className="min-w-0">
-                  <span className="block font-semibold text-ink truncate">{ch.title}</span>
+                  <span className="block font-semibold text-ink truncate">{stripChapterPrefix(ch.title)}</span>
                   <span className="block text-xs text-ink/50 truncate mt-0.5">With {charsIn.slice(0, 4).map(c => c.name).join(', ')}</span>
                 </span>
                 <Waveform progress={isPlaying ? 0.3 : 0} active={isPlaying}/>

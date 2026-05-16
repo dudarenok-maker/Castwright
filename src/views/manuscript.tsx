@@ -6,6 +6,7 @@ import {
 import { SectionLabel, ColorDot, Pill } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
 import { splitAudioTagSpans } from '../lib/audio-tags';
+import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { initialSentences } from '../data/sentences';
 import { useAppDispatch } from '../store';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -252,7 +253,7 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
                     {active && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-peach"/>}
                     <span className={`text-[11px] font-bold tabular-nums w-7 ${excluded ? 'text-ink/30' : (active ? 'text-magenta' : 'text-ink/40')}`}>CH {String(ch.id).padStart(2, '0')}</span>
                     <span className="flex-1 min-w-0">
-                      <span className={`block text-sm truncate ${titleCls}`}>{ch.title}</span>
+                      <span className={`block text-sm truncate ${titleCls}`}>{stripChapterPrefix(ch.title)}</span>
                       <span className={`block text-[11px] tabular-nums ${excluded ? 'text-ink/45 italic' : 'text-ink/50'}`}>
                         {excluded ? 'Excluded' : ch.duration}
                       </span>
@@ -338,7 +339,7 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
           <SectionLabel>Manuscript analysis</SectionLabel>
           <div className="mt-4 flex items-start gap-6">
             <h1 className="flex-1 text-3xl md:text-4xl font-medium leading-[1.1] tracking-tight">
-              Chapter {currentChapter.id} — <span className="font-bold">{currentChapter.title}</span>
+              Chapter {currentChapter.id} — <span className="font-bold">{stripChapterPrefix(currentChapter.title)}</span>
               {currentChapter.excluded && (
                 <span className="ml-3 align-middle inline-block">
                   <Pill>Excluded</Pill>

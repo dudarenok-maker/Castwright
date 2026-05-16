@@ -35,6 +35,7 @@ import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { ttsModelLabel } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
+import { stripChapterPrefix } from '../lib/format-chapter-title';
 import {
   characterLinePositionsByChapter, characterStatsByChapter, linesDoneAt,
   overallProgress, sentencesPerChapter,
@@ -777,7 +778,7 @@ function ChapterRow({
         <span className="grid place-items-center">{stateConfig.icon}</span>
         <span className="text-sm font-bold text-ink/50 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
         <span className="min-w-0">
-          <span className="block font-semibold text-ink truncate">{chapter.title}</span>
+          <span className="block font-semibold text-ink truncate">{stripChapterPrefix(chapter.title)}</span>
           {chapter.state === 'in_progress' && liveTotal > 0 ? (
             /* Live caption — swaps in once a tick has shipped totalLines so
                the user has a per-tick "moving" signal at eye level.
@@ -989,7 +990,7 @@ function ExcludedChapterRow({
         <span className="text-sm font-bold text-ink/35 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
         <span className="min-w-0">
           <span className="block font-medium text-ink/40 truncate line-through decoration-1">
-            {chapter.title}
+            {stripChapterPrefix(chapter.title)}
           </span>
           {running ? (
             <span className="block text-[11px] text-ink/55 mt-0.5">

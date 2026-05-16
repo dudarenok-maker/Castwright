@@ -34,6 +34,7 @@ import {
 } from '../workspace/paths.js';
 import { writeJsonAtomic } from '../workspace/state-io.js';
 import type { BookStateJson } from '../workspace/scan.js';
+import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { backgroundFetchCover } from '../cover/openlibrary.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -241,6 +242,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       coverGradient: deterministicGradient(bookId),
       createdAt: now,
       updatedAt: now,
+      chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
     };
     await writeJsonAtomic(stateJsonPath(bookDir), state);
 

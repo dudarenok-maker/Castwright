@@ -11,6 +11,7 @@ import { Waveform } from '../components/waveform';
 import { ExportQueueRow } from '../components/export-queue-row';
 import { ExportAudiobookModal } from '../modals/export-audiobook';
 import { parseDuration, formatTime } from '../lib/time';
+import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { SUPPORTED_APPS } from '../data/listener-apps';
 import { EXPORT_QUEUE } from '../data/export-queue';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
@@ -332,7 +333,7 @@ function ChapterListenRow({ chapter, charactersIn, isPlaying, onPlay, onRegenera
       </button>
       <span className="text-sm font-bold text-ink/50 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
       <span className="min-w-0">
-        <span className="block font-semibold text-ink truncate">{chapter.title}</span>
+        <span className="block font-semibold text-ink truncate">{stripChapterPrefix(chapter.title)}</span>
         <span className="block text-xs text-ink/50 truncate mt-0.5">With {charactersIn.slice(0, 4).map(c => c.name).join(', ')}</span>
       </span>
       <Waveform progress={isPlaying ? progress : 0} active={isPlaying}/>
