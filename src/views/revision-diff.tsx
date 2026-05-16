@@ -6,6 +6,7 @@ import {
 import { SectionLabel, PrimaryButton, Pill } from '../components/primitives';
 import { Waveform } from '../components/waveform';
 import { CHAR_COLORS, type CharColorEntry } from '../lib/colors';
+import { stripChapterPrefix } from '../lib/format-chapter-title';
 import type { Revision, Chapter, Character, CharColor } from '../lib/types';
 
 interface Props {
@@ -45,7 +46,7 @@ export function RevisionDiffPlayer({ revision, chapter, character, onClose, onAc
           <span className="w-8 h-8 rounded-full bg-peach/20 grid place-items-center text-magenta"><IconAB className="w-4 h-4"/></span>
           <div className="flex-1 min-w-0">
             <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">Revision review · A/B</p>
-            <h1 className="text-base font-bold text-ink leading-tight truncate">CH {String(chapter.id).padStart(2, '0')} · {chapter.title}{character ? ` · ${character.name}` : ''}</h1>
+            <h1 className="text-base font-bold text-ink leading-tight truncate">CH {String(chapter.id).padStart(2, '0')} · {stripChapterPrefix(chapter.title)}{character ? ` · ${character.name}` : ''}</h1>
           </div>
           <span className="text-xs text-ink/55 hidden md:inline-flex items-center gap-1.5"><IconClock className="w-3.5 h-3.5"/>Triggered {revision.triggeredAgo}</span>
           <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60"><IconClose className="w-4 h-4"/></button>

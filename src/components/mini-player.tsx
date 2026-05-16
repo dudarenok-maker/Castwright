@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { IconWaveform, IconRewind, IconPause, IconPlay, IconForward, IconVolume, IconClose } from '../lib/icons';
 import { api } from '../lib/api';
 import { parseDuration, formatTime } from '../lib/time';
+import { stripChapterPrefix } from '../lib/format-chapter-title';
 import type { Chapter, ChapterAudio } from '../lib/types';
 
 interface MiniPlayerProps {
@@ -93,7 +94,7 @@ export function MiniPlayer({ chapter, bookId, onClose, onPrev, onNext, prevAvail
               <IconWaveform className="w-4 h-4 text-white/70"/>
             </span>
             <div className="min-w-0 hidden md:block">
-              <p className="text-sm font-semibold truncate">CH {String(chapter.id).padStart(2, '0')} · {chapter.title}</p>
+              <p className="text-sm font-semibold truncate">CH {String(chapter.id).padStart(2, '0')} · {stripChapterPrefix(chapter.title)}</p>
               <p className="text-[11px] text-canvas/60 truncate">
                 {error ? <span className="text-rose-300">{error}</span> : 'Preview'}
               </p>

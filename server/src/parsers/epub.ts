@@ -26,6 +26,35 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+/* Pull the first h1/h2/h3 text from chapter HTML so we have a fallback
+   when the NCX entry's title is missing or generic. Strips inline tags
+   (`<em>`, `<strong>`, `<span>`) from the heading text and collapses
+   whitespace. Returns null when no heading is present in the first ~8 KB
+   of the document. */
+const FIRST_HEADING_RE = /<h[1-3][^>]*>([\s\S]{0,400}?)<\/h[1-3]>/i;
+function extractFirstHeading(html: string): string | null {
+  const m = FIRST_HEADING_RE.exec(html);
+  if (!m) return null;
+  const raw = m[1]
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (raw.length === 0 || raw.length > 200) return null;
+  return raw;
+}
+
+/* "Chapter 1" / "Chapter IV" / "Chapter Twelve" with nothing else.
+   Used to detect generic NCX titles that should be augmented with the
+   body's <h1>. Mirrors the bare-numbered-heading test in text.ts but
+   self-contained here to keep the parsers loosely coupled. */
+const GENERIC_NCX_RE = /^chapter\s+(?:[ivxlcdm\d]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?\s*$/i;
+
 export async function parseEpub(buffer: Buffer, opts: { fileName?: string; sourcePath?: string }): Promise<ParsedManuscript> {
   /* When the caller already has the EPUB on disk (re-parse path: workspace
      book directory), read it straight from there. The temp-roundtrip path
@@ -64,7 +93,28 @@ export async function parseEpub(buffer: Buffer, opts: { fileName?: string; sourc
       });
       const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(stripHtml(html))));
       if (!body) continue;
-      const chTitle = entry.title?.trim() || `Chapter ${chapters.length + 1}`;
+
+      /* Title resolution — NCX/spine entry.title is the primary source,
+         but many EPUBs ship generic labels ("Chapter 1") even when the
+         chapter HTML body has a descriptive <h1> ("The Berth at
+         Liverpool"). Pull the first h1/h2/h3 as a fallback or merge.
+
+         - NCX missing → use body heading if any, else "Chapter N".
+         - NCX descriptive → keep NCX (don't override authored metadata).
+         - NCX generic ("Chapter 1") + body heading is also generic →
+             keep NCX (no information gained from merging two generics).
+         - NCX generic + body heading is descriptive → merge as
+             "Chapter 1 — The Berth at Liverpool". */
+      const ncxTitle = entry.title?.trim() ?? '';
+      const bodyHeading = extractFirstHeading(html);
+      let chTitle: string;
+      if (!ncxTitle) {
+        chTitle = bodyHeading || `Chapter ${chapters.length + 1}`;
+      } else if (GENERIC_NCX_RE.test(ncxTitle) && bodyHeading && !GENERIC_NCX_RE.test(bodyHeading)) {
+        chTitle = `${ncxTitle} — ${bodyHeading}`;
+      } else {
+        chTitle = ncxTitle;
+      }
       chapters.push({ id: chapters.length + 1, title: chTitle, body });
     }
 

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { IconRefresh, IconClose, IconClock } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { REGEN_REASONS } from '../data/regen-reasons';
+import { stripChapterPrefix } from '../lib/format-chapter-title';
 import type { Chapter } from '../lib/types';
 
 export type RegenScope = 'this' | 'forward';
@@ -40,7 +41,7 @@ export function RegenerateModal({ chapter, defaultScope = 'this', forwardCount =
             <span className="w-9 h-9 rounded-full bg-peach/15 grid place-items-center text-magenta"><IconRefresh className="w-4 h-4"/></span>
             <div className="flex-1 min-w-0">
               <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">Regenerate</p>
-              <h3 className="text-base font-bold text-ink truncate">CH {String(chapter.id).padStart(2, '0')} · {chapter.title}</h3>
+              <h3 className="text-base font-bold text-ink truncate">CH {String(chapter.id).padStart(2, '0')} · {stripChapterPrefix(chapter.title)}</h3>
             </div>
             <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60"><IconClose className="w-4 h-4"/></button>
           </div>

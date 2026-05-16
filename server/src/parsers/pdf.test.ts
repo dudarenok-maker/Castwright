@@ -11,10 +11,29 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 const pdfParseMock = vi.fn();
 vi.mock('pdf-parse', () => ({ default: (...args: unknown[]) => pdfParseMock(...args) }));
 
+/* Mock pdfjs-dist so each test controls the outline payload. The mocked
+   getDocument returns a stub whose getOutline() resolves to whatever
+   `outlineMock` is set to. Returning null mimics a PDF with no outline. */
+let outlineMock: unknown = null;
+let getDocumentShouldThrow = false;
+vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
+  getDocument: () => {
+    if (getDocumentShouldThrow) throw new Error('mock pdfjs failure');
+    return {
+      promise: Promise.resolve({
+        getOutline: async () => outlineMock,
+        destroy: async () => undefined,
+      }),
+    };
+  },
+}));
+
 import { parsePdf } from './pdf.js';
 
 beforeEach(() => {
   pdfParseMock.mockReset();
+  outlineMock = null;
+  getDocumentShouldThrow = false;
 });
 
 describe('parsePdf', () => {
@@ -100,5 +119,85 @@ describe('parsePdf', () => {
     const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
     expect(out.title).toBe('The Title');
     expect(out.author).toBe('Jane Doe');
+  });
+});
+
+describe('parsePdf — outline-based chapter title replacement', () => {
+  it('replaces chapter titles with outline entries when counts match', async () => {
+    pdfParseMock.mockResolvedValue({
+      text: 'Chapter 1\nbody one\n\nChapter 2\nbody two',
+      info: {},
+    });
+    outlineMock = [
+      { title: 'The Berth at Liverpool' },
+      { title: 'A Manifest Two Names Short' },
+    ];
+    const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
+    expect(out.chapters.map(c => c.title)).toEqual([
+      'The Berth at Liverpool',
+      'A Manifest Two Names Short',
+    ]);
+  });
+
+  it('filters front-matter outline entries (Copyright, Acknowledgements) before alignment', async () => {
+    pdfParseMock.mockResolvedValue({
+      text: 'Chapter 1\nfirst\n\nChapter 2\nsecond',
+      info: {},
+    });
+    outlineMock = [
+      { title: 'Copyright' },                       // filtered
+      { title: 'Dedication' },                      // filtered
+      { title: 'The Berth at Liverpool' },          // chapter 1
+      { title: 'A Manifest Two Names Short' },      // chapter 2
+    ];
+    const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
+    expect(out.chapters.map(c => c.title)).toEqual([
+      'The Berth at Liverpool',
+      'A Manifest Two Names Short',
+    ]);
+  });
+
+  it('keeps parseText titles when filtered outline count differs from chapter count (misalignment guard)', async () => {
+    pdfParseMock.mockResolvedValue({
+      text: 'Chapter 1\nfirst\n\nChapter 2\nsecond',
+      info: {},
+    });
+    outlineMock = [
+      { title: 'The Berth at Liverpool' },
+      { title: 'A Manifest Two Names Short' },
+      { title: 'What the Captain Knew' },           // one too many
+    ];
+    const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
+    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 1', 'Chapter 2']);
+  });
+
+  it('keeps parseText titles when no outline is present', async () => {
+    pdfParseMock.mockResolvedValue({
+      text: 'Chapter 1\nfirst\n\nChapter 2\nsecond',
+      info: {},
+    });
+    outlineMock = null;
+    const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
+    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 1', 'Chapter 2']);
+  });
+
+  it('keeps parseText titles when the outline is an empty array', async () => {
+    pdfParseMock.mockResolvedValue({
+      text: 'Chapter 1\nbody',
+      info: {},
+    });
+    outlineMock = [];
+    const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
+    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 1']);
+  });
+
+  it('tolerates getDocument throwing — falls back to parseText titles, no crash', async () => {
+    pdfParseMock.mockResolvedValue({
+      text: 'Chapter 1\nbody',
+      info: {},
+    });
+    getDocumentShouldThrow = true;
+    const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
+    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 1']);
   });
 });

@@ -32,16 +32,80 @@ import { clearAnalysisCache, loadAnalysisCache } from '../store/analysis-cache.j
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { parseManuscript } from '../parsers/index.js';
+import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
 
 export const bookStateRouter = Router();
+
+/* Non-destructive title-only refresh. Invoked transparently from the
+   book-state GET so users open a book and see real chapter names
+   instead of "Chapter 1", "Chapter 2", … even when the book was
+   imported before the parsers learned to extract names.
+
+   Preserves everything except chapter titles: slug (audio file
+   addressing stays valid), excluded flag, audio dir, cast.json,
+   revisions.json, analysis cache, manuscript-edits.json. Bumps
+   `state.chapterTitleParserVersion` so the next read short-circuits.
+
+   Skips refresh (returns state unchanged) when ANY of:
+   - State is already at the current parser version.
+   - Source manuscript file missing on disk.
+   - parseManuscript throws (corrupt file, etc.).
+   - New chapter count differs from the existing count — splitting logic
+     itself changed; aligning titles by index would silently mislabel
+     chapters. Leave the version field as-is so a future fix can retry. */
+async function refreshChapterTitles(state: BookStateJson, bookDir: string): Promise<BookStateJson> {
+  const currentVersion = state.chapterTitleParserVersion ?? 1;
+  if (currentVersion >= CHAPTER_TITLE_PARSER_VERSION) return state;
+
+  const manuscriptPath = join(bookDir, state.manuscriptFile);
+  if (!existsSync(manuscriptPath)) return state;
+
+  try {
+    /* Same legacy text-as-binary detection as the destructive reparse
+       path (see PUT /:bookId/reparse). Pre-fix imports wrote raw text
+       into .epub/.pdf, so route those through the text parser
+       instead of crashing parseEpub on a non-zip file. */
+    const buffer = await readFile(manuscriptPath);
+    const looksLikeEpub = buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04;
+    const looksLikePdf  = buffer.length >= 5 && buffer.slice(0, 5).toString('ascii') === '%PDF-';
+    const claimsBinary  = state.manuscriptFile.endsWith('.epub') || state.manuscriptFile.endsWith('.pdf');
+    const isLegacyTextMasqueradingAsBinary = claimsBinary && !looksLikeEpub && !looksLikePdf;
+    const parsed = isLegacyTextMasqueradingAsBinary
+      ? await parseManuscript({ text: buffer.toString('utf8'), fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt') })
+      : await parseManuscript({ buffer, fileName: state.manuscriptFile, sourcePath: manuscriptPath });
+
+    if (parsed.chapters.length !== state.chapters.length) {
+      console.warn(`[book-state] title-refresh skipped for ${state.bookId}: parsed ${parsed.chapters.length} chapters, state has ${state.chapters.length}. Chapter split logic changed — won't risk misalignment.`);
+      return state;
+    }
+
+    /* Replace titles in order; everything else (slug, excluded, audio
+       state) stays put. Skip the write when nothing actually changed
+       to avoid touching mtime / triggering watchers. */
+    const newChapters = state.chapters.map((c, i) => ({ ...c, title: parsed.chapters[i].title }));
+    const titlesChanged = newChapters.some((c, i) => c.title !== state.chapters[i].title);
+    const nextState: BookStateJson = {
+      ...state,
+      chapters: newChapters,
+      chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+      updatedAt: titlesChanged ? new Date().toISOString() : state.updatedAt,
+    };
+    await writeJsonAtomic(stateJsonPath(bookDir), nextState);
+    return nextState;
+  } catch (err) {
+    console.warn(`[book-state] title-refresh failed for ${state.bookId}:`, (err as Error).message);
+    return state;
+  }
+}
 
 bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
   try {
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
 
-    const { bookDir, state } = located;
+    const { bookDir } = located;
+    const state = await refreshChapterTitles(located.state, bookDir);
     const cast      = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
     let   edits     = await readJson<{ sentences?: unknown[] }>(manuscriptEditsJsonPath(bookDir));
     const revs      = await readJson<{ pending?: unknown[]; drift?: unknown[]; dismissed?: string[] }>(revisionsJsonPath(bookDir));
@@ -478,6 +542,7 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     const nextState: BookStateJson = {
       ...state,
       chapters: newChapters,
+      chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
       castConfirmed: false,    // cast keys to chapters; force re-confirm.
       updatedAt: new Date().toISOString(),
     };
