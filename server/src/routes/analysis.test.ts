@@ -1138,3 +1138,40 @@ describe('dropEvidencelessCast — Phase 0b drop of characters with no verifiabl
     expect(logs[0]).not.toContain('Dropped 1 characters');
   });
 });
+
+/* B1 — sticky analysis: in-flight job map + /pause endpoint.
+   The full multi-subscriber + catch-up replay flow needs a mocked
+   analyzer that can be paused mid-call; for now we exercise the
+   most contract-critical surfaces:
+     - POST /analysis/pause with no job is an idempotent no-op
+       (returns paused:false, 200) — same shape as
+       /generation/pause for symmetry.
+     - isAnalysisJobRunning() returns false when nothing's running.
+   The deeper integration tests (subscribe to existing job + replay,
+   fresh: true displaces, server restart drops the map) are tracked
+   for the B2/B3 commits where the frontend changes pull on them. */
+describe('sticky analysis — in-flight job map + /pause endpoint', () => {
+  it('isAnalysisJobRunning returns false when nothing is in flight', async () => {
+    const { isAnalysisJobRunning } = await import('./analysis.js');
+    expect(isAnalysisJobRunning('m_does_not_exist')).toBe(false);
+  });
+
+  it('POST /analysis/pause is an idempotent no-op when no job exists (200, paused:false)', async () => {
+    /* Mirrors the generation /pause idempotency contract — middleware
+       fires pause blindly on setPaused(true), so a double-click or a
+       pause-after-completion must not 404. */
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter } = await import('./analysis.js');
+
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    const res = await supertest(app)
+      .post('/api/manuscripts/m_no_job/analysis/pause')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, paused: false });
+  });
+});

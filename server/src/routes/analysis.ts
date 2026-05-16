@@ -821,6 +821,123 @@ ${chapter.body}
 `;
 }
 
+/* ── Sticky analysis: in-flight job map + multi-subscriber broadcast ────
+   Mirrors the audio-generation sticky pattern (server/src/routes/generation.ts
+   :42-82, RunningJob). Each entry tracks an analyzer loop that runs
+   detached from any single SSE request — closing the browser tab only
+   unsubscribes the observer; the analyzer keeps running until the queue
+   drains, /analysis/pause is called, or a fresh: true POST displaces the
+   job. A subsequent POST while the job is alive joins as a subscriber
+   and replays a snapshot of the job's current state (last phase tick,
+   accumulated log lines, latest cast-update + ETA, any active failed-
+   chapter rows) so the UI hydrates without a separate fetch.
+
+   The frontend's "Analysis is running, click to view" pill (B3) reads
+   from the same map via a future GET-or-cheap-POST handshake — for
+   now the only consumers are the POST handler's dispatch + /pause. */
+
+interface AnalysisSubscriber {
+  send: (payload: unknown) => void;
+  res: Response;
+  keepAlive: NodeJS.Timeout;
+}
+
+interface AnalysisJobReplayState {
+  /** Every log event emitted, in order. Replayed verbatim to a new
+      subscriber so the phase log surfaces what's already happened. */
+  logs: Array<{ kind: 'log'; phaseId: number; message: string }>;
+  /** Latest phase event (kind:'phase'). Only the most recent is replayed
+      since phase events are cumulative. */
+  lastPhase: { kind: 'phase'; phaseId: number; progress: number; label: string; live?: unknown } | null;
+  /** Latest ETA event (kind:'eta'). */
+  lastEta: { kind: 'eta'; remainingMs: number } | null;
+  /** Latest full cast-update snapshot. cast-update events are cumulative
+      so only the most recent matters. */
+  lastCastUpdate: { kind: 'cast-update'; characters: CharacterOutput[] } | null;
+  /** Active failed-chapter records, keyed by chapterId. chapter-failed
+      adds entries; chapter-resolved removes them. Replayed so a
+      reconnecting client sees the right set of Retry rows. */
+  failedByChapterId: Map<number, { kind: 'chapter-failed'; chapterId: number; message: string }>;
+}
+
+interface AnalysisJob {
+  controller: AbortController;
+  subscribers: Set<AnalysisSubscriber>;
+  manuscriptId: string;
+  replay: AnalysisJobReplayState;
+}
+
+const inFlightAnalysisByManuscript: Map<string, AnalysisJob> = new Map();
+
+/* Exported for tests + the future B2 frontend that wants a cheap "is a
+   job running?" probe before opening an SSE. Returns false when the
+   map entry is present but its controller has been aborted — that
+   entry will be cleared at the end of the current loop iteration. */
+export function isAnalysisJobRunning(manuscriptId: string): boolean {
+  const job = inFlightAnalysisByManuscript.get(manuscriptId);
+  return !!job && !job.controller.signal.aborted;
+}
+
+function broadcastToJob(job: AnalysisJob, payload: unknown): void {
+  for (const sub of job.subscribers) {
+    try { sub.send(payload); } catch { /* dead socket — req.on('close') will clean up */ }
+  }
+}
+
+function trackForReplay(job: AnalysisJob, payload: unknown): void {
+  if (!payload || typeof payload !== 'object') return;
+  const ev = payload as { kind?: string };
+  switch (ev.kind) {
+    case 'log':
+      job.replay.logs.push(ev as { kind: 'log'; phaseId: number; message: string });
+      break;
+    case 'phase':
+      job.replay.lastPhase = ev as AnalysisJobReplayState['lastPhase'];
+      break;
+    case 'eta':
+      job.replay.lastEta = ev as AnalysisJobReplayState['lastEta'];
+      break;
+    case 'cast-update':
+      job.replay.lastCastUpdate = ev as AnalysisJobReplayState['lastCastUpdate'];
+      break;
+    case 'chapter-failed': {
+      const e = ev as { chapterId?: number; message?: string };
+      if (typeof e.chapterId === 'number' && typeof e.message === 'string') {
+        job.replay.failedByChapterId.set(e.chapterId, { kind: 'chapter-failed', chapterId: e.chapterId, message: e.message });
+      }
+      break;
+    }
+    case 'chapter-resolved': {
+      const e = ev as { chapterId?: number };
+      if (typeof e.chapterId === 'number') job.replay.failedByChapterId.delete(e.chapterId);
+      break;
+    }
+    /* heartbeat / throttle / result / error: not replayed (heartbeat +
+       throttle are ephemeral; result + error are terminal and the route
+       closes the connection right after emitting them anyway). */
+  }
+}
+
+function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): void {
+  if (job.replay.lastPhase) send(job.replay.lastPhase);
+  for (const log of job.replay.logs) send(log);
+  if (job.replay.lastEta) send(job.replay.lastEta);
+  if (job.replay.lastCastUpdate) send(job.replay.lastCastUpdate);
+  for (const failed of job.replay.failedByChapterId.values()) send(failed);
+}
+
+function endJob(job: AnalysisJob, finalEv?: unknown): void {
+  if (finalEv) broadcastToJob(job, finalEv);
+  for (const sub of job.subscribers) {
+    clearInterval(sub.keepAlive);
+    try { sub.res.end(); } catch { /* socket already gone */ }
+  }
+  job.subscribers.clear();
+  if (inFlightAnalysisByManuscript.get(job.manuscriptId) === job) {
+    inFlightAnalysisByManuscript.delete(job.manuscriptId);
+  }
+}
+
 analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   const manuscriptId = req.params.id;
 
@@ -846,49 +963,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     try { res.write(':ka\n\n'); } catch { /* socket gone */ }
   }, 15_000);
 
-  /* Track whether the SSE client is still listening. When the user
-     navigates away from the analysing view (back to library, page reload,
-     tab close) the socket closes. The original design kept the analysis
-     loop running so per-chapter cache writes weren't wasted — but at
-     concurrency=1 a zombie loop keeps Ollama busy, and the next time the
-     user opens the book another stream starts that ends up queued behind
-     the zombie. With AbortController plumbed all the way through to the
-     analyzer's fetch (server/src/analyzer/ollama.ts), we now tear the
-     in-flight model call down on disconnect; cache writes that have
-     already happened still survive on disk, so the next session resumes
-     from the chapter the abort caught. */
-  let clientGone = false;
-  const abortController = new AbortController();
-  /* CRITICAL: use res.on('close'), NOT req.on('close'). Node.js's
-     IncomingMessage emits 'close' as soon as the request body stream
-     is fully consumed (which, for a body-bearing POST, happens
-     SYNCHRONOUSLY after Express's body-parser middleware reads it —
-     i.e. within milliseconds of route entry). The TCP connection is
-     still wide open at that point; the response stream is fine; the
-     client is still listening. Treating that signal as "client
-     disconnected" caused the route to abort itself on every single
-     POST before any analysis work could begin (verified with elapsed
-     timings: req.close fired at 1ms, while res.finish/res.close fired
-     only after the route itself called res.end()).
-     res.on('close') is the correct event: it fires when the response
-     socket actually closes, either from our own res.end() (normal
-     completion) or because the client disconnected mid-stream. We
-     differentiate via res.writableEnded — if true, the close is from
-     our own end() call and there's nothing to abort. */
-  res.on('close', () => {
-    if (res.writableEnded) return;  // normal completion, not a client abort
-    clientGone = true;
-    clearInterval(keepAlive);
-    abortController.abort();
-  });
-  res.on('finish', () => clearInterval(keepAlive));
-
+  /* Per-request send used for early validation errors (before the job
+     has been created) and as the subscriber's send function once we
+     join / create a job. broadcastToJob() iterates the job's
+     subscribers and invokes each subscriber's send. */
   const send = (payload: unknown) => {
-    if (clientGone) return;
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
-  };
-  const log = (phaseId: number, message: string) => {
-    send({ kind: 'log', phaseId, message });
+    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { /* dead socket */ }
   };
 
   /* In-memory lookup with a workspace-disk fallback. Lets the analysis
@@ -901,33 +981,132 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       code: 'unknown_manuscript',
       message: `No manuscript found for id "${manuscriptId}". Upload a manuscript or open a workspace book to start analysis.`,
     });
+    clearInterval(keepAlive);
     return res.end();
   }
+
+  const requestedModel = typeof req.body?.model === 'string' ? req.body.model : undefined;
+  const requestedFresh = req.body?.fresh === true;
+  /* `allowStage1Shrink` is the user's opt-in when the route refused a
+     stage1 write because the new roster would replace a much larger
+     existing one (see stage1ShrinkRefused comment). The analysing
+     view's "Accept smaller roster" button re-fires the same request
+     with this flag so the next attempt skips the gate. */
+  const allowStage1Shrink = req.body?.allowStage1Shrink === true;
+  let selection: AnalyzerSelection;
+  try {
+    selection = selectAnalyzer({ model: requestedModel });
+  } catch (e) {
+    send({ kind: 'error', message: (e as Error).message });
+    clearInterval(keepAlive);
+    return res.end();
+  }
+  if (requestedModel) {
+    console.log(`[analysis] manuscript=${manuscriptId} engine=${selection.engine} model=${selection.model}`);
+  }
+
+  /* ── Dispatch: subscribe-vs-start.
+     If a non-aborted job is already running for this manuscript AND we
+     are not explicitly displacing it (fresh: true), join the existing
+     job's subscriber set and replay its current state. Browser reload
+     / navigate-away survival lives here — the second POST lands in
+     this branch and the original analyzer keeps running untouched.
+     Otherwise (no existing job, or fresh: true displacement), abort
+     any prior job and start a new one detached in the background. */
+  const existing = inFlightAnalysisByManuscript.get(manuscriptId);
+  if (existing && !existing.controller.signal.aborted && !requestedFresh) {
+    const subscriber: AnalysisSubscriber = { send, res, keepAlive };
+    existing.subscribers.add(subscriber);
+    replayCatchUp(existing, send);
+    res.on('close', () => {
+      if (res.writableEnded) return;
+      existing.subscribers.delete(subscriber);
+      clearInterval(keepAlive);
+      /* Do NOT abort — sticky semantics. The analyzer keeps running
+         until /pause or the queue drains. */
+    });
+    res.on('finish', () => clearInterval(keepAlive));
+    return;
+  }
+  if (existing) {
+    existing.controller.abort();
+    /* Don't delete from the map here — the displaced job's own loop
+       will hit the AnalysisAbortedError catch and call endJob, which
+       deregisters only when it's still the current entry. We
+       overwrite the map below. */
+  }
+
+  const job: AnalysisJob = {
+    controller: new AbortController(),
+    subscribers: new Set(),
+    manuscriptId,
+    replay: {
+      logs: [],
+      lastPhase: null,
+      lastEta: null,
+      lastCastUpdate: null,
+      failedByChapterId: new Map(),
+    },
+  };
+  inFlightAnalysisByManuscript.set(manuscriptId, job);
+  const subscriber: AnalysisSubscriber = { send, res, keepAlive };
+  job.subscribers.add(subscriber);
+  res.on('close', () => {
+    if (res.writableEnded) return;
+    job.subscribers.delete(subscriber);
+    clearInterval(keepAlive);
+    /* Sticky: do NOT abort the controller on subscriber disconnect.
+       The analyzer keeps running for any other observers (or for
+       none — its writes still land on disk). Only /pause or a
+       fresh: true displacement aborts. */
+  });
+  res.on('finish', () => clearInterval(keepAlive));
+
+  /* Run the analyzer in the background. Express won't end this
+     response until res.end() is called explicitly (by endJob() inside
+     runMainAnalyzerJob), so the response stays open and continues to
+     receive broadcast events for the lifetime of the job. */
+  void runMainAnalyzerJob(job, record, selection, { requestedFresh, allowStage1Shrink });
+});
+
+interface MainAnalyzerJobOpts {
+  requestedFresh: boolean;
+  allowStage1Shrink: boolean;
+}
+
+/* Detached analyzer loop body. Runs as a background promise spawned
+   from the main POST handler; broadcasts every event to job.subscribers
+   and tracks replay state via trackForReplay. Ends all subscribers + de-
+   registers the job from the in-flight map via endJob on any exit path
+   (normal completion, error, abort). */
+async function runMainAnalyzerJob(
+  job: AnalysisJob,
+  record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
+  selection: AnalyzerSelection,
+  opts: MainAnalyzerJobOpts,
+): Promise<void> {
+  const manuscriptId = job.manuscriptId;
+  const requestedFresh = opts.requestedFresh;
+  const allowStage1Shrink = opts.allowStage1Shrink;
+  const abortController = job.controller;
+  const analyzer = selection.analyzer;
+  const recordRef = record;
+  const activeModelId = selection.model;
+  const analyzerLabel = engineLabel(selection.engine, activeModelId);
+
+  const send = (payload: unknown) => {
+    broadcastToJob(job, payload);
+    trackForReplay(job, payload);
+  };
+  const log = (phaseId: number, message: string) => {
+    send({ kind: 'log', phaseId, message });
+  };
 
   const startedAt = Date.now();
   const phaseStarts: Record<number, number> = {};
 
   const markPhase = (id: number) => { phaseStarts[id] = Date.now(); };
   const endPhase = (id: number) => Date.now() - (phaseStarts[id] ?? Date.now());
-
-  const requestedModel = typeof req.body?.model === 'string' ? req.body.model : undefined;
-  let selection: AnalyzerSelection;
-  try {
-    selection = selectAnalyzer({ model: requestedModel });
-  } catch (e) {
-    send({ kind: 'error', message: (e as Error).message });
-    return res.end();
-  }
-  /* Const re-bind so TS keeps the narrowed type inside nested closures
-     (the `let analyzer` was inferred as `Analyzer | undefined` and got
-     widened to `any` when captured by runChapter). */
-  const analyzer = selection.analyzer;
-  const recordRef = record;
-  const activeModelId = selection.model;
-  const analyzerLabel = engineLabel(selection.engine, activeModelId);
-  if (requestedModel) {
-    console.log(`[analysis] manuscript=${manuscriptId} engine=${selection.engine} model=${selection.model}`);
-  }
 
   try {
     const sourceChars = record.sourceText.length;
@@ -939,16 +1118,10 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     let stage2EstMs = clampEst((sourceChars / STAGE1_BASELINE_RATE) * STAGE2_STRETCH);
 
     /* Load any partial progress from a previous attempt. Cached stage 1 is
-       reused as-is; cached chapters are skipped in the stage 2 loop. Pass
-       `fresh: true` in the request body to discard the cache and start
-       over — the route's "Start fresh" button uses this. */
-    const requestedFresh = req.body?.fresh === true;
-    /* `allowStage1Shrink` is the user's opt-in when the route refused a
-       stage1 write because the new roster would replace a much larger
-       existing one (see stage1ShrinkRefused comment). The analysing
-       view's "Accept smaller roster" button re-fires the same request
-       with this flag so the next attempt skips the gate. */
-    const allowStage1Shrink = req.body?.allowStage1Shrink === true;
+       reused as-is; cached chapters are skipped in the stage 2 loop. The
+       `fresh: true` flag (parsed in the route handler and forwarded as
+       opts.requestedFresh) discards the cache before any analyzer work
+       begins. */
     if (requestedFresh) {
       await clearAnalysisCache(manuscriptId);
       /* Match the filesystem to the cleared cache state. Without this,
@@ -1056,14 +1229,14 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
            over a known-good roster. */
         if (stage1ShrinkRefused(before, stage1.characters.length) && !allowStage1Shrink) {
           log(0, `Stage 1 shrink refused — verifier would drop from ${before} to ${stage1.characters.length} characters. Re-run with allowStage1Shrink:true to confirm.`);
-          send({
+          endJob(job, {
             kind: 'error',
             code: 'stage1_shrink_refused',
             message: `Verifier would drop the cast from ${before} to ${stage1.characters.length} characters. Confirm via allowStage1Shrink to accept the smaller roster.`,
             prevCharCount: before,
             nextCharCount: stage1.characters.length,
           });
-          return res.end();
+          return;
         }
         cache.stage1 = stage1;
         await saveAnalysisCache(manuscriptId, cache);
@@ -1331,11 +1504,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
            30+ chapters of cast are already detected. Carries the same
            shape as the post-Phase-1 end-of-run write (palette colours +
            lines:0/scenes:0 placeholders); the final fold-and-attribute
-           pass overwrites with the authoritative version. Skipped on
-           client disconnect to match the end-of-run write — we don't
-           want a navigate-away to flip the library status to
-           cast_pending. */
-        if (recordRef.bookDir && !clientGone) {
+           pass overwrites with the authoritative version. With sticky
+           analysis the run survives navigation, so this no longer needs
+           a clientGone gate — the cache + cast.json writes are the
+           authoritative side effects of progress regardless of
+           subscriber count. */
+        if (recordRef.bookDir) {
           const interim = buildInterimCast(chapterCast, recordRef.chapterHints.map(h => h.id));
           if (interim.length > 0) {
             try {
@@ -1414,12 +1588,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         const failedCount = failedCastChapters.size;
         log(0, `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? '' : 's'} still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.`);
         send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
-        send({
+        endJob(job, {
           kind: 'error',
           code: 'cast_incomplete',
           message: `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? '' : 's'} failed cast detection. Retry below to continue.`,
         });
-        return res.end();
+        return;
       }
 
       /* ── Phase 0b — finalise the roster.
@@ -1452,8 +1626,11 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
          stage1.characters itself stays un-folded for stage-2 attribution
          — the descriptor names need to survive into the stage-2 prompt
          so the model can map dialogue to them. The post-Phase-1 fold
-         later overwrites this file with the authoritative counts. */
-      if (recordRef.bookDir && !clientGone) {
+         later overwrites this file with the authoritative counts.
+         No clientGone gate: with sticky analysis the run survives
+         navigation, so the on-disk state stays in lockstep with the
+         broadcast events regardless of subscriber count. */
+      if (recordRef.bookDir) {
         try {
           const stage1Cast = attachLinesAndScenes(
             assignPaletteColors(previewFoldForLiveView(stage1.characters)),
@@ -1916,20 +2093,19 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     // /api/books (workspace flow); legacy POST /api/manuscripts uploads
     // have no bookDir and are skipped.
     //
-    // Skipped when the SSE client has disconnected: writing cast.json flips
-    // the library status to `cast_pending`, which routes a re-open of the
-    // book to the confirm screen. If the user navigated away mid-run we
-    // don't want them to come back to a confirm screen for a run they
-    // perceive as unfinished — the cache still holds the per-chapter
-    // progress so a follow-up open resumes cheaply.
+    // With sticky analysis (B1) the run survives client navigation, so
+    // there's no clientGone gate — writing cast.json on completion
+    // accurately reflects the work that finished, and the user's next
+    // visit lands on the confirm screen (which is what they want when
+    // the analysis ran to completion in the background).
     //
-    // Also skipped when attribution drift exceeded the threshold — we
-    // still write manuscript-edits.json with the demoted sentences (so
+    // Still skipped when attribution drift exceeded the threshold —
+    // we write manuscript-edits.json with the demoted sentences (so
     // the disk state is internally consistent) but leave cast.json /
     // state.json untouched so the book doesn't flip to `cast_pending`
     // against a corrupted run. The user sees the `attribution_drift`
     // error in the analysing view and can retry.
-    if (record.bookDir && !clientGone) {
+    if (record.bookDir) {
       try {
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: reconciled.sentences });
         if (phase1DriftExceeded) {
@@ -1974,40 +2150,26 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
          demoted sentences so disk state is consistent; cast.json /
          state.json were skipped above so the book doesn't flip to
          `cast_pending`. The user retries; the cache is preserved. */
-      send({
+      endJob(job, {
         kind: 'error',
         code: 'attribution_drift',
         message: `Phase 1 demoted ${reconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round(100 * reconciled.demotedCount / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute.`,
       });
-      return res.end();
+      return;
     }
 
     send({ kind: 'result', response });
-    res.end();
+    endJob(job);
+    return;
   } catch (e) {
-    /* Client-disconnect short-circuit. Abort propagated up from the
-       analyzer's fetch — there's no client to send an error to in the
-       normal case, and we don't want this filling the server log with a
-       fake "failed" entry every time a user navigates away mid-analysis.
-       The send() is still issued (with `code: 'aborted'`) as a
-       belt-and-suspenders: if the abort fired for a non-disconnect
-       reason or there's a race where the client is briefly still
-       listening, they get a structured event instead of the
-       "Analysis stream ended without a result event" frontend fallback. */
+    /* AnalysisAbortedError: an in-flight LLM call was aborted because
+       /pause was hit or a fresh: true POST displaced this job. Emit a
+       structured `aborted` error so the UI distinguishes "you paused
+       this" from "the analyzer broke" — the frontend uses code:
+       'aborted' to short-circuit its error-banner path. */
     if (e instanceof AnalysisAbortedError) {
-      console.log(`[analysis] aborted ${manuscriptId} (client disconnected)`);
-      /* Bypass the clientGone gate on send() — the abort came from a
-         disconnect, but there are race windows where the client is
-         briefly still reading (browser hasn't torn down the fetch
-         consumer yet). Writing to a truly-closed connection just hits
-         the local TCP buffer and gets discarded, so the worst case is
-         a silent no-op; the best case is the frontend gets a
-         structured event instead of falling through to its
-         "Analysis stream ended without a result event" message. */
-      try {
-        res.write(`data: ${JSON.stringify({ kind: 'error', code: 'aborted', message: 'Analysis aborted (client disconnected or server restarted).' })}\n\n`);
-      } catch { /* connection already torn down */ }
-      try { res.end(); } catch { /* already ended */ }
+      console.log(`[analysis] aborted ${manuscriptId} (paused or displaced)`);
+      endJob(job, { kind: 'error', code: 'aborted', message: 'Analysis aborted (paused or displaced by a new run).' });
       return;
     }
     /* Structured dump — SDK errors don't stringify cleanly with bare
@@ -2025,9 +2187,24 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       details: parsedLog?.details,
     });
     const { code, message, detail } = describeError(e, analyzerLabel);
-    send({ kind: 'error', code, message, detail });
-    res.end();
+    endJob(job, { kind: 'error', code, message, detail });
   }
+}
+
+/* POST /api/manuscripts/:id/analysis/pause — explicit pause for the
+   sticky analyzer loop. Mirrors /generation/pause: aborts the job's
+   controller, which the analyzer's per-call signal plumbing turns into
+   an AnalysisAbortedError; the runMainAnalyzerJob catch above emits a
+   structured `error: aborted` event to every attached subscriber and
+   ends each response. Idempotent: returns 200 with paused:false when
+   no job is running so a double-click on Pause doesn't 404. */
+analysisRouter.post('/:id/analysis/pause', (req: Request, res: Response) => {
+  const manuscriptId = req.params.id;
+  const job = inFlightAnalysisByManuscript.get(manuscriptId);
+  if (job && !job.controller.signal.aborted) {
+    job.controller.abort();
+  }
+  res.status(200).json({ ok: true, paused: job != null });
 });
 
 /* POST /api/manuscripts/:id/analysis/chapters — subset re-analysis.
