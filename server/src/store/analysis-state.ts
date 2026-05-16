@@ -42,6 +42,14 @@ export interface AnalysisStateFile {
       because no live in-flight job means the analyzer didn't survive
       the restart. */
   state: 'running' | 'paused' | 'halted';
+  /** Engine the analyzer was using when this snapshot was written.
+      Read by the reverse-direction local-analyzer guard
+      (`src/hooks/use-reverse-local-analyzer-guard.tsx`) to decide
+      whether to prompt the user before a TTS-start while this run is
+      alive. Optional because legacy snapshots written before E1
+      didn't capture it — guard defaults to "do not prompt" on
+      undefined, which is conservative. */
+  engine?: 'local' | 'gemini';
   /** Error code from the terminal event when state === 'halted'.
       Carried so the pill / view can route to the right banner. */
   haltCode?: string;

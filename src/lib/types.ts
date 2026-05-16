@@ -236,6 +236,34 @@ export interface DroppedQuotesResponse {
   batches: DroppedQuotesBatch[];
 }
 
+/* Cold-boot rehydration payload for the AnalysisPill across browser
+   reload + server restart. Matches the on-disk
+   .audiobook/analysis-state.json shape one-for-one (the server
+   returns it verbatim once the running→paused coercion has been
+   applied). See docs/features/32-sticky-analysis.md "Cold-boot
+   rehydration". */
+export interface AnalysisStateResponse {
+  manuscriptId: string;
+  phaseId: number;
+  phaseLabel: string;
+  phaseProgress: number;
+  /** `running` never appears on the wire from the cold-boot endpoint
+      UNLESS a live in-flight job is still serving from memory. The
+      server coerces disk-`running` to `paused` when no live job is
+      present. */
+  state: 'running' | 'paused' | 'halted';
+  /** Engine the analyzer was using when this snapshot was written.
+      Carried so the reverse-direction local-analyzer guard
+      (`src/hooks/use-reverse-local-analyzer-guard.tsx`) sees the
+      right engine on a cold-boot rehydrated pill. Undefined for
+      pre-E1 snapshots — guard defaults to "do not prompt". */
+  engine?: 'local' | 'gemini';
+  haltCode?: string;
+  haltReason?: string;
+  lastTickAt: number;
+  writtenAt?: number;
+}
+
 export type StateSlice = 'cast' | 'manuscript' | 'revisions' | 'state' | 'changeLog';
 
 export interface PutStateRequest {

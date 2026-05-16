@@ -135,6 +135,26 @@ describe('analysis-state store', () => {
     await expect(deleteAnalysisState(bookDir)).resolves.toBeUndefined();
   });
 
+  it('engine field round-trips so the reverse-direction guard sees the right engine on cold-boot', async () => {
+    /* Without engine in the persisted file, the cold-boot rehydrated
+       AnalysisPill would carry engine: undefined and the reverse-
+       direction local-analyzer guard
+       (`src/hooks/use-reverse-local-analyzer-guard.tsx`) would not
+       prompt before a TTS-start — even when the paused analysis was
+       on the local Qwen engine that competes for GPU. */
+    await writeAnalysisState(bookDir, {
+      manuscriptId: 'm_test',
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 0.3,
+      state: 'running',
+      engine: 'local',
+      lastTickAt: Date.now(),
+    });
+    const got = await readAnalysisState(bookDir);
+    expect(got!.engine).toBe('local');
+  });
+
   it('readAnalysisState returns null when the file is malformed JSON', async () => {
     /* OneDrive interrupted us mid-write, or a tester edited the file
        by hand. Caller should treat as "no state" rather than 500. */
