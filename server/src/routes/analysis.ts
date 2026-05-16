@@ -679,7 +679,12 @@ function humanSeconds(ms: number): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
-function buildStage1ChapterInbox(
+/* Build the per-chapter Phase 0a inbox markdown that drives the manual /
+   Gemini / Ollama analyzer. Exported for unit testing — the test asserts
+   that the template includes the broadened first-person guidance so
+   journal / registry-file / bio chapters (the Unlocked format) get
+   detected as their authoring character rather than as Narrator. */
+export function buildStage1ChapterInbox(
   manuscriptId: string,
   title: string,
   chapter: { id: number; title: string; body: string },
@@ -715,13 +720,27 @@ server/handoff/outbox/${manuscriptId}-stage1-ch${chapter.id}.json
 Schema and rules live in
 \`skills/audiobook-character-detection-per-chapter.md\`.
 
-**Only return characters who SPEAK in this chapter.** A character belongs
-in the output only if you can copy a verbatim line of dialogue they utter
-in the chapter below. Pets, animals, magical creatures, and any entity
-whose only "lines" are non-verbal sounds (purring, growling, hissing,
-roaring) do NOT belong on the roster — the narrator covers them. If a
-running-roster character appears only by being mentioned or described in
-this chapter (no spoken line), omit them from this chapter's output.
+**Only return characters with a real verbatim utterance in this chapter.**
+A character belongs in the output when at least one of the following is
+true:
+
+1. They have a line of **direct dialogue** the narrator attributes to
+   them (\`"Hello," she said.\`).
+2. The chapter is a **first-person document** (journal entry, medical
+   log, registry file, diary, letter, transcript, bio page) AND the
+   author of that document is named or strongly implied — by chapter
+   title (\`Sophie's Memory Log\`), header (\`FILED BY: ELWIN\`),
+   signature (\`—Keefe\`), or the surrounding bio block. In that case
+   the *author* is the character, with their \`id\` set to their name,
+   and the document's prose becomes their evidence. \`narrator\` is
+   reserved for omniscient third-person prose with no in-fiction author.
+
+Pets, animals, magical creatures, and any entity whose only "lines" are
+non-verbal sounds (purring, growling, hissing, roaring) do NOT belong on
+the roster — the narrator covers them. If a running-roster character
+appears only by being mentioned or described in this chapter (no spoken
+line and not the author of the chapter's prose), omit them from this
+chapter's output.
 
 Return ONLY a JSON object matching the schema. No prose, no code fences.
 
