@@ -262,6 +262,12 @@ export function Layout() {
               state: snap.state,
               haltCode: snap.haltCode,
               haltReason: snap.haltReason,
+              /* Plan 32 D2: thread the subset discriminator + chapter ids
+                 through to the pill so a cold-boot rehydrated subset retry
+                 renders "Retrying N chapters" copy instead of the generic
+                 phase label. */
+              kind: snap.kind,
+              subsetChapterIds: snap.subsetChapterIds,
             }));
           })
           .catch(err => { console.warn('[analysis-state] cold-boot fetch failed:', err?.message); });
@@ -419,7 +425,7 @@ export function Layout() {
      to the analysing route for the manuscript that's still in flight. */
   const analysisPill: AnalysisPillData | null = (() => {
     if (!analysisStream) return null;
-    const { bookId: streamBookId, phaseId, phaseLabel, phaseProgress, lastTickAt, state: streamState, haltReason } = analysisStream;
+    const { bookId: streamBookId, phaseId, phaseLabel, phaseProgress, lastTickAt, state: streamState, haltReason, kind, subsetChapterIds } = analysisStream;
     /* Per-phase progress + a coarse phase-weighted overall: phase 0 covers
        the first 45%, phase 1 the next 50%, phase 2 the final 5% (matches
        ANALYSIS_PHASES weighting used by the analysing view's overall
@@ -443,6 +449,12 @@ export function Layout() {
       phaseLabel,
       percent,
       haltReason,
+      /* Plan 32 D2: pass through the subset discriminator so the pill
+         renders "Retrying N chapters" copy instead of the generic
+         "Analysing · <phaseLabel>". The pill defaults to main when
+         undefined. */
+      kind,
+      subsetChapterCount: kind === 'subset' ? (subsetChapterIds?.length ?? 0) : undefined,
       onClick: () => {
         if (streamBookId) {
           navigate(`/books/${streamBookId}/analysing`);
