@@ -4,6 +4,8 @@ Living specs for every feature shipped in v1. Each plan combines **invariants to
 
 PRs that change behavior cited in a plan MUST update the relevant plan in the same diff — that is the regression discipline the plans buy.
 
+**For outstanding work** see [`../BACKLOG.md`](../BACKLOG.md) — the MoSCoW-bucketed list of every follow-up, scaffolded item, and untested seam pulled from these plans. Future planned rounds of work pull from there.
+
 ## Writing a new plan
 
 1. Copy [TEMPLATE.md](TEMPLATE.md) — required sections are **Benefit / Rationale**, **Architectural impact**, and **Test plan** (automated + manual).

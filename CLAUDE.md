@@ -105,6 +105,24 @@ Cite this file from any regression plan that needs an e2e run rather than
 inventing fresh fixtures. See `docs/features/28-chapter-audio-format.md` for
 the canonical recipe.
 
+## The backlog
+
+`docs/BACKLOG.md` is the canonical, MoSCoW-bucketed list of outstanding
+work — every KNOWN-scaffolded plan, every "Out of scope" follow-up, every
+CLAUDE.md "Suggested follow-up", every untested seam. Future planned rounds
+of work pull from here. Bugs are out-of-band (the user files them as they
+hit them; they don't queue on the backlog).
+
+When you ship a backlog item:
+
+1. Remove its bullet from `docs/BACKLOG.md`.
+2. Update the source plan's `status:` and/or fill its **Ship notes**.
+3. If the plan is now `stable`, move it to `docs/features/archive/`.
+
+When you discover a new outstanding item (e.g. a "Suggested follow-up"
+added to a plan), add it to `docs/BACKLOG.md` in the right bucket in the
+same PR — the backlog is only useful while it stays current.
+
 ## Planning-mode behaviour
 
 When in planning mode, or when asked "what's outstanding?" / "what's left?" / "summarise what we'd do":
@@ -140,9 +158,6 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 - Real `<audio>` element in `MiniPlayer` once the backend returns URLs.
 - Vitest + slice tests (`applyGenerationTick`, `applyVoiceMatches`).
 - ESLint + Prettier, axe-core a11y pass.
-- Align the `Sentence` shape with the OpenAPI spec (currently the fixtures use
-  `{ id: string, charId, text }` while the spec uses `{ id: number, characterId,
-  chapterId, text }`).
 - **Model lifecycle is split between eager and button-driven** —
   - **Kokoro v1 (default, new in 2026-05)**: eagerly loaded at sidecar
     startup, ~1 s cold load, ~1 GB VRAM. Permanently resident alongside
