@@ -1156,3 +1156,39 @@ describe('AnalysingView — cross-navigation analysis snapshot (B2)', () => {
     });
   });
 });
+
+describe('AnalysingView — series-cast carry-over pill (C3)', () => {
+  it('renders the pill when the server emits a series-prior event', async () => {
+    /* Server emits series-prior once at Phase 0 entry when the
+       analyzer has been pre-seeded with characters from prior books
+       in the same series. The view dispatches setSeriesPrior into the
+       analysis slice; the pill reads from there so it survives
+       reload + cross-navigation. */
+    await renderViewWaitingForAnalysis();
+    /* Drive the captured callback as if the server emitted the event. */
+    await act(async () => {
+      (capturedOpts as AnalyseOpts | undefined)?.onSeriesPrior?.({
+        count: 41,
+        names: ['Sophie', 'Keefe', 'Elwin'],
+      });
+    });
+    const pill = await screen.findByTestId('series-prior-pill');
+    expect(pill).toBeInTheDocument();
+    expect(pill.textContent).toContain('41');
+    expect(pill.textContent).toContain('Sophie');
+    expect(pill.textContent).toContain('Keefe');
+    expect(pill.textContent).toContain('Elwin');
+    /* +N appears when the total exceeds the sample. 41 - 3 = 38. */
+    expect(pill.textContent).toMatch(/\+38/);
+  });
+
+  it('does NOT render the pill when no series-prior event was emitted (standalone / first-in-series)', async () => {
+    await renderViewWaitingForAnalysis();
+    /* Drive a phase tick to confirm the analysis effect is alive,
+       but never emit series-prior. */
+    await act(async () => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.2 });
+    });
+    expect(screen.queryByTestId('series-prior-pill')).not.toBeInTheDocument();
+  });
+});

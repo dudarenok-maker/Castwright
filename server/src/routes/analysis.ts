@@ -911,6 +911,12 @@ interface AnalysisJobReplayState {
       adds entries; chapter-resolved removes them. Replayed so a
       reconnecting client sees the right set of Retry rows. */
   failedByChapterId: Map<number, { kind: 'chapter-failed'; chapterId: number; message: string }>;
+  /** One-shot series-cast prior event emitted at Phase 0 entry. Cached
+      here so a subscriber that attaches AFTER Phase 0 entry receives
+      the carry-over surface in its catch-up replay (otherwise the
+      first subscriber would see the SeriesPriorPill but the second
+      one — post-reload, post-navigate-back — would miss it). */
+  lastSeriesPrior: { kind: 'series-prior'; count: number; names: string[] } | null;
 }
 
 interface AnalysisJob {
@@ -965,6 +971,17 @@ function trackForReplay(job: AnalysisJob, payload: unknown): void {
       if (typeof e.chapterId === 'number') job.replay.failedByChapterId.delete(e.chapterId);
       break;
     }
+    case 'series-prior': {
+      const e = ev as { count?: number; names?: unknown };
+      if (typeof e.count === 'number' && Array.isArray(e.names)) {
+        job.replay.lastSeriesPrior = {
+          kind: 'series-prior',
+          count: e.count,
+          names: e.names.filter((n): n is string => typeof n === 'string'),
+        };
+      }
+      break;
+    }
     /* heartbeat / throttle / result / error: not replayed (heartbeat +
        throttle are ephemeral; result + error are terminal and the route
        closes the connection right after emitting them anyway). */
@@ -976,6 +993,7 @@ function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): void {
   for (const log of job.replay.logs) send(log);
   if (job.replay.lastEta) send(job.replay.lastEta);
   if (job.replay.lastCastUpdate) send(job.replay.lastCastUpdate);
+  if (job.replay.lastSeriesPrior) send(job.replay.lastSeriesPrior);
   for (const failed of job.replay.failedByChapterId.values()) send(failed);
 }
 
@@ -1099,6 +1117,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       lastEta: null,
       lastCastUpdate: null,
       failedByChapterId: new Map(),
+      lastSeriesPrior: null,
     },
   };
   inFlightAnalysisByManuscript.set(manuscriptId, job);

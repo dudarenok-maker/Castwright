@@ -47,6 +47,18 @@ export interface AnalysisStreamSnapshot {
   /** Carried error code from the server's last terminal event so the
       pill / view can route to the right banner. */
   haltCode?: string;
+  /** Series carry-over surface (plan 04 + plan 09). Populated by the
+      server's one-shot `series-prior` SSE event at Phase 0 entry when
+      the analyzer pre-seeded its per-chapter prompt with characters
+      from prior books in the same series. `count` is the total;
+      `names` is the first three for the analysing view's "Carried
+      from <series>" pill copy. Undefined for standalones / first-
+      in-series books (the server doesn't emit the event in that
+      case). */
+  seriesPrior?: {
+    count: number;
+    names: string[];
+  };
 }
 
 export interface AnalysisState {
@@ -117,6 +129,19 @@ export const analysisSlice = createSlice({
        or on a fresh: true displacement when a new run is starting. */
     clearActiveStream(state) {
       state.activeStream = null;
+    },
+
+    /* Apply the one-shot `series-prior` SSE event the server emits at
+       Phase 0 entry. Cross-book guarded so a stale event from another
+       tab can't poison this tab's snapshot. */
+    setSeriesPrior(state, action: PayloadAction<{ manuscriptId: string; count: number; names: string[] }>) {
+      const snap = state.activeStream;
+      if (!snap) return;
+      if (snap.manuscriptId !== action.payload.manuscriptId) return;
+      snap.seriesPrior = {
+        count: action.payload.count,
+        names: action.payload.names,
+      };
     },
   },
 });
