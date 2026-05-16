@@ -9,6 +9,7 @@ import type { AnalyseResponse, DroppedQuotesResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
+import { analysisActions } from '../store/analysis-slice';
 
 /* Heuristic estimate matched to the server's analysis pacing (server/src/
    routes/analysis.ts: STAGE1_BASELINE_RATE × STAGE2_STRETCH ≈ 4 ms per input
@@ -486,6 +487,21 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
        catch below re-sets it with fresh counts. */
     setStage1ShrinkInfo(null);
     const markEvent = () => setLastEventAt(Date.now());
+    /* Seed the cross-navigation analysis snapshot so the AnalysisPill
+       (B3) can read live progress from Redux even after the user
+       navigates away from this view. The snapshot updates on every
+       phase / eta tick below and is torn down on terminal events. */
+    dispatch(analysisActions.setActiveStream({
+      bookId: bookId ?? null,
+      manuscriptId,
+      bookTitle: title ?? undefined,
+      phaseId: 0,
+      phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
+      phaseProgress: 0,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+    }));
     (async () => {
       try {
         const payload = await api.analyseManuscript(manuscriptId, {
@@ -497,6 +513,13 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
             if (cancelled) return;
             setConn('streaming');
             markEvent();
+            dispatch(analysisActions.applyAnalysisSnapshotTick({
+              manuscriptId,
+              phaseId,
+              phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
+              phaseProgress: progress,
+              lastTickAt: Date.now(),
+            }));
             setPhase(prev => {
               /* Drop heartbeat for the previous phase the moment the active
                  phase advances — completed phases shouldn't keep a "still
@@ -538,6 +561,11 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
             setConn('streaming');
             markEvent();
             setRemainingMs(ms);
+            dispatch(analysisActions.applyAnalysisSnapshotTick({
+              manuscriptId,
+              remainingMs: ms,
+              lastTickAt: Date.now(),
+            }));
           },
           onCastUpdate: ({ characters }) => {
             if (cancelled) return;
@@ -583,6 +611,10 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
         completedRef.current = true;
         setConn('done');
         setDroppedQuotesRefreshKey(k => k + 1);
+        /* Run completed cleanly — tear down the cross-navigation snapshot
+           so the pill drops out (the view will transition to confirm
+           via onComplete below anyway). */
+        dispatch(analysisActions.clearActiveStream());
         onComplete(payload);
       } catch (e) {
         if (cancelled) return;
@@ -593,7 +625,14 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
            in the UI. Falling through would flash "Analysis failed:
            Analysis aborted" right before the new attempt renders. */
         if ((e as Error)?.name === 'AbortError') return;
-        if (e instanceof AnalysisError && e.code === 'aborted') return;
+        if (e instanceof AnalysisError && e.code === 'aborted') {
+          /* Server-side pause / displacement. Reflect in the snapshot
+             so the pill renders the paused variant, but DO NOT clear
+             the snapshot — keep the pill visible so the user can
+             navigate back to the analysing view and resume. */
+          dispatch(analysisActions.setPaused({ manuscriptId }));
+          return;
+        }
         /* cast_incomplete is the server's "Phase 0 done but at least one
            chapter still needs retry" signal. Not a failure — the user
            sees the failed-chapter panel and can retry below. The
@@ -602,6 +641,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
           setConn('idle');
           setCastIncomplete(true);
           setDroppedQuotesRefreshKey(k => k + 1);
+          dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
           return;
         }
         /* stage1_shrink_refused is the data-loss guard for stage1
@@ -614,11 +654,13 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
             prev: e.prevCharCount ?? 0,
             next: e.nextCharCount ?? 0,
           });
+          dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
           return;
         }
         setConn('error');
         const code = e instanceof AnalysisError ? e.code : 'unknown';
         const detail = e instanceof AnalysisError ? e.detail : undefined;
+        dispatch(analysisActions.setHalted({ manuscriptId, code, message: (e as Error)?.message ?? 'Analysis failed.' }));
         setError({ message: (e as Error).message || 'Analysis failed.', code, detail });
       }
     })();
@@ -1010,12 +1052,15 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                   : 'Waiting for analyzer…');
             const onClick = () => {
               if (isRunning) {
-                /* Imperative abort — the effect's cleanup will also call
-                   .abort() when analysisStarted flips, but doing it here
-                   first means the user sees the SSE tear down without
-                   the brief race where conn could stay on 'streaming'
-                   between click and effect-cleanup. */
+                /* Imperative abort tears down the per-tab fetch consumer
+                   so conn flips to idle immediately (without waiting on
+                   effect cleanup). Dispatching setPaused additionally
+                   fires the server-side /analysis/pause via the
+                   analysis-stream middleware — post-B1 the server
+                   treats SSE close as "unsubscribe" and won't actually
+                   stop the analyzer without this explicit signal. */
                 analysisControllerRef.current?.abort();
+                if (manuscriptId) dispatch(analysisActions.setPaused({ manuscriptId }));
                 setAnalysisStarted(false);
                 setConn('idle');
               } else {

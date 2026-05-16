@@ -1,6 +1,6 @@
 # 32 — Sticky analysis across navigation
 
-**Status:** B1 landed (server). Frontend (B2/B3) WIP — see commit log.
+**Status:** B1 (server) + B2 (frontend slice + middleware + view wiring) landed. B3 (top-bar pill + local-analyzer-guard wiring) WIP.
 
 Analysis, once started, runs to completion (or to the user's explicit Pause) regardless of where the user navigates. The previous contract aborted the analyzer the moment the SSE socket closed — navigate-away from the analysing view tore the in-flight LLM call down, and the next visit had to re-do the chapter the abort caught. The B-series contract pins the loop to a server-owned job keyed on `manuscriptId` so navigation only unsubscribes; the job carries on until the queue drains, `/pause` is called, or a `fresh: true` POST displaces it.
 
@@ -33,12 +33,22 @@ Mirrors plan 31 (sticky generation) one-for-one. The patterns intentionally matc
 
 7. **On-disk side effects are no longer gated on `clientGone`.** Pre-B1 the route skipped writing `cast.json` / `state.json` if the SSE socket closed — that was a guard against "user navigated away mid-run, don't promote the book to confirm". With sticky analysis the run survives navigation and IS the source of truth; finishing the loop always writes cast.json + state.json. The user comes back to a confirm screen which accurately reflects the completed work. Attribution-drift and stage1-shrink-refused gates still skip cast.json / state.json (those are corruption-prevention paths, not navigation-disconnect paths).
 
-### Frontend (B2 — WIP)
+### Frontend (B2)
 
-To be filled in once B2 lands. Sketch:
-- `src/store/analysis-slice.ts` owns `activeStream: AnalysisStreamSnapshot | null` mirroring `chapters.activeStream`. Cross-book tick guard ensures a tick for a non-current book updates the snapshot but not the per-view phase log.
-- `src/store/analysis-stream-middleware.ts` opens the SSE; the handle survives navigation and book switches; closes only on `setPaused(true)` or a terminal event.
-- `src/views/analysing.tsx` no longer owns the SSE — consumes the slice. Pause button dispatches `setPaused(true)`. Mount with `activeStream` present hydrates from the snapshot without firing a fresh POST.
+1. **`src/store/analysis-slice.ts`** owns `activeStream: AnalysisStreamSnapshot | null` — a narrow snapshot for the (B3) AnalysisPill. Fields: `bookId`, `manuscriptId`, `bookTitle?`, `phaseId`, `phaseLabel`, `phaseProgress` (0..1), `remainingMs` (server ETA), `lastTickAt`, `state: 'running' | 'paused' | 'halted'`, `haltCode?`, `haltReason?`. Reducers: `setActiveStream`, `clearActiveStream`, `applyAnalysisSnapshotTick`, `setHalted`, `setPaused`. Cross-book guard: every reducer except setActiveStream + clearActiveStream verifies `payload.manuscriptId === activeStream.manuscriptId` so a tick from another tab's analysis cannot clobber this tab's snapshot.
+
+2. **`src/store/analysis-stream-middleware.ts`** is intentionally narrow: it bridges `analysis/setPaused` → `api.pauseAnalysis({ manuscriptId })`. Fire-and-forget — the server endpoint is idempotent so a failed request is benign. The view's existing imperative abort still tears down the per-tab fetch consumer; the middleware tears down the server-side analyzer loop. The two paths are independent: post-B1 the server treats SSE close as "unsubscribe", not "abort," so without an explicit `pauseAnalysis` POST the analyzer keeps running after a navigate-away.
+
+3. **`src/views/analysing.tsx` wiring**:
+   - **On SSE start** (the existing `api.analyseManuscript` call): dispatch `setActiveStream({ bookId, manuscriptId, bookTitle, phaseId: 0, phaseLabel, phaseProgress: 0, remainingMs: null, lastTickAt: Date.now(), state: 'running' })`. The pill (B3) sees this and renders live progress.
+   - **On `onPhase` tick**: dispatch `applyAnalysisSnapshotTick({ manuscriptId, phaseId, phaseLabel, phaseProgress, lastTickAt })`.
+   - **On `onEta` tick**: dispatch `applyAnalysisSnapshotTick({ manuscriptId, remainingMs, lastTickAt })`.
+   - **On terminal success** (`onComplete`): dispatch `clearActiveStream()` — pill drops out (view transitions to confirm).
+   - **On `AnalysisError`** with `code: 'aborted'`: dispatch `setPaused({ manuscriptId })` — pill renders the paused variant so the user can navigate back and resume.
+   - **On `AnalysisError`** with `code: 'cast_incomplete' | 'stage1_shrink_refused' | 'attribution_drift' | unknown`: dispatch `setHalted({ manuscriptId, code, message })`.
+   - **Pause button click**: in addition to the existing imperative `analysisControllerRef.current?.abort()` (which tears down the per-tab fetch), dispatch `setPaused({ manuscriptId })`. The middleware sees this and fires the server-side `pauseAnalysis` so the analyzer actually stops.
+
+4. **Out of scope for B2** (deliberate): the middleware does NOT yet own its own SSE for the pill. Snapshot updates flow through the view's existing SSE handlers — when the user navigates away, snapshot freezes at the last-tick state. B3 can opt to extend the middleware with its own SSE if the pill needs live ticks during navigation, but the freeze-then-thaw-on-return behavior is acceptable for v1.
 
 ### Top-bar pill (B3 — WIP)
 

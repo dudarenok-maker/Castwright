@@ -6,6 +6,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
+import { analysisSlice } from '../store/analysis-slice';
 import { AnalysingView } from './analysing';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
 import type { AnalyseResponse, BookStateResponse, Character, DroppedQuotesResponse } from '../lib/types';
@@ -95,8 +96,9 @@ beforeEach(() => {
 function renderView() {
   const store = configureStore({
     reducer: {
-      ui:   uiSlice.reducer,
-      cast: castSlice.reducer,
+      ui:       uiSlice.reducer,
+      cast:     castSlice.reducer,
+      analysis: analysisSlice.reducer,
     },
   });
   return {
@@ -1116,5 +1118,41 @@ describe('AnalysingView — stage1 shrink-refused banner', () => {
        The most recent captured opts are still the original (no override)
        call — the dismiss is purely a UI state change. */
     expect((capturedOpts as AnalyseOpts | undefined)?.allowStage1Shrink).toBeUndefined();
+  });
+});
+
+describe('AnalysingView — cross-navigation analysis snapshot (B2)', () => {
+  it('sets analysis.activeStream when the SSE fires so the AnalysisPill can read from Redux', async () => {
+    const { store } = await renderViewWaitingForAnalysis();
+    /* The view seeds the snapshot when api.analyseManuscript is called.
+       Capturing it via the store proves the cross-navigation surface is
+       wired — the pill (B3) reads this same snapshot. */
+    await waitFor(() => {
+      const snap = store.getState().analysis.activeStream;
+      expect(snap).not.toBeNull();
+    });
+    const snap = store.getState().analysis.activeStream!;
+    expect(snap.manuscriptId).toBe('m1');
+    expect(snap.bookTitle).toBe('the Coalfall Commission');
+    expect(snap.state).toBe('running');
+  });
+
+  it('clicking Pause flips analysis.activeStream.state to paused (middleware will fire api.pauseAnalysis)', async () => {
+    const { store } = await renderViewWaitingForAnalysis();
+    await waitFor(() => expect(store.getState().analysis.activeStream).not.toBeNull());
+
+    /* Drive the SSE handler to streaming state so the button reads
+       "Pause analysis" rather than "Start analysis". A single phase
+       tick is enough to flip conn → streaming. */
+    await act(async () => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.1 });
+    });
+
+    const pauseBtn = await screen.findByRole('button', { name: /pause analysis/i });
+    await act(async () => { fireEvent.click(pauseBtn); });
+
+    await waitFor(() => {
+      expect(store.getState().analysis.activeStream?.state).toBe('paused');
+    });
   });
 });
