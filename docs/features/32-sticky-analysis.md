@@ -1,6 +1,6 @@
 # 32 — Sticky analysis across navigation
 
-**Status:** stable. Server (B1), frontend slice + middleware + view wiring (B2), and top-bar pill + docs (B3) all landed. D1 (middleware-owned SSE) lifted the cross-navigation freeze on the pill — middleware now owns its own subscribe-only SSE in addition to the pause-bridge. D2 wired the symmetric reverse-direction local-analyzer guard so an explicit TTS-start (Resume / Regenerate*) prompts when a local analysis is alive somewhere in the workspace.
+**Status:** stable. Server (B1), frontend slice + middleware + view wiring (B2), top-bar pill + docs (B3), middleware-owned cross-navigation SSE (D1), reverse-direction local-analyzer guard (D2), and cold-boot rehydration server side (E1) all landed. E2 (frontend discovery on layout mount) pending. D1 (middleware-owned SSE) lifted the cross-navigation freeze on the pill — middleware now owns its own subscribe-only SSE in addition to the pause-bridge. D2 wired the symmetric reverse-direction local-analyzer guard so an explicit TTS-start (Resume / Regenerate*) prompts when a local analysis is alive somewhere in the workspace.
 
 Analysis, once started, runs to completion (or to the user's explicit Pause) regardless of where the user navigates. The previous contract aborted the analyzer the moment the SSE socket closed — navigate-away from the analysing view tore the in-flight LLM call down, and the next visit had to re-do the chapter the abort caught. The B-series contract pins the loop to a server-owned job keyed on `manuscriptId` so navigation only unsubscribes; the job carries on until the queue drains, `/pause` is called, or a `fresh: true` POST displaces it.
 
@@ -109,11 +109,36 @@ Server-side smoke (post-B1, no UI needed):
 5. `POST /api/manuscripts/m_test/analysis/pause` — first run's loop catches AnalysisAbortedError, emits final `{kind:'error', code:'aborted'}`, both subscribers' responses end.
 6. POST again — fresh run kicks off (no existing job in the map).
 
+### Cold-boot rehydration (E1)
+
+The B/C/D invariants cover navigation and same-process reload, but the `inFlightAnalysisByManuscript` map is in-memory and the `analysis.activeStream` Redux snapshot lives in the browser tab — both evaporate when their respective process restarts. E1 closes that gap by persisting a minimal snapshot to `.audiobook/analysis-state.json` at phase boundaries + on terminal events, and exposing a discovery endpoint the frontend can call on layout mount.
+
+1. **On-disk schema** lives at `server/src/store/analysis-state.ts`. Minimal subset of `AnalysisStreamSnapshot` — manuscriptId, phaseId/Label/Progress, state (`running` | `paused` | `halted`), `haltCode?`, `haltReason?` (trimmed to 256 chars), `lastTickAt`, `writtenAt`. Sibling to state.json under `.audiobook/`; path resolved via `analysisStateJsonPath(bookDir)` in `server/src/workspace/paths.ts`.
+
+2. **Write sites in `analysis.ts`**:
+   - **Phase-tick** (`trackForReplay`'s `phase` branch): every `kind:'phase'` event calls `persistRunningSnapshot(job, false)`. Throttled by `ANALYSIS_STATE_WRITE_THROTTLE_MS = 5000` so dense Phase 0a sub-ticks don't hammer the filesystem. Force-write is reserved for terminal events.
+   - **Pause endpoint** (`POST /:id/analysis/pause`): writes `state:'paused'` synchronously *before* aborting the controller. The synchronous write guarantees a cold-boot fetch right after pause sees paused state — the analyzer's `endJob({code:'aborted'})` catch will write the same state asynchronously (idempotent).
+   - **`endJob(job, finalEv)`**: branches on the final event:
+     - `kind:'result'` (terminal success) OR no final event → `deleteAnalysisState(bookDir)` so a completed analysis doesn't keep showing a pill.
+     - `kind:'error', code:'aborted'` → write `state:'paused'`.
+     - `kind:'error', code:<anything else>` (attribution_drift / cast_incomplete / stage1_shrink_refused / unknown_manuscript / upstream) → write `state:'halted'` with the trimmed haltCode + haltReason.
+
+3. **`AnalysisJob` carries `bookDir: string | null`** — set at job creation from `record.bookDir`. `null` for legacy POST /api/manuscripts uploads that have no workspace book; those skip every disk write site, matching the existing cast.json / state.json guards.
+
+4. **Discovery endpoint** lives at `GET /api/books/:bookId/analysis/state` in `server/src/routes/book-state.ts` (not analysis.ts — book-state already has the `findBookByBookId` lookup machinery). Resolution order: (a) look up `manuscriptId` from the book's state.json, (b) check the in-flight map via `snapshotInFlightAnalysis(manuscriptId)` — live job wins because its `replay.lastPhase` is freshest, (c) read `.audiobook/analysis-state.json` and **coerce `running` → `paused`** since no live job means the analyzer didn't survive the restart, (d) 404. Returns the `AnalysisStateFile` shape directly so the frontend can pass it to `setActiveStream` largely unchanged.
+
+5. **What the coercion buys us**: the on-disk file is the *last phase-boundary snapshot*. After a server crash that file still says `running` because the analyzer never reached its terminal-write code path. Returning `running` to the client would lie — the pill would show live progress that's actually frozen. Coercing to `paused` instead matches the UX promise: the user clicks Resume, a new POST seeds a fresh in-flight job from disk cache, and live ticks resume.
+
+6. **Frontend wiring (E2 — pending).** `api.getAnalysisState(bookId)` plus a dispatch from `src/components/layout.tsx`'s per-book hydration effect. Scope is per-currently-opened-book; the library home does NOT surface a pill for an unopened-but-paused book (acceptable v1 — the user clicks any book card and the pill rehydrates). A future extension can add a library-mount discovery for cross-book visibility.
+
 ## Critical files
 
-- **Server**: `server/src/routes/analysis.ts` — `inFlightAnalysisByManuscript` map, `AnalysisJob` interface, helpers (`broadcastToJob`, `trackForReplay`, `replayCatchUp`, `endJob`, `isAnalysisJobRunning`), `runMainAnalyzerJob` function, `POST /pause` endpoint.
-- **Server tests**: `server/src/routes/analysis.test.ts` describe block `sticky analysis — in-flight job map + /pause endpoint`.
-- **Frontend** (B2/B3): `src/store/analysis-slice.ts`, `src/store/analysis-stream-middleware.ts`, `src/store/index.ts`, `src/views/analysing.tsx`, `src/components/top-bar.tsx`, `src/components/layout.tsx`, `src/hooks/use-local-analyzer-guard.tsx`, `src/lib/api.ts`.
+- **Server core**: `server/src/routes/analysis.ts` — `inFlightAnalysisByManuscript` map, `AnalysisJob` interface (now with `bookDir` + `lastDiskWriteAt`), helpers (`broadcastToJob`, `trackForReplay`, `replayCatchUp`, `endJob`, `isAnalysisJobRunning`, `snapshotInFlightAnalysis`, `persistRunningSnapshot`, `persistTerminalSnapshot`), `runMainAnalyzerJob` function, `POST /pause` endpoint.
+- **Server cold-boot store**: `server/src/store/analysis-state.ts` — `readAnalysisState` / `writeAnalysisState` / `deleteAnalysisState`, `AnalysisStateFile` interface.
+- **Server cold-boot endpoint**: `server/src/routes/book-state.ts` — `GET /:bookId/analysis/state` handler with memory-first / disk-fallback / running→paused coercion.
+- **Server paths**: `server/src/workspace/paths.ts` — `analysisStateJsonPath(bookDir)`.
+- **Server tests**: `server/src/routes/analysis.test.ts` (`sticky analysis — in-flight job map + /pause endpoint`), `server/src/store/analysis-state.test.ts` (read/write/delete + haltReason trim + malformed-JSON tolerance), `server/src/routes/book-state.test.ts` (`book-state router — GET /:bookId/analysis/state` with 404 cases, paused/halted passthrough, running→paused coercion).
+- **Frontend** (B2/B3/D1/D2): `src/store/analysis-slice.ts`, `src/store/analysis-stream-middleware.ts`, `src/store/index.ts`, `src/views/analysing.tsx`, `src/components/top-bar.tsx`, `src/components/layout.tsx`, `src/hooks/use-local-analyzer-guard.tsx`, `src/hooks/use-reverse-local-analyzer-guard.tsx`, `src/lib/api.ts`.
 
 ## Out of scope / known follow-ups
 
@@ -121,7 +146,7 @@ Server-side smoke (post-B1, no UI needed):
 - **Cold-load tab rehydrates a server-side in-flight job.** D1's middleware-owned SSE opens on the first tick the view dispatches — so a fresh tab that lands on a non-analysing view (e.g. straight onto `/books`) does not discover a server-side in-flight job on its own. The user has to visit the analysing route once to trigger the view's POST, which seeds the snapshot and lets D1's first-tick trigger open the middleware handle. Track a separate follow-up if this becomes user-visible (the workaround — open the analysing view once — is cheap).
 - **Implicit reconcile-driven generation start while a local analysis is alive.** D2 only gates EXPLICIT user-driven TTS-start callsites (Resume button, Regenerate modal confirms). The `generation-stream-middleware.ts` reconcile path that auto-opens a stream when the user lands on Generate with queued chapters is intentionally left unguarded — the user already consented when they originally started generation, and prompting on every navigation would surprise them. If this becomes user-visible (e.g. a user reports both runs slowed down because they navigated back to Generate without realising local analysis was still going), gate via a new "model contention controller" that distinguishes navigation-driven from user-driven opens.
 - **Multi-tab catch-up race.** A second tab opening during the synchronous catch-up replay window can theoretically miss a tick if the first tab's reducer is mid-update. Acceptable since cast.json + manuscript-edits.json on disk are authoritative across reloads; the replay only seeds the in-memory view state.
-- **Server restart drops the in-flight map.** Restart loses every active job — but the disk cache (`server/handoff/cache/{manuscriptId}.json`) survives, so the next POST resumes from cache. The pill's frozen state on the client side rehydrates when the user re-opens the analysing view.
+- **Library-home pill for an unopened paused book.** E2's per-book discovery only fires once the user opens a specific book — the library home does not surface a pill for a paused analysis until that book card is clicked. Acceptable for v1 because the user is one click from rehydration. Trigger: a real user report "I forgot which book had paused analysis." Implementation shape: `GET /api/books/active-analyses` that scans every `.audiobook/analysis-state.json` and returns the most recent paused/halted snapshot, plus a library-mount discovery effect.
 
 ## Related plans
 

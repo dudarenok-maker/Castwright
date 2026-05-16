@@ -29,8 +29,10 @@ import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { putManuscript, getManuscript, getOrHydrateManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { clearAnalysisCache, loadAnalysisCache } from '../store/analysis-cache.js';
+import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { parseManuscript } from '../parsers/index.js';
+import { snapshotInFlightAnalysis } from './analysis.js';
 
 export const bookStateRouter = Router();
 
@@ -177,6 +179,60 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
    server/src/store/dropped-quotes.ts for the shape. Empty envelope
    when the file doesn't exist yet (book just uploaded, or all runs
    had zero drops). */
+/* GET /api/books/:bookId/analysis/state
+   Cold-boot rehydration for the top-bar AnalysisPill across browser
+   reload + server restart. The sticky-analysis in-flight map and the
+   client-side `analysis.activeStream` snapshot both evaporate on
+   their respective restart — this endpoint re-seeds the pill from
+   the live in-flight job (when the server is still alive) or from
+   the per-book `analysis-state.json` snapshot (when it isn't).
+
+   Resolution order:
+   1. Look up manuscriptId from the book's state.json.
+   2. If a live, non-aborted in-flight job exists, return its current
+      phase + running state (memory wins over disk because it has
+      the freshest progress).
+   3. Else read .audiobook/analysis-state.json. Coerce `running` on
+      disk → `paused` in the response because no live job means the
+      analyzer didn't survive the restart — the user must click
+      Resume to re-attach.
+   4. Else 404 (no rehydratable state).
+
+   See docs/features/32-sticky-analysis.md "Cold-boot rehydration"
+   for the full invariant set. */
+bookStateRouter.get('/:bookId/analysis/state', async (req: Request, res: Response) => {
+  try {
+    const located = await findBookByBookId(req.params.bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+
+    const { bookDir, state } = located;
+    const manuscriptId = state.manuscriptId;
+    if (!manuscriptId) {
+      return res.status(404).json({ error: 'No analysis state.' });
+    }
+
+    /* Memory-first: live in-flight job is freshest. snapshotInFlightAnalysis
+       returns null when no job exists or the controller is aborted. */
+    const live = snapshotInFlightAnalysis(manuscriptId);
+    if (live) return res.json(live);
+
+    /* Disk-fallback. Coerce `running` → `paused` because no live job
+       means the analyzer didn't survive whatever wiped the in-memory
+       map (server restart, crash, kill). */
+    const onDisk = await readAnalysisState(bookDir);
+    if (onDisk) {
+      const coerced: AnalysisStateFile =
+        onDisk.state === 'running' ? { ...onDisk, state: 'paused' } : onDisk;
+      return res.json(coerced);
+    }
+
+    return res.status(404).json({ error: 'No analysis state.' });
+  } catch (e) {
+    console.error('[book-state] analysis/state GET failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Failed to read analysis state.' });
+  }
+});
+
 bookStateRouter.get('/:bookId/dropped-quotes', async (req: Request, res: Response) => {
   try {
     const located = await findBookByBookId(req.params.bookId);

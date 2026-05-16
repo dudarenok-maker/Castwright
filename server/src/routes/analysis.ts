@@ -13,6 +13,11 @@ import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import { readUserSettings } from '../workspace/user-settings.js';
 import { clearAnalysisCache, loadAnalysisCache, saveAnalysisCache, type AnalysisCache } from '../store/analysis-cache.js';
+import {
+  deleteAnalysisState,
+  writeAnalysisState,
+  type AnalysisStateFile,
+} from '../store/analysis-state.js';
 import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
 import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -923,7 +928,20 @@ interface AnalysisJob {
   controller: AbortController;
   subscribers: Set<AnalysisSubscriber>;
   manuscriptId: string;
+  /** Path to the book directory the analyzer is writing into. Set
+      from the manuscript record at job creation, used by the
+      cold-boot rehydration writes (`writeAnalysisState` / `deleteAnalysisState`).
+      `null` for legacy POST /api/manuscripts uploads that have no
+      workspace book — those skip every disk write site, same as
+      cast.json / state.json. */
+  bookDir: string | null;
   replay: AnalysisJobReplayState;
+  /** ms-since-epoch of the last `analysis-state.json` write. Used to
+      throttle phase-tick writes to ~once every 5s so we don't hammer
+      the filesystem during the per-chapter sub-tick storms in
+      Phase 0a / Phase 1. Terminal writes (pause, endJob branches)
+      ignore the throttle and always land. */
+  lastDiskWriteAt: number;
 }
 
 const inFlightAnalysisByManuscript: Map<string, AnalysisJob> = new Map();
@@ -935,6 +953,80 @@ const inFlightAnalysisByManuscript: Map<string, AnalysisJob> = new Map();
 export function isAnalysisJobRunning(manuscriptId: string): boolean {
   const job = inFlightAnalysisByManuscript.get(manuscriptId);
   return !!job && !job.controller.signal.aborted;
+}
+
+/** Snapshot the in-flight analyzer's state for the cold-boot
+    discovery endpoint (GET /api/books/:bookId/analysis/state).
+    Returns null when no job is running OR the job's controller has
+    been aborted — both cases fall back to disk in the GET handler.
+    The synthesised file shape matches what the disk writer produces,
+    so the discovery endpoint can return either source unchanged. */
+export function snapshotInFlightAnalysis(manuscriptId: string): AnalysisStateFile | null {
+  const job = inFlightAnalysisByManuscript.get(manuscriptId);
+  if (!job || job.controller.signal.aborted) return null;
+  const phase = job.replay.lastPhase;
+  return {
+    manuscriptId,
+    phaseId: phase?.phaseId ?? 0,
+    phaseLabel: phase?.label ?? PHASES[0].label,
+    phaseProgress: phase?.progress ?? 0,
+    state: 'running',
+    lastTickAt: job.lastDiskWriteAt || Date.now(),
+    writtenAt: Date.now(),
+  };
+}
+
+/** Phase-tick disk-write throttle. Phase events fire densely during
+    Phase 0a / Phase 1 sub-ticks; we only need one snapshot every few
+    seconds for cold-boot rehydration purposes. */
+const ANALYSIS_STATE_WRITE_THROTTLE_MS = 5_000;
+
+async function persistRunningSnapshot(job: AnalysisJob, force: boolean): Promise<void> {
+  if (!job.bookDir) return;
+  const phase = job.replay.lastPhase;
+  if (!phase) return;
+  const now = Date.now();
+  if (!force && now - job.lastDiskWriteAt < ANALYSIS_STATE_WRITE_THROTTLE_MS) return;
+  job.lastDiskWriteAt = now;
+  try {
+    await writeAnalysisState(job.bookDir, {
+      manuscriptId: job.manuscriptId,
+      phaseId: phase.phaseId,
+      phaseLabel: phase.label,
+      phaseProgress: phase.progress,
+      state: 'running',
+      lastTickAt: now,
+    });
+  } catch (err) {
+    /* Non-fatal — the on-disk file only powers cold-boot pill
+       rehydration. The analyzer cache + cast.json are the real
+       source of truth. Log and continue. */
+    console.warn('[analysis-state] running snapshot write failed', err);
+  }
+}
+
+async function persistTerminalSnapshot(
+  job: AnalysisJob,
+  state: 'paused' | 'halted',
+  finalEv: { code?: string; message?: string } | null,
+): Promise<void> {
+  if (!job.bookDir) return;
+  const phase = job.replay.lastPhase;
+  try {
+    await writeAnalysisState(job.bookDir, {
+      manuscriptId: job.manuscriptId,
+      phaseId: phase?.phaseId ?? 0,
+      phaseLabel: phase?.label ?? PHASES[0].label,
+      phaseProgress: phase?.progress ?? 0,
+      state,
+      haltCode: state === 'halted' ? finalEv?.code : undefined,
+      haltReason: state === 'halted' ? finalEv?.message : undefined,
+      lastTickAt: Date.now(),
+    });
+    job.lastDiskWriteAt = Date.now();
+  } catch (err) {
+    console.warn('[analysis-state] terminal snapshot write failed', err);
+  }
 }
 
 function broadcastToJob(job: AnalysisJob, payload: unknown): void {
@@ -952,6 +1044,10 @@ function trackForReplay(job: AnalysisJob, payload: unknown): void {
       break;
     case 'phase':
       job.replay.lastPhase = ev as AnalysisJobReplayState['lastPhase'];
+      /* Fire-and-forget cold-boot snapshot write. Throttled in
+         persistRunningSnapshot so dense Phase 0a sub-ticks don't
+         hammer the filesystem. Non-fatal on error. */
+      void persistRunningSnapshot(job, false);
       break;
     case 'eta':
       job.replay.lastEta = ev as AnalysisJobReplayState['lastEta'];
@@ -999,6 +1095,30 @@ function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): void {
 
 function endJob(job: AnalysisJob, finalEv?: unknown): void {
   if (finalEv) broadcastToJob(job, finalEv);
+  /* Cold-boot snapshot transition. Fire-and-forget; we still tear
+     down subscribers + deregister synchronously below so the route
+     response isn't held up by the disk write. */
+  const kind = (finalEv as { kind?: string } | undefined)?.kind;
+  const code = (finalEv as { code?: string } | undefined)?.code;
+  if (job.bookDir) {
+    if (!finalEv || kind === 'result') {
+      /* Terminal success OR a clean teardown with no final event:
+         the analysis is complete (no pill should appear). Delete
+         the snapshot file. */
+      void deleteAnalysisState(job.bookDir);
+    } else if (kind === 'error' && code === 'aborted') {
+      /* Paused or displaced. Write paused state so the cold-boot
+         endpoint returns paused, and the pill renders the Resume
+         affordance. */
+      void persistTerminalSnapshot(job, 'paused', finalEv as { code: string; message?: string });
+    } else if (kind === 'error') {
+      /* Halted on a real failure: attribution_drift, cast_incomplete,
+         stage1_shrink_refused, unknown_manuscript, or an upstream
+         analyzer error. Persist with haltCode + haltReason so the
+         cold-boot pill routes the user to the right banner. */
+      void persistTerminalSnapshot(job, 'halted', finalEv as { code: string; message?: string });
+    }
+  }
   for (const sub of job.subscribers) {
     clearInterval(sub.keepAlive);
     try { sub.res.end(); } catch { /* socket already gone */ }
@@ -1111,6 +1231,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     controller: new AbortController(),
     subscribers: new Set(),
     manuscriptId,
+    bookDir: record.bookDir ?? null,
     replay: {
       logs: [],
       lastPhase: null,
@@ -1119,6 +1240,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       failedByChapterId: new Map(),
       lastSeriesPrior: null,
     },
+    lastDiskWriteAt: 0,
   };
   inFlightAnalysisByManuscript.set(manuscriptId, job);
   const subscriber: AnalysisSubscriber = { send, res, keepAlive };
@@ -2310,10 +2432,16 @@ async function runMainAnalyzerJob(
    structured `error: aborted` event to every attached subscriber and
    ends each response. Idempotent: returns 200 with paused:false when
    no job is running so a double-click on Pause doesn't 404. */
-analysisRouter.post('/:id/analysis/pause', (req: Request, res: Response) => {
+analysisRouter.post('/:id/analysis/pause', async (req: Request, res: Response) => {
   const manuscriptId = req.params.id;
   const job = inFlightAnalysisByManuscript.get(manuscriptId);
   if (job && !job.controller.signal.aborted) {
+    /* Write the paused snapshot BEFORE aborting so a cold-boot
+       fetch right after pause is guaranteed to see paused state.
+       The analyzer's catch-block fires endJob({code:'aborted'})
+       asynchronously, which also writes paused state — that write
+       is idempotent with this one (same phase + state). */
+    await persistTerminalSnapshot(job, 'paused', { code: 'aborted', message: 'Analysis paused.' });
     job.controller.abort();
   }
   res.status(200).json({ ok: true, paused: job != null });
