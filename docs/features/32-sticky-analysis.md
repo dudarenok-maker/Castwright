@@ -1,6 +1,6 @@
 # 32 — Sticky analysis across navigation
 
-**Status:** stable. Server (B1), frontend slice + middleware + view wiring (B2), and top-bar pill + docs (B3) all landed. D1 (middleware-owned SSE) lifted the cross-navigation freeze on the pill — middleware now owns its own subscribe-only SSE in addition to the pause-bridge.
+**Status:** stable. Server (B1), frontend slice + middleware + view wiring (B2), and top-bar pill + docs (B3) all landed. D1 (middleware-owned SSE) lifted the cross-navigation freeze on the pill — middleware now owns its own subscribe-only SSE in addition to the pause-bridge. D2 wired the symmetric reverse-direction local-analyzer guard so an explicit TTS-start (Resume / Regenerate*) prompts when a local analysis is alive somewhere in the workspace.
 
 Analysis, once started, runs to completion (or to the user's explicit Pause) regardless of where the user navigates. The previous contract aborted the analyzer the moment the SSE socket closed — navigate-away from the analysing view tore the in-flight LLM call down, and the next visit had to re-do the chapter the abort caught. The B-series contract pins the loop to a server-owned job keyed on `manuscriptId` so navigation only unsubscribes; the job carries on until the queue drains, `/pause` is called, or a `fresh: true` POST displaces it.
 
@@ -64,11 +64,25 @@ Mirrors plan 31 (sticky generation) one-for-one. The patterns intentionally matc
 
 3. **Tests** in `src/components/top-bar.test.tsx` cover: hidden when `analysisPill` is null, all four variants render the expected label + chip styling, click handler fires, and the pill coexists with the generation pill when both are alive.
 
-### Local-analyzer guard (`src/hooks/use-local-analyzer-guard.tsx`)
+### Forward + reverse local-analyzer guards
 
-The existing hook protects analysis-starting callsites when an audio generation is alive — that's the direction the previous version of the codebase needed because navigating away from the analysing view aborted the analyzer (so analysis-after-generation was the only scenario you could trip).
+Two sibling hooks live in `src/hooks/`:
 
-Sticky analysis (B1-B3) opens a new symmetric direction: starting TTS generation when a local analysis is alive on a different book. Both run, both compete for GPU. The reverse-direction guard is **not yet wired** — generation start happens implicitly via `generation-stream-middleware`'s reconcile loop, so there is no analogous user-facing "Start generation" callsite to hook into. The hook's comment block now references plan 32 + the new slice; a future extension can read `s.analysis.activeStream != null` alongside `s.chapters.activeStream` to offer the same confirm dialog symmetrically. Tracked in **Known follow-ups** below.
+- **Forward** (`use-local-analyzer-guard.tsx`): gates analysis-starting callsites when a TTS generation is alive. Reads `s.chapters.activeStream` (TTS handle) + `s.ui.selectedModel` (which engine the user is about to fire). Pre-existing.
+- **Reverse** (`use-reverse-local-analyzer-guard.tsx`, D2): gates TTS-starting callsites when a local analysis is alive. Reads `s.analysis.activeStream` (analysis handle) + the **`engine`** field captured ON that snapshot at `setActiveStream` time (not `s.ui.selectedModel`, which could have changed mid-stream).
+
+D2 added an `engine?: 'local' | 'gemini'` field to `AnalysisStreamSnapshot` (`src/store/analysis-slice.ts`) so the reverse hook knows what the running analysis is actually using. The view dispatches it at `setActiveStream` (`src/views/analysing.tsx`) from `MODEL_OPTIONS.find(m => m.id === selectedModel)?.engine`. Capturing on the snapshot — not reading `selectedModel` at guard-decision time — ensures a user model-switch mid-stream cannot misclassify the running run.
+
+**Insertion contract for the reverse guard (explicit TTS-start callsites only):**
+
+- `src/views/generation.tsx` Pause/Resume toggle, but only on the `paused → !paused` transition. Pausing TTS doesn't compete for GPU; only resuming does. The toggle's onClick branches: `if (paused) reverseGuard(() => setPaused(false)); else setPaused(true);`.
+- `src/components/layout.tsx` regenerate-modal onConfirm callbacks: `RegenerateModal`, `CharacterRegenerateModal`, `BatchCharacterRegenerateModal`. The onConfirm closes its own modal first (so the reverse-guard dialog doesn't stack on top), then wraps the regen dispatch + view change in `reverseAnalyzerGuard(...)`.
+
+**Explicitly NOT gated:**
+
+- `generation-stream-middleware.ts`'s implicit reconcile-driven `openHandle`. The user already consented when they originally started generation; nagging them with a prompt every time the slice rehydrates after a navigation would violate the sticky-generation contract (plan 31). If a user wants to stop generation while a local analysis runs, they pause TTS explicitly — the forward guard never fires (already running) and the reverse guard never fires (user-initiated stop).
+
+**Modal confirm action:** `dispatch(analysisActions.setPaused({ manuscriptId }))`. The pause-bridge + D1 close-handler in `analysis-stream-middleware.ts` together (a) fire `POST /pause` to the server, (b) close the middleware's own SSE, and (c) flip the snapshot's state to `paused` so the pill renders the paused variant. The user can resume from the analysing route afterwards.
 
 ## Acceptance walkthrough
 
@@ -105,7 +119,7 @@ Server-side smoke (post-B1, no UI needed):
 
 - **Subset-retry route** (`POST /:id/analysis/chapters`) remains request-bound. Most subset retries are 1-3 chapter calls and the operational pain is on the main analysis route. A future extension could wrap the subset route in the same sticky pattern, sharing the `inFlightAnalysisByManuscript` map (with a second slot keyed on `${manuscriptId}:subset`).
 - **Cold-load tab rehydrates a server-side in-flight job.** D1's middleware-owned SSE opens on the first tick the view dispatches — so a fresh tab that lands on a non-analysing view (e.g. straight onto `/books`) does not discover a server-side in-flight job on its own. The user has to visit the analysing route once to trigger the view's POST, which seeds the snapshot and lets D1's first-tick trigger open the middleware handle. Track a separate follow-up if this becomes user-visible (the workaround — open the analysing view once — is cheap).
-- **Reverse-direction local-analyzer guard.** `useLocalAnalyzerGuard` today gates analysis-trigger callsites against a running TTS generation. The symmetric concern (TTS-start with a running local analysis) needs a corresponding guard at the generation-start callsite; deferred because generation start is implicit (middleware reconcile) and adding a UI gate there is a bigger surface change. Workaround: the user notices slow performance and pauses one.
+- **Implicit reconcile-driven generation start while a local analysis is alive.** D2 only gates EXPLICIT user-driven TTS-start callsites (Resume button, Regenerate modal confirms). The `generation-stream-middleware.ts` reconcile path that auto-opens a stream when the user lands on Generate with queued chapters is intentionally left unguarded — the user already consented when they originally started generation, and prompting on every navigation would surprise them. If this becomes user-visible (e.g. a user reports both runs slowed down because they navigated back to Generate without realising local analysis was still going), gate via a new "model contention controller" that distinguishes navigation-driven from user-driven opens.
 - **Multi-tab catch-up race.** A second tab opening during the synchronous catch-up replay window can theoretically miss a tick if the first tab's reducer is mid-update. Acceptable since cast.json + manuscript-edits.json on disk are authoritative across reloads; the replay only seeds the in-memory view state.
 - **Server restart drops the in-flight map.** Restart loses every active job — but the disk cache (`server/handoff/cache/{manuscriptId}.json`) survives, so the next POST resumes from cache. The pill's frozen state on the client side rehydrates when the user re-opens the analysing view.
 

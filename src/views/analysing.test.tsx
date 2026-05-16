@@ -1135,6 +1135,12 @@ describe('AnalysingView — cross-navigation analysis snapshot (B2)', () => {
     expect(snap.manuscriptId).toBe('m1');
     expect(snap.bookTitle).toBe('Bonus Keefe Story');
     expect(snap.state).toBe('running');
+    /* D2 — snapshot captures the engine at start time so the reverse
+       local-analyzer guard can decide whether to prompt before a
+       user-driven TTS start. Default test setup runs qwen3.5:4b
+       (local). Mis-classifying this as remote would silently disable
+       the reverse guard. */
+    expect(snap.engine).toBe('local');
   });
 
   it('clicking Pause flips analysis.activeStream.state to paused (middleware will fire api.pauseAnalysis)', async () => {

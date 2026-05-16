@@ -24,6 +24,7 @@ import { stageToHash } from '../lib/router';
 import { TopBar, type GenerationPillData, type AnalysisPillData } from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
 import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
+import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { MiniPlayer } from './mini-player';
 import { PreviewListenerView } from '../views/preview-listener';
 import { MatchDetailDrawer } from '../modals/match-detail';
@@ -318,6 +319,17 @@ export function Layout() {
      30 s poll cadence after either is clicked. Consolidating to a single
      poll is a future follow-up tracked in docs/features/30-global-model-control.md. */
   const ttsLifecycle = useTtsLifecycle();
+
+  /* Reverse local-analyzer guard for the regenerate modals (D2 in
+     plan 32). The modals' onConfirm callbacks all dispatch a
+     chaptersActions.regenerate* action that the
+     generation-stream-middleware reconciles into a fresh openHandle —
+     i.e. an explicit user-driven start of TTS work. When a local
+     analysis is alive, gate that start behind the prompt; otherwise
+     pass through. The Resume / Pause toggle in generation.tsx has its
+     own instance of this hook so the Generate view's button is
+     gated symmetrically. */
+  const { guard: reverseAnalyzerGuard, modal: reverseAnalyzerGuardModal } = useReverseLocalAnalyzerGuard();
   const showGlobalTtsPill =
     stageKind === 'analysing' || stageKind === 'confirm' || stageKind === 'ready';
   const ttsPillElement = showGlobalTtsPill ? (
@@ -453,17 +465,21 @@ export function Layout() {
           onClose={() => dispatch(uiActions.setRegenChapter(null))}
           onConfirm={({ reason, scope, note }) => {
             const chapter = ui.regenChapter;
-            if (chapter) {
-              const affectedCount = scope === 'forward'
-                ? chapters.filter(c => c.id >= chapter.id).length
-                : 1;
-              dispatch(changeLogActions.appendLogEvent(
-                buildChapterRegenEvent({ chapter, scope, reason, note, affectedChapterCount: affectedCount }),
-              ));
-              dispatch(chaptersActions.regenerateChapter({ chapterId: chapter.id, scope }));
-            }
+            /* Close the regen modal first so the reverse-guard modal
+               (rendered below) doesn't stack on top of it. */
             dispatch(uiActions.setRegenChapter(null));
-            dispatch(uiActions.changeView('generate'));
+            reverseAnalyzerGuard(() => {
+              if (chapter) {
+                const affectedCount = scope === 'forward'
+                  ? chapters.filter(c => c.id >= chapter.id).length
+                  : 1;
+                dispatch(changeLogActions.appendLogEvent(
+                  buildChapterRegenEvent({ chapter, scope, reason, note, affectedChapterCount: affectedCount }),
+                ));
+                dispatch(chaptersActions.regenerateChapter({ chapterId: chapter.id, scope }));
+              }
+              dispatch(uiActions.changeView('generate'));
+            });
           }}/>
       )}
       {ui.regenCharacterCtx && (
@@ -471,29 +487,33 @@ export function Layout() {
           defaultChapterId={ui.regenCharacterCtx.defaultChapterId}
           onClose={() => dispatch(uiActions.setRegenCharacterCtx(null))}
           onConfirm={({ characterId, chapterIds, reason, note }) => {
-            if (regenCharacter) {
-              dispatch(changeLogActions.appendLogEvent(
-                buildCharacterRegenEvent({ character: regenCharacter, chapterIds, reason, note }),
-              ));
-            }
-            dispatch(chaptersActions.regenerateCharacter({ characterId, chapterIds }));
             dispatch(uiActions.setRegenCharacterCtx(null));
-            dispatch(uiActions.changeView('generate'));
+            reverseAnalyzerGuard(() => {
+              if (regenCharacter) {
+                dispatch(changeLogActions.appendLogEvent(
+                  buildCharacterRegenEvent({ character: regenCharacter, chapterIds, reason, note }),
+                ));
+              }
+              dispatch(chaptersActions.regenerateCharacter({ characterId, chapterIds }));
+              dispatch(uiActions.changeView('generate'));
+            });
           }}/>
       )}
       {ui.batchRegenIds && (
         <BatchCharacterRegenerateModal characterIds={ui.batchRegenIds} characters={characters} chapters={chapters}
           onClose={() => dispatch(uiActions.setBatchRegenIds(null))}
           onConfirm={({ characterIds, chapterIds, reason, note }) => {
-            const targets = characters.filter(c => characterIds.includes(c.id));
-            if (targets.length) {
-              dispatch(changeLogActions.appendLogEvent(
-                buildBatchCharacterRegenEvent({ characters: targets, chapterIds, reason, note }),
-              ));
-            }
-            dispatch(chaptersActions.batchRegenerateCharacters({ characterIds, chapterIds }));
             dispatch(uiActions.setBatchRegenIds(null));
-            dispatch(uiActions.changeView('generate'));
+            reverseAnalyzerGuard(() => {
+              const targets = characters.filter(c => characterIds.includes(c.id));
+              if (targets.length) {
+                dispatch(changeLogActions.appendLogEvent(
+                  buildBatchCharacterRegenEvent({ characters: targets, chapterIds, reason, note }),
+                ));
+              }
+              dispatch(chaptersActions.batchRegenerateCharacters({ characterIds, chapterIds }));
+              dispatch(uiActions.changeView('generate'));
+            });
           }}/>
       )}
       {ui.showDriftReport && (
@@ -571,6 +591,7 @@ export function Layout() {
           onClose={() => setResultDialog(null)}
         />
       )}
+      {reverseAnalyzerGuardModal}
     </div>
   );
 }

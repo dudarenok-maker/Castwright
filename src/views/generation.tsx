@@ -15,6 +15,7 @@ import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { api, AnalysisError } from '../lib/api';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
+import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { ttsModelLabel } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
@@ -92,6 +93,13 @@ export function GenerationView({
      short-circuits to a straight call-through for remote engines
      (Gemini), so this is a no-op unless both conditions hold. */
   const { guard, modal: analyzerGuardModal } = useLocalAnalyzerGuard({ generatingBookTitle: title });
+
+  /* Reverse guard (plan 32, D2): when the user explicitly resumes TTS
+     generation here AND a local analysis is running somewhere in the
+     workspace, prompt before proceeding. The implicit reconcile-driven
+     path in generation-stream-middleware stays unguarded — the user
+     already consented when they originally started generation. */
+  const { guard: reverseGuard, modal: reverseGuardModal } = useReverseLocalAnalyzerGuard();
 
   const patchSubset = (chapterId: number, patch: Partial<SubsetProgress>) => {
     setSubsetByChapter(prev => {
@@ -530,7 +538,16 @@ export function GenerationView({
               <IconRefresh className="w-4 h-4"/> Regenerate
             </button>
           ) : (
-            <button onClick={() => setPaused(!paused)} className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2">
+            <button
+              onClick={() => {
+                /* paused -> running is the explicit "start TTS work"
+                   transition the reverse guard cares about. Running ->
+                   paused is the user choosing to STOP; no guard needed. */
+                if (paused) reverseGuard(() => setPaused(false));
+                else setPaused(true);
+              }}
+              className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+            >
               {paused ? <><IconPlay className="w-4 h-4"/> Resume</> : <><IconPause className="w-4 h-4"/> Pause</>}
             </button>
           )}
@@ -693,6 +710,7 @@ export function GenerationView({
         </div>
       </div>
       {analyzerGuardModal}
+      {reverseGuardModal}
     </div>
   );
 }
