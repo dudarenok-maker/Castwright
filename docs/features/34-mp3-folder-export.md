@@ -142,10 +142,12 @@ additions to it plus the matching handler in `src/views/listen.tsx`.
   specific testid `export-tile-body-bookplayer`. The B2 refactor
   reduced B3 to a one-entry config addition + a one-line handler
   wire-up in `ListenView`.
-- **B4 — Audiobookshelf** *(pending)*. `appHint: 'audiobookshelf'`,
+- **B4 — Audiobookshelf** *(shipped)*. `appHint: 'audiobookshelf'`,
   defaults to `{ format: 'mp3-folder', destination: 'sync-folder' }`.
-  Modal copy mentions pointing the sync folder at the Audiobookshelf
-  scan root.
+  Modal copy points the sync folder at the Audiobookshelf scan root
+  and notes that the server picks the book up on its next rescan.
+  Tile-specific testid `export-tile-body-audiobookshelf`. Same
+  one-entry shape as B3 — TILE_HINTS already carried the config.
 
 ## Out of scope
 

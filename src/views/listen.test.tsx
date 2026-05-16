@@ -170,16 +170,15 @@ describe('ListenView — coming-soon affordances', () => {
     expect(screen.getByTestId('listener-app-pocketbook')).toBeInTheDocument();
   });
 
-  it('disables non-live listener-app cards while four tiles are live', () => {
+  it('disables non-live listener-app cards while five tiles are live', () => {
     renderView();
-    /* After plan 34 B3, BookPlayer joins PocketBook + Voice + Smart
-       AudioBook Player as a live sideload target, leaving three
-       mocked-handoff tiles. */
-    const stillDeferred = ['audiobookshelf', 'apple_books', 'plex'];
+    /* After plan 34 B4, Audiobookshelf joins the live set, leaving two
+       mocked-handoff tiles (Apple Books, Plex). */
+    const stillDeferred = ['apple_books', 'plex'];
     for (const id of stillDeferred) {
       expect(screen.getByTestId(`listener-app-action-${id}`)).toBeDisabled();
     }
-    for (const id of ['pocketbook', 'voice', 'smart_audiobook', 'bookplayer']) {
+    for (const id of ['pocketbook', 'voice', 'smart_audiobook', 'bookplayer', 'audiobookshelf']) {
       expect(screen.getByTestId(`listener-app-action-${id}`)).not.toBeDisabled();
     }
   });
@@ -207,6 +206,17 @@ describe('ListenView — coming-soon affordances', () => {
     expect(screen.queryByTestId('export-format-m4b')).toBeNull();
     expect(screen.queryByTestId('export-format-mp3-zip')).toBeNull();
     expect(screen.getByTestId('export-tile-body-bookplayer')).toBeInTheDocument();
+  });
+
+  it('opens the export modal in Audiobookshelf mode when its tile is clicked (plan 34 B4)', () => {
+    renderView();
+    fireEvent.click(screen.getByTestId('listener-app-action-audiobookshelf'));
+    expect(screen.getByTestId('export-audiobook-modal')).toBeInTheDocument();
+    expect(screen.queryByTestId('export-tab-download')).toBeNull();
+    expect(screen.queryByTestId('export-tab-sync-folder')).toBeNull();
+    expect(screen.queryByTestId('export-format-m4b')).toBeNull();
+    expect(screen.queryByTestId('export-format-mp3-zip')).toBeNull();
+    expect(screen.getByTestId('export-tile-body-audiobookshelf')).toBeInTheDocument();
   });
 
   it('opens the export modal when the PocketBook tile is clicked', () => {
@@ -238,13 +248,14 @@ describe('ListenView — coming-soon affordances', () => {
 
   it('marks deferred listener-app cards with a Soon badge but omits it on live tiles', () => {
     renderView();
-    /* All four live tiles drop the badge; everything else still wears it. */
-    for (const id of ['pocketbook', 'voice', 'smart_audiobook', 'bookplayer']) {
+    /* All five live tiles drop the badge; the remaining two
+       (apple_books, plex) still wear it. */
+    for (const id of ['pocketbook', 'voice', 'smart_audiobook', 'bookplayer', 'audiobookshelf']) {
       const card = screen.getByTestId(`listener-app-${id}`);
       expect(within(card).queryByTestId('coming-soon-badge')).toBeNull();
     }
-    const audiobookshelfCard = screen.getByTestId('listener-app-audiobookshelf');
-    expect(within(audiobookshelfCard).getByTestId('coming-soon-badge')).toBeInTheDocument();
+    const appleBooksCard = screen.getByTestId('listener-app-apple_books');
+    expect(within(appleBooksCard).getByTestId('coming-soon-badge')).toBeInTheDocument();
   });
 
   it('disables the two remaining "Or download a file" tiles and tags them with Soon', () => {
