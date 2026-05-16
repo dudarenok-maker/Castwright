@@ -519,6 +519,65 @@ export function isPhase0aCoverageComplete(
   return { complete: missingChapterIds.length === 0, missingChapterIds, totalRequired };
 }
 
+/* Phase 1 character-id validator. Every sentence's `characterId` must be a
+   member of `validIds` (the set of ids on `stage1.characters`); otherwise
+   the sentence is orphaned and frontend renderers either swallow the entry
+   silently or show "unknown character" rows the user can't fix.
+
+   The skill (`audiobook-sentence-attribution.md:84`) already specifies
+   that the model must only emit ids from the roster, but flaky models
+   occasionally fabricate ids, and a later stage1-shrink (now blocked by
+   `isPhase0aCoverageComplete` for the subset path) can orphan ids that
+   were valid at attribution time. This validator is the disk-write
+   safety net.
+
+   Unknown ids are demoted to `narrator` (the always-present fallback —
+   `analysis.ts` adds it explicitly during Phase 0b finalisation). The
+   caller drives logging + a drift check via `onDemote` and the returned
+   counts. Returns a new array; never mutates the input. Exported for
+   unit testing. */
+export function reconcileSentenceCharacterIds(
+  sentences: SentenceOutput[],
+  validIds: Set<string>,
+  options: {
+    fallbackId?: string;
+    onDemote?: (info: { sentence: SentenceOutput; originalId: string }) => void;
+  } = {},
+): { sentences: SentenceOutput[]; demotedCount: number; demotedByOriginalId: Map<string, number> } {
+  const fallbackId = options.fallbackId ?? 'narrator';
+  let demotedCount = 0;
+  const demotedByOriginalId = new Map<string, number>();
+  const out: SentenceOutput[] = [];
+  for (const s of sentences) {
+    if (validIds.has(s.characterId)) {
+      out.push(s);
+      continue;
+    }
+    demotedCount += 1;
+    demotedByOriginalId.set(s.characterId, (demotedByOriginalId.get(s.characterId) ?? 0) + 1);
+    out.push({ ...s, characterId: fallbackId });
+    options.onDemote?.({ sentence: s, originalId: s.characterId });
+  }
+  return { sentences: out, demotedCount, demotedByOriginalId };
+}
+
+/* Attribution-drift threshold check. When demotion rate exceeds the
+   threshold on a non-trivially-sized sentence set, the model's output is
+   too unreliable to promote silently — the caller should emit an
+   `attribution_drift` error SSE and refuse to write cast.json/state.json
+   so the run can be retried instead of advancing to a corrupted confirm
+   screen. Defaults: 5% demotion ratio, 100-sentence minimum sample.
+   Exported for unit testing. */
+export function attributionDriftExceeded(
+  demotedCount: number,
+  totalSentences: number,
+  thresholdRatio = 0.05,
+  minSentencesForCheck = 100,
+): boolean {
+  if (totalSentences < minSentencesForCheck) return false;
+  return (demotedCount / totalSentences) > thresholdRatio;
+}
+
 /* Per-chapter ETA from observed pace. Once at least one chapter has
    completed we trust observed wall-clock-per-char over any static formula:
    local models (Ollama qwen3.5:4b, etc.) can be 5–10× slower than Gemini,
@@ -1746,6 +1805,25 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       folded.sentences,
     );
 
+    /* Phase 1 character-id reconciliation (see reconcileSentenceCharacterIds
+       comment for motivation). Demote orphan ids to narrator before the
+       manuscript-edits write; abort with `attribution_drift` if the
+       demotion rate exceeds the threshold on a non-trivial sample so the
+       confirm screen never advances against a corrupted run. */
+    const phase1ValidIds = new Set(characters.map(c => c.id));
+    const reconciled = reconcileSentenceCharacterIds(folded.sentences, phase1ValidIds, {
+      onDemote: ({ sentence, originalId }) => {
+        log(1, `Sentence in ch${sentence.chapterId} attributed to unknown character "${originalId}" — demoted to narrator.`);
+      },
+    });
+    if (reconciled.demotedCount > 0) {
+      const summary = Array.from(reconciled.demotedByOriginalId.entries())
+        .map(([id, count]) => `${id}=${count}`)
+        .join(', ');
+      log(1, `Demoted ${reconciled.demotedCount} of ${folded.sentences.length} sentences to narrator (orphan ids: ${summary}).`);
+    }
+    const phase1DriftExceeded = attributionDriftExceeded(reconciled.demotedCount, folded.sentences.length);
+
     const totalElapsed = Date.now() - startedAt;
     const bookId = record.bookId ?? bookIdFromTitle(record.title);
     const response = {
@@ -1755,7 +1833,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       phaseTimings: PHASES.map(p => ({ id: p.id, label: p.label, duration: endPhase(p.id) || Math.round(totalElapsed / PHASES.length) })),
       characters,
       chapters,
-      sentences: folded.sentences,
+      sentences: reconciled.sentences,
       libraryMatches: [] as Array<{ characterId: string; voiceId: string; confidence: number }>,
     };
 
@@ -1770,37 +1848,64 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     // don't want them to come back to a confirm screen for a run they
     // perceive as unfinished — the cache still holds the per-chapter
     // progress so a follow-up open resumes cheaply.
+    //
+    // Also skipped when attribution drift exceeded the threshold — we
+    // still write manuscript-edits.json with the demoted sentences (so
+    // the disk state is internally consistent) but leave cast.json /
+    // state.json untouched so the book doesn't flip to `cast_pending`
+    // against a corrupted run. The user sees the `attribution_drift`
+    // error in the analysing view and can retry.
     if (record.bookDir && !clientGone) {
       try {
-        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: folded.sentences });
-        await writeJsonAtomic(castJsonPath(record.bookDir), { characters });
-        const statePath = stateJsonPath(record.bookDir);
-        const prev = await readJson<BookStateJson>(statePath);
-        if (prev) {
-          /* Preserve the excluded flag — analysis owns chapter titles/
-             durations, the user owns excluded. Match on id so a re-run
-             after a re-parse picks up whichever ids the parser produced. */
-          const prevExcludedById = new Map<number, boolean>();
-          for (const c of prev.chapters) {
-            if (c.excluded) prevExcludedById.set(c.id, true);
+        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: reconciled.sentences });
+        if (phase1DriftExceeded) {
+          log(1, `Attribution drift exceeded threshold (${reconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round(100 * reconciled.demotedCount / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`);
+        } else {
+          await writeJsonAtomic(castJsonPath(record.bookDir), { characters });
+          const statePath = stateJsonPath(record.bookDir);
+          const prev = await readJson<BookStateJson>(statePath);
+          if (prev) {
+            /* Preserve the excluded flag — analysis owns chapter titles/
+               durations, the user owns excluded. Match on id so a re-run
+               after a re-parse picks up whichever ids the parser produced. */
+            const prevExcludedById = new Map<number, boolean>();
+            for (const c of prev.chapters) {
+              if (c.excluded) prevExcludedById.set(c.id, true);
+            }
+            const next: BookStateJson = {
+              ...prev,
+              chapters: chapters.map(c => ({
+                id: c.id,
+                title: c.title,
+                slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+                duration: c.duration,
+                excluded: prevExcludedById.get(c.id) || undefined,
+              })),
+              updatedAt: new Date().toISOString(),
+            };
+            await writeJsonAtomic(statePath, next);
           }
-          const next: BookStateJson = {
-            ...prev,
-            chapters: chapters.map(c => ({
-              id: c.id,
-              title: c.title,
-              slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
-              duration: c.duration,
-              excluded: prevExcludedById.get(c.id) || undefined,
-            })),
-            updatedAt: new Date().toISOString(),
-          };
-          await writeJsonAtomic(statePath, next);
         }
       } catch (persistErr) {
         console.error('[analysis] failed to persist .audiobook/* for', record.bookDir, persistErr);
         // Non-fatal — the analysis result still streams back to the client.
       }
+    }
+
+    if (phase1DriftExceeded) {
+      /* Phase 1 produced too many orphan attributions to trust. Emit an
+         `attribution_drift` error and skip the `result` event so the
+         analysing view stays put instead of advancing to confirm against
+         a corrupted run. manuscript-edits.json was written with the
+         demoted sentences so disk state is consistent; cast.json /
+         state.json were skipped above so the book doesn't flip to
+         `cast_pending`. The user retries; the cache is preserved. */
+      send({
+        kind: 'error',
+        code: 'attribution_drift',
+        message: `Phase 1 demoted ${reconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round(100 * reconciled.demotedCount / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute.`,
+      });
+      return res.end();
     }
 
     send({ kind: 'result', response });
@@ -2172,6 +2277,26 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     }
     const enriched = attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences);
 
+    /* Phase 1 character-id reconciliation — see the main route's same
+       block plus the comment on reconcileSentenceCharacterIds. The
+       subset path is just as exposed to orphan ids (one subset chapter
+       attributing to a fabricated id, or a previously-good roster that
+       shrunk between attribution and persist), so the same guard
+       applies here. */
+    const subsetValidIds = new Set(enriched.map(c => c.id));
+    const subsetReconciled = reconcileSentenceCharacterIds(folded.sentences, subsetValidIds, {
+      onDemote: ({ sentence, originalId }) => {
+        log(1, `Sentence in ch${sentence.chapterId} attributed to unknown character "${originalId}" — demoted to narrator.`);
+      },
+    });
+    if (subsetReconciled.demotedCount > 0) {
+      const summary = Array.from(subsetReconciled.demotedByOriginalId.entries())
+        .map(([id, count]) => `${id}=${count}`)
+        .join(', ');
+      log(1, `Demoted ${subsetReconciled.demotedCount} of ${folded.sentences.length} sentences to narrator (orphan ids: ${summary}).`);
+    }
+    const subsetDriftExceeded = attributionDriftExceeded(subsetReconciled.demotedCount, folded.sentences.length);
+
     const chapterTitleById = new Map(stage1.chapters.map(c => [c.id, c.title]));
     const chaptersOut = record.chapterHints.map(h => ({
       id: h.id,
@@ -2190,7 +2315,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       phaseTimings: PHASES.map(p => ({ id: p.id, label: p.label, duration: 0 })),
       characters: enriched,
       chapters: chaptersOut,
-      sentences: folded.sentences,
+      sentences: subsetReconciled.sentences,
       libraryMatches: [] as Array<{ characterId: string; voiceId: string; confidence: number }>,
     };
 
@@ -2198,34 +2323,50 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
        (or a follow-up generation pass) sees the merged state.
        Skipped when the SSE client has disconnected — see the parent
        analysis route comment for why we don't flip the library status
-       in the background. */
+       in the background.
+       Also skipped (for cast.json / state.json) when attribution drift
+       exceeded the threshold — same reasoning as the main route's
+       persist block. */
     if (record.bookDir && !clientGone) {
       try {
-        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: folded.sentences });
-        await writeJsonAtomic(castJsonPath(record.bookDir), { characters: enriched });
-        const statePath = stateJsonPath(record.bookDir);
-        const prev = await readJson<BookStateJson>(statePath);
-        if (prev) {
-          const prevExcludedById = new Map<number, boolean>();
-          for (const c of prev.chapters) {
-            if (c.excluded) prevExcludedById.set(c.id, true);
+        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: subsetReconciled.sentences });
+        if (subsetDriftExceeded) {
+          log(1, `Attribution drift exceeded threshold (${subsetReconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round(100 * subsetReconciled.demotedCount / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`);
+        } else {
+          await writeJsonAtomic(castJsonPath(record.bookDir), { characters: enriched });
+          const statePath = stateJsonPath(record.bookDir);
+          const prev = await readJson<BookStateJson>(statePath);
+          if (prev) {
+            const prevExcludedById = new Map<number, boolean>();
+            for (const c of prev.chapters) {
+              if (c.excluded) prevExcludedById.set(c.id, true);
+            }
+            const next: BookStateJson = {
+              ...prev,
+              chapters: chaptersOut.map(c => ({
+                id: c.id,
+                title: c.title,
+                slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+                duration: c.duration,
+                excluded: prevExcludedById.get(c.id) || undefined,
+              })),
+              updatedAt: new Date().toISOString(),
+            };
+            await writeJsonAtomic(statePath, next);
           }
-          const next: BookStateJson = {
-            ...prev,
-            chapters: chaptersOut.map(c => ({
-              id: c.id,
-              title: c.title,
-              slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
-              duration: c.duration,
-              excluded: prevExcludedById.get(c.id) || undefined,
-            })),
-            updatedAt: new Date().toISOString(),
-          };
-          await writeJsonAtomic(statePath, next);
         }
       } catch (persistErr) {
         console.error('[analysis-subset] failed to persist .audiobook/* for', record.bookDir, persistErr);
       }
+    }
+
+    if (subsetDriftExceeded) {
+      send({
+        kind: 'error',
+        code: 'attribution_drift',
+        message: `Phase 1 demoted ${subsetReconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round(100 * subsetReconciled.demotedCount / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute.`,
+      });
+      return res.end();
     }
 
     send({ kind: 'result', response });
