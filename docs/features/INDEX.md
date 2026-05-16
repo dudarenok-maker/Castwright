@@ -4,6 +4,25 @@ Living specs for every feature shipped in v1. Each plan combines **invariants to
 
 PRs that change behavior cited in a plan MUST update the relevant plan in the same diff — that is the regression discipline the plans buy.
 
+## Writing a new plan
+
+1. Copy [TEMPLATE.md](TEMPLATE.md) — required sections are **Benefit / Rationale**, **Architectural impact**, and **Test plan** (automated + manual).
+2. Add YAML frontmatter (`status`, `shipped`, `owner`). New plans start `status: draft` until they ship.
+3. Link the plan from the matching area section below.
+4. Land paired automated tests in the same PR — see CLAUDE.md "Testing discipline".
+
+## Plan lifecycle
+
+Each plan's frontmatter `status:` is one of:
+
+- **draft** — written, not yet implementing.
+- **active** — implementation in progress on the main branch.
+- **stable** — feature is end-to-end functional, behavior locked by automated tests.
+- **deferred** — explicitly parked; see body for "wake when" condition.
+- **scaffolded** — UI/contract in place, parts mocked or partial (matches the `KNOWN: scaffolded` body banner).
+
+When a plan reaches **stable** AND has a filled **Ship notes** section, move it to [`archive/`](archive/README.md) in the same PR — the top-level index is the working set, not a changelog. See `archive/README.md` for the move checklist.
+
 ## How to run a plan
 
 1. Pick a plan from the index.
@@ -71,6 +90,7 @@ PRs that change behavior cited in a plan MUST update the relevant plan in the sa
 - [24 — OpenAPI source of truth](24-openapi-source-of-truth.md) — Types come from generated `api-types.ts`.
 - [25 — Design tokens](25-design-tokens.md) — Colours via CSS variables only.
 - [26 — RTK Immer drafts](26-rtk-immer.md) — Reducers mutate, never spread.
+- [37 — Playwright e2e harness](37-e2e-playwright.md) — Browser-level smoke + on-ramp for visual regression. KNOWN: scaffolded — one golden-path spec, broader coverage deferred.
 
 ### L. Book state persistence
 - [27 — Book state persistence](27-book-state-persistence.md) — `.audiobook/state.json` hydration + slice PUT patches.
@@ -80,7 +100,20 @@ PRs that change behavior cited in a plan MUST update the relevant plan in the sa
 
 ## Status legend
 
+In-body banner (legacy — still valid for plans that haven't been ported to frontmatter):
+
 - **stable** — feature is end-to-end functional; assert real behavior.
 - **KNOWN: scaffolded** — UI/contract is in place but parts are mocked or partial; assert only the documented behavior.
 - **KNOWN: backend-pending** — frontend done, backend stub returns empty/canned data; mock mode exercises the UI, real mode is intentionally a no-op.
 - **KNOWN: operational dependency** — works but requires a sibling process the user must start (TTS sidecar).
+
+Frontmatter (canonical going forward — see "Plan lifecycle" above for the full set).
+
+## Shipped (archive)
+
+Plans that shipped and are no longer load-bearing for in-flight work live in
+[`archive/`](archive/README.md). The git log is the changelog; this section is a
+breadcrumb so cross-references still resolve.
+
+_(Empty for now. As plans flip to `status: stable` and land their Ship notes,
+move them here per `archive/README.md`.)_

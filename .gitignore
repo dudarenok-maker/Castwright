@@ -30,6 +30,11 @@ logs/
 # Test output
 coverage/
 
+# Playwright artefacts (browsers cached in %LOCALAPPDATA%, not the repo).
+playwright-report/
+test-results/
+.playwright/
+
 # Husky internals (hook scripts are tracked; staging dir is not)
 .husky/_/
 

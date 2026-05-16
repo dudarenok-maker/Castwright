@@ -15,9 +15,13 @@ without changing component code.
 - `npm run test:sidecar` — pytest single-run for `server/tts-sidecar/tests/`.
   Uses the sidecar venv at `server/tts-sidecar/.venv\Scripts\python.exe`; emits
   a SKIP banner and exits 0 when the venv isn't bootstrapped yet (fresh clone).
-- `npm run test:all` — frontend + server + PowerShell-scripts + sidecar tests (matches the pre-commit hook).
-- `npm run verify` — full battery: typecheck + all tests + build (matches the pre-push hook).
-- `npm run verify:quick` — all tests, no typecheck/build (alias for `test:all`).
+- `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.
+  Requires one-time `npx playwright install chromium`. See `docs/features/37-e2e-playwright.md`.
+- `npm run test:fast` — frontend + server only (matches the pre-commit hook).
+- `npm run test:all` — frontend + server + PowerShell-scripts + sidecar tests (no e2e).
+- `npm run verify` — full battery: typecheck + all tests + e2e + build (matches the pre-push hook).
+- `npm run verify:quick` — all tests (no e2e, no typecheck, no build) — alias for `test:all`.
+- `npm run verify:fast` — fast tests only (alias for `test:fast`) — pre-commit gate.
 - `npm run build` — production build into `dist/`.
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
@@ -78,21 +82,51 @@ not replace them.
 - Refactor → existing tests stay green; add coverage for any previously-uncovered seam you touched.
 - Never delete or `.skip` a test without an explicit replacement or follow-up plan item.
 - If a change lands in untested territory (e.g. the Python sidecar still has no pytest), the test scaffold itself is part of the work — do not ship code without it.
+- **UI-visible behaviour SHOULD land an e2e test** when the change crosses
+  router/redux/layout seams (Vitest+jsdom can lie about layout, focus, and
+  hashchange timing). One Playwright spec per feature surface is the bar.
 
-Harnesses:
+Harnesses (five tiers):
 - Frontend: `npm run test` (Vitest + jsdom + React Testing Library). Tests live next to the unit (`*.test.ts(x)`).
 - Server: `cd server && npm run test` (Vitest + node env, real-ffmpeg integration where relevant). Same colocation.
 - Sidecar (`server/tts-sidecar/`): pytest harness at `server/tts-sidecar/tests/`,
   invoked via `server/tts-sidecar/run-tests.ps1` or `npm run test:sidecar`.
   Any new sidecar code MUST add cases here.
 - PowerShell helpers (`scripts/lib/`): Pester 5 tests in `scripts/tests/`, invoked via `scripts/tests/run.ps1` or `npm run test:scripts`.
-- Top-level `npm run test:all` runs all four harnesses (Vitest frontend + Vitest server + Pester scripts + pytest sidecar).
+- **E2E (`e2e/`)**: Playwright + chromium against Vite in mock mode on port 5174,
+  invoked via `npm run test:e2e`. Browser-level golden paths + on-ramp for
+  visual regression (`toHaveScreenshot()`). See `docs/features/37-e2e-playwright.md`.
+- Top-level `npm run test:all` runs the four unit/integration harnesses.
+  `npm run verify` adds typecheck + e2e + build on top (pre-push gate).
 
 Canonical end-to-end manuscript for full-pipeline regression:
 `C:\Users\dudar\Downloads\the Coalfall Commission.txt` (do not commit — copyrighted).
 Cite this file from any regression plan that needs an e2e run rather than
 inventing fresh fixtures. See `docs/features/28-chapter-audio-format.md` for
 the canonical recipe.
+
+## Planning-mode behaviour
+
+When in planning mode, or when asked "what's outstanding?" / "what's left?" / "summarise what we'd do":
+
+- **List ALL items, in priority order.** No top-N truncation, no "and a few more" hand-waves. If there are 12 things, write 12. The user reads the whole list and re-prioritises if needed — collapsing it to "top 3" forces them to ask follow-ups.
+- **Each item carries a one-line benefit.** Tag it `*Benefit (user / technical / architectural):*` so the *why* is visible at a glance. An item without a benefit line is a TODO masquerading as a plan — write the benefit or drop the item.
+- **Priority is explicit.** Number the list (1, 2, 3 …) — do not present a flat unordered set. If two items are genuinely tied, group them under one number and say so.
+- **Distinguish "must do" from "nice to have."** When the plan has a natural break (e.g. v1 vs. follow-up), call it out with a heading rather than burying it in adjectives.
+- **Do not narrate work already done in the summary section.** Past tense belongs in a separate "Done in this session" line, NOT mixed into the outstanding list.
+
+This applies to BOTH formal plans (ExitPlanMode) AND informal end-of-turn summaries when the user is mid-planning.
+
+## Before-shipping checklist
+
+Run this before declaring any non-trivial task "done." Skipping a step is fine when the step genuinely does not apply (e.g. a doc-only change has no test plan) — but say so explicitly rather than silently omitting.
+
+1. **Update or create the regression plan** under `docs/features/`. New feature → new file from `TEMPLATE.md`. Changed behaviour cited in an existing plan → update that plan in the same diff. Use frontmatter `status:` (`draft` / `active` / `stable` / `scaffolded` / `deferred`).
+2. **Land paired automated test(s).** New behaviour → new test. Bug fix → regression test (fails before, passes after). UI-visible behaviour crossing router/redux/layout seams → Playwright e2e spec under `e2e/`.
+3. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
+4. **Run `npm run verify`** locally — same battery as pre-push. Catches typecheck + all tests + e2e + build in one shot.
+5. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
+6. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
 
 ## Out of scope until told otherwise
 - New features. Surface area is final for v1.
@@ -133,31 +167,40 @@ the canonical recipe.
 
 ## Commit gate
 Two-tier automated test gate, enforced by husky hooks in `.husky/`:
-- **pre-commit** (`.husky/pre-commit`): runs `npm run verify:quick` —
-  frontend + server tests. Refuses the commit if any Vitest spec is red.
+- **pre-commit** (`.husky/pre-commit`): runs `npm run verify:fast` —
+  frontend + server tests only. Sub-5s on a warm cache. Refuses the
+  commit if any Vitest spec is red. Sidecar (pytest), Pester scripts,
+  Playwright e2e, and typecheck are NOT in pre-commit — they live in
+  pre-push so commits stay snappy.
 - **pre-push** (`.husky/pre-push`): runs `npm run verify` — typecheck +
-  all tests + build. Refuses the push if any step fails.
+  all tests + e2e + build. Refuses the push if any step fails.
 
 Hooks activate automatically after `npm install` via the `prepare` script
 (husky v9 — sets `core.hooksPath` to `.husky/`). On a fresh clone, run
 `npm install` once and you're done.
 
-One additional one-time setup is required for the PowerShell-scripts harness:
-Pester >= 5.0 must be installed (Windows-bundled Pester 3.4 isn't API-compatible).
-Install once per user:
+Additional one-time setup:
+- **Pester >= 5.0** for the PowerShell-scripts harness (Windows-bundled Pester 3.4 isn't API-compatible). Install once per user:
 
-  Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck
+      Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck
 
-`scripts/tests/run.ps1` prints this same hint if it can't find Pester 5+.
+  `scripts/tests/run.ps1` prints this same hint if it can't find Pester 5+.
+- **Playwright chromium** for the e2e harness:
+
+      npx playwright install chromium
+
+  One ~100 MB download, cached in `%LOCALAPPDATA%\ms-playwright`. `npm run test:e2e` errors with a clear hint if chromium is missing.
 
 Working practice:
 - Before committing anything non-trivial, run `npm run verify` — same battery
   as pre-push. Catching failures in the same turn beats catching them at
   push time.
-- `npm run verify:quick` runs just the tests, matching pre-commit.
-- **Do not use `--no-verify` to bypass.** If a hook fails, fix the underlying
-  issue (or update the regression doc + paired test if behavior intentionally
-  changed — see `docs/features/INDEX.md`).
+- `npm run verify:fast` matches pre-commit; `npm run verify:quick` is `test:all` without typecheck/build/e2e.
+- **Do not use `--no-verify` to bypass.** If a hook fails:
+  1. **Triage first.** Categorise the failure as **related to my change** vs. **pre-existing** (i.e. the same test would fail on `main`). A `git stash && git checkout main && <run the failing test>` round-trip settles it in 30 seconds.
+  2. **Related → fix it.** Update the code, the regression doc, and the paired test in the same commit. Then retry.
+  3. **Pre-existing → surface to the user before doing anything else.** Do NOT silently fix unrelated test breakage in the same commit (couples scope; muddies blame). Do NOT bypass with `--no-verify`. Ask whether to land a separate fix PR first, or to scope a follow-up.
+  4. **Flake suspicion → run the failing test in isolation once.** If it passes alone, name the flake explicitly to the user and propose either a retry-loop or a quarantine — never bypass on a hunch.
 - Sidecar pytest coverage lives at `server/tts-sidecar/tests/` —
   `test_smoke.py`, `test_synthesize.py`, `test_runtime_wiring.py`,
   `test_kokoro.py`, `test_logging_format.py`. `test_runtime_wiring.py`
