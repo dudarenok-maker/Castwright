@@ -146,6 +146,19 @@ Worked examples:
   `{ id: "keefe", name: "Keefe Sencen", evidence: [...] }`. **Not**
   narrator.
 
+### Reusing known series characters (when the prompt carries a prior)
+
+The inbox may include a section `## Known characters from prior books
+in this series` with `name`, `aliases`, `description`, and
+`fromBookTitle` per character. **Treat that list as the authoritative
+identity pool for this series.** If a speaker in this chapter matches
+a known series character by name or by alias (case-insensitive,
+ignoring punctuation), reuse their `id` **verbatim** — do not invent a
+new id. Mis-attributing a series-regular as a fresh character creates
+duplicate voice profiles and breaks downstream voice-match scoring.
+New characters introduced in this book that are NOT in the list should
+still get fresh kebab-case ids.
+
 ### Reusing existing ids (CRITICAL — drives roster stability)
 
 - If a character in this chapter is **already in the running roster**,

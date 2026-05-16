@@ -968,6 +968,66 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
     );
     expect(inbox).toMatch(/first chapter being processed/i);
   });
+
+  it('renders the series-cast prior section when sibling-book characters are supplied (C2 carry-over)', () => {
+    /* The Unlocked-shaped regression motivator: KOTLC + Bonus Keefe
+       between them have Sophie / Keefe / Elwin already confirmed.
+       Carrying them into Unlocked's per-chapter prompt means the
+       detector recognises them by name rather than inventing new ids. */
+    const inbox = buildStage1ChapterInbox(
+      'mns_unlocked',
+      'Unlocked',
+      { id: 1, title: 'Chapter 1', body: 'I settled into bed.' },
+      [],
+      [
+        { id: 'sophie', name: 'Sophie',  aliases: ['Foster'],         fromBookTitle: 'Keeper of the Lost Cities' },
+        { id: 'keefe',  name: 'Keefe',                                 fromBookTitle: 'Bonus Keefe Story' },
+        { id: 'elwin',  name: 'Elwin',  description: 'A medical professional', fromBookTitle: 'Keeper of the Lost Cities' },
+      ],
+    );
+    expect(inbox).toContain('## Known characters from prior books in this series');
+    /* All three names + their provenance render so the model can
+       disambiguate same-name carry-overs across sibling books. */
+    expect(inbox).toContain('"id": "sophie"');
+    expect(inbox).toContain('"id": "keefe"');
+    expect(inbox).toContain('"id": "elwin"');
+    expect(inbox).toContain('Keeper of the Lost Cities');
+    expect(inbox).toContain('Bonus Keefe Story');
+    /* And the reuse-verbatim guidance is rendered so the model knows
+       NOT to invent a new id when a chapter speaker matches. */
+    expect(inbox).toMatch(/reuse their `id` \*\*verbatim\*\*/i);
+  });
+
+  it('omits the series-cast prior section entirely when the prior list is empty (standalones / first-in-series)', () => {
+    /* Default seriesPrior = [] should keep the prompt clean for
+       standalones and the first book in a series -- no point in
+       rendering an empty section. */
+    const inbox = buildStage1ChapterInbox(
+      'mns_standalone',
+      'Standalone Book',
+      { id: 1, title: 'Chapter 1', body: 'Body.' },
+      [],
+      [],
+    );
+    expect(inbox).not.toContain('Known characters from prior books');
+  });
+
+  it('compact prior rendering: aliases omitted from the JSON when the array is empty (saves prompt tokens)', () => {
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Book',
+      { id: 1, title: 'Chapter 1', body: 'Body.' },
+      [],
+      [
+        { id: 'lone-wolf', name: 'Lone Wolf', aliases: [], fromBookTitle: 'Earlier Book' },
+      ],
+    );
+    /* The JSON.stringify-with-undefined trick: empty aliases array maps
+       to undefined and disappears from the serialized JSON. Keeps the
+       per-chapter prompt small on long series. */
+    expect(inbox).toContain('"id": "lone-wolf"');
+    expect(inbox).not.toContain('"aliases"');
+  });
 });
 
 /* buildInterimCast underpins the mid-run cast.json writes — the helper
