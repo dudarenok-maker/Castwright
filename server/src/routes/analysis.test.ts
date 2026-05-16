@@ -3,7 +3,7 @@ import {
   sortEvidence, normaliseForMatch, verifyEvidenceAgainstSource, mergeRosterChapter,
   chapterEstFromObserved, projectRemainingMs, buildInterimCast, clearFailedChapterId,
   dropEvidencelessCast, isPhase0aCoverageComplete,
-  reconcileSentenceCharacterIds, attributionDriftExceeded,
+  reconcileSentenceCharacterIds, attributionDriftExceeded, stage1ShrinkRefused,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 
@@ -850,6 +850,61 @@ describe('attributionDriftExceeded — threshold gate for blocking confirm advan
     /* 5.0% should not trip; 5.000001% should. */
     expect(attributionDriftExceeded(50, 1000)).toBe(false);
     expect(attributionDriftExceeded(51, 1000)).toBe(true);
+  });
+});
+
+/* stage1ShrinkRefused is the data-loss guard for stage1 rewrites. When a
+   well-populated existing roster would be replaced by a much smaller new
+   roster, the route refuses the write and surfaces the choice to the
+   user via `stage1_shrink_refused`. Without this guard the Unlocked
+   regression (6 characters silently → 1) happens with no warning. */
+describe('stage1ShrinkRefused — data-loss guard for stage1 rewrites', () => {
+  it('refuses when next is less than half of prev on a non-trivial prior roster', () => {
+    /* Unlocked regression: prior had 6 characters, new run produces 1.
+       1 < 6 * 0.5 = 3 → refused. */
+    expect(stage1ShrinkRefused(6, 1)).toBe(true);
+    expect(stage1ShrinkRefused(6, 2)).toBe(true);
+  });
+
+  it('allows shrinks that stay above the half threshold', () => {
+    /* 6 → 3 is exactly half; default ratio is strict less-than (next < prev*0.5)
+       so 3 (= 3.0) is NOT refused. The verifier might legitimately drop one
+       or two evidenceless characters from a 6-character cast; that's fine. */
+    expect(stage1ShrinkRefused(6, 3)).toBe(false);
+    expect(stage1ShrinkRefused(6, 4)).toBe(false);
+    expect(stage1ShrinkRefused(6, 5)).toBe(false);
+    expect(stage1ShrinkRefused(6, 6)).toBe(false);
+  });
+
+  it('allows growth (next > prev) and equal counts', () => {
+    expect(stage1ShrinkRefused(6, 10)).toBe(false);
+    expect(stage1ShrinkRefused(3, 3)).toBe(false);
+  });
+
+  it('does not trigger when the prior roster is below minPrevForGate (default 3)', () => {
+    /* A book that legitimately had 1-2 characters (a short story with
+       a single narrator + one named speaker) shouldn't trip the gate
+       when re-analysis collapses to a single narrator — the gate is
+       for non-trivial casts. */
+    expect(stage1ShrinkRefused(0, 0)).toBe(false);
+    expect(stage1ShrinkRefused(1, 0)).toBe(false);
+    expect(stage1ShrinkRefused(2, 0)).toBe(false);
+    expect(stage1ShrinkRefused(2, 1)).toBe(false);
+  });
+
+  it('honours custom thresholdRatio + minPrevForGate', () => {
+    /* Stricter run: 80% threshold (i.e. refuse any drop more than 20%), gate active from 2. */
+    expect(stage1ShrinkRefused(5, 4, { thresholdRatio: 0.8, minPrevForGate: 2 })).toBe(false);
+    expect(stage1ShrinkRefused(5, 3, { thresholdRatio: 0.8, minPrevForGate: 2 })).toBe(true);
+    /* prev=2 now hits the gate. */
+    expect(stage1ShrinkRefused(2, 1, { thresholdRatio: 0.8, minPrevForGate: 2 })).toBe(true);
+  });
+
+  it('first-run case (no prior stage1) never triggers — prev=0', () => {
+    /* The main route's Phase 0b finalisation only enters when
+       cache.stage1 was unset; prev=0, gate stays open. */
+    expect(stage1ShrinkRefused(0, 5)).toBe(false);
+    expect(stage1ShrinkRefused(0, 1)).toBe(false);
   });
 });
 

@@ -578,6 +578,37 @@ export function attributionDriftExceeded(
   return (demotedCount / totalSentences) > thresholdRatio;
 }
 
+/* Stage 1 shrink guard. When a stage1 write would replace a non-trivial
+   existing roster (default `minPrevForGate=3` characters) with a much
+   smaller one (default `thresholdRatio=0.5` — i.e. >50% drop), refuse
+   the write unless the caller explicitly opted in. Prevents silent data
+   loss when a follow-up run with a worse model collapses the cast.
+
+   Concrete regression motivator (Unlocked, mns_VoP0mLGvov): an earlier
+   Phase 0a run produced 6 characters (narrator + keefe + elwin + biana
+   + alina + sophie — visible in manuscript-edits.json's surviving
+   attribution); a later subset-retry with Gemini 3.1 Flash Lite hit
+   chapters that the model collapsed to Narrator-only, rebuildRoster()
+   produced a 1-character stage1, and the write went through silently —
+   user opens the analysing view to "Cast so far · 1 character" with no
+   warning that 5 known characters just vanished.
+
+   Returns true when the write should be REFUSED. The caller emits a
+   `stage1_shrink_refused` SSE event with prev/next counts, leaves the
+   existing stage1 untouched, and ends the stream so the user can opt
+   in via `allowStage1Shrink: true` in the next request body. Exported
+   for unit testing. */
+export function stage1ShrinkRefused(
+  prevCharCount: number,
+  nextCharCount: number,
+  options: { thresholdRatio?: number; minPrevForGate?: number } = {},
+): boolean {
+  const thresholdRatio = options.thresholdRatio ?? 0.5;
+  const minPrevForGate = options.minPrevForGate ?? 3;
+  if (prevCharCount < minPrevForGate) return false;
+  return nextCharCount < prevCharCount * thresholdRatio;
+}
+
 /* Per-chapter ETA from observed pace. Once at least one chapter has
    completed we trust observed wall-clock-per-char over any static formula:
    local models (Ollama qwen3.5:4b, etc.) can be 5–10× slower than Gemini,
@@ -893,6 +924,12 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
        `fresh: true` in the request body to discard the cache and start
        over — the route's "Start fresh" button uses this. */
     const requestedFresh = req.body?.fresh === true;
+    /* `allowStage1Shrink` is the user's opt-in when the route refused a
+       stage1 write because the new roster would replace a much larger
+       existing one (see stage1ShrinkRefused comment). The analysing
+       view's "Accept smaller roster" button re-fires the same request
+       with this flag so the next attempt skips the gate. */
+    const allowStage1Shrink = req.body?.allowStage1Shrink === true;
     if (requestedFresh) {
       await clearAnalysisCache(manuscriptId);
       /* Match the filesystem to the cleared cache state. Without this,
@@ -991,6 +1028,24 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       const before = stage1.characters.length;
       stage1.characters = dropEvidencelessCast(stage1.characters, msg => log(0, msg));
       if (verified.totalDropped > 0 || stage1.characters.length !== before) {
+        /* Shrink guard — when the re-verify on the resume short-circuit
+           would drop more than half of a non-trivial cached roster,
+           refuse the rewrite unless the user explicitly opted in. The
+           drop usually indicates source text drifted (e.g. user re-
+           parsed the manuscript) and the previously-verified evidence
+           no longer matches — better to surface the loss than write
+           over a known-good roster. */
+        if (stage1ShrinkRefused(before, stage1.characters.length) && !allowStage1Shrink) {
+          log(0, `Stage 1 shrink refused — verifier would drop from ${before} to ${stage1.characters.length} characters. Re-run with allowStage1Shrink:true to confirm.`);
+          send({
+            kind: 'error',
+            code: 'stage1_shrink_refused',
+            message: `Verifier would drop the cast from ${before} to ${stage1.characters.length} characters. Confirm via allowStage1Shrink to accept the smaller roster.`,
+            prevCharCount: before,
+            nextCharCount: stage1.characters.length,
+          });
+          return res.end();
+        }
         cache.stage1 = stage1;
         await saveAnalysisCache(manuscriptId, cache);
       }
@@ -2012,8 +2067,11 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     return res.end();
   }
 
-  const body = req.body as { chapterIds?: unknown; model?: unknown };
+  const body = req.body as { chapterIds?: unknown; model?: unknown; allowStage1Shrink?: unknown };
   const rawIds = Array.isArray(body?.chapterIds) ? body.chapterIds : [];
+  /* See main route comment on allowStage1Shrink — same opt-in flag for
+     the subset-retry path's stage1 finalisation. */
+  const allowStage1ShrinkSubset = body?.allowStage1Shrink === true;
   const requestedIds = Array.from(new Set(
     rawIds.filter((n): n is number => typeof n === 'number' && Number.isInteger(n)),
   ));
@@ -2191,6 +2249,23 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
        comment on isPhase0aCoverageComplete for the regression that
        motivated this gate. */
     const coverage = isPhase0aCoverageComplete(chapterCast, record.chapterHints);
+    /* Stage 1 shrink guard — see comment on stage1ShrinkRefused. The
+       prior count is captured BEFORE the assignment so a no-op rewrite
+       (same count) doesn't trip the gate; only meaningful shrinks do. */
+    const subsetPrevStage1Count = cache.stage1?.characters.length ?? 0;
+    const subsetNextStage1Count = stage1.characters.length;
+    if (remainingFailedCastIds.length === 0 && coverage.complete && stage1ShrinkRefused(subsetPrevStage1Count, subsetNextStage1Count) && !allowStage1ShrinkSubset) {
+      log(0, `Stage 1 shrink refused — rebuild would drop from ${subsetPrevStage1Count} to ${subsetNextStage1Count} characters. Re-run with allowStage1Shrink:true to confirm.`);
+      send({
+        kind: 'error',
+        code: 'stage1_shrink_refused',
+        message: `Cast finalisation would drop from ${subsetPrevStage1Count} to ${subsetNextStage1Count} characters. Confirm via allowStage1Shrink to accept the smaller roster.`,
+        prevCharCount: subsetPrevStage1Count,
+        nextCharCount: subsetNextStage1Count,
+      });
+      await saveAnalysisCache(manuscriptId, cache);
+      return res.end();
+    }
     if (remainingFailedCastIds.length === 0 && coverage.complete) {
       cache.stage1 = stage1;
     } else if (remainingFailedCastIds.length === 0 && !coverage.complete) {

@@ -16,6 +16,11 @@ let capturedSubsetCall: { chapterIds: number[]; opts: AnalyseOpts | undefined } 
 let resolveSubset: ((value: AnalyseResponse) => void) | undefined;
 let getBookStateImpl: ((bookId: string) => Promise<BookStateResponse>) | undefined;
 let getDroppedQuotesImpl: ((bookId: string) => Promise<DroppedQuotesResponse>) | undefined;
+/* Per-test override — when set, the analyseManuscript mock rejects with
+   this error instead of returning a never-resolving promise. Lets tests
+   exercise the view's catch branches (cast_incomplete,
+   stage1_shrink_refused, etc.) without rewiring the whole mock. */
+let analyseManuscriptRejection: unknown | undefined;
 const loadAnalyzerSpy = vi.fn();
 const unloadSidecarSpy = vi.fn();
 const getSidecarHealthSpy = vi.fn();
@@ -31,6 +36,9 @@ vi.mock('../lib/api', async () => {
          for the duration of the test. */
       analyseManuscript: (_id: string, opts?: AnalyseOpts) => {
         capturedOpts = opts;
+        if (analyseManuscriptRejection !== undefined) {
+          return Promise.reject(analyseManuscriptRejection);
+        }
         return new Promise<AnalyseResponse>(() => {});
       },
       /* Subset retry — captures the chapter ids + opts and exposes a
@@ -61,6 +69,7 @@ beforeEach(() => {
   resolveSubset = undefined;
   getBookStateImpl = undefined;
   getDroppedQuotesImpl = undefined;
+  analyseManuscriptRejection = undefined;
   loadAnalyzerSpy.mockReset();
   unloadSidecarSpy.mockReset();
   getSidecarHealthSpy.mockReset();
@@ -1029,5 +1038,83 @@ describe('AnalysingView — dropped-quotes panel', () => {
     expect(await screen.findByText('NewOne')).toBeInTheDocument();
     expect(screen.queryByText('OldOne')).not.toBeInTheDocument();
     expect(screen.queryByText(/old fabrication/)).not.toBeInTheDocument();
+  });
+});
+
+describe('AnalysingView — stage1 shrink-refused banner', () => {
+  it('renders the banner with prev/next counts when the server emits stage1_shrink_refused', async () => {
+    /* Pre-arm the analyse mock to reject with the exact AnalysisError
+       shape the route emits on a refused shrink. The view's catch block
+       handles this code specifically — not a red error banner, but the
+       yellow shrink-refused card with the prev/next counts and the
+       "Accept smaller roster" button. */
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    analyseManuscriptRejection = new AnalysisError(
+      'Cast finalisation would drop from 6 to 1 characters.',
+      'stage1_shrink_refused',
+      undefined,
+      6,
+      1,
+    );
+    await renderViewWaitingForAnalysis();
+
+    /* The banner surfaces both counts and offers the override button. */
+    const banner = await screen.findByTestId('stage1-shrink-refused-banner');
+    expect(banner).toBeInTheDocument();
+    expect(banner.textContent).toMatch(/6 characters/);
+    expect(banner.textContent).toMatch(/replace it with .*1/);
+    const acceptBtn = screen.getByRole('button', { name: /Accept smaller roster \(1 characters\)/i });
+    expect(acceptBtn).toBeInTheDocument();
+  });
+
+  it('clicking Accept smaller roster re-fires the analysis with allowStage1Shrink:true', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    analyseManuscriptRejection = new AnalysisError(
+      'Cast finalisation would drop from 5 to 1 characters.',
+      'stage1_shrink_refused',
+      undefined,
+      5,
+      1,
+    );
+    await renderViewWaitingForAnalysis();
+
+    /* First call: no override — captured opts must not include the flag. */
+    expect((capturedOpts as AnalyseOpts | undefined)?.allowStage1Shrink).toBeUndefined();
+
+    /* Clear the rejection so the second attempt enters the never-resolving
+       branch instead of looping forever in the banner. */
+    analyseManuscriptRejection = undefined;
+
+    const acceptBtn = await screen.findByRole('button', { name: /Accept smaller roster/i });
+    await act(async () => { fireEvent.click(acceptBtn); });
+
+    /* Wait for the override to land on capturedOpts. The mock overwrites
+       on every call, so the most recent capture is the post-click one. */
+    await waitFor(() => {
+      expect((capturedOpts as AnalyseOpts | undefined)?.allowStage1Shrink).toBe(true);
+    });
+  });
+
+  it('Dismiss clears the banner without re-firing with the override', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    analyseManuscriptRejection = new AnalysisError(
+      'Cast finalisation would drop from 4 to 1 characters.',
+      'stage1_shrink_refused',
+      undefined,
+      4,
+      1,
+    );
+    await renderViewWaitingForAnalysis();
+    const banner = await screen.findByTestId('stage1-shrink-refused-banner');
+    expect(banner).toBeInTheDocument();
+
+    const dismissBtn = screen.getByRole('button', { name: /Dismiss/i });
+    await act(async () => { fireEvent.click(dismissBtn); });
+    await waitFor(() => expect(screen.queryByTestId('stage1-shrink-refused-banner')).not.toBeInTheDocument());
+
+    /* Dismiss must not trigger a re-fire with the override flag.
+       The most recent captured opts are still the original (no override)
+       call — the dismiss is purely a UI state change. */
+    expect((capturedOpts as AnalyseOpts | undefined)?.allowStage1Shrink).toBeUndefined();
   });
 });
