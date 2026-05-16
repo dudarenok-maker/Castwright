@@ -85,6 +85,13 @@ export function BooksRoute() {
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
       }}
+      onCoverChanged={async () => {
+        /* The CoverPicker modal already POSTed / DELETEd; just refresh
+           the library so the new coverImageUrl propagates through the
+           slice and other surfaces (Listen header) repaint on next mount. */
+        const res = await api.getLibrary().catch(() => null);
+        if (res) dispatch(libraryActions.hydrate(res));
+      }}
       onReparseBook={async (b) => {
         let result;
         try {
@@ -483,6 +490,7 @@ function ListenRoute({ bookId }: { bookId: string }) {
   const bookMeta   = useAppSelector(selectEffectiveMeta(bookId));
   const isDirty    = useAppSelector(selectIsDirty);
   const coverGradient = useAppSelector(s => s.library.books.find(b => b.bookId === bookId)?.coverGradient ?? null);
+  const coverImageUrl = useAppSelector(s => s.library.books.find(b => b.bookId === bookId)?.coverImageUrl ?? null);
   return (
     <ListenView bookId={bookId} chapters={chapters} characters={characters} library={voices}
       currentTrack={currentTrack}
@@ -492,6 +500,13 @@ function ListenRoute({ bookId }: { bookId: string }) {
       onEnterPreview={() => dispatch(uiActions.setPreviewMode(true))}
       bookMeta={bookMeta}
       bookCoverGradient={coverGradient}
+      bookCoverImageUrl={coverImageUrl}
+      onCoverChanged={async () => {
+        /* Refresh the library so the Listen view picks up the new
+           coverImageUrl via the slice selector above. */
+        const res = await api.getLibrary().catch(() => null);
+        if (res) dispatch(libraryActions.hydrate(res));
+      }}
       onEditMetaField={(field, value) => dispatch(bookMetaActions.setDraftField({ field, value }))}
       onCommitMeta={() => dispatch(bookMetaActions.commitDraft({ bookId }))}
       onCancelMeta={() => dispatch(bookMetaActions.cancelDraft())}

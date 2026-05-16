@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   IconPlay, IconPause, IconHeadphones, IconWaveform, IconShare, IconShield,
-  IconExternal, IconDownload, IconEye, IconRefresh, IconUpload,
+  IconExternal, IconDownload, IconEye, IconRefresh, IconUpload, IconImage,
 } from '../lib/icons';
+import { CoverPicker } from '../modals/cover-picker';
 import {
   SectionLabel, MixedHeading, PrimaryButton, Pill, ComingSoonBadge, MockedPreviewBanner,
 } from '../components/primitives';
@@ -36,6 +37,12 @@ interface Props {
      skeleton rather than the design fixture. */
   bookMeta: EditableBookMeta | null;
   bookCoverGradient: [string, string] | null;
+  /** Server-relative URL for the cached OpenLibrary cover image when
+      one exists for this book. Null falls back to the gradient. */
+  bookCoverImageUrl?: string | null;
+  /** Fired by the CoverPicker after a successful save/remove so the
+      parent can refresh the library slice. */
+  onCoverChanged?: () => Promise<void> | void;
   onEditMetaField: (field: EditableBookMetaField, value: string | null) => void;
   onCommitMeta: () => void;
   onCancelMeta: () => void;
@@ -45,9 +52,21 @@ interface Props {
 export function ListenView({
   bookId,
   chapters, characters, currentTrack, setCurrentTrack, onSendApp, onRegenerate, onEnterPreview,
-  bookMeta, bookCoverGradient,
+  bookMeta, bookCoverGradient, bookCoverImageUrl, onCoverChanged,
   onEditMetaField, onCommitMeta, onCancelMeta, isMetaDirty,
 }: Props) {
+  /* CoverPicker modal state, plus a local override so the new image
+     paints immediately after a successful pick (the prop will catch up
+     on the next library hydrate). Empty string = the user just removed
+     the cover; ignore the prop until the slice refresh resolves. Same
+     pattern as BookCard in book-library.tsx. */
+  const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  const [coverOverride, setCoverOverride] = useState<string | null>(null);
+  const [coverLoadFailed, setCoverLoadFailed] = useState(false);
+  const effectiveCoverUrl =
+    coverOverride !== null
+      ? (coverOverride || null)
+      : (bookCoverImageUrl ?? null);
   /* Local modal state for the export flow. Three entry points open it:
      - The "Export audiobook" pill in the cover-art row (download tab).
      - The PocketBook tile (download tab — LAN/QR sideload story).
@@ -94,7 +113,15 @@ export function ListenView({
   return (
     <div className="max-w-[1200px] mx-auto px-6 py-10">
       <section className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-10 items-end mb-12">
-        <CoverArt title={title} gradient={bookCoverGradient} runtime={formatTime(totalSec)} narrator={narratorName}/>
+        <CoverArt
+          title={title}
+          gradient={bookCoverGradient}
+          imageUrl={!coverLoadFailed ? effectiveCoverUrl : null}
+          onImageError={() => setCoverLoadFailed(true)}
+          runtime={formatTime(totalSec)}
+          narrator={narratorName}
+          onChangeCover={() => setCoverPickerOpen(true)}
+        />
         <div>
           <SectionLabel>Audiobook · ready to listen</SectionLabel>
           <h1 className="mt-4 text-4xl md:text-5xl lg:text-6xl font-bold leading-[1.05] tracking-tight font-serif">
@@ -185,6 +212,22 @@ export function ListenView({
           : undefined}
         onClose={() => setExportModal(null)}
       />
+
+      <CoverPicker
+        open={coverPickerOpen}
+        bookId={bookId}
+        bookTitle={title}
+        bookAuthor={author}
+        currentCoverUrl={effectiveCoverUrl ?? undefined}
+        onClose={() => setCoverPickerOpen(false)}
+        onPicked={(newUrl) => {
+          setCoverLoadFailed(false);
+          /* Empty string from a "Remove cover" pick — shadow the slice
+             with an empty override until the parent refresh hydrates. */
+          setCoverOverride(newUrl ? `${newUrl}?t=${Date.now()}` : '');
+          void onCoverChanged?.();
+        }}
+      />
     </div>
   );
 }
@@ -192,16 +235,24 @@ export function ListenView({
 interface CoverArtProps {
   title: string;
   gradient: [string, string] | null;
+  /** Server-relative cover URL when one is on disk; null/undefined
+      renders the gradient skeleton only. */
+  imageUrl?: string | null;
+  /** Called when the `<img>` 404s / errors out. Parent flips to
+      gradient-only render. */
+  onImageError?: () => void;
   runtime: string;
   narrator: string | null;
+  /** Reveals a small hover-only "Change cover" button on the cover. */
+  onChangeCover?: () => void;
 }
-function CoverArt({ title, gradient, runtime, narrator }: CoverArtProps) {
+function CoverArt({ title, gradient, imageUrl, onImageError, runtime, narrator, onChangeCover }: CoverArtProps) {
   const styled = gradient
     ? { background: `linear-gradient(135deg, ${gradient[0]}, ${gradient[1]})` }
     : undefined;
   return (
     <div data-testid="listen-cover-art"
-         className={`aspect-square rounded-3xl overflow-hidden shadow-float relative ${gradient ? '' : 'bg-gradient-cta'}`}
+         className={`group aspect-square rounded-3xl overflow-hidden shadow-float relative ${gradient ? '' : 'bg-gradient-cta'}`}
          style={styled}>
       <svg viewBox="0 0 320 320" className="absolute inset-0 w-full h-full opacity-25">
         <circle cx="160" cy="160" r="140" fill="none" stroke="white" strokeWidth="0.5"/>
@@ -209,18 +260,38 @@ function CoverArt({ title, gradient, runtime, narrator }: CoverArtProps) {
         <circle cx="160" cy="160" r="80"  fill="none" stroke="white" strokeWidth="0.5"/>
         <circle cx="160" cy="160" r="50"  fill="none" stroke="white" strokeWidth="0.5"/>
       </svg>
+      {imageUrl && (
+        <img
+          data-testid="listen-cover-art-image"
+          src={imageUrl}
+          alt=""
+          className="absolute inset-0 w-full h-full object-cover"
+          onError={onImageError}
+        />
+      )}
       <div className="absolute top-6 left-6 right-6 flex items-center justify-between">
         <p className="text-[10px] uppercase tracking-[0.2em] text-white/70 font-semibold">Audiobook</p>
         <IconHeadphones className="w-5 h-5 text-white/70"/>
       </div>
-      <div className="absolute bottom-6 left-6 right-6">
+      {!imageUrl && <div className="absolute bottom-6 left-6 right-6">
         <h2 className="font-serif text-3xl font-bold text-white leading-[1.1]">{title || ' '}</h2>
         <p className="font-serif italic text-sm text-white/80 mt-1.5">A novel</p>
         <div className="mt-4 flex items-center gap-2 text-[10px] uppercase tracking-widest text-white/60">
           <IconWaveform className="w-3 h-3"/>
           <span>{runtime}{narrator ? ` · narrated by ${narrator}` : ''}</span>
         </div>
-      </div>
+      </div>}
+      {onChangeCover && (
+        <button
+          type="button"
+          onClick={onChangeCover}
+          aria-label="Change cover image"
+          data-testid="listen-change-cover"
+          className="absolute bottom-3 right-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/55 text-white text-[11px] font-medium opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+        >
+          <IconImage className="w-3.5 h-3.5"/> Change cover
+        </button>
+      )}
     </div>
   );
 }

@@ -223,6 +223,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/cover/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List OpenLibrary cover candidates for a book
+         * @description Searches OpenLibrary (`/search.json?title=…&author=…`) and returns
+         *     up to 6 deduped cover candidates. Powers the "Find cover image"
+         *     modal on the library card + Listen header. Keyless — OpenLibrary
+         *     is the upstream and rate-limits anonymously.
+         */
+        get: operations["getCoverCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream the cached cover image bytes
+         * @description Serves the JPEG bytes for the book's currently-selected cover
+         *     (`<bookDir>/.audiobook/cover.jpg`). Cached for an hour
+         *     (`Cache-Control: public, max-age=3600`). Returns 404 when no
+         *     cover is on disk — clients fall back to `coverGradient`.
+         */
+        get: operations["getCover"];
+        put?: never;
+        /**
+         * Download and pin one of the OpenLibrary candidates as this book's cover
+         * @description Re-runs the OpenLibrary search to locate the requested candidate
+         *     by `openLibraryId`, downloads the JPEG to
+         *     `<bookDir>/.audiobook/cover.jpg`, and patches `coverImage` onto
+         *     state.json so the next library scan exposes `coverImageUrl`.
+         */
+        post: operations["setCover"];
+        /**
+         * Remove the cached cover and revert to the procedural gradient
+         * @description Removes `<bookDir>/.audiobook/cover.jpg` and clears the
+         *     `coverImage` field from state.json. Idempotent — succeeds even
+         *     when no cover exists.
+         */
+        delete: operations["deleteCover"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/voices/base": {
         parameters: {
             query?: never;
@@ -674,6 +733,20 @@ export interface components {
             name: string;
             books: components["schemas"]["LibraryBook"][];
         };
+        CoverCandidate: {
+            /**
+             * @description Stable identifier carried back to POST /api/books/{bookId}/cover
+             *     (`cover-i:<openLibraryCoverEditionId>`).
+             */
+            openLibraryId: string;
+            /**
+             * Format: uri
+             * @description Direct OpenLibrary cover URL (`/b/id/<id>-L.jpg`).
+             */
+            coverUrl: string;
+            /** @description Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy. */
+            edition?: string;
+        };
         LibraryBook: {
             /** @description slug(author)__slug(series)__slug(title) */
             bookId: string;
@@ -697,6 +770,14 @@ export interface components {
             /** @description human-formatted relative time, e.g. '2 min ago' */
             lastWorkedOn: string;
             coverGradient: string[];
+            /**
+             * Format: uri-reference
+             * @description Server-relative URL for the cached cover image bytes (always
+             *     `/api/books/{bookId}/cover`). Present only when the book has
+             *     a cover cached on disk (`.audiobook/cover.jpg`). When
+             *     absent, the UI falls back to `coverGradient`.
+             */
+            coverImageUrl?: string;
             pinned?: boolean;
         };
         ImportCandidate: {
@@ -1609,6 +1690,153 @@ export interface operations {
                 };
             };
             /** @description Book or chapter not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getCoverCandidates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Candidate list (may be empty when OpenLibrary has no match) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        candidates: components["schemas"]["CoverCandidate"][];
+                    };
+                };
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description OpenLibrary unreachable, timed out, or returned malformed JSON */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getCover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JPEG bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                };
+            };
+            /** @description Book has no cached cover */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setCover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Stable id from `CoverCandidate.openLibraryId` (e.g. `cover-i:123456`). */
+                    openLibraryId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Cover saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uri-reference */
+                        coverImageUrl: string;
+                    };
+                };
+            };
+            /** @description Missing or malformed `openLibraryId` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found OR candidate no longer in the live OpenLibrary result set */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description OpenLibrary unreachable, timed out, oversized, or returned a non-image response */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteCover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cover removed (or was never present) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -10,6 +10,7 @@ import {
   bookDirByDisplay,
   castJsonPath,
   changeLogJsonPath,
+  coverImagePath,
   dotAudiobook,
   ensureWorkspace,
   makeBookId,
@@ -57,6 +58,17 @@ export interface BookStateJson {
     audioRenderedAt?: string;
   }>;
   coverGradient: [string, string];
+  /** Cached cover-image metadata. Bytes live next to state.json at
+      .audiobook/cover.jpg (see `coverImagePath` in workspace/paths.ts).
+      Populated by the OpenLibrary fetch (server/src/cover/openlibrary.ts)
+      and reverted by DELETE /api/books/:bookId/cover. Optional so books
+      imported before this feature continue to load and fall back to the
+      procedural gradient on the card. */
+  coverImage?: {
+    openLibraryId: string;
+    originalUrl: string;
+    fetchedAt: string;
+  };
   createdAt: string;
   updatedAt: string;
   /* Editable audiobook metadata surfaced by the Listen view's metadata editor.
@@ -85,6 +97,11 @@ export interface LibraryBook {
   runtime?: string;
   lastWorkedOn: string;
   coverGradient: [string, string];
+  /** Server-relative URL to the cached cover image when one is on disk
+      (`<bookDir>/.audiobook/cover.jpg`). Undefined when no cover has
+      been fetched / picked — the card / Listen header fall back to the
+      procedural gradient. */
+  coverImageUrl?: string;
   pinned?: boolean;
 }
 
@@ -213,6 +230,13 @@ async function scanBook(author: string, series: string, title: string): Promise<
 
   const bookId = state?.bookId ?? makeBookId(author, series, title);
   const coverGradient = state?.coverGradient ?? deterministicGradient(bookId);
+  /* Only surface coverImageUrl when both the state.json metadata AND
+     the bytes are present. State without the file (or vice versa) means
+     a half-completed fetch — the card falls back to the gradient until
+     the next user-driven pick. */
+  const coverImageUrl = state?.coverImage && existsSync(coverImagePath(bookDir))
+    ? `/api/books/${bookId}/cover`
+    : undefined;
   /* Excluded chapters (front/back-matter the user opted out of narrating)
      don't count toward the chapterCount or completion math — otherwise a
      12-chapter book with 2 excluded would stall at 10/12 forever. */
@@ -330,6 +354,7 @@ async function scanBook(author: string, series: string, title: string): Promise<
     runtime,
     lastWorkedOn,
     coverGradient,
+    coverImageUrl,
   };
 }
 

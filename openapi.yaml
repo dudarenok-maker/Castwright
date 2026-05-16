@@ -332,6 +332,99 @@ paths:
         '404':
           description: Book or chapter not found
 
+  /api/books/{bookId}/cover/candidates:
+    get:
+      summary: List OpenLibrary cover candidates for a book
+      operationId: getCoverCandidates
+      description: |
+        Searches OpenLibrary (`/search.json?title=…&author=…`) and returns
+        up to 6 deduped cover candidates. Powers the "Find cover image"
+        modal on the library card + Listen header. Keyless — OpenLibrary
+        is the upstream and rate-limits anonymously.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Candidate list (may be empty when OpenLibrary has no match)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [candidates]
+                properties:
+                  candidates:
+                    type: array
+                    items: { $ref: '#/components/schemas/CoverCandidate' }
+        '404': { description: Book not found }
+        '502':
+          description: OpenLibrary unreachable, timed out, or returned malformed JSON
+
+  /api/books/{bookId}/cover:
+    get:
+      summary: Stream the cached cover image bytes
+      operationId: getCover
+      description: |
+        Serves the JPEG bytes for the book's currently-selected cover
+        (`<bookDir>/.audiobook/cover.jpg`). Cached for an hour
+        (`Cache-Control: public, max-age=3600`). Returns 404 when no
+        cover is on disk — clients fall back to `coverGradient`.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: JPEG bytes
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        '404': { description: Book has no cached cover }
+    post:
+      summary: Download and pin one of the OpenLibrary candidates as this book's cover
+      operationId: setCover
+      description: |
+        Re-runs the OpenLibrary search to locate the requested candidate
+        by `openLibraryId`, downloads the JPEG to
+        `<bookDir>/.audiobook/cover.jpg`, and patches `coverImage` onto
+        state.json so the next library scan exposes `coverImageUrl`.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [openLibraryId]
+              properties:
+                openLibraryId:
+                  type: string
+                  description: "Stable id from `CoverCandidate.openLibraryId` (e.g. `cover-i:123456`)."
+      responses:
+        '200':
+          description: Cover saved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [coverImageUrl]
+                properties:
+                  coverImageUrl: { type: string, format: uri-reference }
+        '400': { description: Missing or malformed `openLibraryId` }
+        '404': { description: Book not found OR candidate no longer in the live OpenLibrary result set }
+        '502':
+          description: OpenLibrary unreachable, timed out, oversized, or returned a non-image response
+    delete:
+      summary: Remove the cached cover and revert to the procedural gradient
+      operationId: deleteCover
+      description: |
+        Removes `<bookDir>/.audiobook/cover.jpg` and clears the
+        `coverImage` field from state.json. Idempotent — succeeds even
+        when no cover exists.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '204': { description: Cover removed (or was never present) }
+        '404': { description: Book not found }
+
   /api/voices/base:
     get:
       summary: List the raw model voices the configured engines expose
@@ -867,6 +960,23 @@ components:
           type: array
           items: { $ref: '#/components/schemas/LibraryBook' }
 
+    CoverCandidate:
+      type: object
+      required: [openLibraryId, coverUrl]
+      properties:
+        openLibraryId:
+          type: string
+          description: |
+            Stable identifier carried back to POST /api/books/{bookId}/cover
+            (`cover-i:<openLibraryCoverEditionId>`).
+        coverUrl:
+          type: string
+          format: uri
+          description: "Direct OpenLibrary cover URL (`/b/id/<id>-L.jpg`)."
+        edition:
+          type: string
+          description: "Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy."
+
     LibraryBook:
       type: object
       required: [bookId, title, author, series, status, chapterCount, completedChapters, characterCount, voiceCount, lastWorkedOn, coverGradient, isStandalone]
@@ -897,6 +1007,14 @@ components:
           minItems: 2
           maxItems: 2
           items: { type: string, description: "CSS color literal" }
+        coverImageUrl:
+          type: string
+          format: uri-reference
+          description: |
+            Server-relative URL for the cached cover image bytes (always
+            `/api/books/{bookId}/cover`). Present only when the book has
+            a cover cached on disk (`.audiobook/cover.jpg`). When
+            absent, the UI falls back to `coverGradient`.
         pinned:           { type: boolean }
 
     # --- Import + confirm-metadata ---------------------------------

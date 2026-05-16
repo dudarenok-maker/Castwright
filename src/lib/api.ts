@@ -11,7 +11,7 @@ import type {
   ImportResponse, ConfirmBookRequest, ConfirmBookResponse,
   BookStateResponse, PutStateRequest, WorkspaceChangeLogResponse,
   UserSettings, UserSettingsPatch, DroppedQuotesResponse,
-  AnalysisStateResponse,
+  AnalysisStateResponse, CoverCandidate,
   BookExportRequest, BookExportJob, ExportLanInfo,
   BaseVoice, TtsEngine,
 } from './types';
@@ -591,6 +591,73 @@ async function realPutBookState(bookId: string, req: PutStateRequest): Promise<v
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Book state PUT failed (${res.status}): ${(await res.text()) || res.statusText}`);
+}
+
+/* OpenLibrary cover endpoints. The picker modal calls findCoverCandidates
+   on open, then setCover when the user clicks a thumbnail; removeCover
+   reverts to the procedural gradient. See server/src/routes/cover.ts and
+   server/src/cover/openlibrary.ts for the upstream behaviour. */
+async function realFindCoverCandidates(bookId: string): Promise<{ candidates: CoverCandidate[] }> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover/candidates`);
+  if (!res.ok) throw new Error(`Cover candidates fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function realSetCover(bookId: string, openLibraryId: string): Promise<{ coverImageUrl: string }> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ openLibraryId }),
+  });
+  if (!res.ok) throw new Error(`Cover save failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function realRemoveCover(bookId: string): Promise<void> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Cover remove failed (${res.status}): ${(await res.text()) || res.statusText}`);
+}
+
+/* Mock counterparts. The fake candidates point at real OpenLibrary
+   image URLs so the picker renders meaningful thumbnails under
+   VITE_USE_MOCKS=true; setCover returns the picked URL directly so the
+   library card swaps the cover without a real server round-trip. */
+const MOCK_COVER_CANDIDATES: CoverCandidate[] = [
+  {
+    openLibraryId: 'cover-i:8739161',
+    coverUrl: 'https://covers.openlibrary.org/b/id/8739161-L.jpg',
+    edition: 'Aladdin · 2012',
+  },
+  {
+    openLibraryId: 'cover-i:13035811',
+    coverUrl: 'https://covers.openlibrary.org/b/id/13035811-L.jpg',
+    edition: 'Aladdin · 2013',
+  },
+  {
+    openLibraryId: 'cover-i:14625765',
+    coverUrl: 'https://covers.openlibrary.org/b/id/14625765-L.jpg',
+    edition: 'Aladdin · 2014',
+  },
+  {
+    openLibraryId: 'cover-i:11193889',
+    coverUrl: 'https://covers.openlibrary.org/b/id/11193889-L.jpg',
+    edition: 'Aladdin · 2015',
+  },
+];
+
+async function mockFindCoverCandidates(_bookId: string): Promise<{ candidates: CoverCandidate[] }> {
+  await wait(180);
+  return { candidates: MOCK_COVER_CANDIDATES };
+}
+
+async function mockSetCover(_bookId: string, openLibraryId: string): Promise<{ coverImageUrl: string }> {
+  await wait(80);
+  const hit = MOCK_COVER_CANDIDATES.find(c => c.openLibraryId === openLibraryId);
+  return { coverImageUrl: hit?.coverUrl ?? MOCK_COVER_CANDIDATES[0].coverUrl };
+}
+
+async function mockRemoveCover(_bookId: string): Promise<void> {
+  await wait(40);
 }
 
 async function realConfirmBook(body: ConfirmBookRequest): Promise<ConfirmBookResponse> {
@@ -1650,6 +1717,9 @@ const real = {
   setVoiceOverride:  realSetVoiceOverride,
   getBookState:      realGetBookState,
   putBookState:      realPutBookState,
+  findCoverCandidates: realFindCoverCandidates,
+  setCover:          realSetCover,
+  removeCover:       realRemoveCover,
   getAnalysisState:  realGetAnalysisState,
   getDroppedQuotes:  realGetDroppedQuotes,
   importManuscript:  realImportManuscript,
@@ -1707,6 +1777,9 @@ const mock = {
   setVoiceOverride:  mockSetVoiceOverride,
   getBookState:      mockGetBookState,
   putBookState:      mockPutBookState,
+  findCoverCandidates: mockFindCoverCandidates,
+  setCover:          mockSetCover,
+  removeCover:       mockRemoveCover,
   getAnalysisState:  mockGetAnalysisState,
   getDroppedQuotes:  mockGetDroppedQuotes,
   importManuscript:  mockImportManuscript,

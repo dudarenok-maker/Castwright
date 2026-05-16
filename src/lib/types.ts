@@ -303,8 +303,14 @@ export interface LibraryBook {
   runtime?: string;
   lastWorkedOn: string;
   coverGradient: [string, string];
+  /** Server-relative URL for the cached cover image when one is on
+      disk. Undefined when no cover has been fetched/picked — the card
+      and Listen header fall back to `coverGradient`. */
+  coverImageUrl?: string;
   pinned?: boolean;
 }
+
+export type CoverCandidate = components['schemas']['CoverCandidate'];
 
 export interface LibrarySeries {
   name: string;
