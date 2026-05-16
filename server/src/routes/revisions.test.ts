@@ -33,6 +33,7 @@ interface DriftEventOut {
   chapterId: number;
   severity: 'mild' | 'moderate' | 'severe';
   factor: string;
+  autoQueueable?: boolean;
 }
 
 interface CharacterSnapshot {
@@ -331,6 +332,60 @@ describe('GET /api/books/:bookId/revisions — attribute drift (set-symmetric-di
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.body.drift).toEqual([]);
+  });
+});
+
+describe('GET /api/books/:bookId/revisions — autoQueueable flag (plan 20 C1+C2)', () => {
+  it('marks severe hard-signal drift events as autoQueueable=true', async () => {
+    seed({
+      snapshots: { eliza: { voiceId: 'old' } },
+      cast: [{ id: 'eliza', voiceId: 'new' }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    expect(drift[0].severity).toBe('severe');
+    expect(drift[0].autoQueueable).toBe(true);
+  });
+
+  it('marks severe tone drift (≥40 delta) as autoQueueable=true', async () => {
+    seed({
+      snapshots: { eliza: { tone: { authority: 20 } } },
+      cast: [{ id: 'eliza', tone: { authority: 70 } }],   // delta 50
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    expect(drift[0].severity).toBe('severe');
+    expect(drift[0].autoQueueable).toBe(true);
+  });
+
+  it('leaves moderate tone drift (25-39) without the autoQueueable flag', async () => {
+    seed({
+      snapshots: { eliza: { tone: { pace: 40 } } },
+      cast: [{ id: 'eliza', tone: { pace: 70 } }],         // delta 30
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    expect(drift[0].severity).toBe('moderate');
+    expect(drift[0].autoQueueable).toBeUndefined();
+  });
+
+  it('leaves moderate attribute drift without the autoQueueable flag', async () => {
+    /* Attribute drift is always moderate (existing audio remains bound to
+       the recorded voiceId; the override just changes prebuilt-voice
+       selection on future regenerations). One-click auto-queue isn't
+       warranted — the user should look at the diff first. */
+    seed({
+      snapshots: { elwin: { attributes: ['kind'] } },
+      cast: [{ id: 'elwin', attributes: ['eccentric', 'kind'] }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    expect(drift[0].severity).toBe('moderate');
+    expect(drift[0].autoQueueable).toBeUndefined();
   });
 });
 

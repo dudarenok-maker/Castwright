@@ -68,6 +68,11 @@ interface DriftEvent {
   factor: string;
   factorLabel: string;
   description: string;
+  /** True when severity === 'severe'. Drives the Drift Report's
+      one-click "Auto-regen now" affordance — the frontend bypasses the
+      regen-modal confirmation and dispatches regenerateCharacter
+      directly. Stays optional / absent on moderate + mild events. */
+  autoQueueable?: boolean;
   metrics?: { current: number; expected: number; unit: string };
   detected: string;
   suggestedAction: string;
@@ -153,6 +158,15 @@ interface DriftContext {
   detectedAt: string;
 }
 
+/* Severe drift = the listener will hear "different person". The frontend
+   surfaces these with a one-click "Auto-regen now" button. Keep the
+   `severity === 'severe'` rule in this one helper so future severity
+   tweaks update both the emit sites and the autoQueueable flag at the
+   same time. */
+function autoQueueableFor(severity: DriftEvent['severity']): boolean | undefined {
+  return severity === 'severe' ? true : undefined;
+}
+
 function pushHardDrift(
   out: DriftEvent[],
   ctx: DriftContext,
@@ -175,6 +189,7 @@ function pushHardDrift(
     factor,
     factorLabel,
     description: `${factorLabel} changed from "${before}" to "${after}" after this chapter rendered.`,
+    autoQueueable: autoQueueableFor('severe'),
     detected: ctx.detectedAt,
     suggestedAction: 'regenerate_chapter',
   });
@@ -238,6 +253,7 @@ function pushToneDrift(out: DriftEvent[], ctx: DriftContext, key: ToneKey): void
     factor: key,
     factorLabel: TONE_LABELS[key],
     description: `${TONE_LABELS[key]} drifted ${Math.round(delta)} points (was ${before}, now ${after}).`,
+    autoQueueable: autoQueueableFor(severity),
     metrics: { current: after, expected: before, unit: 'points' },
     detected: ctx.detectedAt,
     suggestedAction: 'regenerate_chapter',

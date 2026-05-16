@@ -1191,6 +1191,8 @@ export interface components {
             factor: string;
             factorLabel?: string;
             description?: string;
+            /** @description True when the drift signal is strong enough that the user almost always wants to regenerate immediately (today: severity === 'severe'). The Drift Report surfaces these with a one-click "Auto-regen now" button that bypasses the regen-modal confirmation. Moderate / mild events leave this unset; the manual regen flow still applies. */
+            autoQueueable?: boolean;
             metrics?: {
                 current?: number;
                 expected?: number;

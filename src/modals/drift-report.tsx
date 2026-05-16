@@ -9,6 +9,13 @@ interface Props {
   characters: Character[];
   onClose: () => void;
   onRegenerateChapter: (characterId: string, chapterId: number) => void;
+  /** Optional one-click shortcut for events flagged `autoQueueable` by
+      the server (severe drift). When provided, the per-event button on
+      autoQueueable rows switches from "Regenerate this chapter" (which
+      opens the regen-modal confirmation) to "Auto-regen now" (which
+      dispatches regenerateCharacter directly with sensible defaults).
+      Plan 20 C1+C2. */
+  onAutoQueueRegenerate?: (characterId: string, chapterId: number) => void;
   onDismiss: (eventId: string) => void;
 }
 
@@ -16,7 +23,9 @@ const severityOrder: Array<DriftEvent['severity']> = ['severe', 'moderate', 'mil
 const severityLabel: Record<DriftEvent['severity'], string> = { severe: 'Severe', moderate: 'Moderate', mild: 'Mild' };
 const severityColor: Record<DriftEvent['severity'], 'danger' | 'warning' | 'neutral'> = { severe: 'danger', moderate: 'warning', mild: 'neutral' };
 
-export function DriftReportModal({ events, characters, onClose, onRegenerateChapter, onDismiss }: Props) {
+export function DriftReportModal({
+  events, characters, onClose, onRegenerateChapter, onAutoQueueRegenerate, onDismiss,
+}: Props) {
   if (events.length === 0) return null;
 
   const findChar = (id: string) => characters.find(c => c.id === id);
@@ -86,9 +95,22 @@ export function DriftReportModal({ events, characters, onClose, onRegenerateChap
                                 </div>
                               )}
                               <div className="flex items-center gap-2">
-                                <button onClick={() => onRegenerateChapter(e.characterId, e.chapterId)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink-soft">
-                                  <IconRefresh className="w-3.5 h-3.5"/> Regenerate this chapter
-                                </button>
+                                {e.autoQueueable && onAutoQueueRegenerate ? (
+                                  <button
+                                    onClick={() => onAutoQueueRegenerate(e.characterId, e.chapterId)}
+                                    data-testid={`drift-auto-regen-${e.id}`}
+                                    title="Skip the confirmation modal — auto-queue this regeneration"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-peach text-ink text-xs font-semibold hover:bg-peach/85">
+                                    <IconRefresh className="w-3.5 h-3.5"/> Auto-regen now
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => onRegenerateChapter(e.characterId, e.chapterId)}
+                                    data-testid={`drift-regen-${e.id}`}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink-soft">
+                                    <IconRefresh className="w-3.5 h-3.5"/> Regenerate this chapter
+                                  </button>
+                                )}
                                 <button className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-canvas border border-ink/10 text-ink/70 hover:text-ink text-xs font-medium">
                                   <IconWaveform className="w-3.5 h-3.5"/> Listen
                                 </button>
