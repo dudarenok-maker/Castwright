@@ -77,6 +77,36 @@ Two flavours of fetch:
   `components/schemas/CoverCandidate`. Regenerated via
   `npm run openapi:types` after spec edits.
 
+## KNOWN: scaffolded
+
+- **Export embedding deferred.** Cover bytes are cached at
+  `<bookDir>/.audiobook/cover.jpg` and served via `GET /api/books/:bookId/cover`,
+  but `server/src/export/build-m4b.ts` and `server/src/export/id3-tags.ts`
+  (used by `build-mp3-zip.ts`) do not currently feed that file into the
+  output artifact. M4B exports ship without the iTunes `covr` atom and
+  MP3.ZIP entries ship without an ID3v2 APIC frame, so PocketBook /
+  Voice / Apple Books / BookPlayer all render their default tile rather
+  than the OpenLibrary art the user picked.
+  - **M4B path (planned A2)**: `buildM4b` passes the cover file as a
+    second ffmpeg input with `-map 1:v -c:v copy -disposition:v:0
+    attached_pic`. Gracefully skips when the file is absent. New
+    regression test: `ffprobe` reports a video stream with
+    `disposition.attached_pic = 1` and `codec_name = mjpeg`.
+  - **MP3.ZIP path (planned A3)**: `applyId3v24Tags` gains an optional
+    `coverJpegPath`; when present, the ffmpeg invocation pipes the JPEG
+    in and writes the APIC frame. The existing `audioBytesOnly`
+    byte-identity invariant must still hold for the audio frames —
+    only the ID3v2 header grows.
+  - Plan 32 + plan 33's atom-mapping references currently mark `covr`
+    as parked under this section. A4 lifts those caveats once A2 + A3
+    ship.
+- **No state-driven cover override yet.** The picker writes
+  `state.json.coverImage = { openLibraryId, originalUrl, fetchedAt }`,
+  but the export-embedding path will read the file directly off disk
+  rather than threading the metadata block through the builder. That's
+  fine for v1; the `coverImage` block is informational (powers the
+  picker's "currently pinned" annotation, not the bytes).
+
 ## Test coverage
 
 Automated:
