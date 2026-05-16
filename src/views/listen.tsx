@@ -67,15 +67,17 @@ export function ListenView({
     coverOverride !== null
       ? (coverOverride || null)
       : (bookCoverImageUrl ?? null);
-  /* Local modal state for the export flow. Three entry points open it:
-     - The "Export audiobook" pill in the cover-art row (download tab).
+  /* Local modal state for the export flow. Entry points:
+     - The "Export audiobook" pill in the cover-art row (download tab,
+       generic two-tab UX, no appHint).
      - The PocketBook tile (download tab — LAN/QR sideload story).
-     - The Voice tile (sync-folder + M4B + appHint='voice', so the modal
-       hides the format/destination toggles and points the user at their
-       configured exportSyncFolder). */
+     - Per-app tiles (Voice, Smart AudioBook Player, …) that pass an
+       appHint matching a TILE_HINTS entry in `src/modals/export-audiobook.tsx`.
+       The modal collapses the format/destination toggles and surfaces
+       tile-specific copy from that entry. */
   const [exportModal, setExportModal] = useState<{
     tab: 'download' | 'sync-folder';
-    appHint?: 'voice';
+    appHint?: 'voice' | 'smart_audiobook';
   } | null>(null);
 
   /* Live job list from the store, with the visual fixtures as a fallback
@@ -181,6 +183,7 @@ export function ListenView({
         onSend={onSendApp}
         onOpenPocketBookExport={() => setExportModal({ tab: 'download' })}
         onOpenVoiceExport={() => setExportModal({ tab: 'sync-folder', appHint: 'voice' })}
+        onOpenSmartAudiobookExport={() => setExportModal({ tab: 'sync-folder', appHint: 'smart_audiobook' })}
       />
       <ExportQueue items={queueItems}/>
 
@@ -209,7 +212,9 @@ export function ListenView({
         initialTab={exportModal?.tab ?? 'download'}
         prefill={exportModal?.appHint === 'voice'
           ? { format: 'm4b', destination: 'sync-folder', appHint: 'voice' }
-          : undefined}
+          : exportModal?.appHint === 'smart_audiobook'
+            ? { format: 'mp3-folder', destination: 'sync-folder', appHint: 'smart_audiobook' }
+            : undefined}
         onClose={() => setExportModal(null)}
       />
 
@@ -440,13 +445,17 @@ interface ListenerAppsProps {
       M4B + sync-folder with appHint='voice' so the format and destination
       toggles are hidden. */
   onOpenVoiceExport: () => void;
+  /** Smart AudioBook Player is live (plan 34 B2): mp3-folder + sync-folder
+      with appHint='smart_audiobook'. */
+  onOpenSmartAudiobookExport: () => void;
 }
-function ListenerApps({ onSend, onOpenPocketBookExport, onOpenVoiceExport }: ListenerAppsProps) {
+function ListenerApps({ onSend, onOpenPocketBookExport, onOpenVoiceExport, onOpenSmartAudiobookExport }: ListenerAppsProps) {
   /* Per-app live handlers. Tiles not in this map render as disabled
      coming-soon placeholders. */
   const liveHandlers: Record<string, () => void> = {
-    pocketbook: onOpenPocketBookExport,
-    voice:      onOpenVoiceExport,
+    pocketbook:      onOpenPocketBookExport,
+    voice:           onOpenVoiceExport,
+    smart_audiobook: onOpenSmartAudiobookExport,
   };
   return (
     <section className="mb-12">
@@ -454,7 +463,7 @@ function ListenerApps({ onSend, onOpenPocketBookExport, onOpenVoiceExport }: Lis
         <SectionLabel>Listen on your favourite app</SectionLabel>
         <span className="text-xs text-ink/50 inline-flex items-center gap-1.5"><IconShield className="w-3.5 h-3.5"/> Open-format export · DRM-free</span>
       </div>
-      <MockedPreviewBanner>direct handoff to other apps is coming soon. PocketBook and Voice are live — click either to sideload.</MockedPreviewBanner>
+      <MockedPreviewBanner>direct handoff to other apps is coming soon. PocketBook, Voice, and Smart AudioBook Player are live — click any to sideload.</MockedPreviewBanner>
       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {SUPPORTED_APPS.map(a => (
           <ListenerAppCard
@@ -473,7 +482,8 @@ function ListenerApps({ onSend, onOpenPocketBookExport, onOpenVoiceExport }: Lis
 interface ListenerAppCardProps {
   app: ListenerApp;
   onSend: (a: ListenerApp) => void;
-  /** Present only for live tiles (PocketBook, Voice). When set, turns the
+  /** Present only for live tiles (PocketBook, Voice, Smart AudioBook
+      Player). When set, turns the
       disabled-placeholder pill into a real button. */
   onOpenLiveExport?: () => void;
 }

@@ -47,25 +47,101 @@ interface Props {
 export interface ExportPrefill {
   format?: FormatId;
   destination?: TabId;
-  /** Per-app key. Today only `'voice'` triggers a specialised UX (M4B +
-      sync-folder forced); other values fall back to the generic flow
-      with the format/destination still applied as defaults. */
-  appHint?: 'voice' | 'pocketbook' | string;
+  /** Per-app key. When the key matches a `TILE_HINTS` entry the modal
+      collapses to that tile's single supported shape (format +
+      destination forced, toggles hidden, header + submit + body copy
+      specialised). Unknown keys fall back to the generic two-tab UX
+      with `format` / `destination` still applied as defaults. */
+  appHint?: TileHintKey | string;
 }
 
 type TabId = 'download' | 'sync-folder';
-type FormatId = 'm4b' | 'mp3-zip';
+type FormatId = 'm4b' | 'mp3-zip' | 'mp3-folder';
+type TileHintKey = 'voice' | 'smart_audiobook' | 'bookplayer' | 'audiobookshelf';
+
+/* Per-tile specialisation. Adding a new live tile is one entry here +
+   the corresponding handler wire-up in `src/views/listen.tsx`. The
+   modal then renders the tile-collapsed UX without any new branching.
+   The `format`/`destination` fields are the contract the route
+   accepts; if the user picks a different export shape the toggles
+   surface via the generic two-tab UX (no TILE_HINTS entry).
+
+   Plan 33 (B Voice) seeded this pattern; plan 34 B2-B4 fills in the
+   folder-format trio. */
+interface TileHint {
+  format: FormatId;
+  destination: TabId;
+  headerTitle: string;
+  submitLabel: string;
+  footerNote: string;
+  bodyIntro: string;
+  folderInputLabel: string;
+  /** Caption shown above the input when a sync folder is already
+      configured. Receives the saved path so the copy can name it. */
+  savedCaption: (savedPath: string) => string;
+}
+
+const TILE_HINTS: Record<TileHintKey, TileHint> = {
+  voice: {
+    format: 'm4b',
+    destination: 'sync-folder',
+    headerTitle: 'Send to Voice library',
+    submitLabel: 'Export to Voice library',
+    footerNote: 'Voice on the device picks up the new .m4b once your sync folder finishes pushing it.',
+    bodyIntro: "Voice scans a folder on your Android device for new audiobooks. Point this at the same folder your sync app (Syncthing, OneDrive, Google Drive desktop) keeps mirrored to the phone — your M4B lands there and Voice picks it up on its next library scan.",
+    folderInputLabel: 'Voice library folder',
+    savedCaption: (saved) => `Saves to your Voice library at ${saved}.`,
+  },
+  smart_audiobook: {
+    format: 'mp3-folder',
+    destination: 'sync-folder',
+    headerTitle: 'Send to Smart AudioBook Player',
+    submitLabel: 'Export to Smart AudioBook Player',
+    footerNote: 'Smart AudioBook Player scans its books folder on the device — the new book appears after your sync app finishes pushing it.',
+    bodyIntro: "Smart AudioBook Player reads a folder per book from a configurable books directory on your Android device. Point this at the same folder your sync app mirrors there — the per-chapter MP3s arrive tagged with title, author, and cover art (when one is set).",
+    folderInputLabel: 'Smart AudioBook Player books folder',
+    savedCaption: (saved) => `Saves to your Smart AudioBook Player books folder at ${saved}.`,
+  },
+  bookplayer: {
+    /* Reserved for B3 — wired here so the type stays exhaustive and the
+       handler in listen.tsx can be added in a one-line follow-up. */
+    format: 'mp3-folder',
+    destination: 'sync-folder',
+    headerTitle: 'Send to BookPlayer',
+    submitLabel: 'Export for BookPlayer',
+    footerNote: 'AirDrop the folder from Finder to your iPhone, then open with BookPlayer. The Files import preserves the chapter order.',
+    bodyIntro: "BookPlayer reads a folder per book on iOS via the Files app. Point this at a folder on your Mac that you can AirDrop from — the per-chapter MP3s arrive with tags and cover art ready to import.",
+    folderInputLabel: 'BookPlayer staging folder',
+    savedCaption: (saved) => `Stages BookPlayer-ready folders at ${saved}.`,
+  },
+  audiobookshelf: {
+    /* Reserved for B4. */
+    format: 'mp3-folder',
+    destination: 'sync-folder',
+    headerTitle: 'Send to Audiobookshelf',
+    submitLabel: 'Export to Audiobookshelf library',
+    footerNote: 'Audiobookshelf rescans its library on a schedule — the new book appears after the next scan once your sync finishes pushing it.',
+    bodyIntro: "Audiobookshelf scans a configured library root on the server and treats each subfolder as one book. Point this at the same folder your sync app mirrors to the server's library path — the chapters arrive tagged and ready.",
+    folderInputLabel: 'Audiobookshelf library folder',
+    savedCaption: (saved) => `Saves to your Audiobookshelf library at ${saved}.`,
+  },
+};
+
+function tileHintFor(appHint: string | undefined): TileHint | null {
+  if (!appHint) return null;
+  return (TILE_HINTS as Record<string, TileHint | undefined>)[appHint] ?? null;
+}
 
 export function ExportAudiobookModal({ open, bookId, initialTab = 'download', prefill, onClose }: Props) {
   const dispatch = useAppDispatch();
   const lanUrls = useAppSelector(s => s.exports.lanUrls);
   const account = useAppSelector(s => s.account);
-  /* prefill (when set) overrides the initialTab/default-format on open and
-     on each open-toggle reset. Voice tile callers pass
-     `{ format: 'm4b', destination: 'sync-folder', appHint: 'voice' }` so
-     the modal opens with the right shape and the appHint branch can
-     collapse the format/destination toggles. */
-  const isVoice = prefill?.appHint === 'voice';
+  /* prefill (when set) overrides the initialTab/default-format on open
+     and on each open-toggle reset. Tile callers (Voice, Smart AudioBook
+     Player, BookPlayer, Audiobookshelf, …) pass `appHint` so the modal
+     can drop the format/destination toggles and surface tile-specific
+     header/body/submit/footer copy from `TILE_HINTS`. */
+  const tileHint = tileHintFor(prefill?.appHint);
   const [tab, setTab] = useState<TabId>(prefill?.destination ?? initialTab);
   const [format, setFormat] = useState<FormatId>(prefill?.format ?? 'm4b');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -195,7 +271,7 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
             <div className="flex-1 min-w-0">
               <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">Export audiobook</p>
               <h3 className="text-base font-bold text-ink truncate">
-                {isVoice ? 'Send to Voice library' : 'Sideload to your phone or sync folder'}
+                {tileHint?.headerTitle ?? 'Sideload to your phone or sync folder'}
               </h3>
             </div>
             <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60" aria-label="Close">
@@ -203,7 +279,7 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
             </button>
           </header>
 
-          {!isVoice && (
+          {!tileHint && (
             <div className="px-6 pt-4 flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
                 {([
@@ -238,8 +314,10 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
           )}
 
           <div className="px-6 py-5 text-sm text-ink/75 leading-relaxed">
-            {isVoice ? (
-              <VoiceTab
+            {tileHint ? (
+              <TileBody
+                hint={tileHint}
+                hintKey={prefill?.appHint as string}
                 draft={syncFolderDraft}
                 setDraft={setSyncFolderDraft}
                 saved={syncFolder}
@@ -285,11 +363,13 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
 
           <footer className="px-6 py-4 border-t border-ink/10 flex items-center justify-between gap-3">
             <p className="text-xs text-ink/55">
-              {isVoice
-                ? 'Voice on the device picks up the new .m4b once your sync folder finishes pushing it.'
+              {tileHint
+                ? tileHint.footerNote
                 : format === 'm4b'
                   ? 'M4B: one file, chapter markers, resumes where you stop. PocketBook lists it under Audiobooks.'
-                  : 'MP3.ZIP: a folder of tagged MP3s. Universal compatibility; any audiobook app reads it.'}
+                  : format === 'mp3-zip'
+                    ? 'MP3.ZIP: a folder of tagged MP3s. Universal compatibility; any audiobook app reads it.'
+                    : 'MP3 folder: per-chapter tagged MP3s mirrored into your sync folder. Folder-scanning apps pick them up.'}
             </p>
             <div className="flex items-center gap-3">
               <button onClick={onClose} className="text-sm font-medium text-ink/60 hover:text-ink">Close</button>
@@ -301,8 +381,8 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
               >
                 {submitting
                   ? 'Starting…'
-                  : isVoice
-                    ? 'Export to Voice library'
+                  : tileHint
+                    ? tileHint.submitLabel
                     : (tab === 'download' ? 'Build download' : 'Build and save')}
               </button>
             </div>
@@ -387,35 +467,44 @@ function SyncFolderTab({ draft, setDraft, saved, saving, onSave }: SyncFolderTab
   );
 }
 
-/* Voice-specialised body. Same SyncFolderTab interaction (the user sets
-   their Voice library folder once, then re-uses it across exports) but
-   with copy that names the Voice flow directly and a caption surfacing
-   the saved path when one is configured. Format and destination toggles
-   are hidden by the parent — Voice's contract is M4B + sync-folder, full
-   stop. */
-function VoiceTab({ draft, setDraft, saved, saving, onSave }: SyncFolderTabProps) {
+/* Per-tile body shared across every TILE_HINTS entry. The user sets
+   their tile-specific folder once (lives on
+   userSettings.exportSyncFolder, shared across tiles — only one synced
+   folder per user makes sense) and re-uses it across exports. Format +
+   destination toggles are hidden by the parent on tile mode; this body
+   is the only interactive surface.
+
+   Tile copy comes from TILE_HINTS; the layout is shared. Each tile
+   gets its own `export-tile-body-<hintKey>` / `export-tile-caption-<hintKey>`
+   testids so a spec can target one tile without false positives across
+   the others. The Voice tile retains its plan-33 `export-voice-body` /
+   `export-voice-caption` testids as aliases so the existing spec
+   doesn't churn for a refactor. */
+interface TileBodyProps extends SyncFolderTabProps {
+  hint: TileHint;
+  hintKey: string;
+}
+function TileBody({ hint, hintKey, draft, setDraft, saved, saving, onSave }: TileBodyProps) {
   const isDirty = (saved ?? '') !== draft;
+  const bodyTestId    = hintKey === 'voice' ? 'export-voice-body'    : `export-tile-body-${hintKey}`;
+  const captionTestId = hintKey === 'voice' ? 'export-voice-caption' : `export-tile-caption-${hintKey}`;
   return (
-    <div className="space-y-3" data-testid="export-voice-body">
-      <p>
-        Voice scans a folder on your Android device for new audiobooks. Point this at the same
-        folder your sync app (Syncthing, OneDrive, Google Drive desktop) keeps mirrored to the
-        phone — your M4B lands there and Voice picks it up on its next library scan.
-      </p>
+    <div className="space-y-3" data-testid={bodyTestId}>
+      <p>{hint.bodyIntro}</p>
       {saved && !isDirty ? (
-        <p className="text-xs text-ink/55" data-testid="export-voice-caption">
-          Saves to your Voice library at <span className="font-mono text-ink/80">{saved}</span>.
+        <p className="text-xs text-ink/55" data-testid={captionTestId}>
+          {hint.savedCaption(saved)}
         </p>
       ) : null}
       <label className="block">
-        <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">Voice library folder</span>
+        <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">{hint.folderInputLabel}</span>
         <input
           type="text"
           value={draft}
           onChange={e => setDraft(e.target.value)}
           placeholder="C:\Users\you\OneDrive\Audiobooks"
           className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30 font-mono"
-          aria-label="Voice library folder"
+          aria-label={hint.folderInputLabel}
           data-testid="sync-folder-input"
         />
       </label>

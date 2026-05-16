@@ -124,23 +124,28 @@ Use the canonical end-to-end manuscript at
 ## Tile UI (B2-B4)
 
 Three tiles graduate from coming-soon to live in this thread, each
-mirroring the Voice tile pattern (plan 33 B):
+mirroring the Voice tile pattern (plan 33 B). B2 introduces the
+shared `TILE_HINTS` config object in
+`src/modals/export-audiobook.tsx`; B3 and B4 are one-entry
+additions to it plus the matching handler in `src/views/listen.tsx`.
 
-- **B2 — Smart AudioBook Player** (Android). `appHint:
+- **B2 — Smart AudioBook Player** *(shipped)*. `appHint:
   'smart_audiobook'`, defaults to `{ format: 'mp3-folder',
-  destination: 'sync-folder' }`. Voice-style modal collapses the
-  format + destination toggles.
-- **B3 — BookPlayer** (iOS, AirDrop-friendly). `appHint:
-  'bookplayer'`, defaults to `{ format: 'mp3-folder', destination:
-  'sync-folder' }`. Modal copy nods at AirDrop from the synced
-  folder via Finder.
-- **B4 — Audiobookshelf** (cross-platform server). `appHint:
-  'audiobookshelf'`, defaults to `{ format: 'mp3-folder',
-  destination: 'sync-folder' }`. Modal copy mentions pointing the
-  sync folder at the Audiobookshelf scan root.
-
-Each tile commit refactors the per-`appHint` modal copy into a single
-config object so adding the next tile is a one-entry change.
+  destination: 'sync-folder' }`. The modal collapses the format +
+  destination toggles via the `TILE_HINTS` lookup; per-tile body /
+  caption / header / submit copy lives in the config entry. Tile-
+  specific testid `export-tile-body-smart_audiobook` (Voice keeps its
+  plan-33 alias `export-voice-body`).
+- **B3 — BookPlayer** *(pending)*. `appHint: 'bookplayer'`,
+  defaults to `{ format: 'mp3-folder', destination: 'sync-folder' }`.
+  Modal copy nods at AirDrop from the synced folder via Finder. The
+  `TILE_HINTS` entry is already wired; the remaining work is the
+  `listener-apps.ts` description refresh + the
+  `onOpenBookplayerExport` handler in `ListenView`.
+- **B4 — Audiobookshelf** *(pending)*. `appHint: 'audiobookshelf'`,
+  defaults to `{ format: 'mp3-folder', destination: 'sync-folder' }`.
+  Modal copy mentions pointing the sync folder at the Audiobookshelf
+  scan root.
 
 ## Out of scope
 
