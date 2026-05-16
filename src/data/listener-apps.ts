@@ -22,14 +22,19 @@ export const SUPPORTED_APPS: ListenerApp[] = [
     sendVerb: 'Send via AirDrop',
   },
   {
+    /* Third live integration target — Smart AudioBook Player. Android-only,
+       free + ad-supported. Reads a folder per book from a configurable
+       books directory; 0.5x to 4x speed control, automatic bookmarking,
+       sleep timer. Defaults to mp3-folder + sync-folder so the per-
+       chapter MP3s land directly in the SABP books folder via Syncthing. */
     id: 'smart_audiobook',
     name: 'Smart AudioBook Player',
     glyph: 'SA',
     gradient: ['#7C5C8C', '#3C194F'],
     platforms: ['Android'],
     tagline: 'The Android default for sideloads.',
-    description: '0.5x to 4x speed control, automatic bookmarking, configurable sleep timer.',
-    sendVerb: 'Send to phone',
+    description: 'Folder-per-book library, 0.5x–4x speed, auto-bookmark, sleep timer. Drops per-chapter MP3s into your sync folder; SABP picks them up on the next scan.',
+    sendVerb: 'Send to Smart AudioBook Player',
   },
   {
     id: 'apple_books',

@@ -172,15 +172,30 @@ describe('ListenView — coming-soon affordances', () => {
 
   it('disables non-live listener-app cards while PocketBook and Voice are live', () => {
     renderView();
-    /* After plan 33, Voice graduates from coming-soon to a live sideload
-       target, leaving five mocked-handoff tiles. */
-    const stillDeferred = ['audiobookshelf', 'bookplayer', 'smart_audiobook', 'apple_books', 'plex'];
+    /* After plan 34 B2, Smart AudioBook Player joins PocketBook + Voice
+       as a live sideload target, leaving four mocked-handoff tiles. */
+    const stillDeferred = ['audiobookshelf', 'bookplayer', 'apple_books', 'plex'];
     for (const id of stillDeferred) {
       expect(screen.getByTestId(`listener-app-action-${id}`)).toBeDisabled();
     }
-    /* PocketBook + Voice are active sideload entry-points. */
+    /* PocketBook + Voice + Smart AudioBook Player are active. */
     expect(screen.getByTestId('listener-app-action-pocketbook')).not.toBeDisabled();
     expect(screen.getByTestId('listener-app-action-voice')).not.toBeDisabled();
+    expect(screen.getByTestId('listener-app-action-smart_audiobook')).not.toBeDisabled();
+  });
+
+  it('opens the export modal in Smart AudioBook Player mode when its tile is clicked (plan 34 B2)', () => {
+    renderView();
+    expect(screen.queryByTestId('export-audiobook-modal')).toBeNull();
+    fireEvent.click(screen.getByTestId('listener-app-action-smart_audiobook'));
+    /* Tile-mode modal: no destination tab strip, no format toggle, and
+       the per-tile body renders in place of the generic SyncFolderTab. */
+    expect(screen.getByTestId('export-audiobook-modal')).toBeInTheDocument();
+    expect(screen.queryByTestId('export-tab-download')).toBeNull();
+    expect(screen.queryByTestId('export-tab-sync-folder')).toBeNull();
+    expect(screen.queryByTestId('export-format-m4b')).toBeNull();
+    expect(screen.queryByTestId('export-format-mp3-zip')).toBeNull();
+    expect(screen.getByTestId('export-tile-body-smart_audiobook')).toBeInTheDocument();
   });
 
   it('opens the export modal when the PocketBook tile is clicked', () => {
