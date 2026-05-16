@@ -63,7 +63,7 @@ interface FfprobeReport {
     end_time: string;
     tags?: { title?: string };
   }>;
-  format: { duration?: string; format_name?: string };
+  format: { duration?: string; format_name?: string; tags?: Record<string, string> };
 }
 
 function ffprobeJson(path: string): FfprobeReport {
@@ -74,6 +74,93 @@ function ffprobeJson(path: string): FfprobeReport {
   );
   if (out.status !== 0) throw new Error(`ffprobe failed: ${out.stderr}`);
   return JSON.parse(out.stdout) as FfprobeReport;
+}
+
+/* Read the iTunes media-kind atom (`stik`) from an MP4 file.
+
+   Primary path: `ffprobe -show_entries format_tags=media_type` — newer
+   Gyan.FFmpeg builds surface this as the `media_type` format tag. Older
+   builds drop it on the floor, so we walk the atom tree ourselves as a
+   fallback. Both paths guard the same invariant: the audiobook
+   media-kind atom survives the mp4 muxer.
+
+   Voice-Android itself doesn't read `stik` (it treats every file in its
+   library as an audiobook regardless), but Apple Books / Plex / BookPlayer
+   do. If a future ffmpeg release silently stops writing this atom, the
+   regression would only surface on those cross-app library moves — exactly
+   the kind of slow-burn break this guard catches. */
+function probeStik(m4bPath: string): number | null {
+  const probe = spawnSync(
+    'ffprobe',
+    ['-v', 'error', '-show_entries', 'format_tags=media_type', '-of', 'json', m4bPath],
+    { encoding: 'utf8' },
+  );
+  if (probe.status === 0) {
+    try {
+      const parsed = JSON.parse(probe.stdout) as { format?: { tags?: { media_type?: string } } };
+      const raw = parsed.format?.tags?.media_type;
+      if (raw !== undefined) {
+        const n = Number(raw);
+        if (Number.isFinite(n)) return n;
+      }
+    } catch {/* fall through to raw atom scan */}
+  }
+  return readStikFromBuffer(readFileSync(m4bPath));
+}
+
+/* Recursive descent through MP4 atom tree to find a value at
+   `moov/udta/meta/ilst/stik/data`.
+
+   MP4 atoms are `[size:uint32 BE][type:4 ascii] <payload>`. size === 1
+   means a 64-bit largesize follows; size === 0 means the atom runs to EOF.
+   The `meta` atom is the odd one out — it has a 4-byte version/flags
+   header before its children, so we skip those 4 bytes when descending
+   into it. The `data` atom under iTunes ilst entries has an 8-byte
+   prefix (4-byte type code, 4-byte locale) before the value bytes; for
+   `stik` the value is a 1-byte unsigned int. */
+function readStikFromBuffer(buf: Buffer): number | null {
+  const stikContainer = findAtom(buf, 0, buf.length, ['moov', 'udta', 'meta', 'ilst', 'stik']);
+  if (!stikContainer) return null;
+  const data = findAtom(buf, stikContainer.start, stikContainer.end, ['data']);
+  if (!data) return null;
+  const valueStart = data.start + 8;
+  if (valueStart >= data.end) return null;
+  return buf.readUInt8(valueStart);
+}
+
+function findAtom(
+  buf: Buffer,
+  start: number,
+  end: number,
+  path: string[],
+): { start: number; end: number } | null {
+  if (path.length === 0) return { start, end };
+  const [head, ...rest] = path;
+  let off = start;
+  while (off + 8 <= end) {
+    const size = buf.readUInt32BE(off);
+    const type = buf.toString('ascii', off + 4, off + 8);
+    let atomLen: number;
+    let headerLen = 8;
+    if (size === 1) {
+      if (off + 16 > end) return null;
+      const hi = buf.readUInt32BE(off + 8);
+      const lo = buf.readUInt32BE(off + 12);
+      atomLen = hi * 0x100000000 + lo;
+      headerLen = 16;
+    } else if (size === 0) {
+      atomLen = end - off;
+    } else {
+      atomLen = size;
+    }
+    if (atomLen < headerLen || off + atomLen > end) return null;
+    if (type === head) {
+      const childStart = off + headerLen + (head === 'meta' ? 4 : 0);
+      return findAtom(buf, childStart, off + atomLen, rest);
+    }
+    off += atomLen;
+  }
+  return null;
 }
 
 describeIfTools('buildM4b', () => {
@@ -147,6 +234,20 @@ describeIfTools('buildM4b', () => {
       }),
     ).rejects.toBeInstanceOf(ExportIncompleteError);
   }, 15_000);
+
+  it('writes the iTunes audiobook media-kind atom (stik = 2) so cross-app players treat it as an audiobook', async () => {
+    /* Regression guard for plan 33 (Voice export). FFMETADATA's
+       `media_type=2` round-trips through the mp4 muxer as the `stik`
+       atom under `moov/udta/meta/ilst`. A future ffmpeg upgrade that
+       silently drops this mapping would still play fine on Voice-Android
+       (it groups every file under "audiobooks" regardless), but Apple
+       Books / Plex / BookPlayer would downgrade the file to "music" —
+       and we'd ship that regression without noticing. */
+    const stikPath = join(tmpRoot, 'stik.m4b');
+    await buildM4b({ bookDir, state: makeState(), outPath: stikPath });
+    const stik = probeStik(stikPath);
+    expect(stik).toBe(2);
+  }, 30_000);
 
   it('reports monotonic progress reaching 1 on completion', async () => {
     const ratios: number[] = [];
