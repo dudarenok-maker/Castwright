@@ -488,6 +488,37 @@ export function clearFailedChapterId(
   return wasFailed;
 }
 
+/* Phase 0a coverage check — every non-excluded chapter must have a
+   non-empty `chapterCast[id]` entry before stage1 can be finalised.
+
+   The subset-retry path used to gate stage1 writes on
+   `failedChapterIds.length === 0` alone, which is the WRONG predicate when
+   the cache covers only a fraction of the book. Example regression seen on
+   "Unlocked" (mns_VoP0mLGvov): chapterCast had entries for chapters 1–28
+   of a 182-chapter book, failedChapterIds was [], and a subset retry
+   rebuilt stage1 from those 28 entries — overwriting a previously-good
+   6-character roster with a Narrator-only one because every cached
+   chapter happened to be a journal/registry-file POV that the model
+   labelled as Narrator.
+
+   Empty arrays are the route's failure-marker convention (see catch path
+   at analysis.ts:2016) so they count as "absent" here too. Excluded
+   chapters are intentionally never run through Phase 0a so they don't
+   count toward coverage. Exported for unit testing. */
+export function isPhase0aCoverageComplete(
+  chapterCast: Record<number, CharacterOutput[]>,
+  chapterHints: Array<{ id: number; excluded?: boolean }>,
+): { complete: boolean; missingChapterIds: number[]; totalRequired: number } {
+  const missingChapterIds: number[] = [];
+  let totalRequired = 0;
+  for (const ch of chapterHints) {
+    if (ch.excluded) continue;
+    totalRequired += 1;
+    if (!chapterCast[ch.id]?.length) missingChapterIds.push(ch.id);
+  }
+  return { complete: missingChapterIds.length === 0, missingChapterIds, totalRequired };
+}
+
 /* Per-chapter ETA from observed pace. Once at least one chapter has
    completed we trust observed wall-clock-per-char over any static formula:
    local models (Ollama qwen3.5:4b, etc.) can be 5–10× slower than Gemini,
@@ -2047,8 +2078,24 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       chapters: record.chapterHints.map(c => ({ id: c.id, title: c.title })),
     };
     const remainingFailedCastIds = cache.failedChapterIds ?? [];
-    if (remainingFailedCastIds.length === 0) {
+    /* Coverage gate (in addition to the no-failed-chapters check) — stage1
+       is finalised only when EVERY non-excluded chapter has a non-empty
+       chapterCast entry. Without this guard a sparse cache (chapters 1–N
+       run, chapters N+1.. untouched) would let rebuildRoster() produce a
+       partial roster that overwrites a richer existing stage1. See the
+       comment on isPhase0aCoverageComplete for the regression that
+       motivated this gate. */
+    const coverage = isPhase0aCoverageComplete(chapterCast, record.chapterHints);
+    if (remainingFailedCastIds.length === 0 && coverage.complete) {
       cache.stage1 = stage1;
+    } else if (remainingFailedCastIds.length === 0 && !coverage.complete) {
+      const covered = coverage.totalRequired - coverage.missingChapterIds.length;
+      log(0, `Cast finalisation deferred — ${coverage.missingChapterIds.length} non-excluded chapter${coverage.missingChapterIds.length === 1 ? '' : 's'} still need Phase 0a detection (${covered}/${coverage.totalRequired} covered). Existing stage1 left intact; run the main analysis to fill the gaps.`);
+      send({
+        kind: 'error',
+        code: 'cast_incomplete',
+        message: `Phase 0a covers ${covered} of ${coverage.totalRequired} chapters — run main analysis to detect the rest before stage1 can finalise.`,
+      });
     }
     await saveAnalysisCache(manuscriptId, cache);
     await persistDroppedQuotesBatch(record.bookDir, manuscriptId, 'analysis-chapters', verified);
@@ -2063,9 +2110,13 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
        roster, and writing partial sentences to cache.chapters would
        have to be re-done after the next retry batch finalises stage1.
        The main /analysis/stream gate will run Phase 1 for these
-       chapters once the user resolves the remaining failures. */
+       chapters once the user resolves the remaining failures (or fills
+       the coverage gap via a full /analysis/stream). */
     if (remainingFailedCastIds.length > 0) {
       log(0, `Cast retry done. ${remainingFailedCastIds.length} chapter${remainingFailedCastIds.length === 1 ? '' : 's'} still need retry before Phase 1 can run.`);
+      return res.end();
+    }
+    if (!coverage.complete) {
       return res.end();
     }
     /* Retry-after-cast-incomplete flow: the main pipeline hasn't run

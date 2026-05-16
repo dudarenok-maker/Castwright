@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   sortEvidence, normaliseForMatch, verifyEvidenceAgainstSource, mergeRosterChapter,
   chapterEstFromObserved, projectRemainingMs, buildInterimCast, clearFailedChapterId,
-  dropEvidencelessCast,
+  dropEvidencelessCast, isPhase0aCoverageComplete,
 } from './analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
@@ -636,6 +636,88 @@ describe('clearFailedChapterId — recovery detection helper', () => {
     expect(clearFailedChapterId(cache, 44)).toBe(true);
     expect(clearFailedChapterId(cache, 44)).toBe(false);
     expect(cache.failedChapterIds).toEqual([]);
+  });
+});
+
+/* isPhase0aCoverageComplete gates stage1 finalisation in the subset-retry
+   path. Without it, a sparse chapterCast (only some chapters run) plus
+   failedChapterIds=[] would let rebuildRoster() write a partial roster
+   over an existing richer one — see the regression on "Unlocked" cited
+   in the helper's comment. */
+describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finalisation', () => {
+  const makeChar = (id: string): CharacterOutput => ({
+    id, name: id, role: 'character', color: 'unset',
+    evidence: [{ quote: `${id}'s quote, long enough to look real.` }],
+  });
+
+  it('returns complete when every non-excluded chapter has a non-empty chapterCast entry', () => {
+    const chapterCast: Record<number, CharacterOutput[]> = {
+      1: [makeChar('narrator'), makeChar('sophie')],
+      2: [makeChar('sophie'), makeChar('keefe')],
+      3: [makeChar('narrator')],
+    };
+    const result = isPhase0aCoverageComplete(chapterCast, [
+      { id: 1 }, { id: 2 }, { id: 3 },
+    ]);
+    expect(result).toEqual({ complete: true, missingChapterIds: [], totalRequired: 3 });
+  });
+
+  it('flags missing chapters when chapterCast is sparse (Unlocked-style regression)', () => {
+    /* 5 chapters required, only 2 covered. */
+    const chapterCast: Record<number, CharacterOutput[]> = {
+      1: [makeChar('narrator')],
+      3: [makeChar('narrator')],
+    };
+    const result = isPhase0aCoverageComplete(chapterCast, [
+      { id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 },
+    ]);
+    expect(result.complete).toBe(false);
+    expect(result.missingChapterIds).toEqual([2, 4, 5]);
+    expect(result.totalRequired).toBe(5);
+  });
+
+  it('treats empty-array entries as missing (the route uses [] as the failure marker)', () => {
+    const chapterCast: Record<number, CharacterOutput[]> = {
+      1: [makeChar('narrator')],
+      2: [],   // failure marker
+      3: [makeChar('narrator')],
+    };
+    const result = isPhase0aCoverageComplete(chapterCast, [
+      { id: 1 }, { id: 2 }, { id: 3 },
+    ]);
+    expect(result.complete).toBe(false);
+    expect(result.missingChapterIds).toEqual([2]);
+    expect(result.totalRequired).toBe(3);
+  });
+
+  it('excluded chapters do not count toward coverage', () => {
+    /* Chapter 2 is excluded (Dedication / front matter the user opted out
+       of narrating). It must NOT be required for stage1 finalisation —
+       Phase 0a deliberately skips excluded chapters. */
+    const chapterCast: Record<number, CharacterOutput[]> = {
+      1: [makeChar('narrator')],
+      3: [makeChar('narrator')],
+    };
+    const result = isPhase0aCoverageComplete(chapterCast, [
+      { id: 1 },
+      { id: 2, excluded: true },
+      { id: 3 },
+    ]);
+    expect(result).toEqual({ complete: true, missingChapterIds: [], totalRequired: 2 });
+  });
+
+  it('zero non-excluded chapters trivially complete (nothing to require)', () => {
+    /* An entirely-excluded book is degenerate but shouldn't crash. */
+    const result = isPhase0aCoverageComplete({}, [
+      { id: 1, excluded: true },
+      { id: 2, excluded: true },
+    ]);
+    expect(result).toEqual({ complete: true, missingChapterIds: [], totalRequired: 0 });
+  });
+
+  it('empty chapter hints returns complete (degenerate; caller is responsible for upstream validation)', () => {
+    const result = isPhase0aCoverageComplete({}, []);
+    expect(result).toEqual({ complete: true, missingChapterIds: [], totalRequired: 0 });
   });
 });
 
