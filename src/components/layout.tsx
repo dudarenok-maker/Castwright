@@ -6,6 +6,7 @@ import { castActions } from '../store/cast-slice';
 import { fetchAccountSettings } from '../store/account-slice';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { analysisActions } from '../store/analysis-slice';
 import { revisionsActions } from '../store/revisions-slice';
 import { libraryActions } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
@@ -230,6 +231,33 @@ export function Layout() {
           },
           narratorFallback: narratorNameFromCast(res.cast?.characters ?? []),
         }));
+
+        /* Cold-boot rehydration for the top-bar AnalysisPill (plan 32, E2).
+           If the server has an in-flight or paused/halted analysis for
+           this book, restore the snapshot so the pill reappears even
+           after a browser reload or full server restart. Returns null
+           when there's no rehydratable state — we leave the slice
+           alone in that case so opening a book with no analysis
+           doesn't clobber another book's still-live pill. */
+        api.getAnalysisState(bookId)
+          .then(snap => {
+            if (cancelled || !snap) return;
+            dispatch(analysisActions.setActiveStream({
+              bookId,
+              manuscriptId: snap.manuscriptId,
+              bookTitle: res.state.title,
+              engine: snap.engine,
+              phaseId: snap.phaseId,
+              phaseLabel: snap.phaseLabel,
+              phaseProgress: snap.phaseProgress,
+              remainingMs: null,
+              lastTickAt: snap.lastTickAt,
+              state: snap.state,
+              haltCode: snap.haltCode,
+              haltReason: snap.haltReason,
+            }));
+          })
+          .catch(err => { console.warn('[analysis-state] cold-boot fetch failed:', err?.message); });
       })
       .catch(err => { console.warn('[book-state] hydrate skipped:', err.message); });
     return () => { cancelled = true; };

@@ -11,6 +11,7 @@ import type {
   ImportResponse, ConfirmBookRequest, ConfirmBookResponse,
   BookStateResponse, PutStateRequest, WorkspaceChangeLogResponse,
   UserSettings, UserSettingsPatch, DroppedQuotesResponse,
+  AnalysisStateResponse,
   BookExportRequest, BookExportJob, ExportLanInfo,
   BaseVoice, TtsEngine,
 } from './types';
@@ -544,6 +545,26 @@ async function realGetBookState(bookId: string): Promise<BookStateResponse> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/state`);
   if (!res.ok) throw new Error(`Book state fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
+}
+
+/* Cold-boot rehydration for the top-bar AnalysisPill (plan 32, E2).
+   Server resolves memory-first / disk-fallback / running→paused
+   coercion (see server/src/routes/book-state.ts). Returns null on
+   404 so the caller can treat "no in-flight analysis" the same as
+   "endpoint not reachable" — both equivalent to "no pill". */
+async function realGetAnalysisState(bookId: string): Promise<AnalysisStateResponse | null> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/analysis/state`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Analysis state fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+/* Mock counterpart — returns null (no in-flight analysis) since mock
+   mode has no disk-backed workspace nor a live analyzer. Layout's
+   discovery effect treats null the same as 404 (no pill). */
+async function mockGetAnalysisState(_bookId: string): Promise<AnalysisStateResponse | null> {
+  await wait(20);
+  return null;
 }
 
 /* Per-book dropped-quote ledger. Append-only file written by the two
@@ -1629,6 +1650,7 @@ const real = {
   setVoiceOverride:  realSetVoiceOverride,
   getBookState:      realGetBookState,
   putBookState:      realPutBookState,
+  getAnalysisState:  realGetAnalysisState,
   getDroppedQuotes:  realGetDroppedQuotes,
   importManuscript:  realImportManuscript,
   confirmBook:       realConfirmBook,
@@ -1685,6 +1707,7 @@ const mock = {
   setVoiceOverride:  mockSetVoiceOverride,
   getBookState:      mockGetBookState,
   putBookState:      mockPutBookState,
+  getAnalysisState:  mockGetAnalysisState,
   getDroppedQuotes:  mockGetDroppedQuotes,
   importManuscript:  mockImportManuscript,
   confirmBook:       mockConfirmBook,

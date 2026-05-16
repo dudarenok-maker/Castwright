@@ -935,6 +935,13 @@ interface AnalysisJob {
       workspace book — those skip every disk write site, same as
       cast.json / state.json. */
   bookDir: string | null;
+  /** Engine the active analyzer is using. Persisted into
+      `analysis-state.json` so the cold-boot rehydrated AnalysisPill
+      carries the right engine for the reverse-direction local-analyzer
+      guard (`src/hooks/use-reverse-local-analyzer-guard.tsx`) — the
+      guard checks `engine === 'local'` to decide whether to prompt
+      before a TTS-start. */
+  engine: 'local' | 'gemini';
   replay: AnalysisJobReplayState;
   /** ms-since-epoch of the last `analysis-state.json` write. Used to
       throttle phase-tick writes to ~once every 5s so we don't hammer
@@ -971,6 +978,7 @@ export function snapshotInFlightAnalysis(manuscriptId: string): AnalysisStateFil
     phaseLabel: phase?.label ?? PHASES[0].label,
     phaseProgress: phase?.progress ?? 0,
     state: 'running',
+    engine: job.engine,
     lastTickAt: job.lastDiskWriteAt || Date.now(),
     writtenAt: Date.now(),
   };
@@ -995,6 +1003,7 @@ async function persistRunningSnapshot(job: AnalysisJob, force: boolean): Promise
       phaseLabel: phase.label,
       phaseProgress: phase.progress,
       state: 'running',
+      engine: job.engine,
       lastTickAt: now,
     });
   } catch (err) {
@@ -1019,6 +1028,7 @@ async function persistTerminalSnapshot(
       phaseLabel: phase?.label ?? PHASES[0].label,
       phaseProgress: phase?.progress ?? 0,
       state,
+      engine: job.engine,
       haltCode: state === 'halted' ? finalEv?.code : undefined,
       haltReason: state === 'halted' ? finalEv?.message : undefined,
       lastTickAt: Date.now(),
@@ -1232,6 +1242,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     subscribers: new Set(),
     manuscriptId,
     bookDir: record.bookDir ?? null,
+    engine: selection.engine,
     replay: {
       logs: [],
       lastPhase: null,
