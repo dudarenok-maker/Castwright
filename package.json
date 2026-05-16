@@ -24,6 +24,7 @@
     "verify": "npm run typecheck && npm run test:all && npm run build",
     "verify:quick": "npm run test:all",
     "openapi:types": "openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts",
+    "reconcile-cast": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/reconcile-broken-cast.ps1",
     "prepare": "husky"
   },
   "dependencies": {

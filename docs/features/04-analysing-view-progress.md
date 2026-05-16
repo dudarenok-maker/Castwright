@@ -44,6 +44,20 @@ Run with `VITE_USE_MOCKS=false` (server on `:8080`, `ANALYZER=manual` or `ANALYZ
 10. **Retry mid-stream pauses, runs subset, resumes** — failed-chapter rows can appear while Phase 0 is still streaming other chapters (or hydrate from book-state for prior-run failures). Click Retry while the main run is in flight: the SSE aborts, the subset call runs alone, then the main run re-fires automatically on settle. The subset endpoint's `chapter-failed` re-emission upserts the row (with the fresh error message); a clean success drops the row via `chapter-resolved`. When the main run's Phase 0a re-queue succeeds for a row that was hydrated from a prior `failedChapterIds`, the same `chapter-resolved` event clears the row mid-stream so the user doesn't click Retry on something the server has already fixed.
 11. **Dropped-quote panel** — after the verify pass at the end of Phase 0, the panel under the cast preview surfaces any quotes the verifier rejected (model fabrications). Two reasons render: "not in source" (stitched dialogue or hallucinated lines) and "empty after normalisation" (pure punctuation / whitespace). PowerShell audit: `Get-Content .audiobook/dropped-quotes.json | ConvertFrom-Json`. Grep into `.batches[-1].entries` for the latest pass; the array grows on every run.
 
+## Recovering from a corrupted cast cache
+
+For books whose `.audiobook/` files drifted out of sync with the analysis cache before the A1/A2/A3 guards landed (orphan `characterId` references in `manuscript-edits.json`, `cast.json` collapsed to a tiny roster while the cache still has Phase 1 sentences attributing to characters that no longer exist), wipe the per-book state with the reconciliation script:
+
+```powershell
+npm run reconcile-cast -- -BookId shannon-messenger__keeper-of-the-lost-cities__unlocked
+```
+
+The script (driven by `scripts/lib/cast-reconcile.psm1` so the archive/remove logic is Pester-tested) walks the workspace tree for the matching `state.json`, prints a summary of the current cast/edits/cache state (with any orphan IDs highlighted), prompts to confirm, then archives `cast.json`, `manuscript-edits.json`, and the analysis-cache entry to `.audiobook/.reconcile-backup-<timestamp>/`. `state.json`, `change-log.json`, and `dropped-quotes.json` are left in place so the next analysis run picks up where it left off.
+
+After running, re-open the book and click Start analysis to repopulate the cast.
+
+Workspace resolution mirrors the server's: `server/user-settings.json` `workspaceDirOverride` > `server/.env` `WORKSPACE_DIR` > `<repo>/audiobook-workspace`. Pass `-WorkspaceDir <path>` to override.
+
 ## Out of scope
 
 - Specific phase timings or labels — those are server-driven.
