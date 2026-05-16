@@ -28,6 +28,8 @@ is `clamp01(0.65 * nameScore + 0.15 * gender + 0.10 * age_range + 0.10 * attribu
 
 **Library scope.** `scanLibraryCharacters()` (`server/src/workspace/library-cast-scan.ts`) walks `BOOKS_ROOT` and yields every character whose owning book has `state.castConfirmed === true`. The route excludes the current `bookId` from its own match candidates (a book never matches itself) and respects an optional `libraryVoiceIds` allow-list on the request body.
 
+**Series-scoped scanning.** `scanSeriesCharacters(author, series, { excludeBookId? })` (`server/src/workspace/series-cast-scan.ts`) is a filtered slice of the same data: same `castConfirmed === true` gate, plus a `(state.author, state.series)` filter and an `isStandalone === true` exclusion (standalones aren't part of a series's continuity). Used by Phase 0a's per-chapter detection prompt (C2) so the analyzer for book N+1 of a series sees the confirmed cast from books 1..N as a prior — distinct from the confirm-time voice-match scan this plan covers. `scanSeriesCharactersForBookId(bookId)` resolves `(author, series)` from `state.json` and applies `excludeBookId` automatically.
+
 ## Invariants to preserve
 
 - `POST /api/books/:bookId/voice-match` request body: `{ characters: Character[] }`. Response shape: `VoiceMatchResponse { bookId, matches: { characterId, candidates: { voiceId, fromBookId, fromBookTitle, fromCharacterId, score, factors: MatchFactor[] }[] }[] }`. `fromBookId` + `fromCharacterId` carry a stable handle on the library record so the override flow can address it without re-walking the books tree.
