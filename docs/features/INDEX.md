@@ -63,6 +63,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [14 — Coqui XTTS sidecar](14-tts-sidecar-coqui.md) — Local sidecar alternate (zero-shot voice cloning).
 - [14a — Kokoro v1 TTS engine](14a-tts-sidecar-kokoro.md) — Local sidecar default, English-only, per-engine cast voice profiles.
 - [15 — Gemini cloud TTS](15-tts-gemini-cloud.md) — Cloud opt-in.
+- [39 — Purge WAV (MP3 is the only format)](39-purge-wav.md) — Drops the legacy-WAV fallback documented in plan 28; locator + routes + types collapse to MP3-only; mock fixtures, UI label, OpenAPI, and 8 feature docs reworded. **draft**.
 
 ### G. Generation
 - [16 — Generation stream](16-generation-stream.md) — Chapter audio SSE stream. Cross-links to plan 28 for the on-disk format.
