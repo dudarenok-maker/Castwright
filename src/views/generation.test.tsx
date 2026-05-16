@@ -4,6 +4,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
+import { MemoryRouter, Outlet, Routes, Route } from 'react-router-dom';
 import { chaptersSlice } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice } from '../store/ui-slice';
@@ -13,7 +14,35 @@ import { librarySlice } from '../store/library-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { generationStreamMiddleware } from '../store/generation-stream-middleware';
 import { GenerationView } from './generation';
+import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
+import type { LayoutContext } from '../components/layout';
 import type { Chapter, Character, Sentence } from '../lib/types';
+import type { ComponentProps } from 'react';
+
+/* After plan 30 G1, GenerationView reads its TTS pill state from a
+   Layout-owned `useTtsLifecycle()` via outlet context. The test harness
+   invokes the hook itself so existing assertions against `loadSidecar` /
+   `unloadAnalyzer` / `getSidecarHealth` keep firing through the hook the
+   way they did when the state lived inline on the view. */
+function HostedGenerationView(props: ComponentProps<typeof GenerationView>) {
+  return (
+    <MemoryRouter>
+      <Routes>
+        <Route element={<HostedOutlet/>}>
+          <Route path="*" element={<UnwrappedGenerationView {...props}/>}/>
+        </Route>
+      </Routes>
+    </MemoryRouter>
+  );
+}
+/* Aliased so the JSX `<GenerationView>` swap in this file's test renders
+   doesn't accidentally recurse on the host above. */
+const UnwrappedGenerationView = GenerationView;
+function HostedOutlet() {
+  const ttsLifecycle = useTtsLifecycle();
+  const ctx: LayoutContext = { showInfo: vi.fn(), showError: vi.fn(), ttsLifecycle };
+  return <Outlet context={ctx}/>;
+}
 
 const streamGenerationMock = vi.fn();
 const unloadAnalyzerSpy = vi.fn();
@@ -143,7 +172,7 @@ function renderView() {
   const store = makeStore();
   return render(
     <Provider store={store}>
-      <GenerationView
+      <HostedGenerationView
         chapters={[chapter1, chapter2]}
         characters={characters}
         paused
@@ -234,7 +263,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     } as any));
     render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={[ch1Done, ch2Queued, ch3Excluded]}
           characters={characters}
           paused
@@ -295,7 +324,7 @@ describe('GenerationView — early-tick render guards (regression)', () => {
     } as any));
     render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={[live]}
           characters={characters}
           paused
@@ -403,7 +432,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
     } as any));
     return render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={[liveChapter]}
           characters={cast}
           paused
@@ -490,7 +519,7 @@ describe('GenerationView — heartbeat / stalled state', () => {
 
     render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={[live]}
           characters={characters}
           paused={false}
@@ -546,7 +575,7 @@ describe('GenerationView — activity sidebar', () => {
 
     render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={[chapter1, chapter2]}
           characters={characters}
           paused
@@ -594,7 +623,7 @@ describe('GenerationView — header action once the run is complete', () => {
     const onRegenerateBook = vi.fn();
     render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={[allDone1, allDone2]}
           characters={characters}
           paused={false}
@@ -638,7 +667,7 @@ describe('GenerationView — header action once the run is complete', () => {
 
     render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={[chapter1, chapter2]}
           characters={characters}
           paused
@@ -705,7 +734,7 @@ describe('GenerationView — reverse local-analyzer guard on Resume (D2)', () =>
 
     render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={[chapter1, chapter2]}
           characters={characters}
           paused
@@ -734,7 +763,7 @@ describe('GenerationView — reverse local-analyzer guard on Resume (D2)', () =>
 
     render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={[chapter1, chapter2]}
           characters={characters}
           paused
@@ -765,7 +794,7 @@ describe('GenerationView — reverse local-analyzer guard on Resume (D2)', () =>
 
     render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={[chapter1, chapter2]}
           characters={characters}
           paused={false}
@@ -960,7 +989,7 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
     } as any));
     render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={chapters}
           characters={characters}
           paused
@@ -1074,7 +1103,7 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
   function renderDrift(store: ReturnType<typeof makeDriftStore>, chapters: Chapter[]) {
     return render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={chapters}
           characters={characters}
           paused
@@ -1300,7 +1329,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
   function renderInclude(store: ReturnType<typeof makeIncludeStore>) {
     return render(
       <Provider store={store}>
-        <GenerationView
+        <HostedGenerationView
           chapters={[chapter1, chapter2, ch3Excluded]}
           characters={characters}
           paused

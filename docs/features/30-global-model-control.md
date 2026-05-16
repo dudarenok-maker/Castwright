@@ -42,23 +42,37 @@ The pill renders only on book-context stages (`analysing` / `confirm` /
 `ready`) — Books and Upload stages skip it since TTS isn't meaningful
 without a manuscript.
 
-**Two polls in flight.** v1 deliberately does NOT consolidate the
-Generation view's local pill into the top-bar one. Layout's hook call
-and Generation's local `sidecarHealth` state run their own 30 s polls
-independently. After a Load click on either pill, the *other* pill
-catches up on its next probe (worst case ~30 s lag); after a Stop click
-the same. The eviction/load-error banners are NOT shared either — the
-banner appears next to whichever pill was clicked. Acceptable for v1
-because the user typically only clicks one pill at a time and the lag
-is bounded.
+## Shipped in G1 (single poll, consolidated state)
 
-## When to pick up the follow-up (consolidation)
+Plan-30 v1 ran two `useTtsLifecycle` instances in parallel — Layout's
+top-bar pill and Generation view's local pill each owned their own 30 s
+`/health` poll, their own `pendingPillState`, and their own
+eviction/load-error banners. The two converged within ~30 s of any
+Load/Stop click but didn't share state in-memory.
 
-When a third non-Generation surface needs JIT TTS warm (today: Profile
-Drawer Play, Cast row Play; likely next: per-character
-"regenerate this voice across the book" button — `profile-drawer.tsx`
-`onRegenerateCharacter`). At that point lift `useTtsLifecycle` state into
-LayoutContext / Redux so all surfaces share a single poll + banner.
+G1 consolidates: the only `useTtsLifecycle()` instance lives in Layout
+(`src/components/layout.tsx`), and Layout exposes it via the
+`LayoutContext` outlet context. `GenerationView` reads
+`ttsLifecycle` through `useOutletContext<LayoutContext>()`
+(`src/views/generation.tsx`); the previously-local `sidecarHealth` /
+`pendingPillState` / `evictionNotice` / `loadErrorNotice` state and the
+duplicate 30 s poll are gone. Load/Stop clicks on either pill now mutate
+the same in-memory state — both pills update instantly (no 30 s lag),
+and the banner is shared.
+
+`GenerationView` falls back to an inert `TtsLifecycle` stub when it's
+mounted outside a Layout (e.g. the cross-book title regression test in
+`src/routes/index.test.tsx`). Real call sites always come through
+Layout, so the fallback is never user-reachable.
+
+## When to extend the pattern
+
+When a third surface graduates from JIT-only to needing a pill (today's
+candidates: Profile Drawer Play, Cast row Play, the per-character
+"regenerate this voice across the book" button at
+`profile-drawer.tsx:onRegenerateCharacter`). Each new surface just reads
+`ttsLifecycle` from outlet context — no new poll, no new banner, no
+parallel state to keep in sync.
 
 ## Invariants to preserve
 

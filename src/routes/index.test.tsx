@@ -297,7 +297,21 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
   function renderBooks(store: ReturnType<typeof makeStore>) {
     const showInfo = vi.fn();
     const showError = vi.fn();
-    const ctx: LayoutContext = { showInfo, showError };
+    /* Stub ttsLifecycle — these tests don't exercise the TTS pill; the
+       BooksRoute itself doesn't read it. Keeping the shape compliant so the
+       LayoutContext type doesn't complain. */
+    const ctx: LayoutContext = {
+      showInfo,
+      showError,
+      ttsLifecycle: {
+        state: 'unreachable',
+        evictionNotice: null,
+        loadErrorNotice: null,
+        onLoad: vi.fn(async () => {}),
+        onStop: vi.fn(async () => {}),
+        dismissNotices: vi.fn(),
+      },
+    };
     function OutletShim() { return <Outlet context={ctx}/>; }
     const utils = render(
       <Provider store={store}>
@@ -386,7 +400,21 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
   function renderBooks(store: ReturnType<typeof makeStore>) {
     const showInfo = vi.fn();
     const showError = vi.fn();
-    const ctx: LayoutContext = { showInfo, showError };
+    /* Stub ttsLifecycle — these tests don't exercise the TTS pill; the
+       BooksRoute itself doesn't read it. Keeping the shape compliant so the
+       LayoutContext type doesn't complain. */
+    const ctx: LayoutContext = {
+      showInfo,
+      showError,
+      ttsLifecycle: {
+        state: 'unreachable',
+        evictionNotice: null,
+        loadErrorNotice: null,
+        onLoad: vi.fn(async () => {}),
+        onStop: vi.fn(async () => {}),
+        dismissNotices: vi.fn(),
+      },
+    };
     function OutletShim() { return <Outlet context={ctx}/>; }
     const utils = render(
       <Provider store={store}>
