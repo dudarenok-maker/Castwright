@@ -136,12 +136,12 @@ additions to it plus the matching handler in `src/views/listen.tsx`.
   caption / header / submit copy lives in the config entry. Tile-
   specific testid `export-tile-body-smart_audiobook` (Voice keeps its
   plan-33 alias `export-voice-body`).
-- **B3 — BookPlayer** *(pending)*. `appHint: 'bookplayer'`,
-  defaults to `{ format: 'mp3-folder', destination: 'sync-folder' }`.
-  Modal copy nods at AirDrop from the synced folder via Finder. The
-  `TILE_HINTS` entry is already wired; the remaining work is the
-  `listener-apps.ts` description refresh + the
-  `onOpenBookplayerExport` handler in `ListenView`.
+- **B3 — BookPlayer** *(shipped)*. `appHint: 'bookplayer'`, defaults
+  to `{ format: 'mp3-folder', destination: 'sync-folder' }`. Modal
+  copy nods at AirDrop from the synced folder via Finder. Tile-
+  specific testid `export-tile-body-bookplayer`. The B2 refactor
+  reduced B3 to a one-entry config addition + a one-line handler
+  wire-up in `ListenView`.
 - **B4 — Audiobookshelf** *(pending)*. `appHint: 'audiobookshelf'`,
   defaults to `{ format: 'mp3-folder', destination: 'sync-folder' }`.
   Modal copy mentions pointing the sync folder at the Audiobookshelf
