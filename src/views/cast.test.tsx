@@ -10,13 +10,28 @@
 import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { CastView } from './cast';
+import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import type { Character, Voice } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {},
+}));
+
+vi.mock('../lib/play-sample-with-auto-load', () => ({
+  playSampleWithAutoLoad: vi.fn().mockResolvedValue({ analyzerEvicted: false }),
+}));
+
+vi.mock('../lib/use-sample-playback', () => ({
+  useSamplePlayback: () => ({
+    isPlaying: false,
+    currentUrl: null,
+    play:  vi.fn(),
+    stop:  vi.fn(),
+    pause: vi.fn(),
+  }),
 }));
 
 const narrator: Character = {
@@ -81,7 +96,7 @@ const library: Voice[] = [
   },
 ];
 
-function renderView() {
+function renderView(opts: { onOpenProfile?: (id: string | null) => void } = {}) {
   const store = configureStore({ reducer: { ui: uiSlice.reducer } });
   return render(
     <Provider store={store}>
@@ -90,7 +105,7 @@ function renderView() {
         setCharacters={() => {}}
         library={library}
         title="The Northern Star"
-        onOpenProfile={() => {}}
+        onOpenProfile={opts.onOpenProfile ?? (() => {})}
         onShowMatchDetail={() => {}}
         onBatchRegenerate={() => {}}
         driftEvents={[]}
@@ -173,5 +188,68 @@ describe('CastView voice-column presentation', () => {
     /* The match line lives in the same min-w-0 wrapper as the profile
        line; if it leaked into the generated row we'd see it here. */
     expect(within(sweeneyCell).queryByText(/From .* · \d+%/)).toBeNull();
+  });
+});
+
+describe('CastView VoiceSwatch sample playback', () => {
+  /* Regression: prior to the fix the gradient swatch on each cast row had
+     no onSelect wired, so clicking it triggered no sample synth at all —
+     only the "Play 12s" pill in the Sample column worked. The swatch's
+     hover overlay implied a play affordance that did nothing. After the
+     fix, clicking the swatch fires playSampleWithAutoLoad with the
+     character's library voice and the row's click bubbles up to open
+     the profile drawer in the same gesture (user-explicit double action). */
+
+  it('routes a swatch click through the auto-load helper', async () => {
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    renderView();
+    const row = rowFor('Mr. Sweeney');
+    /* Swatch is the first <button> inside the row — the row's other
+       buttons (match-source link, Play 12s pill) come after it. */
+    const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+    expect(swatch).toBeTruthy();
+    fireEvent.click(swatch);
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('v_sweeney');
+  });
+
+  it('also opens the profile drawer on the same swatch click', async () => {
+    const onOpenProfile = vi.fn();
+    renderView({ onOpenProfile });
+    const row = rowFor('Mr. Sweeney');
+    const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+    fireEvent.click(swatch);
+    /* The row's onClick is the click target for opening the drawer;
+       the swatch click bubbles up so a single click does both things. */
+    expect(onOpenProfile).toHaveBeenCalledWith('sweeney');
+    /* Let the auto-load promise resolve so the row's loading→idle
+       transition settles inside act, silencing the warning. */
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalled());
+  });
+
+  it('marks the swatch aria-busy while synth is in flight', async () => {
+    /* Hold the helper in flight so the loading state is observable. */
+    let resolveCall: ((v: { analyzerEvicted: boolean }) => void) | undefined;
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockImplementationOnce(
+      () => new Promise<{ analyzerEvicted: boolean }>((resolve) => { resolveCall = resolve; }),
+    );
+    renderView();
+    const row = rowFor('Mr. Sweeney');
+    const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+    fireEvent.click(swatch);
+    /* aria-busy / aria-label flip the moment rowState.loading is true. */
+    await waitFor(() => {
+      const busy = row.querySelector('button[aria-busy="true"]') as HTMLButtonElement | null;
+      expect(busy).toBeTruthy();
+      expect(busy?.getAttribute('aria-label')).toMatch(/^Generating sample/);
+    });
+    resolveCall?.({ analyzerEvicted: false });
+    /* Wait for the row's loading state to clear so the post-resolution
+       setState lands inside act. */
+    await waitFor(() => {
+      const idle = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement | null;
+      expect(idle).toBeTruthy();
+    });
   });
 });

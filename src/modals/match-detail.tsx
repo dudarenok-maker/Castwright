@@ -1,7 +1,12 @@
+import { useState } from 'react';
 import { IconCheckCircle, IconClose } from '../lib/icons';
 import { Avatar, VoiceSwatch, PrimaryButton } from '../components/primitives';
 import { MATCH_FACTORS } from '../data/match-factors';
 import type { Character, Voice } from '../lib/types';
+import { useAppSelector } from '../store';
+import { useSamplePlayback } from '../lib/use-sample-playback';
+import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
+import { buildCharacterHint } from '../lib/build-character-hint';
 
 interface Props {
   character: Character | null;
@@ -12,9 +17,33 @@ interface Props {
 }
 
 export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecline }: Props) {
+  const playback = useSamplePlayback();
+  const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
+  const [sampleBusy, setSampleBusy] = useState(false);
+  const [sampleError, setSampleError] = useState<string | null>(null);
   if (!character || !voice) return null;
   const factors = MATCH_FACTORS[character.id] || MATCH_FACTORS.narrator;
   const overall = character.matchedFrom?.confidence ?? 0.92;
+  async function playSample() {
+    if (!voice || !character) return;
+    setSampleError(null);
+    setSampleBusy(true);
+    try {
+      await playSampleWithAutoLoad({
+        args: {
+          voiceId: voice.id,
+          voice,
+          modelKey: ttsModelKey,
+          characterHint: buildCharacterHint(character),
+        },
+        playback,
+      });
+    } catch (err) {
+      setSampleError((err as Error).message);
+    } finally {
+      setSampleBusy(false);
+    }
+  }
   return (
     <>
       <div onClick={onClose} className="fixed inset-0 bg-ink/30 z-40 fade-in"/>
@@ -46,9 +75,16 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
             </div>
             <div className="p-4 rounded-2xl bg-purple-deep/[0.04] border border-purple-deep/15 text-center">
               <p className="text-[11px] uppercase tracking-wider text-purple-deep/70 font-semibold mb-3">From your library</p>
-              <div className="grid place-items-center"><VoiceSwatch voice={voice} size="md" showLabel={false}/></div>
+              <div className="grid place-items-center">
+                <VoiceSwatch voice={voice} size="md" showLabel={false}
+                  onSelect={() => { void playSample(); }}
+                  loading={sampleBusy}/>
+              </div>
               <p className="mt-3 font-bold text-ink truncate">{voice.character}</p>
               <p className="text-xs text-purple-deep/70 mt-0.5 truncate">{voice.bookTitle}</p>
+              {sampleError && (
+                <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {sampleError}</p>
+              )}
             </div>
           </section>
 

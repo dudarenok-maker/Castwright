@@ -244,6 +244,27 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Play 12s sample/i }));
     expect(await screen.findByText(/TTS sidecar process is not running\./)).toBeTruthy();
   });
+
+  it('routes a gradient-swatch click through the same auto-load helper', async () => {
+    /* Regression for the bug where the drawer's big circle had no
+       onSelect wired — the hover overlay promised playback but clicking
+       did nothing. After the fix, clicking the swatch is an alternate
+       trigger for the same sample synth as the "Play 12s sample" pill. */
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockResolvedValueOnce({ analyzerEvicted: false });
+    render(
+      <Provider store={makeStore()}>
+        <ProfileDrawer character={fitz} voice={undefined} onClose={() => {}} onSave={() => {}} onLock={() => {}}/>
+      </Provider>,
+    );
+    /* The unmatched character has no library Voice, so the swatch falls
+       back to its default voice-named accessible label. We match by
+       prefix because the label suffix depends on whether a voice is
+       present. */
+    fireEvent.click(screen.getByRole('button', { name: /^Play sample for/i }));
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('char-fitz');
+  });
 });
 
 describe('ProfileDrawer downgrade to background bucket', () => {
