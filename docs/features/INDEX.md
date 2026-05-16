@@ -94,6 +94,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [25 — Design tokens](25-design-tokens.md) — Colours via CSS variables only.
 - [26 — RTK Immer drafts](26-rtk-immer.md) — Reducers mutate, never spread.
 - [37 — Playwright e2e harness](37-e2e-playwright.md) — Browser-level smoke + on-ramp for visual regression. KNOWN: scaffolded — one golden-path spec, broader coverage deferred.
+- [38 — Branching & commit convention](38-branching-and-commit-convention.md) — Trunk-based branching + Conventional-Commits subject format; `.husky/commit-msg` gates the convention.
 
 ### L. Book state persistence
 - [27 — Book state persistence](27-book-state-persistence.md) — `.audiobook/state.json` hydration + slice PUT patches.

@@ -181,14 +181,24 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
     `overrideTtsVoice` is migrated lazily at cast.json read time.
 
 ## Commit gate
-Two-tier automated test gate, enforced by husky hooks in `.husky/`:
+Three-tier automated gate, enforced by husky hooks in `.husky/`:
+- **commit-msg** (`.husky/commit-msg`): runs `scripts/validate-commit-msg.mjs`
+  on the subject line. Rejects commits that don't match the
+  `<type>(<scope>): <subject>` convention (with `chore: <subject>` as the
+  no-scope catch-all). Merge / Revert / fixup! / squash! commits are exempt.
+  Full spec lives in [CONTRIBUTING.md](CONTRIBUTING.md); regression plan is
+  [docs/features/38-branching-and-commit-convention.md](docs/features/38-branching-and-commit-convention.md).
 - **pre-commit** (`.husky/pre-commit`): runs `npm run verify:fast` —
-  frontend + server tests only. Sub-5s on a warm cache. Refuses the
-  commit if any Vitest spec is red. Sidecar (pytest), Pester scripts,
+  validator unit tests + frontend + server tests. Sub-5s on a warm cache.
+  Refuses the commit if any spec is red. Sidecar (pytest), Pester scripts,
   Playwright e2e, and typecheck are NOT in pre-commit — they live in
   pre-push so commits stay snappy.
 - **pre-push** (`.husky/pre-push`): runs `npm run verify` — typecheck +
   all tests + e2e + build. Refuses the push if any step fails.
+
+Branching model and the full commit convention (allowed types, allowed scopes,
+multi-scope syntax, worktrees for parallel agent work) are documented in
+[CONTRIBUTING.md](CONTRIBUTING.md). Read this before opening a branch.
 
 Hooks activate automatically after `npm install` via the `prepare` script
 (husky v9 — sets `core.hooksPath` to `.husky/`). On a fresh clone, run
