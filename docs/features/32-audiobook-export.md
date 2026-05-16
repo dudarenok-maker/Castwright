@@ -75,7 +75,13 @@ Use the canonical end-to-end manuscript at `C:\Users\dudar\Downloads\Bonus Keefe
 
 ## Out of scope (follow-ups)
 
-- **Cover art**. The book only carries a 2-tuple gradient today; no JPEG to embed in either format. Adding real cover input is a separate UI thread (upload field on the metadata editor, plus storage under `.audiobook/cover.jpg`).
+- **Cover art** — *shipped under plan 36 + A2/A3.* The OpenLibrary picker
+  caches the chosen JPEG at `<bookDir>/.audiobook/cover.jpg`. Both
+  `buildM4b` and `applyId3v24Tags` now read that file when present and
+  embed it as the iTunes `covr` atom (M4B) or ID3v2 APIC frame
+  (MP3.ZIP). Absent cover → exports still ship without artwork. Pinned
+  by `build-m4b.test.ts` ("embeds the OpenLibrary cover...") and
+  `id3-tags.test.ts` ("cover embedding (coverJpegPath)").
 - **Cancel / dismiss / retry on running jobs.** The modal renders progress but doesn't yet expose a Cancel button. Retry on `failed` jobs is wired in `ExportQueueRow` but not surfaced — the user re-clicks Build.
 - **PocketBook Cloud direct upload.** Closed protocol; not worth reverse-engineering when sideload via LAN URL or sync folder works fine.
 - **Send-to-PocketBook email gateway** (`@pbsync.com`). Marketed for ebooks; audiobook size limits undocumented. Could be a third destination tab later.
