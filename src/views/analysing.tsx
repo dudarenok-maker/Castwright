@@ -343,7 +343,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
   const [phaseProgress, setPhaseProgress] = useState(0);
   const [logs, setLogs] = useState<Record<number, string[]>>({});
   const [error, setError] = useState<{ message: string; code: string; detail?: string } | null>(null);
-  const [retry, setRetry] = useState<{ nonce: number; fresh: boolean }>({ nonce: 0, fresh: false });
+  const [retry, setRetry] = useState<{ nonce: number; fresh: boolean; allowStage1Shrink?: boolean }>({ nonce: 0, fresh: false });
   const [conn, setConn] = useState<ConnState>('idle');
   const [lastEventAt, setLastEventAt] = useState<number | null>(null);
   const [live, setLive] = useState<AnalysisLiveInfo | null>(null);
@@ -396,6 +396,15 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
      failedChapters drains to 0 we auto-resume the main run so Phase 1+
      start without the user having to re-click "Try again". */
   const [castIncomplete, setCastIncomplete] = useState(false);
+
+  /* Stage 1 shrink-refused info — surfaced when the server refused to
+     overwrite a non-trivial cached roster with a much smaller one
+     (`code: 'stage1_shrink_refused'`). The view renders a banner with
+     the prev/next counts and an "Accept smaller roster" button; the
+     button re-fires the analysis with allowStage1Shrink:true so the
+     next attempt bypasses the gate. Null when no shrink has been
+     refused on this view session. */
+  const [stage1ShrinkInfo, setStage1ShrinkInfo] = useState<{ prev: number; next: number } | null>(null);
 
   /* Explicit "Start analysis" gate. The previous auto-fire path was hard
      to reason about — auto-load fires, probe re-runs, isAnalyzerReady
@@ -472,6 +481,10 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
        model switch. If the server still has unresolved failures this
        run will re-set it via the cast_incomplete catch below. */
     setCastIncomplete(false);
+    /* Same clear for the shrink-refused banner — a new attempt either
+       succeeds (banner stays cleared) or hits the gate again and the
+       catch below re-sets it with fresh counts. */
+    setStage1ShrinkInfo(null);
     const markEvent = () => setLastEventAt(Date.now());
     (async () => {
       try {
@@ -479,6 +492,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
           signal: controller.signal,
           model,
           fresh: retry.fresh || undefined,
+          allowStage1Shrink: retry.allowStage1Shrink || undefined,
           onPhase: ({ phaseId, progress, live }) => {
             if (cancelled) return;
             setConn('streaming');
@@ -588,6 +602,18 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
           setConn('idle');
           setCastIncomplete(true);
           setDroppedQuotesRefreshKey(k => k + 1);
+          return;
+        }
+        /* stage1_shrink_refused is the data-loss guard for stage1
+           rewrites. Not a failure — the user sees a banner with the
+           prev/next counts and can opt in via "Accept smaller roster",
+           which re-fires the request with allowStage1Shrink: true. */
+        if (e instanceof AnalysisError && e.code === 'stage1_shrink_refused') {
+          setConn('idle');
+          setStage1ShrinkInfo({
+            prev: e.prevCharCount ?? 0,
+            next: e.nextCharCount ?? 0,
+          });
           return;
         }
         setConn('error');
@@ -1259,6 +1285,42 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
             );
           })}
         </div>
+
+        {/* Stage 1 shrink-refused banner. The server refused to overwrite
+            a non-trivial cached roster with a much smaller one — usually
+            a sign that a follow-up run with a worse model (or a chapter
+            re-parse) would silently lose detected characters. The user
+            can opt in via "Accept smaller roster", which re-fires the
+            analysis with allowStage1Shrink:true. */}
+        {stage1ShrinkInfo && (
+          <div
+            className="mt-6 rounded-3xl border border-amber-300 bg-amber-50 px-6 py-4"
+            data-testid="stage1-shrink-refused-banner"
+          >
+            <p className="text-sm font-semibold text-amber-900">
+              Refusing to shrink the cast roster
+            </p>
+            <p className="mt-1 text-xs text-amber-800/80">
+              The previous run detected <span className="font-semibold">{stage1ShrinkInfo.prev} characters</span>, and the new run would replace it with <span className="font-semibold">{stage1ShrinkInfo.next}</span>. This usually means a worse model collapsed the cast (or the manuscript was re-parsed and quotes no longer match). The existing roster is preserved on disk — you can try a different model, or accept the smaller roster if it's what you want.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setRetry(r => ({ nonce: r.nonce + 1, fresh: false, allowStage1Shrink: true }))}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-ink text-canvas hover:bg-ink/90 transition-colors"
+              >
+                Accept smaller roster ({stage1ShrinkInfo.next} characters)
+              </button>
+              <button
+                type="button"
+                onClick={() => setStage1ShrinkInfo(null)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-900 hover:bg-amber-200 transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Failed-chapter retry panel. Survives reload via book-state
             hydration (see the failed-chapters effect above).

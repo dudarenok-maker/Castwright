@@ -140,6 +140,13 @@ export interface AnalyseOpts {
   /** Discard any cached partial progress for this manuscript before running.
       The "Start fresh" button in the analysing view sets this. */
   fresh?: boolean;
+  /** Explicit opt-in to accept a stage1 shrink. The server emits
+      `stage1_shrink_refused` when a new roster would replace a much
+      larger existing one (default: refuse when new < 0.5 * old AND old
+      >= 3 characters). The analysing view surfaces the choice as an
+      "Accept smaller roster" button; clicking re-fires the request
+      with this flag set, which bypasses the gate for that attempt. */
+  allowStage1Shrink?: boolean;
 }
 export interface MatchArgs { bookId: string; characters: Character[]; }
 export interface MergeCharactersArgs { bookId: string; sourceId: string; targetId: string; }
@@ -615,6 +622,11 @@ interface AnalysisStreamEvent {
       envelopes; falls back to the raw SDK message). Rendered in a collapsible
       block in the analysing view so the headline stays readable. */
   detail?: string;
+  /** Carried on `stage1_shrink_refused` error events so the view can render
+      a precise "Would drop from N to M characters" prompt without
+      regex'ing the message string. */
+  prevCharCount?: number;
+  nextCharCount?: number;
   live?: AnalysisLiveInfo;
   /* Heartbeat fields. */
   receivedBytes?: number;
@@ -638,20 +650,27 @@ interface AnalysisStreamEvent {
 export class AnalysisError extends Error {
   code: string;
   detail?: string;
-  constructor(message: string, code: string, detail?: string) {
+  /** Populated for `stage1_shrink_refused` errors so the analysing view
+      can render a precise "Would drop from N to M characters" banner +
+      "Accept smaller roster" button without parsing the message. */
+  prevCharCount?: number;
+  nextCharCount?: number;
+  constructor(message: string, code: string, detail?: string, prevCharCount?: number, nextCharCount?: number) {
     super(message);
     this.name = 'AnalysisError';
     this.code = code;
     this.detail = detail;
+    this.prevCharCount = prevCharCount;
+    this.nextCharCount = nextCharCount;
   }
 }
 
-async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, model, fresh }: AnalyseOpts = {}): Promise<AnalyseResponse> {
-  const hasBody = model !== undefined || fresh !== undefined;
+async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, model, fresh, allowStage1Shrink }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+  const hasBody = model !== undefined || fresh !== undefined || allowStage1Shrink !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
     headers: hasBody ? { 'Content-Type': 'application/json' } : undefined,
-    body: hasBody ? JSON.stringify({ model, fresh }) : undefined,
+    body: hasBody ? JSON.stringify({ model, fresh, allowStage1Shrink }) : undefined,
     signal,
   });
   if (!res.ok || !res.body) throw new Error(`Analysis stream failed (${res.status}).`);
@@ -722,7 +741,13 @@ async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, on
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
     } else if (payload.kind === 'error') {
-      throw new AnalysisError(payload.message || 'Analysis failed.', payload.code ?? 'unknown', payload.detail);
+      throw new AnalysisError(
+        payload.message || 'Analysis failed.',
+        payload.code ?? 'unknown',
+        payload.detail,
+        payload.prevCharCount,
+        payload.nextCharCount,
+      );
     }
   };
 
@@ -902,14 +927,14 @@ async function mockSetChapterExcluded(
 async function realRunAnalysisForChapters(
   manuscriptId: string,
   chapterIds: number[],
-  { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, model }: AnalyseOpts = {},
+  { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, model, allowStage1Shrink }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
   const res = await fetch(
     `/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis/chapters`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chapterIds, model }),
+      body: JSON.stringify({ chapterIds, model, allowStage1Shrink }),
       signal,
     },
   );
@@ -983,7 +1008,13 @@ async function realRunAnalysisForChapters(
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
     } else if (payload.kind === 'error') {
-      throw new AnalysisError(payload.message || 'Subset analysis failed.', payload.code ?? 'unknown', payload.detail);
+      throw new AnalysisError(
+        payload.message || 'Subset analysis failed.',
+        payload.code ?? 'unknown',
+        payload.detail,
+        payload.prevCharCount,
+        payload.nextCharCount,
+      );
     }
   };
 
