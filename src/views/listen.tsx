@@ -77,7 +77,7 @@ export function ListenView({
        tile-specific copy from that entry. */
   const [exportModal, setExportModal] = useState<{
     tab: 'download' | 'sync-folder';
-    appHint?: 'voice' | 'smart_audiobook';
+    appHint?: 'voice' | 'smart_audiobook' | 'bookplayer';
   } | null>(null);
 
   /* Live job list from the store, with the visual fixtures as a fallback
@@ -184,6 +184,7 @@ export function ListenView({
         onOpenPocketBookExport={() => setExportModal({ tab: 'download' })}
         onOpenVoiceExport={() => setExportModal({ tab: 'sync-folder', appHint: 'voice' })}
         onOpenSmartAudiobookExport={() => setExportModal({ tab: 'sync-folder', appHint: 'smart_audiobook' })}
+        onOpenBookplayerExport={() => setExportModal({ tab: 'sync-folder', appHint: 'bookplayer' })}
       />
       <ExportQueue items={queueItems}/>
 
@@ -214,7 +215,9 @@ export function ListenView({
           ? { format: 'm4b', destination: 'sync-folder', appHint: 'voice' }
           : exportModal?.appHint === 'smart_audiobook'
             ? { format: 'mp3-folder', destination: 'sync-folder', appHint: 'smart_audiobook' }
-            : undefined}
+            : exportModal?.appHint === 'bookplayer'
+              ? { format: 'mp3-folder', destination: 'sync-folder', appHint: 'bookplayer' }
+              : undefined}
         onClose={() => setExportModal(null)}
       />
 
@@ -448,14 +451,20 @@ interface ListenerAppsProps {
   /** Smart AudioBook Player is live (plan 34 B2): mp3-folder + sync-folder
       with appHint='smart_audiobook'. */
   onOpenSmartAudiobookExport: () => void;
+  /** BookPlayer is live (plan 34 B3): mp3-folder + sync-folder with
+      appHint='bookplayer'. iOS via Files import or AirDrop from a Mac. */
+  onOpenBookplayerExport: () => void;
 }
-function ListenerApps({ onSend, onOpenPocketBookExport, onOpenVoiceExport, onOpenSmartAudiobookExport }: ListenerAppsProps) {
+function ListenerApps({
+  onSend, onOpenPocketBookExport, onOpenVoiceExport, onOpenSmartAudiobookExport, onOpenBookplayerExport,
+}: ListenerAppsProps) {
   /* Per-app live handlers. Tiles not in this map render as disabled
      coming-soon placeholders. */
   const liveHandlers: Record<string, () => void> = {
     pocketbook:      onOpenPocketBookExport,
     voice:           onOpenVoiceExport,
     smart_audiobook: onOpenSmartAudiobookExport,
+    bookplayer:      onOpenBookplayerExport,
   };
   return (
     <section className="mb-12">
@@ -463,7 +472,7 @@ function ListenerApps({ onSend, onOpenPocketBookExport, onOpenVoiceExport, onOpe
         <SectionLabel>Listen on your favourite app</SectionLabel>
         <span className="text-xs text-ink/50 inline-flex items-center gap-1.5"><IconShield className="w-3.5 h-3.5"/> Open-format export · DRM-free</span>
       </div>
-      <MockedPreviewBanner>direct handoff to other apps is coming soon. PocketBook, Voice, and Smart AudioBook Player are live — click any to sideload.</MockedPreviewBanner>
+      <MockedPreviewBanner>direct handoff to other apps is coming soon. PocketBook, Voice, Smart AudioBook Player, and BookPlayer are live — click any to sideload.</MockedPreviewBanner>
       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {SUPPORTED_APPS.map(a => (
           <ListenerAppCard

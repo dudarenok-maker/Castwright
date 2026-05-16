@@ -12,14 +12,18 @@ export const SUPPORTED_APPS: ListenerApp[] = [
     sendVerb: 'Send to server',
   },
   {
+    /* Fourth live integration target — BookPlayer (iOS). Imports a folder
+       per book via the Files app or AirDrop from a Mac. Defaults to
+       mp3-folder + sync-folder so the chapters land in a sync directory
+       on the Mac that the user can then AirDrop. */
     id: 'bookplayer',
     name: 'BookPlayer',
     glyph: 'BP',
     gradient: ['#F79A83', '#A43C6C'],
     platforms: ['iOS'],
     tagline: 'Lightweight iOS player.',
-    description: 'Imports M4B from Files or AirDrop. Sleep timer, speed control, beautiful chapter navigation.',
-    sendVerb: 'Send via AirDrop',
+    description: 'Folder-per-book via iOS Files or AirDrop from a Mac. Per-chapter MP3s arrive tagged with title, author, and cover art ready to import.',
+    sendVerb: 'Send to BookPlayer',
   },
   {
     /* Third live integration target — Smart AudioBook Player. Android-only,
