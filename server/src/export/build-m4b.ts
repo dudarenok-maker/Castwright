@@ -18,9 +18,10 @@
    chapters" hint, identical to the MP3.ZIP path. */
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, stat, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { audioDir } from '../workspace/paths.js';
+import { audioDir, coverImagePath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import { ExportIncompleteError } from './build-mp3-zip.js';
 import type { BookStateJson } from '../workspace/scan.js';
@@ -86,9 +87,19 @@ export async function buildM4b(opts: BuildM4bOptions): Promise<BuildM4bResult> {
     await writeFile(ffmetadataPath, buildFfmetadata(state, resolved.map(r => r.chapter), durationsSec), 'utf8');
     await writeFile(concatPath, buildConcatList(resolved.map(r => r.mp3Path)), 'utf8');
 
+    /* Plan 36 A2: pipe the cached OpenLibrary cover into the M4B as the
+       iTunes `covr` atom when one exists for this book. The cover-art
+       pipeline writes `<bookDir>/.audiobook/cover.jpg` after a successful
+       fetch; if the file is absent (no cover picked, or DELETE cleared
+       it) we skip the input entirely so the export still ships — same
+       resilience PocketBook / Voice / Apple Books / BookPlayer rely on. */
+    const cover = coverImagePath(bookDir);
+    const coverPath = existsSync(cover) ? cover : null;
+
     await runFfmpegMux({
       concatPath,
       ffmetadataPath,
+      coverPath,
       outPath,
       totalDurationSec,
       onProgress,
@@ -200,16 +211,26 @@ function probeDurationSec(mp3Path: string): Promise<number> {
 interface RunFfmpegMuxOptions {
   concatPath: string;
   ffmetadataPath: string;
+  /** Optional path to a JPEG/PNG cover. When present, ffmpeg adds it as a
+      third input and writes the iTunes `covr` atom + `attached_pic`
+      disposition. Stream-copied — no re-encode of the cover bytes. */
+  coverPath: string | null;
   outPath: string;
   totalDurationSec: number;
   onProgress?: (ratio: number) => void;
 }
 
 function runFfmpegMux(opts: RunFfmpegMuxOptions): Promise<void> {
-  const { concatPath, ffmetadataPath, outPath, totalDurationSec, onProgress } = opts;
+  const { concatPath, ffmetadataPath, coverPath, outPath, totalDurationSec, onProgress } = opts;
   const totalUs = Math.max(1, Math.round(totalDurationSec * 1_000_000));
 
   return new Promise<void>((resolve, reject) => {
+    /* Inputs: concat-demuxed MP3s [0], FFMETADATA sidecar [1], and
+       optionally the cover JPEG [2]. When the cover is present we map
+       its video stream into the output with `attached_pic` disposition
+       so iOS / Apple / Plex / BookPlayer treat it as the album art
+       rather than a video track. Stream-copied (-c:v copy) — the source
+       JPEG bytes are preserved verbatim. */
     const args = [
       '-y',
       '-loglevel', 'error',
@@ -217,7 +238,9 @@ function runFfmpegMux(opts: RunFfmpegMuxOptions): Promise<void> {
       '-nostats',
       '-f', 'concat', '-safe', '0', '-i', concatPath,
       '-i', ffmetadataPath,
+      ...(coverPath ? ['-i', coverPath] : []),
       '-map', '0:a',
+      ...(coverPath ? ['-map', '2:v', '-c:v', 'copy', '-disposition:v:0', 'attached_pic'] : []),
       '-map_metadata', '1',
       '-c:a', 'aac',
       '-b:a', '96k',

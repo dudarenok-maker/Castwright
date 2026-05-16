@@ -5,7 +5,7 @@
    non-excluded source chapter, with cumulative timestamps. */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
@@ -54,6 +54,7 @@ interface FfprobeReport {
     codec_name?: string;
     channels?: number;
     sample_rate?: string;
+    disposition?: Record<string, number>;
   }>;
   chapters: Array<{
     id: number;
@@ -234,6 +235,58 @@ describeIfTools('buildM4b', () => {
       }),
     ).rejects.toBeInstanceOf(ExportIncompleteError);
   }, 15_000);
+
+  it('embeds the OpenLibrary cover (.audiobook/cover.jpg) as an attached_pic when present', async () => {
+    /* Plan 36 A2: when the cover-art pipeline has cached a cover for
+       this book, buildM4b passes it as a third ffmpeg input and writes
+       the iTunes `covr` atom with attached_pic disposition. ffprobe
+       should report a video stream with codec_name=mjpeg (or png) and
+       disposition.attached_pic=1; the audio stream stays unchanged. */
+    const coverDir = join(bookDir, '.audiobook');
+    if (!existsSync(coverDir)) mkdirSync(coverDir, { recursive: true });
+    /* Tiny 1x1 baseline JPEG. The bytes only need to round-trip
+       through ffmpeg's image demuxer; pixel content is irrelevant. */
+    const jpegBytes = Buffer.from(
+      '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
+      'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB/9sAQwEBAQEBAQEBAQEBAQEB' +
+      'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
+      '/8AAEQgAAQABAwERAAIRAQMRAf/EABQAAQAAAAAAAAAAAAAAAAAAAAj/xAAUAQEAAAAAAAAA' +
+      'AAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Aov8A/9k=',
+      'base64',
+    );
+    const coverPath = join(coverDir, 'cover.jpg');
+    writeFileSync(coverPath, jpegBytes);
+
+    const outPathCover = join(tmpRoot, 'with-cover.m4b');
+    await buildM4b({ bookDir, state: makeState(), outPath: outPathCover });
+
+    const probe = ffprobeJson(outPathCover);
+    const video = probe.streams.find(s => s.codec_type === 'video');
+    expect(video).toBeDefined();
+    expect(video?.codec_name).toMatch(/mjpeg|png/);
+    expect(video?.disposition?.attached_pic).toBe(1);
+    /* Audio stream still intact. */
+    const audio = probe.streams.find(s => s.codec_type === 'audio');
+    expect(audio?.codec_name).toBe('aac');
+
+    /* Clean up so the absence-test below sees no cover file. */
+    rmSync(coverPath, { force: true });
+  }, 30_000);
+
+  it('still produces a valid M4B with no video stream when no cover is cached on disk', async () => {
+    /* Negative path — the export pipeline must remain resilient to the
+       common case (user hasn't picked a cover yet). No video stream
+       should land in the output. */
+    const coverPath = join(bookDir, '.audiobook', 'cover.jpg');
+    if (existsSync(coverPath)) rmSync(coverPath, { force: true });
+
+    const outPathNoCover = join(tmpRoot, 'no-cover.m4b');
+    await buildM4b({ bookDir, state: makeState(), outPath: outPathNoCover });
+
+    const probe = ffprobeJson(outPathNoCover);
+    expect(probe.streams.find(s => s.codec_type === 'video')).toBeUndefined();
+    expect(probe.streams.find(s => s.codec_type === 'audio')?.codec_name).toBe('aac');
+  }, 30_000);
 
   it('writes the iTunes audiobook media-kind atom (stik = 2) so cross-app players treat it as an audiobook', async () => {
     /* Regression guard for plan 33 (Voice export). FFMETADATA's
