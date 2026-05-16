@@ -123,4 +123,37 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     const s3 = analysisSlice.reducer(s2, analysisActions.setPaused({ manuscriptId: 'm_OTHER' }));
     expect(s3.activeStream?.state).toBe('paused'); // still paused, m_OTHER ignored
   });
+
+  it('setSeriesPrior populates the snapshot field with count + names; cross-book guarded', () => {
+    const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
+    const s2 = analysisSlice.reducer(s1, analysisActions.setSeriesPrior({
+      manuscriptId: 'm1',
+      count: 41,
+      names: ['Wren', 'Marlow', 'Oduvan'],
+    }));
+    expect(s2.activeStream?.seriesPrior).toEqual({
+      count: 41,
+      names: ['Wren', 'Marlow', 'Oduvan'],
+    });
+    /* Cross-book: another tab's series-prior event must not poison this tab. */
+    const s3 = analysisSlice.reducer(s2, analysisActions.setSeriesPrior({
+      manuscriptId: 'm_OTHER',
+      count: 99,
+      names: ['Wrong'],
+    }));
+    expect(s3.activeStream?.seriesPrior?.count).toBe(41);
+  });
+
+  it('setSeriesPrior is a no-op when activeStream is null', () => {
+    /* The server emits the event only after the slice's activeStream
+       is set (the view dispatches setActiveStream before opening the
+       SSE), so this case is defensive — a malformed action that lands
+       early must not throw. */
+    const s1 = analysisSlice.reducer(undefined, analysisActions.setSeriesPrior({
+      manuscriptId: 'm1',
+      count: 5,
+      names: ['x', 'y'],
+    }));
+    expect(s1.activeStream).toBeNull();
+  });
 });

@@ -133,6 +133,13 @@ export interface AnalyseOpts {
       per-chapter row instead of letting it look like a hang. Only
       emitted when the wait exceeds ~1s. */
   onThrottle?: (e: { phaseId: number; chapterIndex: number; model: string; waitMs: number; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after' }) => void;
+  /** One-shot event emitted at Phase 0 entry when the analyzer has
+      pre-seeded its per-chapter prompt with characters carried over
+      from prior books in the same series (plan 04 + plan 09). The
+      analysing view renders a small "Carrying in N characters from
+      prior books" pill so the user sees the context being applied.
+      `names` is the first three for display; `count` is the total. */
+  onSeriesPrior?: (e: { count: number; names: string[] }) => void;
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
       Sent as JSON body to POST /api/manuscripts/:id/analysis. Ignored when
       the server runs in ANALYZER=manual mode. */
@@ -610,7 +617,7 @@ async function realUploadManuscript({ text, file, fileName, format }: UploadArgs
 }
 
 interface AnalysisStreamEvent {
-  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update' | 'eta' | 'chapter-failed' | 'chapter-resolved' | 'throttle';
+  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update' | 'eta' | 'chapter-failed' | 'chapter-resolved' | 'throttle' | 'series-prior';
   phaseId?: number;
   progress?: number;
   label?: string;
@@ -627,6 +634,13 @@ interface AnalysisStreamEvent {
       regex'ing the message string. */
   prevCharCount?: number;
   nextCharCount?: number;
+  /** Carried on the `series-prior` event emitted once at Phase 0 entry.
+      `count` is the total number of carry-over characters; `names` is
+      the first three for the "Carrying in Wren, Marlow, Oduvan +N" pill
+      copy. Series carry-over is detection-time only -- the confirm-time
+      voice-match (plan 09) is a separate surface. */
+  count?: number;
+  names?: string[];
   live?: AnalysisLiveInfo;
   /* Heartbeat fields. */
   receivedBytes?: number;
@@ -665,7 +679,7 @@ export class AnalysisError extends Error {
   }
 }
 
-async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, model, fresh, allowStage1Shrink }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, onSeriesPrior, model, fresh, allowStage1Shrink }: AnalyseOpts = {}): Promise<AnalyseResponse> {
   const hasBody = model !== undefined || fresh !== undefined || allowStage1Shrink !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
@@ -736,6 +750,13 @@ async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, on
           model: payload.model,
           waitMs: payload.waitMs,
           reason: payload.reason,
+        });
+      }
+    } else if (payload.kind === 'series-prior') {
+      if (typeof payload.count === 'number' && Array.isArray(payload.names)) {
+        onSeriesPrior?.({
+          count: payload.count,
+          names: payload.names.filter((n): n is string => typeof n === 'string'),
         });
       }
     } else if (payload.kind === 'result' && payload.response) {
@@ -927,7 +948,7 @@ async function mockSetChapterExcluded(
 async function realRunAnalysisForChapters(
   manuscriptId: string,
   chapterIds: number[],
-  { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, model, allowStage1Shrink }: AnalyseOpts = {},
+  { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, onSeriesPrior, model, allowStage1Shrink }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
   const res = await fetch(
     `/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis/chapters`,
@@ -1003,6 +1024,13 @@ async function realRunAnalysisForChapters(
           model: payload.model,
           waitMs: payload.waitMs,
           reason: payload.reason,
+        });
+      }
+    } else if (payload.kind === 'series-prior') {
+      if (typeof payload.count === 'number' && Array.isArray(payload.names)) {
+        onSeriesPrior?.({
+          count: payload.count,
+          names: payload.names.filter((n): n is string => typeof n === 'string'),
         });
       }
     } else if (payload.kind === 'result' && payload.response) {

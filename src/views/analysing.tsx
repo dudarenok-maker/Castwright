@@ -145,6 +145,39 @@ function LiveCastPreview() {
   );
 }
 
+/* Series-cast carry-over pill (C3). Visible under Phase 0 whenever the
+   server's one-shot `series-prior` event landed on this manuscript.
+   Tells the user that the analyzer has been pre-seeded with N
+   characters from prior books in the same series, so a re-detected
+   "Wren" / "Marlow" / "Oduvan" in this book inherits the same id
+   (and therefore the same voice profile) instead of being detected
+   as a fresh entity. Detection-time identity carry-over, distinct
+   from the confirm-time voice match (plan 09). */
+function SeriesPriorPill() {
+  /* Defensive read: some test harnesses build a configureStore without
+     the analysis slice (legacy tests pre-dating B2). Production always
+     has it. Optional chain via the type assertion since useAppSelector's
+     state is non-nullable in production. */
+  const seriesPrior = useAppSelector(s => (s as { analysis?: { activeStream?: { seriesPrior?: { count: number; names: string[] } } } }).analysis?.activeStream?.seriesPrior);
+  if (!seriesPrior || seriesPrior.count === 0) return null;
+  const { count, names } = seriesPrior;
+  const sample = names.slice(0, 3).join(', ');
+  const more = count > names.length ? ` +${count - names.length}` : '';
+  return (
+    <div
+      className="mt-3 text-[11px] text-ink/60"
+      data-testid="series-prior-pill"
+    >
+      <div className="font-semibold text-ink/80">
+        Carried in from prior books in this series · {count} character{count === 1 ? '' : 's'}
+      </div>
+      <div className="mt-1 text-ink/60">
+        {sample}{more}
+      </div>
+    </div>
+  );
+}
+
 /* Read-only ledger of evidence quotes the analyser's verifier rejected
    for not matching the source text. Pulls the latest batch from
    GET /api/books/:bookId/dropped-quotes and groups entries by
@@ -605,6 +638,15 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
               ...prev,
               [phaseId]: { until: Date.now() + waitMs, model: throttleModel, reason },
             }));
+          },
+          onSeriesPrior: ({ count, names }) => {
+            if (cancelled) return;
+            markEvent();
+            /* Series carry-over surface (C3). Server emitted this once
+               at Phase 0 entry; persist into the slice so the
+               analysing view's "Carried from <series>" pill renders
+               immediately and survives reload. */
+            dispatch(analysisActions.setSeriesPrior({ manuscriptId, count, names }));
           },
         });
         if (cancelled || completedRef.current) return;
@@ -1314,6 +1356,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                       Phase 0 completes (or is skipped via a cached resume after
                       a model switch) so the user doesn't lose the detected
                       cast just because the active phase advanced. */}
+                  {p.id === 0 && <SeriesPriorPill/>}
                   {p.id === 0 && <LiveCastPreview/>}
                   {p.id === 0 && <DroppedQuotesPanel bookId={bookId} refreshKey={droppedQuotesRefreshKey}/>}
                   {phaseLogs.length > 0 && (
