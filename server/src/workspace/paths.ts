@@ -116,6 +116,16 @@ export function changeLogJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'change-log.json');
 }
 
+/* Per-book snapshot of the in-flight analyzer's state — written at phase
+   boundaries / on pause / on terminal events. Lets the top-bar
+   AnalysisPill rehydrate across browser reload AND server restart
+   (the in-memory inFlightAnalysisByManuscript map is wiped by both).
+   Sibling to state.json so the cold-boot discovery endpoint in
+   book-state.ts can look it up via the same findBookByBookId path. */
+export function analysisStateJsonPath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'analysis-state.json');
+}
+
 /** Per-book dropped-quote ledger. Each Phase 0 verify pass appends a
     batch; we never overwrite, so the user can audit what the model
     fabricated across every analyser run (model switch, retry, etc.).

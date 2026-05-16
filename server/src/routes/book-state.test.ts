@@ -767,3 +767,151 @@ describe('book-state router — state slice series-membership + on-disk rename',
     expect(rec?.bookDir).toBe(newDir);
   });
 });
+
+/* Cold-boot rehydration for the AnalysisPill across browser reload +
+   server restart. The endpoint reads from .audiobook/analysis-state.json
+   (written by analysis.ts at phase boundaries and on terminal events).
+   See docs/features/32-sticky-analysis.md "Cold-boot rehydration". */
+describe('book-state router — GET /:bookId/analysis/state', () => {
+  const COLD_BOOT_AUTHOR = 'ColdBoot Author';
+  const COLD_BOOT_SERIES = 'Standalones';
+  const COLD_BOOT_TITLE = 'Cold Boot Book';
+  const COLD_BOOT_MANUSCRIPT_ID = 'm_cold_boot';
+  let coldBootBookId: string;
+  let coldBootBookDir: string;
+
+  async function seedColdBootBook(): Promise<void> {
+    const { makeBookId } = await import('../workspace/paths.js');
+    coldBootBookId = makeBookId(COLD_BOOT_AUTHOR, COLD_BOOT_SERIES, COLD_BOOT_TITLE);
+    coldBootBookDir = join(workspaceRoot, 'books', COLD_BOOT_AUTHOR, COLD_BOOT_SERIES, COLD_BOOT_TITLE);
+    mkdirSync(join(coldBootBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(coldBootBookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(coldBootBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: coldBootBookId,
+        manuscriptId: COLD_BOOT_MANUSCRIPT_ID,
+        title: COLD_BOOT_TITLE,
+        author: COLD_BOOT_AUTHOR,
+        series: COLD_BOOT_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: false,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: '01-chapter-1' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  afterEach(() => {
+    /* Wipe any cold-boot book the case created. The shared workspace
+       root has the original test book under AUTHOR, untouched. */
+    if (coldBootBookDir && existsSync(coldBootBookDir)) {
+      const authorDir = join(workspaceRoot, 'books', COLD_BOOT_AUTHOR);
+      rmSync(authorDir, { recursive: true, force: true });
+    }
+  });
+
+  it('404s when the book does not exist', async () => {
+    const res = await request(app).get('/api/books/does-not-exist/analysis/state');
+    expect(res.status).toBe(404);
+  });
+
+  it('404s when the book exists but no analysis-state.json is on disk', async () => {
+    await seedColdBootBook();
+    const res = await request(app).get(`/api/books/${coldBootBookId}/analysis/state`);
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/no analysis state/i);
+  });
+
+  it('returns the paused snapshot verbatim when written to disk', async () => {
+    await seedColdBootBook();
+    const { writeAnalysisState } = await import('../store/analysis-state.js');
+    await writeAnalysisState(coldBootBookDir, {
+      manuscriptId: COLD_BOOT_MANUSCRIPT_ID,
+      phaseId: 1,
+      phaseLabel: 'Parsing and attribution',
+      phaseProgress: 0.42,
+      state: 'paused',
+      lastTickAt: 1_700_000_000_000,
+    });
+
+    const res = await request(app).get(`/api/books/${coldBootBookId}/analysis/state`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      manuscriptId: COLD_BOOT_MANUSCRIPT_ID,
+      phaseId: 1,
+      phaseLabel: 'Parsing and attribution',
+      phaseProgress: 0.42,
+      state: 'paused',
+      lastTickAt: 1_700_000_000_000,
+    });
+  });
+
+  it('returns the halted snapshot with haltCode + haltReason when written to disk', async () => {
+    await seedColdBootBook();
+    const { writeAnalysisState } = await import('../store/analysis-state.js');
+    await writeAnalysisState(coldBootBookDir, {
+      manuscriptId: COLD_BOOT_MANUSCRIPT_ID,
+      phaseId: 1,
+      phaseLabel: 'Parsing and attribution',
+      phaseProgress: 0.7,
+      state: 'halted',
+      haltCode: 'attribution_drift',
+      haltReason: 'Phase 1 demoted 412 of 5234 sentences (8%) to narrator.',
+      lastTickAt: 1_700_000_000_000,
+    });
+
+    const res = await request(app).get(`/api/books/${coldBootBookId}/analysis/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('halted');
+    expect(res.body.haltCode).toBe('attribution_drift');
+    expect(res.body.haltReason).toContain('Phase 1 demoted 412');
+  });
+
+  it('coerces running on disk → paused in the response when there is no live job', async () => {
+    /* This is THE invariant of the cold-boot path: a server restart
+       leaves the disk file at state:'running' (the last phase-boundary
+       write before the crash), but the in-flight map is empty. The
+       endpoint promotes it to 'paused' so the pill shows Resume
+       affordance instead of pretending the analyzer is still ticking. */
+    await seedColdBootBook();
+    const { writeAnalysisState } = await import('../store/analysis-state.js');
+    await writeAnalysisState(coldBootBookDir, {
+      manuscriptId: COLD_BOOT_MANUSCRIPT_ID,
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 0.6,
+      state: 'running',
+      lastTickAt: 1_700_000_000_000,
+    });
+
+    const res = await request(app).get(`/api/books/${coldBootBookId}/analysis/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('paused');
+    /* Phase + progress + manuscriptId pass through unchanged so the
+       pill renders the right phase label even after the coercion. */
+    expect(res.body.phaseId).toBe(0);
+    expect(res.body.phaseProgress).toBe(0.6);
+    expect(res.body.phaseLabel).toBe('Detecting characters');
+  });
+
+  it('404s when state.json exists but has no manuscriptId (book created via a path that never analysed)', async () => {
+    /* Defence-in-depth: a partial book on disk without a manuscriptId
+       can't have an analyzer job (the in-flight map is keyed on
+       manuscriptId), and we shouldn't even read the disk file because
+       it shouldn't exist for such a book. Endpoint returns 404. */
+    await seedColdBootBook();
+    /* Rewrite state.json to drop manuscriptId. */
+    const statePath = join(coldBootBookDir, '.audiobook', 'state.json');
+    const parsed = JSON.parse(readFileSync(statePath, 'utf8'));
+    delete parsed.manuscriptId;
+    writeFileSync(statePath, JSON.stringify(parsed));
+
+    const res = await request(app).get(`/api/books/${coldBootBookId}/analysis/state`);
+    expect(res.status).toBe(404);
+  });
+});
