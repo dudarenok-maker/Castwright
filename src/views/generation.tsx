@@ -1,13 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import {
   IconPlay, IconPause, IconCheck, IconSpinner, IconWarning,
   IconArrowDn, IconRefresh, IconClose, IconHistory, IconClock,
 } from '../lib/icons';
-import type { SidecarHealth } from '../lib/api';
 import {
   SectionLabel, MixedHeading, Pill, ColorDot,
 } from '../components/primitives';
-import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
+import { ModelControlPill } from '../components/ModelControlPill';
+import type { LayoutContext } from '../components/layout';
+import type { TtsLifecycle } from '../lib/use-tts-lifecycle';
+
+/* Fallback used only when GenerationView is mounted outside a Layout
+   (today: the cross-book Generate title regression test that bypasses
+   the Layout wrapper). Inert state, no-op handlers. Real call sites
+   always come through Layout → outlet context. */
+const INERT_TTS_LIFECYCLE: TtsLifecycle = {
+  state: 'unreachable',
+  evictionNotice: null,
+  loadErrorNotice: null,
+  onLoad: async () => {},
+  onStop: async () => {},
+  dismissNotices: () => {},
+};
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { useAppDispatch, useAppSelector } from '../store';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
@@ -347,115 +362,19 @@ export function GenerationView({
     return withRecomputedDisplay(filtered).slice(0, 6);
   }, [activityEvents]);
 
-  /* Poll the sidecar /health endpoint so the user can tell "is the local TTS
-     process even up?" without waiting for a chapter to actually fail. Poll
-     every 30s while we're on this view, plus an immediate re-check whenever
-     a stream-level error lands (it's the single most useful diagnostic
-     follow-up after `chapter_failed`). When the user clicks Load/Stop on
-     the pill we re-probe immediately so the state flips visibly. */
-  const [sidecarHealth, setSidecarHealth] = useState<SidecarHealth | null>(null);
-  const [healthProbeKey, setHealthProbeKey] = useState(0);
-  /* Pending UI override — set immediately on a Load/Stop click so the pill
-     reports the intended next state while /health catches up. Cleared on the
-     next probe that confirms the transition. */
-  const [pendingPillState, setPendingPillState] = useState<ModelControlState | null>(null);
-  /* Inline banner copy shown when the auto-evict flow fires. Kept local to
-     this view rather than a global toast slice — see CLAUDE.md note about
-     not building scaffolding the user can't see. */
-  const [evictionNotice, setEvictionNotice] = useState<string | null>(null);
-  /* Rose banner shown when Load / Stop returns {status:'error', ...} or the
-     request itself throws. Without this the pill would just bounce back to
-     "Load model" after the probe — silent failures are the bug we're closing. */
-  const [loadErrorNotice, setLoadErrorNotice] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    const probe = () => {
-      api.getSidecarHealth()
-        .then(h => {
-          if (cancelled) return;
-          setSidecarHealth(h);
-          setPendingPillState(null);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setSidecarHealth({ status: 'unreachable', url: '', error: 'Probe failed.' });
-          setPendingPillState(null);
-        });
-    };
-    probe();
-    const id = setInterval(probe, 30_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [lastError, healthProbeKey]);
+  /* TTS pill state lives in a single Layout-owned `useTtsLifecycle()` call
+     (plan 30 G1). Layout exposes it via LayoutContext so this view, the
+     top-bar pill, and any future pill surface render the same state from
+     a single 30s /health poll. The pill's Load click here and the
+     top-bar's Load click are now the same action against the same
+     in-memory state — no more 30s lag between surfaces.
 
-  const ttsPillState: ModelControlState = (() => {
-    if (pendingPillState) return pendingPillState;
-    if (!sidecarHealth) return 'idle';
-    if (sidecarHealth.status === 'unreachable') return 'unreachable';
-    if (sidecarHealth.loading) return 'loading';
-    if (sidecarHealth.modelLoaded) return 'ready';
-    return 'idle';
-  })();
-
-  const handleLoadTts = async () => {
-    setPendingPillState('loading');
-    setEvictionNotice(null);
-    setLoadErrorNotice(null);
-    /* Auto-evict the analyzer before warming TTS — both models compete for
-       the same VRAM on a single-GPU box. If the analyzer wasn't resident
-       the call is a cheap no-op on Ollama's side; either way we surface a
-       banner only when the unload actually freed something so we don't
-       lie about state. modelResident (from /api/ps) is the truth — models
-       array (from /api/tags) lists pulled-not-loaded models too. */
-    let analyzerWasLoaded = false;
-    try {
-      const ollama = await api.getOllamaHealth();
-      analyzerWasLoaded = ollama.status === 'reachable' && ollama.modelResident === true;
-    } catch {
-      /* If the analyzer health probe fails we still try to unload — Ollama
-         might be reachable for /api/generate even if /api/ps is flaky. */
-    }
-    try {
-      await api.unloadAnalyzer();
-      if (analyzerWasLoaded) {
-        setEvictionNotice('Analyzer unloaded to free VRAM for TTS.');
-      }
-    } catch {
-      /* Ollama down or no model loaded — proceed with TTS load anyway. */
-    }
-    /* The /api/sidecar/load proxy returns {status:'error', error:'…'} with
-       a 5xx body on timeout or sidecar-side failure (e.g. weights missing,
-       DeepSpeed init crash); realLoadSidecar parses the body either way
-       and only throws if fetch itself fails. So we have to inspect the
-       result AND catch — both paths can be the failure. */
-    try {
-      const result = await api.loadSidecar();
-      if (result.status === 'error') {
-        setLoadErrorNotice(result.error || 'TTS model failed to load. Check the sidecar logs.');
-        setPendingPillState(null);
-      }
-    } catch (e) {
-      setLoadErrorNotice(`Couldn't reach the sidecar: ${(e as Error).message ?? 'fetch failed'}`);
-      setPendingPillState(null);
-    }
-    setHealthProbeKey(k => k + 1);
-  };
-
-  const handleStopTts = async () => {
-    setPendingPillState('idle');
-    setEvictionNotice(null);
-    setLoadErrorNotice(null);
-    try {
-      const result = await api.unloadSidecar();
-      if (result.status === 'error') {
-        setLoadErrorNotice(result.error || 'TTS model failed to unload.');
-        setPendingPillState(null);
-      }
-    } catch (e) {
-      setLoadErrorNotice(`Couldn't reach the sidecar: ${(e as Error).message ?? 'fetch failed'}`);
-      setPendingPillState(null);
-    }
-    setHealthProbeKey(k => k + 1);
-  };
+     Fallback to an inert stub when this view is mounted outside a Layout
+     (the cross-book title regression test, or any future ad-hoc mount):
+     the pill renders as "unreachable", clicks are no-ops, and no /health
+     poll fires. Real call sites always come through Layout. */
+  const outletCtx = useOutletContext<LayoutContext | null>();
+  const ttsLifecycle: TtsLifecycle = outletCtx?.ttsLifecycle ?? INERT_TTS_LIFECYCLE;
 
   /* Sub-chapter "lines synthesised" counter so the user has a tangible
      "something is happening" signal at every tick (real backend emits one
@@ -499,26 +418,26 @@ export function GenerationView({
             <span>Engine: <span className="font-medium text-ink/70">{engineLabel}</span></span>
             <ModelControlPill
               kind="tts"
-              state={ttsPillState}
+              state={ttsLifecycle.state}
               unreachableLabel="Sidecar process not running"
-              onLoad={handleLoadTts}
-              onStop={handleStopTts}
+              onLoad={() => { void ttsLifecycle.onLoad(); }}
+              onStop={() => { void ttsLifecycle.onStop(); }}
             />
           </p>
-          {evictionNotice && (
+          {ttsLifecycle.evictionNotice && (
             <p className="mt-2 inline-flex items-center gap-2 text-[11px] text-emerald-700">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>
-              {evictionNotice}
+              {ttsLifecycle.evictionNotice}
             </p>
           )}
-          {loadErrorNotice && (
+          {ttsLifecycle.loadErrorNotice && (
             <p className="mt-2 inline-flex items-start gap-2 text-[11px] text-rose-700 max-w-prose"
                role="alert">
               <span className="w-1.5 h-1.5 mt-1 rounded-full bg-rose-500 shrink-0"/>
-              <span>{loadErrorNotice}</span>
+              <span>{ttsLifecycle.loadErrorNotice}</span>
               <button
                 type="button"
-                onClick={() => setLoadErrorNotice(null)}
+                onClick={ttsLifecycle.dismissNotices}
                 aria-label="Dismiss error"
                 className="ml-1 text-rose-600/70 hover:text-rose-800"
               >

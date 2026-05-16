@@ -24,7 +24,7 @@ import { engineForModelKey } from '../lib/tts-models';
 import { stageToHash } from '../lib/router';
 import { TopBar, type GenerationPillData, type AnalysisPillData } from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
-import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
+import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { MiniPlayer } from './mini-player';
 import { PreviewListenerView } from '../views/preview-listener';
@@ -41,7 +41,13 @@ import { IconRefresh, IconWarning } from '../lib/icons';
 
 /* Lifted from App.tsx's resultDialog state. Routes that need to surface a
    styled post-action dialog (e.g. BooksRoute after delete/reparse) pull
-   showInfo/showError from outlet context. */
+   showInfo/showError from outlet context.
+
+   `ttsLifecycle` is the single source of truth for TTS pill state and the
+   Load/Stop side-effects (plan 30). Layout owns the only `useTtsLifecycle()`
+   call site; descendant views (Generation today, others as they arrive) read
+   the same state via this context instead of spinning up a parallel /health
+   poll. Routes that don't need TTS state ignore the field. */
 export interface LayoutContext {
   showInfo: (args: {
     title: string;
@@ -51,6 +57,7 @@ export interface LayoutContext {
     onPrimary?: () => void;
   }) => void;
   showError: (title: string, body: ReactNode, eyebrow?: string) => void;
+  ttsLifecycle: TtsLifecycle;
 }
 
 export function Layout() {
@@ -339,14 +346,13 @@ export function Layout() {
       setCurrentTrack={(t) => dispatch(uiActions.setCurrentTrack(t))}/>;
   }
 
-  const ctx: LayoutContext = { showInfo, showError };
   /* Top-bar TTS pill — shown whenever a book is in scope (Confirm Cast,
      Analysing, Ready). Books/upload don't render it since TTS only matters
-     once a manuscript is loaded. Drives its own /health poll independent of
-     the Generation view's existing local pill; the two converge within the
-     30 s poll cadence after either is clicked. Consolidating to a single
-     poll is a future follow-up tracked in docs/features/30-global-model-control.md. */
+     once a manuscript is loaded. Single /health poll owned here; the
+     Generation view's local pill reads the same state via LayoutContext
+     (plan 30 G1 consolidation). */
   const ttsLifecycle = useTtsLifecycle();
+  const ctx: LayoutContext = { showInfo, showError, ttsLifecycle };
 
   /* Reverse local-analyzer guard for the regenerate modals (D2 in
      plan 32). The modals' onConfirm callbacks all dispatch a
