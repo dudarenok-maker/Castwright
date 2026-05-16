@@ -12,6 +12,26 @@ export interface GenerationPillData {
   onClick: () => void;
 }
 
+/* Sibling of GenerationPillData for the in-flight analyzer run. Surfaces
+   live phase progress so the user knows analysis is still going while
+   they're browsing other views; clicking routes back to the analysing
+   view. State mirrors the analysis slice's activeStream.state, plus a
+   `stalled` UI-derived variant when lastTickAt is older than the
+   stall threshold (computed by the slice consumer). */
+export type AnalysisPillState = 'running' | 'paused' | 'halted' | 'stalled';
+export interface AnalysisPillData {
+  state: AnalysisPillState;
+  /** Server-supplied phase label, e.g. "Detecting characters". */
+  phaseLabel: string;
+  /** 0..100 overall percent across the configured phases (caller does
+      the per-phase → overall conversion). */
+  percent: number;
+  /** Reason text rendered on the halted variant — usually the server's
+      structured error message (attribution_drift, cast_incomplete, etc.). */
+  haltReason?: string;
+  onClick: () => void;
+}
+
 interface TopBarProps {
   stage: Stage['kind'];
   view: View | null;
@@ -39,6 +59,10 @@ interface TopBarProps {
       Activity, etc. `null` hides the pill entirely. Clicking routes back to
       the Generate view of the active book. */
   generationPill?: GenerationPillData | null;
+  /** Sibling pill for in-flight analysis. Rendered to the LEFT of the
+      generation pill so both can be visible if a generation and an
+      analysis are alive simultaneously (rare but legal post-B1). */
+  analysisPill?: AnalysisPillData | null;
   /** Optional global TTS pill. Layout supplies a `<ModelControlPill kind="tts" ... />`
       element here so the affordance is visible from every book-context stage
       (Confirm Cast, Cast, Drawer-host views, Generation, Listen). The pill is
@@ -65,7 +89,7 @@ const GLOBAL_NAV: Array<{ id: 'books' | 'voices' | 'changelog'; label: string }>
   { id: 'changelog', label: 'Change log' },
 ];
 
-export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClick, pendingRevisionsCount, onOpenRevisions, onOpenVoices, onOpenChangelog, onOpenAccount, userDisplayName, generationPill, ttsPill }: TopBarProps) {
+export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClick, pendingRevisionsCount, onOpenRevisions, onOpenVoices, onOpenChangelog, onOpenAccount, userDisplayName, generationPill, analysisPill, ttsPill }: TopBarProps) {
   const showGlobalNav = stage === 'books' || stage === 'voices' || stage === 'changelog';
   const onGlobal = (id: 'books' | 'voices' | 'changelog') => {
     if (id === 'books')     onHome();
@@ -107,6 +131,7 @@ export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClic
         )}
         <div className={`flex items-center gap-3 ${stage === 'ready' || showGlobalNav ? '' : 'ml-auto'}`}>
           {ttsPill}
+          {analysisPill && <AnalysisPill data={analysisPill}/>}
           {generationPill && <GenerationPill data={generationPill}/>}
           {pendingRevisionsCount > 0 && (
             <button onClick={onOpenRevisions} className="relative inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold transition-colors">
@@ -125,6 +150,50 @@ export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClic
         </div>
       </div>
     </header>
+  );
+}
+
+function AnalysisPill({ data }: { data: AnalysisPillData }) {
+  const { state, phaseLabel, percent, haltReason, onClick } = data;
+  const variants: Record<AnalysisPillState, { className: string; icon: ReactNode; label: string }> = {
+    running: {
+      className: 'bg-peach/15 hover:bg-peach/25 text-magenta',
+      icon:      <IconSpinner className="w-3.5 h-3.5"/>,
+      label:     'Analysing',
+    },
+    stalled: {
+      className: 'bg-amber-100 hover:bg-amber-200 text-amber-800',
+      icon:      <IconClock className="w-3.5 h-3.5"/>,
+      label:     'Stalled',
+    },
+    paused: {
+      className: 'bg-ink/[0.06] hover:bg-ink/10 text-ink/70',
+      icon:      <IconClock className="w-3.5 h-3.5"/>,
+      label:     'Paused',
+    },
+    halted: {
+      className: 'bg-rose-100 hover:bg-rose-200 text-rose-800',
+      icon:      <IconWarning className="w-3.5 h-3.5"/>,
+      label:     'Halted',
+    },
+  };
+  const v = variants[state];
+  /* Truncate the halt reason on render so a long error message
+     doesn't blow out the header layout — the analysing view shows
+     the full reason in its own banner. */
+  const haltTrim = haltReason && haltReason.length > 32 ? haltReason.slice(0, 32) + '…' : haltReason;
+  return (
+    <button onClick={onClick}
+            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${v.className}`}
+            title={haltReason && haltReason.length > 32 ? haltReason : undefined}
+            data-testid="analysis-pill">
+      {v.icon}
+      <span className="tabular-nums">
+        {v.label} · {phaseLabel}
+        {state === 'running' && ` · ${percent}%`}
+        {state === 'halted' && haltTrim && ` · ${haltTrim}`}
+      </span>
+    </button>
   );
 }
 

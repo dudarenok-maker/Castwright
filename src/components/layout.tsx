@@ -21,7 +21,7 @@ import {
 import { api } from '../lib/api';
 import { engineForModelKey } from '../lib/tts-models';
 import { stageToHash } from '../lib/router';
-import { TopBar, type GenerationPillData } from './top-bar';
+import { TopBar, type GenerationPillData, type AnalysisPillData } from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
 import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
 import { MiniPlayer } from './mini-player';
@@ -59,6 +59,7 @@ export function Layout() {
   const characters = useAppSelector(s => s.cast.characters);
   const chapters   = useAppSelector(s => s.chapters.chapters);
   const activeStream = useAppSelector(s => s.chapters.activeStream);
+  const analysisStream = useAppSelector(s => s.analysis.activeStream);
   const drift      = useAppSelector(s => s.revisions.drift);
   const pending    = useAppSelector(s => s.revisions.pending);
   const manuscript = useAppSelector(s => s.manuscript);
@@ -364,6 +365,46 @@ export function Layout() {
     };
   })();
 
+  /* Sibling pill for in-flight analysis (B3). Same shape as the
+     generation pill: anchored to the cross-book snapshot in
+     `analysis.activeStream`, recomputed inline so the per-second
+     forceClockTick refreshes the stalled check. The pill survives
+     navigation away from the analysing view; clicking routes back
+     to the analysing route for the manuscript that's still in flight. */
+  const analysisPill: AnalysisPillData | null = (() => {
+    if (!analysisStream) return null;
+    const { bookId: streamBookId, phaseId, phaseLabel, phaseProgress, lastTickAt, state: streamState, haltReason } = analysisStream;
+    /* Per-phase progress + a coarse phase-weighted overall: phase 0 covers
+       the first 45%, phase 1 the next 50%, phase 2 the final 5% (matches
+       ANALYSIS_PHASES weighting used by the analysing view's overall
+       bar). */
+    const phaseWeights = [0.45, 0.50, 0.05];
+    const phaseBase = phaseWeights.slice(0, phaseId).reduce((sum, w) => sum + w, 0);
+    const phaseShare = phaseWeights[phaseId] ?? 0;
+    const overall = Math.min(1, phaseBase + Math.max(0, Math.min(1, phaseProgress)) * phaseShare);
+    const percent = Math.round(overall * 100);
+    const stalled = streamState === 'running' && lastTickAt > 0
+      && (Date.now() - lastTickAt) > STALL_THRESHOLD_MS;
+    const pillState: AnalysisPillData['state'] = streamState === 'halted'
+      ? 'halted'
+      : streamState === 'paused'
+        ? 'paused'
+        : stalled
+          ? 'stalled'
+          : 'running';
+    return {
+      state: pillState,
+      phaseLabel,
+      percent,
+      haltReason,
+      onClick: () => {
+        if (streamBookId) {
+          navigate(`/books/${streamBookId}/analysing`);
+        }
+      },
+    };
+  })();
+
   return (
     <div className={`min-h-screen ${trackChapter ? 'pb-24' : 'pb-20'}`}>
       <TopBar stage={stageKind} view={view}
@@ -373,6 +414,7 @@ export function Layout() {
         onTitleClick={stageKind === 'confirm' ? () => dispatch(uiActions.reanalyse()) : undefined}
         pendingRevisionsCount={pending.length}
         generationPill={generationPill}
+        analysisPill={analysisPill}
         ttsPill={ttsPillElement}
         onOpenRevisions={() => dispatch(uiActions.setShowRevisionPlayer(true))}
         onOpenVoices={() => dispatch(uiActions.openVoices())}

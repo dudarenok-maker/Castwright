@@ -69,3 +69,95 @@ describe('TopBar — avatar entry to account', () => {
     expect(screen.getByRole('button', { name: /account.*unnamed user/i })).toBeInTheDocument();
   });
 });
+
+describe('TopBar — AnalysisPill (B3 sticky analysis)', () => {
+  it('hides the pill entirely when analysisPill is null (no in-flight analysis)', () => {
+    render(<TopBar {...makeProps({ analysisPill: null })}/>);
+    expect(screen.queryByTestId('analysis-pill')).not.toBeInTheDocument();
+  });
+
+  it('renders the running variant with the phase label and percent', () => {
+    render(<TopBar {...makeProps({
+      analysisPill: {
+        state: 'running',
+        phaseLabel: 'Detecting characters',
+        percent: 42,
+        onClick: vi.fn(),
+      },
+    })}/>);
+    const pill = screen.getByTestId('analysis-pill');
+    expect(pill.textContent).toContain('Analysing');
+    expect(pill.textContent).toContain('Detecting characters');
+    expect(pill.textContent).toContain('42%');
+  });
+
+  it('renders the halted variant with the trimmed halt reason and a full-message title attribute', () => {
+    const longReason = 'Phase 1 demoted 60% of sentences to narrator — model attribution unreliable.';
+    render(<TopBar {...makeProps({
+      analysisPill: {
+        state: 'halted',
+        phaseLabel: 'Parsing and attribution',
+        percent: 0,
+        haltReason: longReason,
+        onClick: vi.fn(),
+      },
+    })}/>);
+    const pill = screen.getByTestId('analysis-pill');
+    expect(pill.textContent).toContain('Halted');
+    /* Trimmed to 32 chars + ellipsis on render so a long halt message
+       doesn't blow out the header layout. */
+    expect(pill.textContent).toContain('…');
+    /* Full message is preserved on the title attribute for hover. */
+    expect(pill).toHaveAttribute('title', longReason);
+  });
+
+  it('renders the paused variant without a percent (paused work doesn\'t tick)', () => {
+    render(<TopBar {...makeProps({
+      analysisPill: {
+        state: 'paused',
+        phaseLabel: 'Detecting characters',
+        percent: 30,
+        onClick: vi.fn(),
+      },
+    })}/>);
+    const pill = screen.getByTestId('analysis-pill');
+    expect(pill.textContent).toContain('Paused');
+    expect(pill.textContent).not.toContain('30%');
+  });
+
+  it('fires onClick when the pill is clicked (routes back to the analysing view)', () => {
+    const onClick = vi.fn();
+    render(<TopBar {...makeProps({
+      analysisPill: {
+        state: 'running',
+        phaseLabel: 'Detecting characters',
+        percent: 10,
+        onClick,
+      },
+    })}/>);
+    fireEvent.click(screen.getByTestId('analysis-pill'));
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders alongside the generation pill — both can be visible during a cross-book analysis + generation', () => {
+    /* Sticky analysis (B1-3) + sticky generation (plan 31) can both be
+       alive at the same time on different books. The header must show
+       BOTH pills, not one or the other. */
+    render(<TopBar {...makeProps({
+      analysisPill: {
+        state: 'running',
+        phaseLabel: 'Detecting characters',
+        percent: 20,
+        onClick: vi.fn(),
+      },
+      generationPill: {
+        state: 'running',
+        done: 3, total: 10, percent: 30,
+        onClick: vi.fn(),
+      },
+    })}/>);
+    expect(screen.getByTestId('analysis-pill')).toBeInTheDocument();
+    /* GenerationPill has no testid, identify by its visible text. */
+    expect(screen.getByText(/Generating/)).toBeInTheDocument();
+  });
+});
