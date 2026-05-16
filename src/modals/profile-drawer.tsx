@@ -65,7 +65,6 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
      manually without retriggering analysis. */
   const [gender, setGender]     = useState<CharGender | ''>(character.gender ?? '');
   const [ageRange, setAgeRange] = useState<CharAgeRange | ''>(character.ageRange ?? '');
-  const [regenerating, setRegenerating] = useState(false);
   const c = CHAR_COLORS[character.color as CharColor] ?? CHAR_COLORS.narrator;
   const playback = useSamplePlayback();
   const dispatch = useAppDispatch();
@@ -175,11 +174,6 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
     && editedAge !== voiceAge;
   const hasConflict = hasGenderConflict || hasAgeConflict;
 
-  function regenerate() {
-    setRegenerating(true);
-    setTimeout(() => setRegenerating(false), 1800);
-  }
-
   async function playSample() {
     if (isPlayingThis) { playback.stop(); return; }
     setSampleError(null);
@@ -245,7 +239,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
             </div>
 
             <div className="flex items-center gap-4 p-4 rounded-2xl bg-canvas border border-ink/10">
-              <div className={regenerating ? 'pulse-ring rounded-full' : ''}>
+              <div>
                 <VoiceSwatch voice={voice} size="md" showLabel={false}
                   onSelect={() => { void playSample(); }}
                   loading={sampleLoading}/>
@@ -378,10 +372,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
               </div>
             )}
 
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              <button onClick={regenerate} disabled={regenerating} className="px-3 py-2 rounded-xl border border-ink/10 hover:bg-ink/[0.04] text-xs font-medium text-ink inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
-                <IconRefresh className={`w-3.5 h-3.5 ${regenerating ? 'animate-spin' : ''}`}/> {regenerating ? 'Regenerating…' : 'Regenerate'}
-              </button>
+            <div className="mt-3 grid grid-cols-2 gap-2">
               <button className="px-3 py-2 rounded-xl border border-ink/10 hover:bg-ink/[0.04] text-xs font-medium text-ink inline-flex items-center justify-center gap-1.5">
                 <IconStar className="w-3.5 h-3.5"/> Save to library
               </button>

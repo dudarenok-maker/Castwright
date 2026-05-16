@@ -52,6 +52,27 @@ export const revisionsSlice = createSlice({
       s.drift = s.drift.filter(e => e.id !== a.payload);
       if (!s.dismissed.includes(a.payload)) s.dismissed.push(a.payload);
     },
+    /* Enqueue a pending revision when a regen kicks off. The
+       generation-stream middleware fires this on every
+       `chapters/regenerateCharacter` dispatch so the toolbar pending
+       count surfaces the regen-in-flight immediately — without waiting
+       for the 30s revisions poll cycle. `playable: false` until
+       chapter_complete arrives; the a/b player renders a "Rendering…"
+       state until then. Dedupe by id so a regen restart replaces the
+       prior stub rather than queueing duplicates. */
+    enqueuePending: (s, a: PayloadAction<Revision>) => {
+      s.pending = [...s.pending.filter(r => r.id !== a.payload.id), a.payload];
+    },
+    /* Flip `playable: true` for every pending revision whose chapterId
+       matches. Fired from the generation-stream chapter_complete handler
+       once the new render is on disk. Multiple in-flight revisions can
+       target the same chapter (e.g. parallel character regens) — flip
+       them all. */
+    markRevisionPlayable: (s, a: PayloadAction<{ chapterId: number }>) => {
+      s.pending = s.pending.map(r =>
+        r.chapterId === a.payload.chapterId ? { ...r, playable: true } : r,
+      );
+    },
     /* Runtime poll: refresh pending/drift but DON'T touch dismissed or
        acceptedSelections — the server response (RevisionsResponse) doesn't
        include either, and overwriting with empty would lose state until

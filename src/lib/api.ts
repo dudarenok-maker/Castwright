@@ -24,6 +24,13 @@ import { PENDING_REVISIONS } from '../data/revisions';
 import { VOICE_DRIFT_EVENTS } from '../data/drift';
 import { CHANGE_LOG_EVENTS } from '../data/change-log';
 import { parseDuration } from './time';
+/* Bundled mock audio assets — two short tones so the a/b player + mini
+   player + voice samples have something audible to render under
+   VITE_USE_MOCKS. ~88 KB each. stub-a (440 Hz) is the "current/A" /
+   preserved-previous tone, stub-b (880 Hz) is the "new/B" / fresh-render
+   tone. Audibly distinct so a/b in mock mode tells a real story. */
+import stubAudioA from '../mocks/audio/stub-a.wav?url';
+import stubAudioB from '../mocks/audio/stub-b.wav?url';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 
@@ -451,7 +458,7 @@ async function mockGetChapterAudio({ duration }: AudioArgs): Promise<ChapterAudi
     return Math.max(0.05, Math.min(1, base + (Math.random() - 0.5) * 0.35));
   });
   return {
-    url: null,
+    url: stubAudioB,
     durationSec: totalSec,
     peaks,
     sampleRate: 44100,
@@ -459,16 +466,39 @@ async function mockGetChapterAudio({ duration }: AudioArgs): Promise<ChapterAudi
   };
 }
 
+/* Previous (A) audio for the revision-diff a/b player. Mock mode always
+   resolves — the real backend 404s when no preserved pair exists. */
+async function mockGetChapterAudioPrevious({ duration }: AudioArgs): Promise<ChapterAudio> {
+  await wait(120);
+  const totalSec = parseDuration(duration || '10:00');
+  return {
+    url: stubAudioA,
+    durationSec: totalSec,
+    peaks: [],
+    sampleRate: 44100,
+    segments: [],
+  };
+}
+
 async function mockGetVoiceSample({ modelKey }: VoiceSampleArgs): Promise<VoiceSample> {
   await wait(200);
-  /* No real audio in mock mode — frontend treats a null url as a
-     "samples need a live server" signal. */
-  return { url: '', durationSec: 12, cached: false, modelKey };
+  return { url: stubAudioA, durationSec: 12, cached: false, modelKey };
 }
 
 async function mockGetBaseVoiceSample({ modelKey }: BaseVoiceSampleArgs): Promise<VoiceSample> {
   await wait(200);
-  return { url: '', durationSec: 12, cached: false, modelKey };
+  return { url: stubAudioA, durationSec: 12, cached: false, modelKey };
+}
+
+/* Mock accept (DELETE /audio/previous) and reject (POST /audio/previous/restore)
+   for the revision-diff a/b player. Both no-op in mock mode — the slice is
+   the source of truth, the disk state is fictional. */
+async function mockAcceptChapterRevision(_args: { bookId: string; chapterId: number }): Promise<void> {
+  await wait(100);
+}
+
+async function mockRejectChapterRevision(_args: { bookId: string; chapterId: number }): Promise<void> {
+  await wait(100);
 }
 
 async function mockPollRevisions(_args: PollArgs): Promise<RevisionsResponse> {
@@ -1757,6 +1787,35 @@ const real = {
     }
     return res.json();
   },
+  /* Preserved (A) audio for revision-diff a/b audition. 404 when no
+     `.previous.*` pair exists — caller (revision-diff player) handles
+     by rendering the "Original audio not preserved" copy. */
+  getChapterAudioPrevious: async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio | null> => {
+    const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous`);
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Previous audio fetch failed (${res.status}): ${detail || res.statusText}`);
+    }
+    return res.json();
+  },
+  acceptChapterRevision: async ({ bookId, chapterId }: { bookId: string; chapterId: number }): Promise<void> => {
+    const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 404) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Accept revision failed (${res.status}): ${detail || res.statusText}`);
+    }
+  },
+  rejectChapterRevision: async ({ bookId, chapterId }: { bookId: string; chapterId: number }): Promise<void> => {
+    const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous/restore`, { method: 'POST' });
+    if (res.status === 409) {
+      throw new Error('Generation is in flight. Wait for the render to finish before rejecting.');
+    }
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Reject revision failed (${res.status}): ${detail || res.statusText}`);
+    }
+  },
   pollRevisions:     async ({ bookId }: PollArgs): Promise<RevisionsResponse> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/revisions`);
     if (!res.ok) {
@@ -1810,6 +1869,9 @@ const mock = {
   getBookExport:     mockGetBookExport,
   getExportLanUrls:  mockGetExportLanUrls,
   getChapterAudio:   mockGetChapterAudio,
+  getChapterAudioPrevious: mockGetChapterAudioPrevious,
+  acceptChapterRevision:   mockAcceptChapterRevision,
+  rejectChapterRevision:   mockRejectChapterRevision,
   pollRevisions:     mockPollRevisions,
 };
 

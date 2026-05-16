@@ -289,6 +289,40 @@ describe('POST /api/books/:bookId/generation', () => {
     }
   });
 
+  it('preserves prior chapter audio as .previous.* before the new render lands', async () => {
+    /* Rollback model: every regen renames the existing
+       <slug>.{mp3,segments.json} to <slug>.previous.* BEFORE the new
+       render writes. The revision-diff player auditions the preserved
+       pair (A) vs the new render (B). First renders no-op because
+       findChapterAudio returns null — verified by `preserved=false` in
+       the helper's own tests. Here we verify the integration: seed
+       prior audio, run regen, assert both .previous.* files exist with
+       the prior content. */
+    const fs = await import('node:fs');
+    const audioRoot = join(bookDir, 'audio');
+    /* Clear any leftovers from earlier tests so the assertions are
+       deterministic. */
+    if (fs.existsSync(audioRoot)) fs.rmSync(audioRoot, { recursive: true, force: true });
+    fs.mkdirSync(audioRoot, { recursive: true });
+    fs.writeFileSync(join(audioRoot, '01-chapter-one.mp3'), 'PRIOR-mp3-bytes');
+    fs.writeFileSync(join(audioRoot, '01-chapter-one.segments.json'), JSON.stringify({ prior: true }));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    expect(res.status).toBe(200);
+
+    /* New render landed at live names. */
+    expect(fs.existsSync(join(audioRoot, '01-chapter-one.mp3'))).toBe(true);
+    expect(fs.existsSync(join(audioRoot, '01-chapter-one.segments.json'))).toBe(true);
+    /* Prior pair was preserved with the OLD content (not the freshly
+       rendered new pair). */
+    expect(fs.existsSync(join(audioRoot, '01-chapter-one.previous.mp3'))).toBe(true);
+    expect(fs.readFileSync(join(audioRoot, '01-chapter-one.previous.mp3'), 'utf8')).toBe('PRIOR-mp3-bytes');
+    expect(fs.existsSync(join(audioRoot, '01-chapter-one.previous.segments.json'))).toBe(true);
+    expect(JSON.parse(fs.readFileSync(join(audioRoot, '01-chapter-one.previous.segments.json'), 'utf8'))).toEqual({ prior: true });
+  });
+
   it('classifies XTTS "index out of range in self" as fatal on first hit', async () => {
     synthesiseImpl = async () => {
       throw new Error('Local TTS sidecar returned 500: {"detail":"index out of range in self"}');

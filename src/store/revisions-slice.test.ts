@@ -214,3 +214,69 @@ describe('revisionsSlice — hydrateFromBookState', () => {
     expect(next.acceptedSelections).toEqual({});
   });
 });
+
+describe('revisionsSlice — enqueuePending', () => {
+  it('appends a new pending revision', () => {
+    const start = revisionsSlice.reducer(undefined, revisionsActions.applyPoll({ pending: [rev('r1')], drift: [] }));
+    const next = revisionsSlice.reducer(start, revisionsActions.enqueuePending(
+      rev('r2', { playable: false, hasPreviousAudio: true })),
+    );
+    expect(next.pending.map(r => r.id)).toEqual(['r1', 'r2']);
+    expect(next.pending[1].playable).toBe(false);
+    expect(next.pending[1].hasPreviousAudio).toBe(true);
+  });
+
+  it('replaces (dedupes) when the same id is enqueued again', () => {
+    /* Regen restart for the same character + chapter rebuilds the stub
+       with a fresh playable=false. The dedupe is by id, so the slice
+       carries exactly one entry per (chapterId, characterId) tuple as
+       long as the id encodes both. */
+    const start = revisionsSlice.reducer(undefined, revisionsActions.enqueuePending(
+      rev('r1', { playable: true })),
+    );
+    const next = revisionsSlice.reducer(start, revisionsActions.enqueuePending(
+      rev('r1', { playable: false })),
+    );
+    expect(next.pending).toHaveLength(1);
+    expect(next.pending[0].playable).toBe(false);
+  });
+});
+
+describe('revisionsSlice — markRevisionPlayable', () => {
+  it('flips playable=true for matching chapterId', () => {
+    const start = revisionsSlice.reducer(undefined, revisionsActions.applyPoll({
+      pending: [
+        rev('r1', { chapterId: 1, playable: false }),
+        rev('r2', { chapterId: 2, playable: false }),
+      ],
+      drift: [],
+    }));
+    const next = revisionsSlice.reducer(start, revisionsActions.markRevisionPlayable({ chapterId: 1 }));
+    expect(next.pending.find(r => r.id === 'r1')?.playable).toBe(true);
+    expect(next.pending.find(r => r.id === 'r2')?.playable).toBe(false);
+  });
+
+  it('flips all pending revisions targeting the same chapter (parallel regens)', () => {
+    /* Two characters regenerated in the same chapter → two pending
+       revisions with the same chapterId. chapter_complete fires once
+       per chapter; both should flip. */
+    const start = revisionsSlice.reducer(undefined, revisionsActions.applyPoll({
+      pending: [
+        rev('r1', { chapterId: 3, characterId: 'a', playable: false }),
+        rev('r2', { chapterId: 3, characterId: 'b', playable: false }),
+      ],
+      drift: [],
+    }));
+    const next = revisionsSlice.reducer(start, revisionsActions.markRevisionPlayable({ chapterId: 3 }));
+    expect(next.pending.every(r => r.playable === true)).toBe(true);
+  });
+
+  it('is a no-op when no revision targets the chapter', () => {
+    const start = revisionsSlice.reducer(undefined, revisionsActions.applyPoll({
+      pending: [rev('r1', { chapterId: 1, playable: false })],
+      drift: [],
+    }));
+    const next = revisionsSlice.reducer(start, revisionsActions.markRevisionPlayable({ chapterId: 99 }));
+    expect(next.pending).toEqual(start.pending);
+  });
+});

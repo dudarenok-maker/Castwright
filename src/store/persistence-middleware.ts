@@ -63,6 +63,13 @@ const PERSIST_RULES: Record<string, { slice: StateSlice; build: (s: PersistableR
      bulk variants. */
   'revisions/acceptRevision':   { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed, acceptedSelections: s.revisions.acceptedSelections }) },
   'revisions/rejectRevision':   { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
+  /* enqueuePending is fired by the generation-stream middleware on every
+     regenerateCharacter dispatch. Persist `pending` so a mid-regen reload
+     rehydrates the in-flight revision stub. markRevisionPlayable
+     similarly persists so the playable flip survives a reload after the
+     chapter completed but before the user opened the diff. */
+  'revisions/enqueuePending':     { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
+  'revisions/markRevisionPlayable': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
 
   /* Editorial audit trail. Persists the whole `events` array on every
      append — the log is small (one entry per user action) and the server

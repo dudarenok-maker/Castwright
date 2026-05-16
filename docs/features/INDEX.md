@@ -81,7 +81,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [34 — MP3-folder export](34-mp3-folder-export.md) — Per-chapter MP3s in a sub-folder for folder-scanning audiobook apps (Smart AudioBook Player, BookPlayer, Audiobookshelf). Sync-folder destination only; APIC cover travels with each chapter.
 
 ### I. Revisions & drift
-- [20 — Revisions & drift](20-revisions-and-drift.md) — Pending drafts + drift events + dismissal.
+- [20 — Revisions & drift](20-revisions-and-drift.md) — Pending drafts + drift events + a/b audio audition (rollback-preserved previous audio) + stale-audio banner on voice edits.
 
 ### J. Library & workspace
 - [21 — Book library](21-book-library.md) — Workspace scan + status derivation.

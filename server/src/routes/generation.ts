@@ -27,6 +27,7 @@ import { audioDir, castJsonPath, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
+import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { engineForModelKey, isTtsModelKey, selectTtsProvider, type TtsModelKey } from '../tts/index.js';
 import { encodePcmToMp3 } from '../tts/mp3.js';
@@ -80,6 +81,13 @@ interface RunningJob {
 }
 
 const inFlightByBook: Map<string, RunningJob> = new Map();
+
+/** True when a generation job is currently in flight for the book. Exposed
+    so sibling routes can refuse operations that would race the write path
+    (chapter-audio reject restore would clobber a mid-render file). */
+export function isGenerationActive(bookId: string): boolean {
+  return inFlightByBook.has(bookId);
+}
 
 function broadcast(job: RunningJob, ev: unknown): void {
   for (const sub of job.subscribers) {
@@ -469,6 +477,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         segments: result.segments,
         characterSnapshots,
       };
+      /* Rollback preservation: rename the live `<slug>.{mp3,wav}` +
+         `.segments.json` to `.previous.*` BEFORE the new render lands.
+         First renders no-op (nothing to preserve). The revision-diff
+         player auditions the preserved pair (A) vs the new render (B);
+         accept deletes `.previous.*`, reject restores them over current.
+         Best-effort — never blocks the write. */
+      await preserveExistingAsPrevious(audioRoot, chapter.slug);
       await writeJsonAtomic(segPath, segmentsFile);
       await rename(tmpMp3, mp3Path);
 
