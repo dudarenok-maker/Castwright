@@ -10,6 +10,7 @@ import { uiSlice } from '../store/ui-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { castSlice } from '../store/cast-slice';
 import { librarySlice } from '../store/library-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { generationStreamMiddleware } from '../store/generation-stream-middleware';
 import { GenerationView } from './generation';
 import type { Chapter, Character, Sentence } from '../lib/types';
@@ -654,6 +655,136 @@ describe('GenerationView — header action once the run is complete', () => {
     );
 
     expect(screen.getByRole('button', { name: /Resume/ })).toBeInTheDocument();
+  });
+});
+
+describe('GenerationView — reverse local-analyzer guard on Resume (D2)', () => {
+  /* When a local analysis is alive somewhere in the workspace, clicking
+     Resume in the Generate view should prompt the user before flipping
+     the slice's paused flag (which the middleware reconciles into a
+     fresh openHandle, competing for the GPU). Pause -> Resume is the
+     explicit user-driven start the reverse guard is supposed to gate;
+     the implicit reconcile path (no user click) is intentionally left
+     alone. */
+
+  function makeStoreWithAnalysis(opts: { engine?: 'local' | 'gemini' } = {}) {
+    const store = configureStore({
+      reducer: {
+        ui:         uiSlice.reducer,
+        chapters:   chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog:  changeLogSlice.reducer,
+        cast:       castSlice.reducer,
+        library:    librarySlice.reducer,
+        analysis:   analysisSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
+    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
+      bookId: 'b1', characters, chapters: [chapter1, chapter2], sentences,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any));
+    store.dispatch(analysisActions.setActiveStream({
+      bookId: 'other_book',
+      manuscriptId: 'm_other',
+      bookTitle: 'Other Book Mid-Analysis',
+      engine: opts.engine ?? 'local',
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 0.1,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+    }));
+    return store;
+  }
+
+  it('opens the "Pause analysis to generate?" modal when Resume is clicked with a local analysis alive', () => {
+    const store = makeStoreWithAnalysis({ engine: 'local' });
+    const setPaused = vi.fn();
+
+    render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={[chapter1, chapter2]}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          setPaused={setPaused}
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Resume/ }));
+
+    /* Modal renders, setPaused(false) NOT yet called. */
+    expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
+    expect(setPaused).not.toHaveBeenCalled();
+  });
+
+  it('passes through to setPaused(false) without a modal when the analysis is on a remote engine', () => {
+    const store = makeStoreWithAnalysis({ engine: 'gemini' });
+    const setPaused = vi.fn();
+
+    render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={[chapter1, chapter2]}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          setPaused={setPaused}
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Resume/ }));
+
+    expect(screen.queryByText('Pause analysis to generate?')).not.toBeInTheDocument();
+    expect(setPaused).toHaveBeenCalledWith(false);
+  });
+
+  it('does NOT prompt when Pause (running -> paused) is clicked, even with a local analysis alive', () => {
+    /* Pausing TTS doesn't compete for GPU — only resuming / starting
+       does. The reverse guard must stay silent on the Pause direction
+       so the user can always stop generation cleanly. */
+    const store = makeStoreWithAnalysis({ engine: 'local' });
+    const setPaused = vi.fn();
+
+    render(
+      <Provider store={store}>
+        <GenerationView
+          chapters={[chapter1, chapter2]}
+          characters={characters}
+          paused={false}
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          setPaused={setPaused}
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Pause/ }));
+
+    expect(screen.queryByText('Pause analysis to generate?')).not.toBeInTheDocument();
+    expect(setPaused).toHaveBeenCalledWith(true);
   });
 });
 

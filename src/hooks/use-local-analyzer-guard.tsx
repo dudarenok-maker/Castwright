@@ -21,16 +21,17 @@
 
    Pairs with docs/features/31-sticky-generation.md.
 
-   Note (post-B-series sticky analysis, plan 32): the REVERSE direction —
-   guard a TTS-start callsite when a local analysis is alive on a
-   different book — is not yet wired here. With sticky analysis, that
-   conflict is now possible: user opens book Y's Generate after starting
-   analysis on book X with a local Ollama model, both run, both compete
-   for GPU. Today's mitigation is operational (the user notices slow
-   performance and pauses one). A future extension can read
-   `s.analysis.activeStream != null` alongside the existing
-   `s.chapters.activeStream` check to offer a symmetric prompt.
-   Tracked in docs/features/32-sticky-analysis.md "Known follow-ups". */
+   Reverse direction (D2 in plan 32): the symmetric guard — gate
+   TTS-start callsites when a local analysis is alive — lives in
+   `src/hooks/use-reverse-local-analyzer-guard.tsx`. It reads
+   `s.analysis.activeStream` and the `engine` field on that snapshot
+   (captured at setActiveStream time, NOT
+   `s.ui.selectedModel`) so a user model-switch mid-stream cannot
+   misclassify the running analysis. Applied at the Resume button in
+   `src/views/generation.tsx` and at the three regenerate-modal
+   onConfirm callbacks in `src/components/layout.tsx`. The implicit
+   reconcile-driven generation start is intentionally NOT gated; see
+   docs/features/32-sticky-analysis.md for the rationale. */
 
 import { useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';

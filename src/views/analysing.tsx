@@ -528,6 +528,11 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
       bookId: bookId ?? null,
       manuscriptId,
       bookTitle: title ?? undefined,
+      /* Engine captured at start time, not read from ui.selectedModel
+         later. A user model-switch mid-stream must not mis-classify a
+         running analysis from the reverse-direction guard's
+         perspective (see use-reverse-local-analyzer-guard.tsx). */
+      engine: selectedModel?.engine,
       phaseId: 0,
       phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
       phaseProgress: 0,

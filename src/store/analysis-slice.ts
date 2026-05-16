@@ -23,6 +23,14 @@ export interface AnalysisStreamSnapshot {
   bookId: string | null;
   manuscriptId: string;
   bookTitle?: string;
+  /** Engine the running analyzer is using, captured at setActiveStream
+      time. The reverse-direction local-analyzer guard (see
+      `src/hooks/use-reverse-local-analyzer-guard.tsx`) reads this to
+      decide whether starting TTS would compete with this analysis
+      for GPU. Captured on the snapshot (not read from
+      `ui.selectedModel`) so a user model-switch mid-stream cannot
+      misclassify the running analysis. */
+  engine?: 'local' | 'gemini';
   /** Active phase id (0 = detecting characters, 1 = parsing+attribution,
       2 = matching library). */
   phaseId: number;
