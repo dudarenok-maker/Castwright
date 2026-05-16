@@ -4,6 +4,7 @@
 > Key files: `src/views/analysing.tsx`, `src/lib/api.ts` (`realAnalyseManuscript`, `AnalysisError`)
 > URL surface: `#/books/:bookId/analysing`
 > OpenAPI ops: `POST /api/manuscripts/:id/analysis` (SSE stream)
+> Related: [32-sticky-analysis.md](32-sticky-analysis.md) for the server-owned job lifecycle + the `AnalysisPill` cross-navigation surface (B-series).
 
 ## What this covers
 

@@ -19,7 +19,18 @@
        </>
      );
 
-   Pairs with docs/features/NN-sticky-generation.md. */
+   Pairs with docs/features/31-sticky-generation.md.
+
+   Note (post-B-series sticky analysis, plan 32): the REVERSE direction —
+   guard a TTS-start callsite when a local analysis is alive on a
+   different book — is not yet wired here. With sticky analysis, that
+   conflict is now possible: user opens book Y's Generate after starting
+   analysis on book X with a local Ollama model, both run, both compete
+   for GPU. Today's mitigation is operational (the user notices slow
+   performance and pauses one). A future extension can read
+   `s.analysis.activeStream != null` alongside the existing
+   `s.chapters.activeStream` check to offer a symmetric prompt.
+   Tracked in docs/features/32-sticky-analysis.md "Known follow-ups". */
 
 import { useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
