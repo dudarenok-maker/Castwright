@@ -200,6 +200,52 @@ Branching model and the full commit convention (allowed types, allowed scopes,
 multi-scope syntax, worktrees for parallel agent work) are documented in
 [CONTRIBUTING.md](CONTRIBUTING.md). Read this before opening a branch.
 
+## Branching workflow (REQUIRED for every non-trivial change)
+
+Before starting any non-trivial work — new feature, bug fix, refactor, plan
+implementation — cut a branch from `main` rather than committing directly:
+
+1. **Cut the branch first.** `git switch -c <type>/<scope>-<slug>` off the
+   latest `main`. `<type>` and `<scope>` come from the
+   [commit-convention vocabulary](CONTRIBUTING.md#commit-convention). Examples:
+   `feat/server-batch-retry`, `fix/frontend-voice-swatch-click`,
+   `docs/docs-plan-39`.
+2. **Land all commits for that piece of work on the branch.** Do not mix
+   unrelated work on the same branch — one branch = one cohesive change.
+3. **Surface the branch name in your end-of-turn summary**, along with the
+   commit SHAs, so the user can review the diff and decide when to merge.
+4. **Direct-to-`main` is only for trivial, immediately-shipped fixes** (typo,
+   dead-comment removal, single-line doc tweak). Even then, call out the
+   shortcut explicitly in the end-of-turn summary so the user can redirect
+   to a branch if they disagree.
+
+### Parallel agents
+
+When spawning implementation agents via the Agent tool for work that can run
+in parallel:
+
+- Use `isolation: "worktree"` so each agent gets its own working tree off the
+  shared `.git`. Two agents on the same checkout will trip over each other.
+- Give each agent a non-overlapping scope per the [scope discipline table](CONTRIBUTING.md#scope-discipline--merge-magic).
+  Two agents in `frontend/src/components/` will collide; one in `frontend` +
+  one in `sidecar` will not.
+- The Agent tool auto-names the temporary branch (`claude/wt-…`). When the
+  agent finishes, rename the branch to the proper `<type>/<scope>-<slug>`
+  shape before merge — or pre-create the branch with `git switch -c
+  feat/server-foo` and tell the agent in its prompt to check it out as its
+  first step.
+- Reconcile multiple parallel branches via the
+  [`integration/<date>` pattern](CONTRIBUTING.md#reconciliation-pattern):
+  fresh branch off `main`, merge each agent branch one at a time, run
+  `npm run verify` between merges.
+
+### Planning agents
+
+Plan agents (`subagent_type: "Plan"`) design strategies but don't write code,
+so they don't need their own branch. But the implementation work that follows
+a plan does — when you act on a plan, step 1 is cutting the branch named after
+the plan number (e.g. `feat/frontend-plan-38`).
+
 Hooks activate automatically after `npm install` via the `prepare` script
 (husky v9 — sets `core.hooksPath` to `.husky/`). On a fresh clone, run
 `npm install` once and you're done.
