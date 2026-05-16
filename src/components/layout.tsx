@@ -609,6 +609,7 @@ export function Layout() {
           } : undefined}
           onClose={() => dispatch(uiActions.setOpenProfileId(null))}
           onSave={(updated, meta) => {
+            const prior = profileCharacter;
             dispatch(castActions.setCharacters(characters.map(c => c.id === updated.id ? updated : c)));
             /* Only log a tune event when the drawer actually saved a tuned
                voice — the drawer also fires onSave from the "Discard"-less
@@ -619,6 +620,32 @@ export function Layout() {
                 character: updated,
                 hadConflict: meta.hadConflict,
               })));
+            }
+            /* Stale-audio detection: did any voice-driving field change,
+               and does the character speak in any already-rendered
+               (`state === 'done'`) chapter? Both must hold for the
+               banner to fire. Drives the same regen pipeline the
+               CharacterRegenerateModal does but bypasses the modal
+               step + the 30s drift poll wait. */
+            if (prior) {
+              const voiceChanged = (
+                prior.voiceId !== updated.voiceId
+                || prior.gender !== updated.gender
+                || prior.ageRange !== updated.ageRange
+                || JSON.stringify(prior.tone ?? {}) !== JSON.stringify(updated.tone ?? {})
+              );
+              if (voiceChanged) {
+                const affectedChapters = chapters
+                  .filter(ch => ch.state === 'done' && ch.characters && updated.id in ch.characters)
+                  .map(ch => ch.id);
+                if (affectedChapters.length > 0) {
+                  dispatch(uiActions.setStaleAudio({
+                    characterId: updated.id,
+                    characterName: updated.name,
+                    chapterIds: affectedChapters,
+                  }));
+                }
+              }
             }
             dispatch(uiActions.setOpenProfileId(null));
           }}
@@ -633,18 +660,41 @@ export function Layout() {
           onShowMatchDetail={(id) => dispatch(uiActions.setMatchDetailFor(id))}
           onRegenerateCharacter={(charId) => dispatch(uiActions.setRegenCharacterCtx({ characterId: charId }))}/>
       )}
-      {ui.showRevisionPlayer && pending[0] && (
+      {ui.showRevisionPlayer && pending[0] && bookId && (
         <RevisionDiffPlayer revision={pending[0]}
+          bookId={bookId}
           chapter={chapters.find(c => c.id === pending[0].chapterId)}
           character={characters.find(c => c.id === pending[0].characterId)}
           onClose={() => dispatch(uiActions.setShowRevisionPlayer(false))}
           onAccept={(selection) => {
-            dispatch(revisionsActions.acceptRevision({ revisionId: pending[0].id, selection }));
+            /* Accept = the new (B) render wins. Persist the user's
+               per-segment selection on the slice (write-only; future
+               per-segment regen will consume), drop the revision from
+               pending, AND fire the server-side delete of the preserved
+               `.previous.*` pair. Mock mode no-ops on the network call;
+               real mode tells the server the prior take is dead. */
+            const id = pending[0].id;
+            const chapterId = pending[0].chapterId;
+            dispatch(revisionsActions.acceptRevision({ revisionId: id, selection }));
             dispatch(uiActions.setShowRevisionPlayer(false));
+            api.acceptChapterRevision({ bookId, chapterId }).catch(err => {
+              /* eslint-disable-next-line no-console */
+              console.warn('[revision-diff] accept network call failed:', err);
+            });
           }}
           onReject={() => {
-            dispatch(revisionsActions.rejectRevision(pending[0].id));
+            /* Reject = the prior (A) render wins. Drop the pending
+               revision and ask the server to promote `.previous.*` over
+               the live render. 409 surfaces as an error toast so the
+               user knows to wait if a generation is mid-flight. */
+            const id = pending[0].id;
+            const chapterId = pending[0].chapterId;
+            dispatch(revisionsActions.rejectRevision(id));
             dispatch(uiActions.setShowRevisionPlayer(false));
+            api.rejectChapterRevision({ bookId, chapterId }).catch(err => {
+              /* eslint-disable-next-line no-console */
+              console.warn('[revision-diff] reject network call failed:', err);
+            });
           }}/>
       )}
       {resultDialog && (

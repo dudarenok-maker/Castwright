@@ -10,8 +10,10 @@ import { chaptersSlice } from './chapters-slice';
 import { manuscriptSlice } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { changeLogSlice } from './change-log-slice';
+import { castSlice } from './cast-slice';
+import { revisionsSlice } from './revisions-slice';
 import { generationStreamMiddleware } from './generation-stream-middleware';
-import type { Chapter, GenerationTick } from '../lib/types';
+import type { Chapter, GenerationTick, Character } from '../lib/types';
 
 const streamGenerationMock = vi.fn();
 const cancelMock = vi.fn();
@@ -37,6 +39,8 @@ function makeStore() {
       chapters:   chaptersSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       changeLog:  changeLogSlice.reducer,
+      cast:       castSlice.reducer,
+      revisions:  revisionsSlice.reducer,
     },
     middleware: (gd) => gd().concat(generationStreamMiddleware),
   });
@@ -365,6 +369,76 @@ describe('generationStreamMiddleware', () => {
     /* Stop → snapshot cleared. */
     store.dispatch(chaptersSlice.actions.setPaused(true));
     expect(store.getState().chapters.activeStream).toBeNull();
+  });
+
+  it('enqueues a pending revision per (characterId, chapterId) on regenerateCharacter', () => {
+    /* The diff-audio rollout (plan 20) leans on revisions.pending so the
+       toolbar pending badge surfaces the in-flight regen immediately,
+       without waiting for the 30s revisions poll cycle. The middleware
+       fans out one enqueuePending dispatch per affected chapter. */
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [ch(1), ch(2), ch(3)]);
+    store.dispatch(castSlice.actions.setCharacters([
+      { id: 'halloran', name: 'Halloran', role: 'PoV', color: 'narrator' } as Character,
+    ]));
+
+    store.dispatch(chaptersSlice.actions.regenerateCharacter({ characterId: 'halloran', chapterIds: [1, 3] }));
+
+    const pending = store.getState().revisions.pending;
+    expect(pending).toHaveLength(2);
+    expect(pending.map(r => ({ chapterId: r.chapterId, characterId: r.characterId, playable: r.playable })))
+      .toEqual([
+        { chapterId: 1, characterId: 'halloran', playable: false },
+        { chapterId: 3, characterId: 'halloran', playable: false },
+      ]);
+  });
+
+  it('fans out across (character × chapter) pairs on batchRegenerateCharacters', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [ch(1), ch(2)]);
+    store.dispatch(castSlice.actions.setCharacters([
+      { id: 'halloran', name: 'Halloran', role: 'PoV', color: 'narrator' } as Character,
+      { id: 'mary', name: 'Mary', role: 'foil', color: 'magenta' } as Character,
+    ]));
+
+    store.dispatch(chaptersSlice.actions.batchRegenerateCharacters({
+      characterIds: ['halloran', 'mary'],
+      chapterIds: [1, 2],
+    }));
+
+    const pending = store.getState().revisions.pending;
+    expect(pending).toHaveLength(4);
+    /* Verify all four pairs are represented. */
+    const pairs = pending.map(r => `${r.characterId}:${r.chapterId}`).sort();
+    expect(pairs).toEqual(['halloran:1', 'halloran:2', 'mary:1', 'mary:2']);
+  });
+
+  it('flips revision.playable=true when chapter_complete tick lands', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [ch(1), ch(2)]);
+    store.dispatch(castSlice.actions.setCharacters([
+      { id: 'halloran', name: 'Halloran', role: 'PoV', color: 'narrator' } as Character,
+    ]));
+    store.dispatch(chaptersSlice.actions.regenerateCharacter({ characterId: 'halloran', chapterIds: [1, 2] }));
+    expect(store.getState().revisions.pending.every(r => r.playable === false)).toBe(true);
+
+    /* Simulate the SSE chapter_complete tick for chapter 1. */
+    const tick: GenerationTick = {
+      type: 'chapter_complete',
+      chapterId: 1,
+      characterId: 'halloran',
+      progress: 1,
+      currentLine: 0,
+      totalLines: 0,
+    } as unknown as GenerationTick;
+    store.dispatch(chaptersSlice.actions.applyGenerationTick(tick));
+
+    const pending = store.getState().revisions.pending;
+    expect(pending.find(r => r.chapterId === 1)?.playable).toBe(true);
+    expect(pending.find(r => r.chapterId === 2)?.playable).toBe(false);
   });
 
   it('counts only non-excluded chapters in the activeStream snapshot (top-bar pill regression)', () => {

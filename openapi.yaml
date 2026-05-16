@@ -571,6 +571,63 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ChapterAudio' }
 
+  /api/books/{bookId}/chapters/{chapterId}/audio/previous:
+    get:
+      summary: Get the preserved prior chapter audio (for revision a/b audition)
+      operationId: getChapterAudioPrevious
+      description: |
+        Returns the metadata for the chapter audio that was preserved when
+        a regeneration replaced it. Same shape as `getChapterAudio`. The
+        revision-diff player fetches both endpoints to drive its A vs B
+        playback. 404 when no preserved pair exists (legacy chapters or
+        first renders).
+      parameters:
+        - { in: path, name: bookId,    required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Preserved chapter audio metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChapterAudio' }
+        '404':
+          description: No preserved audio for this chapter
+    delete:
+      summary: Accept the new render — discard the preserved prior audio
+      operationId: acceptChapterRevision
+      description: |
+        Deletes `audio/<slug>.previous.{mp3,wav}` and
+        `audio/<slug>.previous.segments.json`. Idempotent: missing files
+        are skipped. 404 only when no preserved pair existed to begin with.
+      parameters:
+        - { in: path, name: bookId,    required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      responses:
+        '204':
+          description: Preserved pair removed
+        '404':
+          description: No preserved audio to delete
+
+  /api/books/{bookId}/chapters/{chapterId}/audio/previous/restore:
+    post:
+      summary: Reject the new render — restore the preserved prior audio
+      operationId: rejectChapterRevision
+      description: |
+        Renames `audio/<slug>.previous.*` over the live names, clobbering
+        the freshly-rendered audio. The user has chosen the prior take.
+        409 when a generation is in flight for the book (the rename would
+        race the write path).
+      parameters:
+        - { in: path, name: bookId,    required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      responses:
+        '204':
+          description: Preserved pair restored over live names
+        '404':
+          description: No preserved audio to restore
+        '409':
+          description: Generation is in flight for this book — restore would race the write path
+
   /api/voices:
     get:
       summary: List voices derived from every confirmed cast in the workspace
@@ -1514,6 +1571,21 @@ components:
         oldDuration:   { type: string }
         newDuration:   { type: string }
         confidence:    { type: number, minimum: 0, maximum: 1 }
+        playable:
+          type: boolean
+          description: >-
+            False while the proposed (B) audio is still rendering. The a/b
+            player disables the B controls until this flips true. Set true
+            once chapter_complete fires for the chapter; the
+            generation-stream middleware flips it without waiting for the
+            30s revisions poll cycle.
+        hasPreviousAudio:
+          type: boolean
+          description: >-
+            False for legacy chapters that pre-date the rollback feature
+            (no .previous.* pair was preserved). The a/b player renders
+            "Original audio not preserved — review by metadata only" on
+            the A card when this is false.
         segments:
           type: array
           items:

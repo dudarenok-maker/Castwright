@@ -17,6 +17,7 @@ const baseState = (stage: Stage): UiState => ({
   regenInitialScope: null,
   regenCharacterCtx: null,
   batchRegenIds: null,
+  staleAudio: null,
   showRevisionPlayer: false,
   showDriftReport: false,
   previewMode: false,

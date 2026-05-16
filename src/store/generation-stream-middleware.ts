@@ -47,13 +47,17 @@ import {
 } from '../lib/change-log';
 import { chaptersActions } from './chapters-slice';
 import { changeLogActions } from './change-log-slice';
+import { revisionsActions } from './revisions-slice';
+import { buildPendingRevisionStub } from '../lib/build-pending-revision';
 import type { ActiveStreamSnapshot, ChaptersState } from './chapters-slice';
+import type { CastState } from './cast-slice';
 import type { UiState } from './ui-slice';
 import type { Chapter, GenerationTick, TtsModelKey } from '../lib/types';
 
 interface StreamableRootState {
   ui: UiState;
   chapters: ChaptersState;
+  cast: CastState;
 }
 
 function bookIdFromState(s: StreamableRootState): string | null {
@@ -279,6 +283,41 @@ export const generationStreamMiddleware: Middleware = (store) => {
       if (after.chapters.currentBookId === handle.bookId) closeHandle();
     }
 
+    /* Enqueue pending-revision stubs on regen dispatch. One per
+       (characterId, chapterId) tuple — the slice's dedupe-by-id collapses
+       restarts. The stub carries playable=false; chapter_complete flips
+       it (handled in the applyGenerationTick branch below). Out-of-scope
+       for chapter-only regens (regenerateChapter / regenerateChapterIds)
+       since those don't carry a character to attribute the diff to. */
+    if (type === 'chapters/regenerateCharacter') {
+      const payload = (a as { payload?: { characterId: string; chapterIds: number[] } }).payload;
+      if (payload) {
+        const after = store.getState() as StreamableRootState;
+        const character = after.cast.characters.find(c => c.id === payload.characterId);
+        if (character) {
+          for (const chapterId of payload.chapterIds) {
+            const chapter = after.chapters.chapters.find(c => c.id === chapterId);
+            if (!chapter) continue;
+            dispatch(revisionsActions.enqueuePending(buildPendingRevisionStub({ chapter, character })));
+          }
+        }
+      }
+    } else if (type === 'chapters/batchRegenerateCharacters') {
+      const payload = (a as { payload?: { characterIds: string[]; chapterIds: number[] } }).payload;
+      if (payload) {
+        const after = store.getState() as StreamableRootState;
+        for (const characterId of payload.characterIds) {
+          const character = after.cast.characters.find(c => c.id === characterId);
+          if (!character) continue;
+          for (const chapterId of payload.chapterIds) {
+            const chapter = after.chapters.chapters.find(c => c.id === chapterId);
+            if (!chapter) continue;
+            dispatch(revisionsActions.enqueuePending(buildPendingRevisionStub({ chapter, character })));
+          }
+        }
+      }
+    }
+
     /* Emit per-tick log events using the post-reducer state — that's where
        the chapter has already flipped to done/failed. Also refresh the
        cross-book snapshot so the global header pill keeps moving even
@@ -300,6 +339,11 @@ export const generationStreamMiddleware: Middleware = (store) => {
         if (!handle.completedChapterIds.includes(ev.chapterId)) {
           handle.completedChapterIds.push(ev.chapterId);
         }
+        /* Flip any pending revisions for this chapter to playable. The
+           new render is on disk now, so the diff player can fetch it.
+           No-op when no pending revision targets the chapter (e.g.
+           plain regenerateChapter without a character). */
+        dispatch(revisionsActions.markRevisionPlayable({ chapterId: ev.chapterId }));
       } else if (ev && ev.type === 'chapter_failed' && ev.chapterId != null && sliceMatchesHandle) {
         const ch = after.chapters.chapters.find(c => c.id === ev.chapterId);
         if (ch) {

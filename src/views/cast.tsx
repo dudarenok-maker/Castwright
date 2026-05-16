@@ -17,6 +17,7 @@ import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import { CompareCastModal } from '../modals/compare-cast-modal';
+import { StaleAudioBanner } from '../components/stale-audio-banner';
 
 interface Props {
   characters: Character[];
@@ -128,6 +129,9 @@ export function CastView({
 
   return (
     <div className={`max-w-[1500px] mx-auto px-6 py-10 grid ${showLibrary ? 'grid-cols-[1fr_360px]' : 'grid-cols-1'} gap-6 relative ${draggingVoiceId ? 'dragging-voice' : ''}`}>
+      <div className="col-span-full -mb-2">
+        <StaleAudioBanner/>
+      </div>
       <div>
         <div className="mb-8 flex items-end justify-between gap-6 flex-wrap">
           <div>

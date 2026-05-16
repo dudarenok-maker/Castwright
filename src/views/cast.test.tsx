@@ -12,6 +12,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
+import { castSlice } from '../store/cast-slice';
 import { CastView } from './cast';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import type { Character, Voice } from '../lib/types';
@@ -97,7 +98,10 @@ const library: Voice[] = [
 ];
 
 function renderView(opts: { onOpenProfile?: (id: string | null) => void } = {}) {
-  const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+  /* StaleAudioBanner (mounted inside CastView) reads s.cast.characters,
+     so the test store needs the cast slice even though the cast list is
+     passed as a prop. */
+  const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
   return render(
     <Provider store={store}>
       <CastView

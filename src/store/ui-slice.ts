@@ -32,6 +32,17 @@ export interface UiState {
   regenInitialScope: RegenScope | null;
   regenCharacterCtx: RegenCharacterCtx | null;
   batchRegenIds: string[] | null;
+  /** Session-only banner shown on the Cast view after a voice-edit Save
+      reveals that one or more done chapters now hold audio that no longer
+      matches the character's current voice/identity. Click "Regenerate
+      now" dispatches the same chain the CharacterRegenerateModal does
+      (regenerateCharacter + change-log + changeView('generate')) without
+      the modal step — bypassing the 30s drift-poll wait. */
+  staleAudio: {
+    characterId: string;
+    characterName: string;
+    chapterIds: number[];
+  } | null;
   showRevisionPlayer: boolean;
   showDriftReport: boolean;
   previewMode: boolean;
@@ -54,6 +65,7 @@ const initialState: UiState = {
   regenInitialScope: null,
   regenCharacterCtx: null,
   batchRegenIds: null,
+  staleAudio: null,
   showRevisionPlayer: false,
   showDriftReport: false,
   previewMode: false,
@@ -139,6 +151,8 @@ export const uiSlice = createSlice({
     setRegenInitialScope:  (s, a: PayloadAction<RegenScope | null>) => { s.regenInitialScope = a.payload; },
     setRegenCharacterCtx:  (s, a: PayloadAction<RegenCharacterCtx | null>) => { s.regenCharacterCtx = a.payload; },
     setBatchRegenIds:      (s, a: PayloadAction<string[] | null>) => { s.batchRegenIds = a.payload; },
+    setStaleAudio:         (s, a: PayloadAction<UiState['staleAudio']>) => { s.staleAudio = a.payload; },
+    clearStaleAudio:       (s) => { s.staleAudio = null; },
     setShowRevisionPlayer: (s, a: PayloadAction<boolean>) => { s.showRevisionPlayer = a.payload; },
     setShowDriftReport:    (s, a: PayloadAction<boolean>) => { s.showDriftReport = a.payload; },
     setPreviewMode:        (s, a: PayloadAction<boolean>) => { s.previewMode = a.payload; },

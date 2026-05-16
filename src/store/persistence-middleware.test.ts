@@ -164,6 +164,53 @@ describe('persistenceMiddleware — payload shape', () => {
     });
   });
 
+  it('sends pending+drift+dismissed for revisions/enqueuePending (middleware-driven regen stub)', async () => {
+    /* enqueuePending is fired by the generation-stream middleware when a
+       regen kicks off. The patch must include `pending` so a mid-regen
+       reload rehydrates the in-flight stub. */
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      revisions: {
+        pending: [{ id: 'revision:1:halloran:42' }],
+        drift: [],
+        dismissed: [],
+        acceptedSelections: {},
+      },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/enqueuePending' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'revisions',
+      patch: {
+        pending: [{ id: 'revision:1:halloran:42' }],
+        drift: [],
+        dismissed: [],
+      },
+    });
+  });
+
+  it('sends pending+drift+dismissed for revisions/markRevisionPlayable', async () => {
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      revisions: {
+        pending: [{ id: 'r1', playable: true }],
+        drift: [],
+        dismissed: [],
+        acceptedSelections: {},
+      },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/markRevisionPlayable' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'revisions',
+      patch: {
+        pending: [{ id: 'r1', playable: true }],
+        drift: [],
+        dismissed: [],
+      },
+    });
+  });
+
   it('sends pending+drift+dismissed (NO acceptedSelections) for revisions/rejectRevision', async () => {
     const next = vi.fn((x) => x);
     const state = baseState({

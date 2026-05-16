@@ -6,7 +6,7 @@
    legacy chapters as .wav, and every callsite must work for both without
    the client knowing or caring. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -134,6 +134,39 @@ function rmIfExists(name: string) {
 function resetAudio() {
   rmIfExists(`${SLUG}.mp3`);
   rmIfExists(`${SLUG}.wav`);
+  rmIfExists(`${SLUG}.previous.mp3`);
+  rmIfExists(`${SLUG}.previous.wav`);
+  rmIfExists(`${SLUG}.previous.segments.json`);
+}
+
+function writePreviousMp3(bytes = 4096) {
+  /* Distinguishable from writeMp3 — fill with 0x42 so byte comparisons in
+     the restore test can prove the previous bytes really replaced the live
+     bytes (vs. just touching the file). */
+  const buf = Buffer.alloc(bytes, 0x42);
+  buf[0] = 0xff;
+  buf[1] = 0xf3;
+  buf[2] = 0x40;
+  buf[3] = 0xc0;
+  writeFileSync(join(audioRoot, `${SLUG}.previous.mp3`), buf);
+}
+
+function writePreviousSegments() {
+  writeFileSync(
+    join(audioRoot, `${SLUG}.previous.segments.json`),
+    JSON.stringify({
+      bookId,
+      chapterId: 1,
+      chapterTitle: 'Chapter 1',
+      durationSec: 11.0,
+      sampleRate: 24_000,
+      modelKey: 'xtts_v2',
+      synthesizedAt: new Date().toISOString(),
+      segments: [
+        { groupIndex: 0, characterId: 'Marlow', sentenceIds: [101], startSec: 0, endSec: 11 },
+      ],
+    }),
+  );
 }
 
 describe('chapter-audio router', () => {
@@ -246,6 +279,118 @@ describe('chapter-audio router', () => {
     it('unknown chapterId → 404', async () => {
       const res = await request(app).get(`/api/books/${bookId}/chapters/999/audio`);
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('preserved previous audio', () => {
+    describe('GET /audio/previous', () => {
+      beforeAll(() => { resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments(); });
+
+      it('JSON metadata points at audio/previous.mp3 URL', async () => {
+        const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous`);
+        expect(res.status).toBe(200);
+        expect(res.body.url).toBe(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio/previous.mp3`);
+        expect(res.body.durationSec).toBe(11.0);
+        expect(res.body.segments).toHaveLength(1);
+      });
+
+      it('GET audio/previous.mp3 serves audio/mpeg with range support', async () => {
+        const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous.mp3`);
+        expect(res.status).toBe(200);
+        expect(res.headers['content-type']).toMatch(/audio\/mpeg/);
+        expect(res.headers['accept-ranges']).toBe('bytes');
+      });
+
+      it('GET audio/previous 404s when nothing preserved', async () => {
+        resetAudio();
+        writeMp3();
+        const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous`);
+        expect(res.status).toBe(404);
+      });
+    });
+
+    describe('DELETE /audio/previous (accept)', () => {
+      beforeAll(() => { resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments(); });
+
+      it('removes both .previous.* files and 204s', async () => {
+        const fs = await import('node:fs');
+        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(true);
+
+        const res = await request(app).delete(`/api/books/${bookId}/chapters/1/audio/previous`);
+        expect(res.status).toBe(204);
+        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(false);
+        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.segments.json`))).toBe(false);
+        /* Live file untouched. */
+        expect(fs.existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
+      });
+
+      it('404s when nothing to delete', async () => {
+        const res = await request(app).delete(`/api/books/${bookId}/chapters/1/audio/previous`);
+        expect(res.status).toBe(404);
+      });
+    });
+
+    describe('POST /audio/previous/restore (reject)', () => {
+      it('renames .previous.* over live names and 204s', async () => {
+        resetAudio();
+        writeMp3();
+        writePreviousMp3();
+        writePreviousSegments();
+        const fs = await import('node:fs');
+        const liveMp3 = join(audioRoot, `${SLUG}.mp3`);
+        const liveSegments = join(audioRoot, `${SLUG}.segments.json`);
+        /* Mark the live mp3 with a sentinel byte so we can verify the
+           previous content replaced it (not just sat next to it). */
+        const liveBytes = fs.readFileSync(liveMp3);
+        const prevBytes = fs.readFileSync(join(audioRoot, `${SLUG}.previous.mp3`));
+        expect(liveBytes.equals(prevBytes)).toBe(false);
+
+        const res = await request(app).post(`/api/books/${bookId}/chapters/1/audio/previous/restore`);
+        expect(res.status).toBe(204);
+
+        /* Previous pair is gone; live now holds what was previous. */
+        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(false);
+        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.segments.json`))).toBe(false);
+        expect(fs.existsSync(liveMp3)).toBe(true);
+        expect(fs.readFileSync(liveMp3).equals(prevBytes)).toBe(true);
+        expect(fs.existsSync(liveSegments)).toBe(true);
+      });
+
+      it('404s when nothing preserved', async () => {
+        resetAudio();
+        writeMp3();
+        const res = await request(app).post(`/api/books/${bookId}/chapters/1/audio/previous/restore`);
+        expect(res.status).toBe(404);
+      });
+
+      it('409s when a generation is in flight for the book', async () => {
+        /* Re-mock generation.js so isGenerationActive returns true for any
+           bookId — we don't want to spin up a real generation here, just
+           verify the route refuses the restore under that condition.
+
+           vi.doMock affects only the FOLLOWING fresh import. We re-import
+           the router into a separate express app so the mock takes effect
+           without contaminating the rest of the suite. */
+        vi.resetModules();
+        vi.doMock('./generation.js', () => ({
+          generationRouter: undefined,
+          isGenerationActive: () => true,
+        }));
+        const { chapterAudioRouter: mockedRouter } = await import('./chapter-audio.js');
+        const mockedApp = express();
+        mockedApp.use('/api/books', mockedRouter);
+
+        resetAudio();
+        writePreviousMp3();
+        const res = await request(mockedApp).post(`/api/books/${bookId}/chapters/1/audio/previous/restore`);
+        expect(res.status).toBe(409);
+        /* .previous.mp3 must still be on disk — refused, not partially executed. */
+        const fs = await import('node:fs');
+        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(true);
+
+        vi.doUnmock('./generation.js');
+        vi.resetModules();
+      });
     });
   });
 });

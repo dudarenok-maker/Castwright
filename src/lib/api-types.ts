@@ -407,6 +407,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/chapters/{chapterId}/audio/previous": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the preserved prior chapter audio (for revision a/b audition)
+         * @description Returns the metadata for the chapter audio that was preserved when
+         *     a regeneration replaced it. Same shape as `getChapterAudio`. The
+         *     revision-diff player fetches both endpoints to drive its A vs B
+         *     playback. 404 when no preserved pair exists (legacy chapters or
+         *     first renders).
+         */
+        get: operations["getChapterAudioPrevious"];
+        put?: never;
+        post?: never;
+        /**
+         * Accept the new render — discard the preserved prior audio
+         * @description Deletes `audio/<slug>.previous.{mp3,wav}` and
+         *     `audio/<slug>.previous.segments.json`. Idempotent: missing files
+         *     are skipped. 404 only when no preserved pair existed to begin with.
+         */
+        delete: operations["acceptChapterRevision"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/chapters/{chapterId}/audio/previous/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject the new render — restore the preserved prior audio
+         * @description Renames `audio/<slug>.previous.*` over the live names, clobbering
+         *     the freshly-rendered audio. The user has chosen the prior take.
+         *     409 when a generation is in flight for the book (the rename would
+         *     race the write path).
+         */
+        post: operations["rejectChapterRevision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/voices": {
         parameters: {
             query?: never;
@@ -1172,6 +1225,10 @@ export interface components {
             oldDuration?: string;
             newDuration?: string;
             confidence?: number;
+            /** @description False while the proposed (B) audio is still rendering. The a/b player disables the B controls until this flips true. Set true once chapter_complete fires for the chapter; the generation-stream middleware flips it without waiting for the 30s revisions poll cycle. */
+            playable?: boolean;
+            /** @description False for legacy chapters that pre-date the rollback feature (no .previous.* pair was preserved). The a/b player renders "Original audio not preserved — review by metadata only" on the A card when this is false. */
+            hasPreviousAudio?: boolean;
             segments: {
                 id?: number;
                 text?: string;
@@ -2009,6 +2066,99 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ChapterAudio"];
                 };
+            };
+        };
+    };
+    getChapterAudioPrevious: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preserved chapter audio metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChapterAudio"];
+                };
+            };
+            /** @description No preserved audio for this chapter */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    acceptChapterRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preserved pair removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No preserved audio to delete */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    rejectChapterRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preserved pair restored over live names */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No preserved audio to restore */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Generation is in flight for this book — restore would race the write path */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
