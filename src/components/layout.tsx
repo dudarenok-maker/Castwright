@@ -557,6 +557,29 @@ export function Layout() {
             dispatch(uiActions.setShowDriftReport(false));
             dispatch(uiActions.setRegenCharacterCtx({ characterId: charId, defaultChapterId: chapterId }));
           }}
+          /* Plan 20 C1+C2: severe drift events skip the regen-modal confirmation.
+             Same change-log entry + same regenerateCharacter dispatch the modal's
+             onConfirm would have fired, just without the intermediate click. The
+             reverse local-analyzer guard still gates the action so a live local
+             analysis prompts before TTS starts. */
+          onAutoQueueRegenerate={(charId, chapterId) => {
+            dispatch(uiActions.setShowDriftReport(false));
+            const character = characters.find(c => c.id === charId);
+            reverseAnalyzerGuard(() => {
+              if (character) {
+                dispatch(changeLogActions.appendLogEvent(
+                  buildCharacterRegenEvent({
+                    character,
+                    chapterIds: [chapterId],
+                    reason: 'drift_auto_queued',
+                    note: 'Auto-queued from severe drift event.',
+                  }),
+                ));
+              }
+              dispatch(chaptersActions.regenerateCharacter({ characterId: charId, chapterIds: [chapterId] }));
+              dispatch(uiActions.changeView('generate'));
+            });
+          }}
           onDismiss={(eventId) => dispatch(revisionsActions.dismissDrift(eventId))}/>
       )}
       {profileCharacter && (

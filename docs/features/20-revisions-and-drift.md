@@ -1,7 +1,7 @@
 # Revisions & drift
 
-> Status: stable for drift; pending revisions support per-item or bulk accept/reject
-> Key files: `src/views/revision-diff.tsx`, `src/modals/drift-report.tsx`, `src/store/revisions-slice.ts` (`acceptRevision`, `rejectRevision`, `acceptAllPending`, `rejectAllPending`, `dismissDrift`, `hydrateFromBookState`), `src/lib/api.ts` (`pollRevisions`), `src/components/layout.tsx` (poll effect + RevisionDiffPlayer wiring), `server/src/routes/revisions.ts` (drift detector), `server/src/routes/generation.ts` (`characterSnapshots` write)
+> Status: stable for drift (severe events surface a one-click Auto-regen shortcut, plan 20 C1+C2); pending revisions support per-item or bulk accept/reject
+> Key files: `src/views/revision-diff.tsx`, `src/modals/drift-report.tsx`, `src/store/revisions-slice.ts` (`acceptRevision`, `rejectRevision`, `acceptAllPending`, `rejectAllPending`, `dismissDrift`, `hydrateFromBookState`), `src/lib/api.ts` (`pollRevisions`), `src/components/layout.tsx` (poll effect + RevisionDiffPlayer wiring + auto-regen handler), `server/src/routes/revisions.ts` (drift detector + `autoQueueable` flag), `server/src/routes/generation.ts` (`characterSnapshots` write)
 > URL surface: indirect — revisions diff opens from `ready` views; drift report is a modal
 > OpenAPI ops: `GET /api/books/:bookId/revisions` (real backend computes drift from per-chapter snapshots)
 
@@ -17,6 +17,7 @@ Two related surfaces. **Revisions** are pending audio re-renders awaiting user a
 - `acceptAllPending` / `rejectAllPending` clear the pending list atomically (toolbar bulk actions). Per-item `acceptRevision` / `rejectRevision` drop one revision from pending; `acceptRevision` also records the user's per-segment `Record<number, 'A' | 'B'>` selection map into `revisions.acceptedSelections[revisionId]`. The selection is write-only in v1 (no in-app consumer reads it back) but it round-trips through `revisions.json` so a future per-segment TTS regen can consume it without forcing the user to redo the diff.
 - `dismissDrift(id)` removes the event from the slice AND records the id in `revisions-slice.dismissed`. The persistence middleware writes `{ pending, drift, dismissed }` to `.audiobook/revisions.json`; the backend detector filters its output by `dismissed` so the same event does not re-emerge on subsequent polls. `hydrateFromBookState` reloads the dismissed list on book open so dismissals union with subsequent ones rather than overwriting them.
 - Drift event ids are stable: `drift:<chapterId>:<characterId>:<factor>` (`factor` ∈ `voice`, `gender`, `ageRange`, `attributes`, `warmth`, `pace`, `authority`, `emotion`). This means a dismiss is durable across polls — the same signal hashes to the same id.
+- **Auto-queueable flag** (`autoQueueable: true`) is stamped by the server on every event with `severity === 'severe'` and only there. The Drift Report renders these with a one-click "Auto-regen now" pill (`drift-auto-regen-<id>` testid) that skips the regen-modal confirmation and dispatches `chaptersActions.regenerateCharacter({ characterId, chapterIds: [chapterId] })` + a `buildCharacterRegenEvent` change-log entry with `reason: 'drift_auto_queued'`. Moderate / mild events keep the existing "Regenerate this chapter" pill (`drift-regen-<id>` testid) which opens the regen-modal confirmation. The `severity === 'severe'` rule lives in one helper (`autoQueueableFor` in `server/src/routes/revisions.ts`) so future severity tweaks update both the emit sites and the flag at the same time. The reverse local-analyzer guard (plan 32 D2) still wraps the auto-queue dispatch so a live local analysis prompts the user before TTS starts.
 - **Drift sensitivity** (`server/src/routes/revisions.ts`):
   - Hard signals (`voiceId`, `gender`, `ageRange` change) always emit `severity: 'severe'`.
   - Tone metric deltas: `< 25` → no event, `25–39` → `moderate`, `≥ 40` → `severe`. Threshold constants are `TONE_MODERATE = 25` and `TONE_SEVERE = 40` — change them in one place if the user reports false positives.
@@ -36,7 +37,8 @@ Run `VITE_USE_MOCKS=true`, navigate to a `ready` book view.
 3a. **Per-item flow**: open one revision, toggle a mix of segment A/B selections, click "Commit selection" → only that revision drops from pending (others stay); the selection map round-trips into `revisions.acceptedSelections[revisionId]`. Reload → the surviving revisions are still pending and the accepted selection is on the slice.
 4. **Open drift report modal** → list of drift events renders with severity, reason, and previous-vs-current voice descriptors.
 5. **Dismiss a drift event** → it disappears from the modal; re-opening shows the remaining events.
-6. **Click "Regen character" from drift** → opens the per-character regen modal (`17-regenerate-this-or-forward.md`) pre-filled with the character + chapter.
+6. **Click "Regenerate this chapter" from a moderate / mild drift event** → opens the per-character regen modal (`17-regenerate-this-or-forward.md`) pre-filled with the character + chapter.
+6a. **Click "Auto-regen now" from a severe drift event** → dispatches `chaptersActions.regenerateCharacter` directly (no confirmation modal), appends a `buildCharacterRegenEvent` change-log entry with `reason: 'drift_auto_queued'`, closes the Drift Report, and routes the user to the Generate view. The reverse local-analyzer guard still prompts if a local analysis is alive.
 
 **Real-mode regression check** (`VITE_USE_MOCKS=false`, server + sidecar running):
 
@@ -48,7 +50,7 @@ Run `VITE_USE_MOCKS=true`, navigate to a `ready` book view.
 
 ## KNOWN: scaffolded
 
-- Real `pending` is not populated by the drift detector — it's written only when the regen-modal flow PUTs to `slice: 'revisions'`. A severe drift event doesn't auto-queue a regen; the user clicks "Regen character" to trigger one.
+- Real `pending` is not populated by the drift detector — it's written only when the regen-modal flow PUTs to `slice: 'revisions'`. The C1+C2 split instead surfaces severe drift through the `autoQueueable` flag on `DriftEvent` and a one-click "Auto-regen now" pill in `DriftReportModal`, which skips the regen-modal confirmation but still goes through the same `chaptersActions.regenerateCharacter` codepath. Populating `pending` end-to-end (so each auto-queued regen surfaces in the pending-revisions diff list before/after rendering) is a follow-up that depends on the per-segment regen design landing first.
 - `acceptedSelections` is persisted but not yet consumed by anything in-app. Future per-segment TTS regen will read it to know which takes to re-render.
 
 ## Out of scope
