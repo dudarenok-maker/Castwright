@@ -27,13 +27,23 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 4 · Should 12 · Could 11 · Won't 13
+**Counts as of 2026-05-17:** Must 5 · Should 12 · Could 11 · Won't 13
 
 ---
 
 ## Must — blocks v1 ship or hurts existing users
 
-### 1. Diff audio playback for revisions (a/b same-sentence)
+### 1. Voice-tab compare-two-cast-members affordance
+
+Source: [`22a-voice-library-compare.md`](features/22a-voice-library-compare.md) (draft).
+
+- *What:* Add multi-select checkboxes to `VoiceCard`s in the Voices tab and a floating "Selected · N [Compare]" pill that opens the existing `CompareCastModal` for any 2-voice pair. Pill carries a "same base voice ✓" / "different base voices" badge so the family-grouped tab visually privileges the same-voice tuning case without restricting cross-family selection. Per-book tab (`#/books/<id>/library`) resolves characters from the cast slice; global tab (`#/voices`) supports same-book pairs only (cross-book is a documented follow-up).
+- *Acceptance:* Vitest covers (a) checkbox renders only when `selected`+`onToggleSelect` are both passed; (b) selecting 2 same-family cards shows the green badge; (c) selecting cross-family shows the amber badge; (d) Compare is disabled at 0/1/3+ selected and enabled at exactly 2 within-book; (e) cross-book pair in the global view disables Compare with the documented tooltip. Playwright `e2e/voices-compare.spec.ts` walks open Voices tab → check 2 cards → assert badge → click Compare → assert dialog appears with both names. Existing Cast-tab compare flow continues to pass without modification.
+- *Key files:* `src/views/voices.tsx` (selection + pill); `src/components/voice-library-panel.tsx` (`VoiceCard` props extension); `src/modals/compare-cast-modal.tsx` (consumed unchanged); `src/lib/voice-character-link.ts` (add inverse `findCharacterForVoice` helper); pattern source-of-truth at `src/views/cast.tsx:284-310`.
+- *Depends on:* none — pure additive on existing surface.
+- *Benefit (user):* the highest-signal compare today — two characters routed to the same base voice but sounding subtly different — requires bouncing Voices → Cast → select → Compare. Putting the entry point next to the family grouping collapses that into a single tab, where the user is already looking at the "same voice" cohort.
+
+### 2. Diff audio playback for revisions (a/b same-sentence)
 
 Source: [`20-revisions-and-drift.md`](features/20-revisions-and-drift.md) (KNOWN: scaffolded).
 
@@ -43,7 +53,7 @@ Source: [`20-revisions-and-drift.md`](features/20-revisions-and-drift.md) (KNOWN
 - *Depends on:* Must #4 (mock-mode audio URL) for any meaningful local exercise; the real backend already returns playable URLs.
 - *Benefit (user):* the revisions feature is half-shipped — users see drift metadata but can't audition the change. Decision-without-evidence is worse than no surface at all because the surface implies the user has enough to choose.
 
-### 2. `mockGetBookState` mock implementation
+### 3. `mockGetBookState` mock implementation
 
 Source: [`12-manuscript-view.md`](features/12-manuscript-view.md) (KNOWN: scaffolded).
 
@@ -52,16 +62,16 @@ Source: [`12-manuscript-view.md`](features/12-manuscript-view.md) (KNOWN: scaffo
 - *Key files:* `src/lib/api.ts:276-285` (mockGetBookState + mockPutBookState); `src/store/persistence-middleware.ts`; `docs/features/27-book-state-persistence.md` for the round-trip contract.
 - *Benefit (technical):* mock mode is the only environment that boots without a Node backend + sidecar. A throwing mock breaks design fixtures, demo recordings, and any Vitest+jsdom test that hits the persistence path.
 
-### 3. `mockGetChapterAudio` mock implementation
+### 4. `mockGetChapterAudio` mock implementation
 
 Source: [`18-listen-view.md`](features/18-listen-view.md) (KNOWN: scaffolded).
 
 - *What:* Return a valid audio URL from `mockGetChapterAudio` (`src/lib/api.ts:445-460`) — either a data: URL with a tiny synthesized tone, or a static asset bundled under `src/mocks/`. Same for `mockGetVoiceSample` and `mockGetBaseVoiceSample` which currently return empty-string URLs.
 - *Acceptance:* Listen view in mock mode plays a sound when play is clicked. Voice library "play sample" plays a sound. An e2e spec (Should #8) asserts a `<audio>` element with a non-empty `src` and non-error `readyState`.
 - *Key files:* `src/lib/api.ts:445-472` (the three mock audio functions); optional `src/mocks/audio/stub.wav` (~1 s of 440Hz tone, ~88 KB).
-- *Benefit (user):* completes the mock-mode demo path through Listen and Voice library so the entire stage machine can be exercised without booting the sidecar. Pairs with Must #1 (revisions a/b player).
+- *Benefit (user):* completes the mock-mode demo path through Listen and Voice library so the entire stage machine can be exercised without booting the sidecar. Pairs with Must #2 (revisions a/b player).
 
-### 4. Cancel / dismiss / retry on running export jobs
+### 5. Cancel / dismiss / retry on running export jobs
 
 Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 
@@ -143,10 +153,10 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
 - *What:* Add a Playwright spec that opens a `ready`-state book under mocks, navigates to Listen, clicks play on the first chapter, and asserts the mini-player shows a play/pause toggle and a progressing duration.
-- *Acceptance:* New file `e2e/listen-playback.spec.ts`. Asserts the `<audio>` element has a non-empty `src` (depends on Must #3) and `paused` flips false after the play click.
+- *Acceptance:* New file `e2e/listen-playback.spec.ts`. Asserts the `<audio>` element has a non-empty `src` (depends on Must #4) and `paused` flips false after the play click.
 - *Key files:* `e2e/smoke.spec.ts`; `src/views/listen.tsx` for the playback affordances.
-- *Depends on:* Must #3 (mock audio URL); meaningless until that lands.
-- *Benefit (technical):* listen + playback is the second-highest-blast-radius surface. Pairs with Must #3.
+- *Depends on:* Must #4 (mock audio URL); meaningless until that lands.
+- *Benefit (technical):* listen + playback is the second-highest-blast-radius surface. Pairs with Must #4.
 
 ### 9. Slice unit tests: `applyGenerationTick`, `applyVoiceMatches`
 
@@ -224,7 +234,7 @@ Source: CLAUDE.md "Suggested follow-ups".
 - *What:* Replace the visual stub mini-player with a real `<audio>` element wired to `getChapterAudio({ chapterId })`; respond to spacebar pause-play and arrow seek.
 - *Acceptance:* Clicking play on the mini-player plays the chapter audio in real mode; the Listen e2e spec (Should #8) asserts playback state.
 - *Key files:* `src/components/MiniPlayer.tsx` (or wherever `MiniPlayer` is defined).
-- *Depends on:* Must #3 (mock audio URL) for local exercise + Should #8 (e2e coverage).
+- *Depends on:* Must #4 (mock audio URL) for local exercise + Should #8 (e2e coverage).
 - *Benefit (user):* listen view becomes actually-listenable.
 
 ### 5. ESLint + Prettier + axe-core a11y pass
