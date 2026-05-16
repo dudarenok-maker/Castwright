@@ -4,6 +4,7 @@ import {
   chapterEstFromObserved, projectRemainingMs, buildInterimCast, clearFailedChapterId,
   dropEvidencelessCast, isPhase0aCoverageComplete,
   reconcileSentenceCharacterIds, attributionDriftExceeded, stage1ShrinkRefused,
+  buildStage1ChapterInbox,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 
@@ -905,6 +906,67 @@ describe('stage1ShrinkRefused — data-loss guard for stage1 rewrites', () => {
        cache.stage1 was unset; prev=0, gate stays open. */
     expect(stage1ShrinkRefused(0, 5)).toBe(false);
     expect(stage1ShrinkRefused(0, 1)).toBe(false);
+  });
+});
+
+/* The per-chapter inbox template feeds the detection skill. Verify it
+   broadcasts the broadened inclusion rules so journal/registry/log
+   chapters get the right guidance — without these, Gemini collapses
+   Unlocked-style first-person chapters to Narrator-only. */
+describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
+  it('includes manuscript metadata + chapter body verbatim', () => {
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Unlocked',
+      { id: 7, title: "Oduvan's Medical Log", body: "I'd just settled into bed when Wren hailed me." },
+      [],
+    );
+    expect(inbox).toContain('manuscriptId: mns_test');
+    expect(inbox).toContain('Title: Unlocked');
+    expect(inbox).toContain("Chapter: 7 — Oduvan's Medical Log");
+    expect(inbox).toContain("I'd just settled into bed when Wren hailed me.");
+  });
+
+  it('renders the broadened first-person guidance so journal/registry chapters detect their author (regression for Unlocked)', () => {
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Unlocked',
+      { id: 7, title: "Oduvan's Medical Log", body: 'Body text.' },
+      [],
+    );
+    /* The broadened rule names the document formats explicitly so the
+       model knows to treat the chapter's prose as the author's evidence
+       rather than collapsing to Narrator. */
+    expect(inbox).toMatch(/journal entry|medical log|registry file|diary|letter|transcript|bio page/);
+    /* And it must call out that narrator is RESERVED for omniscient
+       prose, not the default fallback for first-person content. */
+    expect(inbox).toMatch(/reserved for omniscient/i);
+  });
+
+  it('renders the running-roster section with the supplied ids when non-empty', () => {
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Unlocked',
+      { id: 7, title: 'X', body: 'Y.' },
+      [
+        { id: 'narrator', name: 'Narrator', role: 'Omniscient', color: 'narrator', evidence: [{ quote: 'q1' }] },
+        { id: 'Wren',   name: 'Wren',   role: 'Protagonist', color: 'unset', evidence: [{ quote: 'q2' }] },
+      ],
+    );
+    expect(inbox).toContain('Running roster');
+    expect(inbox).toContain('"id": "narrator"');
+    expect(inbox).toContain('"id": "Wren"');
+    expect(inbox).toContain('"role": "Protagonist"');
+  });
+
+  it('renders the empty-roster fallback line when no characters have been detected yet (first chapter)', () => {
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Unlocked',
+      { id: 1, title: 'Chapter 1', body: 'Body.' },
+      [],
+    );
+    expect(inbox).toMatch(/first chapter being processed/i);
   });
 });
 

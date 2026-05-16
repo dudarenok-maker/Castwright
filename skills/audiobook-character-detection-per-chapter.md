@@ -62,10 +62,17 @@ about exactly one chapter's id.
 
 ### Only actual speakers (CRITICAL — drives whether a voice profile is created)
 
-A character belongs in the roster **only if they have at least one quoted
-utterance of their own in this chapter** — a line of direct speech the
-narrator attributes to them, e.g. `"Hello," she said.` or
-`"Get out!" Marty growled.`
+A character belongs in the roster when this chapter contains at least
+one **verbatim utterance** that is theirs — either:
+
+1. **Direct dialogue** — a line of speech the narrator attributes to
+   them, e.g. `"Hello," she said.` or `"Get out!" Marty growled.`
+2. **First-person prose by an identifiable author** — a journal entry,
+   medical log, registry filing, letter, diary, transcript, or bio
+   page **whose author is named or strongly implied** (header
+   `FILED BY: Oduvan`, signature `—Marlow`, chapter title `Wren's
+   Registry File`, the surrounding bio block, etc.). The author of
+   such text is a character whose `id` is their name, NOT `narrator`.
 
 Do **NOT** include:
 
@@ -83,13 +90,61 @@ Do **NOT** include:
   in the narrator's voice; they do not need their own roster slot.
 
 Test for inclusion: can you copy a verbatim sentence from this chapter
-that is dialogue the entity *speaks*? If no, they do not go on the
-roster. The narrator covers them.
+that is **spoken or written by** the entity? If no, they do not go on
+the roster. The narrator covers them.
 
 If a character previously had dialogue in an earlier chapter (already on
 the roster) but only appears in narration in *this* chapter, omit them
 from this chapter's output — see "Returning characters NOT in this
 chapter" below.
+
+### First-person POV / journal / registry / log formats
+
+Companion books, prequels, and supplementary volumes often present
+chapters as **documents** rather than narrated scenes: a journal entry,
+a medical log, a Registry classified file, a letter, a transcript. The
+prose is first-person but the speaker is *not* an omniscient narrator
+— they are a specific named character in the story world.
+
+When a chapter is one of these formats:
+
+- The `id: "narrator"` slot is **reserved** for omniscient third-person
+  prose with no in-fiction author. Use it only when the chapter is
+  clearly narrated by an external storyteller, not by a character.
+- The **author** of the document is the character whose voice should
+  speak the text. Identify them from the strongest available signal:
+  chapter title (`Wren's Memory Log — Day 4`), document header
+  (`FILED BY: Oduvan`, `Author: Marlow Halden`), closing signature
+  (`—Marlow`), surrounding bio block, or running-roster context (if
+  the roster has `Marlow` and this chapter is unmistakably Marlow's
+  diary, use `Marlow`).
+- The evidence quotes for that character should be excerpts of the
+  document's prose — they don't need to be dialogue. Pick a long,
+  representative sentence and a short, characterising one.
+- If a journal entry contains *quoted dialogue* (the diarist quoting
+  someone else's speech inside their entry), the quoted speaker also
+  gets their own roster entry (provided they have a real, attributed
+  quote).
+- If the chapter switches POV mid-stream (e.g. a registry file with a
+  filing officer's intro followed by the subject's own statement),
+  emit one entry per distinct first-person voice, each with their
+  own evidence.
+
+Worked examples:
+
+- **Chapter "Oduvan's Medical Log"** opens with `FILED BY: Oduvan ·
+  PATIENT: Wren Sparrow` and the body is `I'd just settled into bed
+  when Wren hailed me. I figured she wouldn't want to know that her
+  hands were covered in yeti pee.` → roster entry
+  `{ id: "Oduvan", name: "Oduvan", role: "Healer / journal author",
+  evidence: [{ quote: "I'd just settled into bed when Wren hailed
+  me." }, { quote: "I figured she wouldn't want to know that her hands
+  were covered in yeti pee." }] }`. **Not** narrator.
+- **Chapter "Marlow's Diary — Day Three"** signs off with `—Marlow`. The
+  body is `Foster's still mad at me. I've been working on the perfect
+  apology. It hasn't been going well.` → roster entry
+  `{ id: "Marlow", name: "Marlow Halden", evidence: [...] }`. **Not**
+  narrator.
 
 ### Reusing existing ids (CRITICAL — drives roster stability)
 
