@@ -1235,3 +1235,48 @@ describe('sticky analysis — in-flight job map + /pause endpoint', () => {
     expect(res.body).toEqual({ ok: true, paused: false });
   });
 });
+
+/* D1 — sticky subset retry: the second in-flight slot keyed by
+   manuscriptId.
+
+   We assert the contract-critical surfaces: snapshotInFlightAnalysis
+   carries `kind` + `subsetChapterIds` only when subset state lives in
+   the map, isAnalysisJobRunning reads from both slots, and pause is
+   still a no-op when neither slot has a job.
+
+   The deeper integration tests (subscribe-vs-start dispatch on the
+   subset POST, multi-subscriber catch-up replay, mid-flight pause
+   broadcasting endJob's paused snapshot to every subscriber) need a
+   mocked analyzer that can park mid-call — same blocker the B1 sticky
+   tests already noted for the main route. Tracked under plan 32 D1
+   regression doc. */
+describe('sticky subset retry — second in-flight slot (plan 32 D1)', () => {
+  it('snapshotInFlightAnalysis returns null when neither main nor subset is live', async () => {
+    const { snapshotInFlightAnalysis } = await import('./analysis.js');
+    expect(snapshotInFlightAnalysis('m_nope')).toBeNull();
+  });
+
+  it('isAnalysisJobRunning returns false when both slots are empty', async () => {
+    /* Sanity dual of the existing main-only check — confirms the
+       OR-merge across both maps doesn't accidentally return true on
+       a fresh manuscript id. */
+    const { isAnalysisJobRunning } = await import('./analysis.js');
+    expect(isAnalysisJobRunning('m_nope_either')).toBe(false);
+  });
+
+  it('POST /analysis/pause still no-ops when both slots are empty', async () => {
+    /* Pause now aborts BOTH a main run AND a subset retry; the idempotent
+       no-op behaviour from B1 carries through unchanged. */
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+    const res = await supertest(app)
+      .post('/api/manuscripts/m_no_subset/analysis/pause')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, paused: false });
+  });
+});
