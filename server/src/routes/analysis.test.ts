@@ -3,8 +3,9 @@ import {
   sortEvidence, normaliseForMatch, verifyEvidenceAgainstSource, mergeRosterChapter,
   chapterEstFromObserved, projectRemainingMs, buildInterimCast, clearFailedChapterId,
   dropEvidencelessCast, isPhase0aCoverageComplete,
+  reconcileSentenceCharacterIds, attributionDriftExceeded,
 } from './analysis.js';
-import type { CharacterOutput } from '../handoff/schemas.js';
+import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 
 describe('sortEvidence', () => {
   it('sorts each character\'s evidence by quote length descending', () => {
@@ -718,6 +719,137 @@ describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finali
   it('empty chapter hints returns complete (degenerate; caller is responsible for upstream validation)', () => {
     const result = isPhase0aCoverageComplete({}, []);
     expect(result).toEqual({ complete: true, missingChapterIds: [], totalRequired: 0 });
+  });
+});
+
+/* reconcileSentenceCharacterIds is the Phase 1 disk-write safety net for
+   orphan characterIds. Without it, manuscript-edits.json can carry IDs
+   that don't exist in cast.json — exactly what we found on "Unlocked"
+   where 153 sentences referenced Marlow/Oduvan/Maerin/Linnet/Wren after
+   cast.json had been collapsed to Narrator-only by the partial-cache bug
+   fixed in A1. */
+describe('reconcileSentenceCharacterIds — Phase 1 orphan id demoter', () => {
+  const makeSentence = (id: number, chapterId: number, characterId: string, text = `s${id}`): SentenceOutput => ({
+    id, chapterId, characterId, text,
+  });
+
+  it('passes through sentences whose characterId is in validIds (no-op)', () => {
+    const sentences = [
+      makeSentence(1, 1, 'narrator'),
+      makeSentence(2, 1, 'Wren'),
+      makeSentence(3, 2, 'Marlow'),
+    ];
+    const result = reconcileSentenceCharacterIds(sentences, new Set(['narrator', 'Wren', 'Marlow']));
+    expect(result.demotedCount).toBe(0);
+    expect(result.sentences).toEqual(sentences);
+    expect(result.demotedByOriginalId.size).toBe(0);
+  });
+
+  it('demotes sentences whose characterId is missing from validIds to narrator (default fallback)', () => {
+    /* Unlocked-style regression: stage1 has [narrator] only, but Phase 1
+       attributed to Marlow/Oduvan/Maerin. Those ids become narrator at
+       write time, preserving the rest of the sentence shape. */
+    const sentences = [
+      makeSentence(1, 1, 'narrator', 'Wren hailed me.'),
+      makeSentence(2, 1, 'Marlow',    'Hey, Foster.'),
+      makeSentence(3, 2, 'Oduvan',    'Yeti pee, fascinating.'),
+      makeSentence(4, 2, 'narrator', 'Oduvan sighed.'),
+    ];
+    const result = reconcileSentenceCharacterIds(sentences, new Set(['narrator']));
+    expect(result.demotedCount).toBe(2);
+    expect(result.sentences.map(s => s.characterId)).toEqual([
+      'narrator', 'narrator', 'narrator', 'narrator',
+    ]);
+    /* Non-characterId fields preserved verbatim. */
+    expect(result.sentences[1].id).toBe(2);
+    expect(result.sentences[1].text).toBe('Hey, Foster.');
+    expect(result.sentences[2].chapterId).toBe(2);
+    expect(result.sentences[2].text).toBe('Yeti pee, fascinating.');
+    /* Per-original-id breakdown lets the caller surface a useful log line. */
+    expect(result.demotedByOriginalId.get('Marlow')).toBe(1);
+    expect(result.demotedByOriginalId.get('Oduvan')).toBe(1);
+  });
+
+  it('honours a custom fallbackId (caller can route to "unknown" instead of narrator)', () => {
+    const sentences = [makeSentence(1, 1, 'Marlow')];
+    const result = reconcileSentenceCharacterIds(sentences, new Set(['narrator']), { fallbackId: 'unknown' });
+    expect(result.sentences[0].characterId).toBe('unknown');
+  });
+
+  it('invokes onDemote for each orphan sentence with the original id intact', () => {
+    const sentences = [
+      makeSentence(1, 1, 'narrator'),
+      makeSentence(2, 1, 'Marlow'),
+      makeSentence(3, 2, 'Marlow'),
+    ];
+    const demotions: Array<{ sentenceId: number; originalId: string }> = [];
+    reconcileSentenceCharacterIds(sentences, new Set(['narrator']), {
+      onDemote: ({ sentence, originalId }) => {
+        demotions.push({ sentenceId: sentence.id, originalId });
+      },
+    });
+    expect(demotions).toEqual([
+      { sentenceId: 2, originalId: 'Marlow' },
+      { sentenceId: 3, originalId: 'Marlow' },
+    ]);
+  });
+
+  it('returns a fresh array — caller-provided input is not mutated', () => {
+    const sentences = [makeSentence(1, 1, 'Marlow')];
+    const before = JSON.stringify(sentences);
+    reconcileSentenceCharacterIds(sentences, new Set(['narrator']));
+    expect(JSON.stringify(sentences)).toBe(before);
+  });
+
+  it('empty input is a no-op (zero counts, empty output)', () => {
+    const result = reconcileSentenceCharacterIds([], new Set(['narrator']));
+    expect(result.demotedCount).toBe(0);
+    expect(result.sentences).toEqual([]);
+    expect(result.demotedByOriginalId.size).toBe(0);
+  });
+});
+
+describe('attributionDriftExceeded — threshold gate for blocking confirm advance', () => {
+  it('returns false on small samples regardless of demotion rate (avoids false positives on micro-chapters)', () => {
+    /* 99-sentence sample with 99 demotions — 100% demotion — is still
+       below the 100-sentence minimum check, so the gate stays open.
+       This is intentional: small first-chapter calls during a debug
+       run shouldn't trip a route-wide error. */
+    expect(attributionDriftExceeded(99, 99)).toBe(false);
+  });
+
+  it('returns false when demotion rate is below threshold on a large enough sample', () => {
+    /* Default threshold is 5%; 4% should stay quiet. */
+    expect(attributionDriftExceeded(20, 500)).toBe(false);
+  });
+
+  it('returns true when demotion rate exceeds threshold on a large enough sample', () => {
+    /* Default threshold 5%, minimum 100. 10% on 500 trips it. */
+    expect(attributionDriftExceeded(50, 500)).toBe(true);
+  });
+
+  it('honours a custom thresholdRatio + minSentencesForCheck', () => {
+    /* Strict run: 1% threshold, 50-sentence minimum. 2 of 100 trips it. */
+    expect(attributionDriftExceeded(2, 100, 0.01, 50)).toBe(true);
+    expect(attributionDriftExceeded(1, 100, 0.01, 50)).toBe(false);
+    /* Below custom minimum stays false. */
+    expect(attributionDriftExceeded(99, 49, 0.01, 50)).toBe(false);
+  });
+
+  it('Unlocked-shaped sample (153 demoted of 4192) stays below 5% — handled by demotion, no escalation', () => {
+    /* The real regression numbers: Marlow(134) + Oduvan(9) + Maerin(8) +
+       Linnet(1) + Wren(1) = 153 orphan attributions out of 4192 total
+       sentences. 153/4192 ≈ 3.65%. Demotion runs but the route still
+       advances to confirm — this is the right call: a single-voice
+       audiobook of 4039 narrator + 153 demoted-to-narrator is a degraded
+       but coherent result that beats hard-stopping. */
+    expect(attributionDriftExceeded(153, 4192)).toBe(false);
+  });
+
+  it('exactly-at-threshold is NOT exceeded (strict greater-than)', () => {
+    /* 5.0% should not trip; 5.000001% should. */
+    expect(attributionDriftExceeded(50, 1000)).toBe(false);
+    expect(attributionDriftExceeded(51, 1000)).toBe(true);
   });
 });
 
