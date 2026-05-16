@@ -62,6 +62,7 @@ function renderView(overrides: {
   gradient?: [string, string] | null;
   isDirty?: boolean;
   currentTrack?: number | null;
+  coverImageUrl?: string | null;
 } = {}) {
   const handlers = baseHandlers();
   render(
@@ -70,6 +71,7 @@ function renderView(overrides: {
         currentTrack={overrides.currentTrack ?? null}
         bookMeta={overrides.meta === undefined ? baseMeta() : overrides.meta}
         bookCoverGradient={overrides.gradient ?? ['#2C7A4B', '#0F3A23']}
+        bookCoverImageUrl={overrides.coverImageUrl ?? null}
         isMetaDirty={overrides.isDirty ?? false}
         {...handlers}/>
     </Provider>
@@ -108,6 +110,21 @@ describe('ListenView — top section reads from bookMeta', () => {
     renderView({ meta: null });
     expect(screen.getByText('Loading…')).toBeInTheDocument();
     expect(screen.getByText('Loading metadata…')).toBeInTheDocument();
+  });
+});
+
+describe('ListenView — CoverArt cover-image overlay', () => {
+  it('does not render the cover <img> when no coverImageUrl is set (gradient-only fallback)', () => {
+    renderView({ coverImageUrl: null });
+    expect(screen.queryByTestId('listen-cover-art-image')).not.toBeInTheDocument();
+    /* Title block stays visible as the gradient-skeleton label. */
+    expect(screen.getAllByText('the Coalfall Commission').length).toBeGreaterThan(0);
+  });
+
+  it('renders the cover <img> with the provided URL when present', () => {
+    renderView({ coverImageUrl: '/api/books/bk_test/cover' });
+    const img = screen.getByTestId('listen-cover-art-image') as HTMLImageElement;
+    expect(img.getAttribute('src')).toBe('/api/books/bk_test/cover');
   });
 });
 

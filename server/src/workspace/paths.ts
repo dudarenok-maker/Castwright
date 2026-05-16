@@ -134,6 +134,14 @@ export function droppedQuotesJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'dropped-quotes.json');
 }
 
+/** Per-book cached cover image. JPEG bytes downloaded from OpenLibrary
+    (server/src/cover/openlibrary.ts). Sibling to state.json so the
+    library scan can discover it cheaply via existsSync. Always a .jpg —
+    OpenLibrary serves JPEGs and we don't re-encode. */
+export function coverImagePath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'cover.jpg');
+}
+
 /** Workspace-level voice metadata (pin flags). Spans every book in the
     workspace, so it lives at the workspace root rather than inside any
     one book's .audiobook/ folder. */

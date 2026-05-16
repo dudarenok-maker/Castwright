@@ -38,6 +38,7 @@ export const IconChevL    = (p: IconProps) => Svg(<path d="M15 6l-6 6 6 6"/>, p)
 export const IconDownload = (p: IconProps) => Svg(<><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></>, p);
 export const IconShare    = (p: IconProps) => Svg(<><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98"/></>, p);
 export const IconHeadphones = (p: IconProps) => Svg(<path d="M3 18v-6a9 9 0 0118 0v6M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z"/>, p);
+export const IconImage    = (p: IconProps) => Svg(<><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></>, p);
 export const IconRewind   = (p: IconProps) => Svg(<><polygon points="11 19 2 12 11 5 11 19" fill="currentColor" stroke="none"/><polygon points="22 19 13 12 22 5 22 19" fill="currentColor" stroke="none"/></>, p);
 export const IconForward  = (p: IconProps) => Svg(<><polygon points="13 19 22 12 13 5 13 19" fill="currentColor" stroke="none"/><polygon points="2 19 11 12 2 5 2 19" fill="currentColor" stroke="none"/></>, p);
 export const IconVolume   = (p: IconProps) => Svg(<><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></>, p);

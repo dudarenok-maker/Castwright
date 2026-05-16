@@ -30,6 +30,7 @@ import { voicesRouter } from './routes/voices.js';
 import { libraryRouter } from './routes/library.js';
 import { importRouter } from './routes/import.js';
 import { bookStateRouter } from './routes/book-state.js';
+import { coverRouter } from './routes/cover.js';
 import { generationRouter } from './routes/generation.js';
 import { chapterAudioRouter } from './routes/chapter-audio.js';
 import { exportRouter } from './routes/export.js';
@@ -92,6 +93,7 @@ app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);
 app.use('/api/manuscripts', analysisRouter); // analysisRouter mounts /:id/analysis
 app.use('/api/books', bookStateRouter);      // mounts /:bookId/state (GET/PUT)
+app.use('/api/books', coverRouter);          // mounts /:bookId/cover{,/candidates} (OpenLibrary covers)
 app.use('/api/books', voiceMatchRouter);     // mounts /:bookId/voice-match
 app.use('/api/books', castMergeRouter);      // mounts /:bookId/cast/merge
 app.use('/api', libraryCastOverrideRouter);  // mounts /library-cast/override (cross-book; not under /:bookId)

@@ -34,6 +34,7 @@ import {
 } from '../workspace/paths.js';
 import { writeJsonAtomic } from '../workspace/state-io.js';
 import type { BookStateJson } from '../workspace/scan.js';
+import { backgroundFetchCover } from '../cover/openlibrary.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -242,6 +243,15 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       updatedAt: now,
     };
     await writeJsonAtomic(stateJsonPath(bookDir), state);
+
+    /* Fire-and-forget cover fetch from OpenLibrary. The import response
+       does NOT wait for this — covers can be slow and OpenLibrary can be
+       flaky, but the user should be able to land on the analysing screen
+       immediately. On success, state.json picks up a `coverImage` field
+       and the next library scan surfaces `coverImageUrl` so the card
+       fills in. On failure, the gradient remains and the user can
+       always retry via "Find cover image" on the library card. */
+    void backgroundFetchCover(bookDir, title, author, bookId);
 
     const record: ManuscriptRecord = {
       manuscriptId,

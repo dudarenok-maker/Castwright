@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   IconPlus, IconStar, IconCheck, IconSpinner, IconCheckCircle, IconWarning,
-  IconMore, IconTrash, IconRefresh, IconFolder, IconCopy, IconPencil,
+  IconMore, IconTrash, IconRefresh, IconFolder, IconCopy, IconPencil, IconImage,
 } from '../lib/icons';
 import {
   SectionLabel, MixedHeading, PrimaryButton, Pill,
@@ -11,6 +11,7 @@ import { StatTile } from './voices';
 import { Stat } from './generation';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { EditBookMetaModal, type EditBookMetaPatch } from '../modals/edit-book-meta';
+import { CoverPicker } from '../modals/cover-picker';
 import { api, type WorkspaceInfo } from '../lib/api';
 import { useAppSelector } from '../store';
 import type { LibraryAuthor, LibraryBook, LibraryBookStatus } from '../lib/types';
@@ -24,6 +25,11 @@ interface Props {
   onDeleteBook: (book: LibraryBook) => void;
   onReparseBook: (book: LibraryBook) => void;
   onEditBook: (book: LibraryBook, patch: EditBookMetaPatch) => Promise<void>;
+  /** Fires after the CoverPicker modal successfully updates the book's
+      cover (either picked a new candidate or removed the existing one).
+      The parent should refresh the library so the new `coverImageUrl`
+      propagates back through the slice. */
+  onCoverChanged?: (book: LibraryBook) => Promise<void> | void;
   onStartNew: () => void;
 }
 
@@ -38,7 +44,7 @@ function matchesFilter(book: LibraryBook, filter: Filter): boolean {
   return true;
 }
 
-export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBook, onReparseBook, onEditBook, onStartNew }: Props) {
+export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBook, onReparseBook, onEditBook, onCoverChanged, onStartNew }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   /* First word of the user's display name → "Welcome back, Mike". Falls back
      to "back" when the user hasn't set a name (keeps the heading grammatical). */
@@ -139,6 +145,7 @@ export function BookLibraryView({ authors, activeBookId, onOpenBook, onDeleteBoo
                             onDelete={() => onDeleteBook(b)}
                             onReparse={() => onReparseBook(b)}
                             onEdit={(patch) => onEditBook(b, patch)}
+                            onCoverChanged={() => onCoverChanged?.(b)}
                           />
                         ))}
                       </div>
@@ -199,7 +206,7 @@ const STATUS_UI: Record<LibraryBookStatus, StatusMeta> = {
   orphaned:     { color: 'danger',  label: 'Manuscript missing',icon: <IconWarning className="w-3.5 h-3.5"/> },
 };
 
-function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit }: { book: LibraryBook; active: boolean; onOpen: () => void; onDelete: () => void; onReparse: () => void; onEdit: (patch: EditBookMetaPatch) => Promise<void> | void }) {
+function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit, onCoverChanged }: { book: LibraryBook; active: boolean; onOpen: () => void; onDelete: () => void; onReparse: () => void; onEdit: (patch: EditBookMetaPatch) => Promise<void> | void; onCoverChanged?: () => Promise<void> | void }) {
   const [from, to] = book.coverGradient;
   const grad = `linear-gradient(135deg, ${from}, ${to})`;
   const meta = STATUS_UI[book.status];
@@ -212,6 +219,21 @@ function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit }: { book:
   const [confirmReparse, setConfirmReparse] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  /* Locally-overridden cover URL after the picker resolves. The library
+     slice re-hydrates async via onCoverChanged, but a same-URL refetch
+     (`/api/books/:bookId/cover`) is fronted by the browser's HTTP cache —
+     append a busting timestamp so the new bytes paint immediately. Empty
+     string means "the user just removed the cover; ignore book.coverImageUrl
+     until the slice catches up". */
+  const [coverOverride, setCoverOverride] = useState<string | null>(null);
+  /* Tracks <img> load failures so we can fall back to the gradient
+     skeleton without leaving a stale broken image rendered on top. */
+  const [coverLoadFailed, setCoverLoadFailed] = useState(false);
+  const effectiveCoverUrl =
+    coverOverride !== null
+      ? (coverOverride || null)
+      : (book.coverImageUrl ?? null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!menuOpen) return;
@@ -229,14 +251,25 @@ function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit }: { book:
           <circle cx="60" cy="100" r="60" fill="none" stroke="white" strokeWidth="0.5"/>
           <circle cx="60" cy="100" r="40" fill="none" stroke="white" strokeWidth="0.5"/>
         </svg>
+        {effectiveCoverUrl && !coverLoadFailed && (
+          <img
+            data-testid={`book-cover-${book.bookId}`}
+            src={effectiveCoverUrl}
+            alt=""
+            className="absolute inset-0 w-full h-full object-cover"
+            onError={() => setCoverLoadFailed(true)}
+          />
+        )}
         <div className="absolute top-5 left-5 right-5 flex items-center justify-between">
           <p className="text-[9px] uppercase tracking-[0.2em] text-white/70 font-semibold">Audiobook</p>
           {book.pinned && <IconStar className="w-3.5 h-3.5 text-white/80"/>}
         </div>
-        <div className="absolute bottom-5 left-5 right-5">
-          <h3 className="font-serif text-2xl font-bold text-white leading-tight">{book.title}</h3>
-          <p className="text-[10px] text-white/70 mt-1">{seriesLine}</p>
-        </div>
+        {!effectiveCoverUrl || coverLoadFailed ? (
+          <div className="absolute bottom-5 left-5 right-5">
+            <h3 className="font-serif text-2xl font-bold text-white leading-tight">{book.title}</h3>
+            <p className="text-[10px] text-white/70 mt-1">{seriesLine}</p>
+          </div>
+        ) : null}
         {active && (
           <span className="absolute top-4 right-4 px-2 py-0.5 rounded-full bg-peach text-ink text-[10px] font-bold uppercase tracking-wider">Open</span>
         )}
@@ -255,6 +288,12 @@ function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit }: { book:
                 className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/[0.04] inline-flex items-center gap-2 border-b border-ink/5"
               >
                 <IconPencil className="w-4 h-4"/> Edit details
+              </button>
+              <button
+                onClick={() => { setMenuOpen(false); setCoverPickerOpen(true); }}
+                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/[0.04] inline-flex items-center gap-2 border-b border-ink/5"
+              >
+                <IconImage className="w-4 h-4"/> Find cover image
               </button>
               <button
                 onClick={() => { setMenuOpen(false); setConfirmReparse(true); }}
@@ -348,6 +387,22 @@ function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit }: { book:
                delete/reparse pattern. */
             setEditOpen(false);
             await onEdit(patch);
+          }}
+        />
+        <CoverPicker
+          open={coverPickerOpen}
+          bookId={book.bookId}
+          bookTitle={book.title}
+          bookAuthor={book.author}
+          currentCoverUrl={effectiveCoverUrl ?? undefined}
+          onClose={() => setCoverPickerOpen(false)}
+          onPicked={(newUrl) => {
+            /* Empty string = the user picked "Remove cover". Bust the
+               cache when setting a fresh URL so the browser fetches the
+               new bytes from the same `/api/books/:bookId/cover` path. */
+            setCoverLoadFailed(false);
+            setCoverOverride(newUrl ? `${newUrl}?t=${Date.now()}` : '');
+            void onCoverChanged?.();
           }}
         />
         <ConfirmDialog

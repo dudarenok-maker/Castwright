@@ -96,6 +96,22 @@ describe('BookLibraryView — loading affordance', () => {
     expect(screen.queryByText(/your library is empty/i)).not.toBeInTheDocument();
   });
 
+  it('renders the cover <img> overlay when book.coverImageUrl is set', () => {
+    const bookWithCover: LibraryBook = { ...oneBook, coverImageUrl: '/api/books/b1/cover' };
+    const authorWithCover: LibraryAuthor = {
+      ...oneAuthor,
+      series: [{ name: 'The Hollow Tide', books: [bookWithCover] }],
+    };
+    renderView({ loaded: true, authors: [authorWithCover] });
+    const img = screen.getByTestId('book-cover-b1') as HTMLImageElement;
+    expect(img.getAttribute('src')).toBe('/api/books/b1/cover');
+  });
+
+  it('omits the cover <img> when coverImageUrl is absent', () => {
+    renderView({ loaded: true, authors: [oneAuthor] });
+    expect(screen.queryByTestId('book-cover-b1')).not.toBeInTheDocument();
+  });
+
   it('swaps skeleton → populated grid when hydrate dispatches', () => {
     /* The view's `authors` is a prop, not a selector — the parent route
        (routes/index.tsx) reads `library.authors` from the store and passes

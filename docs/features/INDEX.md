@@ -63,6 +63,7 @@ PRs that change behavior cited in a plan MUST update the relevant plan in the sa
 ### J. Library & workspace
 - [21 — Book library](21-book-library.md) — Workspace scan + status derivation.
 - [22 — Voice library](22-voice-library.md) — Cross-book voices view + pinning.
+- [36 — Book covers (OpenLibrary)](36-book-covers.md) — Real cover artwork on cards + Listen header; auto-fetch on import, manual picker on demand; gradient skeleton fallback.
 
 ### K. Cross-cutting invariants
 - [23 — Mock toggle](23-mock-toggle.md) — `VITE_USE_MOCKS` flips real ↔ mock; components stay neutral.
