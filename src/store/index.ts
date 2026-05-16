@@ -15,8 +15,10 @@ import { voicesSlice } from './voices-slice';
 import { changeLogSlice } from './change-log-slice';
 import { bookMetaSlice } from './book-meta-slice';
 import { exportsSlice } from './exports-slice';
+import { analysisSlice } from './analysis-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
+import { analysisStreamMiddleware } from './analysis-stream-middleware';
 
 export const store = configureStore({
   reducer: {
@@ -31,8 +33,13 @@ export const store = configureStore({
     changeLog:  changeLogSlice.reducer,
     bookMeta:   bookMetaSlice.reducer,
     exports:    exportsSlice.reducer,
+    analysis:   analysisSlice.reducer,
   },
-  middleware: (getDefault) => getDefault().concat(persistenceMiddleware, generationStreamMiddleware),
+  middleware: (getDefault) => getDefault().concat(
+    persistenceMiddleware,
+    generationStreamMiddleware,
+    analysisStreamMiddleware,
+  ),
 });
 
 export type RootState   = ReturnType<typeof store.getState>;

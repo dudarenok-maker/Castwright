@@ -1178,6 +1178,29 @@ async function mockPauseGeneration(_: { bookId: string }): Promise<void> {
   return Promise.resolve();
 }
 
+/* Real Pause endpoint for analysis. Mirrors realPauseGeneration: posts
+   to the server's sticky /analysis/pause endpoint so the in-flight
+   analyzer loop's controller aborts. Decoupled from closing the SSE
+   because B1 made the server treat SSE close as "unsubscribe this
+   observer" rather than "abort the job" — the only ways to actually
+   stop the job server-side are this endpoint or a `fresh: true` POST
+   displacement.
+   Idempotent server-side: returns 200 with paused:false when no job
+   is running, so a double-click on Pause doesn't 404. */
+async function realPauseAnalysis({ manuscriptId }: { manuscriptId: string }): Promise<void> {
+  await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis/pause`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  }).catch(err => {
+    console.warn('[api] pauseAnalysis failed:', err);
+  });
+}
+
+async function mockPauseAnalysis(_: { manuscriptId: string }): Promise<void> {
+  return Promise.resolve();
+}
+
 export interface SidecarHealth {
   status: 'reachable' | 'unreachable';
   url: string;
@@ -1594,6 +1617,7 @@ const real = {
   getBaseVoiceSample: realGetBaseVoiceSample,
   streamGeneration:  realStreamGeneration,
   pauseGeneration:   realPauseGeneration,
+  pauseAnalysis:     realPauseAnalysis,
   getSidecarHealth:  realGetSidecarHealth,
   getOllamaHealth:   realGetOllamaHealth,
   loadSidecar:       realLoadSidecar,
@@ -1649,6 +1673,7 @@ const mock = {
   getBaseVoiceSample: mockGetBaseVoiceSample,
   streamGeneration:  mockStreamGeneration,
   pauseGeneration:   mockPauseGeneration,
+  pauseAnalysis:     mockPauseAnalysis,
   getSidecarHealth:  mockGetSidecarHealth,
   getOllamaHealth:   mockGetOllamaHealth,
   loadSidecar:       mockLoadSidecar,
