@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 0 · Should 8 · Could 13 · Won't 12
+**Counts as of 2026-05-17:** Must 0 · Should 7 · Could 14 · Won't 12
 
 ---
 
@@ -107,16 +107,6 @@ Source: [`41-bulk-library-sync.md`](features/41-bulk-library-sync.md) (draft) �
 - *Key files:* `src/views/confirm-cast.tsx`; new `src/views/confirm-cast.test.tsx`; new `e2e/bulk-sync-library.spec.ts`; new `docs/features/41-bulk-library-sync.md`.
 - *Depends on:* none. Plan 09's per-character override (shipped) is the API path; this is purely a UI compression.
 - *Benefit (user):* large manuscripts in long-running series (12+ carryovers) currently demand a click per character before "Confirm cast". One-click bulk + exception ticking matches how the user actually thinks ("reuse all, except these").
-
-### 8. Top-bar TTS pill — third-surface consolidation trigger
-
-Source: [`30-global-model-control.md`](features/30-global-model-control.md).
-
-- *What:* Tracking item. Single-poll consolidation across pills was deferred until a third surface needs warm. The moment a third pill consumer appears (e.g. preview drawer, Listen view warm-up indicator), unify the polling.
-- *Acceptance:* `useTtsLifecycle` (already a single hook per plan 30 G1) drives all three+ surfaces from one `setInterval`. No new network polls per surface mount.
-- *Key files:* `src/hooks/useTtsLifecycle.ts`; `src/components/layout.tsx`; whatever new surface lands.
-- *Depends on:* the actual third surface materialising.
-- *Benefit (architectural):* prevents the duplicated-poll explosion that motivated plan 30 G1's hook consolidation in the first place.
 
 ---
 
@@ -245,6 +235,16 @@ Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 - *Acceptance:* A working prototype for one of the two paths; new tile on the export modal; documented size limits + caveats.
 - *Key files:* new tile config in `src/data/listener-apps.ts`; `src/modals/export-audiobook.tsx`; `server/src/export/` for any new transport.
 - *Benefit (user):* true sideload-free path. Low priority because LAN download + sync folder already work.
+
+### 14. Single-poll TTS lifecycle for a third consumer (tracking)
+
+Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
+
+- *What:* Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) already drives both today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
+- *Acceptance:* The new surface reads `ttsLifecycle` from `useOutletContext<LayoutContext>()` (pattern from `generation.tsx`). No new `setInterval`, no new `/health` poll, no duplicated `evictionNotice` / `loadErrorNotice` state.
+- *Key files:* `src/lib/use-tts-lifecycle.ts` (no changes expected — already exported); `src/components/layout.tsx` (no changes — already exposes the context); the new surface's component file.
+- *Depends on:* an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
+- *Benefit (architectural):* prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
 
 ---
 
