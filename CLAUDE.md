@@ -214,6 +214,19 @@ implementation — cut a branch from `main` rather than committing directly:
    shortcut explicitly in the end-of-turn summary so the user can redirect
    to a branch if they disagree.
 
+### Opening the PR
+
+Every non-trivial change merges via a GitHub PR. The PR title MUST match the
+[commit-convention subject format](CONTRIBUTING.md#commit-convention) — a
+GitHub Actions workflow rejects malformed titles. GitHub pre-fills the body
+from [.github/pull_request_template.md](.github/pull_request_template.md);
+keep the `## Summary` and `## Test plan` sections, fill them in, and link
+the regression plan under `docs/features/` when one applies. Merges use the
+"Create a merge commit" button (squash / rebase merge are disabled at the
+repo level) and the head branch is auto-deleted on merge. Full spec:
+[CONTRIBUTING.md "Pull requests"](CONTRIBUTING.md#pull-requests). Regression
+plan: [docs/features/44-pr-hygiene.md](docs/features/44-pr-hygiene.md).
+
 ### Parallel agents
 
 When spawning implementation agents via the Agent tool for work that can run
