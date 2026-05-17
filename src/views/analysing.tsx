@@ -777,7 +777,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
     let cancelled = false;
     api.getBookState(bookId)
       .then(res => {
-        if (cancelled) return;
+        if (cancelled || res === null) return;
         const titles: Record<number, string> = {};
         for (const c of res.state.chapters) titles[c.id] = c.title;
         setChapterTitleById(titles);

@@ -5,8 +5,10 @@
    slice has its own debounce window so an edit to cast doesn't delay a
    write to revisions.
 
-   Skipped when VITE_USE_MOCKS=true (mock api has no disk) or when no
-   bookId is in scope (library browsing, fresh upload before confirm). */
+   Skipped when no bookId is in scope (library browsing, fresh upload
+   before confirm). Under VITE_USE_MOCKS, PUTs still flow — the mock api
+   keeps an in-memory state map (MOCK_BOOK_STATES in src/lib/api.ts) so
+   the round-trip works for design fixtures and jsdom tests. */
 
 import type { Middleware } from '@reduxjs/toolkit';
 import type { CastState } from './cast-slice';
@@ -30,7 +32,6 @@ interface PersistableRootState {
   bookMeta: BookMetaState;
 }
 
-const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 const DEBOUNCE_MS = 500;
 
 /* Action types that should trigger a persist. Hydration actions
@@ -112,8 +113,6 @@ function bookIdFromState(s: PersistableRootState): string | null {
 }
 
 export const persistenceMiddleware: Middleware = (store) => {
-  if (USE_MOCKS) return (next) => (action) => next(action);
-
   const timers = new Map<StateSlice, ReturnType<typeof setTimeout>>();
   const pending = new Map<StateSlice, unknown>();
 

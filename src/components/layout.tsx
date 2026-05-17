@@ -202,6 +202,11 @@ export function Layout() {
     api.getBookState(bookId)
       .then(res => {
         if (cancelled) return;
+        /* null = no persisted state for this book (mock fresh boot, or
+           real backend hasn't seen this book yet). Leave the per-book
+           slices on their in-memory defaults; the library-fallback
+           hydrate below seeds bookMeta from the library entry. */
+        if (res === null) return;
         dispatch(manuscriptActions.hydrateFromBookState({
           state: res.state,
           sentences: res.manuscriptEdits?.sentences ?? null,
