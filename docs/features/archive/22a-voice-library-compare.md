@@ -1,12 +1,12 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-05-17
 owner: null
 ---
 
 # Voice library compare
 
-> Status: draft
+> Status: stable
 > Key files: `src/views/voices.tsx`, `src/components/voice-library-panel.tsx`, `src/modals/compare-cast-modal.tsx`, `src/lib/voice-character-link.ts`, `src/views/cast.tsx` (selection-pill pattern)
 > URL surface: `#/voices`, `#/books/<bookId>/library`
 > OpenAPI ops: none (UI-only — modal reuses existing surface)
@@ -37,15 +37,17 @@ The compare-cast logic itself is unchanged — only the entry point is new. Sele
 
 ## Resolving Voice → Character
 
-`CompareCastModal` requires two `Character` records. The Voices view holds `Voice[]`. Resolution rules:
+`CompareCastModal` requires two `Character` records. The Voices view holds `Voice[]`. Resolution rules (v1 ship — simplified from the original draft):
 
-- **Per-book tab (`#/books/<bookId>/library`):** both voices belong to the open book → read from `state.cast.characters`. Reuse the existing link helper at `src/lib/voice-character-link.ts` inverted (`findCharacterForVoice(voice, characters)` matches by `voice.id === character.voiceId`).
-- **Global tab (`#/voices`):** when both selected voices share a `bookId`, fetch that book's cast on demand via `api.getCast(bookId)` (already used by Layout hydration); cache for the modal session. When they belong to different `bookId`s, the Compare button stays disabled with tooltip "Cross-book compare not yet supported — see backlog". This is the v1 cut; full cross-book compare is in **Out of scope** with a follow-up backlog item.
-- When the linked character is missing (deleted / manuscript-edited away), Compare stays disabled with tooltip "Selected voice is no longer linked to a character".
+- **Per-book tab (`#/books/<bookId>/library`):** both voices belong to the open book → read from `state.cast.characters` (already hydrated by Layout for the open book). Resolution uses the existing helper `findCharacterForVoice(voice, characters)` at `src/lib/voice-character-link.ts` (matches by explicit `character.voiceId === voice.id` first, then falls back to `character.id === voice.id`).
+- **Global tab (`#/voices`):** Compare button stays **disabled** with tooltip `"Open a book to compare its voices"`. The route's `currentBookId` (derived from `ui.stage.kind === 'ready' ? stage.bookId : null`) is the gate. On-demand foreign-cast hydrate (via `api.getBookState(bookId)`) for same-book pairs in the global view is a documented follow-up — see `docs/BACKLOG.md`'s Could bucket.
+- **Cross-book pair** (two voices with different `bookId`s, even within the per-book tab): Compare disabled with tooltip `"Cross-book compare not supported yet"`. Full cross-book compare is also a Could-bucket follow-up.
+- **Linked character missing** (deleted / manuscript-edited away): Compare disabled with tooltip `"Selected voice is no longer linked to a character"`.
+- **Wrong count** (0, 1, 3+ selected): Compare disabled with `"Select exactly 2 voices"`.
 
 ## Same-base-voice badge
 
-When `selectedVoiceIds.length === 2`, resolve each voice's `(engine, ttsVoice.name)` pair:
+When `selectedVoiceIds.length === 2`, resolve each voice's `(voice.ttsVoice.provider, voice.ttsVoice.name)` pair:
 
 - Identical → pill shows a green "same base voice ✓" chip beside Compare.
 - Different → pill shows an amber "different base voices" chip with tooltip "Comparing across families is allowed; same-voice characters are the core tuning case".
@@ -90,11 +92,19 @@ Run `VITE_USE_MOCKS=true`.
 
 ## Out of scope
 
-- **Cross-book compare** — requires caching cast data from non-current books. Tracked as a follow-up backlog Could-item once this v1 ships.
+- **Cross-book compare** — requires caching cast data from non-current books. Tracked in `docs/BACKLOG.md` (Could).
+- **Same-book compare from the global `#/voices` tab** — requires on-demand foreign cast hydrate via `api.getBookState(otherBookId)`. Tracked in `docs/BACKLOG.md` (Could).
 - **Drag-to-compare gesture** (option 2 from the exploration) — overloads the existing drag-to-reassign semantics; deferred.
 - **Per-family-scoped picker** (pure option 3) — superseded by the universal pill + badge; reconsiderable only if the badge proves insufficient signal.
 - **N-way compare (>2 voices)** — `CompareCastModal` is built for two sides; an N-way layout is a separate UX problem.
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+- **Shipped:** 2026-05-17.
+- **Commit SHA:** `ec3109ed1106c8a654d1061a851d1b55ccdb30fa` on branch `feat/frontend-voice-library-compare`.
+- **Scope cut from the original draft:** Same-book pairs accessed from the global `#/voices` tab were dropped to a follow-up because they require an on-demand foreign-cast hydrate (the only book whose cast is hydrated in redux is the currently-open one). Cross-book compare was kept out-of-scope for the same reason. Both follow-ups live in `docs/BACKLOG.md` under the Could bucket.
+- **Drift corrections vs. the draft text:** the badge comparison reads `voice.ttsVoice.provider` (not "engine"); the cast hydration API in this codebase is `api.getBookState(bookId)` (`response.cast.characters`), not the draft's mentioned `api.getCast(bookId)`; `LibraryView`'s `currentBookId` is derived from `ui.stage` since the view doesn't receive it as a prop.
+- **Tests landed:**
+  - `src/components/voice-library-panel.test.tsx` — pins checkbox-only-with-both-props, click-fires-onToggleSelect-not-onSelect, peach-tint-when-selected.
+  - `src/views/voices.test.tsx` — pins zero/one/two/three+ selection states, same/different-base-voice badge selection, Compare gating on cross-book / global / missing-character / wrong-count, modal mounts at 2-same-book.
+  - `e2e/voices-compare.spec.ts` — browser-level walk of per-book tab (selection + pill + amber badge + disabled-with-tooltip) and global tab (Compare disabled with "Open a book to compare its voices"). Dialog-open assertion deferred until `mockGetBookState` (BACKLOG Must #2) populates the cast slice.

@@ -11,11 +11,14 @@ import {
 } from '../lib/tts-models';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { castActions } from '../store/cast-slice';
 import { voicesActions } from '../store/voices-slice';
 import { api } from '../lib/api';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playBaseVoiceSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { gradientForTtsVoice } from '../lib/voice-palette';
+import { findCharacterForVoice } from '../lib/voice-character-link';
+import { CompareCastModal } from '../modals/compare-cast-modal';
 
 type Tab = 'all' | 'current' | 'library' | 'base';
 
@@ -68,12 +71,33 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const [tab, setTab] = useState<Tab>('all');
   const [draggingVoiceId, setDraggingVoiceId] = useState<string | null>(null);
   const [familyStatus, setFamilyStatus] = useState<{ key: string; label: string } | null>(null);
+  /* Compare affordance (plan 22a). Selection is local-only (mirrors
+     `cast.tsx`'s ephemeral selection state); the pill at the bottom mounts
+     `CompareCastModal` when the user has exactly 2 selected within the
+     current book. Cross-book compare is a documented v1 follow-up. */
+  const [selectedVoiceIds, setSelectedVoiceIds] = useState<string[]>([]);
+  const [compareIds, setCompareIds] = useState<[string, string] | null>(null);
   const dispatch = useAppDispatch();
   const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
   const baseVoices = useAppSelector(s => s.voices.baseVoices);
   const baseVoicesLoaded = useAppSelector(s => s.voices.baseVoicesLoaded);
+  /* Open book id (null on the global `#/voices` tab). Used to gate Compare:
+     v1 only supports comparing voices that belong to the currently-open
+     book, because that's the only book whose cast is hydrated in the
+     redux store. Cross-book + same-book-from-global Compare are
+     follow-ups tracked in `docs/BACKLOG.md` (Could bucket). */
+  const currentBookId = useAppSelector(s =>
+    s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null
+  );
+  const characters = useAppSelector(s => s.cast.characters);
   const playback = useSamplePlayback();
   const activeEngine = engineForModelKey(ttsModelKey);
+
+  const toggleSelect = (v: Voice) => {
+    setSelectedVoiceIds(prev =>
+      prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]
+    );
+  };
 
   /* Hydrate the base-voice catalog once when the Voices view mounts. The
      catalog is small and changes only when the sidecar's loaded model
@@ -93,6 +117,38 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      regardless of how they got there. */
   const families = useMemo(() => buildFamilies(library, tab), [library, tab]);
   const books = [...new Set(library.map(v => v.bookId))];
+
+  /* Compare derivations. Memoised so a transient render doesn't recompute
+     the same-base / different-base lookup or the disabled-reason string. */
+  const compareDerivations = useMemo(() => {
+    const selectedVoices = selectedVoiceIds
+      .map(id => library.find(v => v.id === id))
+      .filter((v): v is Voice => !!v);
+    let badge: 'same' | 'different' | null = null;
+    if (selectedVoices.length === 2 && selectedVoices[0].ttsVoice && selectedVoices[1].ttsVoice) {
+      const k0 = `${selectedVoices[0].ttsVoice.provider}|${selectedVoices[0].ttsVoice.name}`;
+      const k1 = `${selectedVoices[1].ttsVoice.provider}|${selectedVoices[1].ttsVoice.name}`;
+      badge = k0 === k1 ? 'same' : 'different';
+    }
+    let compareDisabledReason: string | null = null;
+    let canCompare = false;
+    if (selectedVoices.length !== 2) {
+      compareDisabledReason = 'Select exactly 2 voices';
+    } else if (currentBookId === null) {
+      compareDisabledReason = 'Open a book to compare its voices';
+    } else if (!selectedVoices.every(v => v.bookId === currentBookId)) {
+      compareDisabledReason = 'Cross-book compare not supported yet';
+    } else {
+      const linkedCharacters = selectedVoices.map(v => findCharacterForVoice(v, characters));
+      if (linkedCharacters.some(c => !c)) {
+        compareDisabledReason = 'Selected voice is no longer linked to a character';
+      } else {
+        canCompare = true;
+      }
+    }
+    return { selectedVoices, badge, canCompare, compareDisabledReason };
+  }, [selectedVoiceIds, library, currentBookId, characters]);
+  const { selectedVoices, badge, canCompare, compareDisabledReason } = compareDerivations;
 
   function togglePin(voice: Voice) {
     const next = !voice.pinned;
@@ -225,10 +281,73 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               onPlay={playFamilySample}
               status={familyStatus}
               onOpenCharacter={onOpenCharacter}
+              selectedVoiceIds={selectedVoiceIds}
+              onToggleSelect={toggleSelect}
             />
           ))}
         </div>
       )}
+
+      {selectedVoiceIds.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 fade-in">
+          <div className="bg-ink text-canvas rounded-full shadow-float px-4 py-2 flex items-center gap-3">
+            <span className="text-xs text-canvas/60">Selected</span>
+            <span className="px-2 py-0.5 rounded-full bg-canvas/15 text-canvas font-bold text-sm tabular-nums">{selectedVoiceIds.length}</span>
+            {badge === 'same' && (
+              <span
+                role="status"
+                className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 text-[11px] font-semibold"
+                title="Both selected voices resolve to the same base TTS speaker — the highest-signal compare case"
+              >
+                same base voice ✓
+              </span>
+            )}
+            {badge === 'different' && (
+              <span
+                role="status"
+                className="px-2 py-0.5 rounded-full bg-amber-400/25 text-amber-100 text-[11px] font-semibold"
+                title="The selected voices route to different base TTS speakers — comparing across families is allowed; same-voice characters are the core tuning case"
+              >
+                different base voices
+              </span>
+            )}
+            <span className="w-px h-5 bg-canvas/20"/>
+            <button
+              onClick={() => {
+                if (canCompare && selectedVoiceIds.length === 2) {
+                  setCompareIds([selectedVoiceIds[0], selectedVoiceIds[1]]);
+                }
+              }}
+              disabled={!canCompare}
+              title={canCompare ? 'Compare these two voices' : compareDisabledReason ?? undefined}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Compare
+            </button>
+            <button onClick={() => setSelectedVoiceIds([])} className="text-xs text-canvas/70 hover:text-canvas font-medium">Clear</button>
+          </div>
+        </div>
+      )}
+
+      {compareIds && (() => {
+        const [aId, bId] = compareIds;
+        const va = selectedVoices.find(v => v.id === aId);
+        const vb = selectedVoices.find(v => v.id === bId);
+        if (!va || !vb) return null;
+        const charA = findCharacterForVoice(va, characters);
+        const charB = findCharacterForVoice(vb, characters);
+        if (!charA || !charB) return null;
+        return (
+          <CompareCastModal
+            characters={[charA, charB]}
+            library={library}
+            ttsModelKey={ttsModelKey}
+            onSaveSide={(next) => dispatch(castActions.updateCharacter(next))}
+            onClose={() => setCompareIds(null)}
+            onOpenProfile={(id) => { setCompareIds(null); dispatch(uiActions.setOpenProfileId(id)); }}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -331,8 +450,10 @@ interface FamilyProps {
   onPlay: (f: VoiceFamily) => void;
   status: { key: string; label: string } | null;
   onOpenCharacter?: (voice: Voice) => void;
+  selectedVoiceIds: string[];
+  onToggleSelect: (v: Voice) => void;
 }
-function VoiceFamilySection({ family, draggingVoiceId, setDraggingVoiceId, onTogglePin, onPlay, status, onOpenCharacter }: FamilyProps) {
+function VoiceFamilySection({ family, draggingVoiceId, setDraggingVoiceId, onTogglePin, onPlay, status, onOpenCharacter, selectedVoiceIds, onToggleSelect }: FamilyProps) {
   const seriesGroups = family.seriesGroups;
   const isBusy = status?.key === family.key;
   /* Build a Voice-shaped stand-in for the family header swatch so VoiceSwatch
@@ -401,6 +522,8 @@ function VoiceFamilySection({ family, draggingVoiceId, setDraggingVoiceId, onTog
                         pinned={!!v.pinned}
                         onTogglePin={onTogglePin}
                         onSelect={onOpenCharacter}
+                        selected={selectedVoiceIds.includes(v.id)}
+                        onToggleSelect={onToggleSelect}
                       />
                     ))}
                   </div>
