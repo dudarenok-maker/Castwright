@@ -178,6 +178,87 @@ To bypass the hook in a genuine emergency, use `git commit --no-verify` — but
 the pre-push `verify` gate will still run the regression test for the validator,
 and the bypassed commit will need fixing before any PR is reviewed.
 
+## Pull requests
+
+Every change that lands on `main` goes through a GitHub PR. The template, the
+title gate, and the merge-button policy together codify what PRs #1-#4 already
+do by hand. See [docs/features/44-pr-hygiene.md](docs/features/44-pr-hygiene.md)
+for the regression plan and rationale.
+
+### PR title
+
+The PR title MUST match the [commit-convention subject format](#commit-convention):
+
+```
+<type>(<scope>): <subject>
+```
+
+A GitHub Actions workflow ([`.github/workflows/pr-title-lint.yml`](.github/workflows/pr-title-lint.yml))
+runs `scripts/validate-commit-msg.mjs` against the title on every `opened` /
+`edited` / `synchronize` / `reopened` event. The check fails with the same help
+block the local `commit-msg` hook prints. GitHub's title and the squash/merge
+commit subject are independent surfaces — the local hook covers commits, this
+workflow covers the PR title.
+
+The title does NOT have to match the first commit on the branch verbatim. It
+typically does (because most PRs are one commit), but a multi-commit PR picks
+the title that best describes the whole change.
+
+### PR body
+
+GitHub auto-populates the body from [`.github/pull_request_template.md`](.github/pull_request_template.md).
+Two required sections:
+
+1. **`## Summary`** — 1-3 sentences: what changes, why. If a regression plan
+   under `docs/features/` applies, link it here (e.g. *"Implements
+   `docs/features/44-pr-hygiene.md`."*). If the PR fills a plan's Ship notes,
+   say so.
+2. **`## Test plan`** — checklist of what was run and what reviewers should
+   look at. Always start with `- [ ] npm run verify — green` (the pre-push
+   hook will fail your push if it isn't anyway).
+
+The template's HTML comments are guidance — strip them before submitting, or
+leave them; they don't render. The Summary and Test plan headings are the
+load-bearing structure that reviewers (and future-me) skim first.
+
+### Merge policy
+
+- **Merge button: "Create a merge commit" only.** Squash collapses the
+  branch's individual commits, which breaks `git log --grep="(scope)"`
+  walking — that's load-bearing for plan 38's branching/scope model. Rebase
+  loses the merge commit's `Merge pull request #N` marker, which makes
+  `git log --merges` less useful. Disable both at the repo level:
+  ```
+  gh repo edit --enable-squash-merge=false --enable-rebase-merge=false
+  ```
+- **Delete branch on merge: always.** Once a PR merges, the head branch
+  should be removed automatically. `git branch --list 'feat/server-*'`
+  after `git fetch -p` should list open work only. Enable at the repo level:
+  ```
+  gh repo edit --delete-branch-on-merge
+  ```
+- **Rebase locally before merge if `main` has moved.** `git rebase origin/main`
+  on the branch, force-push, then merge — keeps the merge commit's diff clean
+  and the conflict surface minimal. Conflicts are resolved on the branch, never
+  on `main`.
+
+### Before requesting review
+
+- `npm run verify` green locally (pre-push hook already enforces this).
+- The regression plan under `docs/features/` is updated or added in the same
+  diff if the PR changes behaviour the plan cites.
+- The end-of-turn summary names the branch + commit SHAs so the reviewer can
+  jump straight to the diff.
+
+### Server-side enforcement (private repo on Free plan)
+
+Branch protection rules (required status checks, required reviews, no
+force-push) are not available on the current GitHub plan — `gh api
+repos/.../branches/main/protection` returns 403. The conventions above are
+soft enforcement plus the PR-title workflow. When the repo flips to GitHub
+Pro or goes public, enable branch protection on `main` and require the PR
+title check.
+
 ## When you ship a change
 
 The full checklist lives in [CLAUDE.md → "Before-shipping checklist"](CLAUDE.md#before-shipping-checklist).
