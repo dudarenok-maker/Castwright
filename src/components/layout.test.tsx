@@ -168,6 +168,86 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
     });
   });
 
+  it('re-fetches getBookState when entering /confirm with manuscript hydrated but cast empty', async () => {
+    /* Regression for the confirm-cast-empty race (fix branch
+       fix/frontend-confirm-cast-empty-race). When analyseManuscript's
+       'result' SSE event lands with characters absent (or a Phase 0 cache
+       resume skipped the streamed mergeCharacters path), manuscriptActions
+       .hydrateFromAnalysis still populates manuscript.{bookId,manuscriptId,
+       title} while castActions.hydrateFromAnalysis no-ops (its guard:
+       `if (characters?.length)`). The user lands on /confirm with cast=[]
+       and the view renders "0 speaking characters detected." Layout's
+       per-book hydration effect now requires cast.characters.length > 0
+       on the confirm/ready stages before short-circuiting; the previous
+       check (manuscript-only) skipped the disk refetch and left cast
+       empty. This test pins that contract by pre-populating the manuscript
+       slice (simulating hydrateFromAnalysis having run) and verifying
+       Layout still calls getBookState. */
+    getBookStateMock.mockResolvedValue({
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'mns_test',
+        title: 'Unlocked',
+        author: 'Shannon Messenger',
+        series: 'Keeper of the Lost Cities',
+        seriesPosition: 8.5,
+        isStandalone: false,
+        manuscriptFile: 'manuscript.epub',
+        castConfirmed: false,
+        chapters: [],
+        coverGradient: ['#3C194F', '#0F0E0D'],
+        createdAt: '2026-05-17T00:00:00Z',
+        updatedAt: '2026-05-17T00:00:00Z',
+      },
+      cast: { characters: [{ id: 'narrator', name: 'Narrator', role: 'Third-person observer', color: 'narrator' }] },
+      manuscript: { wordCount: 0, format: 'epub' },
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+    });
+
+    const store = makeStore();
+    /* Pre-populate the manuscript slice as it would be after Upload →
+       Analyse: uploadComplete set manuscriptId+title, then the (buggy)
+       analyse completion set bookId via hydrateFromAnalysis. Cast stays
+       empty — the no-op branch of cast-slice.ts:43 when payload.characters
+       is absent / empty. Without the cast-non-empty leg in the layout
+       short-circuit, the effect would skip the disk hydrate and the user
+       would see "0 speaking characters detected" on confirm. */
+    store.dispatch({
+      type: 'manuscript/uploadComplete',
+      payload: { manuscriptId: 'mns_test', title: 'Unlocked', format: 'epub', wordCount: 100, sourceText: null },
+    });
+    store.dispatch({
+      type: 'manuscript/hydrateFromAnalysis',
+      payload: { bookId: 'b1', manuscriptId: 'mns_test', title: 'Unlocked', characters: [], chapters: [], sentences: [], phaseTimings: [] },
+    });
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/confirm']}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<Layout/>}/>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    await waitFor(() => {
+      expect(getBookStateMock).toHaveBeenCalledWith('b1');
+    });
+
+    /* Disk roster landed in the cast slice — the user would now see
+       1 speaking character (narrator) instead of "0 speaking
+       characters detected". */
+    await waitFor(() => {
+      expect(store.getState().cast.characters.map(c => c.id)).toEqual(['narrator']);
+    });
+  });
+
   it('passes null to hydrateFromBookState when revisions field is absent on the response', async () => {
     /* A freshly-imported book whose revisions.json doesn't exist yet
        returns `revisions: null` from getBookState. The slice's null
