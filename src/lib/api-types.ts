@@ -327,7 +327,7 @@ export interface paths {
         /**
          * Synthesise a ~12-second voice preview
          * @description Renders a short sample of the voice via the configured TTS provider
-         *     (free-tier Gemini). The server caches the WAV on disk keyed by
+         *     (free-tier Gemini). The server caches the MP3 on disk keyed by
          *     `voiceId` + `modelKey`; subsequent requests with the same key return
          *     immediately with `cached: true`. The frontend plays the URL with a
          *     plain `<audio>` element.
@@ -379,9 +379,7 @@ export interface paths {
          *     analysis`). Each `data: <json>` payload follows the GenerationTick
          *     schema. Synthesises chapters one at a time; per-chapter completion
          *     writes `audio/<chapterSlug>.mp3` + `audio/<chapterSlug>.segments.json`
-         *     into the workspace book directory. Legacy `.wav` files from chapters
-         *     generated before the MP3 switch keep playing — the locator probes
-         *     `.mp3` first, falls back to `.wav` (see plan 28).
+         *     into the workspace book directory.
          */
         post: operations["streamGeneration"];
         delete?: never;
@@ -427,7 +425,7 @@ export interface paths {
         post?: never;
         /**
          * Accept the new render — discard the preserved prior audio
-         * @description Deletes `audio/<slug>.previous.{mp3,wav}` and
+         * @description Deletes `audio/<slug>.previous.mp3` and
          *     `audio/<slug>.previous.segments.json`. Idempotent: missing files
          *     are skipped. 404 only when no preserved pair existed to begin with.
          */
@@ -976,7 +974,7 @@ export interface components {
             /**
              * @description `chapter_assembling` is emitted between the last per-group synthesis
              *     tick and `chapter_complete`, while the server concatenates the PCM,
-             *     writes the WAV + segments JSON, and updates state.json. Surfaces
+             *     writes the MP3 + segments JSON, and updates state.json. Surfaces
              *     the disk-write phase so the UI doesn't look stalled at 99 %.
              * @enum {string}
              */
