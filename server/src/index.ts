@@ -46,7 +46,8 @@ import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, ensureWorkspace } from './workspace/paths.js';
 import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
-import { readUserSettings, getResolvedSidecarUrl } from './workspace/user-settings.js';
+import { readUserSettings, getResolvedSidecarUrl, getResolvedAutoStartSidecar } from './workspace/user-settings.js';
+import { spawnSidecar, type SidecarHandle } from './tts/spawn-sidecar.js';
 
 const app = express();
 
@@ -112,6 +113,13 @@ app.use('/api/sidecar', sidecarHealthRouter); // mounts GET /health
 app.use('/api/ollama', ollamaHealthRouter);  // mounts GET /health (local LLM analyzer)
 
 const PORT = Number(process.env.PORT ?? 8080);
+
+/* Sidecar child-process handle: populated when the spawn succeeds, null
+   when the preference is off OR something is already listening on :9000
+   (manual `npm run tts:sidecar` already running). Kept module-scoped so
+   the SIGINT/SIGTERM handlers below can reach it. */
+let sidecarHandle: SidecarHandle | null = null;
+
 app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`[server] listening on http://localhost:${PORT}`);
@@ -165,4 +173,33 @@ app.listen(PORT, () => {
      up, and runCatalogAudit never throws (it logs a warning on timeout). */
   const sidecarUrl = getResolvedSidecarUrl();
   void runCatalogAudit({ sidecarUrl });
+
+  /* Plan 43 — spawn the Python TTS sidecar per user preference. Fired
+     after the listener is up so the server is already accepting requests
+     while the sidecar warms in the background. The catalog audit above
+     will pick up the same sidecar once Kokoro/Coqui finishes loading. */
+  void (async () => {
+    const settings = await readUserSettings();
+    sidecarHandle = await spawnSidecar({
+      autoStart: getResolvedAutoStartSidecar(),
+      modelKey: settings.defaultTtsModelKey,
+      repoRoot: resolve(__dirname, '..', '..'),
+    });
+  })();
 });
+
+/* On Ctrl+C or kill, reap the sidecar tree before exit so port 9000 is
+   free for the next boot and stop-app.bat's port sweep has nothing left
+   to find. On Windows the child is powershell.exe → uvicorn → python,
+   and the handle's kill() runs `taskkill /T /F /PID <pid>` to cascade
+   through the tree. */
+let shuttingDown = false;
+function shutdown(signal: NodeJS.Signals): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[server] ${signal} received, tearing down sidecar...`);
+  const reap = sidecarHandle?.kill() ?? Promise.resolve();
+  void reap.finally(() => process.exit(0));
+}
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));
