@@ -231,6 +231,21 @@ describe('book-state router — state slice editable metadata', () => {
     expect(onDisk.bookId).toBe(bookId);
     expect(onDisk.manuscriptId).toBe('m_test');
   });
+
+  it('PUT slice=state stamps schema=1 on the on-disk file (plan 27 versioning seam)', async () => {
+    /* End-to-end check that the migration seam wires through every
+       writer hot path. The seed file in beforeAll has no schema field
+       (legacy); after any PUT through the state slice, the file must
+       carry the current CURRENT_STATE_SCHEMA stamp. Round-trip
+       complement to the unit specs in workspace/state-migrate.test.ts. */
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { narratorCredit: 'Schema Witness' } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.schema).toBe(1);
+  });
 });
 
 describe('book-state router — POST /chapters/:chapterId/exclude', () => {
