@@ -42,6 +42,7 @@ owner: null
 ### Automated coverage
 
 - **Playwright e2e** (`e2e/smoke.spec.ts`) — asserts cold boot lands on the library, the "Start a new book" CTA is visible, the hash is one of `''`/`'#'`/`'#/'`, and clicking the CTA navigates to `#/new`. Runs in chromium under `VITE_USE_MOCKS=true`.
+- **Playwright e2e** (`e2e/new-book-flow.spec.ts`) — walks cold boot → "Start a new book" → paste manuscript → fill author → submit → analysing route → click "Start analysis" → wait for the mock SSE (~7.6 s) to land confirm → click "Confirm cast and review manuscript" → assert URL on the ready/manuscript stage. End-to-end check of the upload pipeline and the four stage transitions. Wall-clock ~13 s warm.
 
 ### Manual acceptance walkthrough
 
@@ -62,7 +63,7 @@ Run from a clean checkout:
 ## Out of scope (follow-ups)
 
 - **Visual regression baselines.** Playwright supports `toHaveScreenshot()` natively. Capture baselines for the library, upload, analysing, confirm, and ready stages once they stabilise. Open question: where do baselines live (`e2e/__screenshots__/` per-platform vs. committed-as-art) — capture in a follow-up plan when the first baseline lands.
-- **More golden paths.** Upload → analysing → confirm → ready. Listen-view playback (mock player). Voice library tab. Each gets its own spec, all reuse the mock backend.
+- **More golden paths.** Upload → analysing → confirm → ready *(shipped 2026-05-17 — `e2e/new-book-flow.spec.ts`)*. Listen-view playback (mock player). Voice library tab. Each gets its own spec, all reuse the mock backend.
 - **CI integration.** No CI runs anything yet. When CI exists, `test:e2e` is the slowest job; budget accordingly.
 
 ## Ship notes
