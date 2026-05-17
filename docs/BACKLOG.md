@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 0 · Should 11 · Could 17 · Won't 12
+**Counts as of 2026-05-17:** Must 0 · Should 12 · Could 17 · Won't 12
 
 ---
 
@@ -143,6 +143,16 @@ Source: [`30-global-model-control.md`](features/30-global-model-control.md).
 - *Key files:* `src/hooks/useTtsLifecycle.ts`; `src/components/layout.tsx`; whatever new surface lands.
 - *Depends on:* the actual third surface materialising.
 - *Benefit (architectural):* prevents the duplicated-poll explosion that motivated plan 30 G1's hook consolidation in the first place.
+
+### 12. Adjustable cover framing + local-disk upload
+
+Source: [`40-cover-framing-and-upload.md`](features/40-cover-framing-and-upload.md) (draft).
+
+- *What:* Extend the existing CoverPicker (plan [36](features/36-book-covers.md)) with two tabs: **Upload** (drag-drop / file picker for JPEG/PNG, ≤10 MB, PNG transcoded to JPEG server-side) and **Frame** (drag-pan + zoom slider 1.0×–3.0× on the square preview). Framing persists to `state.json.coverImage.framing` and renders via `object-position` + `transform: scale`; uploaded covers replace the on-disk JPEG so the export pipeline (M4B `covr`, MP3 `APIC`) keeps working unchanged. New endpoints: `POST /api/books/{bookId}/cover/upload`, `PATCH /api/books/{bookId}/cover/framing`.
+- *Acceptance:* Per the plan 40 walkthrough — drag-to-frame an OpenLibrary cover so the title is visible inside the square; reload preserves framing; upload a local PNG → transcoded to JPEG on disk → renders identically on BookCard + CoverArt; M4B export still embeds an `attached_pic` stream. Paired Vitest covers `computeCoverStyle` boundaries, picker tab switching, and the two new server endpoints; optional Playwright spec exercises the upload golden path.
+- *Key files:* `src/modals/cover-picker.tsx`; `src/views/book-library.tsx`; `src/views/listen.tsx`; new `src/lib/cover-framing.ts`; new `server/src/cover/upload.ts`; `server/src/routes/cover.ts`; `server/src/workspace/scan.ts`; `openapi.yaml`.
+- *Depends on:* none structural. Plan 36's data model and endpoints are extended, not replaced; the plan 27 schema-versioning seam (already shipped) accommodates the additive `coverImage.framing` field.
+- *Benefit (user):* OpenLibrary covers crop the title/author away in our square frame today, and books with no OpenLibrary match are stuck on the procedural gradient forever. Both gaps close in one round.
 
 ---
 
