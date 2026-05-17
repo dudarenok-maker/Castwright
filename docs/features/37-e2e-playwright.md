@@ -46,6 +46,18 @@ owner: null
 - **Playwright e2e** (`e2e/listen-playback.spec.ts`) — navigates directly to `#/books/sb/listen` for the seeded 'complete' Solway Bay mock book, clicks "Play from the start", asserts the MiniPlayer's `<audio>` element renders with a `stub-b.mp3` src and `paused === false`. Locks the mock-seed → chapter hydrate → MiniPlayer mount → audio playback seam. Wall-clock ~5 s warm. Depends on the `MOCK_BOOK_STATES['sb']` seed in `src/lib/api.ts` (shipped alongside).
 - **Playwright e2e** (`e2e/visual.spec.ts`) — captures `toHaveScreenshot()` baselines for the six core surfaces (library, upload, analysing-pre-start, confirm, ready/manuscript, listen). First defence against silent CSS-token / Tailwind / icon-set drift. See "Visual baselines" below.
 
+### Test hooks (DEV + e2e only)
+
+- **`window.__store__`** — the Redux store is exposed on `window` in `import.meta.env.DEV` builds (`npm run dev` on port 5173) and in `--mode e2e` builds (Playwright on port 5174). Gated in `src/main.tsx`; never set in production builds (`vite build`) because the gate tree-shakes. Use it in specs as:
+
+  ```ts
+  await page.evaluate(() => window.__store__!.getState().ui.stage.kind)
+  ```
+
+  Don't add untyped writes to the store from specs — assertions only. The spec helper `getStageKind(page)` in `e2e/new-book-flow.spec.ts` is the canonical read pattern.
+
+- **What this enables:** per-stage Redux assertions on top of URL/visibility checks (catches the class of bug where `ui.stage` desyncs from the URL or the visible view) and refresh-restores-stage assertions that exercise the redux-persist whitelist (`UI_PERSIST_WHITELIST` in `src/store/index.ts`). Deleting `ui` from that whitelist would now fail the `new-book-flow` refresh assertion.
+
 ### Visual baselines
 
 - **Storage:** per-platform under `e2e/visual.spec.ts-snapshots/{platform}/visual.spec.ts/<name>.png`. `{platform}` resolves to `win32` | `linux` | `darwin` via `process.platform`. Wired via `snapshotPathTemplate: '{snapshotDir}/{platform}/{testFilePath}/{arg}{ext}'` in `playwright.config.ts`. Per-platform was chosen over a single committed set because chromium font rendering and sub-pixel layout drift between OSes (and CI will land on Linux per Could #1 in `docs/BACKLOG.md`).
