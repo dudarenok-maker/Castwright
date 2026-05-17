@@ -1,0 +1,13 @@
+dist/
+node_modules/
+server/dist/
+server/node_modules/
+server/tts-sidecar/.venv/
+server/handoff/
+playwright-report/
+test-results/
+e2e/**/__snapshots__/
+audiobook-workspace/
+package-lock.json
+server/package-lock.json
+src/lib/api-types.ts
