@@ -93,10 +93,12 @@ export function useAbPlayback({ urlA, urlB }: Args): UseAbPlaybackResult {
     return () => {
       if (refA.current) {
         refA.current.pause();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
         refA.current.removeAttribute('src');
       }
       if (refB.current) {
         refB.current.pause();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
         refB.current.removeAttribute('src');
       }
     };
