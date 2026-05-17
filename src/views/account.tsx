@@ -10,7 +10,9 @@ import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primiti
 import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
 import type { TtsModelKey, UserSettings, UserSettingsPatch } from '../lib/types';
+import type { ThemePreference } from '../lib/use-theme';
 import { useAppDispatch, useAppSelector } from '../store';
+import { uiActions } from '../store/ui-slice';
 import { fetchAccountSettings, saveAccountSettings } from '../store/account-slice';
 
 export function AccountView() {
@@ -31,6 +33,10 @@ export function AccountView() {
   const [workspaceDirOverride,  setWorkspaceDirOverride]  = useState<string>(account.workspaceDirOverride ?? '');
   const [minorCastMinLines,     setMinorCastMinLines]     = useState<number>(account.minorCastMinLines);
   const [coverPickerDefaultTab, setCoverPickerDefaultTab] = useState<NonNullable<UserSettings['coverPickerDefaultTab']>>(account.coverPickerDefaultTab ?? 'search');
+  const [defaultThemePreference, setDefaultThemePreference] = useState<ThemePreference>(
+    account.defaultThemePreference ?? 'system',
+  );
+  const themeOverride = useAppSelector(s => s.ui.themeOverride);
   const [showSaved,             setShowSaved]             = useState(false);
 
   useEffect(() => {
@@ -44,12 +50,14 @@ export function AccountView() {
     setWorkspaceDirOverride(account.workspaceDirOverride ?? '');
     setMinorCastMinLines(account.minorCastMinLines);
     setCoverPickerDefaultTab(account.coverPickerDefaultTab ?? 'search');
+    setDefaultThemePreference(account.defaultThemePreference ?? 'system');
   }, [account.hydrated, account.displayName, account.defaultAnalysisModel,
       account.defaultTtsEngine, account.defaultTtsModelKey,
       account.sidecarUrl, account.analysisEngine, account.ollamaUrl,
       account.workspaceDirOverride,
       account.minorCastMinLines,
-      account.coverPickerDefaultTab]);
+      account.coverPickerDefaultTab,
+      account.defaultThemePreference]);
 
   /* When the engine switches, the selected modelKey may not belong to the
      new engine's group. Default to the new group's first model so the
@@ -78,10 +86,12 @@ export function AccountView() {
         || ollamaUrl             !== account.ollamaUrl
         || minorCastMinLines     !== account.minorCastMinLines
         || coverPickerDefaultTab !== (account.coverPickerDefaultTab ?? 'search')
+        || defaultThemePreference !== (account.defaultThemePreference ?? 'system')
         || workspaceDirty;
   }, [displayName, defaultAnalysisModel, defaultTtsEngine, defaultTtsModelKey,
       sidecarUrl, analysisEngine, ollamaUrl,
-      minorCastMinLines, coverPickerDefaultTab, workspaceDirty, account]);
+      minorCastMinLines, coverPickerDefaultTab, defaultThemePreference,
+      workspaceDirty, account]);
 
   const onSave = async () => {
     const patch: UserSettingsPatch = {
@@ -95,6 +105,7 @@ export function AccountView() {
       workspaceDirOverride: workspaceDirOverride.trim() === '' ? null : workspaceDirOverride.trim(),
       minorCastMinLines,
       coverPickerDefaultTab,
+      defaultThemePreference,
     };
     const action = await dispatch(saveAccountSettings(patch));
     if (saveAccountSettings.fulfilled.match(action)) {
@@ -258,6 +269,40 @@ export function AccountView() {
               <option value="upload">Upload local</option>
             </select>
           </FieldRow>
+        </FormCard>
+
+        <FormCard title="Appearance"
+          hint="How the app looks. The sun/moon toggle in the top bar is a device-only override; this picker sets the default that any new device or fresh session inherits.">
+          <FieldRow label="Default theme"
+            sublabel="System follows your OS's dark/light setting at runtime and auto-flips at sundown. Light or Dark pins one regardless of OS. Changes here are server-persisted; the top-bar toggle's per-device override always wins until you clear it below.">
+            <select
+              value={defaultThemePreference}
+              onChange={(e) => setDefaultThemePreference(e.target.value as ThemePreference)}
+              data-testid="account-default-theme"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30">
+              <option value="system">System (follows OS — default)</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </FieldRow>
+          {themeOverride !== null && (
+            <div
+              data-testid="theme-override-pill"
+              className="flex items-center justify-between gap-3 rounded-xl border border-magenta/30 bg-magenta/10 px-4 py-3">
+              <div className="text-xs text-ink/75">
+                <span className="font-semibold text-magenta">This device is overridden</span>
+                {' '}— the top-bar toggle is set to{' '}
+                <span className="font-mono text-ink">{themeOverride}</span>.
+                Clear the override to follow the account default again.
+              </div>
+              <PrimaryButton
+                variant="ghost"
+                icon={false}
+                onClick={() => dispatch(uiActions.clearThemeOverride())}>
+                Use account default
+              </PrimaryButton>
+            </div>
+          )}
         </FormCard>
 
         <FormCard title="Server configuration"

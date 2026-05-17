@@ -25,6 +25,7 @@ import { stageToHash } from '../lib/router';
 import { TopBar, type GenerationPillData, type AnalysisPillData } from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
+import { useTheme } from '../lib/use-theme';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { MiniPlayer } from './mini-player';
 import { PreviewListenerView } from '../views/preview-listener';
@@ -441,6 +442,11 @@ export function Layout() {
      Generation view's local pill reads the same state via LayoutContext
      (plan 30 G1 consolidation). */
   const ttsLifecycle = useTtsLifecycle();
+  /* Plan 41 — single mount of the theme hook. Writes the resolved
+     theme to <html data-theme> on every change (override, account
+     hydrate, OS scheme flip). Return value unused at this layer —
+     the paint surface is CSS, not React. */
+  useTheme();
   const ctx: LayoutContext = { showInfo, showError, ttsLifecycle };
 
   /* Reverse local-analyzer guard for the regenerate modals (D2 in

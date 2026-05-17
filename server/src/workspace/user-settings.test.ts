@@ -20,6 +20,51 @@ afterEach(() => {
   delete process.env.WORKSPACE_DIR;
 });
 
+describe('userSettingsSchema — defaultThemePreference (plan 41)', () => {
+  it("defaults to 'system' on a fresh user-settings document", () => {
+    expect(DEFAULT_USER_SETTINGS.defaultThemePreference).toBe('system');
+  });
+
+  it("accepts 'light', 'dark', and 'system'", () => {
+    for (const value of ['light', 'dark', 'system'] as const) {
+      expect(
+        userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, defaultThemePreference: value })
+          .defaultThemePreference,
+      ).toBe(value);
+    }
+  });
+
+  it("rejects unknown values such as 'sepia'", () => {
+    expect(() =>
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, defaultThemePreference: 'sepia' }),
+    ).toThrow();
+  });
+
+  it('treats the field as optional — legacy settings files without it parse cleanly', () => {
+    const { defaultThemePreference, ...legacy } = DEFAULT_USER_SETTINGS;
+    const parsed = userSettingsSchema.parse(legacy);
+    expect(parsed.defaultThemePreference).toBeUndefined();
+  });
+
+  it('round-trips through writeUserSettings + readUserSettings', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    const before = await mod.readUserSettings();
+    try {
+      const updated = await mod.writeUserSettings({ defaultThemePreference: 'dark' });
+      expect(updated.defaultThemePreference).toBe('dark');
+      mod._resetUserSettingsCache();
+      const reread = await mod.readUserSettings();
+      expect(reread.defaultThemePreference).toBe('dark');
+    } finally {
+      await mod.writeUserSettings({
+        defaultThemePreference: before.defaultThemePreference ?? 'system',
+      });
+      mod._resetUserSettingsCache();
+    }
+  });
+});
+
 describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
   it("defaults to 'search' on a fresh user-settings document", () => {
     expect(DEFAULT_USER_SETTINGS.coverPickerDefaultTab).toBe('search');

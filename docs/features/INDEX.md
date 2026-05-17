@@ -92,6 +92,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [23 — Mock toggle](23-mock-toggle.md) — `VITE_USE_MOCKS` flips real ↔ mock; components stay neutral.
 - [24 — OpenAPI source of truth](24-openapi-source-of-truth.md) — Types come from generated `api-types.ts`.
 - [25 — Design tokens](25-design-tokens.md) — Colours via CSS variables only.
+- [42 — Dark mode + theme management](42-dark-mode.md) — `[data-theme="dark"]` token override block; top-bar 3-state toggle (Light / Dark / System) as device-local override; Account page sets the first-visit default. Builds on plan 25's token system.
 - [26 — RTK Immer drafts](26-rtk-immer.md) — Reducers mutate, never spread.
 - [37 — Playwright e2e harness](37-e2e-playwright.md) — Browser-level smoke + on-ramp for visual regression. KNOWN: scaffolded — one golden-path spec, broader coverage deferred.
 - [38 — Branching & commit convention](38-branching-and-commit-convention.md) — Trunk-based branching + Conventional-Commits subject format; `.husky/commit-msg` gates the convention.

@@ -32,4 +32,27 @@ All theme colours and core spacings live as CSS custom properties declared in `s
 - Token semantics (semantic naming vs role-based) — current set is mixed and documented in `styles.css`.
 - Cross-platform native theming.
 
-> Dark mode was promoted from this plan's out-of-scope list into the active backlog on 2026-05-17 (see `docs/BACKLOG.md` Should #3). The token system here is the substrate; the dark-theme overrides will land as a `[data-theme="dark"]` block alongside the existing root tokens.
+## Dark mode invariants (plan 42)
+
+Dark mode was promoted from this plan's out-of-scope list into the
+backlog on 2026-05-17 and shipped as plan
+[42](42-dark-mode.md). It does not change the token system — it
+extends it.
+
+- The dark-token block lives in `src/styles.css` under
+  `[data-theme="dark"]`. Adding a new token requires declaring it
+  in **both** `:root` (light) and the dark block; missing the
+  dark override means the new token paints the same on both
+  themes (sometimes correct — brand hues like `--peach` —
+  sometimes a bug).
+- The `[data-theme]` attribute on `<html>` is owned by
+  `useTheme()` in `src/lib/use-theme.ts`. The pre-mount IIFE in
+  `src/main.tsx` is the only other writer (cold-boot paint guard,
+  runs once before React). Component code never reads or writes
+  the attribute directly.
+- The two Tailwind-utility band-aids in the dark block
+  (`bg-white`, `bg-rose-100`, etc.) are an explicit, contained
+  exception to "no fixed paint outside the token cascade". Adding
+  new band-aids is allowed when migrating the affected component
+  to a `bg-surface` token would be invasive; document the choice
+  inline.

@@ -25,6 +25,7 @@ describe('UI_PERSIST_WHITELIST', () => {
       'selectedModel',
       'selectedModelExplicit',
       'stage',
+      'themeOverride',
       'ttsModelKey',
       'ttsModelKeyExplicit',
     ]);
