@@ -242,6 +242,40 @@ export interface DroppedQuotesResponse {
    returns it verbatim once the running→paused coercion has been
    applied). See docs/features/32-sticky-analysis.md "Cold-boot
    rehydration". */
+/** Wire shape for `GET /api/library/active-analyses` — every book in the
+    workspace whose `.audiobook/analysis-state.json` snapshot resolves to
+    `paused` or `halted`, sorted by `writtenAt` DESC (freshest first).
+    The library layout's cold-boot effect picks the first entry to seed
+    the top-bar AnalysisPill so the pill appears immediately on a
+    refresh — without the user having to navigate to a specific book's
+    analysing route first. The full list is available so a follow-up
+    (Backlog Should #2) can render per-card "Paused — resume?" badges.
+
+    Disk `running` is coerced to wire `paused` server-side (no live
+    in-flight job means the analyzer didn't survive the restart), so the
+    `state` field never contains `'running'` over the wire from this
+    endpoint. */
+export interface ActiveAnalysisSummary {
+  bookId: string;
+  bookTitle: string;
+  manuscriptId: string;
+  phaseId: number;
+  phaseLabel: string;
+  phaseProgress: number;
+  state: 'paused' | 'halted';
+  engine?: 'local' | 'gemini';
+  kind?: 'main' | 'subset';
+  subsetChapterIds?: number[];
+  haltCode?: string;
+  haltReason?: string;
+  lastTickAt: number;
+  writtenAt: number;
+}
+
+export interface ActiveAnalysesResponse {
+  snapshots: ActiveAnalysisSummary[];
+}
+
 export interface AnalysisStateResponse {
   manuscriptId: string;
   phaseId: number;

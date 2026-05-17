@@ -50,6 +50,9 @@ vi.mock('../lib/api', () => ({
     /* Cold-boot analysis state probe — return null so the analysing-pill
        rehydration short-circuits. */
     getAnalysisState: vi.fn(async () => null),
+    /* Workspace-wide cold-boot scan (Backlog Should #1). Layout's mount
+       effect calls this; return empty so no pill seeds. */
+    getActiveAnalyses: vi.fn(async () => ({ snapshots: [] })),
     /* The 30 s pollRevisions interval. Resolve to empty so it doesn't
        overwrite the slice between hydrate and the test's assertions. */
     pollRevisions:   (...args: unknown[]) => pollRevisionsMock(...args),

@@ -12,7 +12,7 @@ import type {
   BookStateResponse, BookStateJson, ChangeLogEvent,
   PutStateRequest, WorkspaceChangeLogResponse,
   UserSettings, UserSettingsPatch, DroppedQuotesResponse,
-  AnalysisStateResponse, CoverCandidate,
+  AnalysisStateResponse, ActiveAnalysesResponse, CoverCandidate,
   BookExportRequest, BookExportJob, ExportLanInfo,
   BaseVoice, TtsEngine,
 } from './types';
@@ -807,6 +807,30 @@ async function realGetAnalysisState(bookId: string): Promise<AnalysisStateRespon
 async function mockGetAnalysisState(_bookId: string): Promise<AnalysisStateResponse | null> {
   await wait(20);
   return null;
+}
+
+/* Workspace-wide cold-boot scan. Library layout calls this once on
+   mount; if any snapshots come back AND no live analysis stream is
+   already in the slice, the pill seeds from the most-recent one (the
+   server sorts DESC by writtenAt so index 0 wins). Failure-tolerant
+   on the client: a network error returns an empty list rather than
+   throwing so a missing endpoint can't break the library view's
+   render. */
+async function realGetActiveAnalyses(): Promise<ActiveAnalysesResponse> {
+  try {
+    const res = await fetch('/api/library/active-analyses');
+    if (!res.ok) return { snapshots: [] };
+    return res.json();
+  } catch {
+    return { snapshots: [] };
+  }
+}
+
+/* Mock counterpart — empty list, same shape. Mock mode has no disk-
+   backed workspace, so there's nothing to surface. */
+async function mockGetActiveAnalyses(): Promise<ActiveAnalysesResponse> {
+  await wait(20);
+  return { snapshots: [] };
 }
 
 /* Per-book dropped-quote ledger. Append-only file written by the two
@@ -2070,6 +2094,7 @@ const real = {
   setCover:          realSetCover,
   removeCover:       realRemoveCover,
   getAnalysisState:  realGetAnalysisState,
+  getActiveAnalyses: realGetActiveAnalyses,
   getDroppedQuotes:  realGetDroppedQuotes,
   importManuscript:  realImportManuscript,
   confirmBook:       realConfirmBook,
@@ -2162,6 +2187,7 @@ const mock = {
   setCover:          mockSetCover,
   removeCover:       mockRemoveCover,
   getAnalysisState:  mockGetAnalysisState,
+  getActiveAnalyses: mockGetActiveAnalyses,
   getDroppedQuotes:  mockGetDroppedQuotes,
   importManuscript:  mockImportManuscript,
   confirmBook:       mockConfirmBook,
