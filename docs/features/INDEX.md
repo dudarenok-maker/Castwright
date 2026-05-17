@@ -111,6 +111,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [38 — Branching & commit convention](38-branching-and-commit-convention.md) — Trunk-based branching + Conventional-Commits subject format; `.husky/commit-msg` gates the convention.
 - [44 — Pull request hygiene](44-pr-hygiene.md) — PR template + PR-title lint workflow + merge-commit-only / delete-branch-on-merge repo settings; codifies the Summary / Test plan shape PRs #1-#4 already use.
 - [45 — Vitest pool tuning + one-retry policy](45-vitest-pool-tuning.md) — Caps the server-suite forks pool at 4 and turns on `retry: 1` on both Vitest configs so transient tinypool "Worker exited unexpectedly" failures no longer force a full pre-push re-run.
+- [46 — Lint, format, a11y baseline](archive/46-lint-format-a11y.md) — ESLint 8 + Prettier 3 + axe-core on four core views; lint prepended to `verify`. Shipped 2026-05-18.
 
 ### L. Book state persistence
 
@@ -140,3 +141,4 @@ breadcrumb so cross-references still resolve.
 - [22a — Voice library compare](archive/22a-voice-library-compare.md) — Two-cast-member compare entry point on the Voices tab; reuses `CompareCastModal`; same-/different-base-voice badge on the selection pill. Shipped 2026-05-17.
 - [39 — Purge WAV (MP3 is the only format)](archive/39-purge-wav.md) — Dropped the legacy-WAV fallback once documented in plan 28; locator + routes + types now MP3-only. Shipped 2026-05-17.
 - [40 — Cover framing + local-disk upload](archive/40-cover-framing-and-upload.md) — Three-tab CoverPicker (Search / Upload / Frame), PNG → JPEG transcode server-side, render-time pan + zoom via `object-position` + `transform`, account-level default for the initial tab. Shipped 2026-05-17.
+- [46 — Lint, format, a11y baseline](archive/46-lint-format-a11y.md) — ESLint 8 + Prettier 3 + axe-core on the four core views; `npm run lint` (max-warnings 0) prepended to `verify`. Shipped 2026-05-18.

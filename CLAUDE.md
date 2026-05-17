@@ -158,7 +158,6 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 
 ## Suggested follow-ups (not requirements)
 
-- ESLint + Prettier, axe-core a11y pass.
 - **Model lifecycle is split between eager and button-driven** —
   - **Kokoro v1 (default, new in 2026-05)**: eagerly loaded at sidecar
     startup, ~1 s cold load, ~1 GB VRAM. Permanently resident alongside
@@ -198,6 +197,12 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   pre-push so commits stay snappy.
 - **pre-push** (`.husky/pre-push`): runs `npm run verify` — typecheck +
   all tests + e2e + build. Refuses the push if any step fails.
+
+`npm run verify` also prepends `lint` (ESLint + Prettier via
+`eslint-config-prettier`) and includes `test:a11y` (axe-core on the four
+core views) — see [docs/features/archive/46-lint-format-a11y.md](docs/features/archive/46-lint-format-a11y.md)
+for the rulesets, the autofix-baseline shape, and the rationale for each
+relaxed rule.
 
 Branching model and the full commit convention (allowed types, allowed scopes,
 multi-scope syntax, worktrees for parallel agent work) are documented in
