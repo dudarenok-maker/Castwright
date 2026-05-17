@@ -624,7 +624,7 @@ export function GenerationView({
 
       <div className="mt-10 pt-6 border-t border-ink/10 flex items-center justify-between text-xs text-ink/50 flex-wrap gap-3">
         <div className="flex items-center gap-6 flex-wrap">
-          <span>Output: WAV (16-bit PCM)</span>
+          <span>Output: MP3 (VBR V2)</span>
           <span>·</span>
           <span>Runtime so far: <span className="tabular-nums text-ink/70">{runtimeSec > 0 ? formatTime(runtimeSec) : '0:00'}</span></span>
         </div>
