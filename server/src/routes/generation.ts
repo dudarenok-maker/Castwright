@@ -24,6 +24,7 @@ import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir, castJsonPath, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { stampStateSchema } from '../workspace/state-migrate.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
@@ -509,7 +510,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           ),
           updatedAt: new Date().toISOString(),
         };
-        await writeJsonAtomic(statePath, next);
+        await writeJsonAtomic(statePath, stampStateSchema(next));
       }
 
       /* Chapter finished — clear the per-chapter tracking so a subscriber
