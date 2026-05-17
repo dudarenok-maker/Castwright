@@ -48,10 +48,13 @@
 }
 
 /* Dark mode ----------------------------------------------------------------
-   Plan 41. Activated by <html data-theme="dark"> — set pre-mount in
-   main.tsx and kept in sync by useTheme() in src/lib/use-theme.ts.
-   Override the paint-affecting tokens; brand hues (peach, magenta,
-   purple-deep) stay as-is because they read on both surfaces. */
+   Plan 42 (with contrast fixes from plan-42 follow-up). Activated by
+   <html data-theme="dark"> — set pre-mount in main.tsx and kept in
+   sync by useTheme() in src/lib/use-theme.ts. Override the paint-
+   affecting tokens. Peach is the only brand hue that stays unchanged
+   (#F79A83 already gives ~8:1 on dark canvas); magenta and purple-
+   deep are lifted because their light values (#A43C6C / #3C194F) give
+   2.27:1 and 1.18:1 — both fail WCAG when used as text colours. */
 [data-theme="dark"] {
   /* Inverted canvas. A near-black neutral with a hint of warmth so the
      peach accent doesn't glow blue against a cold grey. */
@@ -65,14 +68,27 @@
      muted plum so peach badges stay legible without screaming. */
   --peach-soft:   #3C2128;
 
+  /* Brand-as-text contrast lifts. The light values #A43C6C / #3C194F
+     give 2.27:1 and 1.18:1 against #14110F — fail WCAG AA at every
+     size. Lifted to lighter, less-saturated tints that hold 7-8:1 on
+     dark while reading as the same brand colour. Cascades through
+     tailwind.config.ts:11-12 → every text-magenta / bg-magenta /
+     border-magenta / ring-magenta utility flips automatically (same
+     for purple-deep). --peach stays unchanged. */
+  --magenta:      #E58FB8;
+  --purple-deep:  #B89AD6;
+
   /* Channel forms — Recompute against the inverted core tokens so
      every rgba(var(--ink-rgb), …) elevation darkens to a near-white
      glow on dark surfaces instead of staying near-black (which would
-     be invisible). Peach-rgb keeps its hue (brand). */
+     be invisible). Peach-rgb keeps its hue (brand). Magenta-rgb and
+     purple-deep-rgb shift in lockstep with the new --magenta /
+     --purple-deep values so rgba(var(--magenta-rgb), …) overlays
+     stay tonally aligned with the text-colour utilities. */
   --peach-rgb:        247, 154, 131;
   --ink-rgb:          244, 239, 236;
-  --magenta-rgb:      201, 94, 144;
-  --purple-deep-rgb:  108, 70, 138;
+  --magenta-rgb:      229, 143, 184;
+  --purple-deep-rgb:  184, 154, 214;
 
   /* Shadows — darker base + higher alpha for the deeper canvas. Inverts
      to a subtle light glow once --ink-rgb flips to near-white above. */
@@ -97,26 +113,64 @@
    appear in component code as backgrounds. */
 [data-theme="dark"] .bg-white { background-color: #1F1B19; }
 
+/* Hover variants of bg-white. Tailwind generates these as
+   `.hover\:bg-white:hover` etc., a different selector than the bare
+   `.bg-white` rule above, so they need their own dark overrides —
+   otherwise hovering paints pure white and the dark text on top
+   disappears (the original plan-42 bug the user hit). Hover should
+   read as a one-step elevation OVER the base bg-white redirect, so
+   the values trend slightly lighter than #1F1B19 rather than back
+   toward white. */
+[data-theme="dark"] .hover\:bg-white:hover      { background-color: #2A2520; }
+[data-theme="dark"] .hover\:bg-white\/60:hover  { background-color: rgba(244, 239, 236, 0.06); }
+[data-theme="dark"] .hover\:bg-white\/70:hover  { background-color: rgba(244, 239, 236, 0.07); }
+
 /* Status pills use coloured backgrounds (rose / emerald / amber);
    their contrast against light text is fine on dark surfaces, but
-   the pale-100 fills wash out. Drop them to a 30% alpha overlay so
-   the hue stays recognisable without blowing out luminance. */
+   the pale-100 fills wash out. Drop them to alpha overlays so the
+   hue stays recognisable without blowing out luminance. -50 / -200
+   / -900 / -950 variants follow the same pattern at varying alpha
+   so the elevation step over canvas is preserved. */
 [data-theme="dark"] .bg-rose-50    { background-color: rgba(244, 63, 94, 0.12); }
 [data-theme="dark"] .bg-rose-100   { background-color: rgba(244, 63, 94, 0.18); }
+[data-theme="dark"] .bg-rose-200   { background-color: rgba(244, 63, 94, 0.22); }
+[data-theme="dark"] .bg-red-50     { background-color: rgba(239, 68, 68, 0.10); }
+[data-theme="dark"] .bg-emerald-50 { background-color: rgba(16, 185, 129, 0.10); }
 [data-theme="dark"] .bg-emerald-100{ background-color: rgba(16, 185, 129, 0.18); }
+[data-theme="dark"] .bg-amber-50   { background-color: rgba(245, 158, 11, 0.10); }
 [data-theme="dark"] .bg-amber-100  { background-color: rgba(245, 158, 11, 0.18); }
+[data-theme="dark"] .bg-amber-200  { background-color: rgba(245, 158, 11, 0.22); }
+[data-theme="dark"] .bg-amber-900  { background-color: rgba(245, 158, 11, 0.28); }
+[data-theme="dark"] .bg-amber-950  { background-color: rgba(245, 158, 11, 0.32); }
+
+/* Status text colours. Light-mode palette uses the darker shades
+   (-700/-800/-900) on pale fills; on dark we want lighter shades
+   (-300 / -400) so the text reads against the dark canvas. */
 [data-theme="dark"] .text-rose-900,
 [data-theme="dark"] .text-rose-900\/85,
 [data-theme="dark"] .text-rose-900\/70 { color: #FCA5A5; }
-[data-theme="dark"] .text-rose-700 { color: #FCA5A5; }
+[data-theme="dark"] .text-rose-700    { color: #FCA5A5; }
+[data-theme="dark"] .text-rose-300    { color: #FCA5A5; }
+[data-theme="dark"] .text-red-700     { color: #FCA5A5; }
 [data-theme="dark"] .text-emerald-800 { color: #6EE7B7; }
+[data-theme="dark"] .text-emerald-700 { color: #6EE7B7; }
+[data-theme="dark"] .text-emerald-600 { color: #34D399; }
 [data-theme="dark"] .text-amber-800   { color: #FBBF24; }
+[data-theme="dark"] .text-amber-700   { color: #FBBF24; }
+[data-theme="dark"] .text-amber-900   { color: #FCD34D; }
 
-/* The Books library uses border-rose-200 / border-ink/15 as the card
-   outline; under dark mode those pale outlines disappear into the
-   canvas. Lift to ink-soft so the cards retain their edge. */
+/* Borders. The Books library uses border-rose-200 / border-ink/15 as
+   the card outline; under dark mode those pale outlines disappear
+   into the canvas. Lift the ink-tinted ones to a higher alpha;
+   coloured ones get tinted at ~30% so they stay recognisable but
+   never disappear. */
+[data-theme="dark"] .border-ink\/5    { border-color: rgba(var(--ink-rgb), 0.12); }
 [data-theme="dark"] .border-ink\/10,
-[data-theme="dark"] .border-ink\/15 { border-color: rgba(var(--ink-rgb), 0.18); }
+[data-theme="dark"] .border-ink\/15   { border-color: rgba(var(--ink-rgb), 0.18); }
+[data-theme="dark"] .border-amber-200,
+[data-theme="dark"] .border-amber-300 { border-color: rgba(245, 158, 11, 0.30); }
+[data-theme="dark"] .border-emerald-200 { border-color: rgba(16, 185, 129, 0.30); }
+[data-theme="dark"] .border-rose-200  { border-color: rgba(244, 63, 94, 0.30); }
 
 /* Page chrome -------------------------------------------------------------- */
 html, body { background: var(--canvas); }
