@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 0 · Should 12 · Could 13 · Won't 13
+**Counts as of 2026-05-17:** Must 0 · Should 11 · Could 13 · Won't 13
 
 ---
 
@@ -67,16 +67,7 @@ Source: CLAUDE.md commit-gate section ("next milestone").
 - *Key files:* `server/tts-sidecar/tests/test_runtime_wiring.py` (existing pattern to mirror); `server/tts-sidecar/main.py` for the thread-pool wiring.
 - *Benefit (technical):* current pytest pins the single-request CUDA+DeepSpeed+fp16 path but says nothing about thread-pool behaviour under parallel load — exactly the regression class that produces silent audio corruption.
 
-### 4. Subset-retry route sticky behaviour (second in-flight map)
-
-Source: [`32-sticky-analysis.md`](features/32-sticky-analysis.md) follow-ups.
-
-- *What:* The chapter-specific re-analysis path uses the same SSE plumbing but does not yet land in the server-side in-flight map, so a navigation away during a subset retry drops the run. Add a second in-flight map keyed by `(bookId, chapterIds)` and route subset-retry SSEs through it, mirroring the full-analysis sticky pattern.
-- *Acceptance:* Starting a subset retry, navigating to Books, then back to `analysing` shows the AnalysisPill in its subset-retry variant and the SSE stream continues uninterrupted; covered by a new server-side Vitest spec.
-- *Key files:* `server/src/routes/analysis.ts` (existing full-analysis sticky map); `src/store/analysis-stream-middleware.ts`; `src/components/AnalysisPill.tsx` (subset-retry variant already exists in UI).
-- *Benefit (technical):* the AnalysisPill subset-retry variant lies today — UI says "retrying chapter 4" but a navigation drops the run. Closing this is correctness, not polish.
-
-### 5. Implicit reconcile-driven generation start guard
+### 4. Implicit reconcile-driven generation start guard
 
 Source: [`32-sticky-analysis.md`](features/32-sticky-analysis.md) follow-ups.
 
@@ -85,7 +76,7 @@ Source: [`32-sticky-analysis.md`](features/32-sticky-analysis.md) follow-ups.
 - *Key files:* `src/store/generation-stream-middleware.ts`; `src/store/persistence-middleware.ts` (hydration path); `docs/features/32-sticky-analysis.md` D2 section.
 - *Benefit (architectural):* current behaviour is deliberate but leaks the rule. Closing the seam stops a future contributor from accidentally bypassing D2 by routing through reconcile.
 
-### 6. `state.json` schema versioning + migration story
+### 5. `state.json` schema versioning + migration story
 
 Source: [`27-book-state-persistence.md`](features/27-book-state-persistence.md) (TBD note).
 
@@ -94,7 +85,7 @@ Source: [`27-book-state-persistence.md`](features/27-book-state-persistence.md) 
 - *Key files:* `server/src/workspace/state.ts` (or wherever state.json read/write lives); `server/src/routes/book-state.ts`; `docs/features/27-book-state-persistence.md`.
 - *Benefit (architectural):* every persisted-state system that skipped versioning regrets it on the first non-additive change. Write the version now while there are zero on-disk v1 files in the wild that resist upgrade.
 
-### 7. E2E coverage: upload → analysing → confirm → ready
+### 6. E2E coverage: upload → analysing → confirm → ready
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
@@ -103,7 +94,7 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - *Key files:* `e2e/smoke.spec.ts` (pattern to mirror); `playwright.config.ts`; mock fixtures in `src/mocks/canned-data.ts` are already wired for this flow.
 - *Benefit (technical):* the full new-book flow is the highest-blast-radius user journey and currently has zero browser-level regression coverage.
 
-### 8. E2E coverage: listen view + mini-player
+### 7. E2E coverage: listen view + mini-player
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
@@ -113,7 +104,7 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - *Depends on:* mock-mode chapter seeding — `mockGetBookState` (Must #3) needs to populate the chapters slice so the listen view can render a track list. Mock audio URLs are now live (former Must #5 shipped 2026-05-17 with plan 20 a/b audio), so the URL plumbing is unblocked; the remaining blocker is the chapters not appearing in `state.chapters.chapters` when a complete book is opened under mocks.
 - *Benefit (technical):* listen + playback is the second-highest-blast-radius surface.
 
-### 9. Slice unit tests: `applyGenerationTick`, `applyVoiceMatches`
+### 8. Slice unit tests: `applyGenerationTick`, `applyVoiceMatches`
 
 Source: CLAUDE.md "Suggested follow-ups".
 
@@ -122,17 +113,17 @@ Source: CLAUDE.md "Suggested follow-ups".
 - *Key files:* `src/store/chapters-slice.ts` (likely owns `applyGenerationTick`); `src/store/cast-slice.ts` (likely owns `applyVoiceMatches`); existing `*-slice.test.ts` files for the pattern.
 - *Benefit (technical):* the two slice reducers with the most regression history, currently exercised only via integration. Unit coverage shrinks the blast radius of any future refactor of either.
 
-### 10. Visual-regression baselines via Playwright `toHaveScreenshot()`
+### 9. Visual-regression baselines via Playwright `toHaveScreenshot()`
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups + open question.
 
 - *What:* Capture screenshot baselines for the five core stages (library, upload, analysing, confirm, ready) plus the listen view, using Playwright's native `toHaveScreenshot()`. Decide and document: per-platform baselines (`e2e/__screenshots__/{platform}/`) vs. single committed artwork. CI implications differ per choice.
 - *Acceptance:* `npm run test:e2e` includes a `visual.spec.ts` that captures and diffs the six baselines; first run blesses, subsequent runs diff. `docs/features/37-e2e-playwright.md` gets a new "Visual baselines" section documenting the storage decision.
 - *Key files:* new `e2e/visual.spec.ts`; `playwright.config.ts` (may need a project for `--update-snapshots` toggling); `docs/features/37-e2e-playwright.md`.
-- *Depends on:* Should #7 (need the new-book flow spec landing first so the analysing/confirm/ready stages can be captured under the same mock-data shape).
+- *Depends on:* Should #6 (need the new-book flow spec landing first so the analysing/confirm/ready stages can be captured under the same mock-data shape).
 - *Benefit (technical):* first defence against the silent CSS-token / Tailwind / icon-set drift that unit tests can't catch.
 
-### 11. Automatic retry of transient TTS sidecar failures
+### 10. Automatic retry of transient TTS sidecar failures
 
 Source: [`14-tts-sidecar-coqui.md`](features/14-tts-sidecar-coqui.md) (KNOWN: scaffolded behaviour).
 
@@ -141,7 +132,7 @@ Source: [`14-tts-sidecar-coqui.md`](features/14-tts-sidecar-coqui.md) (KNOWN: sc
 - *Key files:* `server/src/tts/synthesise-chapter.ts`; `server/src/tts/sidecar.ts` (the HTTP client to the sidecar); existing retry pattern in `server/src/analyzer/gemini.ts` for reference (see `generateWithLimiter`).
 - *Benefit (user):* a long generation run with one flaky sentence today wedges the queue until the user notices and clicks Retry. A single auto-retry restores hands-off operation.
 
-### 12. Top-bar TTS pill — third-surface consolidation trigger
+### 11. Top-bar TTS pill — third-surface consolidation trigger
 
 Source: [`30-global-model-control.md`](features/30-global-model-control.md).
 
