@@ -274,11 +274,16 @@ Working practice:
   4. **Flake suspicion → run the failing test in isolation once.** If it passes alone, name the flake explicitly to the user and propose either a retry-loop or a quarantine — never bypass on a hunch.
 - Sidecar pytest coverage lives at `server/tts-sidecar/tests/` —
   `test_smoke.py`, `test_synthesize.py`, `test_runtime_wiring.py`,
-  `test_kokoro.py`, `test_logging_format.py`. `test_runtime_wiring.py`
-  pins the CUDA+DeepSpeed+fp16 primary path: DeepSpeed init reaches the
-  model and runs before `tts.to(device)`, init failure is swallowed,
-  fp16 autocast wraps the synth call, `_float_audio_to_int16_le` handles
+  `test_kokoro.py`, `test_logging_format.py`,
+  `test_concurrent_synthesis.py`. `test_runtime_wiring.py` pins the
+  CUDA+DeepSpeed+fp16 primary path: DeepSpeed init reaches the model
+  and runs before `tts.to(device)`, init failure is swallowed, fp16
+  autocast wraps the synth call, `_float_audio_to_int16_le` handles
   clipping / stereo downmix / list input, and speaker-manifest
-  enumeration tolerates API drift. Wired into `npm run test:all` via
-  `npm run test:sidecar` (skips with a banner on an unbootstrapped venv).
-  Next milestone: concurrent-synthesis / thread-pool saturation.
+  enumeration tolerates API drift. `test_concurrent_synthesis.py` pins
+  the thread-pool saturation contract: N parallel `/synthesize` calls
+  run in parallel (asyncio.to_thread offload intact), each response
+  carries its own PCM (no cross-request bleed), and the sample-rate
+  header is per-response — Coqui and Kokoro covered separately. Wired
+  into `npm run test:all` via `npm run test:sidecar` (skips with a
+  banner on an unbootstrapped venv).
