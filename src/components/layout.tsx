@@ -178,6 +178,42 @@ export function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageKind]);
 
+  /* Cold-boot active-analyses discovery — surfaces the top-bar
+     AnalysisPill on the library route without requiring the user to
+     navigate to the specific book's analysing route first to discover
+     that there's a paused analysis on disk.
+
+     Fires once at mount. The dispatched action (`hydrateColdBoot`)
+     only writes when `analysis.activeStream === null`, so it safely
+     loses to a live SSE if the analysing view's own effect runs first
+     (e.g. cold-boot directly into `#/books/X/analysing`). Empty
+     snapshots list → no-op. Mock mode returns an empty list. */
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve(api.getActiveAnalyses?.()).then(res => {
+      if (cancelled || !res || res.snapshots.length === 0) return;
+      const top = res.snapshots[0];
+      dispatch(analysisActions.hydrateColdBoot({
+        bookId: top.bookId,
+        manuscriptId: top.manuscriptId,
+        bookTitle: top.bookTitle,
+        engine: top.engine,
+        phaseId: top.phaseId,
+        phaseLabel: top.phaseLabel,
+        phaseProgress: top.phaseProgress,
+        remainingMs: null,
+        lastTickAt: top.lastTickAt,
+        state: top.state,
+        haltReason: top.haltReason,
+        haltCode: top.haltCode,
+        kind: top.kind,
+        subsetChapterIds: top.subsetChapterIds,
+      }));
+    }).catch(err => { console.warn('[analysis] cold-boot scan failed', err); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /* Voice library hydration — derived from every confirmed cast on disk.
      Re-fires when the active book or selected TTS engine changes so
      `source: 'current'` and the engine-specific ttsVoice labels are correct

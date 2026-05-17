@@ -156,4 +156,46 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     }));
     expect(s1.activeStream).toBeNull();
   });
+
+  it('hydrateColdBoot writes the snapshot when activeStream is currently null', () => {
+    const state = analysisSlice.reducer(
+      undefined,
+      analysisActions.hydrateColdBoot({ ...baseSnapshot, state: 'paused' }),
+    );
+    expect(state.activeStream).toMatchObject({
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      state: 'paused',
+    });
+  });
+
+  it('hydrateColdBoot is a no-op when activeStream is already set (live SSE wins)', () => {
+    /* The cold-boot fetch can resolve AFTER the analysing view has
+       mounted and dispatched its own setActiveStream. The live snapshot
+       always wins — overwriting it with a stale disk snapshot would
+       reset progress / engine / kind to the on-disk values, causing
+       a visible flicker and (worse) misreporting the live engine to
+       the reverse-direction local-analyzer guard. */
+    const live: AnalysisStreamSnapshot = {
+      ...baseSnapshot,
+      phaseId: 1,
+      phaseLabel: 'Parsing and attribution',
+      phaseProgress: 0.42,
+      state: 'running',
+    };
+    const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(live));
+    const s2 = analysisSlice.reducer(
+      s1,
+      analysisActions.hydrateColdBoot({
+        ...baseSnapshot,
+        bookId: 'b_OTHER',
+        manuscriptId: 'm_OTHER',
+        phaseId: 0,
+        phaseLabel: 'Detecting characters',
+        phaseProgress: 0,
+        state: 'paused',
+      }),
+    );
+    expect(s2.activeStream).toEqual(live);
+  });
 });
