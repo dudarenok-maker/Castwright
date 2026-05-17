@@ -24,6 +24,7 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<UserSettings,
   | 'minorCastMinLines'
   | 'coverPickerDefaultTab'
   | 'defaultThemePreference'
+  | 'autoStartSidecar'
 > = {
   displayName:          'Mike Dudarenok',
   /* Gemini 3.1 Flash Lite over the Google API key is the new default
@@ -58,4 +59,10 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<UserSettings,
      Flip in lockstep with server/src/workspace/user-settings.ts
      DEFAULT_USER_SETTINGS. */
   defaultThemePreference: 'system',
+  /* Plan 43 — auto-start the TTS sidecar at server boot. On by default
+     because Kokoro v1 (the engine default) is cheap to keep resident
+     (~1 GB VRAM, ~1 s load). Users running Coqui or sharing VRAM with
+     the analyzer can toggle off in the Account view. Flip in lockstep
+     with server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
+  autoStartSidecar: true,
 };

@@ -24,7 +24,11 @@ Default local TTS provider. A separate process (Python-based Coqui XTTS v2 serve
 
 ## Acceptance walkthrough
 
-Run server with `VITE_USE_MOCKS=false`. Start the sidecar separately (`npm run tts:sidecar` per `CLAUDE.md`).
+Run server with `VITE_USE_MOCKS=false`. Sidecar autostart since plan
+[43](43-auto-start-sidecar.md) means the Node server spawns the sidecar
+on `app.listen` when `autoStartSidecar` is enabled (default true) — no
+second terminal needed. To run it manually instead, toggle the preference
+off in `#/account` and `npm run tts:sidecar` in a second terminal.
 
 1. **Sidecar up, first preview** — open profile drawer, click Preview. Within ~2–5 s, audio plays. MP3 appears under `server/audio/voices/`. Response: `cached: false`.
 2. **Sidecar up, second identical preview** — `cached: true` instantly; no sidecar round-trip.
