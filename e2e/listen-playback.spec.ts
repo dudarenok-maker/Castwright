@@ -45,5 +45,38 @@ test.describe('listen view + mini-player', () => {
     await expect(audio).toHaveJSProperty('paused', false, { timeout: 3_000 });
     const srcValue = await audio.evaluate((el: HTMLAudioElement) => el.src);
     expect(srcValue).toMatch(/stub-b\.mp3/);
+
+    /* Duration-tick assertion: with a real bundled MP3 driving the
+       element (stub-b.mp3, ~88 KB, 880 Hz tone) the browser will
+       advance `currentTime` once playback starts. Two `onTimeUpdate`
+       cycles (~500 ms each in chromium) is the unit of observable
+       progress; the 1000 ms wait covers two cycles with margin.
+       Deleting `setCurrentSec(e.currentTarget.currentTime)` in
+       src/components/mini-player.tsx would not break this assertion
+       (we read `currentTime` directly on the <audio>), but deleting
+       the imperative `el.src = audio.url` or the play() call would —
+       this case pins the play seam, not the React state update. */
+    await expect.poll(async () => audio.evaluate((el: HTMLAudioElement) => el.currentTime), {
+      timeout: 3_000,
+      message: 'audio currentTime should advance past zero after play()',
+    }).toBeGreaterThan(0);
+
+    /* Chapter-switch: clicking a different chapter row's play button
+       reloads the MiniPlayer's <audio> with that chapter's URL. In
+       mock mode both chapters resolve to stubAudioB so the src is
+       identical, but loading a fresh metadata cycle resets
+       currentTime — assert the row's "playing" affordance flips to
+       chapter 2 and the audio stays unpaused. Locator: stable
+       data-testid added to ChapterListenRow for this case. */
+    const chapter2Row = page.getByTestId('chapter-row-2');
+    await expect(chapter2Row).toBeVisible({ timeout: 3_000 });
+    await chapter2Row.getByRole('button', { name: /Play chapter 2/i }).click();
+    /* The newly-clicked row's button label flips to "Pause chapter 2"
+       once `currentTrack` updates and isPlaying becomes true. */
+    await expect(chapter2Row.getByRole('button', { name: /Pause chapter 2/i }))
+      .toBeVisible({ timeout: 3_000 });
+    /* Audio element stays alive and unpaused through the switch (the
+       URL-landing effect kicks off a new load + play). */
+    await expect(audio).toHaveJSProperty('paused', false, { timeout: 3_000 });
   });
 });
