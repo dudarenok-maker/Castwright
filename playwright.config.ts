@@ -18,6 +18,19 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
+  /* Per-platform visual-regression baselines. {platform} resolves to
+     'win32' | 'linux' | 'darwin' under Node's process.platform. Without
+     this, Playwright would commingle baselines from different OSes
+     under one path and fail on chromium font-rendering / sub-pixel
+     drift the moment CI on a different OS lands. Documented in
+     docs/features/37-e2e-playwright.md under "Visual baselines". */
+  snapshotPathTemplate: '{snapshotDir}/{platform}/{testFilePath}/{arg}{ext}',
+  expect: {
+    toHaveScreenshot: {
+      animations: 'disabled',
+      maxDiffPixelRatio: 0.01,
+    },
+  },
   use: {
     baseURL: 'http://127.0.0.1:5174',
     trace: 'retain-on-failure',

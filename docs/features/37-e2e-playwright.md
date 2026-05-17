@@ -44,6 +44,15 @@ owner: null
 - **Playwright e2e** (`e2e/smoke.spec.ts`) — asserts cold boot lands on the library, the "Start a new book" CTA is visible, the hash is one of `''`/`'#'`/`'#/'`, and clicking the CTA navigates to `#/new`. Runs in chromium under `VITE_USE_MOCKS=true`.
 - **Playwright e2e** (`e2e/new-book-flow.spec.ts`) — walks cold boot → "Start a new book" → paste manuscript → fill author → submit → analysing route → click "Start analysis" → wait for the mock SSE (~7.6 s) to land confirm → click "Confirm cast and review manuscript" → assert URL on the ready/manuscript stage. End-to-end check of the upload pipeline and the four stage transitions. Wall-clock ~13 s warm.
 - **Playwright e2e** (`e2e/listen-playback.spec.ts`) — navigates directly to `#/books/sb/listen` for the seeded 'complete' Solway Bay mock book, clicks "Play from the start", asserts the MiniPlayer's `<audio>` element renders with a `stub-b.mp3` src and `paused === false`. Locks the mock-seed → chapter hydrate → MiniPlayer mount → audio playback seam. Wall-clock ~5 s warm. Depends on the `MOCK_BOOK_STATES['sb']` seed in `src/lib/api.ts` (shipped alongside).
+- **Playwright e2e** (`e2e/visual.spec.ts`) — captures `toHaveScreenshot()` baselines for the six core surfaces (library, upload, analysing-pre-start, confirm, ready/manuscript, listen). First defence against silent CSS-token / Tailwind / icon-set drift. See "Visual baselines" below.
+
+### Visual baselines
+
+- **Storage:** per-platform under `e2e/visual.spec.ts-snapshots/{platform}/visual.spec.ts/<name>.png`. `{platform}` resolves to `win32` | `linux` | `darwin` via `process.platform`. Wired via `snapshotPathTemplate: '{snapshotDir}/{platform}/{testFilePath}/{arg}{ext}'` in `playwright.config.ts`. Per-platform was chosen over a single committed set because chromium font rendering and sub-pixel layout drift between OSes (and CI will land on Linux per Could #1 in `docs/BACKLOG.md`).
+- **Stability knobs:** `animations: 'disabled'` and `maxDiffPixelRatio: 0.01` in the global `expect.toHaveScreenshot` config. Animations:'disabled' freezes CSS transitions + animations at their final frame for capture. The 1% pixel ratio absorbs minor font hinting noise without masking real visual regressions.
+- **The analysing baseline captures the pre-Start state**, not mid-stream. The streaming UI's phase-progress percent is React state (not CSS animation) so animations:'disabled' wouldn't make it deterministic. The pre-Start state still exercises the analysing-view layout — model picker, Start button, header — which is the layout under regression test.
+- **Regenerate workflow:** intentional visual changes (token tweaks, layout edits, new icons) require regenerating baselines. Run `npm run test:e2e -- --update-snapshots visual.spec.ts`, review the new PNGs in `git diff`, and commit alongside the source change. Reviewers see both deltas in one PR.
+- **Invariant:** any change that touches `src/styles.css`, `tailwind.config.ts`, an icon under `src/lib/icons.tsx`, or layout JSX in the six baselined surfaces SHOULD regenerate baselines in the same commit. Drift caught by a later unrelated PR muddies blame.
 
 ### Manual acceptance walkthrough
 
@@ -63,8 +72,7 @@ Run from a clean checkout:
 
 ## Out of scope (follow-ups)
 
-- **Visual regression baselines.** Playwright supports `toHaveScreenshot()` natively. Capture baselines for the library, upload, analysing, confirm, and ready stages once they stabilise. Open question: where do baselines live (`e2e/__screenshots__/` per-platform vs. committed-as-art) — capture in a follow-up plan when the first baseline lands.
-- **More golden paths.** Voice library tab. Each gets its own spec, all reuse the mock backend. (Upload → analysing → confirm → ready *shipped 2026-05-17 as `e2e/new-book-flow.spec.ts`*; Listen-view playback *shipped 2026-05-17 as `e2e/listen-playback.spec.ts` with the `MOCK_BOOK_STATES['sb']` seed*.)
+- **More golden paths.** Voice library tab. Each gets its own spec, all reuse the mock backend. (Upload → analysing → confirm → ready *shipped 2026-05-17 as `e2e/new-book-flow.spec.ts`*; Listen-view playback *shipped 2026-05-17 as `e2e/listen-playback.spec.ts` with the `MOCK_BOOK_STATES['sb']` seed*; Visual baselines *shipped 2026-05-17 as `e2e/visual.spec.ts` covering six core surfaces*.)
 - **CI integration.** No CI runs anything yet. When CI exists, `test:e2e` is the slowest job; budget accordingly.
 
 ## Ship notes
