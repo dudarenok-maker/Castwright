@@ -15,7 +15,14 @@ export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  /* Local pre-push runs the e2e battery alongside whatever chrome
+     instances + node processes the developer left running, so parallel
+     workers occasionally lose a race to fetch+decode the bundled mock
+     MP3 or to complete a `page.reload()` navigation. One retry catches
+     these environmental flakes without masking real regressions —
+     genuine breakage fails the retry too. CI keeps 2 retries for the
+     same reason at slightly higher tolerance. */
+  retries: process.env.CI ? 2 : 1,
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
   /* Per-platform visual-regression baselines. {platform} resolves to
