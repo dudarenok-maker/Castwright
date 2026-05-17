@@ -58,6 +58,8 @@ LAN URL enumeration (`GET /api/export/lan`) filters out 127.x and 169.254.x — 
 - **Atomic writes.** Both the staging artifact and the sync-folder copy use `tmp + renameWithRetry`. The retry covers OneDrive's change-detection scan window — same hazard that crashed the library-cast-override path on 2026-05-15.
 - **In-memory jobs are not the source of truth for downloads.** A `manifest.json` lands next to the artifact on completion; the route's `rehydrateBook` re-populates the in-memory table on first lookup so download URLs survive server restarts.
 - **The export modal is the only entry point.** The Listen view's three "Or download a file" tiles (now two) stay marked as future affordances; the live flow goes through the modal.
+- **Cancel signals the server to abort.** `DELETE /api/books/:bookId/exports/:exportId` flips the job to `cancelled`, fires an `AbortController` that the build functions check between chapters (and between the probe loop / ffmpeg spawn for M4B), and removes the staging dir best-effort. The frontend dispatches `exportDismissed` synchronously regardless of the DELETE result so the modal recovers even if the server has already lost the job. Idempotent on already-terminal jobs (returns 204 without touching state). Pinned by `server/src/routes/export.test.ts` ("DELETE cancels a running job", "DELETE is idempotent on already-terminal jobs", "DELETE on an unknown export id 404s").
+- **Retry re-POSTs the same spec without re-opening the picker.** From a `failed` job, clicking Retry dispatches `exportDismissed` for the failed id and immediately submits the current `format`/`destination` again. The picker doesn't flash because `handleSubmit` synchronously sets the new `activeJobId` on success. Pinned by `src/modals/export-audiobook.test.tsx` ("retries from FAILED").
 - **LAN bind is whatever Node defaults to.** No `host` argument is passed to `app.listen`; the user trusts their LAN. No TLS / auth — out of scope for v1.
 
 ## Acceptance walkthrough (Android, end-to-end)
@@ -82,6 +84,5 @@ Use the canonical end-to-end manuscript at `C:\Users\dudar\Downloads\the Coalfal
   (MP3.ZIP). Absent cover → exports still ship without artwork. Pinned
   by `build-m4b.test.ts` ("embeds the OpenLibrary cover...") and
   `id3-tags.test.ts` ("cover embedding (coverJpegPath)").
-- **Cancel / dismiss / retry on running jobs.** The modal renders progress but doesn't yet expose a Cancel button. Retry on `failed` jobs is wired in `ExportQueueRow` but not surfaced — the user re-clicks Build.
 - **PocketBook Cloud direct upload.** Closed protocol; not worth reverse-engineering when sideload via LAN URL or sync folder works fine.
 - **Send-to-PocketBook email gateway** (`@pbsync.com`). Marketed for ebooks; audiobook size limits undocumented. Could be a third destination tab later.

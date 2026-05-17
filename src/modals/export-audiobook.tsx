@@ -212,6 +212,7 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
     };
   }, [activeJobId, bookId, dispatch]);
 
+
   /* Hook must run on every render — keep it above the early return. */
   const activeJob: BookExportJob | undefined = useAppSelector(s =>
     activeJobId ? (s.exports.byBookId[bookId] ?? []).find(j => j.id === activeJobId) : undefined,
@@ -248,6 +249,33 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
     } finally {
       setSyncFolderSaving(false);
     }
+  };
+
+  /* Cancel a running export. Fires-and-forgets the server DELETE
+     (failures don't block dismissal — the user wants out either way),
+     drops the job from the slice, and returns the modal to the picker
+     by clearing activeJobId (which also tears down the poll effect via
+     its cleanup). */
+  const handleCancel = async () => {
+    if (!activeJobId) return;
+    const idAtClick = activeJobId;
+    setActiveJobId(null);
+    setMissing(null);
+    try { await api.cancelBookExport(bookId, idAtClick); }
+    catch { /* server may already be gone; local dismiss still wins */ }
+    dispatch(exportsActions.exportDismissed({ bookId, exportId: idAtClick }));
+  };
+
+  /* Retry from FAILED: drop the failed job from the slice and re-submit
+     the same format/destination immediately. The picker doesn't reappear
+     mid-flight because handleSubmit synchronously sets the new
+     activeJobId on success. */
+  const handleRetry = () => {
+    if (activeJobId) {
+      dispatch(exportsActions.exportDismissed({ bookId, exportId: activeJobId }));
+      setActiveJobId(null);
+    }
+    void handleSubmit();
   };
 
   const lanUrl = lanUrls[0] ?? null;
@@ -373,18 +401,41 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
             </p>
             <div className="flex items-center gap-3">
               <button onClick={onClose} className="text-sm font-medium text-ink/60 hover:text-ink">Close</button>
-              <button
-                onClick={handleSubmit}
-                disabled={!canSubmit}
-                data-testid="export-submit"
-                className="px-5 py-2 rounded-full font-semibold text-sm bg-ink text-canvas hover:bg-ink-soft disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {submitting
-                  ? 'Starting…'
-                  : tileHint
-                    ? tileHint.submitLabel
-                    : (tab === 'download' ? 'Build download' : 'Build and save')}
-              </button>
+              {activeJob && (activeJob.status === 'in_progress' || activeJob.status === 'queued') ? (
+                /* EXPORTING — Cancel signals the server to abort and
+                   returns the picker. Building copy stays as "Starting…"
+                   for the brief window before the first poll lands. */
+                <button
+                  onClick={handleCancel}
+                  data-testid="export-cancel"
+                  className="px-5 py-2 rounded-full font-semibold text-sm bg-rose-100 text-rose-800 hover:bg-rose-200"
+                >
+                  Cancel
+                </button>
+              ) : activeJob && activeJob.status === 'failed' ? (
+                /* FAILED — Retry re-POSTs the same format/destination
+                   without re-opening the picker. */
+                <button
+                  onClick={handleRetry}
+                  data-testid="export-retry"
+                  className="px-5 py-2 rounded-full font-semibold text-sm bg-ink text-canvas hover:bg-ink-soft"
+                >
+                  Retry
+                </button>
+              ) : (
+                <button
+                  onClick={handleSubmit}
+                  disabled={!canSubmit}
+                  data-testid="export-submit"
+                  className="px-5 py-2 rounded-full font-semibold text-sm bg-ink text-canvas hover:bg-ink-soft disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {submitting
+                    ? 'Starting…'
+                    : tileHint
+                      ? tileHint.submitLabel
+                      : (tab === 'download' ? 'Build download' : 'Build and save')}
+                </button>
+              )}
             </div>
           </footer>
         </div>

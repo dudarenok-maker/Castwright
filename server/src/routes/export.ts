@@ -16,7 +16,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { nanoid } from 'nanoid';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
@@ -35,7 +35,7 @@ export interface BookExportJob {
   bookId: string;
   format: 'mp3-zip' | 'm4b' | 'mp3-folder';
   destination: 'download' | 'sync-folder';
-  status: 'queued' | 'in_progress' | 'done' | 'failed';
+  status: 'queued' | 'in_progress' | 'done' | 'failed' | 'cancelled';
   filename: string;
   sizeBytes: number | null;
   progress: number | null;
@@ -46,12 +46,19 @@ export interface BookExportJob {
   completedAt: string | null;
 }
 
+
 const ALLOWED_FORMATS: ReadonlySet<BookExportJob['format']> = new Set(['mp3-zip', 'm4b', 'mp3-folder']);
 
 export const exportRouter = Router();
 
 /* In-memory job table. Cleared by tests via _resetExportJobs(). */
 const jobs = new Map<string, BookExportJob>();
+
+/* Sibling map of AbortControllers keyed by exportId. Populated when a
+   POST creates a job, signalled by DELETE, deleted by runExportJob's
+   finally. Lets cancellation propagate into the running build without
+   the build functions having to know about jobs/jobControllers. */
+const jobControllers = new Map<string, AbortController>();
 
 function exportsDir(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'exports');
@@ -151,12 +158,59 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
     completedAt: null,
   };
   jobs.set(exportId, job);
+  const controller = new AbortController();
+  jobControllers.set(exportId, controller);
 
   /* Fire-and-forget the actual build. The client polls getBookExport for
      progress + completion. */
-  void runExportJob(job, located.bookDir, located.state, outPath, settings.exportSyncFolder);
+  void runExportJob(job, located.bookDir, located.state, outPath, settings.exportSyncFolder, controller.signal);
 
   return res.status(201).json(job);
+});
+
+exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Response) => {
+  const located = await findBookByBookId(req.params.bookId);
+  if (!located) return res.status(404).json({ error: 'book_not_found' });
+  await rehydrateBook(located.bookDir, located.state.bookId);
+  const job = jobs.get(req.params.exportId);
+  if (!job || job.bookId !== located.state.bookId) return res.status(404).json({ error: 'export_not_found' });
+
+  /* Idempotent: already-terminal jobs (done / failed / cancelled) reply
+     204 without touching state. Lets the frontend retry a cancel click
+     without surfacing a spurious error if the job finished in between. */
+  if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') {
+    return res.status(204).end();
+  }
+
+  /* Mark cancelled BEFORE aborting the controller — runExportJob's
+     catch checks `job.status === 'cancelled'` to decide whether to
+     overwrite with 'failed', so the order matters. */
+  job.status = 'cancelled';
+  job.completedAt = new Date().toISOString();
+  job.errorReason = 'Cancelled by user.';
+  jobs.set(job.id, { ...job });
+
+  const controller = jobControllers.get(job.id);
+  controller?.abort();
+
+  /* Best-effort manifest write so a server restart sees the cancelled
+     state. If the disk write fails (the staging dir might already be
+     gone), the in-memory state is still authoritative. */
+  try {
+    await writeJsonAtomic(manifestPath(located.bookDir, job.id), job);
+  } catch {
+    /* swallow */
+  }
+
+  /* Best-effort cleanup of the staging dir so cancelled jobs don't
+     leak partial artifacts. The build's own finally clauses already
+     remove their staging-* tmp dirs; this removes the export-id
+     parent (which holds the final-output path that was about to be
+     written). */
+  const stagingDir = join(exportsDir(located.bookDir), job.id);
+  await rm(stagingDir, { recursive: true, force: true }).catch(() => { /* leave it for next rehydrate */ });
+
+  return res.status(204).end();
 });
 
 exportRouter.get('/:bookId/exports/:exportId', async (req: Request, res: Response) => {
@@ -219,6 +273,7 @@ async function runExportJob(
   state: BookStateJson,
   outPath: string,
   syncFolder: string | null,
+  signal: AbortSignal,
 ): Promise<void> {
   try {
     const onProgress = (ratio: number) => {
@@ -230,7 +285,7 @@ async function runExportJob(
          sub-directory per book under the export id). The builder writes
          per-chapter MP3s into it; the sync-folder branch then mirrors
          each file into the user's target via writeFolderToSyncFolder. */
-      const folderResult = await buildMp3Folder({ bookDir, state, outDir: outPath, onProgress });
+      const folderResult = await buildMp3Folder({ bookDir, state, outDir: outPath, onProgress, signal });
       job.sizeBytes = folderResult.totalBytes;
       job.progress = 1;
 
@@ -246,8 +301,8 @@ async function runExportJob(
       job.downloadUrl = null;
     } else {
       const result = job.format === 'mp3-zip'
-        ? await buildMp3Zip({ bookDir, state, outPath, onProgress })
-        : await buildM4b({ bookDir, state, outPath, onProgress });
+        ? await buildMp3Zip({ bookDir, state, outPath, onProgress, signal })
+        : await buildM4b({ bookDir, state, outPath, onProgress, signal });
       job.sizeBytes = result.sizeBytes;
       job.progress = 1;
 
@@ -260,13 +315,26 @@ async function runExportJob(
     job.status = 'done';
     job.completedAt = new Date().toISOString();
   } catch (e) {
-    job.status = 'failed';
-    job.errorReason = e instanceof ExportIncompleteError
-      ? `Export incomplete: ${e.missing.length} chapter(s) missing MP3 audio.`
-      : (e as Error).message;
-    job.completedAt = new Date().toISOString();
+    /* Cancellation: the DELETE handler already flipped status to
+       'cancelled' before signalling abort. Honour that — don't
+       overwrite it with 'failed'. Same guard for races where the
+       signal trips for any reason while DELETE hasn't run yet. */
+    if (job.status === 'cancelled' || signal.aborted || (e as Error)?.name === 'AbortError') {
+      if (job.status !== 'cancelled') {
+        job.status = 'cancelled';
+        job.completedAt = new Date().toISOString();
+        job.errorReason = (e as Error)?.message || 'Cancelled.';
+      }
+    } else {
+      job.status = 'failed';
+      job.errorReason = e instanceof ExportIncompleteError
+        ? `Export incomplete: ${e.missing.length} chapter(s) missing MP3 audio.`
+        : (e as Error).message;
+      job.completedAt = new Date().toISOString();
+    }
   } finally {
     jobs.set(job.id, { ...job });
+    jobControllers.delete(job.id);
     try {
       await writeJsonAtomic(manifestPath(bookDir, job.id), job);
     } catch {
@@ -281,4 +349,5 @@ async function runExportJob(
 /** Test-only: drop the in-memory job table. */
 export function _resetExportJobs(): void {
   jobs.clear();
+  jobControllers.clear();
 }

@@ -35,6 +35,8 @@ export interface BuildMp3FolderOptions {
   /** Progress callback — fires once per chapter packed, with a 0..1
       ratio. Mirrors `buildMp3Zip`. */
   onProgress?: (ratio: number) => void;
+  /** Optional cancellation signal — checked between chapters. */
+  signal?: AbortSignal;
 }
 
 export interface BuildMp3FolderResult {
@@ -46,7 +48,7 @@ export interface BuildMp3FolderResult {
 }
 
 export async function buildMp3Folder(opts: BuildMp3FolderOptions): Promise<BuildMp3FolderResult> {
-  const { bookDir, state, outDir, onProgress } = opts;
+  const { bookDir, state, outDir, onProgress, signal } = opts;
 
   const chapters = [...state.chapters]
     .filter(c => !c.excluded)
@@ -87,6 +89,7 @@ export async function buildMp3Folder(opts: BuildMp3FolderOptions): Promise<Build
   let totalBytes = 0;
 
   for (let i = 0; i < resolved.length; i++) {
+    signal?.throwIfAborted();
     const { chapter, mp3Path } = resolved[i];
     const fileName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.mp3`;
     const taggedPath = join(outDir, fileName);

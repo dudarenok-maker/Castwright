@@ -35,6 +35,10 @@ export interface BuildM4bOptions {
   /** Optional progress callback — fires as ffmpeg writes `-progress` ticks
       to stdout. Ratio is 0..1 over the *total* expected duration. */
   onProgress?: (ratio: number) => void;
+  /** Optional cancellation signal — checked between probe iterations and
+      before the ffmpeg spawn; the running ffmpeg is killed via SIGTERM
+      if the signal trips mid-mux. */
+  signal?: AbortSignal;
 }
 
 export interface BuildM4bResult {
@@ -44,7 +48,7 @@ export interface BuildM4bResult {
 }
 
 export async function buildM4b(opts: BuildM4bOptions): Promise<BuildM4bResult> {
-  const { bookDir, state, outPath, onProgress } = opts;
+  const { bookDir, state, outPath, onProgress, signal } = opts;
 
   const chapters = [...state.chapters]
     .filter(c => !c.excluded)
@@ -73,8 +77,10 @@ export async function buildM4b(opts: BuildM4bOptions): Promise<BuildM4bResult> {
      is the source of truth for the chapter timestamps. */
   const durationsSec: number[] = [];
   for (const { mp3Path } of resolved) {
+    signal?.throwIfAborted();
     durationsSec.push(await probeDurationSec(mp3Path));
   }
+  signal?.throwIfAborted();
   const totalDurationSec = durationsSec.reduce((a, b) => a + b, 0);
 
   const stagingDir = `${outPath}.staging-${process.pid}-${Date.now()}`;
@@ -103,6 +109,7 @@ export async function buildM4b(opts: BuildM4bOptions): Promise<BuildM4bResult> {
       outPath,
       totalDurationSec,
       onProgress,
+      signal,
     });
 
     const finalStat = await stat(outPath);
@@ -218,13 +225,18 @@ interface RunFfmpegMuxOptions {
   outPath: string;
   totalDurationSec: number;
   onProgress?: (ratio: number) => void;
+  signal?: AbortSignal;
 }
 
 function runFfmpegMux(opts: RunFfmpegMuxOptions): Promise<void> {
-  const { concatPath, ffmetadataPath, coverPath, outPath, totalDurationSec, onProgress } = opts;
+  const { concatPath, ffmetadataPath, coverPath, outPath, totalDurationSec, onProgress, signal } = opts;
   const totalUs = Math.max(1, Math.round(totalDurationSec * 1_000_000));
 
   return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'));
+      return;
+    }
     /* Inputs: concat-demuxed MP3s [0], FFMETADATA sidecar [1], and
        optionally the cover JPEG [2]. When the cover is present we map
        its video stream into the output with `attached_pic` disposition
@@ -253,6 +265,17 @@ function runFfmpegMux(opts: RunFfmpegMuxOptions): Promise<void> {
     const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const stderrChunks: Buffer[] = [];
 
+    /* Bridge AbortSignal → child process. ffmpeg responds to SIGTERM on
+       Windows by exiting non-zero (the close handler below resolves
+       reject) — combined with the `cancelled` flag we set here, the
+       caller can distinguish an abort from a real failure. */
+    let cancelledByAbort = false;
+    const onAbort = () => {
+      cancelledByAbort = true;
+      try { child.kill('SIGTERM'); } catch { /* already exited */ }
+    };
+    signal?.addEventListener('abort', onAbort);
+
     let stdoutBuf = '';
     child.stdout.on('data', (chunk: Buffer) => {
       if (!onProgress) return;
@@ -280,11 +303,18 @@ function runFfmpegMux(opts: RunFfmpegMuxOptions): Promise<void> {
     });
     child.stderr.on('data', c => stderrChunks.push(c));
 
-    child.on('error', err => reject(new Error(
-      `Failed to spawn ffmpeg: ${err.message}. ` +
-      `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
-    )));
+    child.on('error', err => {
+      signal?.removeEventListener('abort', onAbort);
+      reject(new Error(
+        `Failed to spawn ffmpeg: ${err.message}. ` +
+        `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
+      ));
+    });
     child.on('close', code => {
+      signal?.removeEventListener('abort', onAbort);
+      if (cancelledByAbort) {
+        return reject(signal?.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'));
+      }
       if (code === 0) return resolve();
       const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
       reject(new Error(`ffmpeg exited with code ${code}: ${stderr || '(no stderr)'}`));
