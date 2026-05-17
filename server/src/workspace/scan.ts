@@ -17,6 +17,7 @@ import {
   stateJsonPath,
 } from './paths.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
+import { stampStateSchema } from './state-migrate.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 
 export type LibraryBookStatus =
@@ -29,6 +30,12 @@ export type LibraryBookStatus =
   | 'orphaned';
 
 export interface BookStateJson {
+  /** Schema version of the on-disk shape. Stamped on every write by
+      `stampStateSchema` in `server/src/workspace/state-migrate.ts`.
+      Absent in legacy files written before the seam landed — those are
+      interpreted as v1 by `migrateStateJson`. See plan 27 for the
+      rename-vs-add policy. */
+  schema?: number;
   bookId: string;
   manuscriptId: string;
   title: string;
@@ -529,7 +536,7 @@ export async function backfillAudioModelKeysFromSegments(
   if (backfillNeeded) {
     const upgraded: BookStateJson = { ...state, chapters: next };
     try {
-      await writeJsonAtomic(stateJsonPath(bookDir), upgraded);
+      await writeJsonAtomic(stateJsonPath(bookDir), stampStateSchema(upgraded));
       return { state: upgraded, totalSec };
     } catch {
       /* Best-effort upgrade — a failed write just means the next call

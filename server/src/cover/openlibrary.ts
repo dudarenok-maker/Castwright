@@ -15,6 +15,7 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { stampStateSchema } from '../workspace/state-migrate.js';
 import { coverImagePath, stateJsonPath } from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
@@ -224,7 +225,7 @@ export async function patchStateCover(
     fetchedAt: new Date().toISOString(),
   };
   state.updatedAt = new Date().toISOString();
-  await writeJsonAtomic(path, state);
+  await writeJsonAtomic(path, stampStateSchema(state));
 }
 
 /** Inverse of patchStateCover — used by DELETE to revert to the
@@ -235,5 +236,5 @@ export async function clearStateCover(bookDir: string): Promise<void> {
   if (!state) return;
   delete state.coverImage;
   state.updatedAt = new Date().toISOString();
-  await writeJsonAtomic(path, state);
+  await writeJsonAtomic(path, stampStateSchema(state));
 }

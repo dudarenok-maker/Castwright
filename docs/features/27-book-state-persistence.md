@@ -43,8 +43,28 @@ Run with `VITE_USE_MOCKS=false`, server on `:8080`, with at least one book under
 - **Reparse selective wipe**: `ConfirmRoute.onReanalyse` dispatches `changeLog/wipeBookShapeEvents` BEFORE `uiActions.reanalyse`. The wipe drops every event with a defined `chapterId` (regenerate, chapter_complete, chapter_failed, boundary_move). Cast/voice prefs (voice_tune, voice_lock, voice_reuse, cast_confirm) and historical markers (import, analysis_complete, library_add, generation_started) survive — those are either still accurate after a reparse or remain informative.
 - Workspace endpoint MUST skip books that have no `.audiobook/change-log.json` rather than failing the whole response. A freshly imported book without any logged actions is normal state.
 
+## Schema versioning + migration seam
+
+State.json is versioned via a top-level `schema: number` field stamped by `stampStateSchema` (in `server/src/workspace/state-migrate.ts`) on every write. `CURRENT_STATE_SCHEMA = 1` today. The reader-side `migrateStateJson(raw)` runs every parsed doc through a single seam that knows how to:
+
+- Treat a missing `schema` field as v1 (back-compat for every state.json written before the seam landed — those files load unchanged).
+- Pass v1 docs through as a no-op.
+- Reject `schema > CURRENT_STATE_SCHEMA` with `UnsupportedStateSchemaError`, refusing to interpret a future-version file the current server doesn't fully understand. (Silently reading would risk dropping fields a newer client wrote when the user next edits the book.)
+- Route older versions through a transform branch (today no path exists because field-absent already covers the only pre-v1 case).
+
+**Rename-vs-add policy.** Decide whether your change bumps the schema:
+
+- **Adding an OPTIONAL field is backwards-compatible.** No schema bump. The old reader ignores the new field; the new writer keeps writing it. This is the common case (e.g. `narratorCredit`, `coverImage`, `audioModelKey` all landed without a bump).
+- **Renaming a field, removing a field still read by older clients, or changing a field's semantics (units, encoding, type widening)** breaks readers. Bump `CURRENT_STATE_SCHEMA` and add a migration branch in `migrateStateJson`.
+
+**Writer call sites** (all stamped via `stampStateSchema` at the `writeJsonAtomic(stateJsonPath(...), ...)` boundary): `server/src/routes/book-state.ts` (title refresh, PUT slice=state with/without rename, reparse, exclude-chapter), `server/src/routes/import.ts` (initial book creation), `server/src/routes/analysis.ts` (main + subset analysis result writes), `server/src/routes/generation.ts` (post-render duration + audioModelKey stamp), `server/src/workspace/scan.ts` (lazy audio-model backfill), `server/src/cover/openlibrary.ts` (cover patch / clear). Adding a new writer? Stamp it.
+
+**Reader-side migration**: today the readers throughout `server/src/` still use raw `readJson<BookStateJson>(...)` because the `schema?: number` field is optional in the type and v1-stamped files pass through unchanged. When `CURRENT_STATE_SCHEMA` bumps to 2, route the canonical reader (`findBookByBookId` in `scan.ts`) through `migrateStateJson(raw)` so every other caller picks up the migration for free.
+
+Pinned by `server/src/workspace/state-migrate.test.ts` (the unit specs) + the round-trip case in `server/src/routes/book-state.test.ts` ("PUT slice=state stamps schema=1 on the on-disk file").
+
 ## Out of scope
 
 - Conflict resolution if two clients write the same book simultaneously — single-user assumption.
-- Versioning of the state.json schema — current is v1; future migrations TBD.
+- `.audiobook/analysis-state.json` schema versioning — separate file, ephemeral persistence (deleted on terminal success), not yet versioned. If that ever needs migration, file a new backlog item.
 - Encryption of state.json — local-only, no encryption needed.

@@ -21,6 +21,7 @@ import {
 import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
 import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { normaliseForMatch as normaliseForMatchShared, matchQuoteInSource } from '../util/text-match.js';
@@ -2432,7 +2433,7 @@ async function runMainAnalyzerJob(
               })),
               updatedAt: new Date().toISOString(),
             };
-            await writeJsonAtomic(statePath, next);
+            await writeJsonAtomic(statePath, stampStateSchema(next));
           }
         }
       } catch (persistErr) {
@@ -3050,7 +3051,7 @@ async function runSubsetAnalyzerJob(
               })),
               updatedAt: new Date().toISOString(),
             };
-            await writeJsonAtomic(statePath, next);
+            await writeJsonAtomic(statePath, stampStateSchema(next));
           }
         }
       } catch (persistErr) {
