@@ -69,6 +69,15 @@ export const userSettingsSchema = z.object({
      'system' default so legacy user-settings.json files load
      unchanged. */
   defaultThemePreference: z.enum(THEME_PREFERENCE_VALUES).optional(),
+  /* Plan 43 — when true, the Node server spawns the Python TTS
+     sidecar as a child process at app.listen time. The existing
+     `defaultTtsModelKey` decides whether the spawn sets
+     `PRELOAD_COQUI=1` (only when defaulting to coqui-xtts-v2),
+     so this boolean × that enum effectively gives an off /
+     kokoro-only / coqui-preload triple without a new field.
+     Optional with a `true` default so legacy user-settings.json
+     files load unchanged and a fresh install gets TTS-on-boot. */
+  autoStartSidecar: z.boolean().optional(),
 });
 
 export type UserSettings = z.infer<typeof userSettingsSchema>;
@@ -107,6 +116,13 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      top-bar quick toggle. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   defaultThemePreference: 'system',
+  /* Default ON: with Kokoro v1 as the default engine the sidecar's
+     eager Kokoro preload is cheap (~1 GB / ~1 s), so co-starting it
+     with the Node server saves a second terminal. Coqui-defaulters
+     pay the ~30 s preload up front but explicitly opted in via
+     defaultTtsModelKey. Flip in lockstep with
+     src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
+  autoStartSidecar: true,
 };
 
 let cached: UserSettings | null = null;
@@ -191,6 +207,19 @@ export function getResolvedOllamaUrl(): string {
   const c = cached;
   const raw = c?.ollamaUrl ?? process.env.OLLAMA_URL ?? DEFAULT_USER_SETTINGS.ollamaUrl;
   return raw.replace(/\/+$/, '');
+}
+
+/** Plan 43 — controls whether server/src/index.ts spawns the TTS sidecar
+    at app.listen time. Resolution chain:
+      1. process.env.DISABLE_AUTOSTART_SIDECAR === '1' → false (CI / tests
+         can hard-disable regardless of the on-disk preference).
+      2. cached user-settings autoStartSidecar (if defined).
+      3. DEFAULT_USER_SETTINGS.autoStartSidecar (true).
+    Returns boolean; never undefined. */
+export function getResolvedAutoStartSidecar(): boolean {
+  if (process.env.DISABLE_AUTOSTART_SIDECAR === '1') return false;
+  const c = cached;
+  return c?.autoStartSidecar ?? DEFAULT_USER_SETTINGS.autoStartSidecar ?? true;
 }
 
 /** Hardcoded Ollama tag used as the terminal fallback in

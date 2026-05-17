@@ -1042,6 +1042,17 @@ components:
             via `prefers-color-scheme` at runtime and re-evaluates if
             the OS scheme flips.
             Plan [41](docs/features/41-dark-mode.md).
+        autoStartSidecar:
+          type: boolean
+          description: |
+            When true (default), the Node server spawns the Python TTS
+            sidecar as a child process at app.listen time, with
+            `PRELOAD_COQUI=1` propagated iff `defaultTtsModelKey` is
+            `coqui-xtts-v2`. When false, the user manages the sidecar
+            themselves (e.g. `npm run tts:sidecar` in a second terminal)
+            and the Node server still serves requests over a red
+            /api/sidecar/health until they do.
+            Plan [43](docs/features/43-auto-start-sidecar.md).
         apiKeyStatus:
           type: string
           enum: [set, unset]
@@ -1096,6 +1107,8 @@ components:
         defaultThemePreference:
           type: string
           enum: [light, dark, system]
+        autoStartSidecar:
+          type: boolean
 
     # --- Library ----------------------------------------------------
     LibraryResponse:

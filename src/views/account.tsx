@@ -36,6 +36,9 @@ export function AccountView() {
   const [defaultThemePreference, setDefaultThemePreference] = useState<ThemePreference>(
     account.defaultThemePreference ?? 'system',
   );
+  const [autoStartSidecar, setAutoStartSidecar] = useState<boolean>(
+    account.autoStartSidecar ?? true,
+  );
   const themeOverride = useAppSelector(s => s.ui.themeOverride);
   const [showSaved,             setShowSaved]             = useState(false);
 
@@ -51,13 +54,15 @@ export function AccountView() {
     setMinorCastMinLines(account.minorCastMinLines);
     setCoverPickerDefaultTab(account.coverPickerDefaultTab ?? 'search');
     setDefaultThemePreference(account.defaultThemePreference ?? 'system');
+    setAutoStartSidecar(account.autoStartSidecar ?? true);
   }, [account.hydrated, account.displayName, account.defaultAnalysisModel,
       account.defaultTtsEngine, account.defaultTtsModelKey,
       account.sidecarUrl, account.analysisEngine, account.ollamaUrl,
       account.workspaceDirOverride,
       account.minorCastMinLines,
       account.coverPickerDefaultTab,
-      account.defaultThemePreference]);
+      account.defaultThemePreference,
+      account.autoStartSidecar]);
 
   /* When the engine switches, the selected modelKey may not belong to the
      new engine's group. Default to the new group's first model so the
@@ -76,6 +81,9 @@ export function AccountView() {
   const persistedOverride = account.workspaceDirOverride ?? '';
   const workspaceDirty = workspaceDirOverride !== persistedOverride;
 
+  const persistedAutoStart = account.autoStartSidecar ?? true;
+  const autoStartDirty = autoStartSidecar !== persistedAutoStart;
+
   const dirty = useMemo(() => {
     return displayName           !== account.displayName
         || defaultAnalysisModel  !== account.defaultAnalysisModel
@@ -87,10 +95,12 @@ export function AccountView() {
         || minorCastMinLines     !== account.minorCastMinLines
         || coverPickerDefaultTab !== (account.coverPickerDefaultTab ?? 'search')
         || defaultThemePreference !== (account.defaultThemePreference ?? 'system')
+        || autoStartDirty
         || workspaceDirty;
   }, [displayName, defaultAnalysisModel, defaultTtsEngine, defaultTtsModelKey,
       sidecarUrl, analysisEngine, ollamaUrl,
       minorCastMinLines, coverPickerDefaultTab, defaultThemePreference,
+      autoStartDirty,
       workspaceDirty, account]);
 
   const onSave = async () => {
@@ -106,6 +116,7 @@ export function AccountView() {
       minorCastMinLines,
       coverPickerDefaultTab,
       defaultThemePreference,
+      autoStartSidecar,
     };
     const action = await dispatch(saveAccountSettings(patch));
     if (saveAccountSettings.fulfilled.match(action)) {
@@ -303,6 +314,31 @@ export function AccountView() {
               </PrimaryButton>
             </div>
           )}
+        </FormCard>
+
+        <FormCard title="TTS sidecar"
+          hint="The Python sidecar process that runs Kokoro / Coqui XTTS locally. The Node server can launch it for you automatically.">
+          <FieldRow label="Auto-start with server"
+            sublabel="When the analysis server starts (start-app.bat or `cd server && npm run dev`), automatically spawn the Python TTS sidecar as a child process. Disable to run `npm run tts:sidecar` yourself, e.g. for debugging or to swap engines per-session. Takes effect on the next server restart.">
+            <label className="inline-flex items-center gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoStartSidecar}
+                onChange={(e) => setAutoStartSidecar(e.target.checked)}
+                data-testid="account-auto-start-sidecar"
+                className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"/>
+              <span className="text-sm text-ink">
+                {autoStartSidecar
+                  ? 'Enabled — the server will spawn the sidecar at boot.'
+                  : 'Disabled — you manage the sidecar process yourself.'}
+              </span>
+            </label>
+            {autoStartDirty && (
+              <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
+                Restart the server to apply this change.
+              </p>
+            )}
+          </FieldRow>
         </FormCard>
 
         <FormCard title="Server configuration"

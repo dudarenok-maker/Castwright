@@ -1,8 +1,12 @@
 #requires -Version 5.1
-# Start the audiobook app: frontend (Vite :5173), server (Express :8080),
-# and TTS sidecar (uvicorn :9000) — all backgrounded, logs in logs\*.log,
-# PIDs tracked in .run\*.pid. Idempotent: re-running while alive just
-# re-opens the browser.
+# Start the audiobook app: frontend (Vite :5173) and server (Express :8080)
+# — both backgrounded, logs in logs\*.log, PIDs tracked in .run\*.pid.
+# Idempotent: re-running while alive just re-opens the browser.
+#
+# Plan 43: the TTS sidecar (uvicorn :9000) is no longer launched from here.
+# The Node server spawns it as a child process at app.listen time, gated
+# on the user's `autoStartSidecar` preference (default true). Its PID
+# still lands in .run\tts.pid so stop-app.ps1 reaps it the same way.
 
 $ErrorActionPreference = "Stop"
 
@@ -45,29 +49,16 @@ $services = @(
         FilePath  = "npm.cmd"
         ArgList   = @("run", "dev:server")
         WorkDir   = $repoRoot
-    },
-    @{
-        Name      = "tts"
-        Port      = 9000
-        FilePath  = "powershell.exe"
-        ArgList   = @("-ExecutionPolicy", "Bypass", "-NoProfile", "-File",
-                      (Join-Path $repoRoot "server\tts-sidecar\start.ps1"))
-        WorkDir   = $repoRoot
     }
 )
 
-# --- Preflight: TTS venv must exist before we spawn anything --------------
-$venvPython = Join-Path $repoRoot "server\tts-sidecar\.venv\Scripts\python.exe"
-if (-not (Test-Path $venvPython)) {
-    Fail @"
-TTS sidecar venv not found at: $venvPython
-
-One-time setup (see server\tts-sidecar\README.md):
-  cd server\tts-sidecar
-  python -m venv .venv
-  .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-"@
-}
+# Plan 43: the TTS venv preflight used to live here. It's been removed
+# because Node now owns the sidecar spawn — when the user's
+# `autoStartSidecar` preference is off, a missing venv is irrelevant;
+# when it's on, Node's child process exits non-zero and the failure
+# surfaces via /api/sidecar/health and logs/tts.err.log. Hard-failing
+# the whole stack here would punish users who deliberately disabled
+# auto-start.
 
 # --- Preflight: ffmpeg required for chapter-audio MP3 encoding ------------
 # generation.ts pipes PCM through `ffmpeg -c:a libmp3lame -q:a 2` at chapter
@@ -144,11 +135,11 @@ foreach ($svc in $toStart) {
 # IPv4-first resolution of "localhost" connects immediately; the IPv6/IPv4
 # probe-agnosticism here is belt-and-braces in case that ever changes.
 
-# Port-readiness no longer includes the XTTS model load. The sidecar now
-# defaults PRELOAD_COQUI=0 (see server/tts-sidecar/main.py) — uvicorn
-# binds :9000 in ~2s with the model unloaded, and the in-app Load button
-# warms XTTS on demand. 60s is generous for fresh npm install + tsx
-# warm-up; anyone who flips PRELOAD_COQUI=1 should bump this back up.
+# Port-readiness covers frontend (:5173) and server (:8080) only. The TTS
+# sidecar (:9000) is now spawned by the Node server itself (plan 43), so
+# its readiness is decoupled from this gate — /api/sidecar/health will
+# show green once Node finishes warming Kokoro, which we don't block on.
+# 60s is generous for fresh npm install + tsx warm-up.
 $timeoutSec = 60
 $deadline   = (Get-Date).AddSeconds($timeoutSec)
 $pending    = @($services | ForEach-Object { $_.Name })
