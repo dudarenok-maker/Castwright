@@ -1,13 +1,17 @@
 # Hash router
 
 > Status: stable
-> Key files: `src/lib/router.ts`, `src/store/index.ts` (RouterStore adapter)
+> Key files: `src/routes/index.tsx` (react-router v6 `createHashRouter` config), `src/lib/router.ts` (grammar shims still used by `parseHash`/`stageToHash`/`stageEqual` callers)
 > URL surface: `#/`, `#/new`, `#/voices`, `#/log`, `#/books/:bookId/analysing`, `#/books/:bookId/confirm?profile=`, `#/books/:bookId/:view?chapter=&profile=`
 > OpenAPI ops: none
 
 ## What this covers
 
-Two-way binding between the URL hash and `ui.stage`. `parseHash` turns a URL into a `Stage`; `stageToHash` turns a `Stage` back into a URL; `installRouter` keeps them in sync via `hashchange` events and a store subscription. The router stays decoupled from the store by accepting a `RouterStore` adapter so the action shape stays internal to the slice.
+Two-way binding between the URL hash and `ui.stage`. `parseHash` turns a URL into a `Stage`; `stageToHash` turns a `Stage` back into a URL. The URL grammar is preserved verbatim from the original hand-rolled implementation; today the routing is driven by react-router v6's `createHashRouter` in `src/routes/index.tsx`, with the grammar shims in `src/lib/router.ts` reused by code that still parses/serialises stages directly.
+
+## Ship notes
+
+- 2026-05-13 (`4403b0f`): "Migrate to react-router v6, add feature regression plans". Replaced the hand-rolled `RouterStore` adapter + `installRouter` subscription with react-router's `createHashRouter` declarative config. URL grammar unchanged — `parseHash`/`stageToHash`/`stageEqual` are still the single source of truth for the grammar and remain importable.
 
 ## Invariants to preserve
 

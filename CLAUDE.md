@@ -152,11 +152,6 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 - Backend work. This repo is the frontend that will call the OpenAPI spec.
 
 ## Suggested follow-ups (not requirements)
-- Swap `src/lib/router.ts` for `react-router` v6 `createHashRouter` keeping the
-  grammar identical.
-- `redux-persist` on `ui` and `manuscript` slices.
-- Real `<audio>` element in `MiniPlayer` once the backend returns URLs.
-- Vitest + slice tests (`applyGenerationTick`, `applyVoiceMatches`).
 - ESLint + Prettier, axe-core a11y pass.
 - **Model lifecycle is split between eager and button-driven** —
   - **Kokoro v1 (default, new in 2026-05)**: eagerly loaded at sidecar
