@@ -52,12 +52,20 @@ import { buildPendingRevisionStub } from '../lib/build-pending-revision';
 import type { ActiveStreamSnapshot, ChaptersState } from './chapters-slice';
 import type { CastState } from './cast-slice';
 import type { UiState } from './ui-slice';
+import type { AnalysisState } from './analysis-slice';
 import type { Chapter, GenerationTick, TtsModelKey } from '../lib/types';
 
 interface StreamableRootState {
   ui: UiState;
   chapters: ChaptersState;
   cast: CastState;
+  /* Plan 32 D2 follow-up: the implicit reconcile-driven open below
+     needs to honour the same engine === 'local' rule the reverse-
+     local-analyzer guard hook enforces for EXPLICIT TTS-start
+     callsites. Without analysis access here, a cold-boot rehydration
+     of a book with both a live local analysis AND queued chapters
+     would auto-start a generation behind the user's back. */
+  analysis: AnalysisState;
 }
 
 function bookIdFromState(s: StreamableRootState): string | null {
@@ -256,6 +264,44 @@ export const generationStreamMiddleware: Middleware = (store) => {
     if (paused) return;
     const shouldOpen = pendingRegen != null || hasWork(chapters);
     if (!shouldOpen) return;
+
+    /* Plan 32 D2 follow-up: REVERSE-LOCAL-ANALYZER GUARD (implicit
+       path). The D2 hook gates EXPLICIT user-initiated TTS-start
+       callsites (Resume button, Regenerate modal confirms). This
+       block closes the parallel implicit seam: cold-boot rehydration
+       of a book with both `analysis.activeStream.engine === 'local'`
+       (an alive local analysis on the same book) AND a non-empty
+       generation queue would otherwise auto-fire generation behind
+       the user's back, competing for the same GPU.
+       Rule mirrors the hook (use-reverse-local-analyzer-guard.tsx):
+       - engine === 'local' — Gemini analyses don't compete for GPU,
+         so the gate doesn't fire on them.
+       - bookId matches — a local analysis on book A shouldn't block
+         generation on unrelated book B.
+       - state !== 'paused' / 'halted' — a user-paused or halted
+         analysis is already not competing for GPU; respecting that
+         matches the existing sticky-generation contract (the user
+         explicitly stopped the analysis).
+       Refusal mechanism: flip the slice to paused. The user reads
+       the analysis pill, knows what's running, and resumes
+       generation when ready. No new modal — we're not nagging on
+       every navigation, we're refusing to act without consent. */
+    /* Defensive read: a handful of legacy test harnesses build a
+       store without the analysis slice. Production always has it
+       (configured in src/store/index.ts). */
+    const analysisSnap = (after as { analysis?: { activeStream?: typeof after.analysis.activeStream } })
+      .analysis?.activeStream ?? null;
+    if (
+      analysisSnap != null
+      && analysisSnap.engine === 'local'
+      && analysisSnap.bookId === stageBookId
+      && analysisSnap.state !== 'paused'
+      && analysisSnap.state !== 'halted'
+    ) {
+      dispatch(chaptersActions.setPaused(true));
+      return;
+    }
+
     openHandle(stageBookId, modelKey, pendingRegen);
   };
 
