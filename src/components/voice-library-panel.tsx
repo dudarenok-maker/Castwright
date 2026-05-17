@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { IconStar, IconDrag } from '../lib/icons';
+import { IconStar, IconDrag, IconCheck } from '../lib/icons';
 import { VoiceSwatch, Pill } from './primitives';
 import type { Character, Voice } from '../lib/types';
 import { findCharacterForVoice } from '../lib/voice-character-link';
@@ -80,6 +80,13 @@ interface VoiceCardProps {
      no character from the currently-loaded cast matches — e.g. the global
      `#/voices` page, where the click navigates to the voice's source book. */
   onSelect?: (voice: Voice) => void;
+  /* Multi-select affordance (plan 22a). When BOTH `selected` and
+     `onToggleSelect` are set, the card renders a checkbox at top-left that
+     toggles selection without firing onSelect/onOpenProfile. Mirrors the
+     DOM in `src/views/cast.tsx` (~lines 200-203). When either prop is
+     omitted, the legacy drag-only / click-to-open card renders unchanged. */
+  selected?: boolean;
+  onToggleSelect?: (voice: Voice) => void;
 }
 
 export function VoiceCard({
@@ -94,11 +101,14 @@ export function VoiceCard({
   onOpenProfile,
   onPlaySample,
   onSelect,
+  selected,
+  onToggleSelect,
 }: VoiceCardProps) {
   const isDragging = draggingVoiceId === voice.id;
   const canOpenProfile = !!(character && onOpenProfile);
   const canPlay = !!(character && onPlaySample);
   const interactive = !!onSelect || canOpenProfile;
+  const selectable = selected !== undefined && !!onToggleSelect;
   const activate = onSelect
     ? () => onSelect(voice)
     : canOpenProfile
@@ -112,7 +122,19 @@ export function VoiceCard({
       role={interactive ? 'button' : undefined}
       tabIndex={interactive ? 0 : undefined}
       onKeyDown={activate ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } } : undefined}
-      className={`group flex items-start gap-3 p-3 rounded-2xl border bg-canvas hover:bg-white border-ink/10 cursor-grab active:cursor-grabbing transition-all ${isDragging ? 'opacity-40 scale-[0.98]' : ''}`}>
+      className={`group flex items-start gap-3 p-3 rounded-2xl border bg-canvas hover:bg-white border-ink/10 cursor-grab active:cursor-grabbing transition-all ${isDragging ? 'opacity-40 scale-[0.98]' : ''} ${selectable && selected ? 'bg-peach/[0.04]' : ''}`}>
+      {selectable && (
+        <span
+          onClick={(e) => { e.stopPropagation(); onToggleSelect!(voice); }}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="grid place-items-center pt-0.5"
+          aria-label={selected ? 'Deselect voice' : 'Select voice for compare'}
+        >
+          <span className={`w-5 h-5 rounded-md grid place-items-center transition-colors ${selected ? 'bg-peach' : 'bg-white border border-ink/20 hover:border-ink/40'}`}>
+            {selected && <IconCheck className="w-3 h-3 text-white"/>}
+          </span>
+        </span>
+      )}
       <span onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
         <VoiceSwatch voice={voice} size="sm" showLabel={false}
           onSelect={canPlay ? () => onPlaySample!(character!, voice) : undefined}/>

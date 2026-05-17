@@ -86,7 +86,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 ### J. Library & workspace
 - [21 — Book library](21-book-library.md) — Workspace scan + status derivation.
 - [22 — Voice library](22-voice-library.md) — Cross-book voices view + pinning.
-- [22a — Voice library compare](22a-voice-library-compare.md) — Two-cast-member compare entry point on the Voices tab; reuses `CompareCastModal`; same-/different-base-voice badge on the selection pill.
 - [36 — Book covers (OpenLibrary)](36-book-covers.md) — Real cover artwork on cards + Listen header; auto-fetch on import, manual picker on demand; gradient skeleton fallback.
 
 ### K. Cross-cutting invariants
@@ -120,5 +119,4 @@ Plans that shipped and are no longer load-bearing for in-flight work live in
 [`archive/`](archive/README.md). The git log is the changelog; this section is a
 breadcrumb so cross-references still resolve.
 
-_(Empty for now. As plans flip to `status: stable` and land their Ship notes,
-move them here per `archive/README.md`.)_
+- [22a — Voice library compare](archive/22a-voice-library-compare.md) — Two-cast-member compare entry point on the Voices tab; reuses `CompareCastModal`; same-/different-base-voice badge on the selection pill. Shipped 2026-05-17.
