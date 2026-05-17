@@ -58,7 +58,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 ### E. Manuscript editing
 - [12 — Manuscript view](12-manuscript-view.md) — Sentence list, low-confidence flagging, speaker reassignment.
-- [12a — Fix: sentence reassignment scoped by (chapterId, id)](12a-fix-reassign-cross-chapter-id.md) — Reassign reducers + inspector prop scope by both chapter and sentence id; pre-fix, clicks on chapter 2+ silently mutated chapter 1. **Status: active.**
+- [12a — Fix: sentence reassignment scoped by (chapterId, id)](12a-fix-reassign-cross-chapter-id.md) — Reassign reducers + inspector prop scope by both chapter and sentence id; pre-fix, clicks on chapter 2+ silently mutated chapter 1. Shipped 2026-05-18.
 
 ### F. TTS
 - [13 — TTS engine picker](13-tts-engine-picker.md) — Two-tier engine + model selector.

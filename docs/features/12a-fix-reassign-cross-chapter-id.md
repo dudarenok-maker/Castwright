@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-18
 owner: null
 ---
 
 # Fix — sentence reassignment scoped by (chapterId, id)
 
-> Status: active (must-have, sibling fix to plan 12)
+> Status: stable (shipped 2026-05-18)
 > Cross-links: [12 — Manuscript view](12-manuscript-view.md) — this plan patches invariant 4 and the **Key files** line of plan 12 to reflect the chapterId-scoping contract.
 > Key files: `src/store/manuscript-slice.ts` (`setSentenceCharacter`, `setSentencesCharacter`, `splitSentence`), `src/views/manuscript.tsx` (`commitBoundaryMove`, `reassignSegment`, `assignSelectionTo`, inline `onReassignSentence`, `SegmentInspector` prop), `src/store/manuscript-slice.test.ts`, `src/views/manuscript.test.tsx`
 > URL surface: `#/books/:bookId/manuscript?chapter=N` — fix is invisible at the URL layer; the bug surfaced as "clicks do nothing" in chapters whose sentence ids collide with chapter 1's.
@@ -83,4 +83,12 @@ Run `VITE_USE_MOCKS=true`, navigate to `#/books/<id>/manuscript`.
 
 ## Ship notes
 
-(Filled in when status flips to `stable`. Append: shipped date, merge commit SHA, link to the regression specs that pin it. This sibling fix plan retires alongside plan 12 if/when plan 12 ever archives.)
+- **Shipped:** 2026-05-18.
+- **Fix commit:** `c2af1ad` — `fix(frontend): scope sentence reassignment by chapterId`.
+- **Merge commit:** `6010a60` — Merge pull request #1 from `fix/frontend-reassign-cross-chapter-id` into `main` (merge commit, not squash, per the branch-history convention).
+- **Regression coverage that pins the fix:**
+  - `src/store/manuscript-slice.test.ts` — three new specs: `setSentenceCharacter scopes by chapterId — chapter 2 reassignment leaves chapter 1 untouched`, `setSentencesCharacter scopes by chapterId — chapter 2 batch leaves chapter 1 untouched`, `splitSentence scopes by chapterId — chapter 2 split leaves chapter 1 untouched`.
+  - `src/views/manuscript.test.tsx` — new spec `ManuscriptView — cross-chapter reassign isolation` (jsdom integration through real React + real redux).
+- **Behaviour delta vs. the original spec:** none — the spec is the fix.
+- **Plan 12 patch:** invariant 4 + Key files line + cross-link to this plan landed in the same commit.
+- **Archive policy:** this sibling fix plan retires alongside plan 12 if/when plan 12 ever archives.
