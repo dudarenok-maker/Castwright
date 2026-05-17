@@ -312,3 +312,78 @@ describe('ManuscriptView — inspector with large cast', () => {
     }
   });
 });
+
+/* Cross-chapter reassign — regression for the bug where clicking a
+   character chip in the SegmentInspector on a non-first chapter silently
+   mutated chapter 1's same-id sentence (because the reducer matched by id
+   alone, but sentence ids restart at 1 per chapter). The slice unit tests
+   in src/store/manuscript-slice.test.ts cover the reducer in isolation;
+   this test pins the prop wiring end-to-end through real React + real
+   redux: SegmentInspector must forward `s.chapterId` to onReassignSentence
+   so the dispatch carries the right chapter scope. */
+describe('ManuscriptView — cross-chapter reassign isolation', () => {
+  it('reassigning a chapter-2 sentence via the inspector leaves chapter 1\'s same-id sentence untouched', async () => {
+    const user = userEvent.setup();
+    const reassignCharacters: Character[] = [
+      { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+      { id: 'eliza',    name: 'Eliza',    role: 'Cast',     color: 'narrator' },
+    ];
+    const twoChapters: Chapter[] = [
+      { id: 1, title: 'Chapter One', duration: '10:00', state: 'done', progress: 1, characters: {} },
+      { id: 2, title: 'Chapter Two', duration: '10:00', state: 'done', progress: 1, characters: {} },
+    ];
+    /* Both chapters carry id=1 — the collision the bug used to glob onto. */
+    const twoChapterSentences: Sentence[] = [
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one opening line.' },
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'Chapter two opening line.' },
+    ];
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog:  changeLogSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: {
+          bookId: null, manuscriptId: null, title: null, format: null,
+          wordCount: 0, sourceText: null,
+          sentences: twoChapterSentences,
+          importCandidate: null,
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={reassignCharacters}
+          chapters={twoChapters}
+          currentChapterId={2}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={twoChapterSentences}
+        />
+      </Provider>,
+    );
+
+    /* Open the inspector by clicking chapter 2's sentence. */
+    await user.click(screen.getByText('Chapter two opening line.'));
+    expect(screen.getByText('Reassign whole segment to')).toBeInTheDocument();
+
+    /* Click the Eliza chip in the "Reassign whole segment to" list. The
+       inspector lists every cast member; Eliza appears once in the list
+       and once in the sidebar (Detected), so use getAllByText and click
+       the inspector copy (last in DOM order under the inspector card). */
+    const elizaButtons = screen.getAllByRole('button', { name: /Eliza/ });
+    /* The inspector copy is inside the inspector card — its parent button
+       has the role and contains the colour dot + name. Pick the last one
+       because the inspector card renders below the sidebar card in DOM
+       order. */
+    await user.click(elizaButtons[elizaButtons.length - 1]);
+
+    /* Store assertion is the regression contract. Chapter 2's sentence
+       reassigned; chapter 1's same-id sentence untouched. */
+    const after = store.getState().manuscript.sentences;
+    expect(after).toEqual([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one opening line.' },
+      { id: 1, chapterId: 2, characterId: 'eliza',    text: 'Chapter two opening line.' },
+    ]);
+  });
+});
