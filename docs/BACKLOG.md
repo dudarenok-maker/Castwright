@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 0 · Should 2 · Could 14 · Won't 10
+**Counts as of 2026-05-17:** Must 0 · Should 1 · Could 14 · Won't 10
 
 ---
 
@@ -39,17 +39,7 @@ _All v1-blocker items shipped 2026-05-17 (plans 22a, 27, 32, 39)._
 
 ## Should — important, not blocking ship
 
-### 1. Dark mode
-
-Source: [`25-design-tokens.md`](features/25-design-tokens.md) (was Won't #6; promoted 2026-05-17 per user prioritisation).
-
-- *What:* Add a `[data-theme="dark"]` token override block in `src/styles.css` for every `--peach`/`--ink`/`--magenta`/`--canvas`/`--ink-soft` token. Add a theme toggle in the top bar (`src/components/layout.tsx`). Persist preference via the `ui` slice (rides on the redux-persist wiring shipped 2026-05-17 — extend `UI_PERSIST_WHITELIST` with the new `theme` field in `src/store/index.ts`) and read `prefers-color-scheme` as the first-visit default.
-- *Acceptance:* Toggling the affordance flips every surface (library, upload, analysing, confirm, ready, listen, voices, modals) without a single hex literal needing change. The grep test in plan 25 still returns zero hits. Refresh preserves the user's choice. New Playwright spec captures `toHaveScreenshot()` for both themes on the five core stages (extends the baseline harness shipped 2026-05-17 as `e2e/visual.spec.ts`).
-- *Key files:* `src/styles.css` (dark-token block); `tailwind.config.ts` (already references `var(--token)`, no changes expected); `src/components/layout.tsx` (toggle); `src/store/ui-slice.ts` (theme field); `src/store/index.ts` (extend `UI_PERSIST_WHITELIST`); `docs/features/25-design-tokens.md` (drop the "out of scope" bullet, add a "Dark mode" invariants section).
-- *Depends on:* none structural — the visual-baselines harness (`e2e/visual.spec.ts`) is already in place; dark-mode adds a second-theme baseline pass on top.
-- *Benefit (user):* the single most-requested visual polish missing from v1; 9 PM listening sessions stop blasting white.
-
-### 2. Bulk-apply library sync on confirm-cast
+### 1. Bulk-apply library sync on confirm-cast
 
 Source: [`41-bulk-library-sync.md`](features/41-bulk-library-sync.md) (draft) — supersedes plan 09 §"Bulk-accept-all UI".
 

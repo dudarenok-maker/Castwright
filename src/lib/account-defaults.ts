@@ -23,6 +23,7 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<UserSettings,
   | 'workspaceDirOverride'
   | 'minorCastMinLines'
   | 'coverPickerDefaultTab'
+  | 'defaultThemePreference'
 > = {
   displayName:          'Mike Dudarenok',
   /* Gemini 3.1 Flash Lite over the Google API key is the new default
@@ -51,4 +52,10 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<UserSettings,
      Flip in lockstep with server/src/workspace/user-settings.ts
      DEFAULT_USER_SETTINGS. */
   coverPickerDefaultTab: 'search',
+  /* Plan 41 — first-visit / account-default theme. `'system'` follows
+     the OS's prefers-color-scheme at runtime; users can pin Light or
+     Dark from the Account view or via the top-bar quick toggle.
+     Flip in lockstep with server/src/workspace/user-settings.ts
+     DEFAULT_USER_SETTINGS. */
+  defaultThemePreference: 'system',
 };

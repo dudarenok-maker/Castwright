@@ -75,3 +75,6 @@ export const IconTrend    = (p: IconProps) => Svg(<><path d="M22 7L13.5 15.5l-5-
 export const IconAB       = (p: IconProps) => Svg(<><path d="M5 17l3-9 3 9M6 14h4"/><path d="M14 17V7h3a3 3 0 010 6h-3"/><path d="M14 13h3a3 3 0 010 6h-3"/></>, p);
 export const IconCheckBox = (p: IconProps) => Svg(<><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></>, p);
 export const IconCheckBoxE = (p: IconProps) => Svg(<rect x="3" y="3" width="18" height="18" rx="2"/>, p);
+export const IconSun      = (p: IconProps) => Svg(<><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></>, p);
+export const IconMoon     = (p: IconProps) => Svg(<path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>, p);
+export const IconMonitor  = (p: IconProps) => Svg(<><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></>, p);

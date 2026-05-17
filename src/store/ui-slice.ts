@@ -54,6 +54,13 @@ export interface UiState {
   selectedModelExplicit: boolean;
   /** Same as above for the TTS model selector. */
   ttsModelKeyExplicit: boolean;
+  /** Plan 41 — device-local theme override, set via the top-bar
+      quick toggle. `null` (the default) means "follow account
+      default" — see `src/lib/use-theme.ts` for the resolution
+      rule. `'system'` is a third explicit value that re-enables
+      OS-driven auto-flip even when the account default is pinned
+      to Light or Dark on this device. */
+  themeOverride: 'light' | 'dark' | 'system' | null;
 }
 
 const initialState: UiState = {
@@ -73,6 +80,7 @@ const initialState: UiState = {
   ttsModelKey: DEFAULT_TTS_MODEL,
   selectedModelExplicit: false,
   ttsModelKeyExplicit: false,
+  themeOverride: null,
 };
 
 export const uiSlice = createSlice({
@@ -158,6 +166,8 @@ export const uiSlice = createSlice({
     setPreviewMode:        (s, a: PayloadAction<boolean>) => { s.previewMode = a.payload; },
     setSelectedModel:      (s, a: PayloadAction<string>) => { s.selectedModel = a.payload; s.selectedModelExplicit = true; },
     setTtsModelKey:        (s, a: PayloadAction<TtsModelKey>) => { s.ttsModelKey = a.payload; s.ttsModelKeyExplicit = true; },
+    setThemeOverride:      (s, a: PayloadAction<'light' | 'dark' | 'system'>) => { s.themeOverride = a.payload; },
+    clearThemeOverride:    (s) => { s.themeOverride = null; },
   },
   extraReducers: (builder) => {
     /* Seed-on-new-book: when the account settings hydrate (boot or save),

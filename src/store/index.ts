@@ -47,6 +47,7 @@ export const UI_PERSIST_WHITELIST: ReadonlyArray<keyof UiState> = [
   'ttsModelKey',
   'selectedModelExplicit',
   'ttsModelKeyExplicit',
+  'themeOverride',
 ];
 
 /** Persisted manuscript-slice keys. Just enough to render the top-bar
@@ -69,7 +70,7 @@ export const MANUSCRIPT_PERSIST_WHITELIST: ReadonlyArray<keyof ManuscriptState> 
  *  initialState, which is the safe outcome for storage we don't know how
  *  to migrate. Pair with a `migrate:` config entry to do a real
  *  field-level migration when one is needed. */
-const UI_PERSIST_VERSION = 1;
+const UI_PERSIST_VERSION = 2;
 const MANUSCRIPT_PERSIST_VERSION = 1;
 
 const uiPersistConfig: PersistConfig<UiState> = {

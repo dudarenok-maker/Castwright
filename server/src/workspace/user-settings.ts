@@ -27,6 +27,7 @@ export const TTS_MODEL_KEY_VALUES = [
   'gemini-3.1-flash',
 ] as const;
 export const COVER_PICKER_TAB_VALUES = ['search', 'upload'] as const;
+export const THEME_PREFERENCE_VALUES = ['light', 'dark', 'system'] as const;
 
 export const userSettingsSchema = z.object({
   displayName:          z.string().max(120),
@@ -61,6 +62,13 @@ export const userSettingsSchema = z.object({
      their own art. Optional with a 'search' default so legacy
      user-settings.json files load unchanged. */
   coverPickerDefaultTab: z.enum(COVER_PICKER_TAB_VALUES).optional(),
+  /* Plan 41 — first-visit / default theme. The top-bar quick toggle
+     writes a device-local override to the UI slice (redux-persist);
+     this field is the fallback when no override is set, and the
+     account default any new device inherits. Optional with a
+     'system' default so legacy user-settings.json files load
+     unchanged. */
+  defaultThemePreference: z.enum(THEME_PREFERENCE_VALUES).optional(),
 });
 
 export type UserSettings = z.infer<typeof userSettingsSchema>;
@@ -93,6 +101,12 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   exportSyncFolder:     null,
   minorCastMinLines:    3,
   coverPickerDefaultTab: 'search',
+  /* 'system' follows the OS's prefers-color-scheme at runtime so a
+     fresh install paints the way the device does after sundown.
+     Users can pin Light or Dark from the Account view or via the
+     top-bar quick toggle. Flip in lockstep with
+     src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
+  defaultThemePreference: 'system',
 };
 
 let cached: UserSettings | null = null;

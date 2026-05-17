@@ -805,6 +805,17 @@ export interface components {
              */
             coverPickerDefaultTab?: "search" | "upload";
             /**
+             * @description First-visit / account-wide default theme. The top-bar quick
+             *     toggle writes a per-device override into the UI slice
+             *     (redux-persist); this field is the fallback when no override
+             *     is set, and what any new device inherits. `system` resolves
+             *     via `prefers-color-scheme` at runtime and re-evaluates if
+             *     the OS scheme flips.
+             *     Plan [41](docs/features/41-dark-mode.md).
+             * @enum {string}
+             */
+            defaultThemePreference?: "light" | "dark" | "system";
+            /**
              * @description Whether process.env.GEMINI_API_KEY is non-empty. The key value
              *     itself is never returned over the wire — the UI uses this flag
              *     to render a "set in server/.env" pill.
@@ -843,6 +854,8 @@ export interface components {
             minorCastMinLines?: number;
             /** @enum {string} */
             coverPickerDefaultTab?: "search" | "upload";
+            /** @enum {string} */
+            defaultThemePreference?: "light" | "dark" | "system";
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];

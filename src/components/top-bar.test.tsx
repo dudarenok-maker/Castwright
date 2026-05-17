@@ -5,7 +5,11 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { configureStore } from '@reduxjs/toolkit';
+import { Provider } from 'react-redux';
 import { TopBar } from './top-bar';
+import { uiSlice } from '../store/ui-slice';
+import { accountSlice } from '../store/account-slice';
 
 function makeProps(overrides: Partial<Parameters<typeof TopBar>[0]> = {}): Parameters<typeof TopBar>[0] {
   return {
@@ -23,28 +27,42 @@ function makeProps(overrides: Partial<Parameters<typeof TopBar>[0]> = {}): Param
   };
 }
 
+/* TopBar embeds the ThemeToggleButton (plan 41), which reads from the ui
+   and account slices. Wrap every render with a Provider so those hooks
+   can resolve their state — tests that don't care about the toggle
+   still need the wrapper. */
+function renderWithStore(ui: React.ReactElement) {
+  const store = configureStore({
+    reducer: {
+      ui:      uiSlice.reducer,
+      account: accountSlice.reducer,
+    },
+  });
+  return render(<Provider store={store}>{ui}</Provider>);
+}
+
 describe('TopBar — global nav', () => {
   it('renders the Change log button when no book is open', () => {
-    render(<TopBar {...makeProps({ stage: 'books' })}/>);
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })}/>);
     expect(screen.getByRole('button', { name: 'Change log' })).toBeInTheDocument();
   });
 
   it('fires onOpenChangelog when the Change log button is clicked from the Books page', () => {
     const onOpenChangelog = vi.fn();
-    render(<TopBar {...makeProps({ stage: 'books', onOpenChangelog })}/>);
+    renderWithStore(<TopBar {...makeProps({ stage: 'books', onOpenChangelog })}/>);
     fireEvent.click(screen.getByRole('button', { name: 'Change log' }));
     expect(onOpenChangelog).toHaveBeenCalledTimes(1);
   });
 
   it('fires onOpenChangelog from the Voices page too — the nav stays consistent across global stages', () => {
     const onOpenChangelog = vi.fn();
-    render(<TopBar {...makeProps({ stage: 'voices', onOpenChangelog })}/>);
+    renderWithStore(<TopBar {...makeProps({ stage: 'voices', onOpenChangelog })}/>);
     fireEvent.click(screen.getByRole('button', { name: 'Change log' }));
     expect(onOpenChangelog).toHaveBeenCalledTimes(1);
   });
 
   it('hides the global nav when a book is open (in-book tabs render instead)', () => {
-    render(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })}/>);
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })}/>);
     expect(screen.queryByRole('button', { name: 'Change log' })).not.toBeInTheDocument();
     /* The per-book log tab is the lowercase "Log" instead. */
     expect(screen.getByRole('button', { name: 'Log' })).toBeInTheDocument();
@@ -53,31 +71,31 @@ describe('TopBar — global nav', () => {
 
 describe('TopBar — avatar entry to account', () => {
   it('renders the avatar as a button labelled with the display name', () => {
-    render(<TopBar {...makeProps({ userDisplayName: 'Captain Picard' })}/>);
+    renderWithStore(<TopBar {...makeProps({ userDisplayName: 'Captain Picard' })}/>);
     expect(screen.getByRole('button', { name: /account.*captain picard/i })).toBeInTheDocument();
   });
 
   it('fires onOpenAccount when the avatar is clicked', () => {
     const onOpenAccount = vi.fn();
-    render(<TopBar {...makeProps({ onOpenAccount })}/>);
+    renderWithStore(<TopBar {...makeProps({ onOpenAccount })}/>);
     fireEvent.click(screen.getByRole('button', { name: /account.*mike dudarenok/i }));
     expect(onOpenAccount).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to an "unnamed user" label when displayName is empty', () => {
-    render(<TopBar {...makeProps({ userDisplayName: '' })}/>);
+    renderWithStore(<TopBar {...makeProps({ userDisplayName: '' })}/>);
     expect(screen.getByRole('button', { name: /account.*unnamed user/i })).toBeInTheDocument();
   });
 });
 
 describe('TopBar — AnalysisPill (B3 sticky analysis)', () => {
   it('hides the pill entirely when analysisPill is null (no in-flight analysis)', () => {
-    render(<TopBar {...makeProps({ analysisPill: null })}/>);
+    renderWithStore(<TopBar {...makeProps({ analysisPill: null })}/>);
     expect(screen.queryByTestId('analysis-pill')).not.toBeInTheDocument();
   });
 
   it('renders the running variant with the phase label and percent', () => {
-    render(<TopBar {...makeProps({
+    renderWithStore(<TopBar {...makeProps({
       analysisPill: {
         state: 'running',
         phaseLabel: 'Detecting characters',
@@ -93,7 +111,7 @@ describe('TopBar — AnalysisPill (B3 sticky analysis)', () => {
 
   it('renders the halted variant with the trimmed halt reason and a full-message title attribute', () => {
     const longReason = 'Phase 1 demoted 60% of sentences to narrator — model attribution unreliable.';
-    render(<TopBar {...makeProps({
+    renderWithStore(<TopBar {...makeProps({
       analysisPill: {
         state: 'halted',
         phaseLabel: 'Parsing and attribution',
@@ -112,7 +130,7 @@ describe('TopBar — AnalysisPill (B3 sticky analysis)', () => {
   });
 
   it('renders the paused variant without a percent (paused work doesn\'t tick)', () => {
-    render(<TopBar {...makeProps({
+    renderWithStore(<TopBar {...makeProps({
       analysisPill: {
         state: 'paused',
         phaseLabel: 'Detecting characters',
@@ -127,7 +145,7 @@ describe('TopBar — AnalysisPill (B3 sticky analysis)', () => {
 
   it('fires onClick when the pill is clicked (routes back to the analysing view)', () => {
     const onClick = vi.fn();
-    render(<TopBar {...makeProps({
+    renderWithStore(<TopBar {...makeProps({
       analysisPill: {
         state: 'running',
         phaseLabel: 'Detecting characters',
@@ -143,7 +161,7 @@ describe('TopBar — AnalysisPill (B3 sticky analysis)', () => {
     /* Sticky analysis (B1-3) + sticky generation (plan 31) can both be
        alive at the same time on different books. The header must show
        BOTH pills, not one or the other. */
-    render(<TopBar {...makeProps({
+    renderWithStore(<TopBar {...makeProps({
       analysisPill: {
         state: 'running',
         phaseLabel: 'Detecting characters',
@@ -169,7 +187,7 @@ describe('TopBar — AnalysisPill subset variant (plan 32 D2)', () => {
        place of the per-phase label. The percent still tracks the
        phase-weighted overall progress so the user sees the retry
        advance. */
-    render(<TopBar {...makeProps({
+    renderWithStore(<TopBar {...makeProps({
       analysisPill: {
         state: 'running',
         phaseLabel: 'Detecting characters',
@@ -190,7 +208,7 @@ describe('TopBar — AnalysisPill subset variant (plan 32 D2)', () => {
   });
 
   it('singularises the chapter count for a one-chapter retry', () => {
-    render(<TopBar {...makeProps({
+    renderWithStore(<TopBar {...makeProps({
       analysisPill: {
         state: 'running',
         phaseLabel: 'Detecting characters',
@@ -209,7 +227,7 @@ describe('TopBar — AnalysisPill subset variant (plan 32 D2)', () => {
     /* Defensive default — if a cold-boot snapshot omits the chapter ids
        (legacy file, or an in-flight glitch where the count's not on the
        snapshot yet), the pill still renders rather than NaN-ing out. */
-    render(<TopBar {...makeProps({
+    renderWithStore(<TopBar {...makeProps({
       analysisPill: {
         state: 'running',
         phaseLabel: 'Detecting characters',
@@ -228,7 +246,7 @@ describe('TopBar — AnalysisPill subset variant (plan 32 D2)', () => {
        from a pre-D2 snapshot) must keep the main rendering. The
        data-pill-kind attribute also defaults to "main" so tests can
        target either kind explicitly. */
-    render(<TopBar {...makeProps({
+    renderWithStore(<TopBar {...makeProps({
       analysisPill: {
         state: 'running',
         phaseLabel: 'Detecting characters',
@@ -243,7 +261,7 @@ describe('TopBar — AnalysisPill subset variant (plan 32 D2)', () => {
   });
 
   it('subset paused / halted variants keep the standard terminal copy (not the retrying label)', () => {
-    render(<TopBar {...makeProps({
+    renderWithStore(<TopBar {...makeProps({
       analysisPill: {
         state: 'paused',
         phaseLabel: 'Detecting characters',

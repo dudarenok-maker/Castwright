@@ -1031,6 +1031,17 @@ components:
             candidates first. `upload` is for users who routinely bring
             their own cover art and want the file-picker tab front.
             Plan [40](docs/features/40-cover-framing-and-upload.md).
+        defaultThemePreference:
+          type: string
+          enum: [light, dark, system]
+          description: |
+            First-visit / account-wide default theme. The top-bar quick
+            toggle writes a per-device override into the UI slice
+            (redux-persist); this field is the fallback when no override
+            is set, and what any new device inherits. `system` resolves
+            via `prefers-color-scheme` at runtime and re-evaluates if
+            the OS scheme flips.
+            Plan [41](docs/features/41-dark-mode.md).
         apiKeyStatus:
           type: string
           enum: [set, unset]
@@ -1082,6 +1093,9 @@ components:
         coverPickerDefaultTab:
           type: string
           enum: [search, upload]
+        defaultThemePreference:
+          type: string
+          enum: [light, dark, system]
 
     # --- Library ----------------------------------------------------
     LibraryResponse:

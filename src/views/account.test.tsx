@@ -4,9 +4,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { accountSlice, fetchAccountSettings, type AccountState } from '../store/account-slice';
+import { uiSlice } from '../store/ui-slice';
 import { AccountView } from './account';
 import type { UserSettings } from '../lib/types';
 
@@ -43,7 +44,10 @@ function renderView(initial: Partial<UserSettings> = {}) {
     hydrated: true,
   };
   const store = configureStore({
-    reducer: { account: accountSlice.reducer },
+    reducer: {
+      account: accountSlice.reducer,
+      ui:      uiSlice.reducer,
+    },
     preloadedState: { account: preloaded },
   });
   return {
@@ -199,7 +203,10 @@ describe('AccountView — hydration sync', () => {
       displayName: 'Hydrated Name',
     });
     const store = configureStore({
-      reducer: { account: accountSlice.reducer },
+      reducer: {
+        account: accountSlice.reducer,
+        ui:      uiSlice.reducer,
+      },
     });
     render(<Provider store={store}><AccountView/></Provider>);
     /* The store starts on built-in defaults; fetch dispatches and the form
@@ -220,7 +227,10 @@ describe('AccountView — hydration sync', () => {
       new Error('User settings fetch failed (502): Bad Gateway'),
     );
     const store = configureStore({
-      reducer: { account: accountSlice.reducer },
+      reducer: {
+        account: accountSlice.reducer,
+        ui:      uiSlice.reducer,
+      },
     });
     render(<Provider store={store}><AccountView/></Provider>);
     await store.dispatch(fetchAccountSettings());
@@ -247,5 +257,65 @@ describe('AccountView — hydration sync', () => {
       expect((screen.getByLabelText('Display name') as HTMLInputElement).value).toBe('Recovered');
     });
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('AccountView — Appearance (plan 41)', () => {
+  it('renders the default-theme picker with the persisted value', () => {
+    renderView({ defaultThemePreference: 'dark' });
+    const select = screen.getByTestId('account-default-theme') as HTMLSelectElement;
+    expect(select.value).toBe('dark');
+  });
+
+  it("falls back to 'system' when the field is absent (legacy settings file)", () => {
+    renderView({ defaultThemePreference: undefined });
+    const select = screen.getByTestId('account-default-theme') as HTMLSelectElement;
+    expect(select.value).toBe('system');
+  });
+
+  it('round-trips defaultThemePreference through the Save patch', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      defaultThemePreference: 'dark',
+    });
+    const user = userEvent.setup();
+    renderView({ defaultThemePreference: 'system' });
+    const select = screen.getByTestId('account-default-theme') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'dark' } });
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+    const [patch] = (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch.defaultThemePreference).toBe('dark');
+  });
+
+  it('hides the override pill when no device override is set', () => {
+    renderView();
+    expect(screen.queryByTestId('theme-override-pill')).toBeNull();
+  });
+
+  it('shows the override pill when ui.themeOverride is set', () => {
+    const { store } = renderView();
+    /* Use the slice action so the test mirrors how the top-bar toggle
+       writes to the override field. Wrap in act() so the re-render
+       happens before the assertion. */
+    act(() => {
+      store.dispatch({ type: 'ui/setThemeOverride', payload: 'dark' });
+    });
+    expect(screen.getByTestId('theme-override-pill')).toBeInTheDocument();
+    expect(screen.getByTestId('theme-override-pill').textContent).toMatch(/this device is overridden/i);
+  });
+
+  it('"Use account default" button clears the override', async () => {
+    const user = userEvent.setup();
+    const { store } = renderView();
+    act(() => {
+      store.dispatch({ type: 'ui/setThemeOverride', payload: 'dark' });
+    });
+    expect(store.getState().ui.themeOverride).toBe('dark');
+    await user.click(screen.getByRole('button', { name: /use account default/i }));
+    expect(store.getState().ui.themeOverride).toBeNull();
+    expect(screen.queryByTestId('theme-override-pill')).toBeNull();
   });
 });
