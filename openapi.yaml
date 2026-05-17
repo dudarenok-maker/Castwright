@@ -425,6 +425,73 @@ paths:
         '204': { description: Cover removed (or was never present) }
         '404': { description: Book not found }
 
+  /api/books/{bookId}/cover/upload:
+    post:
+      summary: Upload a local cover image (JPEG/PNG) and pin it as this book's cover
+      operationId: uploadCover
+      description: |
+        Multipart upload route for user-supplied cover art. Accepts a
+        single `image` field with `image/jpeg` or `image/png` content
+        type, up to 10 MB. PNG payloads are transcoded server-side to
+        JPEG (q=85) so the export pipeline's `covr` / `APIC` frames
+        stay JPEG. Writes atomically to `<bookDir>/.audiobook/cover.jpg`,
+        replacing any prior cover, and patches `state.json.coverImage`
+        with `source: 'local'`, `originalFilename`, and `uploadedAt`.
+        Plan [40](docs/features/40-cover-framing-and-upload.md).
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Cover saved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [coverImageUrl]
+                properties:
+                  coverImageUrl:    { type: string, format: uri-reference }
+                  originalFilename: { type: string, nullable: true }
+        '400': { description: Missing `image` field }
+        '404': { description: Book not found }
+        '413': { description: Upload exceeds 10 MB }
+        '415': { description: Content type is not `image/jpeg` or `image/png` }
+        '502': { description: PNG → JPEG transcode failed }
+
+  /api/books/{bookId}/cover/framing:
+    patch:
+      summary: Set pan + zoom framing for the book's current cover
+      operationId: setCoverFraming
+      description: |
+        Persists a `CoverFraming` record onto `state.json.coverImage`,
+        which the next library scan exposes as `LibraryBook.coverFraming`.
+        Render-time only — does not modify the on-disk JPEG bytes, so the
+        export pipeline is unaffected. Server clamps `offsetX`/`offsetY`
+        to [-100, 100] and `zoom` to [1.0, 3.0]. To reset framing to
+        defaults, PATCH `{ offsetX: 0, offsetY: 0, zoom: 1.0 }`.
+        Plan [40](docs/features/40-cover-framing-and-upload.md).
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CoverFraming' }
+      responses:
+        '204': { description: Framing saved }
+        '400': { description: Body is missing fields or contains non-numeric values }
+        '404': { description: Book not found, or book has no cover pinned }
+
   /api/voices/base:
     get:
       summary: List the raw model voices the configured engines expose
@@ -955,6 +1022,15 @@ components:
             "Unknown" will still fold). Default 3 — i.e. a speaker who
             says 0, 1, or 2 sentences in the whole book doesn't warrant a
             dedicated voice profile.
+        coverPickerDefaultTab:
+          type: string
+          enum: [search, upload]
+          description: |
+            Which tab the CoverPicker modal opens on by default. `search`
+            (the default) preserves today's behaviour: OpenLibrary
+            candidates first. `upload` is for users who routinely bring
+            their own cover art and want the file-picker tab front.
+            Plan [40](docs/features/40-cover-framing-and-upload.md).
         apiKeyStatus:
           type: string
           enum: [set, unset]
@@ -1003,6 +1079,9 @@ components:
           type: integer
           minimum: 0
           maximum: 50
+        coverPickerDefaultTab:
+          type: string
+          enum: [search, upload]
 
     # --- Library ----------------------------------------------------
     LibraryResponse:
@@ -1048,6 +1127,34 @@ components:
           type: string
           description: "Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy."
 
+    CoverFraming:
+      type: object
+      required: [offsetX, offsetY, zoom]
+      description: |
+        Pan + zoom transform applied to the on-disk cover image at render
+        time. Pure metadata — does not re-encode the JPEG. Consumed by
+        `computeCoverStyle` (src/lib/cover-framing.ts) which translates
+        to CSS `object-position: <offsetX>% <offsetY>%; transform:
+        scale(<zoom>)` on the `<img>` element. Server clamps to the
+        ranges below; client should too for live preview. Plan
+        [40](docs/features/40-cover-framing-and-upload.md).
+      properties:
+        offsetX:
+          type: number
+          minimum: -100
+          maximum: 100
+          description: "Horizontal pan as `object-position` percentage. 0 = centred."
+        offsetY:
+          type: number
+          minimum: -100
+          maximum: 100
+          description: "Vertical pan as `object-position` percentage. 0 = centred. Negative shifts the image up (showing the top)."
+        zoom:
+          type: number
+          minimum: 1.0
+          maximum: 3.0
+          description: "Scale factor. 1.0 = `object-cover` default; up to 3.0× tighter crop."
+
     LibraryBook:
       type: object
       required: [bookId, title, author, series, status, chapterCount, completedChapters, characterCount, voiceCount, lastWorkedOn, coverGradient, isStandalone]
@@ -1086,6 +1193,14 @@ components:
             `/api/books/{bookId}/cover`). Present only when the book has
             a cover cached on disk (`.audiobook/cover.jpg`). When
             absent, the UI falls back to `coverGradient`.
+        coverFraming:
+          allOf:
+            - $ref: '#/components/schemas/CoverFraming'
+          description: |
+            Optional pan + zoom for the cover. Absent → renderers fall
+            back to bare `object-cover` (the default before plan 40
+            shipped). Always paired with `coverImageUrl` — framing on a
+            book without a cover is meaningless.
         pinned:           { type: boolean }
 
     # --- Import + confirm-metadata ---------------------------------

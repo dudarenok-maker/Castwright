@@ -884,6 +884,43 @@ async function realRemoveCover(bookId: string): Promise<void> {
   if (!res.ok) throw new Error(`Cover remove failed (${res.status}): ${(await res.text()) || res.statusText}`);
 }
 
+/* Plan 40 — local-disk cover upload + render-time framing. Server route
+   in server/src/routes/cover.ts. */
+
+export type UploadCoverErrorKind = 'invalid_mime' | 'oversize' | 'transcode_failed' | 'unknown';
+
+export class UploadCoverError extends Error {
+  constructor(public kind: UploadCoverErrorKind, message: string) {
+    super(message);
+    this.name = 'UploadCoverError';
+  }
+}
+
+async function realUploadCover(bookId: string, file: File): Promise<{ coverImageUrl: string; originalFilename: string | null }> {
+  const form = new FormData();
+  form.append('image', file, file.name);
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover/upload`, { method: 'POST', body: form });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string; kind?: string };
+    const kind: UploadCoverErrorKind =
+      res.status === 415 ? 'invalid_mime'
+      : res.status === 413 ? 'oversize'
+      : res.status === 502 ? 'transcode_failed'
+      : 'unknown';
+    throw new UploadCoverError(kind, body.error ?? `Cover upload failed (${res.status})`);
+  }
+  return res.json();
+}
+
+async function realPatchCoverFraming(bookId: string, framing: { offsetX: number; offsetY: number; zoom: number }): Promise<void> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover/framing`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(framing),
+  });
+  if (!res.ok) throw new Error(`Cover framing save failed (${res.status}): ${(await res.text()) || res.statusText}`);
+}
+
 /* Mock counterparts. The fake candidates point at real OpenLibrary
    image URLs so the picker renders meaningful thumbnails under
    VITE_USE_MOCKS=true; setCover returns the picked URL directly so the
@@ -923,6 +960,20 @@ async function mockSetCover(_bookId: string, openLibraryId: string): Promise<{ c
 }
 
 async function mockRemoveCover(_bookId: string): Promise<void> {
+  await wait(40);
+}
+
+async function mockUploadCover(_bookId: string, file: File): Promise<{ coverImageUrl: string; originalFilename: string | null }> {
+  await wait(120);
+  // Mock returns a transient blob URL so the picker repaints immediately.
+  // No server round-trip — the blob lives for the session only.
+  const url = typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
+    ? URL.createObjectURL(file)
+    : MOCK_COVER_CANDIDATES[0].coverUrl;
+  return { coverImageUrl: url, originalFilename: file.name };
+}
+
+async function mockPatchCoverFraming(_bookId: string, _framing: { offsetX: number; offsetY: number; zoom: number }): Promise<void> {
   await wait(40);
 }
 
@@ -2093,6 +2144,8 @@ const real = {
   findCoverCandidates: realFindCoverCandidates,
   setCover:          realSetCover,
   removeCover:       realRemoveCover,
+  uploadCover:       realUploadCover,
+  patchCoverFraming: realPatchCoverFraming,
   getAnalysisState:  realGetAnalysisState,
   getActiveAnalyses: realGetActiveAnalyses,
   getDroppedQuotes:  realGetDroppedQuotes,
@@ -2186,6 +2239,8 @@ const mock = {
   findCoverCandidates: mockFindCoverCandidates,
   setCover:          mockSetCover,
   removeCover:       mockRemoveCover,
+  uploadCover:       mockUploadCover,
+  patchCoverFraming: mockPatchCoverFraming,
   getAnalysisState:  mockGetAnalysisState,
   getActiveAnalyses: mockGetActiveAnalyses,
   getDroppedQuotes:  mockGetDroppedQuotes,

@@ -206,3 +206,138 @@ describe('cover router — error paths', () => {
     expect(r4.status).toBe(404);
   });
 });
+
+/* ---------- Plan 40 — upload + framing endpoints ---------- */
+
+describe('POST /:bookId/cover/upload (plan 40)', () => {
+  it('accepts a JPEG upload, writes cover.jpg verbatim, patches state with source=local', async () => {
+    // Build a small valid JPEG via sharp so the bytes pass validateUpload.
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    }).jpeg({ quality: 85 }).toBuffer();
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cover/upload`)
+      .attach('image', jpeg, { filename: 'mine.jpg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.coverImageUrl).toBe(`/api/books/${bookId}/cover`);
+    expect(res.body.originalFilename).toBe('mine.jpg');
+
+    const onDisk = join(bookDir, '.audiobook', 'cover.jpg');
+    expect(existsSync(onDisk)).toBe(true);
+    expect(Buffer.compare(readFileSync(onDisk), jpeg)).toBe(0);
+
+    const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(state.coverImage.source).toBe('local');
+    expect(state.coverImage.originalFilename).toBe('mine.jpg');
+    expect(state.coverImage.openLibraryId).toBeUndefined();
+  });
+
+  it('transcodes a PNG upload to JPEG on disk', async () => {
+    const sharp = (await import('sharp')).default;
+    const png = await sharp({
+      create: { width: 8, height: 8, channels: 4, background: { r: 80, g: 30, b: 200, alpha: 1 } },
+    }).png().toBuffer();
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cover/upload`)
+      .attach('image', png, { filename: 'mine.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(200);
+    const written = readFileSync(join(bookDir, '.audiobook', 'cover.jpg'));
+    // JPEG SOI marker, never PNG signature.
+    expect(written[0]).toBe(0xff);
+    expect(written[1]).toBe(0xd8);
+  });
+
+  it('415s on an unsupported MIME (image/gif)', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cover/upload`)
+      .attach('image', Buffer.from('GIF89a fake'), { filename: 'x.gif', contentType: 'image/gif' });
+    expect(res.status).toBe(415);
+    expect(res.body.kind).toBe('invalid_mime');
+  });
+
+  it('400s when the multipart body has no image field', async () => {
+    const res = await request(app).post(`/api/books/${bookId}/cover/upload`).send();
+    expect(res.status).toBe(400);
+  });
+
+  it('404s on an unknown bookId', async () => {
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    }).jpeg().toBuffer();
+    const res = await request(app)
+      .post('/api/books/no-such-book__nowhere__nope/cover/upload')
+      .attach('image', jpeg, { filename: 'x.jpg', contentType: 'image/jpeg' });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('PATCH /:bookId/cover/framing (plan 40)', () => {
+  beforeEach(async () => {
+    // Seed a cover so framing has something to attach to. Resets prior test state.
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    }).jpeg().toBuffer();
+    await request(app)
+      .post(`/api/books/${bookId}/cover/upload`)
+      .attach('image', jpeg, { filename: 'seed.jpg', contentType: 'image/jpeg' });
+  });
+
+  it('persists framing on a book that has a cover', async () => {
+    const res = await request(app)
+      .patch(`/api/books/${bookId}/cover/framing`)
+      .set('Content-Type', 'application/json')
+      .send({ offsetX: 30, offsetY: -25, zoom: 1.4 });
+    expect(res.status).toBe(204);
+
+    const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(state.coverImage.framing).toEqual({ offsetX: 30, offsetY: -25, zoom: 1.4 });
+  });
+
+  it('clamps out-of-range values server-side', async () => {
+    await request(app)
+      .patch(`/api/books/${bookId}/cover/framing`)
+      .set('Content-Type', 'application/json')
+      .send({ offsetX: 500, offsetY: -500, zoom: 99 });
+
+    const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(state.coverImage.framing).toEqual({ offsetX: 100, offsetY: -100, zoom: 3 });
+  });
+
+  it('400s when offsetX/offsetY/zoom are missing or non-numeric', async () => {
+    const r1 = await request(app)
+      .patch(`/api/books/${bookId}/cover/framing`)
+      .set('Content-Type', 'application/json')
+      .send({});
+    expect(r1.status).toBe(400);
+
+    const r2 = await request(app)
+      .patch(`/api/books/${bookId}/cover/framing`)
+      .set('Content-Type', 'application/json')
+      .send({ offsetX: 'left', offsetY: 0, zoom: 1 });
+    expect(r2.status).toBe(400);
+  });
+
+  it('404s when the book has no cover pinned', async () => {
+    await request(app).delete(`/api/books/${bookId}/cover`);
+    const res = await request(app)
+      .patch(`/api/books/${bookId}/cover/framing`)
+      .set('Content-Type', 'application/json')
+      .send({ offsetX: 0, offsetY: 0, zoom: 1 });
+    expect(res.status).toBe(404);
+  });
+
+  it('404s on an unknown bookId', async () => {
+    const res = await request(app)
+      .patch('/api/books/no-such-book__nowhere__nope/cover/framing')
+      .set('Content-Type', 'application/json')
+      .send({ offsetX: 0, offsetY: 0, zoom: 1 });
+    expect(res.status).toBe(404);
+  });
+});

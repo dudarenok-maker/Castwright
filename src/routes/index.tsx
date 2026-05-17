@@ -491,6 +491,7 @@ function ListenRoute({ bookId }: { bookId: string }) {
   const isDirty    = useAppSelector(selectIsDirty);
   const coverGradient = useAppSelector(s => s.library.books.find(b => b.bookId === bookId)?.coverGradient ?? null);
   const coverImageUrl = useAppSelector(s => s.library.books.find(b => b.bookId === bookId)?.coverImageUrl ?? null);
+  const coverFraming = useAppSelector(s => s.library.books.find(b => b.bookId === bookId)?.coverFraming);
   return (
     <ListenView bookId={bookId} chapters={chapters} characters={characters} library={voices}
       currentTrack={currentTrack}
@@ -501,6 +502,7 @@ function ListenRoute({ bookId }: { bookId: string }) {
       bookMeta={bookMeta}
       bookCoverGradient={coverGradient}
       bookCoverImageUrl={coverImageUrl}
+      bookCoverFraming={coverFraming}
       onCoverChanged={async () => {
         /* Refresh the library so the Listen view picks up the new
            coverImageUrl via the slice selector above. */

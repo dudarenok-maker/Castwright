@@ -112,6 +112,34 @@ describe('BookLibraryView — loading affordance', () => {
     expect(screen.queryByTestId('book-cover-b1')).not.toBeInTheDocument();
   });
 
+  it('applies coverFraming via object-position + transform when set (plan 40)', () => {
+    const bookWithFraming: LibraryBook = {
+      ...oneBook,
+      coverImageUrl: '/api/books/b1/cover',
+      coverFraming: { offsetX: -50, offsetY: 50, zoom: 1.5 },
+    };
+    const author: LibraryAuthor = {
+      ...oneAuthor,
+      series: [{ name: 'Keeper of the Lost Cities', books: [bookWithFraming] }],
+    };
+    renderView({ loaded: true, authors: [author] });
+    const img = screen.getByTestId('book-cover-b1') as HTMLImageElement;
+    expect(img.style.objectPosition).toBe('25% 75%');
+    expect(img.style.transform).toContain('scale(1.5)');
+  });
+
+  it('emits no extra style when coverFraming is absent (legacy / pre-plan-40 books)', () => {
+    const bookWithCover: LibraryBook = { ...oneBook, coverImageUrl: '/api/books/b1/cover' };
+    const author: LibraryAuthor = {
+      ...oneAuthor,
+      series: [{ name: 'Keeper of the Lost Cities', books: [bookWithCover] }],
+    };
+    renderView({ loaded: true, authors: [author] });
+    const img = screen.getByTestId('book-cover-b1') as HTMLImageElement;
+    expect(img.style.objectPosition).toBe('');
+    expect(img.style.transform).toBe('');
+  });
+
   it('renders the "Paused — resume?" badge when the cold-boot scan reports a paused snapshot', () => {
     const pausedSnap: ActiveAnalysisSummary = {
       bookId: 'b1',

@@ -1,11 +1,17 @@
 /* CoverPicker modal — opens on demand from the library card "..." menu
-   and the Listen-view "Change cover" button. Assertions cover the four
-   states (loading → ready / empty / error), the pick-success round-trip,
-   and the Remove-cover destructive button. */
+   and the Listen-view "Change cover" button.
+
+   Asserts: the four search-tab states (loading → ready / empty / error),
+   the pick-success round-trip, the Remove-cover destructive button, AND
+   (plan 40) the three-tab UI, upload happy/sad paths, framing PATCH,
+   and the account-default-tab seam. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
 import { CoverPicker } from './cover-picker';
+import { accountSlice } from '../store/account-slice';
 import type { CoverCandidate } from '../lib/types';
 
 /* Each test customises the mock return value before importing the
@@ -13,11 +19,18 @@ import type { CoverCandidate } from '../lib/types';
 const findCoverCandidates = vi.fn();
 const setCover = vi.fn();
 const removeCover = vi.fn();
+const uploadCover = vi.fn();
+const patchCoverFraming = vi.fn();
 vi.mock('../lib/api', () => ({
   api: {
     findCoverCandidates: (...args: unknown[]) => findCoverCandidates(...args),
     setCover: (...args: unknown[]) => setCover(...args),
     removeCover: (...args: unknown[]) => removeCover(...args),
+    uploadCover: (...args: unknown[]) => uploadCover(...args),
+    patchCoverFraming: (...args: unknown[]) => patchCoverFraming(...args),
+  },
+  UploadCoverError: class extends Error {
+    constructor(public kind: string, message: string) { super(message); }
   },
 }));
 
@@ -30,31 +43,53 @@ beforeEach(() => {
   findCoverCandidates.mockReset();
   setCover.mockReset();
   removeCover.mockReset();
+  uploadCover.mockReset();
+  patchCoverFraming.mockReset();
 });
 
-function renderPicker(overrides: Partial<React.ComponentProps<typeof CoverPicker>> = {}) {
-  const onClose = vi.fn();
-  const onPicked = vi.fn();
-  const utils = render(
-    <CoverPicker
-      open
-      bookId="bk_test"
-      bookTitle="Bonus Keefe Story"
-      bookAuthor="Shannon Messenger"
-      onClose={onClose}
-      onPicked={onPicked}
-      {...overrides}
-    />,
-  );
-  return { onClose, onPicked, ...utils };
+type RenderOpts = {
+  defaultTab?: 'search' | 'upload';
+} & Partial<React.ComponentProps<typeof CoverPicker>>;
+
+function makeStore(defaultTab: 'search' | 'upload' = 'search') {
+  return configureStore({
+    reducer: { account: accountSlice.reducer },
+    preloadedState: {
+      account: {
+        ...accountSlice.getInitialState(),
+        coverPickerDefaultTab: defaultTab,
+      },
+    },
+  });
 }
 
-describe('CoverPicker — rendering states', () => {
+function renderPicker({ defaultTab = 'search', ...overrides }: RenderOpts = {}) {
+  const onClose = vi.fn();
+  const onPicked = vi.fn();
+  const onFramingChanged = vi.fn();
+  const store = makeStore(defaultTab);
+  const utils = render(
+    <Provider store={store}>
+      <CoverPicker
+        open
+        bookId="bk_test"
+        bookTitle="Bonus Keefe Story"
+        bookAuthor="Shannon Messenger"
+        onClose={onClose}
+        onPicked={onPicked}
+        onFramingChanged={onFramingChanged}
+        {...overrides}
+      />
+    </Provider>,
+  );
+  return { onClose, onPicked, onFramingChanged, store, ...utils };
+}
+
+describe('CoverPicker — rendering states (Search tab)', () => {
   it('renders the candidate grid once the request resolves', async () => {
     findCoverCandidates.mockResolvedValue({ candidates: TWO_CANDIDATES });
     renderPicker();
 
-    /* Picker queries the book's id on mount. */
     expect(findCoverCandidates).toHaveBeenCalledWith('bk_test');
 
     await waitFor(() => expect(screen.getByTestId('cover-grid')).toBeInTheDocument());
@@ -77,13 +112,12 @@ describe('CoverPicker — rendering states', () => {
     await screen.findByText(/upstream offline/i);
     fireEvent.click(screen.getByRole('button', { name: /try again/i }));
 
-    /* The retry triggers a second call and renders the grid on success. */
     await screen.findByTestId('cover-grid');
     expect(findCoverCandidates).toHaveBeenCalledTimes(2);
   });
 });
 
-describe('CoverPicker — pick flow', () => {
+describe('CoverPicker — pick flow (Search tab)', () => {
   it('calls api.setCover with the chosen openLibraryId, fires onPicked, and closes', async () => {
     findCoverCandidates.mockResolvedValue({ candidates: TWO_CANDIDATES });
     setCover.mockResolvedValue({ coverImageUrl: '/api/books/bk_test/cover' });
@@ -114,25 +148,12 @@ describe('CoverPicker — pick flow', () => {
 describe('CoverPicker — remove flow', () => {
   it('renders the Remove cover button only when currentCoverUrl is set', async () => {
     findCoverCandidates.mockResolvedValue({ candidates: TWO_CANDIDATES });
-    const { rerender } = renderPicker();
+    renderPicker();
     await screen.findByTestId('cover-grid');
     expect(screen.queryByRole('button', { name: /remove cover/i })).not.toBeInTheDocument();
-
-    rerender(
-      <CoverPicker
-        open
-        bookId="bk_test"
-        bookTitle="Bonus Keefe Story"
-        bookAuthor="Shannon Messenger"
-        currentCoverUrl="/api/books/bk_test/cover"
-        onClose={() => {}}
-        onPicked={() => {}}
-      />,
-    );
-    expect(screen.getByRole('button', { name: /remove cover/i })).toBeInTheDocument();
   });
 
-  it('calls api.removeCover and emits an empty string via onPicked when Remove is clicked', async () => {
+  it('renders Remove cover when currentCoverUrl is set, calls api.removeCover and emits empty string on click', async () => {
     findCoverCandidates.mockResolvedValue({ candidates: TWO_CANDIDATES });
     removeCover.mockResolvedValue(undefined);
 
@@ -150,16 +171,150 @@ describe('CoverPicker — closed state', () => {
   it('renders nothing when open=false and never calls the API', () => {
     findCoverCandidates.mockResolvedValue({ candidates: TWO_CANDIDATES });
     render(
-      <CoverPicker
-        open={false}
-        bookId="bk_test"
-        bookTitle="Bonus Keefe Story"
-        bookAuthor="Shannon Messenger"
-        onClose={() => {}}
-        onPicked={() => {}}
-      />,
+      <Provider store={makeStore()}>
+        <CoverPicker
+          open={false}
+          bookId="bk_test"
+          bookTitle="Bonus Keefe Story"
+          bookAuthor="Shannon Messenger"
+          onClose={() => {}}
+          onPicked={() => {}}
+        />
+      </Provider>,
     );
     expect(screen.queryByTestId('cover-picker')).not.toBeInTheDocument();
     expect(findCoverCandidates).not.toHaveBeenCalled();
+  });
+});
+
+/* ---------- Plan 40 — tabs + upload + framing ---------- */
+
+describe('CoverPicker — tabs (plan 40)', () => {
+  it('renders all three tabs; Frame is disabled until a cover is pinned', async () => {
+    findCoverCandidates.mockResolvedValue({ candidates: [] });
+    renderPicker();
+    await screen.findByTestId('tab-search');
+    expect(screen.getByTestId('tab-search')).toBeInTheDocument();
+    expect(screen.getByTestId('tab-upload')).toBeInTheDocument();
+    expect(screen.getByTestId('tab-frame')).toBeDisabled();
+  });
+
+  it('Frame tab is enabled when currentCoverUrl is set', async () => {
+    findCoverCandidates.mockResolvedValue({ candidates: [] });
+    renderPicker({ currentCoverUrl: '/api/books/bk_test/cover' });
+    await screen.findByTestId('tab-frame');
+    expect(screen.getByTestId('tab-frame')).not.toBeDisabled();
+  });
+
+  it("honours the account's coverPickerDefaultTab='upload' setting on open", async () => {
+    findCoverCandidates.mockResolvedValue({ candidates: [] });
+    renderPicker({ defaultTab: 'upload' });
+    /* Upload panel renders the dropzone; Search panel would render the
+       grid or empty-state. */
+    await screen.findByTestId('upload-dropzone');
+    expect(screen.queryByTestId('cover-grid')).not.toBeInTheDocument();
+  });
+
+  it("defaults to Search when coverPickerDefaultTab is unset or 'search'", async () => {
+    findCoverCandidates.mockResolvedValue({ candidates: TWO_CANDIDATES });
+    renderPicker({ defaultTab: 'search' });
+    await screen.findByTestId('cover-grid');
+    expect(screen.queryByTestId('upload-dropzone')).not.toBeInTheDocument();
+  });
+});
+
+describe('CoverPicker — Upload tab (plan 40)', () => {
+  function makeFile(name: string, type: string, sizeBytes = 100): File {
+    const blob = new Blob([new Uint8Array(sizeBytes)], { type });
+    return new File([blob], name, { type });
+  }
+
+  it('uploads a JPEG and auto-switches to the Frame tab on success', async () => {
+    findCoverCandidates.mockResolvedValue({ candidates: [] });
+    uploadCover.mockResolvedValue({ coverImageUrl: '/api/books/bk_test/cover', originalFilename: 'mine.jpg' });
+
+    const { onPicked } = renderPicker({ defaultTab: 'upload' });
+    const input = await screen.findByTestId('upload-input');
+
+    const file = makeFile('mine.jpg', 'image/jpeg');
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [file] } });
+    });
+
+    await waitFor(() => expect(uploadCover).toHaveBeenCalledWith('bk_test', file));
+    expect(onPicked).toHaveBeenCalledWith('/api/books/bk_test/cover');
+    /* Auto-switch to Frame — preview should be in the DOM. */
+    await screen.findByTestId('frame-preview');
+  });
+
+  it('rejects an unsupported MIME without firing api.uploadCover', async () => {
+    findCoverCandidates.mockResolvedValue({ candidates: [] });
+    renderPicker({ defaultTab: 'upload' });
+    const input = await screen.findByTestId('upload-input');
+
+    const file = makeFile('x.gif', 'image/gif');
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [file] } });
+    });
+
+    expect(uploadCover).not.toHaveBeenCalled();
+    expect(await screen.findByTestId('upload-error')).toHaveTextContent(/jpeg and png/i);
+  });
+
+  it('rejects oversize uploads (> 10 MB) client-side', async () => {
+    findCoverCandidates.mockResolvedValue({ candidates: [] });
+    renderPicker({ defaultTab: 'upload' });
+    const input = await screen.findByTestId('upload-input');
+
+    const file = makeFile('big.jpg', 'image/jpeg', 11 * 1024 * 1024);
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [file] } });
+    });
+
+    expect(uploadCover).not.toHaveBeenCalled();
+    expect(await screen.findByTestId('upload-error')).toHaveTextContent(/10 mb/i);
+  });
+});
+
+describe('CoverPicker — Frame tab (plan 40)', () => {
+  /* Uses real timers + waitFor so we don't fight Testing Library's
+     own polling. The 300 ms debounce + 1 s waitFor headroom is plenty. */
+  it('fires debounced PATCH on zoom change with the new zoom value', async () => {
+    findCoverCandidates.mockResolvedValue({ candidates: [] });
+    patchCoverFraming.mockResolvedValue(undefined);
+
+    const { onFramingChanged } = renderPicker({
+      currentCoverUrl: '/api/books/bk_test/cover',
+      currentFraming: { offsetX: 0, offsetY: 0, zoom: 1 },
+    });
+
+    fireEvent.click(screen.getByTestId('tab-frame'));
+    const zoom = await screen.findByTestId('frame-zoom');
+    fireEvent.change(zoom, { target: { value: '1.5' } });
+
+    await waitFor(() => expect(patchCoverFraming).toHaveBeenCalled(), { timeout: 1500 });
+    expect(patchCoverFraming).toHaveBeenCalledWith(
+      'bk_test',
+      expect.objectContaining({ zoom: 1.5 }),
+    );
+    await waitFor(() => expect(onFramingChanged).toHaveBeenCalled());
+  });
+
+  it('Reset framing button restores defaults via the same PATCH path', async () => {
+    findCoverCandidates.mockResolvedValue({ candidates: [] });
+    patchCoverFraming.mockResolvedValue(undefined);
+
+    renderPicker({
+      currentCoverUrl: '/api/books/bk_test/cover',
+      currentFraming: { offsetX: 40, offsetY: -20, zoom: 1.8 },
+    });
+
+    fireEvent.click(screen.getByTestId('tab-frame'));
+    fireEvent.click(await screen.findByTestId('frame-reset'));
+
+    await waitFor(
+      () => expect(patchCoverFraming).toHaveBeenCalledWith('bk_test', { offsetX: 0, offsetY: 0, zoom: 1 }),
+      { timeout: 1500 },
+    );
   });
 });

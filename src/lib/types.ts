@@ -350,6 +350,9 @@ export interface LibraryBook {
       disk. Undefined when no cover has been fetched/picked — the card
       and Listen header fall back to `coverGradient`. */
   coverImageUrl?: string;
+  /** Plan 40 — pan + zoom applied to coverImageUrl at render time.
+      Absent → bare object-cover. */
+  coverFraming?: components['schemas']['CoverFraming'];
   pinned?: boolean;
 }
 
