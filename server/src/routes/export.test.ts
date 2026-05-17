@@ -218,6 +218,62 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     expect(res.status).toBe(404);
   });
 
+  it('DELETE cancels a running job and flips its status to cancelled', async () => {
+    const create = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'm4b', destination: 'download' });
+    expect(create.status).toBe(201);
+    const exportId = create.body.id as string;
+
+    /* Fire DELETE while the fire-and-forget build is still running. The
+       m4b path probes durations + spawns ffmpeg; even on a 2-chapter
+       fixture the SIGTERM lands well before completion. */
+    const del = await request(app).delete(`/api/books/${bookId}/exports/${exportId}`);
+    expect(del.status).toBe(204);
+
+    /* Subsequent GET reports cancelled. Allow a couple of poll ticks in
+       case runExportJob's finally hasn't flushed yet — the DELETE
+       handler synchronously flips the status, so the first GET should
+       already see it. */
+    let final: Record<string, unknown> | null = null;
+    for (let i = 0; i < 20; i++) {
+      const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
+      if (res.status === 200 && res.body.status === 'cancelled') {
+        final = res.body;
+        break;
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    expect(final).not.toBeNull();
+    expect(final!.status).toBe('cancelled');
+    expect(final!.errorReason).toMatch(/cancel/i);
+
+    /* Staging dir should be gone (best-effort cleanup). */
+    const stagingPath = join(bookDir, '.audiobook', 'exports', exportId);
+    expect(existsSync(stagingPath)).toBe(false);
+  }, 15_000);
+
+  it('DELETE is idempotent on already-terminal jobs', async () => {
+    const create = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'mp3-zip', destination: 'download' });
+    const exportId = create.body.id as string;
+    await waitForDone(exportId);
+
+    const del = await request(app).delete(`/api/books/${bookId}/exports/${exportId}`);
+    expect(del.status).toBe(204);
+
+    /* Status stays 'done' — the cancel was a no-op. */
+    const after = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
+    expect(after.status).toBe(200);
+    expect(after.body.status).toBe('done');
+  });
+
+  it('DELETE on an unknown export id 404s', async () => {
+    const res = await request(app).delete(`/api/books/${bookId}/exports/exp_doesnotexist`);
+    expect(res.status).toBe(404);
+  });
+
   it('persists the manifest so a fresh server process can rehydrate the job', async () => {
     const create = await request(app)
       .post(`/api/books/${bookId}/exports`)

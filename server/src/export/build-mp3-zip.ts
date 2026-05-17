@@ -32,6 +32,10 @@ export interface BuildMp3ZipOptions {
   /** Optional progress callback — fires once per chapter packed, with a
       0..1 ratio. The route uses this to update the job's `progress`. */
   onProgress?: (ratio: number) => void;
+  /** Optional cancellation signal. Checked between chapters; when aborted
+      mid-build the zip stream is destroyed and an AbortError is thrown.
+      The route's cancel handler is the only producer today. */
+  signal?: AbortSignal;
 }
 
 export interface BuildMp3ZipResult {
@@ -51,7 +55,7 @@ export class ExportIncompleteError extends Error {
 }
 
 export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3ZipResult> {
-  const { bookDir, state, outPath, onProgress } = opts;
+  const { bookDir, state, outPath, onProgress, signal } = opts;
 
   const chapters = [...state.chapters]
     .filter(c => !c.excluded)
@@ -110,6 +114,7 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
     });
 
     for (let i = 0; i < resolved.length; i++) {
+      signal?.throwIfAborted();
       const { chapter, mp3Path } = resolved[i];
       const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.mp3`;
       const taggedPath = join(stagingDir, entryName);

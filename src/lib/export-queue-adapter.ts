@@ -23,7 +23,13 @@ export function bookExportJobToQueueItem(job: BookExportJob): ExportQueueItem {
     filename:    job.filename,
     format:      FORMAT_TO_VIEW[job.format] ?? 'zip',
     size:        formatSize(job.sizeBytes ?? null),
-    status:      job.status === 'queued' ? 'in_progress' : job.status,
+    /* queued → in_progress (the rail shows them the same); cancelled →
+       failed visually, with errorReason='Cancelled by user.' carried
+       through. The modal dismisses cancelled jobs synchronously so the
+       mapping mostly matters for any other surface that polls them. */
+    status:      job.status === 'queued'    ? 'in_progress'
+              :  job.status === 'cancelled' ? 'failed'
+              :  job.status,
     timestamp:   relativeTime(job.completedAt ?? job.createdAt),
     destination: destinationLabel(job),
     progress:    job.progress ?? undefined,
