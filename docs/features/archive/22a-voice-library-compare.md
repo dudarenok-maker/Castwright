@@ -101,10 +101,10 @@ Run `VITE_USE_MOCKS=true`.
 ## Ship notes
 
 - **Shipped:** 2026-05-17.
-- **Commit SHA:** see git log for `feat/frontend-voice-library-compare` merge to `main`.
+- **Commit SHA:** `ec3109ed1106c8a654d1061a851d1b55ccdb30fa` on branch `feat/frontend-voice-library-compare`.
 - **Scope cut from the original draft:** Same-book pairs accessed from the global `#/voices` tab were dropped to a follow-up because they require an on-demand foreign-cast hydrate (the only book whose cast is hydrated in redux is the currently-open one). Cross-book compare was kept out-of-scope for the same reason. Both follow-ups live in `docs/BACKLOG.md` under the Could bucket.
 - **Drift corrections vs. the draft text:** the badge comparison reads `voice.ttsVoice.provider` (not "engine"); the cast hydration API in this codebase is `api.getBookState(bookId)` (`response.cast.characters`), not the draft's mentioned `api.getCast(bookId)`; `LibraryView`'s `currentBookId` is derived from `ui.stage` since the view doesn't receive it as a prop.
 - **Tests landed:**
   - `src/components/voice-library-panel.test.tsx` — pins checkbox-only-with-both-props, click-fires-onToggleSelect-not-onSelect, peach-tint-when-selected.
   - `src/views/voices.test.tsx` — pins zero/one/two/three+ selection states, same/different-base-voice badge selection, Compare gating on cross-book / global / missing-character / wrong-count, modal mounts at 2-same-book.
-  - `e2e/voices-compare.spec.ts` — browser-level walk of per-book tab (selection + pill + amber badge + disabled-with-tooltip) and global tab (Compare disabled with "Open a book to compare its voices"). Dialog-open assertion deferred until `mockGetBookState` (BACKLOG Must #3) populates the cast slice.
+  - `e2e/voices-compare.spec.ts` — browser-level walk of per-book tab (selection + pill + amber badge + disabled-with-tooltip) and global tab (Compare disabled with "Open a book to compare its voices"). Dialog-open assertion deferred until `mockGetBookState` (BACKLOG Must #2) populates the cast slice.
