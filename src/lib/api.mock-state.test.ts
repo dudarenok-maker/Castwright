@@ -26,8 +26,8 @@ describe('mock book-state round-trip', () => {
 
   it('round-trips a cast PUT into a subsequent GET', async () => {
     const characters: Character[] = [
-      { id: 'narrator', displayName: 'Narrator' } as Character,
-      { id: 'halloran', displayName: 'Halloran' } as Character,
+      { id: 'narrator', displayName: 'Narrator' } as unknown as Character,
+      { id: 'halloran', displayName: 'Halloran' } as unknown as Character,
     ];
     await mockPutBookState('book-x', { slice: 'cast', patch: { characters } });
 
@@ -52,8 +52,8 @@ describe('mock book-state round-trip', () => {
   });
 
   it('full-replaces sequential cast PUTs (matches real route writeJsonAtomic)', async () => {
-    const first: Character[]  = [{ id: 'a' } as Character];
-    const second: Character[] = [{ id: 'b' } as Character, { id: 'c' } as Character];
+    const first: Character[]  = [{ id: 'a' } as unknown as Character];
+    const second: Character[] = [{ id: 'b' } as unknown as Character, { id: 'c' } as unknown as Character];
 
     await mockPutBookState('book-z', { slice: 'cast', patch: { characters: first } });
     await mockPutBookState('book-z', { slice: 'cast', patch: { characters: second } });
