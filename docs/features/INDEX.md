@@ -54,6 +54,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [09 — Voice match pipeline](09-voice-match-pipeline.md) — Post-analysis library matching.
 - [10 — Profile drawer](10-profile-drawer.md) — Character edit drawer + sample preview + evidence toggle.
 - [11 — Batch character regenerate](11-batch-character-regenerate.md) — Multi-select character → chapter-range regen.
+- [41 — Bulk-apply library sync on confirm-cast](41-bulk-library-sync.md) — Top-of-view pill that ticks every eligible "Sync profile" checkbox in one click; per-card untick still handles exceptions. **Status: draft.**
 
 ### E. Manuscript editing
 - [12 — Manuscript view](12-manuscript-view.md) — Sentence list, low-confidence flagging, speaker reassignment.
