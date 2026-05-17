@@ -75,7 +75,7 @@ describeIfFfmpeg('encodePcmToMp3', () => {
     const versionBits = (headerByte1 >> 3) & 0x3;
     const layerBits = (headerByte1 >> 1) & 0x3;
     expect(versionBits).toBe(0b10); // MPEG-2 (24 kHz is an MPEG-2 sample rate)
-    expect(layerBits).toBe(0b01);   // Layer III
+    expect(layerBits).toBe(0b01); // Layer III
 
     const sampleRateIndex = (headerByte2 >> 2) & 0x3;
     expect(sampleRateIndex).toBe(0b01); // MPEG-2 idx 01 → 24000 Hz
@@ -104,6 +104,6 @@ if (!ffmpegPresent) {
   // eslint-disable-next-line no-console
   console.warn(
     '[mp3.test.ts] ffmpeg not found on PATH — skipping encoder integration tests. ' +
-    'Install: winget install Gyan.FFmpeg',
+      'Install: winget install Gyan.FFmpeg',
   );
 }

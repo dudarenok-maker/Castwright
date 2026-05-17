@@ -8,12 +8,12 @@ owner: null
 
 > Status: active
 > Key files: `src/styles.css`, `src/lib/use-theme.ts`,
->            `src/components/theme-toggle.tsx`, `src/views/account.tsx`,
->            `src/store/ui-slice.ts`, `src/store/index.ts`,
->            `server/src/workspace/user-settings.ts`, `src/main.tsx`
+> `src/components/theme-toggle.tsx`, `src/views/account.tsx`,
+> `src/store/ui-slice.ts`, `src/store/index.ts`,
+> `server/src/workspace/user-settings.ts`, `src/main.tsx`
 > URL surface: indirect — `<html data-theme>` attribute owned by `useTheme()`
 > OpenAPI ops: `GET /api/user/settings`, `PUT /api/user/settings`
->              (extended with `defaultThemePreference: light|dark|system`)
+> (extended with `defaultThemePreference: light|dark|system`)
 
 ## Benefit / Rationale
 
@@ -133,7 +133,7 @@ dark-mode token / utility edit must preserve these targets:
    `--canvas` (AA Normal). Light-mode values fail this; that's
    why they're overridden.
 3. **Hover-state surfaces** — `hover:bg-white`, `hover:bg-white/60`,
-   `hover:bg-white/70` must paint a *darker* surface than the bare
+   `hover:bg-white/70` must paint a _darker_ surface than the bare
    `bg-white` redirect (#1F1B19), one that still keeps the on-top
    text legible. They MUST NOT paint pure white.
 4. **Status pills** — rose / emerald / amber backgrounds drop to

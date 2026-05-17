@@ -20,16 +20,21 @@ describe('RegenerateModal — defaultScope', () => {
      per-chapter Regenerate entry-point still gets the 'this' default. */
   it('pre-selects "This and all subsequent" when defaultScope=forward', () => {
     const onConfirm = vi.fn();
-    render(<RegenerateModal chapter={chapter} defaultScope="forward"
-                            onClose={() => {}} onConfirm={onConfirm}/>);
+    render(
+      <RegenerateModal
+        chapter={chapter}
+        defaultScope="forward"
+        onClose={() => {}}
+        onConfirm={onConfirm}
+      />,
+    );
     fireEvent.click(screen.getByRole('button', { name: /^Regenerate$/ }));
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ scope: 'forward' }));
   });
 
   it('defaults to "Just this chapter" when no scope is forced', () => {
     const onConfirm = vi.fn();
-    render(<RegenerateModal chapter={chapter}
-                            onClose={() => {}} onConfirm={onConfirm}/>);
+    render(<RegenerateModal chapter={chapter} onClose={() => {}} onConfirm={onConfirm} />);
     fireEvent.click(screen.getByRole('button', { name: /^Regenerate$/ }));
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ scope: 'this' }));
   });
@@ -41,15 +46,29 @@ describe('RegenerateModal — forward ETA reflects actual affected count', () =>
      subsequent" on chapter 1 of a 20-chapter book lied about scope. The count
      must mirror what `regenerateChapter` actually queues. */
   it('renders the passed-in forwardCount in the "this and all subsequent" ETA', () => {
-    render(<RegenerateModal chapter={chapter} defaultScope="forward" forwardCount={20}
-                            onClose={() => {}} onConfirm={() => {}}/>);
+    render(
+      <RegenerateModal
+        chapter={chapter}
+        defaultScope="forward"
+        forwardCount={20}
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
     expect(screen.getByText(/for 20 chapters/)).toBeInTheDocument();
     expect(screen.queryByText(/for 4 chapters/)).not.toBeInTheDocument();
   });
 
   it('pluralises correctly when only one chapter remains', () => {
-    render(<RegenerateModal chapter={chapter} defaultScope="forward" forwardCount={1}
-                            onClose={() => {}} onConfirm={() => {}}/>);
+    render(
+      <RegenerateModal
+        chapter={chapter}
+        defaultScope="forward"
+        forwardCount={1}
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
     expect(screen.getByText(/for 1 chapter\b/)).toBeInTheDocument();
   });
 });

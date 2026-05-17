@@ -47,7 +47,11 @@ export function rawAttemptPath(manuscriptId: string, key: HandoffKey, attempt: 1
   return join(OUTBOX, `${manuscriptId}-stage${key}.attempt${attempt}.raw.txt`);
 }
 
-export async function writeInbox(manuscriptId: string, key: HandoffKey, body: string): Promise<string> {
+export async function writeInbox(
+  manuscriptId: string,
+  key: HandoffKey,
+  body: string,
+): Promise<string> {
   await ensureDirs();
   const path = inboxPath(manuscriptId, key);
   // Clean any stale outbox so a stale dropped file can't masquerade as fresh.

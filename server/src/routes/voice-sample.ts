@@ -28,8 +28,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /* Tests override the on-disk cache root via VOICE_SAMPLE_AUDIO_DIR so a run
    doesn't leave files in the dev server's real audio dir. Production uses
    server/audio/voices/ which is also the static mount root in index.ts. */
-const AUDIO_DIR = process.env.VOICE_SAMPLE_AUDIO_DIR
-  ?? resolve(__dirname, '..', '..', 'audio', 'voices');
+const AUDIO_DIR =
+  process.env.VOICE_SAMPLE_AUDIO_DIR ?? resolve(__dirname, '..', '..', 'audio', 'voices');
 
 /* Sample script. The analyzer ships ≥3 evidence quotes per character,
    sorted longest-first server-side (see analysis.ts sortEvidence) and
@@ -49,7 +49,7 @@ function buildSampleText(voice: VoiceLike, hint?: CharacterHint): string {
      (e.g. user edits in the profile drawer that haven't been saved). */
   const cleaned = (hint?.evidence ?? [])
     .map(stripQuoteMarks)
-    .filter(s => s.length > 0)
+    .filter((s) => s.length > 0)
     .sort((a, b) => b.length - a.length);
 
   const longest = cleaned[0];
@@ -95,7 +95,7 @@ function isTtsEngine(value: unknown): value is TtsEngine {
    shouldn't have to know to re-pick — the server routes via the engine. */
 function defaultModelKeyForEngine(engine: TtsEngine): TtsModelKey {
   if (engine === 'gemini') return 'gemini-2.5-flash';
-  if (engine === 'piper')  return 'piper-en-us-medium';
+  if (engine === 'piper') return 'piper-en-us-medium';
   if (engine === 'kokoro') return 'kokoro-v1';
   return 'coqui-xtts-v2';
 }
@@ -182,10 +182,16 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     });
   }
 
-  console.info(`[tts] ${cacheScope} → ${voiceName} (engine=${engine}, model=${effectiveModelKey}, ${text.length} chars, hash=${paramHash})`);
+  console.info(
+    `[tts] ${cacheScope} → ${voiceName} (engine=${engine}, model=${effectiveModelKey}, ${text.length} chars, hash=${paramHash})`,
+  );
 
   try {
-    const { pcm, sampleRate } = await provider.synthesize({ text, voiceName, modelKey: effectiveModelKey });
+    const { pcm, sampleRate } = await provider.synthesize({
+      text,
+      voiceName,
+      modelKey: effectiveModelKey,
+    });
     /* Compute duration from raw PCM before encode — MP3 frame counting would
        force a probe step. PCM bytes/sec is exact for 16-bit mono. */
     const durationSec = pcmDurationSec(pcm.length, sampleRate);
@@ -203,9 +209,11 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     const status = isEncoderMissing ? 503 : isSidecarDown ? 503 : isRateLimit ? 429 : 502;
     const code = isEncoderMissing
       ? 'encoder_unavailable'
-      : isSidecarDown ? 'sidecar_down'
-      : isRateLimit ? 'rate_limited'
-      : 'tts_failed';
+      : isSidecarDown
+        ? 'sidecar_down'
+        : isRateLimit
+          ? 'rate_limited'
+          : 'tts_failed';
     return res.status(status).json({ code, message: msg });
   }
 });

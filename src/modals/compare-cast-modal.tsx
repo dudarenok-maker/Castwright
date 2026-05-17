@@ -11,19 +11,19 @@ import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import type { Character, Voice, CharColor, TtsModelKey, TtsEngine } from '../lib/types';
 
-type CharGender   = NonNullable<Character['gender']>;
+type CharGender = NonNullable<Character['gender']>;
 type CharAgeRange = NonNullable<Character['ageRange']>;
 type Tone = NonNullable<Character['tone']>;
 
 const GENDER_OPTIONS: Array<{ value: CharGender; label: string }> = [
-  { value: 'male',    label: 'Male' },
-  { value: 'female',  label: 'Female' },
+  { value: 'male', label: 'Male' },
+  { value: 'female', label: 'Female' },
   { value: 'neutral', label: 'Neutral' },
 ];
 const AGE_OPTIONS: Array<{ value: CharAgeRange; label: string }> = [
-  { value: 'child',   label: 'Child' },
-  { value: 'teen',    label: 'Teen' },
-  { value: 'adult',   label: 'Adult' },
+  { value: 'child', label: 'Child' },
+  { value: 'teen', label: 'Teen' },
+  { value: 'adult', label: 'Adult' },
   { value: 'elderly', label: 'Elderly' },
 ];
 
@@ -57,22 +57,29 @@ function draftFromCharacter(c: Character): SideDraft {
 function mergeDraft(c: Character, d: SideDraft): Character {
   return {
     ...c,
-    gender:   d.gender   || undefined,
+    gender: d.gender || undefined,
     ageRange: d.ageRange || undefined,
-    tone:     d.tone,
+    tone: d.tone,
   };
 }
 
-function draftToHintOverrides(d: SideDraft): Partial<Pick<Character, 'gender' | 'ageRange' | 'tone'>> {
+function draftToHintOverrides(
+  d: SideDraft,
+): Partial<Pick<Character, 'gender' | 'ageRange' | 'tone'>> {
   return {
-    gender:   d.gender   || undefined,
+    gender: d.gender || undefined,
     ageRange: d.ageRange || undefined,
-    tone:     d.tone,
+    tone: d.tone,
   };
 }
 
 function tonesEqual(a: Tone, b: Tone): boolean {
-  return a.warmth === b.warmth && a.pace === b.pace && a.authority === b.authority && a.emotion === b.emotion;
+  return (
+    a.warmth === b.warmth &&
+    a.pace === b.pace &&
+    a.authority === b.authority &&
+    a.emotion === b.emotion
+  );
 }
 
 function isDirty(orig: Character, d: SideDraft): boolean {
@@ -84,14 +91,24 @@ function sampleUrlPrefix(voiceId: string, modelKey: TtsModelKey): string {
   return `/audio/voices/${encodeURIComponent(voiceId)}-${modelKey}`;
 }
 
-export function CompareCastModal({ characters, library, ttsModelKey, onSaveSide, onClose, onOpenProfile }: Props) {
+export function CompareCastModal({
+  characters,
+  library,
+  ttsModelKey,
+  onSaveSide,
+  onClose,
+  onOpenProfile,
+}: Props) {
   const [a, b] = characters;
   const ttsEngine = engineForModelKey(ttsModelKey);
   const playback = useSamplePlayback();
 
   const [draftA, setDraftA] = useState<SideDraft>(() => draftFromCharacter(a));
   const [draftB, setDraftB] = useState<SideDraft>(() => draftFromCharacter(b));
-  const [rowState, setRowState] = useState<Record<SideKey, { loading?: boolean; error?: string }>>({ a: {}, b: {} });
+  const [rowState, setRowState] = useState<Record<SideKey, { loading?: boolean; error?: string }>>({
+    a: {},
+    b: {},
+  });
   const [autoRunning, setAutoRunning] = useState(false);
   const [footerError, setFooterError] = useState<string | null>(null);
   const autoCancelRef = useRef(false);
@@ -112,7 +129,7 @@ export function CompareCastModal({ characters, library, ttsModelKey, onSaveSide,
   }
 
   function setRow(side: SideKey, patch: { loading?: boolean; error?: string } | null) {
-    setRowState(prev => {
+    setRowState((prev) => {
       const next = { ...prev };
       if (patch === null) next[side] = {};
       else next[side] = { ...next[side], ...patch };
@@ -120,8 +137,14 @@ export function CompareCastModal({ characters, library, ttsModelKey, onSaveSide,
     });
   }
 
-  const sideA = useMemo(() => buildSideContext(a, draftA, library, ttsEngine, ttsModelKey), [a, draftA, library, ttsEngine, ttsModelKey]);
-  const sideB = useMemo(() => buildSideContext(b, draftB, library, ttsEngine, ttsModelKey), [b, draftB, library, ttsEngine, ttsModelKey]);
+  const sideA = useMemo(
+    () => buildSideContext(a, draftA, library, ttsEngine, ttsModelKey),
+    [a, draftA, library, ttsEngine, ttsModelKey],
+  );
+  const sideB = useMemo(
+    () => buildSideContext(b, draftB, library, ttsEngine, ttsModelKey),
+    [b, draftB, library, ttsEngine, ttsModelKey],
+  );
 
   const dirtyA = isDirty(a, draftA);
   const dirtyB = isDirty(b, draftB);
@@ -210,7 +233,7 @@ export function CompareCastModal({ characters, library, ttsModelKey, onSaveSide,
 
   function resetSide(side: SideKey) {
     if (side === 'a') setDraftA(draftFromCharacter(a));
-    else              setDraftB(draftFromCharacter(b));
+    else setDraftB(draftFromCharacter(b));
   }
 
   return (
@@ -238,7 +261,7 @@ export function CompareCastModal({ characters, library, ttsModelKey, onSaveSide,
                 aria-label="Close"
                 className="ml-auto p-2 rounded-full hover:bg-ink/5 text-ink/60"
               >
-                <IconClose className="w-4 h-4"/>
+                <IconClose className="w-4 h-4" />
               </button>
             </div>
 
@@ -258,7 +281,10 @@ export function CompareCastModal({ characters, library, ttsModelKey, onSaveSide,
                 onPlay={() => playSide('a')}
                 onSave={() => saveSide('a')}
                 onReset={() => resetSide('a')}
-                onOpenProfile={() => { onOpenProfile(a.id); handleClose(); }}
+                onOpenProfile={() => {
+                  onOpenProfile(a.id);
+                  handleClose();
+                }}
                 playbackUrl={playback.currentUrl}
                 playbackPlaying={playback.isPlaying}
               />
@@ -277,7 +303,10 @@ export function CompareCastModal({ characters, library, ttsModelKey, onSaveSide,
                 onPlay={() => playSide('b')}
                 onSave={() => saveSide('b')}
                 onReset={() => resetSide('b')}
-                onOpenProfile={() => { onOpenProfile(b.id); handleClose(); }}
+                onOpenProfile={() => {
+                  onOpenProfile(b.id);
+                  handleClose();
+                }}
                 playbackUrl={playback.currentUrl}
                 playbackPlaying={playback.isPlaying}
               />
@@ -293,11 +322,17 @@ export function CompareCastModal({ characters, library, ttsModelKey, onSaveSide,
                     : 'bg-peach text-ink hover:bg-peach/90'
                 }`}
               >
-                {autoRunning ? <IconPause className="w-3.5 h-3.5"/> : <IconRefresh className="w-3.5 h-3.5"/>}
+                {autoRunning ? (
+                  <IconPause className="w-3.5 h-3.5" />
+                ) : (
+                  <IconRefresh className="w-3.5 h-3.5" />
+                )}
                 <span>{autoRunning ? 'Stop auto-compare' : 'Auto A → B'}</span>
               </button>
               {footerError && (
-                <span className="text-xs text-red-600/80 truncate" title={footerError}>⚠ {footerError}</span>
+                <span className="text-xs text-red-600/80 truncate" title={footerError}>
+                  ⚠ {footerError}
+                </span>
               )}
               <button
                 onClick={handleClose}
@@ -380,9 +415,23 @@ interface SidePanelProps {
 }
 
 function SidePanel({
-  side, character, draft, setDraft, ctx, otherCharacter, otherDraft, otherCtx,
-  rowState, dirty, disabled, onPlay, onSave, onReset, onOpenProfile,
-  playbackUrl, playbackPlaying,
+  side,
+  character,
+  draft,
+  setDraft,
+  ctx,
+  otherCharacter,
+  otherDraft,
+  otherCtx,
+  rowState,
+  dirty,
+  disabled,
+  onPlay,
+  onSave,
+  onReset,
+  onOpenProfile,
+  playbackUrl,
+  playbackPlaying,
 }: SidePanelProps) {
   const isPlayingThis = playbackPlaying && !!playbackUrl?.startsWith(ctx.samplePrefix);
   /* Diff is computed against the *other side's draft* so editing live
@@ -390,15 +439,15 @@ function SidePanel({
      about the comparison. We don't diff against the saved Character. */
   const thisGender = draft.gender || character.gender || '';
   const otherGender = otherDraft.gender || otherCharacter.gender || '';
-  const thisAge   = draft.ageRange || character.ageRange || '';
-  const otherAge  = otherDraft.ageRange || otherCharacter.ageRange || '';
+  const thisAge = draft.ageRange || character.ageRange || '';
+  const otherAge = otherDraft.ageRange || otherCharacter.ageRange || '';
   const differsGender = thisGender !== otherGender;
-  const differsAge    = thisAge !== otherAge;
-  const differsTone   = !tonesEqual(draft.tone, otherDraft.tone);
-  const differsVoice  = ctx.ttsVoiceName !== otherCtx.ttsVoiceName;
+  const differsAge = thisAge !== otherAge;
+  const differsTone = !tonesEqual(draft.tone, otherDraft.tone);
+  const differsVoice = ctx.ttsVoiceName !== otherCtx.ttsVoiceName;
   const differsProfile = ctx.profile !== otherCtx.profile;
   const otherAttrs = new Set(otherCharacter.attributes ?? []);
-  const onlyInThis = (character.attributes ?? []).filter(x => !otherAttrs.has(x));
+  const onlyInThis = (character.attributes ?? []).filter((x) => !otherAttrs.has(x));
 
   const profileLabel = ctx.profile.replace('-', ' · ');
 
@@ -408,19 +457,21 @@ function SidePanel({
       className="bg-white rounded-2xl border border-ink/10 p-5 space-y-4"
     >
       <header className="flex items-center gap-3 min-w-0">
-        <Avatar name={character.name} color={character.color as CharColor} size={40}/>
+        <Avatar name={character.name} color={character.color as CharColor} size={40} />
         <div className="min-w-0">
           <p className="font-bold text-ink truncate">{character.name}</p>
           <p className="text-xs text-ink/60 truncate">{character.role}</p>
         </div>
-        <span className="ml-auto text-[10px] uppercase tracking-wider font-semibold text-ink/40">Side {side.toUpperCase()}</span>
+        <span className="ml-auto text-[10px] uppercase tracking-wider font-semibold text-ink/40">
+          Side {side.toUpperCase()}
+        </span>
       </header>
 
       <div className="space-y-2 text-sm">
-        <DiffRow label="Resolved voice" value={ctx.ttsVoiceName} differs={differsVoice}/>
-        <DiffRow label="Profile bucket" value={profileLabel} differs={differsProfile}/>
+        <DiffRow label="Resolved voice" value={ctx.ttsVoiceName} differs={differsVoice} />
+        <DiffRow label="Profile bucket" value={profileLabel} differs={differsProfile} />
         {ctx.voiceLibraryName && (
-          <DiffRow label="Library voice" value={ctx.voiceLibraryName} differs={false}/>
+          <DiffRow label="Library voice" value={ctx.voiceLibraryName} differs={false} />
         )}
       </div>
 
@@ -433,7 +484,11 @@ function SidePanel({
             aria-label={`Gender for ${character.name}`}
           >
             <option value="">—</option>
-            {GENDER_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            {GENDER_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
         </EditorRow>
         <EditorRow label="Age range" differs={differsAge}>
@@ -444,7 +499,11 @@ function SidePanel({
             aria-label={`Age range for ${character.name}`}
           >
             <option value="">—</option>
-            {AGE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            {AGE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
         </EditorRow>
       </div>
@@ -454,18 +513,47 @@ function SidePanel({
           <span className="text-xs uppercase tracking-wider font-semibold text-ink/50">Tone</span>
           {differsTone && <Pill color="library">≠ differs</Pill>}
         </div>
-        <ToneSlider label="Warmth"   value={draft.tone.warmth   ?? 50} onChange={(v) => setDraft({ ...draft, tone: { ...draft.tone, warmth: v } })}   leftLabel="Cool"     rightLabel="Warm"/>
-        <ToneSlider label="Pace"     value={draft.tone.pace     ?? 50} onChange={(v) => setDraft({ ...draft, tone: { ...draft.tone, pace: v } })}     leftLabel="Slow"     rightLabel="Quick"/>
-        <ToneSlider label="Authority" value={draft.tone.authority ?? 50} onChange={(v) => setDraft({ ...draft, tone: { ...draft.tone, authority: v } })} leftLabel="Gentle"   rightLabel="Commanding"/>
-        <ToneSlider label="Emotion"  value={draft.tone.emotion  ?? 50} onChange={(v) => setDraft({ ...draft, tone: { ...draft.tone, emotion: v } })}  leftLabel="Reserved" rightLabel="Expressive"/>
+        <ToneSlider
+          label="Warmth"
+          value={draft.tone.warmth ?? 50}
+          onChange={(v) => setDraft({ ...draft, tone: { ...draft.tone, warmth: v } })}
+          leftLabel="Cool"
+          rightLabel="Warm"
+        />
+        <ToneSlider
+          label="Pace"
+          value={draft.tone.pace ?? 50}
+          onChange={(v) => setDraft({ ...draft, tone: { ...draft.tone, pace: v } })}
+          leftLabel="Slow"
+          rightLabel="Quick"
+        />
+        <ToneSlider
+          label="Authority"
+          value={draft.tone.authority ?? 50}
+          onChange={(v) => setDraft({ ...draft, tone: { ...draft.tone, authority: v } })}
+          leftLabel="Gentle"
+          rightLabel="Commanding"
+        />
+        <ToneSlider
+          label="Emotion"
+          value={draft.tone.emotion ?? 50}
+          onChange={(v) => setDraft({ ...draft, tone: { ...draft.tone, emotion: v } })}
+          leftLabel="Reserved"
+          rightLabel="Expressive"
+        />
       </div>
 
       {onlyInThis.length > 0 && (
         <div className="border-t border-ink/10 pt-3">
-          <p className="text-xs uppercase tracking-wider font-semibold text-ink/50 mb-2">Attributes only on this side</p>
+          <p className="text-xs uppercase tracking-wider font-semibold text-ink/50 mb-2">
+            Attributes only on this side
+          </p>
           <div className="flex flex-wrap gap-1">
-            {onlyInThis.map(x => (
-              <span key={x} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-magenta/10 text-magenta text-[11px] font-semibold">
+            {onlyInThis.map((x) => (
+              <span
+                key={x}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-magenta/10 text-magenta text-[11px] font-semibold"
+              >
                 ≠ {x}
               </span>
             ))}
@@ -477,7 +565,11 @@ function SidePanel({
         <button
           onClick={onPlay}
           disabled={disabled || rowState.loading}
-          aria-label={isPlayingThis ? `Stop sample for ${character.name}` : `Play sample for ${character.name}`}
+          aria-label={
+            isPlayingThis
+              ? `Stop sample for ${character.name}`
+              : `Play sample for ${character.name}`
+          }
           className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
             rowState.loading
               ? 'bg-magenta/10 text-magenta cursor-wait'
@@ -486,9 +578,13 @@ function SidePanel({
                 : 'bg-ink/[0.06] text-ink/80 hover:bg-magenta/15 hover:text-magenta'
           }`}
         >
-          {rowState.loading ? <IconSpinner className="w-3 h-3"/>
-            : isPlayingThis ? <IconPause className="w-3 h-3"/>
-            : <IconPlay className="w-3 h-3"/>}
+          {rowState.loading ? (
+            <IconSpinner className="w-3 h-3" />
+          ) : isPlayingThis ? (
+            <IconPause className="w-3 h-3" />
+          ) : (
+            <IconPlay className="w-3 h-3" />
+          )}
           <span>{rowState.loading ? 'Generating…' : isPlayingThis ? 'Stop' : 'Play 12s'}</span>
         </button>
         {dirty && (
@@ -508,7 +604,9 @@ function SidePanel({
       </div>
 
       {rowState.error && (
-        <p className="text-[11px] text-red-600/80" role="alert">⚠ {rowState.error}</p>
+        <p className="text-[11px] text-red-600/80" role="alert">
+          ⚠ {rowState.error}
+        </p>
       )}
 
       <button
@@ -521,29 +619,49 @@ function SidePanel({
   );
 }
 
-interface DiffRowProps { label: string; value: string; differs: boolean; }
+interface DiffRowProps {
+  label: string;
+  value: string;
+  differs: boolean;
+}
 function DiffRow({ label, value, differs }: DiffRowProps) {
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-xs text-ink/50">{label}</span>
       <span className="flex items-center gap-1.5 min-w-0">
         {differs && (
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-magenta/15 text-magenta text-[10px] font-bold" aria-label="differs">≠</span>
+          <span
+            className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-magenta/15 text-magenta text-[10px] font-bold"
+            aria-label="differs"
+          >
+            ≠
+          </span>
         )}
-        <span className="text-sm font-medium text-ink truncate" title={value}>{value}</span>
+        <span className="text-sm font-medium text-ink truncate" title={value}>
+          {value}
+        </span>
       </span>
     </div>
   );
 }
 
-interface EditorRowProps { label: string; differs: boolean; children: ReactNode; }
+interface EditorRowProps {
+  label: string;
+  differs: boolean;
+  children: ReactNode;
+}
 function EditorRow({ label, differs, children }: EditorRowProps) {
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="flex items-center gap-1.5 text-sm text-ink">
         {label}
         {differs && (
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-magenta/15 text-magenta text-[10px] font-bold" aria-label="differs">≠</span>
+          <span
+            className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-magenta/15 text-magenta text-[10px] font-bold"
+            aria-label="differs"
+          >
+            ≠
+          </span>
         )}
       </span>
       {children}

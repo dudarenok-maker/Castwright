@@ -29,7 +29,7 @@ export function installTimestamps(): void {
     const original = (console[method] as (...args: unknown[]) => void).bind(console);
     console[method] = ((...args: unknown[]) => {
       original(formatTimestamp(new Date()), ...args);
-    }) as typeof console[typeof method];
+    }) as (typeof console)[typeof method];
   }
   target[PATCHED_FLAG] = true;
 }

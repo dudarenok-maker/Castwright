@@ -44,21 +44,27 @@ describe('exportsSlice', () => {
     const unknown = makeJob({ id: 'exp_unknown' });
     let s = exportsSlice.reducer(initial, exportsActions.exportStarted(known));
     s = exportsSlice.reducer(s, exportsActions.exportUpdated(unknown));
-    expect(s.byBookId[known.bookId].map(j => j.id)).toEqual(['exp_unknown', 'exp_known']);
+    expect(s.byBookId[known.bookId].map((j) => j.id)).toEqual(['exp_unknown', 'exp_known']);
   });
 
   it('exportDismissed drops the matching job', () => {
     const job = makeJob();
     let s = exportsSlice.reducer(initial, exportsActions.exportStarted(job));
-    s = exportsSlice.reducer(s, exportsActions.exportDismissed({ bookId: job.bookId, exportId: job.id }));
+    s = exportsSlice.reducer(
+      s,
+      exportsActions.exportDismissed({ bookId: job.bookId, exportId: job.id }),
+    );
     expect(s.byBookId[job.bookId]).toEqual([]);
   });
 
   it('lanUrlsHydrated replaces the URL list and port', () => {
-    const s = exportsSlice.reducer(initial, exportsActions.lanUrlsHydrated({
-      urls: ['http://192.168.1.42:8080'],
-      port: 8080,
-    }));
+    const s = exportsSlice.reducer(
+      initial,
+      exportsActions.lanUrlsHydrated({
+        urls: ['http://192.168.1.42:8080'],
+        port: 8080,
+      }),
+    );
     expect(s.lanUrls).toEqual(['http://192.168.1.42:8080']);
     expect(s.lanPort).toBe(8080);
   });

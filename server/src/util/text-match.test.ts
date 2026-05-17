@@ -13,12 +13,12 @@ import {
 
 describe('stripTerminalSentencePunct', () => {
   it.each([
-    ['hello world.',     'hello world'],
-    ['hello world,',     'hello world'],
-    ['hello world!?!',   'hello world'],
-    ['hello world',      'hello world'],
-    ['hello, world',     'hello, world'],
-    ['',                 ''],
+    ['hello world.', 'hello world'],
+    ['hello world,', 'hello world'],
+    ['hello world!?!', 'hello world'],
+    ['hello world', 'hello world'],
+    ['hello, world', 'hello, world'],
+    ['', ''],
   ])('%s → %s', (input, expected) => {
     expect(stripTerminalSentencePunct(input)).toBe(expected);
   });
@@ -26,20 +26,22 @@ describe('stripTerminalSentencePunct', () => {
 
 describe('splitSentenceSegments', () => {
   it('splits on sentence-final punctuation followed by whitespace', () => {
-    expect(splitSentenceSegments('keep moving forward. then turn left now.'))
-      .toEqual(['keep moving forward', 'then turn left now']);
+    expect(splitSentenceSegments('keep moving forward. then turn left now.')).toEqual([
+      'keep moving forward',
+      'then turn left now',
+    ]);
   });
 
   it('filters out segments shorter than the minLen threshold (default 8)', () => {
     /* "yeah" (4) and "no" (2) are below the cutoff — only the long
        segment survives. */
-    expect(splitSentenceSegments('yeah. some longer sentence here. no.'))
-      .toEqual(['some longer sentence here']);
+    expect(splitSentenceSegments('yeah. some longer sentence here. no.')).toEqual([
+      'some longer sentence here',
+    ]);
   });
 
   it('respects a caller-supplied minLen', () => {
-    expect(splitSentenceSegments('hi there. bye now.', 3))
-      .toEqual(['hi there', 'bye now']);
+    expect(splitSentenceSegments('hi there. bye now.', 3)).toEqual(['hi there', 'bye now']);
   });
 
   it('returns an empty array when no segment clears the threshold', () => {
@@ -50,9 +52,9 @@ describe('splitSentenceSegments', () => {
 describe('matchQuoteInSource — three-tier verifier', () => {
   const source = normaliseForMatch(
     '"Hard to starboard," Halloran said, watching the gulls scatter. ' +
-    'Hours later, by the binnacle, he muttered: "Cold supper it is, then." ' +
-    'Marcus shrugged. "Aye." ' +
-    '"Mammoths are extinct," she interrupted.',
+      'Hours later, by the binnacle, he muttered: "Cold supper it is, then." ' +
+      'Marcus shrugged. "Aye." ' +
+      '"Mammoths are extinct," she interrupted.',
   );
 
   it('returns "verbatim" when the candidate appears as a contiguous run', () => {
@@ -63,15 +65,14 @@ describe('matchQuoteInSource — three-tier verifier', () => {
     /* The signature KOTLC false positive: source has `extinct,` (comma
        because a dialogue tag follows), model emits `extinct.` (period
        because the line is a complete utterance). */
-    expect(matchQuoteInSource(normaliseForMatch('Mammoths are extinct.'), source)).toBe('terminal_punct');
+    expect(matchQuoteInSource(normaliseForMatch('Mammoths are extinct.'), source)).toBe(
+      'terminal_punct',
+    );
   });
 
   it('returns "segments" for stitched same-speaker quotes with narration removed', () => {
     expect(
-      matchQuoteInSource(
-        normaliseForMatch('Hard to starboard. Cold supper it is, then.'),
-        source,
-      ),
+      matchQuoteInSource(normaliseForMatch('Hard to starboard. Cold supper it is, then.'), source),
     ).toBe('segments');
   });
 
@@ -122,12 +123,15 @@ describe('matchQuoteInSource — KOTLC ledger regression', () => {
   const normSource = normaliseForMatch(sourceFragments);
 
   it.each([
-    ['Kick his butt, Sophie! It\'s about time someone took Fitz down.', 'segments'],
-    ['A Level Two making it to the top ten. And you said you weren\'t mysterious.', 'segments'],
-    ['Makeovers? You girls sure know how to have fun. Maybe you can braid each other\'s hair and giggle about boys while you\'re at it.', 'segments'],
-    ['Told you so.',                       'terminal_punct'],
-    ['Sorry, I forgot you\'re worse at this stuff than me.', 'terminal_punct'],
-    ['I promise I\'ll be careful. You don\'t have to worry.', 'segments'],
+    ["Kick his butt, Sophie! It's about time someone took Fitz down.", 'segments'],
+    ["A Level Two making it to the top ten. And you said you weren't mysterious.", 'segments'],
+    [
+      "Makeovers? You girls sure know how to have fun. Maybe you can braid each other's hair and giggle about boys while you're at it.",
+      'segments',
+    ],
+    ['Told you so.', 'terminal_punct'],
+    ["Sorry, I forgot you're worse at this stuff than me.", 'terminal_punct'],
+    ["I promise I'll be careful. You don't have to worry.", 'segments'],
   ])('keeps real KOTLC quote %s via %s tier', (quote, expectedTier) => {
     expect(matchQuoteInSource(normaliseForMatch(quote), normSource)).toBe(expectedTier);
   });

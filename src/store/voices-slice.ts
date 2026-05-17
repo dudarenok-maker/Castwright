@@ -36,7 +36,7 @@ export const voicesSlice = createSlice({
     /* Optimistic pin toggle. PUT /api/voices/:id/pin still fires from the
        view; transient mismatches are cheap (next hydrate corrects them). */
     setPinned: (s, a: PayloadAction<{ voiceId: string; pinned: boolean }>) => {
-      const v = s.voices.find(v => v.id === a.payload.voiceId);
+      const v = s.voices.find((v) => v.id === a.payload.voiceId);
       if (v) v.pinned = a.payload.pinned || undefined;
     },
     /* Optimistic override write. The matching PUT /api/voices/:id/override
@@ -52,11 +52,8 @@ export const voicesSlice = createSlice({
        - `override = null` → clear EVERY engine slot. (Per-slot clearing
          isn't surfaced yet; if a UI needs it later, add a separate
          action with an explicit `engine` field.) */
-    setOverride: (
-      s,
-      a: PayloadAction<{ voiceId: string; override: BaseVoice | null }>,
-    ) => {
-      const v = s.voices.find(v => v.id === a.payload.voiceId);
+    setOverride: (s, a: PayloadAction<{ voiceId: string; override: BaseVoice | null }>) => {
+      const v = s.voices.find((v) => v.id === a.payload.voiceId);
       if (!v) return;
       const override = a.payload.override;
       if (override === null) {

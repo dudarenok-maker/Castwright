@@ -11,7 +11,13 @@
 
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { parseAndValidate, repairUnescapedQuotes, repairStructuralPunctuation, stripCodeFences, trimTrailingProse } from './gemini.js';
+import {
+  parseAndValidate,
+  repairUnescapedQuotes,
+  repairStructuralPunctuation,
+  stripCodeFences,
+  trimTrailingProse,
+} from './gemini.js';
 
 describe('repairUnescapedQuotes', () => {
   it('is a no-op on already-valid JSON', () => {
@@ -72,10 +78,10 @@ describe('repairUnescapedQuotes', () => {
 
   it('keeps closing quotes followed by `,` `}` `]` `:` or EOF as real closes', () => {
     const variants = [
-      '{"a":"x","b":"y"}',  // followed by `,`
-      '{"a":"x"}',          // followed by `}`
-      '["a","b"]',          // followed by `,` and `]`
-      '{"x":"y"}',          // followed by `}`
+      '{"a":"x","b":"y"}', // followed by `,`
+      '{"a":"x"}', // followed by `}`
+      '["a","b"]', // followed by `,` and `]`
+      '{"x":"y"}', // followed by `}`
     ];
     for (const v of variants) {
       expect(repairUnescapedQuotes(v)).toBe(v);
@@ -166,10 +172,12 @@ describe('stripCodeFences', () => {
 });
 
 describe('parseAndValidate — repair integration', () => {
-  const schema = z.object({
-    quote: z.string(),
-    note:  z.string(),
-  }).strict();
+  const schema = z
+    .object({
+      quote: z.string(),
+      note: z.string(),
+    })
+    .strict();
 
   it('returns ok with repaired:false for clean valid JSON', () => {
     const r = parseAndValidate('{"quote":"hi","note":"n"}', schema);
@@ -214,7 +222,8 @@ describe('parseAndValidate — repair integration', () => {
   it('returns ok with repaired:true when fence AND quote-escape repair are BOTH needed', () => {
     /* Worst-case: model emits the fence wrapper AND has unescaped dialogue
        quotes inside a string value. Both cleanup passes must run, in order. */
-    const fenced = '```json\n{"quote":"Sophie, let the dog go," Mr. Forkle ordered.","note":"x"}\n```';
+    const fenced =
+      '```json\n{"quote":"Sophie, let the dog go," Mr. Forkle ordered.","note":"x"}\n```';
     expect(() => JSON.parse(fenced)).toThrow();
 
     const r = parseAndValidate(fenced, schema);

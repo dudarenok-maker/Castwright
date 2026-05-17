@@ -116,13 +116,16 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
 
   it('appends a "reparse" change-log entry with the preserved-edits count', async () => {
     const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
-    writeFileSync(editsPath, JSON.stringify({
-      sentences: [
-        { id: 1, chapterId: 1, characterId: 'eliza', text: 'a' },
-        { id: 2, chapterId: 1, characterId: 'narrator', text: 'b' },
-        { id: 3, chapterId: 1, characterId: 'halloran', text: 'c' },
-      ],
-    }));
+    writeFileSync(
+      editsPath,
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'eliza', text: 'a' },
+          { id: 2, chapterId: 1, characterId: 'narrator', text: 'b' },
+          { id: 3, chapterId: 1, characterId: 'halloran', text: 'c' },
+        ],
+      }),
+    );
 
     const res = await request(app).post(`/api/books/${bookId}/reparse`);
     expect(res.status).toBe(200);
@@ -188,7 +191,13 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.chapters)).toBe(true);
     expect(res.body.chapters.length).toBe(2);
-    for (const c of res.body.chapters as Array<{ id: number; title: string; slug: string; wordCount: number; excluded: boolean }>) {
+    for (const c of res.body.chapters as Array<{
+      id: number;
+      title: string;
+      slug: string;
+      wordCount: number;
+      excluded: boolean;
+    }>) {
       expect(typeof c.id).toBe('number');
       expect(typeof c.title).toBe('string');
       expect(typeof c.slug).toBe('string');
@@ -212,7 +221,7 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
     const cur = JSON.parse(readFileSync(statePath, 'utf8'));
     cur.chapters = [
       { id: 7, title: 'Some Old Title', slug: '01-chapter-1', excluded: true }, // matches what parser emits for ch1
-      { id: 8, title: 'Other Old',      slug: '02-chapter-two' },
+      { id: 8, title: 'Other Old', slug: '02-chapter-two' },
     ];
     writeFileSync(statePath, JSON.stringify(cur));
 
@@ -229,16 +238,30 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
 
   it('prepends to an existing change-log without dropping prior entries', async () => {
     const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
-    writeFileSync(editsPath, JSON.stringify({
-      sentences: [{ id: 1, chapterId: 1, characterId: 'eliza', text: 'a' }],
-    }));
+    writeFileSync(
+      editsPath,
+      JSON.stringify({
+        sentences: [{ id: 1, chapterId: 1, characterId: 'eliza', text: 'a' }],
+      }),
+    );
     const logPath = join(bookDir, '.audiobook', 'change-log.json');
-    writeFileSync(logPath, JSON.stringify({
-      events: [
-        { id: 99, at: '2026-01-01T00:00:00.000Z', ts: 'Earlier', date: 'earlier',
-          type: 'analysis_complete', title: 'Analysis complete', note: 'old', actor: 'system' },
-      ],
-    }));
+    writeFileSync(
+      logPath,
+      JSON.stringify({
+        events: [
+          {
+            id: 99,
+            at: '2026-01-01T00:00:00.000Z',
+            ts: 'Earlier',
+            date: 'earlier',
+            type: 'analysis_complete',
+            title: 'Analysis complete',
+            note: 'old',
+            actor: 'system',
+          },
+        ],
+      }),
+    );
 
     const res = await request(app).post(`/api/books/${bookId}/reparse`);
     expect(res.status).toBe(200);
@@ -246,8 +269,8 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
     const log = JSON.parse(readFileSync(logPath, 'utf8'));
     expect(log.events).toHaveLength(2);
     expect(log.events[0].type).toBe('reparse');
-    expect(log.events[0].id).toBe(100);                  // max(99) + 1
-    expect(log.events[1].id).toBe(99);                   // prior entry intact
+    expect(log.events[0].id).toBe(100); // max(99) + 1
+    expect(log.events[1].id).toBe(99); // prior entry intact
   });
 });
 
@@ -257,28 +280,34 @@ describe('GET handler — filters orphan edits against the analysis cache', () =
        between cache max (4) and beyond, so kept as a likely split offspring;
        id=100 ditto. (Both > maxCacheId=4 = kept.) */
     mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(cachePath, JSON.stringify({
-      chapters: {
-        1: [
-          { id: 1, chapterId: 1, characterId: 'narrator', text: 'a' },
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        chapters: {
+          1: [
+            { id: 1, chapterId: 1, characterId: 'narrator', text: 'a' },
+            { id: 2, chapterId: 1, characterId: 'narrator', text: 'b' },
+            { id: 3, chapterId: 1, characterId: 'narrator', text: 'c' },
+            { id: 4, chapterId: 1, characterId: 'narrator', text: 'd' },
+          ],
+        },
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'eliza', text: 'a' },
           { id: 2, chapterId: 1, characterId: 'narrator', text: 'b' },
-          { id: 3, chapterId: 1, characterId: 'narrator', text: 'c' },
-          { id: 4, chapterId: 1, characterId: 'narrator', text: 'd' },
+          { id: 99, chapterId: 1, characterId: 'halloran', text: 'split-piece' },
+          { id: 100, chapterId: 1, characterId: 'eliza', text: 'split-piece-2' },
         ],
-      },
-    }));
-    writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify({
-      sentences: [
-        { id: 1, chapterId: 1, characterId: 'eliza', text: 'a' },
-        { id: 2, chapterId: 1, characterId: 'narrator', text: 'b' },
-        { id: 99, chapterId: 1, characterId: 'halloran', text: 'split-piece' },
-        { id: 100, chapterId: 1, characterId: 'eliza', text: 'split-piece-2' },
-      ],
-    }));
+      }),
+    );
 
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
-    const ids = (res.body.manuscriptEdits.sentences as Array<{ id: number }>).map(s => s.id);
+    const ids = (res.body.manuscriptEdits.sentences as Array<{ id: number }>).map((s) => s.id);
     expect(ids.sort((a, b) => a - b)).toEqual([1, 2, 99, 100]);
   });
 
@@ -288,28 +317,34 @@ describe('GET handler — filters orphan edits against the analysis cache', () =
        - 3, 4 in cache id-range (≤ max=5) but not in cache → dropped (orphans)
        - 100 > max=5 → kept (split offspring) */
     mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(cachePath, JSON.stringify({
-      chapters: {
-        1: [
-          { id: 1, chapterId: 1, characterId: 'narrator', text: 'a' },
-          { id: 2, chapterId: 1, characterId: 'narrator', text: 'b' },
-          { id: 5, chapterId: 1, characterId: 'narrator', text: 'e' },
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        chapters: {
+          1: [
+            { id: 1, chapterId: 1, characterId: 'narrator', text: 'a' },
+            { id: 2, chapterId: 1, characterId: 'narrator', text: 'b' },
+            { id: 5, chapterId: 1, characterId: 'narrator', text: 'e' },
+          ],
+        },
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'eliza', text: 'a' },
+          { id: 2, chapterId: 1, characterId: 'eliza', text: 'b' },
+          { id: 3, chapterId: 1, characterId: 'eliza', text: 'orphan-3' },
+          { id: 4, chapterId: 1, characterId: 'eliza', text: 'orphan-4' },
+          { id: 100, chapterId: 1, characterId: 'eliza', text: 'split-offspring' },
         ],
-      },
-    }));
-    writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify({
-      sentences: [
-        { id: 1, chapterId: 1, characterId: 'eliza', text: 'a' },
-        { id: 2, chapterId: 1, characterId: 'eliza', text: 'b' },
-        { id: 3, chapterId: 1, characterId: 'eliza', text: 'orphan-3' },
-        { id: 4, chapterId: 1, characterId: 'eliza', text: 'orphan-4' },
-        { id: 100, chapterId: 1, characterId: 'eliza', text: 'split-offspring' },
-      ],
-    }));
+      }),
+    );
 
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
-    const ids = (res.body.manuscriptEdits.sentences as Array<{ id: number }>).map(s => s.id);
+    const ids = (res.body.manuscriptEdits.sentences as Array<{ id: number }>).map((s) => s.id);
     expect(ids.sort((a, b) => a - b)).toEqual([1, 2, 100]);
   });
 
@@ -317,11 +352,14 @@ describe('GET handler — filters orphan edits against the analysis cache', () =
     /* Pre-existing fallback path stays intact: an old book whose stage 2 never
        triggered a persistence write returns the analyser sentences directly. */
     mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(cachePath, JSON.stringify({
-      chapters: {
-        1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'a' }],
-      },
-    }));
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        chapters: {
+          1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'a' }],
+        },
+      }),
+    );
 
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
@@ -333,16 +371,19 @@ describe('GET handler — filters orphan edits against the analysis cache', () =
   it('keeps edits untouched when no analysis cache exists yet', async () => {
     /* Right after reparse but before re-analysis, the cache is empty. We
        can't reconcile, so trust the edits file as-is rather than wiping it. */
-    writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify({
-      sentences: [
-        { id: 1, chapterId: 1, characterId: 'eliza', text: 'a' },
-        { id: 42, chapterId: 1, characterId: 'halloran', text: 'split' },
-      ],
-    }));
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'eliza', text: 'a' },
+          { id: 42, chapterId: 1, characterId: 'halloran', text: 'split' },
+        ],
+      }),
+    );
 
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
-    const ids = (res.body.manuscriptEdits.sentences as Array<{ id: number }>).map(s => s.id);
+    const ids = (res.body.manuscriptEdits.sentences as Array<{ id: number }>).map((s) => s.id);
     expect(ids.sort((a, b) => a - b)).toEqual([1, 42]);
   });
 });
@@ -356,7 +397,7 @@ describe('reparse handler — legacy text-masquerading-as-binary fallback', () =
 
   const LEGACY_AUTHOR = 'Legacy Test';
   const LEGACY_SERIES = 'Standalones';
-  const LEGACY_TITLE  = 'Legacy Text As Epub';
+  const LEGACY_TITLE = 'Legacy Text As Epub';
   const LEGACY_MANUSCRIPT_ID = 'm_legacy_text_as_epub';
   let legacyBookDir: string;
   let legacyBookId: string;
@@ -364,7 +405,7 @@ describe('reparse handler — legacy text-masquerading-as-binary fallback', () =
 
   beforeAll(async () => {
     const { makeBookId } = await import('../workspace/paths.js');
-    legacyBookId  = makeBookId(LEGACY_AUTHOR, LEGACY_SERIES, LEGACY_TITLE);
+    legacyBookId = makeBookId(LEGACY_AUTHOR, LEGACY_SERIES, LEGACY_TITLE);
     legacyBookDir = join(workspaceRoot, 'books', LEGACY_AUTHOR, LEGACY_SERIES, LEGACY_TITLE);
     legacyCachePath = join(CACHE_DIR, `${LEGACY_MANUSCRIPT_ID}.json`);
     mkdirSync(join(legacyBookDir, '.audiobook'), { recursive: true });

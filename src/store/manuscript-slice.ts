@@ -5,7 +5,11 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { initialSentences } from '../data/sentences';
 import type {
-  Sentence, UploadResponse, AnalyseResponse, ImportCandidate, BookStateJson,
+  Sentence,
+  UploadResponse,
+  AnalyseResponse,
+  ImportCandidate,
+  BookStateJson,
 } from '../lib/types';
 
 export interface ManuscriptState {
@@ -81,10 +85,13 @@ export const manuscriptSlice = createSlice({
       if (a.payload.bookId) s.bookId = a.payload.bookId;
       const incoming = a.payload.sentences as unknown as Sentence[] | undefined;
       if (!incoming?.length) return;
-      if (s.manuscriptId === null) { s.sentences = incoming; return; }
+      if (s.manuscriptId === null) {
+        s.sentences = incoming;
+        return;
+      }
 
       const key = (x: Sentence) => `${x.chapterId}:${x.id}`;
-      const incomingByKey = new Map<string, Sentence>(incoming.map(x => [key(x), x]));
+      const incomingByKey = new Map<string, Sentence>(incoming.map((x) => [key(x), x]));
       const stateKeys = new Set<string>(s.sentences.map(key));
       const merged: Sentence[] = [];
       for (const x of s.sentences) {
@@ -110,12 +117,15 @@ export const manuscriptSlice = createSlice({
 
     /* Rehydrate from a disk-resident book state + manuscript-edits.json.
        Used when opening a previously-analysed book. */
-    hydrateFromBookState: (s, a: PayloadAction<{
-      state: BookStateJson;
-      sentences: Sentence[] | null;
-      wordCount?: number | null;
-      format?: UploadResponse['format'] | null;
-    }>) => {
+    hydrateFromBookState: (
+      s,
+      a: PayloadAction<{
+        state: BookStateJson;
+        sentences: Sentence[] | null;
+        wordCount?: number | null;
+        format?: UploadResponse['format'] | null;
+      }>,
+    ) => {
       const { state, sentences, wordCount, format } = a.payload;
       s.bookId = state.bookId;
       s.manuscriptId = state.manuscriptId;
@@ -140,15 +150,23 @@ export const manuscriptSlice = createSlice({
        Scopes by (chapterId, sentenceId) — sentence ids restart at 1 in
        every chapter, so a single-id match would silently mutate the wrong
        chapter's same-id sentence. Mirrors the hydrate-merge keying above. */
-    setSentenceCharacter: (s, a: PayloadAction<{ chapterId: number; sentenceId: number; characterId: string }>) => {
-      const sent = s.sentences.find(x => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId);
+    setSentenceCharacter: (
+      s,
+      a: PayloadAction<{ chapterId: number; sentenceId: number; characterId: string }>,
+    ) => {
+      const sent = s.sentences.find(
+        (x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId,
+      );
       if (sent) sent.characterId = a.payload.characterId;
     },
 
     /* User edit: reassign a batch of sentences at once. Used by the
        boundary-drag handle and the segment inspector. Scoped to one
        chapter — the caller batches ids from a single chapter's segments. */
-    setSentencesCharacter: (s, a: PayloadAction<{ chapterId: number; sentenceIds: number[]; characterId: string }>) => {
+    setSentencesCharacter: (
+      s,
+      a: PayloadAction<{ chapterId: number; sentenceIds: number[]; characterId: string }>,
+    ) => {
       const ids = new Set(a.payload.sentenceIds);
       for (const sent of s.sentences) {
         if (sent.chapterId === a.payload.chapterId && ids.has(sent.id)) {
@@ -164,8 +182,18 @@ export const manuscriptSlice = createSlice({
        keeps the original sentence's id; subsequent pieces get new ids
        (max + 1, +2, …) inserted right after it. Empty pieces are skipped.
        Scoped to one chapter — sentence ids restart per chapter. */
-    splitSentence: (s, a: PayloadAction<{ chapterId: number; sentenceId: number; offsets: number[]; characterIds: string[] }>) => {
-      const idx = s.sentences.findIndex(x => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId);
+    splitSentence: (
+      s,
+      a: PayloadAction<{
+        chapterId: number;
+        sentenceId: number;
+        offsets: number[];
+        characterIds: string[];
+      }>,
+    ) => {
+      const idx = s.sentences.findIndex(
+        (x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId,
+      );
       if (idx < 0) return;
       const original = s.sentences[idx];
       const text = original.text;

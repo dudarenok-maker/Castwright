@@ -56,11 +56,13 @@ Run `VITE_USE_MOCKS=true`, navigate to a book's cast view.
    - **Legacy migration**: if a cast.json was written by an older client carrying the singular `overrideTtsVoice` field, the drawer still displays it correctly (read-time `mapOverridesToBaseVoiceMap` projects it into the engine map). The next override write upgrades the on-disk shape and drops the legacy field.
    - **Clear-to-Auto is currently all-engines**: pick "Auto" on any tab and the network call is `{ override: null }`, which clears EVERY engine slot — the other tab's filled-slot dot disappears too. Per-slot clearing isn't surfaced in the API yet (would need `{ engine, name: '' }` to be accepted as a delete-this-slot signal); track it as a known gap. The picker returns to "Auto — currently &lt;Engine · Name&gt;" on every tab; server-side the entire `overrideTtsVoices` field is removed from each cast.json entry.
 10. **Downgrade a descriptor-named speaker** (real backend only — mock returns an empty cast):
-   - From the "Meet the cast" confirmation view, click a card like *Rescuer* (≥3 lines so the auto-fold left it alone).
-   - In the drawer, scroll to **Cast roster** → click **Unknown male** or **Unknown female**.
-   - Network: `POST /api/books/:bookId/cast/merge` with `{ sourceId, targetId: 'unknown-male' | 'unknown-female' }`. Response is the recomputed roster; the source disappears and the bucket gains the source's name in its `aliases` list.
-   - Drawer closes; URL drops `?profile=`. The roster card for the bucket now reflects the merged line/scene count.
-   - Re-open the bucket's profile → the downgrade buttons are HIDDEN for it (a bucket can't be downgraded into itself).
+
+- From the "Meet the cast" confirmation view, click a card like _Rescuer_ (≥3 lines so the auto-fold left it alone).
+- In the drawer, scroll to **Cast roster** → click **Unknown male** or **Unknown female**.
+- Network: `POST /api/books/:bookId/cast/merge` with `{ sourceId, targetId: 'unknown-male' | 'unknown-female' }`. Response is the recomputed roster; the source disappears and the bucket gains the source's name in its `aliases` list.
+- Drawer closes; URL drops `?profile=`. The roster card for the bucket now reflects the merged line/scene count.
+- Re-open the bucket's profile → the downgrade buttons are HIDDEN for it (a bucket can't be downgraded into itself).
+
 11. **Close drawer** → `setOpenProfileId(null)`; URL drops `?profile=`.
 
 ## Out of scope

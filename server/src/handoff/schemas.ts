@@ -3,75 +3,92 @@
 
 import { z } from 'zod';
 
-export const toneSchema = z.object({
-  warmth:    z.number().int().min(0).max(100).optional(),
-  pace:      z.number().int().min(0).max(100).optional(),
-  authority: z.number().int().min(0).max(100).optional(),
-  emotion:   z.number().int().min(0).max(100).optional(),
-}).strict();
+export const toneSchema = z
+  .object({
+    warmth: z.number().int().min(0).max(100).optional(),
+    pace: z.number().int().min(0).max(100).optional(),
+    authority: z.number().int().min(0).max(100).optional(),
+    emotion: z.number().int().min(0).max(100).optional(),
+  })
+  .strict();
 
-export const evidenceSchema = z.object({
-  quote: z.string(),
-  note:  z.string().optional(),
-}).strict();
+export const evidenceSchema = z
+  .object({
+    quote: z.string(),
+    note: z.string().optional(),
+  })
+  .strict();
 
-export const characterSchema = z.object({
-  id:          z.string().min(1),
-  name:        z.string().min(1),
-  role:        z.string().min(1),
-  color:       z.string().min(1),
-  lines:       z.number().int().nonnegative().optional(),
-  scenes:      z.number().int().nonnegative().optional(),
-  attributes:  z.array(z.string()).optional(),
-  /* Alternate names for this character, accumulated when the user merges
+export const characterSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    role: z.string().min(1),
+    color: z.string().min(1),
+    lines: z.number().int().nonnegative().optional(),
+    scenes: z.number().int().nonnegative().optional(),
+    attributes: z.array(z.string()).optional(),
+    /* Alternate names for this character, accumulated when the user merges
      a duplicate roster entry. Persisted for the voice matcher to pick up
      the same person across books in a series. */
-  aliases:     z.array(z.string()).optional(),
-  tone:        toneSchema.optional(),
-  /* Optional voice-shaping hints. The skill prompt asks for these so the
+    aliases: z.array(z.string()).optional(),
+    tone: toneSchema.optional(),
+    /* Optional voice-shaping hints. The skill prompt asks for these so the
      TTS picker doesn't have to scrape pronouns out of the description. Kept
      optional so previously cached analyses still validate. */
-  gender:      z.enum(['male', 'female', 'neutral']).optional(),
-  ageRange:    z.enum(['child', 'teen', 'adult', 'elderly']).optional(),
-  description: z.string().optional(),
-  evidence:    z.array(evidenceSchema).optional(),
-  voiceState:  z.enum(['generated', 'tuned', 'reused', 'locked']).optional(),
-  matchedFrom: z.object({
-    bookTitle:  z.string(),
-    confidence: z.number().min(0).max(1),
-  }).nullable().optional(),
-}).strict();
+    gender: z.enum(['male', 'female', 'neutral']).optional(),
+    ageRange: z.enum(['child', 'teen', 'adult', 'elderly']).optional(),
+    description: z.string().optional(),
+    evidence: z.array(evidenceSchema).optional(),
+    voiceState: z.enum(['generated', 'tuned', 'reused', 'locked']).optional(),
+    matchedFrom: z
+      .object({
+        bookTitle: z.string(),
+        confidence: z.number().min(0).max(1),
+      })
+      .nullable()
+      .optional(),
+  })
+  .strict();
 
 export const chapterStub = z.object({
-  id:    z.number().int().positive(),
+  id: z.number().int().positive(),
   title: z.string().min(1),
 });
 
-export const stage1Schema = z.object({
-  characters: z.array(characterSchema).min(1),
-  chapters:   z.array(chapterStub).min(1),
-}).strict();
+export const stage1Schema = z
+  .object({
+    characters: z.array(characterSchema).min(1),
+    chapters: z.array(chapterStub).min(1),
+  })
+  .strict();
 
 /* Per-chapter cast detection (Phase 0a). The route loops over chapters,
    each call returns the characters that appear in THIS chapter (new +
    recurring); the route merges them into a running roster and emits a
    `cast-update` SSE event after each merge. No `chapters` field — the
    parser's chapter list is already authoritative. */
-export const stage1ChapterSchema = z.object({
-  characters: z.array(characterSchema),
-}).strict();
+export const stage1ChapterSchema = z
+  .object({
+    characters: z.array(characterSchema),
+  })
+  .strict();
 
-export const sentenceSchema = z.object({
-  id:          z.number().int().positive(),
-  chapterId:   z.number().int().positive(),
-  characterId: z.string().min(1),
-  text:        z.string().min(1),
-  confidence:  z.number().min(0).max(1).optional(),
-}).strict();
+export const sentenceSchema = z
+  .object({
+    id: z.number().int().positive(),
+    chapterId: z.number().int().positive(),
+    characterId: z.string().min(1),
+    text: z.string().min(1),
+    confidence: z.number().min(0).max(1).optional(),
+  })
+  .strict();
 
-export const stage2Schema = z.object({
-  sentences: z.array(sentenceSchema).min(1),
-}).strict();
+export const stage2Schema = z
+  .object({
+    sentences: z.array(sentenceSchema).min(1),
+  })
+  .strict();
 
 /* Stage 2 now runs per-chapter — same shape, narrower scope. The route loops
    over chapters and concatenates the per-chapter sentence arrays. Keeping

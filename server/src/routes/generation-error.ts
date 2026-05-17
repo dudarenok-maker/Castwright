@@ -28,7 +28,11 @@ export function describeSynthesisError(err: unknown): SynthesisErrorClassificati
 
   const isQuota = status === 429 || /429|quota|rate/i.test(raw);
   if (isQuota) {
-    return { errorReason: 'Gemini TTS rate-limited — stopped run; resume later or switch to a local engine.', fatal: true };
+    return {
+      errorReason:
+        'Gemini TTS rate-limited — stopped run; resume later or switch to a local engine.',
+      fatal: true,
+    };
   }
 
   const isAuth = status === 401 || status === 403 || /invalid[_ ]?key|API key/i.test(raw);
@@ -36,10 +40,12 @@ export function describeSynthesisError(err: unknown): SynthesisErrorClassificati
     return { errorReason: 'Gemini TTS authentication failed — check GEMINI_API_KEY.', fatal: true };
   }
 
-  const isXttsTensor = /index out of range in self|IndexError|out of range \(expected to be in range/i.test(raw);
+  const isXttsTensor =
+    /index out of range in self|IndexError|out of range \(expected to be in range/i.test(raw);
   if (isXttsTensor) {
     return {
-      errorReason: 'Local TTS engine rejected a speaker — the voice catalog is out of sync with the loaded model. Stop the sidecar, re-run the speaker manifest audit, and regenerate.',
+      errorReason:
+        'Local TTS engine rejected a speaker — the voice catalog is out of sync with the loaded model. Stop the sidecar, re-run the speaker manifest audit, and regenerate.',
       fatal: true,
     };
   }
@@ -58,7 +64,8 @@ export function describeSynthesisError(err: unknown): SynthesisErrorClassificati
      Retry once /health comes back picks up cleanly. The offending text is
      in the sidecar log under `text_preview=` — usually a stray
      zero-width, bidi, or control char in the manuscript. */
-  const isCudaPoisoned = /device-side assert|CUDA error|CUDA kernel errors|"poisoned":\s*true/i.test(raw);
+  const isCudaPoisoned =
+    /device-side assert|CUDA error|CUDA kernel errors|"poisoned":\s*true/i.test(raw);
   if (isCudaPoisoned) {
     return {
       errorReason:

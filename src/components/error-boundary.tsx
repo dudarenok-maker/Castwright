@@ -9,8 +9,12 @@
 
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
-interface Props { children: ReactNode; }
-interface State { error: Error | null; }
+interface Props {
+  children: ReactNode;
+}
+interface State {
+  error: Error | null;
+}
 
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
@@ -23,7 +27,9 @@ export class ErrorBoundary extends Component<Props, State> {
     console.error('[error-boundary] render failed', error, info);
   }
 
-  reset = () => { this.setState({ error: null }); };
+  reset = () => {
+    this.setState({ error: null });
+  };
 
   render() {
     if (!this.state.error) return this.props.children;
@@ -31,12 +37,14 @@ export class ErrorBoundary extends Component<Props, State> {
       <div role="alert" className="min-h-screen flex items-center justify-center p-6 bg-canvas">
         <div className="max-w-lg w-full bg-white rounded-3xl border border-ink/10 p-8 space-y-5">
           <div className="space-y-1.5">
-            <p className="text-xs uppercase tracking-wider text-ink/50 font-semibold">Something broke</p>
+            <p className="text-xs uppercase tracking-wider text-ink/50 font-semibold">
+              Something broke
+            </p>
             <h1 className="text-2xl font-bold text-ink">The Generate screen hit a render error.</h1>
             <p className="text-sm text-ink/70">
-              Your work is still safe on disk. Click below to re-render the page without losing
-              your session. If the error keeps coming back, copy the message and check the dev
-              console for the full stack.
+              Your work is still safe on disk. Click below to re-render the page without losing your
+              session. If the error keeps coming back, copy the message and check the dev console
+              for the full stack.
             </p>
           </div>
           <pre className="text-xs bg-ink/[0.04] text-ink/80 rounded-xl p-3 overflow-auto max-h-40 whitespace-pre-wrap">

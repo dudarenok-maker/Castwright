@@ -52,9 +52,14 @@ function deterministicGradient(seed: string): [string, string] {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
   const palette: Array<[string, string]> = [
-    ['#3C194F', '#0F0E0D'], ['#6B6663', '#1A1A1A'], ['#D4A04E', '#7B5A26'],
-    ['#A43C6C', '#3C194F'], ['#1F3A5F', '#0A1628'], ['#5C3A1E', '#2A1810'],
-    ['#3E5F4A', '#162820'], ['#7A2E3C', '#2A0F14'],
+    ['#3C194F', '#0F0E0D'],
+    ['#6B6663', '#1A1A1A'],
+    ['#D4A04E', '#7B5A26'],
+    ['#A43C6C', '#3C194F'],
+    ['#1F3A5F', '#0A1628'],
+    ['#5C3A1E', '#2A1810'],
+    ['#3E5F4A', '#162820'],
+    ['#7A2E3C', '#2A0F14'],
   ];
   return palette[Math.abs(h) % palette.length];
 }
@@ -124,7 +129,7 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
         sourceText: entry.sourceText,
         wordCount: countWords(entry.sourceText),
         byteSize: entry.byteSize,
-        chapters: entry.chapters.map(c => ({
+        chapters: entry.chapters.map((c) => ({
           id: c.id,
           title: c.title,
           /* Per-chapter wordCount lets the confirm view auto-suggest
@@ -166,11 +171,13 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     }
     const entry = getStaging(body.tempId);
     if (!entry) {
-      return res.status(410).json({ error: 'Import expired or already consumed. Please re-upload.' });
+      return res
+        .status(410)
+        .json({ error: 'Import expired or already consumed. Please re-upload.' });
     }
 
     const author = (body.author ?? '').trim();
-    const title  = (body.title  ?? '').trim();
+    const title = (body.title ?? '').trim();
     if (!author || !title) {
       return res.status(400).json({ error: 'author and title are required.' });
     }
@@ -181,7 +188,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     }
     const seriesPosition = isStandalone
       ? null
-      : (typeof body.seriesPosition === 'number' && Number.isFinite(body.seriesPosition))
+      : typeof body.seriesPosition === 'number' && Number.isFinite(body.seriesPosition)
         ? body.seriesPosition
         : null;
 
@@ -210,9 +217,11 @@ importRouter.post('/books', async (req: Request, res: Response) => {
 
     const now = new Date().toISOString();
     const excludedSet = new Set<string>(
-      Array.isArray(body.excludedSlugs) ? body.excludedSlugs.filter(s => typeof s === 'string') : [],
+      Array.isArray(body.excludedSlugs)
+        ? body.excludedSlugs.filter((s) => typeof s === 'string')
+        : [],
     );
-    const chaptersWithSlug = entry.chapters.map(c => {
+    const chaptersWithSlug = entry.chapters.map((c) => {
       const slugStr = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
       const isExcluded = excludedSet.has(slugStr);
       return {
@@ -233,7 +242,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       isStandalone,
       manuscriptFile,
       castConfirmed: false,
-      chapters: chaptersWithSlug.map(c => ({
+      chapters: chaptersWithSlug.map((c) => ({
         id: c.id,
         title: c.title,
         slug: c.slug,
@@ -265,7 +274,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       sourceText: entry.sourceText,
       /* Mirror the excluded flag onto chapterHints so the in-memory
          analysis route sees it without re-reading state.json. */
-      chapterHints: chaptersWithSlug.map(c => ({
+      chapterHints: chaptersWithSlug.map((c) => ({
         id: c.id,
         title: c.title,
         body: c.body,

@@ -10,9 +10,9 @@ fallback skeleton.
 ## Why
 
 Procedural gradients are recognisable but visually homogeneous — the
-user wants a quick visual cue that says *this book*, not *this slot in
-the workspace*. OpenLibrary is keyless and dedicated to book covers, so
-it slots in cleanly without an API-key bootstrap (no GOOGLE_CSE_*, no
+user wants a quick visual cue that says _this book_, not _this slot in
+the workspace_. OpenLibrary is keyless and dedicated to book covers, so
+it slots in cleanly without an API-key bootstrap (no GOOGLE*CSE*\*, no
 quota dashboard).
 
 ## Storage
@@ -82,7 +82,7 @@ Two flavours of fetch:
 - **M4B (`covr` atom)** — `buildM4b` (`server/src/export/build-m4b.ts`)
   probes `<bookDir>/.audiobook/cover.jpg` and, when present, passes it
   as a third ffmpeg input with `-map 2:v -c:v copy -disposition:v:0
-  attached_pic`. Stream-copied — source JPEG bytes preserved verbatim.
+attached_pic`. Stream-copied — source JPEG bytes preserved verbatim.
   When the file is absent the cover input is omitted and the export
   ships without a video stream. Pinned by `build-m4b.test.ts`
   ("embeds the OpenLibrary cover..." + "still produces a valid M4B
@@ -143,6 +143,7 @@ Canonical end-to-end manuscript: `C:\Users\dudar\Downloads\Bonus Keefe Story.txt
 ## Files
 
 Modified:
+
 - `openapi.yaml` (LibraryBook.coverImageUrl, CoverCandidate schema, 4 endpoints)
 - `src/lib/api-types.ts` (regenerated)
 - `src/lib/types.ts` (LibraryBook.coverImageUrl, CoverCandidate alias)
@@ -157,6 +158,7 @@ Modified:
 - `server/src/index.ts` (coverRouter mount)
 
 Created:
+
 - `server/src/cover/openlibrary.ts`
 - `server/src/cover/openlibrary.test.ts`
 - `server/src/routes/cover.ts`

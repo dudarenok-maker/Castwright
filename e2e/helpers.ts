@@ -25,24 +25,30 @@ const PASTED_MANUSCRIPT =
  * button is visible + enabled. */
 export async function goToAnalysing(page: Page): Promise<void> {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: /Start a new book/i }).first())
-    .toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+    timeout: 10_000,
+  });
 
-  await page.getByRole('button', { name: /Start a new book/i }).first().click();
+  await page
+    .getByRole('button', { name: /Start a new book/i })
+    .first()
+    .click();
   await expect(page).toHaveURL(/#\/new$/);
 
   await page.getByRole('button', { name: /Paste text/i }).click();
   await page.locator('textarea').fill(PASTED_MANUSCRIPT);
   await page.getByRole('button', { name: /Upload pasted text/i }).click();
 
-  await expect(page.getByRole('button', { name: /Save book and start analysis/i }))
-    .toBeVisible({ timeout: 5_000 });
+  await expect(page.getByRole('button', { name: /Save book and start analysis/i })).toBeVisible({
+    timeout: 5_000,
+  });
   await page.getByPlaceholder(/Ursula K\. Le Guin/i).fill('E2E Author');
   await page.getByRole('button', { name: /Save book and start analysis/i }).click();
 
   await expect(page).toHaveURL(/#\/books\/.+\/analysing$/, { timeout: 5_000 });
-  await expect(page.getByRole('button', { name: /Start analysis/i }))
-    .toBeVisible({ timeout: 5_000 });
+  await expect(page.getByRole('button', { name: /Start analysis/i })).toBeVisible({
+    timeout: 5_000,
+  });
 }
 
 /* Continue from `goToAnalysing` through the analysis stream to the
@@ -52,6 +58,7 @@ export async function goToConfirm(page: Page): Promise<void> {
   await goToAnalysing(page);
   await page.getByRole('button', { name: /Start analysis/i }).click();
   await expect(page).toHaveURL(/#\/books\/.+\/confirm$/, { timeout: 15_000 });
-  await expect(page.getByRole('button', { name: /Confirm cast and review manuscript/i }))
-    .toBeVisible({ timeout: 5_000 });
+  await expect(
+    page.getByRole('button', { name: /Confirm cast and review manuscript/i }),
+  ).toBeVisible({ timeout: 5_000 });
 }

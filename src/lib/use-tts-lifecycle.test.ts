@@ -9,11 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
-    getSidecarHealth:  vi.fn(),
-    getOllamaHealth:   vi.fn(),
-    unloadAnalyzer:    vi.fn(),
-    loadSidecar:       vi.fn(),
-    unloadSidecar:     vi.fn(),
+    getSidecarHealth: vi.fn(),
+    getOllamaHealth: vi.fn(),
+    unloadAnalyzer: vi.fn(),
+    loadSidecar: vi.fn(),
+    unloadSidecar: vi.fn(),
   },
 }));
 
@@ -23,17 +23,23 @@ import { useTtsLifecycle } from './use-tts-lifecycle';
 
 beforeEach(() => {
   mocks.getSidecarHealth.mockResolvedValue({
-    status: 'reachable', url: '', loading: false, modelLoaded: false,
+    status: 'reachable',
+    url: '',
+    loading: false,
+    modelLoaded: false,
   });
   mocks.getOllamaHealth.mockResolvedValue({
-    status: 'reachable', modelResident: true,
+    status: 'reachable',
+    modelResident: true,
   });
   mocks.unloadAnalyzer.mockResolvedValue({ status: 'ok' });
   mocks.loadSidecar.mockResolvedValue({ status: 'ok' });
   mocks.unloadSidecar.mockResolvedValue({ status: 'ok' });
 });
 
-afterEach(() => { vi.clearAllMocks(); });
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 describe('useTtsLifecycle', () => {
   it('starts in "idle" state before the first probe completes', () => {
@@ -44,7 +50,10 @@ describe('useTtsLifecycle', () => {
 
   it('flips to "ready" when /health reports modelLoaded=true', async () => {
     mocks.getSidecarHealth.mockResolvedValueOnce({
-      status: 'reachable', url: '', loading: false, modelLoaded: true,
+      status: 'reachable',
+      url: '',
+      loading: false,
+      modelLoaded: true,
     });
     const { result } = renderHook(() => useTtsLifecycle());
     await waitFor(() => expect(result.current.state).toBe('ready'));
@@ -60,7 +69,9 @@ describe('useTtsLifecycle', () => {
     const { result } = renderHook(() => useTtsLifecycle());
     await waitFor(() => expect(result.current.state).toBe('idle'));
 
-    await act(async () => { await result.current.onLoad(); });
+    await act(async () => {
+      await result.current.onLoad();
+    });
 
     expect(mocks.unloadAnalyzer).toHaveBeenCalledOnce();
     expect(mocks.loadSidecar).toHaveBeenCalledOnce();
@@ -69,12 +80,15 @@ describe('useTtsLifecycle', () => {
 
   it('onLoad does NOT surface the eviction banner when analyzer was already unloaded', async () => {
     mocks.getOllamaHealth.mockResolvedValueOnce({
-      status: 'reachable', modelResident: false,
+      status: 'reachable',
+      modelResident: false,
     });
     const { result } = renderHook(() => useTtsLifecycle());
     await waitFor(() => expect(result.current.state).toBe('idle'));
 
-    await act(async () => { await result.current.onLoad(); });
+    await act(async () => {
+      await result.current.onLoad();
+    });
 
     /* unloadAnalyzer still fires (idempotent) but the banner stays off
        because we only show it when the unload actually freed something. */
@@ -87,7 +101,9 @@ describe('useTtsLifecycle', () => {
     const { result } = renderHook(() => useTtsLifecycle());
     await waitFor(() => expect(result.current.state).toBe('idle'));
 
-    await act(async () => { await result.current.onLoad(); });
+    await act(async () => {
+      await result.current.onLoad();
+    });
 
     expect(result.current.loadErrorNotice).toBe('weights missing');
   });
@@ -97,7 +113,9 @@ describe('useTtsLifecycle', () => {
     const { result } = renderHook(() => useTtsLifecycle());
     await waitFor(() => expect(result.current.state).toBe('idle'));
 
-    await act(async () => { await result.current.onLoad(); });
+    await act(async () => {
+      await result.current.onLoad();
+    });
 
     expect(result.current.loadErrorNotice).toMatch(/connect ECONNREFUSED/);
   });
@@ -107,10 +125,14 @@ describe('useTtsLifecycle', () => {
     await waitFor(() => expect(result.current.state).toBe('idle'));
 
     /* Plant a notice via onLoad first, then verify onStop clears it. */
-    await act(async () => { await result.current.onLoad(); });
+    await act(async () => {
+      await result.current.onLoad();
+    });
     expect(result.current.evictionNotice).not.toBeNull();
 
-    await act(async () => { await result.current.onStop(); });
+    await act(async () => {
+      await result.current.onStop();
+    });
     expect(mocks.unloadSidecar).toHaveBeenCalledOnce();
     expect(result.current.evictionNotice).toBeNull();
     expect(result.current.loadErrorNotice).toBeNull();
@@ -121,11 +143,15 @@ describe('useTtsLifecycle', () => {
     const { result } = renderHook(() => useTtsLifecycle());
     await waitFor(() => expect(result.current.state).toBe('idle'));
 
-    await act(async () => { await result.current.onLoad(); });
+    await act(async () => {
+      await result.current.onLoad();
+    });
     expect(result.current.loadErrorNotice).toBe('X');
 
     const callsBefore = mocks.loadSidecar.mock.calls.length + mocks.unloadSidecar.mock.calls.length;
-    act(() => { result.current.dismissNotices(); });
+    act(() => {
+      result.current.dismissNotices();
+    });
     expect(result.current.evictionNotice).toBeNull();
     expect(result.current.loadErrorNotice).toBeNull();
     const callsAfter = mocks.loadSidecar.mock.calls.length + mocks.unloadSidecar.mock.calls.length;

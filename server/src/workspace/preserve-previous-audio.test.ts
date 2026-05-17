@@ -46,7 +46,9 @@ describe('preserveExistingAsPrevious', () => {
 
     /* Content survives the rename — we move atomically, not copy-then-zero. */
     expect(await readFile(join(workdir, 'ch01.previous.mp3'), 'utf8')).toBe('fake-mp3-bytes');
-    expect(JSON.parse(await readFile(join(workdir, 'ch01.previous.segments.json'), 'utf8'))).toEqual({ v: 1 });
+    expect(
+      JSON.parse(await readFile(join(workdir, 'ch01.previous.segments.json'), 'utf8')),
+    ).toEqual({ v: 1 });
   });
 
   it('overwrites stale .previous.* from an earlier preserve', async () => {
@@ -63,7 +65,9 @@ describe('preserveExistingAsPrevious', () => {
 
     /* Previous now holds what was the CURRENT pair, not the older one. */
     expect(await readFile(join(workdir, 'ch01.previous.mp3'), 'utf8')).toBe('CURRENT-bytes');
-    expect(JSON.parse(await readFile(join(workdir, 'ch01.previous.segments.json'), 'utf8'))).toEqual({ v: 1 });
+    expect(
+      JSON.parse(await readFile(join(workdir, 'ch01.previous.segments.json'), 'utf8')),
+    ).toEqual({ v: 1 });
   });
 
   it('moves audio even when segments.json is missing', async () => {

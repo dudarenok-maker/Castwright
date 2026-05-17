@@ -23,7 +23,7 @@ export async function renameWithRetry(src: string, dest: string): Promise<void> 
       if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'ENOENT') throw e;
       lastErr = e;
       if (attempt === RENAME_RETRY_DELAYS_MS.length) break;
-      await new Promise(r => setTimeout(r, RENAME_RETRY_DELAYS_MS[attempt]));
+      await new Promise((r) => setTimeout(r, RENAME_RETRY_DELAYS_MS[attempt]));
     }
   }
   throw lastErr;

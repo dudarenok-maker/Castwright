@@ -118,10 +118,10 @@ paths:
                     type: object
                     required: [voice, generation, manuscript, cast]
                     properties:
-                      voice:      { type: integer }
+                      voice: { type: integer }
                       generation: { type: integer }
                       manuscript: { type: integer }
-                      cast:       { type: integer }
+                      cast: { type: integer }
 
   /api/library:
     get:
@@ -162,7 +162,7 @@ paths:
               type: object
               required: [text]
               properties:
-                text:     { type: string }
+                text: { type: string }
                 fileName: { type: string }
       responses:
         '200':
@@ -203,7 +203,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  error:          { type: string, example: 'slug_collision' }
+                  error: { type: string, example: 'slug_collision' }
                   suggestedTitle: { type: string }
         '410':
           description: Import tempId expired or already consumed
@@ -220,15 +220,15 @@ paths:
               type: object
               required: [file]
               properties:
-                file:        { type: string, format: binary }
-                title:       { type: string, description: "Optional override title." }
+                file: { type: string, format: binary }
+                title: { type: string, description: 'Optional override title.' }
           application/json:
             schema:
               type: object
               required: [text]
               properties:
                 title: { type: string }
-                text:  { type: string, description: "Inline manuscript text (markdown or plain)." }
+                text: { type: string, description: 'Inline manuscript text (markdown or plain).' }
       responses:
         '200':
           description: Manuscript accepted
@@ -281,8 +281,12 @@ paths:
                 chapterIds:
                   type: array
                   items: { type: integer }
-                  description: "Chapter ids to re-run analysis for. Must reference chapters already in the manuscript record."
-                model: { type: string, description: "Optional model id override (matches the full-book endpoint)." }
+                  description: 'Chapter ids to re-run analysis for. Must reference chapters already in the manuscript record.'
+                model:
+                  {
+                    type: string,
+                    description: 'Optional model id override (matches the full-book endpoint).',
+                  }
       responses:
         '200':
           description: SSE stream identical in shape to the full-book analysis route.
@@ -305,7 +309,7 @@ paths:
         the chapter is eligible for analysis-subset + audio generation
         again.
       parameters:
-        - { in: path, name: bookId,    required: true, schema: { type: string } }
+        - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: chapterId, required: true, schema: { type: integer } }
       requestBody:
         required: true
@@ -325,9 +329,9 @@ paths:
                 type: object
                 required: [id, title, slug, excluded]
                 properties:
-                  id:       { type: integer }
-                  title:    { type: string }
-                  slug:     { type: string }
+                  id: { type: integer }
+                  title: { type: string }
+                  slug: { type: string }
                   excluded: { type: boolean }
         '404':
           description: Book or chapter not found
@@ -397,7 +401,7 @@ paths:
               properties:
                 openLibraryId:
                   type: string
-                  description: "Stable id from `CoverCandidate.openLibraryId` (e.g. `cover-i:123456`)."
+                  description: 'Stable id from `CoverCandidate.openLibraryId` (e.g. `cover-i:123456`).'
       responses:
         '200':
           description: Cover saved
@@ -409,7 +413,8 @@ paths:
                 properties:
                   coverImageUrl: { type: string, format: uri-reference }
         '400': { description: Missing or malformed `openLibraryId` }
-        '404': { description: Book not found OR candidate no longer in the live OpenLibrary result set }
+        '404':
+          { description: Book not found OR candidate no longer in the live OpenLibrary result set }
         '502':
           description: OpenLibrary unreachable, timed out, oversized, or returned a non-image response
     delete:
@@ -460,7 +465,7 @@ paths:
                 type: object
                 required: [coverImageUrl]
                 properties:
-                  coverImageUrl:    { type: string, format: uri-reference }
+                  coverImageUrl: { type: string, format: uri-reference }
                   originalFilename: { type: string, nullable: true }
         '400': { description: Missing `image` field }
         '404': { description: Book not found }
@@ -627,7 +632,7 @@ paths:
       summary: Get a chapter's playable audio + waveform metadata
       operationId: getChapterAudio
       parameters:
-        - { in: path, name: bookId,    required: true, schema: { type: string } }
+        - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: chapterId, required: true, schema: { type: integer } }
       responses:
         '200':
@@ -647,7 +652,7 @@ paths:
         playback. 404 when no preserved pair exists (legacy chapters or
         first renders).
       parameters:
-        - { in: path, name: bookId,    required: true, schema: { type: string } }
+        - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: chapterId, required: true, schema: { type: integer } }
       responses:
         '200':
@@ -665,7 +670,7 @@ paths:
         `audio/<slug>.previous.segments.json`. Idempotent: missing files
         are skipped. 404 only when no preserved pair existed to begin with.
       parameters:
-        - { in: path, name: bookId,    required: true, schema: { type: string } }
+        - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: chapterId, required: true, schema: { type: integer } }
       responses:
         '204':
@@ -683,7 +688,7 @@ paths:
         409 when a generation is in flight for the book (the rename would
         race the write path).
       parameters:
-        - { in: path, name: bookId,    required: true, schema: { type: string } }
+        - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: chapterId, required: true, schema: { type: integer } }
       responses:
         '204':
@@ -711,7 +716,7 @@ paths:
           name: currentBookId
           required: false
           schema: { type: string }
-          description: "When set, voices belonging to that book are tagged source=current."
+          description: 'When set, voices belonging to that book are tagged source=current.'
         - in: query
           name: engine
           required: false
@@ -848,14 +853,14 @@ paths:
                   error: { type: string, enum: [export_incomplete] }
                   missing:
                     type: array
-                    items: { type: string, description: "Chapter slug or title" }
+                    items: { type: string, description: 'Chapter slug or title' }
 
   /api/books/{bookId}/exports/{exportId}:
     get:
       summary: Poll the status of an in-flight or completed export
       operationId: getBookExport
       parameters:
-        - { in: path, name: bookId,   required: true, schema: { type: string } }
+        - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: exportId, required: true, schema: { type: string } }
       responses:
         '200':
@@ -874,7 +879,7 @@ paths:
         without touching state). Best-effort cleanup of the staging dir
         so partial artifacts don't leak.
       parameters:
-        - { in: path, name: bookId,   required: true, schema: { type: string } }
+        - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: exportId, required: true, schema: { type: string } }
       responses:
         '204':
@@ -892,7 +897,7 @@ paths:
         over the LAN; the browser saves into Downloads/ and a tap
         opens it with PocketBook Reader.
       parameters:
-        - { in: path, name: bookId,   required: true, schema: { type: string } }
+        - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: exportId, required: true, schema: { type: string } }
       responses:
         '200':
@@ -927,7 +932,6 @@ paths:
 # ---------------------------------------------------------------------
 components:
   schemas:
-
     # --- User settings ----------------------------------------------
     UserSettings:
       type: object
@@ -1082,15 +1086,15 @@ components:
         workspaceRoot, workspaceSource) are ignored. Any `geminiApiKey`-
         shaped field is dropped — the API key only lives in server/.env.
       properties:
-        displayName:          { type: string }
+        displayName: { type: string }
         defaultAnalysisModel: { type: string }
-        defaultTtsEngine:     { type: string, enum: [local, gemini] }
+        defaultTtsEngine: { type: string, enum: [local, gemini] }
         defaultTtsModelKey:
           type: string
           enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
-        sidecarUrl:           { type: string }
-        analysisEngine:       { type: string, enum: [local, gemini] }
-        ollamaUrl:            { type: string }
+        sidecarUrl: { type: string }
+        analysisEngine: { type: string, enum: [local, gemini] }
+        ollamaUrl: { type: string }
         workspaceDirOverride:
           type: string
           nullable: true
@@ -1149,10 +1153,10 @@ components:
         coverUrl:
           type: string
           format: uri
-          description: "Direct OpenLibrary cover URL (`/b/id/<id>-L.jpg`)."
+          description: 'Direct OpenLibrary cover URL (`/b/id/<id>-L.jpg`).'
         edition:
           type: string
-          description: "Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy."
+          description: 'Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy.'
 
     CoverFraming:
       type: object
@@ -1170,48 +1174,63 @@ components:
           type: number
           minimum: -100
           maximum: 100
-          description: "Horizontal pan as `object-position` percentage. 0 = centred."
+          description: 'Horizontal pan as `object-position` percentage. 0 = centred.'
         offsetY:
           type: number
           minimum: -100
           maximum: 100
-          description: "Vertical pan as `object-position` percentage. 0 = centred. Negative shifts the image up (showing the top)."
+          description: 'Vertical pan as `object-position` percentage. 0 = centred. Negative shifts the image up (showing the top).'
         zoom:
           type: number
           minimum: 1.0
           maximum: 3.0
-          description: "Scale factor. 1.0 = `object-cover` default; up to 3.0× tighter crop."
+          description: 'Scale factor. 1.0 = `object-cover` default; up to 3.0× tighter crop.'
 
     LibraryBook:
       type: object
-      required: [bookId, title, author, series, status, chapterCount, completedChapters, characterCount, voiceCount, lastWorkedOn, coverGradient, isStandalone]
+      required:
+        [
+          bookId,
+          title,
+          author,
+          series,
+          status,
+          chapterCount,
+          completedChapters,
+          characterCount,
+          voiceCount,
+          lastWorkedOn,
+          coverGradient,
+          isStandalone,
+        ]
       properties:
-        bookId:           { type: string, description: "slug(author)__slug(series)__slug(title)" }
-        title:            { type: string }
-        author:           { type: string }
-        series:           { type: string }
+        bookId: { type: string, description: 'slug(author)__slug(series)__slug(title)' }
+        title: { type: string }
+        author: { type: string }
+        series: { type: string }
         seriesPosition:
           type: number
           nullable: true
-          description: "Series position. Allows decimals for novellas (e.g. 1.5)."
-        isStandalone:     { type: boolean }
+          description: 'Series position. Allows decimals for novellas (e.g. 1.5).'
+        isStandalone: { type: boolean }
         status:
           type: string
           enum: [not_analysed, analysing, cast_pending, generating, complete, unreadable, orphaned]
-        manuscriptId:     { type: string }
-        chapterCount:     { type: integer }
+        manuscriptId: { type: string }
+        chapterCount: { type: integer }
         completedChapters: { type: integer }
-        characterCount:   { type: integer }
-        voiceCount:       { type: integer }
+        characterCount: { type: integer }
+        voiceCount: { type: integer }
         matchedFromLibrary: { type: integer }
-        progress:         { type: number, minimum: 0, maximum: 1 }
-        runtime:          { type: string, description: "human-formatted total runtime, e.g. '4h 38m'" }
-        lastWorkedOn:     { type: string, description: "human-formatted relative time, e.g. '2 min ago'" }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        runtime: { type: string, description: "human-formatted total runtime, e.g. '4h 38m'" }
+        lastWorkedOn:
+          { type: string, description: "human-formatted relative time, e.g. '2 min ago'" }
         coverGradient:
           type: array
           minItems: 2
           maxItems: 2
-          items: { type: string, description: "CSS color literal" }
+          items: { type: string, description: 'CSS color literal' }
         coverImageUrl:
           type: string
           format: uri-reference
@@ -1228,58 +1247,62 @@ components:
             back to bare `object-cover` (the default before plan 40
             shipped). Always paired with `coverImageUrl` — framing on a
             book without a cover is meaningless.
-        pinned:           { type: boolean }
+        pinned: { type: boolean }
 
     # --- Import + confirm-metadata ---------------------------------
     ImportCandidate:
       type: object
       required: [format, title, sourceText, wordCount, byteSize, chapters]
       properties:
-        format:         { type: string, enum: [markdown, plaintext, epub, pdf] }
-        title:          { type: string }
-        author:         { type: string, nullable: true }
-        series:         { type: string, nullable: true }
+        format: { type: string, enum: [markdown, plaintext, epub, pdf] }
+        title: { type: string }
+        author: { type: string, nullable: true }
+        series: { type: string, nullable: true }
         seriesPosition:
           type: number
           nullable: true
-          description: "Series position. Allows decimals for novellas (e.g. 1.5)."
-        sourceText:     { type: string }
-        wordCount:      { type: integer }
-        byteSize:       { type: integer }
+          description: 'Series position. Allows decimals for novellas (e.g. 1.5).'
+        sourceText: { type: string }
+        wordCount: { type: integer }
+        byteSize: { type: integer }
         chapters:
           type: array
           items:
             type: object
             required: [id, title]
             properties:
-              id:        { type: integer }
-              title:     { type: string }
-              wordCount: { type: integer, description: "Words in this chapter body. Lets the confirm view auto-suggest front/back-matter exclusion." }
+              id: { type: integer }
+              title: { type: string }
+              wordCount:
+                {
+                  type: integer,
+                  description: 'Words in this chapter body. Lets the confirm view auto-suggest front/back-matter exclusion.',
+                }
 
     ImportResponse:
       type: object
       required: [tempId, candidate]
       properties:
-        tempId:    { type: string, example: "imp_abc123" }
+        tempId: { type: string, example: 'imp_abc123' }
         candidate: { $ref: '#/components/schemas/ImportCandidate' }
 
     ConfirmBookRequest:
       type: object
       required: [tempId, author, title, isStandalone]
       properties:
-        tempId:       { type: string }
-        author:       { type: string }
-        series:       { type: string }
+        tempId: { type: string }
+        author: { type: string }
+        series: { type: string }
         seriesPosition:
           type: number
           nullable: true
-          description: "Series position. Allows decimals for novellas (e.g. 1.5)."
-        title:        { type: string }
+          description: 'Series position. Allows decimals for novellas (e.g. 1.5).'
+        title: { type: string }
         isStandalone: { type: boolean }
         excludedSlugs:
           type: array
           items: { type: string }
-          description: "Chapter slugs to seed as excluded=true in state.json. Built client-side from the candidate.chapters[].id + title; the server re-derives the slug to match."
+          description: 'Chapter slugs to seed as excluded=true in state.json. Built client-side from the candidate.chapters[].id + title; the server re-derives the slug to match.'
 
     ConfirmBookResponse:
       allOf:
@@ -1287,20 +1310,20 @@ components:
         - type: object
           required: [bookId, author, series, isStandalone, paths]
           properties:
-            bookId:       { type: string }
-            author:       { type: string }
-            series:       { type: string }
+            bookId: { type: string }
+            author: { type: string }
+            series: { type: string }
             seriesPosition:
               type: number
               nullable: true
-              description: "Series position. Allows decimals for novellas (e.g. 1.5)."
+              description: 'Series position. Allows decimals for novellas (e.g. 1.5).'
             isStandalone: { type: boolean }
             paths:
               type: object
               required: [bookDir, manuscript, dotAudiobook]
               properties:
-                bookDir:      { type: string }
-                manuscript:   { type: string }
+                bookDir: { type: string }
+                manuscript: { type: string }
                 dotAudiobook: { type: string }
 
     # --- Upload -----------------------------------------------------
@@ -1308,41 +1331,41 @@ components:
       type: object
       required: [manuscriptId, format, title, wordCount, byteSize, uploadedAt, sourceText]
       properties:
-        manuscriptId: { type: string, example: "mns_abc123" }
-        format:       { type: string, enum: [markdown, plaintext, epub, pdf] }
-        title:        { type: string }
-        wordCount:    { type: integer }
-        byteSize:     { type: integer }
-        uploadedAt:   { type: string, format: date-time }
-        sourceText:   { type: string, description: "Normalised plain-text body." }
+        manuscriptId: { type: string, example: 'mns_abc123' }
+        format: { type: string, enum: [markdown, plaintext, epub, pdf] }
+        title: { type: string }
+        wordCount: { type: integer }
+        byteSize: { type: integer }
+        uploadedAt: { type: string, format: date-time }
+        sourceText: { type: string, description: 'Normalised plain-text body.' }
 
     # --- Analyse ----------------------------------------------------
     AnalysePhaseEvent:
       type: object
       required: [phaseId, progress]
       properties:
-        phaseId:  { type: integer, minimum: 0 }
-        progress: { type: number,  minimum: 0, maximum: 1 }
-        label:    { type: string }
+        phaseId: { type: integer, minimum: 0 }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        label: { type: string }
 
     AnalyseResponse:
       type: object
       required: [bookId, manuscriptId, title, phaseTimings, characters, chapters, sentences]
       properties:
-        bookId:        { type: string, example: "ns" }
-        manuscriptId:  { type: string }
-        title:         { type: string }
+        bookId: { type: string, example: 'ns' }
+        manuscriptId: { type: string }
+        title: { type: string }
         phaseTimings:
           type: array
           items:
             type: object
             properties:
-              id:       { type: integer }
-              label:    { type: string }
-              duration: { type: integer, description: "milliseconds" }
-        characters:    { type: array, items: { $ref: '#/components/schemas/Character' } }
-        chapters:      { type: array, items: { $ref: '#/components/schemas/Chapter' } }
-        sentences:     { type: array, items: { $ref: '#/components/schemas/Sentence' } }
+              id: { type: integer }
+              label: { type: string }
+              duration: { type: integer, description: 'milliseconds' }
+        characters: { type: array, items: { $ref: '#/components/schemas/Character' } }
+        chapters: { type: array, items: { $ref: '#/components/schemas/Chapter' } }
+        sentences: { type: array, items: { $ref: '#/components/schemas/Sentence' } }
         libraryMatches:
           type: array
           description: Hints from a pre-pass against the user's voice library.
@@ -1350,16 +1373,16 @@ components:
             type: object
             properties:
               characterId: { type: string }
-              voiceId:     { type: string }
-              confidence:  { type: number }
+              voiceId: { type: string }
+              confidence: { type: number }
 
     # --- Voice match ------------------------------------------------
     CharacterMatchInput:
       type: object
       required: [id, name, attributes]
       properties:
-        id:             { type: string }
-        name:           { type: string }
+        id: { type: string }
+        name: { type: string }
         aliases:
           type: array
           items: { type: string }
@@ -1376,14 +1399,14 @@ components:
           type: string
           enum: [child, teen, adult, elderly]
           description: Optional tie-breaker signal (set by analysis).
-        attributes:     { type: array, items: { type: string } }
+        attributes: { type: array, items: { type: string } }
         tone:
           type: object
           properties:
-            warmth:    { type: integer }
-            pace:      { type: integer }
+            warmth: { type: integer }
+            pace: { type: integer }
             authority: { type: integer }
-            emotion:   { type: integer }
+            emotion: { type: integer }
         evidenceQuotes:
           type: array
           items: { type: string }
@@ -1392,7 +1415,7 @@ components:
       type: object
       required: [bookId, matches]
       properties:
-        bookId:  { type: string }
+        bookId: { type: string }
         matches:
           type: array
           items:
@@ -1406,11 +1429,19 @@ components:
                   type: object
                   required: [voiceId, score]
                   properties:
-                    voiceId:         { type: string }
-                    fromBookId:      { type: string, description: "Library book whose confirmed cast holds this voice. Lets the client target the exact library record for the override endpoint." }
-                    fromBookTitle:   { type: string }
-                    fromCharacterId: { type: string, description: "Character id within fromBookId's cast.json. Stable handle for library-cast override." }
-                    score:           { type: number, minimum: 0, maximum: 1 }
+                    voiceId: { type: string }
+                    fromBookId:
+                      {
+                        type: string,
+                        description: 'Library book whose confirmed cast holds this voice. Lets the client target the exact library record for the override endpoint.',
+                      }
+                    fromBookTitle: { type: string }
+                    fromCharacterId:
+                      {
+                        type: string,
+                        description: "Character id within fromBookId's cast.json. Stable handle for library-cast override.",
+                      }
+                    score: { type: number, minimum: 0, maximum: 1 }
                     factors:
                       type: array
                       items: { $ref: '#/components/schemas/MatchFactor' }
@@ -1419,9 +1450,9 @@ components:
       type: object
       required: [id, label, score]
       properties:
-        id:     { type: string, example: "register" }
-        label:  { type: string, example: "Vocabulary register" }
-        score:  { type: number, minimum: 0, maximum: 1 }
+        id: { type: string, example: 'register' }
+        label: { type: string, example: 'Vocabulary register' }
+        score: { type: number, minimum: 0, maximum: 1 }
         detail: { type: string }
 
     # --- Generation -------------------------------------------------
@@ -1437,14 +1468,14 @@ components:
             tick and `chapter_complete`, while the server concatenates the PCM,
             writes the MP3 + segments JSON, and updates state.json. Surfaces
             the disk-write phase so the UI doesn't look stalled at 99 %.
-        chapterId:   { type: integer }
+        chapterId: { type: integer }
         characterId:
           type: string
           nullable: true
           description: null = chapter-wide tick (not character-specific).
-        progress:    { type: number, minimum: 0, maximum: 1 }
+        progress: { type: number, minimum: 0, maximum: 1 }
         currentLine: { type: integer }
-        totalLines:  { type: integer }
+        totalLines: { type: integer }
         totalGroups:
           type: integer
           description: Only on `chapter_assembling` — number of synthesised same-speaker groups about to land on disk.
@@ -1476,8 +1507,8 @@ components:
           type: object
           description: Frontend Voice payload (attributes drive the prebuilt-voice picker).
           properties:
-            id:         { type: string }
-            character:  { type: string }
+            id: { type: string }
+            character: { type: string }
             attributes: { type: array, items: { type: string } }
         characterHint:
           type: object
@@ -1491,9 +1522,9 @@ components:
             present so every voice actually sounds like that character.
           properties:
             description: { type: string }
-            role:        { type: string }
-            gender:      { type: string, enum: [male, female, neutral] }
-            ageRange:    { type: string, enum: [child, teen, adult, elderly] }
+            role: { type: string }
+            gender: { type: string, enum: [male, female, neutral] }
+            ageRange: { type: string, enum: [child, teen, adult, elderly] }
             evidence:
               type: array
               items: { type: string }
@@ -1501,10 +1532,10 @@ components:
             tone:
               type: object
               properties:
-                warmth:    { type: integer }
-                pace:      { type: integer }
+                warmth: { type: integer }
+                pace: { type: integer }
                 authority: { type: integer }
-                emotion:   { type: integer }
+                emotion: { type: integer }
         text:
           type: string
           description: Optional override script. Capped to ~30 words server-side to stay near 12 s.
@@ -1533,7 +1564,7 @@ components:
           type: number
           nullable: true
           description: Computed from the synthesised PCM length. Null when the response was served from cache.
-        cached:    { type: boolean }
+        cached: { type: boolean }
         modelKey:
           type: string
           enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
@@ -1547,9 +1578,17 @@ components:
         the same picker that synthesises samples and chapters, so the value
         previewed in the UI matches what the user actually hears.
       properties:
-        provider:    { type: string, enum: [coqui, gemini, piper, kokoro] }
-        name:        { type: string, description: "Engine-specific prebuilt voice name, e.g. 'Charon' (Gemini) or 'Claribel Dervla' (Coqui XTTS v2)." }
-        description: { type: string, description: "Short label for the picked voice — engine-specific. Empty/placeholder when the engine doesn't publish descriptors." }
+        provider: { type: string, enum: [coqui, gemini, piper, kokoro] }
+        name:
+          {
+            type: string,
+            description: "Engine-specific prebuilt voice name, e.g. 'Charon' (Gemini) or 'Claribel Dervla' (Coqui XTTS v2).",
+          }
+        description:
+          {
+            type: string,
+            description: "Short label for the picked voice — engine-specific. Empty/placeholder when the engine doesn't publish descriptors.",
+          }
 
     BaseVoice:
       type: object
@@ -1561,9 +1600,17 @@ components:
         name, Gemini prebuilt voice id, Piper short name, etc.). Used by the
         Voices view's "Base voices" tab and the Profile Drawer override picker.
       properties:
-        engine:   { type: string, enum: [coqui, gemini, piper, kokoro] }
-        name:     { type: string, description: "Engine-specific speaker handle, e.g. 'Asya Anara' (Coqui XTTS) or 'Charon' (Gemini)." }
-        language: { type: string, description: "Optional ISO 639-1 / BCP-47 hint; absent when the engine doesn't tag languages." }
+        engine: { type: string, enum: [coqui, gemini, piper, kokoro] }
+        name:
+          {
+            type: string,
+            description: "Engine-specific speaker handle, e.g. 'Asya Anara' (Coqui XTTS) or 'Charon' (Gemini).",
+          }
+        language:
+          {
+            type: string,
+            description: "Optional ISO 639-1 / BCP-47 hint; absent when the engine doesn't tag languages.",
+          }
         gender:
           type: string
           enum: [male, female, neutral]
@@ -1581,10 +1628,14 @@ components:
       type: object
       required: [id, character, bookTitle, bookId, attributes, gradient, usedIn, source, ttsVoice]
       properties:
-        id:         { type: string, description: "Stable id used to hash a TTS prebuilt voice. Defaults to character.voiceId or character.id." }
-        character:  { type: string }
-        bookTitle:  { type: string }
-        bookId:     { type: string }
+        id:
+          {
+            type: string,
+            description: 'Stable id used to hash a TTS prebuilt voice. Defaults to character.voiceId or character.id.',
+          }
+        character: { type: string }
+        bookTitle: { type: string }
+        bookId: { type: string }
         attributes:
           type: array
           items: { type: string }
@@ -1592,15 +1643,28 @@ components:
           type: array
           minItems: 2
           maxItems: 2
-          items: { type: string, description: "CSS color literal" }
-        usedIn:     { type: integer, minimum: 0, description: "Number of distinct books that contain this voiceId." }
+          items: { type: string, description: 'CSS color literal' }
+        usedIn:
+          {
+            type: integer,
+            minimum: 0,
+            description: 'Number of distinct books that contain this voiceId.',
+          }
         source:
           type: string
           enum: [current, library]
           description: "'current' when the voice belongs to the currently-open book; 'library' otherwise."
-        reusable:   { type: boolean, description: "Marker for narrator-like voices that span an entire book." }
-        pinned:     { type: boolean, description: "Workspace-level pin flag from audiobook-workspace/voices.json." }
-        ttsVoice:   { $ref: '#/components/schemas/TtsVoiceAssignment' }
+        reusable:
+          {
+            type: boolean,
+            description: 'Marker for narrator-like voices that span an entire book.',
+          }
+        pinned:
+          {
+            type: boolean,
+            description: 'Workspace-level pin flag from audiobook-workspace/voices.json.',
+          }
+        ttsVoice: { $ref: '#/components/schemas/TtsVoiceAssignment' }
         overrideTtsVoices:
           type: object
           nullable: true
@@ -1623,8 +1687,8 @@ components:
                 type: string
                 description: "Engine-specific speaker handle for this engine's slot."
           example:
-            coqui:  { name: "Asya Anara" }
-            kokoro: { name: "am_onyx" }
+            coqui: { name: 'Asya Anara' }
+            kokoro: { name: 'am_onyx' }
         overrideTtsVoice:
           deprecated: true
           allOf:
@@ -1668,31 +1732,64 @@ components:
           type: array
           items: { type: number, minimum: 0, maximum: 1 }
           description: Pre-computed waveform envelope, typically 240 samples.
-        sampleRate:  { type: integer, example: 44100 }
+        sampleRate: { type: integer, example: 44100 }
         segments:
           type: array
           items:
             type: object
             properties:
-              start:       { type: number, description: "seconds" }
-              end:         { type: number, description: "seconds" }
+              start: { type: number, description: 'seconds' }
+              end: { type: number, description: 'seconds' }
               characterId: { type: string }
-              sentenceId:  { type: integer }
+              sentenceId: { type: integer }
 
     # --- Workspace change log ---------------------------------------
     ChangeLogEvent:
       type: object
       required: [id, ts, date, type, title, note, actor]
       properties:
-        id:       { type: integer, description: "Monotonic id, usually now.getTime() at write time." }
-        at:       { type: string, format: date-time, description: "ISO timestamp; absent on hand-authored fixture entries." }
-        ts:       { type: string, description: "Human-readable relative time (\"Just now\", \"2 min ago\"). Recomputed on render." }
-        date:     { type: string, enum: [today, yesterday, earlier] }
-        type:     { type: string, enum: [regenerate, voice_tune, voice_reuse, voice_lock, boundary_move, chapter_complete, generation_run_complete, chapter_failed, generation_started, cast_confirm, analysis_complete, import, library_add, reparse] }
-        title:    { type: string }
-        note:     { type: string }
-        actor:    { type: string, enum: [you, system] }
-        chapterId:  { type: integer, description: "Bound to chapter scope when applicable. Reparse drops every event that carries this field." }
+        id: { type: integer, description: 'Monotonic id, usually now.getTime() at write time.' }
+        at:
+          {
+            type: string,
+            format: date-time,
+            description: 'ISO timestamp; absent on hand-authored fixture entries.',
+          }
+        ts:
+          {
+            type: string,
+            description: 'Human-readable relative time ("Just now", "2 min ago"). Recomputed on render.',
+          }
+        date: { type: string, enum: [today, yesterday, earlier] }
+        type:
+          {
+            type: string,
+            enum:
+              [
+                regenerate,
+                voice_tune,
+                voice_reuse,
+                voice_lock,
+                boundary_move,
+                chapter_complete,
+                generation_run_complete,
+                chapter_failed,
+                generation_started,
+                cast_confirm,
+                analysis_complete,
+                import,
+                library_add,
+                reparse,
+              ],
+          }
+        title: { type: string }
+        note: { type: string }
+        actor: { type: string, enum: [you, system] }
+        chapterId:
+          {
+            type: integer,
+            description: 'Bound to chapter scope when applicable. Reparse drops every event that carries this field.',
+          }
         revertible: { type: boolean }
     WorkspaceChangeLogEvent:
       allOf:
@@ -1704,29 +1801,29 @@ components:
             the workspace view can render cross-book context.
           required: [bookId, bookTitle, author]
           properties:
-            bookId:    { type: string }
+            bookId: { type: string }
             bookTitle: { type: string }
-            author:    { type: string }
+            author: { type: string }
 
     # --- Revisions + drift -----------------------------------------
     RevisionsResponse:
       type: object
       properties:
         pending: { type: array, items: { $ref: '#/components/schemas/Revision' } }
-        drift:   { type: array, items: { $ref: '#/components/schemas/DriftEvent' } }
+        drift: { type: array, items: { $ref: '#/components/schemas/DriftEvent' } }
 
     Revision:
       type: object
       required: [id, chapterId, characterId, segments]
       properties:
-        id:            { type: string }
-        chapterId:     { type: integer }
-        characterId:   { type: string }
-        triggeredBy:   { type: string }
-        triggeredAgo:  { type: string }
-        oldDuration:   { type: string }
-        newDuration:   { type: string }
-        confidence:    { type: number, minimum: 0, maximum: 1 }
+        id: { type: string }
+        chapterId: { type: integer }
+        characterId: { type: string }
+        triggeredBy: { type: string }
+        triggeredAgo: { type: string }
+        oldDuration: { type: string }
+        newDuration: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1 }
         playable:
           type: boolean
           description: >-
@@ -1747,24 +1844,24 @@ components:
           items:
             type: object
             properties:
-              id:           { type: integer }
-              text:         { type: string }
-              oldDuration:  { type: string }
-              newDuration:  { type: string }
-              changed:      { type: boolean }
+              id: { type: integer }
+              text: { type: string }
+              oldDuration: { type: string }
+              newDuration: { type: string }
+              changed: { type: boolean }
               narratorOnly: { type: boolean }
 
     DriftEvent:
       type: object
       required: [id, characterId, chapterId, severity, factor]
       properties:
-        id:           { type: string }
-        characterId:  { type: string }
-        chapterId:    { type: integer }
-        severity:     { type: string, enum: [mild, moderate, severe] }
-        factor:       { type: string, example: "register" }
-        factorLabel:  { type: string }
-        description:  { type: string }
+        id: { type: string }
+        characterId: { type: string }
+        chapterId: { type: integer }
+        severity: { type: string, enum: [mild, moderate, severe] }
+        factor: { type: string, example: 'register' }
+        factorLabel: { type: string }
+        description: { type: string }
         autoQueueable:
           type: boolean
           description: >-
@@ -1777,24 +1874,24 @@ components:
         metrics:
           type: object
           properties:
-            current:  { type: number }
+            current: { type: number }
             expected: { type: number }
-            unit:     { type: string }
-        detected:         { type: string }
-        suggestedAction:  { type: string, example: "regenerate_chapter" }
+            unit: { type: string }
+        detected: { type: string }
+        suggestedAction: { type: string, example: 'regenerate_chapter' }
 
     # --- Domain core -----------------------------------------------
     Character:
       type: object
       required: [id, name, role, color]
       properties:
-        id:          { type: string }
-        name:        { type: string }
-        role:        { type: string }
-        color:       { type: string }
-        lines:       { type: integer }
-        scenes:      { type: integer }
-        attributes:  { type: array, items: { type: string } }
+        id: { type: string }
+        name: { type: string }
+        role: { type: string }
+        color: { type: string }
+        lines: { type: integer }
+        scenes: { type: integer }
+        attributes: { type: array, items: { type: string } }
         aliases:
           type: array
           items: { type: string }
@@ -1807,12 +1904,12 @@ components:
         tone:
           type: object
           properties:
-            warmth:    { type: integer }
-            pace:      { type: integer }
+            warmth: { type: integer }
+            pace: { type: integer }
             authority: { type: integer }
-            emotion:   { type: integer }
-        voiceId:     { type: string }
-        voiceState:  { type: string, enum: [generated, tuned, reused, locked] }
+            emotion: { type: integer }
+        voiceId: { type: string }
+        voiceState: { type: string, enum: [generated, tuned, reused, locked] }
         gender:
           type: string
           enum: [male, female, neutral]
@@ -1831,34 +1928,46 @@ components:
             type: object
             properties:
               quote: { type: string }
-              note:  { type: string }
+              note: { type: string }
         matchedFrom:
           type: object
           nullable: true
           properties:
-            bookId:      { type: string, description: "Library book whose confirmed cast holds the matched voice. Required for the library-cast override flow." }
-            characterId: { type: string, description: "Character id within bookId's cast.json. Required for the library-cast override flow." }
-            bookTitle:   { type: string }
-            confidence:  { type: number, minimum: 0, maximum: 1 }
+            bookId:
+              {
+                type: string,
+                description: 'Library book whose confirmed cast holds the matched voice. Required for the library-cast override flow.',
+              }
+            characterId:
+              {
+                type: string,
+                description: "Character id within bookId's cast.json. Required for the library-cast override flow.",
+              }
+            bookTitle: { type: string }
+            confidence: { type: number, minimum: 0, maximum: 1 }
 
     Chapter:
       type: object
       required: [id, title, duration, state, progress, characters]
       properties:
-        id:           { type: integer }
-        title:        { type: string }
-        duration:     { type: string, example: "12:48" }
-        state:        { type: string, enum: [queued, in_progress, done, failed] }
-        progress:     { type: number, minimum: 0, maximum: 1 }
-        currentLine:  { type: integer }
-        totalLines:   { type: integer }
+        id: { type: integer }
+        title: { type: string }
+        duration: { type: string, example: '12:48' }
+        state: { type: string, enum: [queued, in_progress, done, failed] }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        currentLine: { type: integer }
+        totalLines: { type: integer }
         characters:
           type: object
           additionalProperties:
             type: string
             enum: [queued, in_progress, done, skipped, failed]
-        errorReason:  { type: string, nullable: true }
-        excluded:     { type: boolean, description: "When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author." }
+        errorReason: { type: string, nullable: true }
+        excluded:
+          {
+            type: boolean,
+            description: 'When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author.',
+          }
         audioModelKey:
           type: string
           enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
@@ -1882,12 +1991,12 @@ components:
       type: object
       required: [id, chapterId, text, characterId]
       properties:
-        id:          { type: integer }
-        chapterId:   { type: integer }
-        text:        { type: string }
+        id: { type: integer }
+        chapterId: { type: integer }
+        text: { type: string }
         characterId: { type: string }
-        startMs:     { type: integer }
-        endMs:       { type: integer }
+        startMs: { type: integer }
+        endMs: { type: integer }
 
     # --- Audiobook export ------------------------------------------
     BookExportRequest:
@@ -1929,21 +2038,49 @@ components:
       type: object
       required: [id, bookId, format, destination, status, filename, createdAt]
       properties:
-        id:          { type: string, description: "Server-generated export id" }
-        bookId:      { type: string }
-        format:      { type: string, enum: [mp3-zip, m4b, mp3-folder] }
+        id: { type: string, description: 'Server-generated export id' }
+        bookId: { type: string }
+        format: { type: string, enum: [mp3-zip, m4b, mp3-folder] }
         destination: { type: string, enum: [download, sync-folder] }
         status:
           type: string
           enum: [queued, in_progress, done, failed, cancelled]
-        filename:    { type: string, description: "e.g. 'The Northern Star.zip'" }
-        sizeBytes:   { type: integer, nullable: true, description: "Final size once status === 'done'." }
-        progress:    { type: number, minimum: 0, maximum: 1, nullable: true, description: "0..1 while in_progress; null otherwise." }
-        downloadUrl: { type: string, nullable: true, description: "Set once status === 'done' AND destination === 'download'." }
-        syncPath:    { type: string, nullable: true, description: "Absolute path the archive was copied to when destination === 'sync-folder'." }
-        errorReason: { type: string, nullable: true, description: "Human-readable failure reason; populated when status === 'failed'." }
-        createdAt:   { type: string, description: "ISO timestamp" }
-        completedAt: { type: string, nullable: true, description: "ISO timestamp once status leaves in_progress." }
+        filename: { type: string, description: "e.g. 'The Northern Star.zip'" }
+        sizeBytes:
+          { type: integer, nullable: true, description: "Final size once status === 'done'." }
+        progress:
+          {
+            type: number,
+            minimum: 0,
+            maximum: 1,
+            nullable: true,
+            description: '0..1 while in_progress; null otherwise.',
+          }
+        downloadUrl:
+          {
+            type: string,
+            nullable: true,
+            description: "Set once status === 'done' AND destination === 'download'.",
+          }
+        syncPath:
+          {
+            type: string,
+            nullable: true,
+            description: "Absolute path the archive was copied to when destination === 'sync-folder'.",
+          }
+        errorReason:
+          {
+            type: string,
+            nullable: true,
+            description: "Human-readable failure reason; populated when status === 'failed'.",
+          }
+        createdAt: { type: string, description: 'ISO timestamp' }
+        completedAt:
+          {
+            type: string,
+            nullable: true,
+            description: 'ISO timestamp once status leaves in_progress.',
+          }
 
     ExportLanInfo:
       type: object

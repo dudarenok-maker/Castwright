@@ -7,7 +7,8 @@
    Conservative: only strips when the prefix is followed by a separator
    (em-dash, colon, or hyphen with spaces). A bare "Chapter 3" with no
    following text stays as-is so the user still sees something. */
-const PREFIX_RE = /^chapter\s+(?:[ivxlcdm\d]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?\s*[—:–-]\s+/i;
+const PREFIX_RE =
+  /^chapter\s+(?:[ivxlcdm\d]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?\s*[—:–-]\s+/i;
 
 export function stripChapterPrefix(title: string): string {
   if (!title) return title;

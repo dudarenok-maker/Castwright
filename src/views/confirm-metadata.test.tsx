@@ -13,31 +13,33 @@ import { ConfirmMetadataView } from './confirm-metadata';
 import type { ImportCandidate, LibraryBook } from '../lib/types';
 
 const candidate: ImportCandidate = {
-  tempId:         'imp_test',
-  format:         'epub',
-  title:          'Keeper of the Lost Cities',
-  author:         'Shannon Messenger',
-  series:         'Keeper of the Lost Cities',
-  seriesPosition: null, /* Mirrors the screenshot: parser left position blank. */
-  sourceText:     'body',
-  wordCount:      103102,
-  byteSize:       500_000,
-  chapters:       Array.from({ length: 59 }, (_, i) => ({ id: i + 1, title: `Chapter ${i + 1}` })),
+  tempId: 'imp_test',
+  format: 'epub',
+  title: 'Keeper of the Lost Cities',
+  author: 'Shannon Messenger',
+  series: 'Keeper of the Lost Cities',
+  seriesPosition: null /* Mirrors the screenshot: parser left position blank. */,
+  sourceText: 'body',
+  wordCount: 103102,
+  byteSize: 500_000,
+  chapters: Array.from({ length: 59 }, (_, i) => ({ id: i + 1, title: `Chapter ${i + 1}` })),
 };
 
-const libraryBook = (overrides: Partial<LibraryBook> & Pick<LibraryBook, 'bookId'>): LibraryBook => ({
-  title:             overrides.bookId,
-  author:            'Shannon Messenger',
-  series:            'Keeper of the Lost Cities',
-  seriesPosition:    null,
-  isStandalone:      false,
-  status:            'complete',
-  chapterCount:      30,
+const libraryBook = (
+  overrides: Partial<LibraryBook> & Pick<LibraryBook, 'bookId'>,
+): LibraryBook => ({
+  title: overrides.bookId,
+  author: 'Shannon Messenger',
+  series: 'Keeper of the Lost Cities',
+  seriesPosition: null,
+  isStandalone: false,
+  status: 'complete',
+  chapterCount: 30,
   completedChapters: 30,
-  characterCount:    20,
-  voiceCount:        20,
-  lastWorkedOn:      'last week',
-  coverGradient:     ['#000', '#fff'],
+  characterCount: 20,
+  voiceCount: 20,
+  lastWorkedOn: 'last week',
+  coverGradient: ['#000', '#fff'],
   ...overrides,
 });
 
@@ -45,17 +47,21 @@ function renderView(libraryBooks: LibraryBook[] = []) {
   const store = configureStore({
     reducer: {
       manuscript: manuscriptSlice.reducer,
-      library:    librarySlice.reducer,
-      ui:         uiSlice.reducer,
+      library: librarySlice.reducer,
+      ui: uiSlice.reducer,
     },
     preloadedState: {
       manuscript: { ...manuscriptSlice.getInitialState(), importCandidate: candidate },
-      library:    { loaded: true, authors: [], books: libraryBooks, pausedSnapshots: {} },
+      library: { loaded: true, authors: [], books: libraryBooks, pausedSnapshots: {} },
     },
   });
   return {
     store,
-    ...render(<Provider store={store}><ConfirmMetadataView/></Provider>),
+    ...render(
+      <Provider store={store}>
+        <ConfirmMetadataView />
+      </Provider>,
+    ),
   };
 }
 
@@ -90,7 +96,11 @@ describe('ConfirmMetadataView — duplicate position warning', () => {
   it('flags the conflict when another book in the same series already owns this number', async () => {
     const user = userEvent.setup();
     renderView([
-      libraryBook({ bookId: 'shannon-messenger__keeper__exile', title: 'Exile', seriesPosition: 2 }),
+      libraryBook({
+        bookId: 'shannon-messenger__keeper__exile',
+        title: 'Exile',
+        seriesPosition: 2,
+      }),
     ]);
     const bookNum = screen.getByPlaceholderText('1');
     await user.type(bookNum, '2');
@@ -112,9 +122,9 @@ describe('ConfirmMetadataView — duplicate position warning', () => {
     const user = userEvent.setup();
     renderView([
       libraryBook({
-        bookId:         'lower-case-series',
-        title:          'Everblaze',
-        series:         'keeper of the lost cities',
+        bookId: 'lower-case-series',
+        title: 'Everblaze',
+        series: 'keeper of the lost cities',
         seriesPosition: 3,
       }),
     ]);

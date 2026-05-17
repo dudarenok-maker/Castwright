@@ -4,14 +4,19 @@
    layer; `src/lib/audio-tags.ts` mirrors AUDIO_TAGS for the UI. */
 
 export const AUDIO_TAGS = [
-  'emphatic', 'shouting', 'whispers', 'laughs', 'sighs',
-  'excited', 'hesitant',
+  'emphatic',
+  'shouting',
+  'whispers',
+  'laughs',
+  'sighs',
+  'excited',
+  'hesitant',
 ] as const;
-export type AudioTag = typeof AUDIO_TAGS[number];
+export type AudioTag = (typeof AUDIO_TAGS)[number];
 
 /* Smart and straight quote characters that wrap dialogue. */
-const QUOTE_OPENS = '"“';   // " “
-const QUOTE_CLOSES = '"”';  // " ”
+const QUOTE_OPENS = '"“'; // " “
+const QUOTE_CLOSES = '"”'; // " ”
 
 /* Already-tagged-at-the-start check. Lets every detector be idempotent and
    keeps later detectors from stacking a second tag onto something an
@@ -116,16 +121,16 @@ export function tagMarkdownEmphasis(text: string): string {
   // Order matters: handle **bold** and __bold__ first so the single-char
   // pass below doesn't half-consume them.
   let out = text.replace(/\*\*([^*\n]+?)\*\*/g, (_m, body: string) =>
-    body.trim() ? `[emphatic] ${body}` : _m
+    body.trim() ? `[emphatic] ${body}` : _m,
   );
   out = out.replace(/__([^_\n]+?)__/g, (_m, body: string) =>
-    body.trim() ? `[emphatic] ${body}` : _m
+    body.trim() ? `[emphatic] ${body}` : _m,
   );
   out = out.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, (_m, lead: string, body: string) =>
-    body.trim() ? `${lead}[emphatic] ${body}` : _m
+    body.trim() ? `${lead}[emphatic] ${body}` : _m,
   );
   out = out.replace(/(^|[^_\w])_([^_\n]+?)_(?!_)/g, (_m, lead: string, body: string) =>
-    body.trim() ? `${lead}[emphatic] ${body}` : _m
+    body.trim() ? `${lead}[emphatic] ${body}` : _m,
   );
   return out;
 }
@@ -134,8 +139,7 @@ export function tagMarkdownEmphasis(text: string): string {
    `[emphatic] …` inline. Run BEFORE general HTML stripping so the
    tag boundaries are still visible. */
 export function tagHtmlEmphasis(html: string): string {
-  return html.replace(
-    /<(em|i|strong|b)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi,
-    (_m, _tag, body: string) => body.trim() ? `[emphatic] ${body}` : body
+  return html.replace(/<(em|i|strong|b)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi, (_m, _tag, body: string) =>
+    body.trim() ? `[emphatic] ${body}` : body,
   );
 }

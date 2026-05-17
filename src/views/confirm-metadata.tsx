@@ -18,16 +18,18 @@ import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 
 export function ConfirmMetadataView() {
   const dispatch = useAppDispatch();
-  const candidate = useAppSelector(s => s.manuscript.importCandidate);
+  const candidate = useAppSelector((s) => s.manuscript.importCandidate);
 
-  const [author, setAuthor]                 = useState(candidate?.author ?? '');
-  const [isStandalone, setIsStandalone]     = useState<boolean>(candidate?.series == null && candidate?.seriesPosition == null);
-  const [series, setSeries]                 = useState(candidate?.series ?? '');
+  const [author, setAuthor] = useState(candidate?.author ?? '');
+  const [isStandalone, setIsStandalone] = useState<boolean>(
+    candidate?.series == null && candidate?.seriesPosition == null,
+  );
+  const [series, setSeries] = useState(candidate?.series ?? '');
   const [seriesPosition, setSeriesPosition] = useState<string>(
     candidate?.seriesPosition != null ? String(candidate.seriesPosition) : '',
   );
   const [title, setTitle] = useState(candidate?.title ?? '');
-  const [busy, setBusy]   = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   /* Auto-suggest front/back-matter exclusion. Pre-tick the chapter's
@@ -59,12 +61,12 @@ export function ConfirmMetadataView() {
     return null; // App.tsx only renders us when a candidate exists.
   }
 
-  const libraryBooks = useAppSelector(s => s.library.books);
+  const libraryBooks = useAppSelector((s) => s.library.books);
 
   const trimmedAuthor = author.trim();
-  const trimmedTitle  = title.trim();
+  const trimmedTitle = title.trim();
   const trimmedSeries = series.trim();
-  const seriesPosNum  = seriesPosition.trim() ? parseFloat(seriesPosition.trim()) : NaN;
+  const seriesPosNum = seriesPosition.trim() ? parseFloat(seriesPosition.trim()) : NaN;
   const canSubmit =
     !busy &&
     trimmedAuthor.length > 0 &&
@@ -77,12 +79,15 @@ export function ConfirmMetadataView() {
   const duplicatePositionBook = useMemo(() => {
     if (isStandalone || !trimmedSeries || !Number.isFinite(seriesPosNum)) return null;
     const seriesKey = trimmedSeries.toLowerCase();
-    return libraryBooks.find(b =>
-      !b.isStandalone &&
-      b.series?.trim().toLowerCase() === seriesKey &&
-      typeof b.seriesPosition === 'number' &&
-      b.seriesPosition === seriesPosNum,
-    ) ?? null;
+    return (
+      libraryBooks.find(
+        (b) =>
+          !b.isStandalone &&
+          b.series?.trim().toLowerCase() === seriesKey &&
+          typeof b.seriesPosition === 'number' &&
+          b.seriesPosition === seriesPosNum,
+      ) ?? null
+    );
   }, [isStandalone, trimmedSeries, seriesPosNum, libraryBooks]);
 
   async function handleSubmit(): Promise<void> {
@@ -118,10 +123,12 @@ export function ConfirmMetadataView() {
         coverGradient: ['#3C194F', '#0F0E0D'],
       };
       dispatch(libraryActions.addBook(optimistic));
-      dispatch(uiActions.manuscriptUploaded({
-        bookId: res.bookId,
-        manuscriptId: res.manuscriptId,
-      }));
+      dispatch(
+        uiActions.manuscriptUploaded({
+          bookId: res.bookId,
+          manuscriptId: res.manuscriptId,
+        }),
+      );
     } catch (e) {
       if (e instanceof SlugCollisionError) {
         setTitle(e.suggestedTitle);
@@ -139,15 +146,20 @@ export function ConfirmMetadataView() {
 
   return (
     <div className="relative min-h-[calc(100vh-64px)] flex items-center justify-center px-6 py-16">
-      <div className="absolute inset-0 bg-gradient-hero-wash opacity-90 pointer-events-none"/>
+      <div className="absolute inset-0 bg-gradient-hero-wash opacity-90 pointer-events-none" />
       <div className="relative max-w-2xl w-full">
         <div className="text-center mb-8">
           <SectionLabel>Confirm book details</SectionLabel>
           <div className="mt-5">
-            <MixedHeading level="h1" regular="A few details before we" bold="meet the cast"/>
+            <MixedHeading level="h1" regular="A few details before we" bold="meet the cast" />
           </div>
           <p className="mt-4 text-base text-ink/70">
-            We'll save this book to your workspace under <code className="px-1.5 py-0.5 rounded bg-ink/5 text-[12px]">books/{trimmedAuthor || '…'}/{isStandalone ? 'Standalones' : (trimmedSeries || '…')}/{trimmedTitle || '…'}/</code>.
+            We'll save this book to your workspace under{' '}
+            <code className="px-1.5 py-0.5 rounded bg-ink/5 text-[12px]">
+              books/{trimmedAuthor || '…'}/{isStandalone ? 'Standalones' : trimmedSeries || '…'}/
+              {trimmedTitle || '…'}/
+            </code>
+            .
           </p>
           {!autoDetected && (
             <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full inline-block px-4 py-1.5">
@@ -158,18 +170,24 @@ export function ConfirmMetadataView() {
 
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-7 space-y-5">
           <Field label="Author" required>
-            <input value={author} disabled={busy}
-                   onChange={(e) => setAuthor(e.target.value)}
-                   placeholder="e.g. Ursula K. Le Guin"
-                   className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"/>
+            <input
+              value={author}
+              disabled={busy}
+              onChange={(e) => setAuthor(e.target.value)}
+              placeholder="e.g. Ursula K. Le Guin"
+              className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+            />
           </Field>
 
           <div className="flex items-center gap-3 pt-1">
-            <input id="standalone" type="checkbox"
-                   checked={isStandalone}
-                   onChange={(e) => setIsStandalone(e.target.checked)}
-                   disabled={busy}
-                   className="rounded border-ink/20"/>
+            <input
+              id="standalone"
+              type="checkbox"
+              checked={isStandalone}
+              onChange={(e) => setIsStandalone(e.target.checked)}
+              disabled={busy}
+              className="rounded border-ink/20"
+            />
             <label htmlFor="standalone" className="text-sm text-ink/80 select-none">
               This is a standalone (not part of a series)
             </label>
@@ -178,49 +196,66 @@ export function ConfirmMetadataView() {
           {!isStandalone && (
             <div className="grid grid-cols-[1fr_120px] gap-3">
               <Field label="Series" required>
-                <input value={series} disabled={busy}
-                       onChange={(e) => setSeries(e.target.value)}
-                       placeholder="e.g. Earthsea"
-                       className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"/>
+                <input
+                  value={series}
+                  disabled={busy}
+                  onChange={(e) => setSeries(e.target.value)}
+                  placeholder="e.g. Earthsea"
+                  className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+                />
               </Field>
               <Field label="Book #" required>
-                <input value={seriesPosition} disabled={busy} inputMode="decimal"
-                       onChange={(e) => {
-                         /* Keep digits + the first dot only — supports novella positions like 1.5. */
-                         let v = e.target.value.replace(/[^0-9.]/g, '');
-                         const dot = v.indexOf('.');
-                         if (dot !== -1) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
-                         setSeriesPosition(v);
-                       }}
-                       placeholder="1"
-                       className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50 tabular-nums"/>
+                <input
+                  value={seriesPosition}
+                  disabled={busy}
+                  inputMode="decimal"
+                  onChange={(e) => {
+                    /* Keep digits + the first dot only — supports novella positions like 1.5. */
+                    let v = e.target.value.replace(/[^0-9.]/g, '');
+                    const dot = v.indexOf('.');
+                    if (dot !== -1) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
+                    setSeriesPosition(v);
+                  }}
+                  placeholder="1"
+                  className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50 tabular-nums"
+                />
               </Field>
             </div>
           )}
 
           {duplicatePositionBook && (
             <div className="-mt-2 px-4 py-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
-              <span className="font-semibold">Heads-up:</span> "{duplicatePositionBook.title}" is already saved as
-              {' '}{duplicatePositionBook.series} #{duplicatePositionBook.seriesPosition}. Saving will create a separate
-              entry — change the number if that's not what you want.
+              <span className="font-semibold">Heads-up:</span> "{duplicatePositionBook.title}" is
+              already saved as {duplicatePositionBook.series} #
+              {duplicatePositionBook.seriesPosition}. Saving will create a separate entry — change
+              the number if that's not what you want.
             </div>
           )}
 
           <Field label="Title" required>
-            <input value={title} disabled={busy}
-                   onChange={(e) => setTitle(e.target.value)}
-                   placeholder="e.g. A Wizard of Earthsea"
-                   className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"/>
+            <input
+              value={title}
+              disabled={busy}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. A Wizard of Earthsea"
+              className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+            />
           </Field>
 
           <div className="pt-2 grid grid-cols-3 gap-3 text-[11px] text-ink/55">
-            <Stat label="Format" value={candidate.format}/>
-            <Stat label="Word count" value={candidate.wordCount.toLocaleString()}/>
+            <Stat label="Format" value={candidate.format} />
+            <Stat label="Word count" value={candidate.wordCount.toLocaleString()} />
             <Stat
-              label={excludedSlugs.size > 0 ? `Chapters (${candidate.chapters.length - excludedSlugs.size} of ${candidate.chapters.length})` : 'Chapters detected'}
-              value={excludedSlugs.size > 0
-                ? `${candidate.chapters.length - excludedSlugs.size}`
-                : String(candidate.chapters.length)}
+              label={
+                excludedSlugs.size > 0
+                  ? `Chapters (${candidate.chapters.length - excludedSlugs.size} of ${candidate.chapters.length})`
+                  : 'Chapters detected'
+              }
+              value={
+                excludedSlugs.size > 0
+                  ? `${candidate.chapters.length - excludedSlugs.size}`
+                  : String(candidate.chapters.length)
+              }
             />
           </div>
 
@@ -228,16 +263,17 @@ export function ConfirmMetadataView() {
             chapters={candidate.chapters}
             excludedSlugs={excludedSlugs}
             onToggle={(slug, include) => {
-              setExcludedSlugs(prev => {
+              setExcludedSlugs((prev) => {
                 const next = new Set(prev);
-                if (include) next.delete(slug); else next.add(slug);
+                if (include) next.delete(slug);
+                else next.add(slug);
                 return next;
               });
             }}
             onSelectAll={() => setExcludedSlugs(new Set())}
             onResetSuggestions={() => setExcludedSlugs(new Set(initialExcludedSlugs))}
             expanded={showChapterList}
-            onToggleExpanded={() => setShowChapterList(v => !v)}
+            onToggleExpanded={() => setShowChapterList((v) => !v)}
             disabled={busy}
           />
 
@@ -248,13 +284,16 @@ export function ConfirmMetadataView() {
           )}
 
           <div className="flex items-center justify-between pt-2">
-            <button onClick={handleBack} disabled={busy}
-                    className="text-sm text-ink/60 hover:text-ink disabled:opacity-50">
+            <button
+              onClick={handleBack}
+              disabled={busy}
+              className="text-sm text-ink/60 hover:text-ink disabled:opacity-50"
+            >
               ← Pick a different file
             </button>
             <PrimaryButton variant="dark" onClick={handleSubmit} disabled={!canSubmit}>
               <span className="inline-flex items-center gap-2">
-                {busy && <IconSpinner className="w-4 h-4"/>}
+                {busy && <IconSpinner className="w-4 h-4" />}
                 {busy ? 'Saving…' : 'Save book and start analysis'}
               </span>
             </PrimaryButton>
@@ -265,11 +304,20 @@ export function ConfirmMetadataView() {
   );
 }
 
-function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
+function Field({
+  label,
+  required,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <label className="block">
       <span className="text-xs uppercase tracking-[0.12em] font-semibold text-ink/55">
-        {label}{required && <span className="text-magenta ml-1">*</span>}
+        {label}
+        {required && <span className="text-magenta ml-1">*</span>}
       </span>
       <div className="mt-1.5">{children}</div>
     </label>
@@ -284,4 +332,3 @@ function Stat({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-

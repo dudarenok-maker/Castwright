@@ -7,11 +7,7 @@
    file is too late to swap api.* over to the mock branch. */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import {
-  mockGetBookState,
-  mockPutBookState,
-  _resetMockBookStates,
-} from './api';
+import { mockGetBookState, mockPutBookState, _resetMockBookStates } from './api';
 import type { Character } from './types';
 
 beforeEach(() => {
@@ -52,8 +48,11 @@ describe('mock book-state round-trip', () => {
   });
 
   it('full-replaces sequential cast PUTs (matches real route writeJsonAtomic)', async () => {
-    const first: Character[]  = [{ id: 'a' } as unknown as Character];
-    const second: Character[] = [{ id: 'b' } as unknown as Character, { id: 'c' } as unknown as Character];
+    const first: Character[] = [{ id: 'a' } as unknown as Character];
+    const second: Character[] = [
+      { id: 'b' } as unknown as Character,
+      { id: 'c' } as unknown as Character,
+    ];
 
     await mockPutBookState('book-z', { slice: 'cast', patch: { characters: first } });
     await mockPutBookState('book-z', { slice: 'cast', patch: { characters: second } });

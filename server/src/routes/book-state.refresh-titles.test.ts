@@ -79,7 +79,13 @@ beforeEach(() => {
    parser version. Defaults to legacy (no version field) so tests opting
    into the legacy path don't have to spell it out every time. */
 function writeState(opts: {
-  chapters: Array<{ id: number; title: string; slug: string; excluded?: boolean; audioRenderedAt?: string }>;
+  chapters: Array<{
+    id: number;
+    title: string;
+    slug: string;
+    excluded?: boolean;
+    audioRenderedAt?: string;
+  }>;
   parserVersion?: number;
 }) {
   const state: Record<string, unknown> = {
@@ -125,7 +131,7 @@ describe('GET /:bookId/state — title-only refresh on legacy books', () => {
       chapters: Array<{ title: string }>;
       chapterTitleParserVersion?: number;
     };
-    expect(onDisk.chapters.map(c => c.title)).toEqual([
+    expect(onDisk.chapters.map((c) => c.title)).toEqual([
       'Chapter 1 — The Beginning',
       'Chapter 2 — A Manifest',
     ]);
@@ -135,7 +141,13 @@ describe('GET /:bookId/state — title-only refresh on legacy books', () => {
   it('preserves slug, excluded flag, and audioRenderedAt across the refresh', async () => {
     writeState({
       chapters: [
-        { id: 1, title: 'Chapter 1', slug: '01-original-slug-keep-me', excluded: true, audioRenderedAt: '2026-02-15T10:00:00.000Z' },
+        {
+          id: 1,
+          title: 'Chapter 1',
+          slug: '01-original-slug-keep-me',
+          excluded: true,
+          audioRenderedAt: '2026-02-15T10:00:00.000Z',
+        },
         { id: 2, title: 'Chapter 2', slug: '02-other-slug' },
       ],
     });
@@ -175,7 +187,7 @@ describe('GET /:bookId/state — title-only refresh on legacy books', () => {
     const mtimeBefore = statSync(statePath).mtimeMs;
 
     /* Sleep briefly so any rewrite would visibly change mtime. */
-    await new Promise(r => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 20));
 
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.body.state.chapters.map((c: { title: string }) => c.title)).toEqual([
@@ -210,9 +222,7 @@ describe('GET /:bookId/state — title-only refresh on legacy books', () => {
   it('skips refresh when the source file is missing on disk — no crash', async () => {
     rmSync(join(bookDir, 'manuscript.md'), { force: true });
     writeState({
-      chapters: [
-        { id: 1, title: 'Chapter 1', slug: '01-c1' },
-      ],
+      chapters: [{ id: 1, title: 'Chapter 1', slug: '01-c1' }],
     });
 
     const res = await request(app).get(`/api/books/${bookId}/state`);

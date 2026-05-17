@@ -98,11 +98,15 @@ describe('tagHesitantDialog', () => {
 
 describe('tagMarkdownEmphasis', () => {
   it('converts *foo* to [emphatic] foo', () => {
-    expect(tagMarkdownEmphasis('this is *important* news')).toBe('this is [emphatic] important news');
+    expect(tagMarkdownEmphasis('this is *important* news')).toBe(
+      'this is [emphatic] important news',
+    );
   });
 
   it('converts _foo_ to [emphatic] foo', () => {
-    expect(tagMarkdownEmphasis('this is _stressed_ syllable')).toBe('this is [emphatic] stressed syllable');
+    expect(tagMarkdownEmphasis('this is _stressed_ syllable')).toBe(
+      'this is [emphatic] stressed syllable',
+    );
   });
 
   it('converts **bold** to [emphatic] bold (no double tag)', () => {
@@ -128,7 +132,9 @@ describe('tagHtmlEmphasis', () => {
   });
 
   it('converts <i>, <strong>, <b> tags', () => {
-    expect(tagHtmlEmphasis('<i>x</i> <strong>y</strong> <b>z</b>')).toBe('[emphatic] x [emphatic] y [emphatic] z');
+    expect(tagHtmlEmphasis('<i>x</i> <strong>y</strong> <b>z</b>')).toBe(
+      '[emphatic] x [emphatic] y [emphatic] z',
+    );
   });
 
   it('case-insensitive on tag name', () => {

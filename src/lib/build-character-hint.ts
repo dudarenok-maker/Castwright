@@ -17,11 +17,11 @@ type HintOverrides = Partial<Pick<Character, 'gender' | 'ageRange' | 'tone'>>;
 
 export function buildCharacterHint(c: Character, overrides?: HintOverrides): CharacterHint {
   const evidence = (c.evidence ?? [])
-    .map(e => e.quote)
+    .map((e) => e.quote)
     .filter((q): q is string => typeof q === 'string' && q.length > 0);
-  const gender   = overrides && 'gender'   in overrides ? overrides.gender   : c.gender;
+  const gender = overrides && 'gender' in overrides ? overrides.gender : c.gender;
   const ageRange = overrides && 'ageRange' in overrides ? overrides.ageRange : c.ageRange;
-  const tone     = overrides && 'tone'     in overrides ? overrides.tone     : c.tone;
+  const tone = overrides && 'tone' in overrides ? overrides.tone : c.tone;
   return {
     description: c.description,
     role: c.role,

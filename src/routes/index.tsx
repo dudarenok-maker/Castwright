@@ -5,8 +5,12 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  createHashRouter, Navigate, useOutletContext,
-  useNavigate, useParams, useSearchParams,
+  createHashRouter,
+  Navigate,
+  useOutletContext,
+  useNavigate,
+  useParams,
+  useSearchParams,
 } from 'react-router-dom';
 import { useAppDispatch, useAppSelector, store } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -57,13 +61,19 @@ function useHydrateStage(derived: Stage, deps: ReadonlyArray<unknown>) {
 export function BooksRoute() {
   useHydrateStage({ kind: 'books' }, []);
   const dispatch = useAppDispatch();
-  const library = useAppSelector(s => s.library);
-  const bookId  = useAppSelector(s => (s.ui.stage as { bookId?: string }).bookId ?? null);
+  const library = useAppSelector((s) => s.library);
+  const bookId = useAppSelector((s) => (s.ui.stage as { bookId?: string }).bookId ?? null);
   const { showInfo, showError } = useOutletContext<LayoutContext>();
 
   return (
-    <BookLibraryView authors={library.authors} activeBookId={bookId}
-      onOpenBook={(b) => dispatch(uiActions.openBook({ id: b.bookId, status: b.status, manuscriptId: b.manuscriptId }))}
+    <BookLibraryView
+      authors={library.authors}
+      activeBookId={bookId}
+      onOpenBook={(b) =>
+        dispatch(
+          uiActions.openBook({ id: b.bookId, status: b.status, manuscriptId: b.manuscriptId }),
+        )
+      }
       onDeleteBook={async (b) => {
         try {
           await api.deleteBook(b.bookId);
@@ -125,16 +135,26 @@ export function BooksRoute() {
            onto the perceived re-parse latency, depending on workspace
            size. The dialog has everything it needs from `result`
            already. */
-        const refreshedLibrary = api.getLibrary()
-          .then(res => { dispatch(libraryActions.hydrate(res)); return res; })
+        const refreshedLibrary = api
+          .getLibrary()
+          .then((res) => {
+            dispatch(libraryActions.hydrate(res));
+            return res;
+          })
           .catch(() => null);
 
         /* Chapter records for the dialog. The server emits the rich form
            on current builds; fall back to titles-only for older servers
            so the dialog still renders something useful. */
-        const dialogChapters = result.chapters ?? result.chapterTitles.map((title, i) => ({
-          id: i + 1, title, slug: '', wordCount: 0, excluded: false,
-        }));
+        const dialogChapters =
+          result.chapters ??
+          result.chapterTitles.map((title, i) => ({
+            id: i + 1,
+            title,
+            slug: '',
+            wordCount: 0,
+            excluded: false,
+          }));
 
         /* The server preserved excluded flags across the re-parse by
            best-effort (id then slug match). That's our starting point
@@ -143,7 +163,7 @@ export function BooksRoute() {
            Shared mutable box: the body's onChange writes here, the
            onPrimary closure reads it. */
         const initialExcludedSlugs = new Set<string>(
-          dialogChapters.filter(c => c.excluded).map(c => c.slug || chapterSlug(c.id, c.title)),
+          dialogChapters.filter((c) => c.excluded).map((c) => c.slug || chapterSlug(c.id, c.title)),
         );
         const pendingBox: { current: Set<string> } = { current: new Set(initialExcludedSlugs) };
 
@@ -152,7 +172,9 @@ export function BooksRoute() {
             bookTitle={b.title}
             chapters={dialogChapters}
             initialExcludedSlugs={initialExcludedSlugs}
-            onChangeExcludedSlugs={(s) => { pendingBox.current = s; }}
+            onChangeExcludedSlugs={(s) => {
+              pendingBox.current = s;
+            }}
           />
         );
 
@@ -181,55 +203,62 @@ export function BooksRoute() {
                still racing or failed. */
             const res = await refreshedLibrary;
             const updatedBook = res?.authors
-              .flatMap(a => a.series.flatMap(s => s.books))
-              .find(book => book.bookId === b.bookId);
+              .flatMap((a) => a.series.flatMap((s) => s.books))
+              .find((book) => book.bookId === b.bookId);
             const target = updatedBook ?? b;
-            dispatch(uiActions.openBook({
-              id: target.bookId,
-              status: 'analysing',
-              manuscriptId: target.manuscriptId,
-            }));
+            dispatch(
+              uiActions.openBook({
+                id: target.bookId,
+                status: 'analysing',
+                manuscriptId: target.manuscriptId,
+              }),
+            );
           },
         });
       }}
-      onStartNew={() => dispatch(uiActions.startNewBook())}/>
+      onStartNew={() => dispatch(uiActions.startNewBook())}
+    />
   );
 }
 
 function UploadRoute() {
   useHydrateStage({ kind: 'upload' }, []);
-  const importCandidate = useAppSelector(s => s.manuscript.importCandidate);
-  return importCandidate ? <ConfirmMetadataView/> : <UploadView/>;
+  const importCandidate = useAppSelector((s) => s.manuscript.importCandidate);
+  return importCandidate ? <ConfirmMetadataView /> : <UploadView />;
 }
 
 function VoicesRoute() {
   useHydrateStage({ kind: 'voices' }, []);
-  const voices = useAppSelector(s => s.voices.voices);
+  const voices = useAppSelector((s) => s.voices.voices);
   const navigate = useNavigate();
   /* Clicking a voice card from the global Voices view navigates to the
      character's source-book cast view with `?profile=<charId>` set. The
      ReadyRoute parses the param into stage.openProfileId, Layout hydrates
      that book's cast from disk, and the ProfileDrawer pops out alongside
      the cast table — same affordance as the cast view's in-book panel. */
-  return <LibraryView library={voices}
-    onOpenCharacter={(voice) => {
-      if (!voice.bookId) return;
-      navigate(`/books/${voice.bookId}/cast?profile=${encodeURIComponent(voice.id)}`);
-    }}/>;
+  return (
+    <LibraryView
+      library={voices}
+      onOpenCharacter={(voice) => {
+        if (!voice.bookId) return;
+        navigate(`/books/${voice.bookId}/cast?profile=${encodeURIComponent(voice.id)}`);
+      }}
+    />
+  );
 }
 
 function AccountRoute() {
   useHydrateStage({ kind: 'account' }, []);
-  return <AccountView/>;
+  return <AccountView />;
 }
 
 export function ChangelogRoute() {
   useHydrateStage({ kind: 'changelog' }, []);
   const dispatch = useAppDispatch();
-  const events         = useAppSelector(s => s.changeLog.workspaceEvents);
-  const nextCursor     = useAppSelector(s => s.changeLog.workspaceNextCursor);
-  const totalCount     = useAppSelector(s => s.changeLog.workspaceTotalCount);
-  const categoryCounts = useAppSelector(s => s.changeLog.workspaceCategoryCounts);
+  const events = useAppSelector((s) => s.changeLog.workspaceEvents);
+  const nextCursor = useAppSelector((s) => s.changeLog.workspaceNextCursor);
+  const totalCount = useAppSelector((s) => s.changeLog.workspaceTotalCount);
+  const categoryCounts = useAppSelector((s) => s.changeLog.workspaceCategoryCounts);
   const [loadingMore, setLoadingMore] = useState(false);
 
   /* The workspace endpoint fans out across every book's
@@ -239,34 +268,45 @@ export function ChangelogRoute() {
      reach of the tail. */
   useEffect(() => {
     let cancelled = false;
-    api.getWorkspaceChangelog().then(res => {
-      if (!cancelled) dispatch(changeLogActions.hydrateWorkspaceFirstPage(res));
-    }).catch(err => {
-      console.error('[changelog] workspace fetch failed', err);
-    });
-    return () => { cancelled = true; };
+    api
+      .getWorkspaceChangelog()
+      .then((res) => {
+        if (!cancelled) dispatch(changeLogActions.hydrateWorkspaceFirstPage(res));
+      })
+      .catch((err) => {
+        console.error('[changelog] workspace fetch failed', err);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [dispatch]);
 
   /* Fetch the next page when the view's sentinel intersects the viewport.
      The loadingMore guard keeps a sub-200px scroll from firing two
      overlapping requests for the same cursor. */
-  const loadMore = useMemo(() => () => {
-    if (!nextCursor || loadingMore) return;
-    setLoadingMore(true);
-    api.getWorkspaceChangelog({ before: nextCursor })
-      .then(res => dispatch(changeLogActions.appendWorkspacePage(res)))
-      .catch(err => console.error('[changelog] workspace page fetch failed', err))
-      .finally(() => setLoadingMore(false));
-  }, [dispatch, nextCursor, loadingMore]);
+  const loadMore = useMemo(
+    () => () => {
+      if (!nextCursor || loadingMore) return;
+      setLoadingMore(true);
+      api
+        .getWorkspaceChangelog({ before: nextCursor })
+        .then((res) => dispatch(changeLogActions.appendWorkspacePage(res)))
+        .catch((err) => console.error('[changelog] workspace page fetch failed', err))
+        .finally(() => setLoadingMore(false));
+    },
+    [dispatch, nextCursor, loadingMore],
+  );
 
-  return <ChangeLogView
-    events={events}
-    totalCount={totalCount}
-    categoryCounts={categoryCounts}
-    onLoadMore={loadMore}
-    hasMore={nextCursor != null}
-    loadingMore={loadingMore}
-  />;
+  return (
+    <ChangeLogView
+      events={events}
+      totalCount={totalCount}
+      categoryCounts={categoryCounts}
+      onLoadMore={loadMore}
+      hasMore={nextCursor != null}
+      loadingMore={loadingMore}
+    />
+  );
 }
 
 export function AnalysingRoute() {
@@ -274,19 +314,20 @@ export function AnalysingRoute() {
   useHydrateStage({ kind: 'analysing', bookId, manuscriptId: null }, [bookId]);
 
   const dispatch = useAppDispatch();
-  const stage      = useAppSelector(s => s.ui.stage);
-  const manuscript = useAppSelector(s => s.manuscript);
-  const library    = useAppSelector(s => s.library);
-  const ui         = useAppSelector(s => s.ui);
-  const activeBook = library.books.find(b => b.bookId === bookId);
+  const stage = useAppSelector((s) => s.ui.stage);
+  const manuscript = useAppSelector((s) => s.manuscript);
+  const library = useAppSelector((s) => s.library);
+  const ui = useAppSelector((s) => s.ui);
+  const activeBook = library.books.find((b) => b.bookId === bookId);
   /* Stage.manuscriptId is set when the user goes through Upload → Analyse, but
      it's null on page refresh, deep links, or confirm→reanalyse — none of
      those carry the id through ui.stage. Layout's book-state hydration always
      repopulates manuscript.manuscriptId from disk, so prefer that (and fall
      back to the library entry for the brief window before disk hydrate lands). */
-  const manuscriptId = stage.kind === 'analysing'
-    ? stage.manuscriptId ?? manuscript.manuscriptId ?? activeBook?.manuscriptId ?? null
-    : null;
+  const manuscriptId =
+    stage.kind === 'analysing'
+      ? (stage.manuscriptId ?? manuscript.manuscriptId ?? activeBook?.manuscriptId ?? null)
+      : null;
 
   return (
     <AnalysingView
@@ -304,7 +345,8 @@ export function AnalysingRoute() {
         dispatch(chaptersActions.hydrateFromAnalysis(payload));
         dispatch(manuscriptActions.hydrateFromAnalysis(payload));
         dispatch(uiActions.analysisComplete({ bookId: payload.bookId }));
-      }}/>
+      }}
+    />
   );
 }
 
@@ -315,9 +357,9 @@ function ConfirmRoute() {
   useHydrateStage({ kind: 'confirm', bookId, openProfileId }, [bookId, openProfileId]);
 
   const dispatch = useAppDispatch();
-  const characters = useAppSelector(s => s.cast.characters);
-  const voices     = useAppSelector(s => s.voices.voices);
-  const manuscript = useAppSelector(s => s.manuscript);
+  const characters = useAppSelector((s) => s.cast.characters);
+  const voices = useAppSelector((s) => s.voices.voices);
+  const manuscript = useAppSelector((s) => s.manuscript);
   /* Re-analyse fires a fresh local-analyzer pass; guard it the same way
      book imports do so it can't evict TTS mid-chapter. Gemini/Gemma
      engines pass through unguarded. */
@@ -325,11 +367,13 @@ function ConfirmRoute() {
 
   return (
     <>
-    <ConfirmCastView characters={characters} library={voices}
-      title={manuscript.title}
-      onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
-      onOverrideLibrary={async ({ sourceCharacterId, targetBookId, targetCharacterId }) => {
-        /* Binds sourceBookId from the route's bookId — the view doesn't
+      <ConfirmCastView
+        characters={characters}
+        library={voices}
+        title={manuscript.title}
+        onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
+        onOverrideLibrary={async ({ sourceCharacterId, targetBookId, targetCharacterId }) => {
+          /* Binds sourceBookId from the route's bookId — the view doesn't
            need to know about the source side beyond per-character ids.
            Server returns the merged record for both sides; we patch the
            source-side record into redux so the confirm card immediately
@@ -339,34 +383,39 @@ function ConfirmRoute() {
            the workspace's cast state in this slice, so no client-side
            dispatch is needed for it — the next time that book opens it
            will hydrate from the updated file. */
-        const res = await api.overrideLibraryCast({
-          sourceBookId: bookId,
-          sourceCharacterId,
-          targetBookId,
-          targetCharacterId,
-        });
-        if (res?.source) {
-          dispatch(castActions.updateCharacter(res.source));
-        }
-      }}
-      onConfirm={() => {
-        dispatch(uiActions.confirmCast());
-        dispatch(changeLogActions.appendLogEvent(buildCastConfirmEvent({
-          characterCount: characters.length,
-          bookTitle: manuscript.title || undefined,
-        })));
-      }}
-      onReanalyse={() => {
-        /* Drop chapter-id-bearing entries (regenerate, chapter_complete,
+          const res = await api.overrideLibraryCast({
+            sourceBookId: bookId,
+            sourceCharacterId,
+            targetBookId,
+            targetCharacterId,
+          });
+          if (res?.source) {
+            dispatch(castActions.updateCharacter(res.source));
+          }
+        }}
+        onConfirm={() => {
+          dispatch(uiActions.confirmCast());
+          dispatch(
+            changeLogActions.appendLogEvent(
+              buildCastConfirmEvent({
+                characterCount: characters.length,
+                bookTitle: manuscript.title || undefined,
+              }),
+            ),
+          );
+        }}
+        onReanalyse={() => {
+          /* Drop chapter-id-bearing entries (regenerate, chapter_complete,
            chapter_failed, boundary_move) because the upcoming reparse
            reshuffles chapter ids. Cast/voice prefs survive — those are
            still meaningful after a reparse. */
-        guard(() => {
-          dispatch(changeLogActions.wipeBookShapeEvents());
-          dispatch(uiActions.reanalyse());
-        });
-      }}/>
-    {guardModal}
+          guard(() => {
+            dispatch(changeLogActions.wipeBookShapeEvents());
+            dispatch(uiActions.reanalyse());
+          });
+        }}
+      />
+      {guardModal}
     </>
   );
 }
@@ -376,41 +425,52 @@ export function ReadyRoute() {
   const [searchParams] = useSearchParams();
   const view: View = (VALID_VIEWS as string[]).includes(rawView ?? '') ? (rawView as View) : 'cast';
   const chapterStr = searchParams.get('chapter');
-  const currentChapterId = chapterStr != null && !Number.isNaN(parseInt(chapterStr, 10))
-    ? parseInt(chapterStr, 10) : 3;
+  const currentChapterId =
+    chapterStr != null && !Number.isNaN(parseInt(chapterStr, 10)) ? parseInt(chapterStr, 10) : 3;
   const openProfileId = searchParams.get('profile');
 
-  useHydrateStage(
-    { kind: 'ready', bookId, view, currentChapterId, openProfileId },
-    [bookId, view, currentChapterId, openProfileId],
-  );
+  useHydrateStage({ kind: 'ready', bookId, view, currentChapterId, openProfileId }, [
+    bookId,
+    view,
+    currentChapterId,
+    openProfileId,
+  ]);
 
-  return <ReadyViewSwitch view={view} bookId={bookId} currentChapterId={currentChapterId}/>;
+  return <ReadyViewSwitch view={view} bookId={bookId} currentChapterId={currentChapterId} />;
 }
 
 /* Inner view switch for the ready stage. Kept as a small sub-component so
    the param-derivation effect runs ahead of the view's selectors. */
-function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookId: string; currentChapterId: number }) {
+function ReadyViewSwitch({
+  view,
+  bookId,
+  currentChapterId,
+}: {
+  view: View;
+  bookId: string;
+  currentChapterId: number;
+}) {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
-  const characters = useAppSelector(s => s.cast.characters);
-  const chapters   = useAppSelector(s => s.chapters.chapters);
-  const paused     = useAppSelector(s => s.chapters.paused);
-  const drift      = useAppSelector(s => s.revisions.drift);
-  const manuscript = useAppSelector(s => s.manuscript);
-  const library    = useAppSelector(s => s.library);
-  const voices     = useAppSelector(s => s.voices.voices);
-  const ui         = useAppSelector(s => s.ui);
-  const changeLogEvents = useAppSelector(s => s.changeLog.events);
+  const characters = useAppSelector((s) => s.cast.characters);
+  const chapters = useAppSelector((s) => s.chapters.chapters);
+  const paused = useAppSelector((s) => s.chapters.paused);
+  const drift = useAppSelector((s) => s.revisions.drift);
+  const manuscript = useAppSelector((s) => s.manuscript);
+  const library = useAppSelector((s) => s.library);
+  const voices = useAppSelector((s) => s.voices.voices);
+  const ui = useAppSelector((s) => s.ui);
+  const changeLogEvents = useAppSelector((s) => s.changeLog.events);
 
-  const activeBook   = library.books.find(b => b.bookId === bookId);
+  const activeBook = library.books.find((b) => b.bookId === bookId);
   /* Anchored to the manuscript slice's bookId so cross-book navigation —
      e.g. analysing Book A → clicking the generation pill to open Book B's
      Generate view — doesn't render Book A's stale title under
      "Generating …" until the disk re-hydrate lands. See manuscript-slice
      bookId tracking + Layout's matching projectTitle/hydration guards. */
   const manuscriptMatchesBook = manuscript.bookId === bookId;
-  const projectTitle = (manuscriptMatchesBook ? manuscript.title : null) || activeBook?.title || null;
+  const projectTitle =
+    (manuscriptMatchesBook ? manuscript.title : null) || activeBook?.title || null;
 
   const setCharacters = (next: Character[] | ((prev: Character[]) => Character[])) =>
     dispatch(castActions.setCharacters(typeof next === 'function' ? next(characters) : next));
@@ -418,22 +478,29 @@ function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookI
   switch (view) {
     case 'manuscript':
       return (
-        <ManuscriptView characters={characters} chapters={chapters}
+        <ManuscriptView
+          characters={characters}
+          chapters={chapters}
           currentChapterId={currentChapterId}
           setCurrentChapterId={(id) => dispatch(uiActions.setCurrentChapterId(id))}
           sentencesFromStore={manuscript.sentences}
           onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
-          onStartGenerating={() => dispatch(uiActions.changeView('generate'))}/>
+          onStartGenerating={() => dispatch(uiActions.changeView('generate'))}
+        />
       );
     case 'cast':
       return (
-        <CastView characters={characters} setCharacters={setCharacters} library={voices}
+        <CastView
+          characters={characters}
+          setCharacters={setCharacters}
+          library={voices}
           title={projectTitle}
           onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
           onShowMatchDetail={(id) => dispatch(uiActions.setMatchDetailFor(id))}
           onBatchRegenerate={(ids) => dispatch(uiActions.setBatchRegenIds(ids))}
           driftEvents={drift}
-          onShowDrift={() => dispatch(uiActions.setShowDriftReport(true))}/>
+          onShowDrift={() => dispatch(uiActions.setShowDriftReport(true))}
+        />
       );
     case 'library':
       /* Clicking a voice card opens the profile drawer for the linked
@@ -441,17 +508,23 @@ function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookI
          the drawer in place (cast slice already carries those characters);
          otherwise we navigate to the source book's cast view so the drawer
          can render against that book's hydrated cast. */
-      return <LibraryView library={voices}
-        onOpenCharacter={(voice) => {
-          if (voice.bookId === bookId) {
-            dispatch(uiActions.setOpenProfileId(voice.id));
-          } else if (voice.bookId) {
-            navigate(`/books/${voice.bookId}/cast?profile=${encodeURIComponent(voice.id)}`);
-          }
-        }}/>;
+      return (
+        <LibraryView
+          library={voices}
+          onOpenCharacter={(voice) => {
+            if (voice.bookId === bookId) {
+              dispatch(uiActions.setOpenProfileId(voice.id));
+            } else if (voice.bookId) {
+              navigate(`/books/${voice.bookId}/cast?profile=${encodeURIComponent(voice.id)}`);
+            }
+          }}
+        />
+      );
     case 'generate':
       return (
-        <GenerationView chapters={chapters} characters={characters}
+        <GenerationView
+          chapters={chapters}
+          characters={characters}
           paused={paused}
           title={projectTitle}
           bookId={bookId}
@@ -467,13 +540,17 @@ function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookI
             dispatch(uiActions.setRegenChapter(chapters[0]));
           }}
           onRegenerateCharacterInChapter={(charId, chapterId) =>
-            dispatch(uiActions.setRegenCharacterCtx({ characterId: charId, defaultChapterId: chapterId }))}
-          onPreview={(id) => dispatch(uiActions.setCurrentTrack(id))}/>
+            dispatch(
+              uiActions.setRegenCharacterCtx({ characterId: charId, defaultChapterId: chapterId }),
+            )
+          }
+          onPreview={(id) => dispatch(uiActions.setCurrentTrack(id))}
+        />
       );
     case 'listen':
-      return <ListenRoute bookId={bookId}/>;
+      return <ListenRoute bookId={bookId} />;
     case 'log':
-      return <ChangeLogView events={changeLogEvents} title={projectTitle}/>;
+      return <ChangeLogView events={changeLogEvents} title={projectTitle} />;
   }
 }
 
@@ -483,17 +560,27 @@ function ReadyViewSwitch({ view, bookId, currentChapterId }: { view: View; bookI
    selectors instead of bloating the parent. */
 function ListenRoute({ bookId }: { bookId: string }) {
   const dispatch = useAppDispatch();
-  const chapters   = useAppSelector(s => s.chapters.chapters);
-  const characters = useAppSelector(s => s.cast.characters);
-  const voices     = useAppSelector(s => s.voices.voices);
-  const currentTrack = useAppSelector(s => s.ui.currentTrack);
-  const bookMeta   = useAppSelector(selectEffectiveMeta(bookId));
-  const isDirty    = useAppSelector(selectIsDirty);
-  const coverGradient = useAppSelector(s => s.library.books.find(b => b.bookId === bookId)?.coverGradient ?? null);
-  const coverImageUrl = useAppSelector(s => s.library.books.find(b => b.bookId === bookId)?.coverImageUrl ?? null);
-  const coverFraming = useAppSelector(s => s.library.books.find(b => b.bookId === bookId)?.coverFraming);
+  const chapters = useAppSelector((s) => s.chapters.chapters);
+  const characters = useAppSelector((s) => s.cast.characters);
+  const voices = useAppSelector((s) => s.voices.voices);
+  const currentTrack = useAppSelector((s) => s.ui.currentTrack);
+  const bookMeta = useAppSelector(selectEffectiveMeta(bookId));
+  const isDirty = useAppSelector(selectIsDirty);
+  const coverGradient = useAppSelector(
+    (s) => s.library.books.find((b) => b.bookId === bookId)?.coverGradient ?? null,
+  );
+  const coverImageUrl = useAppSelector(
+    (s) => s.library.books.find((b) => b.bookId === bookId)?.coverImageUrl ?? null,
+  );
+  const coverFraming = useAppSelector(
+    (s) => s.library.books.find((b) => b.bookId === bookId)?.coverFraming,
+  );
   return (
-    <ListenView bookId={bookId} chapters={chapters} characters={characters} library={voices}
+    <ListenView
+      bookId={bookId}
+      chapters={chapters}
+      characters={characters}
+      library={voices}
       currentTrack={currentTrack}
       setCurrentTrack={(t) => dispatch(uiActions.setCurrentTrack(t))}
       onSendApp={(app) => dispatch(uiActions.setHandoffApp(app))}
@@ -512,7 +599,8 @@ function ListenRoute({ bookId }: { bookId: string }) {
       onEditMetaField={(field, value) => dispatch(bookMetaActions.setDraftField({ field, value }))}
       onCommitMeta={() => dispatch(bookMetaActions.commitDraft({ bookId }))}
       onCancelMeta={() => dispatch(bookMetaActions.cancelDraft())}
-      isMetaDirty={isDirty}/>
+      isMetaDirty={isDirty}
+    />
   );
 }
 
@@ -535,7 +623,10 @@ interface ReparseDialogChapter {
    (onChangeExcludedSlugs) so the dialog's onPrimary can apply deltas
    without coupling to dialog state. */
 function ReparseResultBody({
-  bookTitle, chapters, initialExcludedSlugs, onChangeExcludedSlugs,
+  bookTitle,
+  chapters,
+  initialExcludedSlugs,
+  onChangeExcludedSlugs,
 }: {
   bookTitle: string;
   chapters: ReparseDialogChapter[];
@@ -543,7 +634,7 @@ function ReparseResultBody({
   onChangeExcludedSlugs: (s: Set<string>) => void;
 }): ReactNode {
   const dispatch = useAppDispatch();
-  const selectedModel = useAppSelector(s => s.ui.selectedModel);
+  const selectedModel = useAppSelector((s) => s.ui.selectedModel);
   /* Combine the server-preserved excluded set with auto-suggestions
      against the *new* chapter list. The heuristic only adds (never
      removes) — if the server preserved Chapter 1 as excluded but the
@@ -564,13 +655,15 @@ function ReparseResultBody({
 
   /* Mirror local state into the parent's box so the onPrimary closure
      sees the latest selection without re-rendering. */
-  useEffect(() => { onChangeExcludedSlugs(excludedSlugs); }, [excludedSlugs, onChangeExcludedSlugs]);
+  useEffect(() => {
+    onChangeExcludedSlugs(excludedSlugs);
+  }, [excludedSlugs, onChangeExcludedSlugs]);
 
   return (
     <div className="space-y-3">
       <p>
-        <span className="font-semibold text-ink">{chapters.length}</span>{' '}
-        chapter{chapters.length === 1 ? '' : 's'} detected in{' '}
+        <span className="font-semibold text-ink">{chapters.length}</span> chapter
+        {chapters.length === 1 ? '' : 's'} detected in{' '}
         <span className="font-semibold text-ink">{bookTitle}</span>.
       </p>
 
@@ -578,16 +671,17 @@ function ReparseResultBody({
         chapters={chapters}
         excludedSlugs={excludedSlugs}
         onToggle={(slug, include) => {
-          setExcludedSlugs(prev => {
+          setExcludedSlugs((prev) => {
             const next = new Set(prev);
-            if (include) next.delete(slug); else next.add(slug);
+            if (include) next.delete(slug);
+            else next.add(slug);
             return next;
           });
         }}
         onSelectAll={() => setExcludedSlugs(new Set())}
         onResetSuggestions={() => setExcludedSlugs(new Set(suggestedExcludedSlugs))}
         expanded={showChapterList}
-        onToggleExpanded={() => setShowChapterList(v => !v)}
+        onToggleExpanded={() => setShowChapterList((v) => !v)}
         disabled={false}
         heading="Chapters to analyze"
       />
@@ -599,10 +693,12 @@ function ReparseResultBody({
           onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
           className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
         >
-          {MODEL_OPTION_GROUPS.map(g => (
+          {MODEL_OPTION_GROUPS.map((g) => (
             <optgroup key={g.engine} label={g.label}>
-              {g.models.map(m => (
-                <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>
+              {g.models.map((m) => (
+                <option key={m.id} value={m.id} title={m.hint}>
+                  {m.label}
+                </option>
               ))}
             </optgroup>
           ))}
@@ -610,7 +706,9 @@ function ReparseResultBody({
       </label>
 
       <p className="text-ink/55 text-xs">
-        Cast and analysis cache were cleared. Hit "Analyse now" to run character detection + sentence attribution against the new chapter list. You can still switch models on the analysing screen if the run goes sideways.
+        Cast and analysis cache were cleared. Hit "Analyse now" to run character detection +
+        sentence attribution against the new chapter list. You can still switch models on the
+        analysing screen if the run goes sideways.
       </p>
     </div>
   );
@@ -639,41 +737,45 @@ async function applyExcludedDeltas(
     if (initialSlugs.has(slug)) continue;
     const id = slugToId.get(slug);
     if (id == null) continue;
-    calls.push(api.setChapterExcluded(bookId, id, true).catch(err => {
-      console.error('[reparse] failed to exclude chapter', id, err);
-    }));
+    calls.push(
+      api.setChapterExcluded(bookId, id, true).catch((err) => {
+        console.error('[reparse] failed to exclude chapter', id, err);
+      }),
+    );
   }
   /* Newly included — slugs in initial but not in final. */
   for (const slug of initialSlugs) {
     if (finalSlugs.has(slug)) continue;
     const id = slugToId.get(slug);
     if (id == null) continue;
-    calls.push(api.setChapterExcluded(bookId, id, false).catch(err => {
-      console.error('[reparse] failed to include chapter', id, err);
-    }));
+    calls.push(
+      api.setChapterExcluded(bookId, id, false).catch((err) => {
+        console.error('[reparse] failed to include chapter', id, err);
+      }),
+    );
   }
   await Promise.all(calls);
 }
 
 /* Catch-all → redirect home. Replaces parseHash's fallback to { kind: 'books' }. */
 function NotFound() {
-  return <Navigate to="/" replace/>;
+  return <Navigate to="/" replace />;
 }
 
 export const router = createHashRouter([
   {
     path: '/',
-    element: <Layout/>,
+    element: <Layout />,
     children: [
-      { index: true,                                element: <BooksRoute/> },
-      { path: 'new',                                element: <UploadRoute/> },
-      { path: 'voices',                             element: <VoicesRoute/> },
-      { path: 'log',                                element: <ChangelogRoute/> },
-      { path: 'account',                            element: <AccountRoute/> },
-      { path: 'books/:bookId/analysing',            element: <AnalysingRoute/> },
-      { path: 'books/:bookId/confirm',              element: <ConfirmRoute/> },
-      { path: 'books/:bookId/:view',                element: <ReadyRoute/> },
-      { path: '*',                                  element: <NotFound/> },
+      { index: true, element: <BooksRoute /> },
+      { path: 'new', element: <UploadRoute /> },
+      { path: 'voices', element: <VoicesRoute /> },
+      { path: 'log', element: <ChangelogRoute /> },
+      { path: 'account', element: <AccountRoute /> },
+      { path: 'books/:bookId/analysing', element: <AnalysingRoute /> },
+      { path: 'books/:bookId/confirm', element: <ConfirmRoute /> },
+      { path: 'books/:bookId/:view', element: <ReadyRoute /> },
+      { path: '*', element: <NotFound /> },
     ],
   },
 ]);

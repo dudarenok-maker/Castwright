@@ -26,7 +26,10 @@ test.describe('golden path', () => {
     const hash = await page.evaluate(() => window.location.hash);
     expect(hash === '' || hash === '#/' || hash === '#').toBe(true);
 
-    await page.getByRole('button', { name: /Start a new book/i }).first().click();
+    await page
+      .getByRole('button', { name: /Start a new book/i })
+      .first()
+      .click();
 
     await expect(page).toHaveURL(/#\/new$/);
   });

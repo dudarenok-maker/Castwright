@@ -12,15 +12,27 @@ import type { Chapter, Character, Voice } from '../lib/types';
 import type { EditableBookMeta } from '../store/book-meta-slice';
 
 const chapters: Chapter[] = [
-  { id: 1, title: 'The Approach', duration: '08:32', state: 'done',
-    characters: { narrator: 'voiced' as never }, progress: 1 } as Chapter,
-  { id: 2, title: 'Into the Fog', duration: '12:14', state: 'done',
-    characters: { narrator: 'voiced' as never }, progress: 1 } as Chapter,
+  {
+    id: 1,
+    title: 'The Approach',
+    duration: '08:32',
+    state: 'done',
+    characters: { narrator: 'voiced' as never },
+    progress: 1,
+  } as Chapter,
+  {
+    id: 2,
+    title: 'Into the Fog',
+    duration: '12:14',
+    state: 'done',
+    characters: { narrator: 'voiced' as never },
+    progress: 1,
+  } as Chapter,
 ];
 
 const characters: Character[] = [
-  { id: 'narrator', name: 'Anders Vale',   role: 'Narrator', color: 'narrator' } as Character,
-  { id: 'halloran', name: 'Cpt. Halloran', role: 'Captain',  color: 'magenta'  } as Character,
+  { id: 'narrator', name: 'Anders Vale', role: 'Narrator', color: 'narrator' } as Character,
+  { id: 'halloran', name: 'Cpt. Halloran', role: 'Captain', color: 'magenta' } as Character,
 ];
 
 const voices: Voice[] = [];
@@ -36,13 +48,13 @@ const baseMeta = (over: Partial<EditableBookMeta> = {}): EditableBookMeta => ({
 });
 
 const baseHandlers = () => ({
-  setCurrentTrack:  vi.fn(),
-  onSendApp:        vi.fn(),
-  onRegenerate:     vi.fn(),
-  onEnterPreview:   vi.fn(),
-  onEditMetaField:  vi.fn(),
-  onCommitMeta:     vi.fn(),
-  onCancelMeta:     vi.fn(),
+  setCurrentTrack: vi.fn(),
+  onSendApp: vi.fn(),
+  onRegenerate: vi.fn(),
+  onEnterPreview: vi.fn(),
+  onEditMetaField: vi.fn(),
+  onCommitMeta: vi.fn(),
+  onCancelMeta: vi.fn(),
 });
 
 beforeEach(() => vi.clearAllMocks());
@@ -52,31 +64,38 @@ function makeStore() {
     reducer: {
       exports: exportsSlice.reducer,
       account: accountSlice.reducer,
-      ui:      uiSlice.reducer,
+      ui: uiSlice.reducer,
     },
   });
 }
 
-function renderView(overrides: {
-  meta?: EditableBookMeta | null;
-  gradient?: [string, string] | null;
-  isDirty?: boolean;
-  currentTrack?: number | null;
-  coverImageUrl?: string | null;
-  coverFraming?: { offsetX: number; offsetY: number; zoom: number };
-} = {}) {
+function renderView(
+  overrides: {
+    meta?: EditableBookMeta | null;
+    gradient?: [string, string] | null;
+    isDirty?: boolean;
+    currentTrack?: number | null;
+    coverImageUrl?: string | null;
+    coverFraming?: { offsetX: number; offsetY: number; zoom: number };
+  } = {},
+) {
   const handlers = baseHandlers();
   render(
     <Provider store={makeStore()}>
-      <ListenView bookId="demo__sa__test" chapters={chapters} characters={characters} library={voices}
+      <ListenView
+        bookId="demo__sa__test"
+        chapters={chapters}
+        characters={characters}
+        library={voices}
         currentTrack={overrides.currentTrack ?? null}
         bookMeta={overrides.meta === undefined ? baseMeta() : overrides.meta}
         bookCoverGradient={overrides.gradient ?? ['#2C7A4B', '#0F3A23']}
         bookCoverImageUrl={overrides.coverImageUrl ?? null}
         bookCoverFraming={overrides.coverFraming}
         isMetaDirty={overrides.isDirty ?? false}
-        {...handlers}/>
-    </Provider>
+        {...handlers}
+      />
+    </Provider>,
   );
   return handlers;
 }
@@ -164,7 +183,7 @@ describe('ListenView — metadata editor wiring', () => {
 
   it('Save and Cancel are disabled when the form is clean', () => {
     renderView({ isDirty: false });
-    const save   = screen.getByRole('button', { name: /save changes/i });
+    const save = screen.getByRole('button', { name: /save changes/i });
     const cancel = screen.getByTestId('meta-cancel');
     expect(save).toBeDisabled();
     expect(cancel).toBeDisabled();
@@ -172,7 +191,7 @@ describe('ListenView — metadata editor wiring', () => {
 
   it('Save and Cancel are enabled and dispatch when the form is dirty', () => {
     const h = renderView({ isDirty: true });
-    const save   = screen.getByRole('button', { name: /save changes/i });
+    const save = screen.getByRole('button', { name: /save changes/i });
     const cancel = screen.getByTestId('meta-cancel');
     expect(save).not.toBeDisabled();
     expect(cancel).not.toBeDisabled();
@@ -309,29 +328,58 @@ describe('ListenView — excluded chapters are filtered out of the listen rail',
      confirm-metadata stage) have no audio, so they'd otherwise surface as
      00:00 rows in the "ready to listen" card and bloat the chapter total. */
   const mixedChapters: Chapter[] = [
-    { id: 1, title: 'Dedication', duration: '00:00', state: 'done',
+    {
+      id: 1,
+      title: 'Dedication',
+      duration: '00:00',
+      state: 'done',
       excluded: true,
-      characters: { narrator: 'voiced' as never }, progress: 1 } as Chapter,
-    { id: 2, title: 'Preface', duration: '00:00', state: 'done',
+      characters: { narrator: 'voiced' as never },
+      progress: 1,
+    } as Chapter,
+    {
+      id: 2,
+      title: 'Preface',
+      duration: '00:00',
+      state: 'done',
       excluded: true,
-      characters: { narrator: 'voiced' as never }, progress: 1 } as Chapter,
-    { id: 3, title: 'Chapter One', duration: '11:32', state: 'done',
-      characters: { narrator: 'voiced' as never }, progress: 1 } as Chapter,
-    { id: 4, title: 'Chapter Two', duration: '06:35', state: 'done',
-      characters: { narrator: 'voiced' as never }, progress: 1 } as Chapter,
+      characters: { narrator: 'voiced' as never },
+      progress: 1,
+    } as Chapter,
+    {
+      id: 3,
+      title: 'Chapter One',
+      duration: '11:32',
+      state: 'done',
+      characters: { narrator: 'voiced' as never },
+      progress: 1,
+    } as Chapter,
+    {
+      id: 4,
+      title: 'Chapter Two',
+      duration: '06:35',
+      state: 'done',
+      characters: { narrator: 'voiced' as never },
+      progress: 1,
+    } as Chapter,
   ];
 
   function renderWithMix() {
     const handlers = baseHandlers();
     render(
       <Provider store={makeStore()}>
-        <ListenView bookId="demo__sa__test" chapters={mixedChapters} characters={characters} library={voices}
+        <ListenView
+          bookId="demo__sa__test"
+          chapters={mixedChapters}
+          characters={characters}
+          library={voices}
           currentTrack={null}
           bookMeta={baseMeta()}
           bookCoverGradient={['#2C7A4B', '#0F3A23']}
           isMetaDirty={false}
-          {...handlers}/>
-      </Provider>
+          {...handlers}
+        />
+      </Provider>,
     );
     return handlers;
   }
@@ -351,11 +399,15 @@ describe('ListenView — excluded chapters are filtered out of the listen rail',
        <span>. Match against the combined textContent so we don't catch
        the CH-XX badges in the row list. 18:07 is the runtime sum of the
        two non-excluded chapters (11:32 + 06:35). */
-    const headerLine = screen.getByText((_, el) =>
-      el?.tagName === 'SPAN' && /^2 chapters$/.test(el.textContent ?? ''));
+    const headerLine = screen.getByText(
+      (_, el) => el?.tagName === 'SPAN' && /^2 chapters$/.test(el.textContent ?? ''),
+    );
     expect(headerLine).toBeInTheDocument();
-    expect(screen.queryByText((_, el) =>
-      el?.tagName === 'SPAN' && /^4 chapters$/.test(el.textContent ?? ''))).toBeNull();
+    expect(
+      screen.queryByText(
+        (_, el) => el?.tagName === 'SPAN' && /^4 chapters$/.test(el.textContent ?? ''),
+      ),
+    ).toBeNull();
     expect(screen.getByText('18:07')).toBeInTheDocument();
   });
 

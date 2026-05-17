@@ -28,38 +28,46 @@ describe('inferProfile', () => {
   });
 
   it('routes the narrator id with high warmth to narrator-warm when gender is absent', () => {
-    expect(inferProfile({
-      id: 'narrator',
-      name: 'Narrator',
-      tone: { warmth: 70, pace: 50, authority: 40, emotion: 50 },
-    })).toBe('narrator-warm');
+    expect(
+      inferProfile({
+        id: 'narrator',
+        name: 'Narrator',
+        tone: { warmth: 70, pace: 50, authority: 40, emotion: 50 },
+      }),
+    ).toBe('narrator-warm');
   });
 
   it('routes the narrator id to narrator-cool when warmth is low', () => {
-    expect(inferProfile({
-      id: 'narrator',
-      name: 'Narrator',
-      tone: { warmth: 20, pace: 50, authority: 80, emotion: 30 },
-    })).toBe('narrator-cool');
+    expect(
+      inferProfile({
+        id: 'narrator',
+        name: 'Narrator',
+        tone: { warmth: 20, pace: 50, authority: 80, emotion: 30 },
+      }),
+    ).toBe('narrator-cool');
   });
 
   it('respects explicit female gender even on the narrator id', () => {
     /* The narrator short-circuit only fires when no gender is set —
        once the user picks one, the bucket should follow gender×register. */
-    expect(inferProfile({
-      id: 'narrator',
-      name: 'Narrator',
-      gender: 'female',
-    })).toBe('female-mid');
+    expect(
+      inferProfile({
+        id: 'narrator',
+        name: 'Narrator',
+        gender: 'female',
+      }),
+    ).toBe('female-mid');
   });
 
   it('respects explicit female gender over attribute-derived male tokens', () => {
-    expect(inferProfile({
-      id: 'x',
-      gender: 'female',
-      attributes: ['his', 'man'],
-      description: 'He spoke gruffly.',
-    })).toBe('female-mid');
+    expect(
+      inferProfile({
+        id: 'x',
+        gender: 'female',
+        attributes: ['his', 'man'],
+        description: 'He spoke gruffly.',
+      }),
+    ).toBe('female-mid');
   });
 });
 

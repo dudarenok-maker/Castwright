@@ -1,6 +1,10 @@
 import type { CharColor } from './types';
 
-export interface CharColorEntry { hex: string; tint: string; ring: string; }
+export interface CharColorEntry {
+  hex: string;
+  tint: string;
+  ring: string;
+}
 
 /* The frontend palette. `narrator` is the gray slot reserved for narrative
    prose. The next three (`halloran`, `eliza`, `marcus`) are kept by name
@@ -18,7 +22,7 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 function entry(hex: string): CharColorEntry {
-  return { hex, tint: hexToRgba(hex, 0.10), ring: hexToRgba(hex, 0.40) };
+  return { hex, tint: hexToRgba(hex, 0.1), ring: hexToRgba(hex, 0.4) };
 }
 
 function hslToHex(h: number, s: number, l: number): string {
@@ -30,7 +34,9 @@ function hslToHex(h: number, s: number, l: number): string {
     const v = lig - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
     return Math.round(v * 255);
   };
-  const r = f(0), g = f(8), b = f(4);
+  const r = f(0),
+    g = f(8),
+    b = f(4);
   return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
 }
 
@@ -41,8 +47,8 @@ function generateSlots(): Record<string, CharColorEntry> {
   const count = 27;
   for (let i = 0; i < count; i++) {
     const hue = (i * (360 / count) + 40) % 360;
-    const sat = 50 + (i % 3) * 8;            // 50 / 58 / 66
-    const light = 48 + ((i + 1) % 3) * 6;    // 48 / 54 / 60
+    const sat = 50 + (i % 3) * 8; // 50 / 58 / 66
+    const light = 48 + ((i + 1) % 3) * 6; // 48 / 54 / 60
     out[`slot-${i + 4}`] = entry(hslToHex(hue, sat, light));
   }
   return out;
@@ -51,8 +57,8 @@ function generateSlots(): Record<string, CharColorEntry> {
 export const CHAR_COLORS: Record<string, CharColorEntry> = {
   narrator: entry('#6B6663'),
   halloran: entry('#F79A83'),
-  eliza:    entry('#A43C6C'),
-  marcus:   entry('#7C5C8C'),
+  eliza: entry('#A43C6C'),
+  marcus: entry('#7C5C8C'),
   ...generateSlots(),
 };
 
@@ -61,7 +67,9 @@ export const CHAR_COLORS: Record<string, CharColorEntry> = {
    roster order; the array is kept in sync with CHAR_COLORS above. Exported
    for tests/tooling — not used by the runtime UI. */
 export const CHARACTER_SLOTS: readonly string[] = [
-  'halloran', 'eliza', 'marcus',
+  'halloran',
+  'eliza',
+  'marcus',
   ...Array.from({ length: 27 }, (_, i) => `slot-${i + 4}`),
 ];
 

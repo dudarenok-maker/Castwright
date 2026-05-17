@@ -90,20 +90,24 @@ export const analysisStreamMiddleware: Middleware = (store) => {
     const callbacks = {
       signal: controller.signal,
       onPhase: ({ phaseId, progress }: { phaseId: number; progress: number }) => {
-        dispatch(analysisActions.applyAnalysisSnapshotTick({
-          manuscriptId,
-          phaseId,
-          phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
-          phaseProgress: progress,
-          lastTickAt: Date.now(),
-        }));
+        dispatch(
+          analysisActions.applyAnalysisSnapshotTick({
+            manuscriptId,
+            phaseId,
+            phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
+            phaseProgress: progress,
+            lastTickAt: Date.now(),
+          }),
+        );
       },
       onEta: ({ remainingMs }: { remainingMs: number }) => {
-        dispatch(analysisActions.applyAnalysisSnapshotTick({
-          manuscriptId,
-          remainingMs,
-          lastTickAt: Date.now(),
-        }));
+        dispatch(
+          analysisActions.applyAnalysisSnapshotTick({
+            manuscriptId,
+            remainingMs,
+            lastTickAt: Date.now(),
+          }),
+        );
       },
       onSeriesPrior: ({ count, names }: { count: number; names: string[] }) => {
         dispatch(analysisActions.setSeriesPrior({ manuscriptId, count, names }));
@@ -150,11 +154,13 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
           return;
         }
-        dispatch(analysisActions.setHalted({
-          manuscriptId,
-          code: 'unknown',
-          message: (e as Error)?.message ?? 'Analysis failed.',
-        }));
+        dispatch(
+          analysisActions.setHalted({
+            manuscriptId,
+            code: 'unknown',
+            message: (e as Error)?.message ?? 'Analysis failed.',
+          }),
+        );
       }
     })();
   };

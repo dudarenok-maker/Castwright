@@ -51,7 +51,10 @@ async function readPdfOutlineTitles(buffer: Buffer): Promise<string[] | null> {
   }
 }
 
-export async function parsePdf(buffer: Buffer, opts: { fileName?: string }): Promise<ParsedManuscript> {
+export async function parsePdf(
+  buffer: Buffer,
+  opts: { fileName?: string },
+): Promise<ParsedManuscript> {
   const { text, info } = await pdfParse(buffer);
   const parsed = parseText(text, { fileName: opts.fileName, format: 'plaintext' });
   const meta = info as { Title?: string; Author?: string } | undefined;

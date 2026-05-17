@@ -39,17 +39,22 @@ export interface ScanSeriesOptions {
    book whose state.json was just written but state.castConfirmed is
    still false — already excluded by scanLibraryCharacters but caller
    may still pass us its bookId). */
-async function findAuthorSeriesForBookId(targetBookId: string): Promise<{ author: string; series: string } | null> {
+async function findAuthorSeriesForBookId(
+  targetBookId: string,
+): Promise<{ author: string; series: string } | null> {
   const { existsSync, readdirSync } = await import('node:fs');
   if (!existsSync(BOOKS_ROOT)) return null;
   const authors = readdirSync(BOOKS_ROOT, { withFileTypes: true })
-    .filter(d => d.isDirectory()).map(d => d.name);
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
   for (const authorName of authors) {
     const seriesNames = readdirSync(join(BOOKS_ROOT, authorName), { withFileTypes: true })
-      .filter(d => d.isDirectory()).map(d => d.name);
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
     for (const seriesName of seriesNames) {
       const titles = readdirSync(join(BOOKS_ROOT, authorName, seriesName), { withFileTypes: true })
-        .filter(d => d.isDirectory()).map(d => d.name);
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
       for (const titleName of titles) {
         const state = await readJson<BookStateJson>(
           stateJsonPath(join(BOOKS_ROOT, authorName, seriesName, titleName)),
@@ -88,9 +93,17 @@ export async function scanSeriesCharacters(
   const { existsSync, readdirSync } = await import('node:fs');
   if (!existsSync(BOOKS_ROOT)) return [];
   const lookup = new Map<string, { author: string; series: string; isStandalone: boolean }>();
-  for (const authorName of readdirSync(BOOKS_ROOT, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name)) {
-    for (const seriesName of readdirSync(join(BOOKS_ROOT, authorName), { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name)) {
-      for (const titleName of readdirSync(join(BOOKS_ROOT, authorName, seriesName), { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name)) {
+  for (const authorName of readdirSync(BOOKS_ROOT, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)) {
+    for (const seriesName of readdirSync(join(BOOKS_ROOT, authorName), { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)) {
+      for (const titleName of readdirSync(join(BOOKS_ROOT, authorName, seriesName), {
+        withFileTypes: true,
+      })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)) {
         const state = await readJson<BookStateJson>(
           stateJsonPath(join(BOOKS_ROOT, authorName, seriesName, titleName)),
         );
@@ -104,7 +117,7 @@ export async function scanSeriesCharacters(
     }
   }
 
-  return all.filter(record => {
+  return all.filter((record) => {
     if (options.excludeBookId && record.bookId === options.excludeBookId) return false;
     const meta = lookup.get(record.bookId);
     if (!meta) return false;

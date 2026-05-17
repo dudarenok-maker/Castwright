@@ -26,7 +26,12 @@ export class SidecarTtsProvider implements TtsProvider {
     this.engine = opts.engine;
   }
 
-  async synthesize({ text, voiceName, modelKey, signal }: SynthesizeInput): Promise<SynthesizeOutput> {
+  async synthesize({
+    text,
+    voiceName,
+    modelKey,
+    signal,
+  }: SynthesizeInput): Promise<SynthesizeOutput> {
     const body = JSON.stringify({
       engine: this.engine,
       model: sidecarModelId(modelKey),
@@ -78,11 +83,11 @@ export class SidecarTtsProvider implements TtsProvider {
          - 4xx other than 408 → client-side; retry won't help. */
       const poisoned = isPoisonedBody(bodyText);
       const transient =
-        !poisoned &&
-        (response.status === 408 ||
-          (response.status >= 500 && response.status < 600));
+        !poisoned && (response.status === 408 || (response.status >= 500 && response.status < 600));
       throw Object.assign(
-        new Error(`Local TTS sidecar returned ${response.status}: ${trimmed || response.statusText}`),
+        new Error(
+          `Local TTS sidecar returned ${response.status}: ${trimmed || response.statusText}`,
+        ),
         { transient, status: response.status, poisoned },
       );
     }
@@ -107,8 +112,8 @@ export class SidecarTtsProvider implements TtsProvider {
     if (substitutedFrom) {
       console.warn(
         `[tts] Sidecar substituted voice: requested "${substitutedFrom}" not in XTTS v2 manifest. ` +
-        `Update server/src/tts/voice-mapping.ts to remove this name. ` +
-        `Run \`curl ${this.url}/speakers\` to see the model's actual speaker list.`,
+          `Update server/src/tts/voice-mapping.ts to remove this name. ` +
+          `Run \`curl ${this.url}/speakers\` to see the model's actual speaker list.`,
       );
     }
 
@@ -122,7 +127,11 @@ function parseRateFromMime(mime: string): number {
 }
 
 async function safeReadText(response: Response): Promise<string> {
-  try { return await response.text(); } catch { return ''; }
+  try {
+    return await response.text();
+  } catch {
+    return '';
+  }
 }
 
 /* The sidecar returns `{ "detail": "...", "poisoned": true }` on the

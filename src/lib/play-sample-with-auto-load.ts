@@ -145,7 +145,9 @@ export interface PlayBaseSampleOptions {
   onStatus?: (status: SampleStatus, opts: { analyzerEvicted: boolean }) => void;
 }
 
-export async function playBaseVoiceSampleWithAutoLoad(opts: PlayBaseSampleOptions): Promise<PlaySampleResult> {
+export async function playBaseVoiceSampleWithAutoLoad(
+  opts: PlayBaseSampleOptions,
+): Promise<PlaySampleResult> {
   const { args, playback, onStatus } = opts;
   const needsSidecar: TtsEngine = args.engine;
   let analyzerEvicted = false;

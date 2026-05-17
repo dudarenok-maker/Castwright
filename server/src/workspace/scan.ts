@@ -43,7 +43,7 @@ export interface BookStateJson {
   series: string;
   seriesPosition: number | null;
   isStandalone: boolean;
-  manuscriptFile: string;       // e.g. 'manuscript.epub'
+  manuscriptFile: string; // e.g. 'manuscript.epub'
   castConfirmed: boolean;
   chapters: Array<{
     id: number;
@@ -183,25 +183,29 @@ function listDirs(path: string): string[] {
   if (!existsSync(path)) return [];
   try {
     return readdirSync(path, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => d.name);
-  } catch { return []; }
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
 }
 
 function listFiles(path: string): string[] {
   if (!existsSync(path)) return [];
   try {
     return readdirSync(path, { withFileTypes: true })
-      .filter(d => d.isFile())
-      .map(d => d.name);
-  } catch { return []; }
+      .filter((d) => d.isFile())
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
 }
 
 function findManuscriptFile(bookDir: string): string | null {
   const files = listFiles(bookDir);
   for (const f of files) {
     const lower = f.toLowerCase();
-    if (lower.startsWith('manuscript.') && MANUSCRIPT_EXTS.some(ext => lower.endsWith(ext))) {
+    if (lower.startsWith('manuscript.') && MANUSCRIPT_EXTS.some((ext) => lower.endsWith(ext))) {
       return f;
     }
   }
@@ -238,10 +242,18 @@ function relativeTimeFromMs(then: number): string {
 }
 
 function mtimeMs(path: string): number {
-  try { return statSync(path).mtimeMs; } catch { return Date.now(); }
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return Date.now();
+  }
 }
 
-async function scanBook(author: string, series: string, title: string): Promise<LibraryBook | null> {
+async function scanBook(
+  author: string,
+  series: string,
+  title: string,
+): Promise<LibraryBook | null> {
   const bookDir = bookDirByDisplay(author, series, title);
   const manuscriptFile = findManuscriptFile(bookDir);
   const stateJson = stateJsonPath(bookDir);
@@ -269,16 +281,19 @@ async function scanBook(author: string, series: string, title: string): Promise<
      the bytes are present. State without the file (or vice versa) means
      a half-completed fetch — the card falls back to the gradient until
      the next user-driven pick. */
-  const coverImageUrl = state?.coverImage && existsSync(coverImagePath(bookDir))
-    ? `/api/books/${bookId}/cover`
-    : undefined;
+  const coverImageUrl =
+    state?.coverImage && existsSync(coverImagePath(bookDir))
+      ? `/api/books/${bookId}/cover`
+      : undefined;
   const coverFraming = coverImageUrl ? state?.coverImage?.framing : undefined;
   /* Excluded chapters (front/back-matter the user opted out of narrating)
      don't count toward the chapterCount or completion math — otherwise a
      12-chapter book with 2 excluded would stall at 10/12 forever. */
-  const activeChapters = state?.chapters.filter(c => !c.excluded) ?? [];
+  const activeChapters = state?.chapters.filter((c) => !c.excluded) ?? [];
   const chapterCount = activeChapters.length;
-  const audioFiles = manuscriptFile ? listFiles(audioDir(bookDir)).filter(f => /\.(mp3|m4a|opus)$/i.test(f)) : [];
+  const audioFiles = manuscriptFile
+    ? listFiles(audioDir(bookDir)).filter((f) => /\.(mp3|m4a|opus)$/i.test(f))
+    : [];
   const completedChapters = audioFiles.length;
   const lastWorkedOn = relativeTimeFromMs(mtimeMs(existsSync(dotDir) ? dotDir : bookDir));
 
@@ -301,7 +316,9 @@ async function scanBook(author: string, series: string, title: string): Promise<
         if (vid) voiceIds.add(vid);
       }
       castVoiceCount = voiceIds.size;
-    } catch { /* ignore; counts stay at 0 */ }
+    } catch {
+      /* ignore; counts stay at 0 */
+    }
   }
 
   /* Runtime totals come from each chapter's <slug>.segments.json (written
@@ -345,11 +362,13 @@ async function scanBook(author: string, series: string, title: string): Promise<
   if (state?.manuscriptId) {
     try {
       const cache = await loadAnalysisCache(state.manuscriptId);
-      const cachedIds = new Set(Object.keys(cache.chapters ?? {}).map(k => Number(k)));
+      const cachedIds = new Set(Object.keys(cache.chapters ?? {}).map((k) => Number(k)));
       for (const ch of activeChapters) {
         if (cachedIds.has(ch.id)) analysedChapterCount += 1;
       }
-    } catch { /* missing/corrupt cache → treat as nothing analysed */ }
+    } catch {
+      /* missing/corrupt cache → treat as nothing analysed */
+    }
   }
   const analysisComplete = chapterCount === 0 || analysedChapterCount >= chapterCount;
 
@@ -384,9 +403,12 @@ async function scanBook(author: string, series: string, title: string): Promise<
     completedChapters,
     characterCount: castCharacterCount,
     voiceCount: castVoiceCount,
-    progress: status === 'analysing' ? analysingProgress
-            : status === 'generating' ? generatingProgress
-            : undefined,
+    progress:
+      status === 'analysing'
+        ? analysingProgress
+        : status === 'generating'
+          ? generatingProgress
+          : undefined,
     runtime,
     lastWorkedOn,
     coverGradient,
@@ -407,12 +429,17 @@ export async function scanLibrary(): Promise<LibraryResponse> {
         if (book) books.push(book);
       }
       if (books.length) {
-        books.sort((a, b) => (a.seriesPosition ?? 0) - (b.seriesPosition ?? 0) || a.title.localeCompare(b.title));
+        books.sort(
+          (a, b) =>
+            (a.seriesPosition ?? 0) - (b.seriesPosition ?? 0) || a.title.localeCompare(b.title),
+        );
         seriesList.push({ name: seriesName, books });
       }
     }
     if (seriesList.length) {
-      seriesList.sort((a, b) => a.name === 'Standalones' ? 1 : b.name === 'Standalones' ? -1 : a.name.localeCompare(b.name));
+      seriesList.sort((a, b) =>
+        a.name === 'Standalones' ? 1 : b.name === 'Standalones' ? -1 : a.name.localeCompare(b.name),
+      );
       authors.push({ name: authorName, series: seriesList });
     }
   }
@@ -431,7 +458,7 @@ export async function findBookByBookId(bookId: string): Promise<{
   title: string;
   state: BookStateJson;
 } | null> {
-  return findBookBy(state => state.bookId === bookId);
+  return findBookBy((state) => state.bookId === bookId);
 }
 
 /** Locate a book by its manuscriptId — used to re-hydrate the in-memory
@@ -444,7 +471,7 @@ export async function findBookByManuscriptId(manuscriptId: string): Promise<{
   title: string;
   state: BookStateJson;
 } | null> {
-  return findBookBy(state => state.manuscriptId === manuscriptId);
+  return findBookBy((state) => state.manuscriptId === manuscriptId);
 }
 
 /** Each event in `.audiobook/change-log.json` for a single book, paired with
@@ -470,7 +497,9 @@ export async function listAllChangeLogs(): Promise<BookChangeLogEvents[]> {
         const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
         const state = await readJson<BookStateJson>(stateJsonPath(dir)).catch(() => null);
         if (!state) continue;
-        const log = await readJson<{ events?: unknown[] }>(changeLogJsonPath(dir)).catch(() => null);
+        const log = await readJson<{ events?: unknown[] }>(changeLogJsonPath(dir)).catch(
+          () => null,
+        );
         const events = log?.events ?? [];
         if (events.length === 0) continue;
         out.push({
@@ -503,7 +532,9 @@ async function findBookBy(predicate: (state: BookStateJson) => boolean): Promise
            total-loss case (no backups parsed either) — the lookup
            silently returns null and the route layer responds 404 as
            it would on a genuinely missing book. */
-        const raw = await readStateJsonWithRecovery(join(dir, '.audiobook', 'state.json')).catch(() => null);
+        const raw = await readStateJsonWithRecovery(join(dir, '.audiobook', 'state.json')).catch(
+          () => null,
+        );
         if (raw && predicate(raw)) {
           /* Apply the same lazy backfill we run during library scan — so
              a user opening a specific book's detail page (without going
@@ -550,17 +581,23 @@ export async function backfillAudioModelKeysFromSegments(
       if (typeof meta.durationSec === 'number' && Number.isFinite(meta.durationSec)) {
         totalSec += meta.durationSec;
       }
-      const needsModelKey   = !ch.audioModelKey   && typeof meta.modelKey       === 'string' && meta.modelKey.length       > 0;
-      const needsRenderedAt = !ch.audioRenderedAt && typeof meta.synthesizedAt  === 'string' && meta.synthesizedAt.length  > 0;
+      const needsModelKey =
+        !ch.audioModelKey && typeof meta.modelKey === 'string' && meta.modelKey.length > 0;
+      const needsRenderedAt =
+        !ch.audioRenderedAt &&
+        typeof meta.synthesizedAt === 'string' &&
+        meta.synthesizedAt.length > 0;
       if (needsModelKey || needsRenderedAt) {
         next[i] = {
           ...ch,
-          ...(needsModelKey   ? { audioModelKey:   meta.modelKey }      : {}),
+          ...(needsModelKey ? { audioModelKey: meta.modelKey } : {}),
           ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
         };
         backfillNeeded = true;
       }
-    } catch { /* malformed segments file → skip */ }
+    } catch {
+      /* malformed segments file → skip */
+    }
   }
   if (backfillNeeded) {
     const upgraded: BookStateJson = { ...state, chapters: next };

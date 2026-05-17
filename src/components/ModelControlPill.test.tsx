@@ -17,19 +17,19 @@ function makeHandlers() {
 
 describe('ModelControlPill — label per state', () => {
   it.each<[ModelControlState, RegExp]>([
-    ['idle',        /TTS model idle/i],
-    ['loading',     /loading tts model/i],
-    ['ready',       /TTS model ready/i],
+    ['idle', /TTS model idle/i],
+    ['loading', /loading tts model/i],
+    ['ready', /TTS model ready/i],
     ['unreachable', /TTS model unavailable/i],
   ])('renders the canonical label for state %s', (state, labelRegex) => {
     const { onLoad, onStop } = makeHandlers();
-    render(<ModelControlPill kind="tts" state={state} onLoad={onLoad} onStop={onStop}/>);
+    render(<ModelControlPill kind="tts" state={state} onLoad={onLoad} onStop={onStop} />);
     expect(screen.getByText(labelRegex)).toBeInTheDocument();
   });
 
   it('uses the analyzer noun when kind="analyzer"', () => {
     const { onLoad, onStop } = makeHandlers();
-    render(<ModelControlPill kind="analyzer" state="ready" onLoad={onLoad} onStop={onStop}/>);
+    render(<ModelControlPill kind="analyzer" state="ready" onLoad={onLoad} onStop={onStop} />);
     expect(screen.getByText(/Analyzer ready/i)).toBeInTheDocument();
   });
 
@@ -46,7 +46,7 @@ describe('ModelControlPill — label per state', () => {
         streamingDetail={{ sizeText: '12.4 KB', charsPerSec: 280, sinceLastSec: 2 }}
         onLoad={onLoad}
         onStop={onStop}
-      />
+      />,
     );
     expect(screen.getByText(/streaming live/i)).toBeInTheDocument();
     expect(screen.getByText(/12\.4 KB/)).toBeInTheDocument();
@@ -65,7 +65,7 @@ describe('ModelControlPill — label per state', () => {
         streamingDetail={{ sizeText: '40 KB', charsPerSec: 0, sinceLastSec: 12 }}
         onLoad={onLoad}
         onStop={onStop}
-      />
+      />,
     );
     expect(screen.getByText(/stalled · last chunk 12s ago/i)).toBeInTheDocument();
   });
@@ -82,7 +82,7 @@ describe('ModelControlPill — label per state', () => {
         unreachableLabel="Sidecar process not running"
         onLoad={onLoad}
         onStop={onStop}
-      />
+      />,
     );
     expect(screen.getByText('Sidecar process not running')).toBeInTheDocument();
   });
@@ -91,7 +91,7 @@ describe('ModelControlPill — label per state', () => {
 describe('ModelControlPill — action routing', () => {
   it('fires onLoad when the button reads "Load model"', () => {
     const { onLoad, onStop } = makeHandlers();
-    render(<ModelControlPill kind="tts" state="idle" onLoad={onLoad} onStop={onStop}/>);
+    render(<ModelControlPill kind="tts" state="idle" onLoad={onLoad} onStop={onStop} />);
     fireEvent.click(screen.getByRole('button', { name: /load model/i }));
     expect(onLoad).toHaveBeenCalledTimes(1);
     expect(onStop).not.toHaveBeenCalled();
@@ -99,7 +99,7 @@ describe('ModelControlPill — action routing', () => {
 
   it('fires onStop when the model is ready and the user clicks Stop', () => {
     const { onLoad, onStop } = makeHandlers();
-    render(<ModelControlPill kind="tts" state="ready" onLoad={onLoad} onStop={onStop}/>);
+    render(<ModelControlPill kind="tts" state="ready" onLoad={onLoad} onStop={onStop} />);
     fireEvent.click(screen.getByRole('button', { name: /stop/i }));
     expect(onStop).toHaveBeenCalledTimes(1);
     expect(onLoad).not.toHaveBeenCalled();
@@ -111,7 +111,7 @@ describe('ModelControlPill — action routing', () => {
        them but the second one would still pay the lock wait, surfacing as
        a "stuck Loading…" pill that doesn't match what the box is doing. */
     const { onLoad, onStop } = makeHandlers();
-    render(<ModelControlPill kind="tts" state="loading" onLoad={onLoad} onStop={onStop}/>);
+    render(<ModelControlPill kind="tts" state="loading" onLoad={onLoad} onStop={onStop} />);
     const btn = screen.getByRole('button', { name: /loading/i });
     expect(btn).toBeDisabled();
     fireEvent.click(btn);
@@ -131,7 +131,7 @@ describe('ModelControlPill — action routing', () => {
         streamingDetail={{ sizeText: '4 KB', charsPerSec: 200, sinceLastSec: 1 }}
         onLoad={onLoad}
         onStop={onStop}
-      />
+      />,
     );
     const btn = screen.getByRole('button', { name: /stop/i });
     expect(btn).toBeDisabled();
@@ -144,7 +144,7 @@ describe('ModelControlPill — action routing', () => {
        back up (or starts Ollama) and clicks Retry, which is the same
        semantics as Load: warm the model. */
     const { onLoad, onStop } = makeHandlers();
-    render(<ModelControlPill kind="tts" state="unreachable" onLoad={onLoad} onStop={onStop}/>);
+    render(<ModelControlPill kind="tts" state="unreachable" onLoad={onLoad} onStop={onStop} />);
     fireEvent.click(screen.getByRole('button', { name: /retry/i }));
     expect(onLoad).toHaveBeenCalledTimes(1);
   });
