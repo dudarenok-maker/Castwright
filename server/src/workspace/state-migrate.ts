@@ -28,6 +28,7 @@
  * Pairs with docs/features/27-book-state-persistence.md. */
 
 import type { BookStateJson } from './scan.js';
+import { writeJsonAtomic, readJsonWithRecovery } from './state-io.js';
 
 export const CURRENT_STATE_SCHEMA = 1;
 
@@ -93,4 +94,38 @@ export function migrateStateJson(raw: unknown): BookStateJson & { schema: number
  *  defeating the seam the moment we bump to v2. */
 export function stampStateSchema<T extends BookStateJson>(state: T): T & { schema: number } {
   return { ...state, schema: CURRENT_STATE_SCHEMA };
+}
+
+/** How many prior `state.json` snapshots to keep on disk per book.
+ *  Three slots cover the realistic recovery window: the last completed
+ *  write, the one before it, and one earlier — enough to undo a
+ *  schema-migration bug or a torn OneDrive write without ballooning
+ *  workspace size. Tune up only with a clear motivating incident. */
+export const STATE_BACKUP_KEEP = 3;
+
+/** Stamp + atomic-write state.json with rotating backups. Use at every
+ *  state.json write site — the cheapest insurance against a torn write,
+ *  a schema-migration bug, or an OneDrive race that survives
+ *  rename-retry. Other .audiobook/*.json files (cast.json,
+ *  revisions.json, ...) stay on the bare `writeJsonAtomic` shape:
+ *  they're cheaper to re-derive on loss and not worth the disk
+ *  multiplier. */
+export async function writeStateJsonAtomic(path: string, state: BookStateJson): Promise<void> {
+  await writeJsonAtomic(path, stampStateSchema(state), {
+    rotate: { keep: STATE_BACKUP_KEEP },
+  });
+}
+
+/** Read state.json with backup recovery. On a torn / corrupt main
+ *  file, the next-newest backup parses and the read succeeds with a
+ *  single warning logged. Use at any read site that already wants the
+ *  read to succeed against best-effort recovery (the library scan
+ *  helpers in scan.ts — corrupt state.json there silently hides a
+ *  book today; recovery lets the book stay visible). Direct strict
+ *  reads via `readJson` are still valid for callers that prefer the
+ *  fast-fail diagnostic. */
+export async function readStateJsonWithRecovery(
+  path: string,
+): Promise<BookStateJson | null> {
+  return readJsonWithRecovery<BookStateJson>(path, { keep: STATE_BACKUP_KEEP });
 }

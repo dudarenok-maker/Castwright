@@ -32,8 +32,7 @@ import {
   stateJsonPath,
   slug,
 } from '../workspace/paths.js';
-import { writeJsonAtomic } from '../workspace/state-io.js';
-import { stampStateSchema } from '../workspace/state-migrate.js';
+import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { backgroundFetchCover } from '../cover/openlibrary.js';
@@ -245,7 +244,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       updatedAt: now,
       chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
     };
-    await writeJsonAtomic(stateJsonPath(bookDir), stampStateSchema(state));
+    await writeStateJsonAtomic(stateJsonPath(bookDir), state);
 
     /* Fire-and-forget cover fetch from OpenLibrary. The import response
        does NOT wait for this — covers can be slow and OpenLibrary can be
