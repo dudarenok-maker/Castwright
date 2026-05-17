@@ -47,6 +47,77 @@
   --font-mono:  'JetBrains Mono', ui-monospace, monospace;
 }
 
+/* Dark mode ----------------------------------------------------------------
+   Plan 41. Activated by <html data-theme="dark"> — set pre-mount in
+   main.tsx and kept in sync by useTheme() in src/lib/use-theme.ts.
+   Override the paint-affecting tokens; brand hues (peach, magenta,
+   purple-deep) stay as-is because they read on both surfaces. */
+[data-theme="dark"] {
+  /* Inverted canvas. A near-black neutral with a hint of warmth so the
+     peach accent doesn't glow blue against a cold grey. */
+  --canvas:       #14110F;
+  --canvas-warm:  #2A1A20;
+  /* Ink becomes near-white so existing `text-ink` classes invert with
+     zero per-component changes. Ink-soft mirrors that contrast step. */
+  --ink:          #F4EFEC;
+  --ink-soft:     #DCD4CF;
+  /* Peach-soft was a near-pink fill; on dark it needs to drop into a
+     muted plum so peach badges stay legible without screaming. */
+  --peach-soft:   #3C2128;
+
+  /* Channel forms — Recompute against the inverted core tokens so
+     every rgba(var(--ink-rgb), …) elevation darkens to a near-white
+     glow on dark surfaces instead of staying near-black (which would
+     be invisible). Peach-rgb keeps its hue (brand). */
+  --peach-rgb:        247, 154, 131;
+  --ink-rgb:          244, 239, 236;
+  --magenta-rgb:      201, 94, 144;
+  --purple-deep-rgb:  108, 70, 138;
+
+  /* Shadows — darker base + higher alpha for the deeper canvas. Inverts
+     to a subtle light glow once --ink-rgb flips to near-white above. */
+  --shadow-card:       0 1px 2px rgba(0, 0, 0, 0.55), 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.60), 0 16px 40px rgba(0, 0, 0, 0.55);
+  --shadow-float:      0 24px 60px rgba(0, 0, 0, 0.70);
+  --shadow-drawer:     -24px 0 60px rgba(0, 0, 0, 0.70);
+
+  /* Gradients — the only one that needs flipping is the white→peach
+     image wash; on dark canvas the white stop breaks the surface.
+     The CTA / progress / hero stops are all token-derived so they
+     repaint automatically against the inverted canvas. */
+  --gradient-image-wash: linear-gradient(90deg, var(--canvas), var(--peach) 80%);
+}
+
+/* Tailwind utility overrides under dark mode. `bg-white` is used in
+   ~100 places across components as the standard raised-surface
+   background — migrating each to a `bg-surface` token would be
+   invasive. The override redirects it to an elevated-canvas
+   shade (slightly lighter than --canvas to read as elevation).
+   Same idea for the few other fixed Tailwind colour utilities that
+   appear in component code as backgrounds. */
+[data-theme="dark"] .bg-white { background-color: #1F1B19; }
+
+/* Status pills use coloured backgrounds (rose / emerald / amber);
+   their contrast against light text is fine on dark surfaces, but
+   the pale-100 fills wash out. Drop them to a 30% alpha overlay so
+   the hue stays recognisable without blowing out luminance. */
+[data-theme="dark"] .bg-rose-50    { background-color: rgba(244, 63, 94, 0.12); }
+[data-theme="dark"] .bg-rose-100   { background-color: rgba(244, 63, 94, 0.18); }
+[data-theme="dark"] .bg-emerald-100{ background-color: rgba(16, 185, 129, 0.18); }
+[data-theme="dark"] .bg-amber-100  { background-color: rgba(245, 158, 11, 0.18); }
+[data-theme="dark"] .text-rose-900,
+[data-theme="dark"] .text-rose-900\/85,
+[data-theme="dark"] .text-rose-900\/70 { color: #FCA5A5; }
+[data-theme="dark"] .text-rose-700 { color: #FCA5A5; }
+[data-theme="dark"] .text-emerald-800 { color: #6EE7B7; }
+[data-theme="dark"] .text-amber-800   { color: #FBBF24; }
+
+/* The Books library uses border-rose-200 / border-ink/15 as the card
+   outline; under dark mode those pale outlines disappear into the
+   canvas. Lift to ink-soft so the cards retain their edge. */
+[data-theme="dark"] .border-ink\/10,
+[data-theme="dark"] .border-ink\/15 { border-color: rgba(var(--ink-rgb), 0.18); }
+
 /* Page chrome -------------------------------------------------------------- */
 html, body { background: var(--canvas); }
 body       { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }

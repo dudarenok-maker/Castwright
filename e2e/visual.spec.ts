@@ -89,3 +89,73 @@ test.describe('visual baselines', () => {
     await expect(page).toHaveScreenshot('listen.png');
   });
 });
+
+/* Plan 41 — dark-theme baselines.
+ *
+ * Mirrors the six light-mode captures above with a pre-mount
+ * `localStorage` seed that flips the ui-slice themeOverride to 'dark'
+ * before React mounts. The pre-mount paint guard in src/main.tsx
+ * picks up the seeded value and sets <html data-theme="dark"> before
+ * the first frame, so the captures show the dark surface without a
+ * one-frame light flash.
+ *
+ * Same regenerate command as the light pass:
+ *   npm run test:e2e -- --update-snapshots visual.spec.ts
+ */
+test.describe('visual baselines (dark theme)', () => {
+  test.beforeEach(async ({ context }) => {
+    /* Seed the redux-persist 'persist:ui' blob before any page in this
+       context loads. Each key inside the wrapper is JSON-encoded
+       individually, mirroring redux-persist's own serialisation. */
+    await context.addInitScript(() => {
+      const wrapper = { themeOverride: JSON.stringify('dark') };
+      window.localStorage.setItem('persist:ui', JSON.stringify(wrapper));
+    });
+  });
+
+  test('library (dark)', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first())
+      .toBeVisible({ timeout: 10_000 });
+    await page.waitForTimeout(300);
+    await expect(page).toHaveScreenshot('library-dark.png');
+  });
+
+  test('upload (dark)', async ({ page }) => {
+    await page.goto('/#/new');
+    await expect(page.getByRole('button', { name: /Paste text/i }))
+      .toBeVisible({ timeout: 5_000 });
+    await page.waitForTimeout(200);
+    await expect(page).toHaveScreenshot('upload-dark.png');
+  });
+
+  test('analysing (pre-start, dark)', async ({ page }) => {
+    await goToAnalysing(page);
+    await page.waitForTimeout(300);
+    await expect(page).toHaveScreenshot('analysing-dark.png');
+  });
+
+  test('confirm (dark)', async ({ page }) => {
+    await goToConfirm(page);
+    await page.waitForTimeout(300);
+    await expect(page).toHaveScreenshot('confirm-dark.png');
+  });
+
+  test('ready (manuscript, dark)', async ({ page }) => {
+    await page.goto('/#/books/sb/manuscript');
+    await expect(page.getByRole('heading', { name: /^Chapters$/, level: 2 }))
+      .toBeVisible({ timeout: 5_000 });
+    await page.waitForTimeout(300);
+    await expect(page).toHaveScreenshot('ready-dark.png');
+  });
+
+  test('listen (dark)', async ({ page }) => {
+    await page.goto('/#/books/sb/listen');
+    await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 }))
+      .toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /Play from the start/i }))
+      .toBeEnabled({ timeout: 5_000 });
+    await page.waitForTimeout(300);
+    await expect(page).toHaveScreenshot('listen-dark.png');
+  });
+});
