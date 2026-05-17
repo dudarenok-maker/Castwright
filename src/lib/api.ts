@@ -183,6 +183,46 @@ export interface OverrideLibraryCastResponse {
   source: Character;
   target: Character;
 }
+/* Manual continuity link to a prior series book — used when the
+   auto-matcher's name-score floor missed a legitimate link (e.g. "Dex"
+   in book 1 vs "Dexter Alvin Diznee" in book 2). Server appends
+   source.name to the prior book's character.aliases on disk, then
+   returns the matchedFrom payload the frontend dispatches via
+   castActions.applyManualMatch so the "Continuity preserved" footer +
+   "Sync profile" checkbox light up exactly like an auto-match. */
+export interface LinkPriorCharacterArgs {
+  bookId: string;
+  sourceCharacterId: string;
+  targetBookId: string;
+  targetCharacterId: string;
+}
+export interface LinkPriorCharacterResponse {
+  matchedFrom: {
+    bookId: string;
+    characterId: string;
+    bookTitle: string;
+    confidence: number;
+  };
+  voiceId?: string;
+}
+/* Series roster — the union of confirmed casts across every prior book
+   in the same (author, series). Powers the Profile Drawer's "From prior
+   books in <series>" optgroup so the user can manually link to a
+   character the auto-matcher missed. Standalones, unconfirmed casts,
+   and the source book itself are excluded by the server. */
+export interface SeriesRosterEntry {
+  id: string;
+  name: string;
+  bookId: string;
+  bookTitle: string;
+  voiceId?: string;
+  aliases?: string[];
+  gender?: 'male' | 'female' | 'neutral';
+  ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+}
+export interface SeriesRosterResponse {
+  characters: SeriesRosterEntry[];
+}
 export interface StreamArgs {
   bookId: string;
   modelKey: TtsModelKey;
@@ -1144,6 +1184,83 @@ async function mockOverrideLibraryCast(args: OverrideLibraryCastArgs): Promise<O
   };
 }
 
+async function realGetSeriesRoster(bookId: string): Promise<SeriesRosterResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/series-roster`);
+  if (!res.ok) {
+    let detail = '';
+    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    throw new Error(detail || `Series roster fetch failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockGetSeriesRoster(bookId: string): Promise<SeriesRosterResponse> {
+  await wait(40);
+  void bookId;
+  return { characters: MOCK_SERIES_ROSTER };
+}
+
+async function realLinkPriorCharacter(args: LinkPriorCharacterArgs): Promise<LinkPriorCharacterResponse> {
+  const { bookId, ...body } = args;
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/link-prior`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    throw new Error(detail || `Manual continuity link failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockLinkPriorCharacter(args: LinkPriorCharacterArgs): Promise<LinkPriorCharacterResponse> {
+  /* Echo the canonical prior-roster entry so the drawer can dispatch a
+     valid applyManualMatch and the "Continuity preserved" footer surfaces
+     in the design environment. */
+  await wait(120);
+  const prior = MOCK_SERIES_ROSTER.find(
+    e => e.bookId === args.targetBookId && e.id === args.targetCharacterId,
+  );
+  return {
+    matchedFrom: {
+      bookId: args.targetBookId,
+      characterId: args.targetCharacterId,
+      bookTitle: prior?.bookTitle ?? 'Solway Bay',
+      confidence: 1,
+    },
+    voiceId: prior?.voiceId,
+  };
+}
+
+/* Canned prior-series roster for The Northern Star. Two characters from
+   the (mocked) first book "Solway Bay" that don't appear in the current
+   book — gives mock mode something to surface in the "From prior books
+   in Northern Coast Trilogy" optgroup. The user picks one to exercise
+   the link-prior flow without a real backend on disk. */
+const MOCK_SERIES_ROSTER: SeriesRosterEntry[] = [
+  {
+    id: 'old-halloran',
+    name: 'Captain James Halloran',
+    bookId: 'sb',
+    bookTitle: 'Solway Bay',
+    voiceId: 'v_halloran_solway',
+    aliases: ['the old captain'],
+    gender: 'male',
+    ageRange: 'elderly',
+  },
+  {
+    id: 'mae-vance',
+    name: 'Mae Vance',
+    bookId: 'sb',
+    bookTitle: 'Solway Bay',
+    voiceId: 'v_mae_vance',
+    gender: 'female',
+    ageRange: 'adult',
+  },
+];
+
 export interface ReparseBookResponse {
   state: { chapters: Array<{ id: number; title: string; slug: string }> };
   chapterCount: number;
@@ -1961,6 +2078,8 @@ const real = {
   matchVoices:       realMatchVoices,
   mergeCharacters:   realMergeCharacters,
   overrideLibraryCast: realOverrideLibraryCast,
+  getSeriesRoster:   realGetSeriesRoster,
+  linkPriorCharacter: realLinkPriorCharacter,
   deleteBook:        realDeleteBook,
   reparseBook:       realReparseBook,
   setChapterExcluded:      realSetChapterExcluded,
@@ -2051,6 +2170,8 @@ const mock = {
   matchVoices:       mockMatchVoices,
   mergeCharacters:   mockMergeCharacters,
   overrideLibraryCast: mockOverrideLibraryCast,
+  getSeriesRoster:   mockGetSeriesRoster,
+  linkPriorCharacter: mockLinkPriorCharacter,
   deleteBook:        mockDeleteBook,
   reparseBook:       mockReparseBook,
   setChapterExcluded:      mockSetChapterExcluded,
