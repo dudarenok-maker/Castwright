@@ -12,6 +12,7 @@ import type { TtsEngine, TtsModelKey, TtsProvider } from './index.js';
 import { normaliseForTts } from './text-normalize.js';
 import { pcmDurationSec } from './pcm.js';
 import { resamplePcm16 } from './resample-pcm16.js';
+import { withTtsRetry } from './retry.js';
 
 /** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`
     `CastJsonCharacter` and the analyzer's Character output). The hint fields
@@ -103,6 +104,20 @@ export interface SynthesiseChapterOpts {
     totalGroups: number;
     accumulatedSec: number;
   }) => void;
+  /** Notification fired before each auto-retry sleep when the provider
+      throws a transient error. `attempt` is the 1-indexed attempt
+      number that's about to start (so the first retry passes attempt=2).
+      The route handler can wire this to the SSE stream to surface a
+      "retrying group N (attempt 2/3) — sidecar 503" hint while the
+      auto-retry runs; persistent failures still throw out of
+      `synthesiseChapter` exactly as before. */
+  onGroupRetry?: (e: {
+    group: SentenceGroup;
+    totalGroups: number;
+    attempt: number;
+    backoffMs: number;
+    reason: string;
+  }) => void;
   /** Optional abort signal — checked between groups and forwarded to the
       provider so an in-flight TTS call can be cancelled mid-call. Used by
       the per-bookId server mutex to stop a stale generation handler when a
@@ -168,7 +183,7 @@ export function buildHintFromCast(c: CastCharacter): CharacterHint {
 }
 
 export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<ChapterSynthesisResult> {
-  const { sentences, cast, provider, modelKey, engine, onGroupStart, onGroupComplete, signal } = opts;
+  const { sentences, cast, provider, modelKey, engine, onGroupStart, onGroupComplete, onGroupRetry, signal } = opts;
 
   const castById = new Map(cast.map(c => [c.id, c]));
   const groups = buildSentenceGroups(sentences);
@@ -209,13 +224,31 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
        which together produced ~60s of garbled audio at the top of
        chapter 2 of the canonical Keeper manuscript. The transform is
        idempotent; segment metadata still references the original
-       SentenceOutput so UI captions and quote audits are unaffected. */
-    const result = await provider.synthesize({
-      text: normaliseForTts(group.text),
-      voiceName,
-      modelKey,
-      signal,
-    });
+       SentenceOutput so UI captions and quote audits are unaffected.
+
+       Wrapped in `withTtsRetry` so the queue absorbs flaky transients
+       (sidecar 5xx mid-load, brief connection refused while the user
+       toggled Stop, network blip). Non-transient throws (4xx, poisoned
+       CUDA state, retry-exhausted) bubble out of the wrapper unchanged
+       and surface as today's per-chapter `chapter_failed`. */
+    const result = await withTtsRetry(
+      () => provider.synthesize({
+        text: normaliseForTts(group.text),
+        voiceName,
+        modelKey,
+        signal,
+      }),
+      {
+        signal,
+        onRetry: info => onGroupRetry?.({
+          group,
+          totalGroups: groups.length,
+          attempt: info.attempt,
+          backoffMs: info.backoffMs,
+          reason: info.reason,
+        }),
+      },
+    );
 
     /* The chapter's output rate is anchored by the first group's response.
        Subsequent groups at a mismatched rate get resampled to the anchor —
