@@ -856,6 +856,28 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
     /* Retry now owns the conn/phase indicators — main is either already
        idle or just got paused. */
     setConn('connecting');
+    /* Plan 32 follow-up: switch the cross-navigation snapshot from
+       main → subset so the top-bar AnalysisPill renders the "Retrying
+       N chapters" variant and the analysis-stream-middleware re-opens
+       its sticky subscribe POST against the subset route's in-flight
+       map. Without this, a navigate-away mid-retry dropped the pill
+       and the middleware would have tried to subscribe to the main
+       map (which has no job) and either start a fresh main run or
+       fall through. */
+    dispatch(analysisActions.setActiveStream({
+      bookId: bookId ?? null,
+      manuscriptId,
+      bookTitle: title ?? undefined,
+      engine: selectedModel?.engine,
+      phaseId: 0,
+      phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
+      phaseProgress: 0,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'subset',
+      subsetChapterIds: [chapterId],
+    }));
     /* Track whether the server re-emitted chapter-failed for THIS id
        during the retry. We use this instead of relying on .then() vs
        .catch() because the subset route may end without a `result`
@@ -873,6 +895,15 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
         setConn('streaming');
         setPhase(phaseId); setPhaseProgress(progress);
         if (live) setLive(live);
+        /* Snapshot tick — proof to the middleware that the subset
+           SSE is alive so it can attach as a second subscriber. */
+        dispatch(analysisActions.applyAnalysisSnapshotTick({
+          manuscriptId,
+          phaseId,
+          phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
+          phaseProgress: progress,
+          lastTickAt: Date.now(),
+        }));
       },
       onLog: ({ phaseId, message }) => {
         markEvent();
@@ -937,8 +968,31 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
            where the pause left off (plus the freshly-retried chapter,
            which is now cached too). */
         if (pausedMainForRetry) {
+          /* Restore the snapshot to kind=main so the middleware re-opens
+             against the main route's in-flight map on the resumed run's
+             first tick. The analysis effect below will dispatch its own
+             setActiveStream when it re-fires, which will overwrite this
+             with fresh phase data — but the kind has to flip back first
+             or the middleware would still be aiming at the subset route. */
+          dispatch(analysisActions.setActiveStream({
+            bookId: bookId ?? null,
+            manuscriptId,
+            bookTitle: title ?? undefined,
+            engine: selectedModel?.engine,
+            phaseId: 0,
+            phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
+            phaseProgress: 0,
+            remainingMs: null,
+            lastTickAt: Date.now(),
+            state: 'running',
+          }));
           setAnalysisStarted(true);
           setRetry(r => ({ nonce: r.nonce + 1, fresh: false }));
+        } else {
+          /* Main wasn't running — retry was a standalone (cast_incomplete
+             auto-resume path). Clear the snapshot so the pill drops out;
+             the auto-resume effect handles its own next-step decisions. */
+          dispatch(analysisActions.clearActiveStream());
         }
       });
   };
