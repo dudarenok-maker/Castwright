@@ -47,10 +47,15 @@ describe('appendBatch', () => {
       route: 'analysis-stream',
       totalDropped: 1,
       affectedCharacters: 1,
-      entries: [{
-        characterId: 'Wren', characterName: 'Wren',
-        quote: 'fabricated', truncated: false, reason: 'not_in_source',
-      }],
+      entries: [
+        {
+          characterId: 'Wren',
+          characterName: 'Wren',
+          quote: 'fabricated',
+          truncated: false,
+          reason: 'not_in_source',
+        },
+      ],
     };
     const next = appendBatch(file, batch);
     expect(next.batches).toHaveLength(1);
@@ -63,17 +68,35 @@ describe('appendBatch', () => {
     const first: DroppedQuotesBatch = {
       recordedAt: '2026-05-15T10:00:00.000Z',
       route: 'analysis-stream',
-      totalDropped: 1, affectedCharacters: 1,
-      entries: [{ characterId: 'a', characterName: 'A', quote: 'q1', truncated: false, reason: 'not_in_source' }],
+      totalDropped: 1,
+      affectedCharacters: 1,
+      entries: [
+        {
+          characterId: 'a',
+          characterName: 'A',
+          quote: 'q1',
+          truncated: false,
+          reason: 'not_in_source',
+        },
+      ],
     };
     const second: DroppedQuotesBatch = {
       recordedAt: '2026-05-15T10:05:00.000Z',
       route: 'analysis-chapters',
-      totalDropped: 2, affectedCharacters: 1,
-      entries: [{ characterId: 'b', characterName: 'B', quote: 'q2', truncated: false, reason: 'empty_after_normalisation' }],
+      totalDropped: 2,
+      affectedCharacters: 1,
+      entries: [
+        {
+          characterId: 'b',
+          characterName: 'B',
+          quote: 'q2',
+          truncated: false,
+          reason: 'empty_after_normalisation',
+        },
+      ],
     };
     const after = appendBatch(appendBatch({ manuscriptId: 'm1', batches: [] }, first), second);
-    expect(after.batches.map(b => b.recordedAt)).toEqual([
+    expect(after.batches.map((b) => b.recordedAt)).toEqual([
       '2026-05-15T10:00:00.000Z',
       '2026-05-15T10:05:00.000Z',
     ]);
@@ -103,12 +126,18 @@ describe('loadDroppedQuotes / saveDroppedQuotes', () => {
     const batch: DroppedQuotesBatch = {
       recordedAt: '2026-05-15T11:00:00.000Z',
       route: 'analysis-stream',
-      totalDropped: 1, affectedCharacters: 1,
-      entries: [{
-        characterId: 'Marlow', characterName: 'Marlow',
-        quote: 'stitched dialogue', truncated: false, reason: 'not_in_source',
-        note: 'model said: chap 3 dialogue',
-      }],
+      totalDropped: 1,
+      affectedCharacters: 1,
+      entries: [
+        {
+          characterId: 'Marlow',
+          characterName: 'Marlow',
+          quote: 'stitched dialogue',
+          truncated: false,
+          reason: 'not_in_source',
+          note: 'model said: chap 3 dialogue',
+        },
+      ],
     };
     const original: DroppedQuotesFile = { manuscriptId: 'm1', batches: [batch] };
     await saveDroppedQuotes(bookDir, original);
@@ -122,17 +151,37 @@ describe('loadDroppedQuotes / saveDroppedQuotes', () => {
        append-only invariant. */
     const file0 = await loadDroppedQuotes(bookDir, 'm1');
     const batch1: DroppedQuotesBatch = {
-      recordedAt: '2026-05-15T12:00:00.000Z', route: 'analysis-stream',
-      totalDropped: 1, affectedCharacters: 1,
-      entries: [{ characterId: 'a', characterName: 'A', quote: 'q1', truncated: false, reason: 'not_in_source' }],
+      recordedAt: '2026-05-15T12:00:00.000Z',
+      route: 'analysis-stream',
+      totalDropped: 1,
+      affectedCharacters: 1,
+      entries: [
+        {
+          characterId: 'a',
+          characterName: 'A',
+          quote: 'q1',
+          truncated: false,
+          reason: 'not_in_source',
+        },
+      ],
     };
     await saveDroppedQuotes(bookDir, appendBatch(file0, batch1));
 
     const file1 = await loadDroppedQuotes(bookDir, 'm1');
     const batch2: DroppedQuotesBatch = {
-      recordedAt: '2026-05-15T12:05:00.000Z', route: 'analysis-chapters',
-      totalDropped: 1, affectedCharacters: 1,
-      entries: [{ characterId: 'b', characterName: 'B', quote: 'q2', truncated: false, reason: 'empty_after_normalisation' }],
+      recordedAt: '2026-05-15T12:05:00.000Z',
+      route: 'analysis-chapters',
+      totalDropped: 1,
+      affectedCharacters: 1,
+      entries: [
+        {
+          characterId: 'b',
+          characterName: 'B',
+          quote: 'q2',
+          truncated: false,
+          reason: 'empty_after_normalisation',
+        },
+      ],
     };
     await saveDroppedQuotes(bookDir, appendBatch(file1, batch2));
 
@@ -145,12 +194,19 @@ describe('loadDroppedQuotes / saveDroppedQuotes', () => {
   it('preserves truncated flag and large quote bodies across the round-trip', async () => {
     const big = 'z'.repeat(MAX_QUOTE_CHARS);
     const batch: DroppedQuotesBatch = {
-      recordedAt: '2026-05-15T13:00:00.000Z', route: 'analysis-stream',
-      totalDropped: 1, affectedCharacters: 1,
-      entries: [{
-        characterId: 'verbose', characterName: 'Verbose',
-        quote: big, truncated: true, reason: 'not_in_source',
-      }],
+      recordedAt: '2026-05-15T13:00:00.000Z',
+      route: 'analysis-stream',
+      totalDropped: 1,
+      affectedCharacters: 1,
+      entries: [
+        {
+          characterId: 'verbose',
+          characterName: 'Verbose',
+          quote: big,
+          truncated: true,
+          reason: 'not_in_source',
+        },
+      ],
     };
     await saveDroppedQuotes(bookDir, { manuscriptId: 'm1', batches: [batch] });
     const loaded = await loadDroppedQuotes(bookDir, 'm1');

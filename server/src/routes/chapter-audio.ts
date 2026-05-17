@@ -59,14 +59,17 @@ interface ChapterSegmentsFile {
   /** Per-character voice snapshot captured at synthesis time. Read by the
       revisions route to surface drift. Older segments files (pre-snapshot
       field) omit this; the chapter-audio route ignores it either way. */
-  characterSnapshots?: Record<string, {
-    tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
-    gender?: 'male' | 'female' | 'neutral';
-    ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
-    voiceId?: string;
-    voiceEngine?: string;
-    attributes?: string[];
-  }>;
+  characterSnapshots?: Record<
+    string,
+    {
+      tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
+      gender?: 'male' | 'female' | 'neutral';
+      ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+      voiceId?: string;
+      voiceEngine?: string;
+      attributes?: string[];
+    }
+  >;
 }
 
 export const chapterAudioRouter = Router();
@@ -89,16 +92,18 @@ async function locateChapterAudio(
   if (!Number.isInteger(chapterId)) return null;
   const located = await findBookByBookId(bookId);
   if (!located) return null;
-  const chapter = located.state.chapters.find(c => c.id === chapterId);
+  const chapter = located.state.chapters.find((c) => c.id === chapterId);
   if (!chapter) return null;
   const root = audioDir(located.bookDir);
-  const audio = variant === 'current'
-    ? findChapterAudio(root, chapter.slug)
-    : findPreviousChapterAudio(root, chapter.slug);
+  const audio =
+    variant === 'current'
+      ? findChapterAudio(root, chapter.slug)
+      : findPreviousChapterAudio(root, chapter.slug);
   if (!audio) return null;
-  const segPath = variant === 'current'
-    ? `${root}/${chapter.slug}.segments.json`
-    : `${root}/${chapter.slug}.previous.segments.json`;
+  const segPath =
+    variant === 'current'
+      ? `${root}/${chapter.slug}.segments.json`
+      : `${root}/${chapter.slug}.previous.segments.json`;
   return { audio, segPath, chapterId, chapterTitle: chapter.title };
 }
 
@@ -109,132 +114,155 @@ function findPreviousChapterAudio(audioRoot: string, slug: string): ChapterAudio
   return { path, ext: 'mp3', mime: 'audio/mpeg', urlSuffix: 'audio.mp3' };
 }
 
-chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio', async (req: Request, res: Response) => {
-  const found = await locateChapterAudio(req.params.bookId, req.params.chapterId, 'current');
-  if (!found) return res.status(404).json({ message: 'Chapter audio not found.' });
-  const meta = await readJson<ChapterSegmentsFile>(found.segPath);
-  /* On-disk segments use `startSec/endSec/sentenceIds[]` (per-group). The
+chapterAudioRouter.get(
+  '/:bookId/chapters/:chapterId/audio',
+  async (req: Request, res: Response) => {
+    const found = await locateChapterAudio(req.params.bookId, req.params.chapterId, 'current');
+    if (!found) return res.status(404).json({ message: 'Chapter audio not found.' });
+    const meta = await readJson<ChapterSegmentsFile>(found.segPath);
+    /* On-disk segments use `startSec/endSec/sentenceIds[]` (per-group). The
      ChapterAudio contract publishes `start/end/sentenceId` (singular) — map
      each group to one outward segment, using the group's first sentence id
      as the representative. Peaks: [] for now (MiniPlayer doesn't draw them;
      Listen's waveform is out of scope here). */
-  const segments = (meta?.segments ?? []).map(s => ({
-    start: s.startSec,
-    end: s.endSec,
-    characterId: s.characterId,
-    sentenceId: s.sentenceIds[0],
-  }));
-  res.json({
-    url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/${found.audio.urlSuffix}`,
-    durationSec: meta?.durationSec ?? 0,
-    peaks: [],
-    sampleRate: meta?.sampleRate ?? 24000,
-    segments,
-  });
-});
+    const segments = (meta?.segments ?? []).map((s) => ({
+      start: s.startSec,
+      end: s.endSec,
+      characterId: s.characterId,
+      sentenceId: s.sentenceIds[0],
+    }));
+    res.json({
+      url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/${found.audio.urlSuffix}`,
+      durationSec: meta?.durationSec ?? 0,
+      peaks: [],
+      sampleRate: meta?.sampleRate ?? 24000,
+      segments,
+    });
+  },
+);
 
 /* The preserved variant: same JSON shape as current, URL points at the
    `previous.mp3` binary endpoint below. The revision-diff a/b player
    fetches BOTH this and the live `/audio` endpoint and renders one A
    audio element + one B audio element. */
-chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio/previous', async (req: Request, res: Response) => {
-  const found = await locateChapterAudio(req.params.bookId, req.params.chapterId, 'previous');
-  if (!found) return res.status(404).json({ message: 'No preserved previous audio.' });
-  const meta = await readJson<ChapterSegmentsFile>(found.segPath);
-  const segments = (meta?.segments ?? []).map(s => ({
-    start: s.startSec,
-    end: s.endSec,
-    characterId: s.characterId,
-    sentenceId: s.sentenceIds[0],
-  }));
-  res.json({
-    url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/audio/previous.mp3`,
-    durationSec: meta?.durationSec ?? 0,
-    peaks: [],
-    sampleRate: meta?.sampleRate ?? 24000,
-    segments,
-  });
-});
+chapterAudioRouter.get(
+  '/:bookId/chapters/:chapterId/audio/previous',
+  async (req: Request, res: Response) => {
+    const found = await locateChapterAudio(req.params.bookId, req.params.chapterId, 'previous');
+    if (!found) return res.status(404).json({ message: 'No preserved previous audio.' });
+    const meta = await readJson<ChapterSegmentsFile>(found.segPath);
+    const segments = (meta?.segments ?? []).map((s) => ({
+      start: s.startSec,
+      end: s.endSec,
+      characterId: s.characterId,
+      sentenceId: s.sentenceIds[0],
+    }));
+    res.json({
+      url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/audio/previous.mp3`,
+      durationSec: meta?.durationSec ?? 0,
+      peaks: [],
+      sampleRate: meta?.sampleRate ?? 24000,
+      segments,
+    });
+  },
+);
 
 function makeFileHandler(variant: AudioVariant = 'current') {
   return async (req: Request, res: Response) => {
     const chapterId = Number.parseInt(req.params.chapterId, 10);
-    if (!Number.isInteger(chapterId)) return res.status(404).json({ message: 'Chapter audio not found.' });
+    if (!Number.isInteger(chapterId))
+      return res.status(404).json({ message: 'Chapter audio not found.' });
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ message: 'Chapter audio not found.' });
-    const chapter = located.state.chapters.find(c => c.id === chapterId);
+    const chapter = located.state.chapters.find((c) => c.id === chapterId);
     if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
-    const fileName = variant === 'current'
-      ? `${chapter.slug}.mp3`
-      : `${chapter.slug}.previous.mp3`;
+    const fileName = variant === 'current' ? `${chapter.slug}.mp3` : `${chapter.slug}.previous.mp3`;
     const path = join(audioDir(located.bookDir), fileName);
     if (!existsSync(path)) return res.status(404).json({ message: 'Chapter audio not found.' });
-    res.sendFile(path, {
-      headers: { 'Content-Type': MP3_MIME, 'Cache-Control': 'no-cache' },
-    }, err => {
-      if (err && !res.headersSent) res.status(500).end();
-    });
+    res.sendFile(
+      path,
+      {
+        headers: { 'Content-Type': MP3_MIME, 'Cache-Control': 'no-cache' },
+      },
+      (err) => {
+        if (err && !res.headersSent) res.status(500).end();
+      },
+    );
   };
 }
 
 chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio.mp3', makeFileHandler('current'));
-chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio/previous.mp3', makeFileHandler('previous'));
+chapterAudioRouter.get(
+  '/:bookId/chapters/:chapterId/audio/previous.mp3',
+  makeFileHandler('previous'),
+);
 
 /* ACCEPT — the user has chosen the new render. Delete the .previous.* pair.
    404 when nothing to delete (caller didn't audition first, or already
    accepted/rejected). 204 on success. */
-chapterAudioRouter.delete('/:bookId/chapters/:chapterId/audio/previous', async (req: Request, res: Response) => {
-  const chapterId = Number.parseInt(req.params.chapterId, 10);
-  if (!Number.isInteger(chapterId)) return res.status(404).json({ message: 'Chapter audio not found.' });
-  const located = await findBookByBookId(req.params.bookId);
-  if (!located) return res.status(404).json({ message: 'Chapter audio not found.' });
-  const chapter = located.state.chapters.find(c => c.id === chapterId);
-  if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
-  const root = audioDir(located.bookDir);
-  const previous = findPreviousChapterAudio(root, chapter.slug);
-  if (!previous) return res.status(404).json({ message: 'No preserved previous audio.' });
-  /* Delete both files — segments.json absence on its own isn't a fault. */
-  await unlink(previous.path).catch(() => {});
-  await unlink(join(root, `${chapter.slug}.previous.segments.json`)).catch(() => {});
-  res.status(204).end();
-});
+chapterAudioRouter.delete(
+  '/:bookId/chapters/:chapterId/audio/previous',
+  async (req: Request, res: Response) => {
+    const chapterId = Number.parseInt(req.params.chapterId, 10);
+    if (!Number.isInteger(chapterId))
+      return res.status(404).json({ message: 'Chapter audio not found.' });
+    const located = await findBookByBookId(req.params.bookId);
+    if (!located) return res.status(404).json({ message: 'Chapter audio not found.' });
+    const chapter = located.state.chapters.find((c) => c.id === chapterId);
+    if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
+    const root = audioDir(located.bookDir);
+    const previous = findPreviousChapterAudio(root, chapter.slug);
+    if (!previous) return res.status(404).json({ message: 'No preserved previous audio.' });
+    /* Delete both files — segments.json absence on its own isn't a fault. */
+    await unlink(previous.path).catch(() => {});
+    await unlink(join(root, `${chapter.slug}.previous.segments.json`)).catch(() => {});
+    res.status(204).end();
+  },
+);
 
 /* REJECT — the user has chosen the prior render. Promote .previous.* over
    the live names. 409 when a generation is in flight (the rename would
    race the write path). 404 when no preserved pair. */
-chapterAudioRouter.post('/:bookId/chapters/:chapterId/audio/previous/restore', async (req: Request, res: Response) => {
-  if (isGenerationActive(req.params.bookId)) {
-    return res.status(409).json({
-      message: 'A generation is in flight for this book. Wait for the render to finish before rejecting.',
-    });
-  }
-  const chapterId = Number.parseInt(req.params.chapterId, 10);
-  if (!Number.isInteger(chapterId)) return res.status(404).json({ message: 'Chapter audio not found.' });
-  const located = await findBookByBookId(req.params.bookId);
-  if (!located) return res.status(404).json({ message: 'Chapter audio not found.' });
-  const chapter = located.state.chapters.find(c => c.id === chapterId);
-  if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
-  const root = audioDir(located.bookDir);
-  const previous = findPreviousChapterAudio(root, chapter.slug);
-  if (!previous) return res.status(404).json({ message: 'No preserved previous audio.' });
+chapterAudioRouter.post(
+  '/:bookId/chapters/:chapterId/audio/previous/restore',
+  async (req: Request, res: Response) => {
+    if (isGenerationActive(req.params.bookId)) {
+      return res.status(409).json({
+        message:
+          'A generation is in flight for this book. Wait for the render to finish before rejecting.',
+      });
+    }
+    const chapterId = Number.parseInt(req.params.chapterId, 10);
+    if (!Number.isInteger(chapterId))
+      return res.status(404).json({ message: 'Chapter audio not found.' });
+    const located = await findBookByBookId(req.params.bookId);
+    if (!located) return res.status(404).json({ message: 'Chapter audio not found.' });
+    const chapter = located.state.chapters.find((c) => c.id === chapterId);
+    if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
+    const root = audioDir(located.bookDir);
+    const previous = findPreviousChapterAudio(root, chapter.slug);
+    if (!previous) return res.status(404).json({ message: 'No preserved previous audio.' });
 
-  /* Delete the live render first so the previous → live rename doesn't
+    /* Delete the live render first so the previous → live rename doesn't
      race a still-present current file. */
-  const currentLive = findChapterAudio(root, chapter.slug);
-  if (currentLive) await unlink(currentLive.path).catch(() => {});
-  const liveSegments = join(root, `${chapter.slug}.segments.json`);
-  if (existsSync(liveSegments)) await unlink(liveSegments).catch(() => {});
+    const currentLive = findChapterAudio(root, chapter.slug);
+    if (currentLive) await unlink(currentLive.path).catch(() => {});
+    const liveSegments = join(root, `${chapter.slug}.segments.json`);
+    if (existsSync(liveSegments)) await unlink(liveSegments).catch(() => {});
 
-  try {
-    await renameWithRetry(previous.path, join(root, `${chapter.slug}.${previous.ext}`));
-  } catch (err) {
-    /* eslint-disable-next-line no-console */
-    console.error(`[chapter-audio] failed to restore previous audio for ${chapter.slug}: ${(err as Error).message}`);
-    return res.status(500).json({ message: 'Failed to restore previous audio.' });
-  }
-  const previousSegments = join(root, `${chapter.slug}.previous.segments.json`);
-  if (existsSync(previousSegments)) {
-    await renameWithRetry(previousSegments, liveSegments).catch(() => {});
-  }
-  res.status(204).end();
-});
+    try {
+      await renameWithRetry(previous.path, join(root, `${chapter.slug}.${previous.ext}`));
+    } catch (err) {
+      /* eslint-disable-next-line no-console */
+      console.error(
+        `[chapter-audio] failed to restore previous audio for ${chapter.slug}: ${(err as Error).message}`,
+      );
+      return res.status(500).json({ message: 'Failed to restore previous audio.' });
+    }
+    const previousSegments = join(root, `${chapter.slug}.previous.segments.json`);
+    if (existsSync(previousSegments)) {
+      await renameWithRetry(previousSegments, liveSegments).catch(() => {});
+    }
+    res.status(204).end();
+  },
+);

@@ -34,7 +34,7 @@ Pre-flight (one-time): install Ollama for Windows, then `ollama pull qwen3.5:9b`
 5. **Schema regression** — If the model emits valid JSON that fails Zod (e.g. forbidden `additionalProperties`), the validation-retry loop fires once. On second failure, stream surfaces `{kind:'error', code:'schema-validation', detail:<issues>}`. Same shape as Gemini.
 6. **Engine toggle via UI** — Open Account → Server configuration → Analyzer engine. Flip to Gemini, save. Re-run analysis; SSE label now reads a Gemini model. Flip back to Local; next analysis goes through Ollama again. No server restart required.
 7. **Model pick is single-sourced** — Account → Defaults for new books → Analysis model lists both Local (Ollama tags like `qwen3.5:9b`) and Gemini ids grouped via `<optgroup>`. Pick a local tag, save; the server uses that tag for Ollama. There is **no** separate "Ollama model" text field — the top picker is the only model-selection surface, and `getResolvedOllamaModel()` derives the tag from it.
-7. **Health probe** — `curl http://localhost:8080/api/ollama/health` returns `{status:'reachable', models:[…], expectedModel:'qwen3.5:9b', modelPulled:true}` when up; `{status:'unreachable', error:'…'}` when down. Same 2 s budget as the sidecar probe.
+8. **Health probe** — `curl http://localhost:8080/api/ollama/health` returns `{status:'reachable', models:[…], expectedModel:'qwen3.5:9b', modelPulled:true}` when up; `{status:'unreachable', error:'…'}` when down. Same 2 s budget as the sidecar probe.
 
 ## Ship notes
 

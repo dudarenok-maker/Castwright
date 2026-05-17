@@ -16,18 +16,18 @@ export type Chapter = components['schemas']['Chapter'] & {
 export type Sentence = components['schemas']['Sentence'] & {
   confidence?: number;
 };
-export type Revision  = components['schemas']['Revision'];
-export type DriftEvent      = components['schemas']['DriftEvent'];
-export type MatchFactor     = components['schemas']['MatchFactor'];
-export type GenerationTick  = components['schemas']['GenerationTick'];
-export type ChapterAudio    = components['schemas']['ChapterAudio'];
-export type UploadResponse  = components['schemas']['UploadResponse'];
+export type Revision = components['schemas']['Revision'];
+export type DriftEvent = components['schemas']['DriftEvent'];
+export type MatchFactor = components['schemas']['MatchFactor'];
+export type GenerationTick = components['schemas']['GenerationTick'];
+export type ChapterAudio = components['schemas']['ChapterAudio'];
+export type UploadResponse = components['schemas']['UploadResponse'];
 export type AnalyseResponse = components['schemas']['AnalyseResponse'];
 export type VoiceMatchResponse = components['schemas']['VoiceMatchResponse'];
-export type RevisionsResponse  = components['schemas']['RevisionsResponse'];
-export type VoiceSample        = components['schemas']['VoiceSample'];
+export type RevisionsResponse = components['schemas']['RevisionsResponse'];
+export type VoiceSample = components['schemas']['VoiceSample'];
 export type VoiceSampleRequest = components['schemas']['VoiceSampleRequest'];
-export type TtsModelKey        = NonNullable<VoiceSampleRequest['modelKey']>;
+export type TtsModelKey = NonNullable<VoiceSampleRequest['modelKey']>;
 
 /* ── App-domain types not modelled in the OpenAPI spec ────────────────── */
 
@@ -373,10 +373,20 @@ export interface LibraryResponse {
 }
 
 export type ChangeLogType =
-  | 'regenerate' | 'voice_tune' | 'voice_reuse' | 'voice_lock'
-  | 'boundary_move' | 'chapter_complete' | 'generation_run_complete'
-  | 'chapter_failed' | 'generation_started'
-  | 'cast_confirm' | 'analysis_complete' | 'import' | 'library_add' | 'reparse';
+  | 'regenerate'
+  | 'voice_tune'
+  | 'voice_reuse'
+  | 'voice_lock'
+  | 'boundary_move'
+  | 'chapter_complete'
+  | 'generation_run_complete'
+  | 'chapter_failed'
+  | 'generation_started'
+  | 'cast_confirm'
+  | 'analysis_complete'
+  | 'import'
+  | 'library_add'
+  | 'reparse';
 
 export interface ChangeLogEvent {
   id: number;
@@ -476,8 +486,8 @@ export interface ExportQueueItem {
    The export modal polls `BookExportJob` until status === 'done' and
    then triggers a download via `downloadUrl`. */
 export type BookExportRequest = components['schemas']['BookExportRequest'];
-export type BookExportJob     = components['schemas']['BookExportJob'];
-export type ExportLanInfo     = components['schemas']['ExportLanInfo'];
+export type BookExportJob = components['schemas']['BookExportJob'];
+export type ExportLanInfo = components['schemas']['ExportLanInfo'];
 
 /* ── UI stage discriminated union ─────────────────────────────────────── */
 
@@ -487,8 +497,14 @@ export type Stage =
   | { kind: 'books' }
   | { kind: 'upload' }
   | { kind: 'analysing'; bookId?: string; manuscriptId?: string | null }
-  | { kind: 'confirm';   bookId: string; openProfileId: string | null }
-  | { kind: 'ready';     bookId: string; view: View; currentChapterId: number; openProfileId: string | null }
+  | { kind: 'confirm'; bookId: string; openProfileId: string | null }
+  | {
+      kind: 'ready';
+      bookId: string;
+      view: View;
+      currentChapterId: number;
+      openProfileId: string | null;
+    }
   | { kind: 'voices' }
   | { kind: 'changelog' }
   | { kind: 'account' };

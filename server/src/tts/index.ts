@@ -41,18 +41,18 @@ export type TtsEngine = 'coqui' | 'piper' | 'kokoro' | 'gemini';
    model half is forwarded to the engine as-is. New local engines/voices slot
    in here without touching the picker logic. */
 export type TtsModelKey =
-  | 'coqui-xtts-v2'        // local default
-  | 'piper-en-us-medium'   // future local
-  | 'kokoro-v1'            // future local
-  | 'gemini-2.5-flash'     // cloud fallback
+  | 'coqui-xtts-v2' // local default
+  | 'piper-en-us-medium' // future local
+  | 'kokoro-v1' // future local
+  | 'gemini-2.5-flash' // cloud fallback
   | 'gemini-3.1-flash';
 
 export const TTS_MODEL_LABELS: Record<TtsModelKey, string> = {
-  'coqui-xtts-v2':     'Coqui XTTS v2 (local)',
+  'coqui-xtts-v2': 'Coqui XTTS v2 (local)',
   'piper-en-us-medium': 'Piper en-US medium (local)',
-  'kokoro-v1':         'Kokoro v1 (local)',
-  'gemini-2.5-flash':  'Gemini 2.5 Flash TTS',
-  'gemini-3.1-flash':  'Gemini 3.1 Flash TTS',
+  'kokoro-v1': 'Kokoro v1 (local)',
+  'gemini-2.5-flash': 'Gemini 2.5 Flash TTS',
+  'gemini-3.1-flash': 'Gemini 3.1 Flash TTS',
 };
 
 /* Map UI-stable Gemini keys to actual model ids via env so preview-suffix
@@ -79,8 +79,8 @@ export function isTtsModelKey(value: unknown): value is TtsModelKey {
 }
 
 export function engineForModelKey(key: TtsModelKey): TtsEngine {
-  if (key.startsWith('coqui-'))  return 'coqui';
-  if (key.startsWith('piper-'))  return 'piper';
+  if (key.startsWith('coqui-')) return 'coqui';
+  if (key.startsWith('piper-')) return 'piper';
   if (key.startsWith('kokoro-')) return 'kokoro';
   return 'gemini';
 }
@@ -88,9 +88,9 @@ export function engineForModelKey(key: TtsModelKey): TtsEngine {
 /* For sidecar requests, derive the engine-side model id from the namespaced
    key. `coqui-xtts-v2` → `xtts_v2`, `piper-en-us-medium` → `en-us-medium`. */
 export function sidecarModelId(key: TtsModelKey): string {
-  if (key === 'coqui-xtts-v2')        return 'xtts_v2';
-  if (key === 'piper-en-us-medium')   return 'en-us-medium';
-  if (key === 'kokoro-v1')            return 'v1';
+  if (key === 'coqui-xtts-v2') return 'xtts_v2';
+  if (key === 'piper-en-us-medium') return 'en-us-medium';
+  if (key === 'kokoro-v1') return 'v1';
   throw new Error(`sidecarModelId called with non-local key: ${key}`);
 }
 
@@ -102,7 +102,9 @@ export function selectTtsProvider(modelKey: TtsModelKey): TtsProvider {
   if (engine === 'gemini') {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error('Gemini TTS selected but GEMINI_API_KEY is not set. Add it to server/.env or switch to a local engine.');
+      throw new Error(
+        'Gemini TTS selected but GEMINI_API_KEY is not set. Add it to server/.env or switch to a local engine.',
+      );
     }
     return new GeminiTtsProvider({ apiKey });
   }

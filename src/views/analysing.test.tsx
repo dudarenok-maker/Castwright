@@ -9,7 +9,12 @@ import { castSlice } from '../store/cast-slice';
 import { analysisSlice } from '../store/analysis-slice';
 import { AnalysingView } from './analysing';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
-import type { AnalyseResponse, BookStateResponse, Character, DroppedQuotesResponse } from '../lib/types';
+import type {
+  AnalyseResponse,
+  BookStateResponse,
+  Character,
+  DroppedQuotesResponse,
+} from '../lib/types';
 
 /* Captured handlers so tests can drive phase/log events at will. */
 let capturedOpts: AnalyseOpts | undefined;
@@ -46,7 +51,9 @@ vi.mock('../lib/api', async () => {
          manual resolver so tests can simulate a successful retry. */
       runAnalysisForChapters: (_id: string, chapterIds: number[], opts?: AnalyseOpts) => {
         capturedSubsetCall = { chapterIds, opts };
-        return new Promise<AnalyseResponse>(resolve => { resolveSubset = resolve; });
+        return new Promise<AnalyseResponse>((resolve) => {
+          resolveSubset = resolve;
+        });
       },
       getBookState: (bookId: string) =>
         getBookStateImpl ? getBookStateImpl(bookId) : Promise.reject(new Error('no impl')),
@@ -56,10 +63,13 @@ vi.mock('../lib/api', async () => {
           : Promise.resolve({ manuscriptId: 'm1', batches: [] }),
       getOllamaHealth: () => getOllamaHealthSpy(),
       getSidecarHealth: () => getSidecarHealthSpy(),
-      loadAnalyzer:    () => loadAnalyzerSpy(),
-      unloadAnalyzer:  () => Promise.resolve({ status: 'unloaded' as const }),
-      loadSidecar:     () => Promise.resolve({ status: 'ready' as const }),
-      unloadSidecar:   () => { unloadSidecarSpy(); return Promise.resolve({ status: 'idle' as const }); },
+      loadAnalyzer: () => loadAnalyzerSpy(),
+      unloadAnalyzer: () => Promise.resolve({ status: 'unloaded' as const }),
+      loadSidecar: () => Promise.resolve({ status: 'ready' as const }),
+      unloadSidecar: () => {
+        unloadSidecarSpy();
+        return Promise.resolve({ status: 'idle' as const });
+      },
     },
   };
 });
@@ -96,8 +106,8 @@ beforeEach(() => {
 function renderView() {
   const store = configureStore({
     reducer: {
-      ui:       uiSlice.reducer,
-      cast:     castSlice.reducer,
+      ui: uiSlice.reducer,
+      cast: castSlice.reducer,
       analysis: analysisSlice.reducer,
     },
   });
@@ -126,7 +136,9 @@ function renderView() {
 async function renderViewWaitingForAnalysis() {
   const result = renderView();
   const startBtn = await screen.findByRole('button', { name: /start analysis/i });
-  await act(async () => { fireEvent.click(startBtn); });
+  await act(async () => {
+    fireEvent.click(startBtn);
+  });
   await waitFor(() => expect(capturedOpts).toBeDefined());
   return result;
 }
@@ -138,8 +150,8 @@ describe('AnalysingView — live ticker (regression for stuck-chapter screenshot
     const live: AnalysisLiveInfo = {
       totalChapters: 7,
       chapters: [
-        { chapterIndex: 2, chapterTitle: 'DAY ONE',   elapsedMs: 4 * 60_000 + 15_000, estMs: 21_000  },
-        { chapterIndex: 7, chapterTitle: 'DAY SIX',   elapsedMs: 8_000,               estMs: 123_000 },
+        { chapterIndex: 2, chapterTitle: 'DAY ONE', elapsedMs: 4 * 60_000 + 15_000, estMs: 21_000 },
+        { chapterIndex: 7, chapterTitle: 'DAY SIX', elapsedMs: 8_000, estMs: 123_000 },
       ],
     };
 
@@ -196,14 +208,17 @@ describe('AnalysingView — streaming heartbeat indicator', () => {
     expect(screen.getByText(/last chunk 1s ago/)).toBeInTheDocument();
   });
 
-  it('clears the previous phase\'s heartbeat the moment the active phase advances', async () => {
+  it("clears the previous phase's heartbeat the moment the active phase advances", async () => {
     await renderViewWaitingForAnalysis();
 
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.4 });
       capturedOpts?.onHeartbeat?.({
-        phaseId: 0, receivedBytes: 4096, charsPerSec: 100,
-        elapsedMs: 5_000, sinceLastChunkMs: 800,
+        phaseId: 0,
+        receivedBytes: 4096,
+        charsPerSec: 100,
+        elapsedMs: 5_000,
+        sinceLastChunkMs: 800,
       });
     });
     expect(screen.getByText(/Receiving response/i)).toBeInTheDocument();
@@ -226,8 +241,11 @@ describe('AnalysingView — streaming heartbeat indicator', () => {
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 1, progress: 0.4 });
       capturedOpts?.onHeartbeat?.({
-        phaseId: 1, receivedBytes: 1024, charsPerSec: 100,
-        elapsedMs: 2_000, sinceLastChunkMs: 200,
+        phaseId: 1,
+        receivedBytes: 1024,
+        charsPerSec: 100,
+        elapsedMs: 2_000,
+        sinceLastChunkMs: 200,
       });
     });
     expect(screen.getByText(/Receiving response/i)).toBeInTheDocument();
@@ -268,7 +286,9 @@ describe('AnalysingView — streaming heartbeat indicator', () => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.05 });
       capturedOpts?.onLog?.({ phaseId: 0, message: 'Manuscript: 103,102 words, …' });
     });
-    expect(screen.queryByText(/Reading the manuscript \(parsing chapters\)…/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Reading the manuscript \(parsing chapters\)…/),
+    ).not.toBeInTheDocument();
   });
 
   it('flags as Stalled only past the engine-specific threshold (60s for local Ollama, 8s for cloud)', async () => {
@@ -308,7 +328,11 @@ describe('AnalysingView — streaming heartbeat indicator', () => {
 
 describe('AnalysingView — Phase 0a live cast preview', () => {
   const makeChar = (id: string, name: string): Character => ({
-    id, name, role: 'role', color: id, voiceState: 'generated',
+    id,
+    name,
+    role: 'role',
+    color: id,
+    voiceState: 'generated',
   });
 
   it('does not render the cast preview before any cast-update has arrived', () => {
@@ -323,10 +347,9 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
     /* Chapter 1 lands — narrator + Wren. */
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.05 });
-      capturedOpts?.onCastUpdate?.({ characters: [
-        makeChar('narrator', 'Narrator'),
-        makeChar('Wren', 'Wren'),
-      ]});
+      capturedOpts?.onCastUpdate?.({
+        characters: [makeChar('narrator', 'Narrator'), makeChar('Wren', 'Wren')],
+      });
     });
     expect(screen.getByText(/Cast so far · 2 characters/)).toBeInTheDocument();
     expect(screen.getByText('Wren')).toBeInTheDocument();
@@ -334,11 +357,13 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
     /* Chapter 5 lands — adds Marlow. */
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.4 });
-      capturedOpts?.onCastUpdate?.({ characters: [
-        makeChar('narrator', 'Narrator'),
-        makeChar('Wren', 'Wren'),
-        makeChar('Marlow', 'Marlow'),
-      ]});
+      capturedOpts?.onCastUpdate?.({
+        characters: [
+          makeChar('narrator', 'Narrator'),
+          makeChar('Wren', 'Wren'),
+          makeChar('Marlow', 'Marlow'),
+        ],
+      });
     });
     expect(screen.getByText(/Cast so far · 3 characters/)).toBeInTheDocument();
     expect(screen.getByText('Marlow')).toBeInTheDocument();
@@ -349,9 +374,9 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
 
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 1 });
-      capturedOpts?.onCastUpdate?.({ characters: [
-        makeChar('narrator', 'Narrator'), makeChar('Wren', 'Wren'),
-      ]});
+      capturedOpts?.onCastUpdate?.({
+        characters: [makeChar('narrator', 'Narrator'), makeChar('Wren', 'Wren')],
+      });
       /* Now Phase 1 (attribution) becomes active. */
       capturedOpts?.onPhase?.({ phaseId: 1, progress: 0.05 });
     });
@@ -423,12 +448,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
     });
     return render(
       <Provider store={store}>
-        <AnalysingView
-          manuscriptId={null}
-          title="Demo"
-          wordCount={500}
-          onComplete={() => {}}
-        />
+        <AnalysingView manuscriptId={null} title="Demo" wordCount={500} onComplete={() => {}} />
       </Provider>,
     );
   }
@@ -436,19 +456,30 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
   it('unloads the TTS sidecar before warming the analyzer when both compete for VRAM', async () => {
     /* Sidecar has a model loaded → unloading it should fire AND the banner
        should surface so the user knows the swap happened. */
-    getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: true });
+    getSidecarHealthSpy.mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      modelLoaded: true,
+    });
     /* Override the default-resident probe so the Load button is visible
        (it only appears when the analyzer is NOT resident). */
     getOllamaHealthSpy.mockResolvedValue({
-      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'],
-      expectedModel: 'qwen3.5:4b', modelPulled: true, resident: [], modelResident: false,
+      status: 'reachable',
+      url: '(test)',
+      models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b',
+      modelPulled: true,
+      resident: [],
+      modelResident: false,
     });
 
     renderNoManuscript();
 
     /* Wait for the initial health probe to settle so the pill is rendered. */
     const loadBtn = await screen.findByRole('button', { name: /load model \(analyzer\)/i });
-    await act(async () => { fireEvent.click(loadBtn); });
+    await act(async () => {
+      fireEvent.click(loadBtn);
+    });
 
     await waitFor(() => expect(unloadSidecarSpy).toHaveBeenCalledTimes(1));
     expect(loadAnalyzerSpy).toHaveBeenCalledTimes(1);
@@ -460,15 +491,26 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
   it('does not surface the eviction banner when TTS had no model loaded to begin with', async () => {
     /* No-op unload should still fire (Ollama hates surprise state), but
        the banner lies if it pretends VRAM was freed when it wasn't. */
-    getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
+    getSidecarHealthSpy.mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      modelLoaded: false,
+    });
     getOllamaHealthSpy.mockResolvedValue({
-      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'],
-      expectedModel: 'qwen3.5:4b', modelPulled: true, resident: [], modelResident: false,
+      status: 'reachable',
+      url: '(test)',
+      models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b',
+      modelPulled: true,
+      resident: [],
+      modelResident: false,
     });
 
     renderNoManuscript();
     const loadBtn = await screen.findByRole('button', { name: /load model \(analyzer\)/i });
-    await act(async () => { fireEvent.click(loadBtn); });
+    await act(async () => {
+      fireEvent.click(loadBtn);
+    });
 
     await waitFor(() => expect(loadAnalyzerSpy).toHaveBeenCalled());
     expect(screen.queryByText(/TTS unloaded to free VRAM/i)).not.toBeInTheDocument();
@@ -480,8 +522,13 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
      daemon's error string so the failure is visible. */
   it('surfaces the error message when loadAnalyzer resolves with status:error', async () => {
     getOllamaHealthSpy.mockResolvedValue({
-      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'],
-      expectedModel: 'qwen3.5:4b', modelPulled: true, resident: [], modelResident: false,
+      status: 'reachable',
+      url: '(test)',
+      models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b',
+      modelPulled: true,
+      resident: [],
+      modelResident: false,
     });
     loadAnalyzerSpy.mockResolvedValue({
       status: 'error' as const,
@@ -490,7 +537,9 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
 
     renderNoManuscript();
     const loadBtn = await screen.findByRole('button', { name: /load model \(analyzer\)/i });
-    await act(async () => { fireEvent.click(loadBtn); });
+    await act(async () => {
+      fireEvent.click(loadBtn);
+    });
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /Ollama \/api\/generate returned 503/i,
@@ -499,14 +548,21 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
 
   it('surfaces a fetch failure when loadAnalyzer throws', async () => {
     getOllamaHealthSpy.mockResolvedValue({
-      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'],
-      expectedModel: 'qwen3.5:4b', modelPulled: true, resident: [], modelResident: false,
+      status: 'reachable',
+      url: '(test)',
+      models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b',
+      modelPulled: true,
+      resident: [],
+      modelResident: false,
     });
     loadAnalyzerSpy.mockRejectedValue(new Error('Failed to fetch'));
 
     renderNoManuscript();
     const loadBtn = await screen.findByRole('button', { name: /load model \(analyzer\)/i });
-    await act(async () => { fireEvent.click(loadBtn); });
+    await act(async () => {
+      fireEvent.click(loadBtn);
+    });
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn't reach Ollama/i);
   });
@@ -528,7 +584,9 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
     );
     /* Gemini has no local lifecycle to manage; the analyzer pill should be
        absent (the original ConnPill renders instead). */
-    expect(screen.queryByRole('button', { name: /load model \(analyzer\)/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /load model \(analyzer\)/i }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -584,8 +642,13 @@ describe('AnalysingView — analyzer pill reflects model state, not SSE state', 
        loadAnalyzer fires; the pill's loading-text rendering is covered
        in ModelControlPill.test.tsx. */
     getOllamaHealthSpy.mockResolvedValue({
-      status: 'reachable', url: '(test)', models: ['qwen3.5:4b'],
-      expectedModel: 'qwen3.5:4b', modelPulled: true, resident: [], modelResident: false,
+      status: 'reachable',
+      url: '(test)',
+      models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b',
+      modelPulled: true,
+      resident: [],
+      modelResident: false,
     });
 
     renderView();
@@ -636,7 +699,9 @@ describe('AnalysingView — Start/Pause/Resume button cycle', () => {
     /* Phase 2: Pause. Click aborts the captured controller. The next
        render swaps the label to Resume. */
     const pauseBtn = screen.getByRole('button', { name: /pause analysis/i });
-    await act(async () => { fireEvent.click(pauseBtn); });
+    await act(async () => {
+      fireEvent.click(pauseBtn);
+    });
     expect(firstSignal.aborted).toBe(true);
     expect(await screen.findByRole('button', { name: /resume analysis/i })).toBeInTheDocument();
 
@@ -644,7 +709,9 @@ describe('AnalysingView — Start/Pause/Resume button cycle', () => {
        AbortController — the old one stays aborted. */
     capturedOpts = undefined;
     const resumeBtn = screen.getByRole('button', { name: /resume analysis/i });
-    await act(async () => { fireEvent.click(resumeBtn); });
+    await act(async () => {
+      fireEvent.click(resumeBtn);
+    });
     await waitFor(() => expect(capturedOpts).toBeDefined());
     expect(capturedOpts!.signal!.aborted).toBe(false);
     expect(capturedOpts!.signal).not.toBe(firstSignal);
@@ -668,7 +735,12 @@ describe('AnalysingView — failed-chapter retry', () => {
         castConfirmed: false,
         chapters: [
           { id: 44, title: 'Chapter Forty-Two', slug: '44-chapter-forty-two', duration: '0:00' },
-          { id: 49, title: 'Chapter Forty-Seven', slug: '49-chapter-forty-seven', duration: '0:00' },
+          {
+            id: 49,
+            title: 'Chapter Forty-Seven',
+            slug: '49-chapter-forty-seven',
+            duration: '0:00',
+          },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: '2026-05-15T00:00:00.000Z',
@@ -736,7 +808,9 @@ describe('AnalysingView — failed-chapter retry', () => {
     /* Start the analysis so the effect captures opts, then drive a
        phase event so the view transitions to conn === 'streaming'. */
     const startBtn = await screen.findByRole('button', { name: /start analysis/i });
-    await act(async () => { fireEvent.click(startBtn); });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
     await waitFor(() => expect(capturedOpts).toBeDefined());
     const mainSignal = capturedOpts!.signal!;
     expect(mainSignal.aborted).toBe(false);
@@ -754,7 +828,9 @@ describe('AnalysingView — failed-chapter retry', () => {
        subset call. Without this the two SSEs race the disk-backed
        analysis cache and the second finisher overwrites the first. */
     capturedOpts = undefined;
-    await act(async () => { fireEvent.click(retryBtn); });
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
     expect(mainSignal.aborted).toBe(true);
     expect(capturedSubsetCall).toBeDefined();
     expect(capturedSubsetCall!.chapterIds).toEqual([44]);
@@ -762,8 +838,13 @@ describe('AnalysingView — failed-chapter retry', () => {
     /* Resolve the subset call as if the server succeeded. */
     await act(async () => {
       resolveSubset?.({
-        bookId: 'b1', manuscriptId: 'm1', title: '',
-        phaseTimings: [], characters: [], chapters: [], sentences: [],
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        title: '',
+        phaseTimings: [],
+        characters: [],
+        chapters: [],
+        sentences: [],
         libraryMatches: [],
       } as AnalyseResponse);
     });
@@ -806,7 +887,9 @@ describe('AnalysingView — failed-chapter retry', () => {
        the SSE callbacks bind to the running main run. */
     await screen.findByText(/2 chapters failed cast detection/i);
     const startBtn = screen.getByRole('button', { name: /start analysis/i });
-    await act(async () => { fireEvent.click(startBtn); });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
     await waitFor(() => expect(capturedOpts).toBeDefined());
 
     /* Server resolves chapter 44 during Phase 0a re-queue. */
@@ -849,7 +932,9 @@ describe('AnalysingView — failed-chapter retry', () => {
     );
 
     const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
-    await act(async () => { fireEvent.click(retryBtn); });
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
 
     expect(capturedSubsetCall).toBeDefined();
     expect(capturedSubsetCall!.chapterIds).toEqual([44]);
@@ -861,8 +946,13 @@ describe('AnalysingView — failed-chapter retry', () => {
        whole panel disappears. */
     await act(async () => {
       resolveSubset?.({
-        bookId: 'b1', manuscriptId: 'm1', title: '',
-        phaseTimings: [], characters: [], chapters: [], sentences: [],
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        title: '',
+        phaseTimings: [],
+        characters: [],
+        chapters: [],
+        sentences: [],
         libraryMatches: [],
       } as AnalyseResponse);
     });
@@ -883,7 +973,11 @@ describe('AnalysingView — failed-chapter retry', () => {
    mount", which this test pins down. */
 describe('AnalysingView — pre-hydrated cast preview on mount', () => {
   const makeChar = (id: string, name: string): Character => ({
-    id, name, role: 'role', color: id, voiceState: 'generated',
+    id,
+    name,
+    role: 'role',
+    color: id,
+    voiceState: 'generated',
   });
 
   it('renders the cast preview from a pre-hydrated cast slice before any SSE event fires', () => {
@@ -894,11 +988,13 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
        runs ahead of the analysing route mounting. With cast.json now
        written incrementally on the server, this slice can land
        non-empty even when the user just re-opened a mid-run book. */
-    store.dispatch(castSlice.actions.setCharacters([
-      makeChar('narrator', 'Narrator'),
-      makeChar('Wren', 'Wren'),
-      makeChar('Marlow', 'Marlow'),
-    ]));
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        makeChar('narrator', 'Narrator'),
+        makeChar('Wren', 'Wren'),
+        makeChar('Marlow', 'Marlow'),
+      ]),
+    );
 
     render(
       <Provider store={store}>
@@ -941,19 +1037,31 @@ describe('AnalysingView — dropped-quotes panel', () => {
      doesn't reject loudly — return an empty BookStateResponse. The
      book-state hydration isn't what these tests exercise. */
   function setEmptyBookState() {
-    getBookStateImpl = () => Promise.resolve({
-      state: {
-        bookId: 'b1', manuscriptId: 'm1', title: '',
-        author: '', series: '', seriesPosition: null, isStandalone: true,
-        manuscriptFile: '', castConfirmed: false, chapters: [],
-        coverGradient: ['#000', '#fff'],
-        createdAt: '2026-05-15T00:00:00.000Z',
-        updatedAt: '2026-05-15T00:00:00.000Z',
-      },
-      cast: null, manuscript: null, manuscriptEdits: null,
-      revisions: null, completedSlugs: [], changeLog: null,
-      analysis: { failedChapterIds: [] },
-    } as BookStateResponse);
+    getBookStateImpl = () =>
+      Promise.resolve({
+        state: {
+          bookId: 'b1',
+          manuscriptId: 'm1',
+          title: '',
+          author: '',
+          series: '',
+          seriesPosition: null,
+          isStandalone: true,
+          manuscriptFile: '',
+          castConfirmed: false,
+          chapters: [],
+          coverGradient: ['#000', '#fff'],
+          createdAt: '2026-05-15T00:00:00.000Z',
+          updatedAt: '2026-05-15T00:00:00.000Z',
+        },
+        cast: null,
+        manuscript: null,
+        manuscriptEdits: null,
+        revisions: null,
+        completedSlugs: [],
+        changeLog: null,
+        analysis: { failedChapterIds: [] },
+      } as BookStateResponse);
   }
 
   it('renders nothing when the endpoint returns an empty envelope', async () => {
@@ -967,26 +1075,47 @@ describe('AnalysingView — dropped-quotes panel', () => {
 
   it('renders the latest batch grouped by character with the drop reason rendered', async () => {
     setEmptyBookState();
-    getDroppedQuotesImpl = () => Promise.resolve({
-      manuscriptId: 'm1',
-      batches: [
-        {
-          recordedAt: '2026-05-15T10:00:00.000Z',
-          route: 'analysis-stream',
-          totalDropped: 3,
-          affectedCharacters: 2,
-          entries: [
-            { characterId: 'Wren', characterName: 'Wren', quote: 'fabricated 1', truncated: false, reason: 'not_in_source' },
-            { characterId: 'Wren', characterName: 'Wren', quote: 'fabricated 2', truncated: false, reason: 'not_in_source' },
-            { characterId: 'Marlow',  characterName: 'Marlow',  quote: '   ', truncated: false, reason: 'empty_after_normalisation' },
-          ],
-        },
-      ],
-    });
+    getDroppedQuotesImpl = () =>
+      Promise.resolve({
+        manuscriptId: 'm1',
+        batches: [
+          {
+            recordedAt: '2026-05-15T10:00:00.000Z',
+            route: 'analysis-stream',
+            totalDropped: 3,
+            affectedCharacters: 2,
+            entries: [
+              {
+                characterId: 'Wren',
+                characterName: 'Wren',
+                quote: 'fabricated 1',
+                truncated: false,
+                reason: 'not_in_source',
+              },
+              {
+                characterId: 'Wren',
+                characterName: 'Wren',
+                quote: 'fabricated 2',
+                truncated: false,
+                reason: 'not_in_source',
+              },
+              {
+                characterId: 'Marlow',
+                characterName: 'Marlow',
+                quote: '   ',
+                truncated: false,
+                reason: 'empty_after_normalisation',
+              },
+            ],
+          },
+        ],
+      });
     renderWithBookId();
 
     /* Header reports the totals. */
-    expect(await screen.findByText(/Verifier dropped 3 quotes across 2 characters/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Verifier dropped 3 quotes across 2 characters/),
+    ).toBeInTheDocument();
     /* Both character groups render. */
     expect(screen.getByText('Wren')).toBeInTheDocument();
     expect(screen.getByText('Marlow')).toBeInTheDocument();
@@ -999,43 +1128,69 @@ describe('AnalysingView — dropped-quotes panel', () => {
 
   it('shows the [truncated] marker for entries truncated server-side', async () => {
     setEmptyBookState();
-    getDroppedQuotesImpl = () => Promise.resolve({
-      manuscriptId: 'm1',
-      batches: [{
-        recordedAt: '2026-05-15T10:00:00.000Z',
-        route: 'analysis-stream',
-        totalDropped: 1, affectedCharacters: 1,
-        entries: [{
-          characterId: 'verbose', characterName: 'Verbose',
-          quote: 'this was originally much longer',
-          truncated: true,
-          reason: 'not_in_source',
-        }],
-      }],
-    });
+    getDroppedQuotesImpl = () =>
+      Promise.resolve({
+        manuscriptId: 'm1',
+        batches: [
+          {
+            recordedAt: '2026-05-15T10:00:00.000Z',
+            route: 'analysis-stream',
+            totalDropped: 1,
+            affectedCharacters: 1,
+            entries: [
+              {
+                characterId: 'verbose',
+                characterName: 'Verbose',
+                quote: 'this was originally much longer',
+                truncated: true,
+                reason: 'not_in_source',
+              },
+            ],
+          },
+        ],
+      });
     renderWithBookId();
     expect(await screen.findByText(/\[truncated\]/)).toBeInTheDocument();
   });
 
   it('renders only the latest batch when multiple batches exist', async () => {
     setEmptyBookState();
-    getDroppedQuotesImpl = () => Promise.resolve({
-      manuscriptId: 'm1',
-      batches: [
-        {
-          recordedAt: '2026-05-15T09:00:00.000Z',
-          route: 'analysis-stream',
-          totalDropped: 1, affectedCharacters: 1,
-          entries: [{ characterId: 'a', characterName: 'OldOne', quote: 'old fabrication', truncated: false, reason: 'not_in_source' }],
-        },
-        {
-          recordedAt: '2026-05-15T10:00:00.000Z',
-          route: 'analysis-chapters',
-          totalDropped: 1, affectedCharacters: 1,
-          entries: [{ characterId: 'b', characterName: 'NewOne', quote: 'recent fabrication', truncated: false, reason: 'not_in_source' }],
-        },
-      ],
-    });
+    getDroppedQuotesImpl = () =>
+      Promise.resolve({
+        manuscriptId: 'm1',
+        batches: [
+          {
+            recordedAt: '2026-05-15T09:00:00.000Z',
+            route: 'analysis-stream',
+            totalDropped: 1,
+            affectedCharacters: 1,
+            entries: [
+              {
+                characterId: 'a',
+                characterName: 'OldOne',
+                quote: 'old fabrication',
+                truncated: false,
+                reason: 'not_in_source',
+              },
+            ],
+          },
+          {
+            recordedAt: '2026-05-15T10:00:00.000Z',
+            route: 'analysis-chapters',
+            totalDropped: 1,
+            affectedCharacters: 1,
+            entries: [
+              {
+                characterId: 'b',
+                characterName: 'NewOne',
+                quote: 'recent fabrication',
+                truncated: false,
+                reason: 'not_in_source',
+              },
+            ],
+          },
+        ],
+      });
     renderWithBookId();
     expect(await screen.findByText('NewOne')).toBeInTheDocument();
     expect(screen.queryByText('OldOne')).not.toBeInTheDocument();
@@ -1065,7 +1220,9 @@ describe('AnalysingView — stage1 shrink-refused banner', () => {
     expect(banner).toBeInTheDocument();
     expect(banner.textContent).toMatch(/6 characters/);
     expect(banner.textContent).toMatch(/replace it with .*1/);
-    const acceptBtn = screen.getByRole('button', { name: /Accept smaller roster \(1 characters\)/i });
+    const acceptBtn = screen.getByRole('button', {
+      name: /Accept smaller roster \(1 characters\)/i,
+    });
     expect(acceptBtn).toBeInTheDocument();
   });
 
@@ -1088,7 +1245,9 @@ describe('AnalysingView — stage1 shrink-refused banner', () => {
     analyseManuscriptRejection = undefined;
 
     const acceptBtn = await screen.findByRole('button', { name: /Accept smaller roster/i });
-    await act(async () => { fireEvent.click(acceptBtn); });
+    await act(async () => {
+      fireEvent.click(acceptBtn);
+    });
 
     /* Wait for the override to land on capturedOpts. The mock overwrites
        on every call, so the most recent capture is the post-click one. */
@@ -1111,8 +1270,12 @@ describe('AnalysingView — stage1 shrink-refused banner', () => {
     expect(banner).toBeInTheDocument();
 
     const dismissBtn = screen.getByRole('button', { name: /Dismiss/i });
-    await act(async () => { fireEvent.click(dismissBtn); });
-    await waitFor(() => expect(screen.queryByTestId('stage1-shrink-refused-banner')).not.toBeInTheDocument());
+    await act(async () => {
+      fireEvent.click(dismissBtn);
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId('stage1-shrink-refused-banner')).not.toBeInTheDocument(),
+    );
 
     /* Dismiss must not trigger a re-fire with the override flag.
        The most recent captured opts are still the original (no override)
@@ -1155,7 +1318,9 @@ describe('AnalysingView — cross-navigation analysis snapshot (B2)', () => {
     });
 
     const pauseBtn = await screen.findByRole('button', { name: /pause analysis/i });
-    await act(async () => { fireEvent.click(pauseBtn); });
+    await act(async () => {
+      fireEvent.click(pauseBtn);
+    });
 
     await waitFor(() => {
       expect(store.getState().analysis.activeStream?.state).toBe('paused');
@@ -1211,8 +1376,8 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
   function renderViewWithActiveStream(state: 'running' | 'paused' | 'halted') {
     const store = configureStore({
       reducer: {
-        ui:       uiSlice.reducer,
-        cast:     castSlice.reducer,
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
         analysis: analysisSlice.reducer,
       },
       preloadedState: {

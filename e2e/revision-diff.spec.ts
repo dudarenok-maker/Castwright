@@ -19,16 +19,24 @@ import { test, expect } from '@playwright/test';
  */
 
 test.describe('revision diff a/b audition pill', () => {
-  test('pending-revisions pill appears after opening a complete book under mocks', async ({ page }) => {
+  test('pending-revisions pill appears after opening a complete book under mocks', async ({
+    page,
+  }) => {
     await page.goto('/');
-    await expect(page.getByRole('button', { name: /Start a new book/i })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: /Start a new book/i })).toBeVisible({
+      timeout: 10_000,
+    });
 
     /* Solway Bay is the 'complete' book in the mock library. */
-    await page.getByText(/Solway Bay/i).first().click({ timeout: 10_000 });
+    await page
+      .getByText(/Solway Bay/i)
+      .first()
+      .click({ timeout: 10_000 });
 
     /* The revision pill renders once the mock pollRevisions call resolves
        (≈200ms) and the slice flips loaded. Matches "1 revision". */
-    await expect(page.getByRole('button', { name: /\d+ revisions?/i }))
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: /\d+ revisions?/i })).toBeVisible({
+      timeout: 10_000,
+    });
   });
 });

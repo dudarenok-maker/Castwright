@@ -54,10 +54,20 @@ export interface Analyzer {
   /* Phase 0a — per-chapter cast detection. Each call returns the
      speaking characters that appear in ONE chapter (new + recurring).
      The route merges these into a running roster across the book. */
-  runStage1Chapter(manuscriptId: string, chapterId: number, promptMd: string, call: StageCall): Promise<Stage1ChapterOutput>;
+  runStage1Chapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<Stage1ChapterOutput>;
   /* Per-chapter sentence attribution. Stays under model context windows
      and lets free-tier rate limits recover between calls. */
-  runStage2Chapter(manuscriptId: string, chapterId: number, promptMd: string, call: StageCall): Promise<Stage2ChapterOutput>;
+  runStage2Chapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<Stage2ChapterOutput>;
 }
 
 export interface SelectAnalyzerOptions {
@@ -121,7 +131,9 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
 
   // engine === 'gemini'
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is required when ANALYZER=gemini (set it in server/.env — see server/.env.example).');
+    throw new Error(
+      'GEMINI_API_KEY is required when ANALYZER=gemini (set it in server/.env — see server/.env.example).',
+    );
   }
   const model = opts.model ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
   return {

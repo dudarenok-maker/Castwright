@@ -58,7 +58,9 @@ export function listManuscripts(): ManuscriptRecord[] {
 /* In-memory lookup, with a workspace fallback that re-parses the manuscript
    file on disk if the in-memory record is missing (server restart, etc.).
    Returns undefined if the manuscript can't be located by either route. */
-export async function getOrHydrateManuscript(manuscriptId: string): Promise<ManuscriptRecord | undefined> {
+export async function getOrHydrateManuscript(
+  manuscriptId: string,
+): Promise<ManuscriptRecord | undefined> {
   const cached = store.get(manuscriptId);
   if (cached) return cached;
 
@@ -82,7 +84,7 @@ export async function getOrHydrateManuscript(manuscriptId: string): Promise<Manu
   for (const c of book.state.chapters) {
     if (c.excluded) excludedById.set(c.id, true);
   }
-  const chapterHints: ChapterHint[] = parsed.chapters.map(c => ({
+  const chapterHints: ChapterHint[] = parsed.chapters.map((c) => ({
     ...c,
     excluded: excludedById.get(c.id) || undefined,
   }));

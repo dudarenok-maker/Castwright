@@ -69,7 +69,7 @@ export async function readJsonWithRecovery<T>(
         const value = JSON.parse(raw) as T;
         console.warn(
           `[state-io] ${path} was unreadable (${(originalErr as Error).message}); ` +
-          `recovered from ${backupPath}.`,
+            `recovered from ${backupPath}.`,
         );
         return value;
       } catch {

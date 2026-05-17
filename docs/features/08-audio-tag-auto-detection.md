@@ -27,49 +27,49 @@ These tests should ideally live as a Vitest spec against `server/src/parsers/aud
 
 ### `tagShoutingDialog`
 
-| Input | Expected output |
-|---|---|
-| `She said "HELP ME!"` | `She said "[shouting] Help me!"` |
-| `She said "NO!"` | `She said "[shouting] No!"` |
-| `She said "OK"` | `She said "OK"` (unchanged — only 2 letters, no `!`) |
-| `She said "AC"` | `She said "AC"` (initialism guard) |
-| `She said "[whispers] HELP!"` | unchanged (already tagged) |
-| `She said "GET out!"` | unchanged (mixed case) |
+| Input                         | Expected output                                      |
+| ----------------------------- | ---------------------------------------------------- |
+| `She said "HELP ME!"`         | `She said "[shouting] Help me!"`                     |
+| `She said "NO!"`              | `She said "[shouting] No!"`                          |
+| `She said "OK"`               | `She said "OK"` (unchanged — only 2 letters, no `!`) |
+| `She said "AC"`               | `She said "AC"` (initialism guard)                   |
+| `She said "[whispers] HELP!"` | unchanged (already tagged)                           |
+| `She said "GET out!"`         | unchanged (mixed case)                               |
 
 ### `tagExcitedDialog`
 
-| Input | Expected output |
-|---|---|
-| `"Wait — you mean it!"` | `"[excited] Wait — you mean it!"` |
-| `"HELP!"` | unchanged (shouting wins; would be tagged by `tagShoutingDialog` first) |
-| `"[shouting] Help!"` | unchanged (already tagged) |
-| `"OK."` | unchanged (no `!`) |
+| Input                   | Expected output                                                         |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `"Wait — you mean it!"` | `"[excited] Wait — you mean it!"`                                       |
+| `"HELP!"`               | unchanged (shouting wins; would be tagged by `tagShoutingDialog` first) |
+| `"[shouting] Help!"`    | unchanged (already tagged)                                              |
+| `"OK."`                 | unchanged (no `!`)                                                      |
 
 ### `tagHesitantDialog`
 
-| Input | Expected output |
-|---|---|
-| `"…I don't know."` | `"[hesitant] …I don't know."` |
-| `"Wait…"` | `"[hesitant] Wait…"` |
-| `"Wait..."` | `"[hesitant] Wait..."` (2+ dots also triggers) |
-| `"Hi!"` | unchanged (no ellipsis) |
+| Input               | Expected output                                                                               |
+| ------------------- | --------------------------------------------------------------------------------------------- |
+| `"…I don't know."`  | `"[hesitant] …I don't know."`                                                                 |
+| `"Wait…"`           | `"[hesitant] Wait…"`                                                                          |
+| `"Wait..."`         | `"[hesitant] Wait..."` (2+ dots also triggers)                                                |
+| `"Hi!"`             | unchanged (no ellipsis)                                                                       |
 | `"[excited] Wait!"` | unchanged (already tagged — excited keeps precedence even if a hesitation cue is added later) |
 
 ### `tagMarkdownEmphasis`
 
-| Input | Expected output |
-|---|---|
-| `She **really** meant it.` | `She [emphatic] really meant it.` |
-| `She *really* meant it.` | `She [emphatic] really meant it.` |
-| `She __really__ meant it.` | `She [emphatic] really meant it.` |
-| `She _really_ meant it.` | `She [emphatic] really meant it.` |
-| `She * meant *` (stray asterisks) | unchanged |
+| Input                             | Expected output                   |
+| --------------------------------- | --------------------------------- |
+| `She **really** meant it.`        | `She [emphatic] really meant it.` |
+| `She *really* meant it.`          | `She [emphatic] really meant it.` |
+| `She __really__ meant it.`        | `She [emphatic] really meant it.` |
+| `She _really_ meant it.`          | `She [emphatic] really meant it.` |
+| `She * meant *` (stray asterisks) | unchanged                         |
 
 ### `tagHtmlEmphasis`
 
-| Input | Expected output |
-|---|---|
-| `She <em>really</em> meant it.` | `She [emphatic] really meant it.` |
+| Input                                             | Expected output                   |
+| ------------------------------------------------- | --------------------------------- |
+| `She <em>really</em> meant it.`                   | `She [emphatic] really meant it.` |
 | `She <strong class="x">really</strong> meant it.` | `She [emphatic] really meant it.` |
 
 ### Idempotence

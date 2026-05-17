@@ -19,8 +19,7 @@ vi.mock('node:fs/promises', async () => {
   return {
     ...actual,
     /* Default: pass-through. Tests override via setRenameImpl(). */
-    rename: (src: string, dest: string): Promise<void> =>
-      (renameImpl ?? actual.rename)(src, dest),
+    rename: (src: string, dest: string): Promise<void> => (renameImpl ?? actual.rename)(src, dest),
   };
 });
 
@@ -122,7 +121,7 @@ describe('renameWithRetry transient-error handling', () => {
 
     /* The tmp file should be gone — leaking .tmp-<pid>-<ts> droppings
        across crashed writes pollutes .audiobook/ over time. */
-    const droppings = (await readdir(workdir)).filter(n => n.includes('.tmp-'));
+    const droppings = (await readdir(workdir)).filter((n) => n.includes('.tmp-'));
     expect(droppings).toEqual([]);
 
     /* And the target was never created (no partial state). */
@@ -148,7 +147,7 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
     expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ v: 2 });
     expect(JSON.parse(await readFile(`${target}.bak.1`, 'utf8'))).toEqual({ v: 1 });
     /* No bak.2/.bak.3 yet — only one prior write to shift. */
-    const names = (await readdir(workdir)).filter(n => n.startsWith('state.json'));
+    const names = (await readdir(workdir)).filter((n) => n.startsWith('state.json'));
     expect(names.sort()).toEqual(['state.json', 'state.json.bak.1']);
   });
 
@@ -166,7 +165,7 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
     expect(JSON.parse(await readFile(`${target}.bak.2`, 'utf8'))).toEqual({ v: 3 });
     expect(JSON.parse(await readFile(`${target}.bak.3`, 'utf8'))).toEqual({ v: 2 });
 
-    const names = (await readdir(workdir)).filter(n => n.startsWith('state.json')).sort();
+    const names = (await readdir(workdir)).filter((n) => n.startsWith('state.json')).sort();
     expect(names).toEqual([
       'state.json',
       'state.json.bak.1',
@@ -182,7 +181,7 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
     await writeJsonAtomic(target, { v: 1 });
     await writeJsonAtomic(target, { v: 2 });
 
-    const names = (await readdir(workdir)).filter(n => n.startsWith('state.json')).sort();
+    const names = (await readdir(workdir)).filter((n) => n.startsWith('state.json')).sort();
     expect(names).toEqual(['state.json']);
   });
 });
@@ -254,8 +253,8 @@ describe('readJsonWithRecovery — fallback to .bak.N on corrupt JSON', () => {
        errors with V8's "Expected property name" wording; the assertion
        only needs to confirm a JSON parse error bubbles out (no silent
        null when nothing was recoverable). */
-    await expect(
-      readJsonWithRecovery<{ v: number }>(target, { keep: 3 }),
-    ).rejects.toThrow(/json|expected|unexpected/i);
+    await expect(readJsonWithRecovery<{ v: number }>(target, { keep: 3 })).rejects.toThrow(
+      /json|expected|unexpected/i,
+    );
   });
 });

@@ -20,16 +20,29 @@ const HANDOFF_ROOT = resolve(__dirname, '..', '..', 'handoff');
    fine because we only validate the assembled buffer at the end. */
 const STAGE1_RESPONSE = JSON.stringify({
   characters: [
-    { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator',
-      evidence: [{ quote: 'aaa' }, { quote: 'bbbb' }, { quote: 'ccccc' }] },
-    { id: 'Wren',   name: 'Wren',   role: 'protagonist', color: 'orange',
-      evidence: [{ quote: 'ddd' }, { quote: 'eeee' }, { quote: 'fffff' }] },
-    { id: 'Marlow',    name: 'Marlow',    role: 'sidekick',    color: 'magenta',
-      evidence: [{ quote: 'ggg' }, { quote: 'hhhh' }, { quote: 'iiiii' }] },
+    {
+      id: 'narrator',
+      name: 'Narrator',
+      role: 'narrator',
+      color: 'narrator',
+      evidence: [{ quote: 'aaa' }, { quote: 'bbbb' }, { quote: 'ccccc' }],
+    },
+    {
+      id: 'Wren',
+      name: 'Wren',
+      role: 'protagonist',
+      color: 'orange',
+      evidence: [{ quote: 'ddd' }, { quote: 'eeee' }, { quote: 'fffff' }],
+    },
+    {
+      id: 'Marlow',
+      name: 'Marlow',
+      role: 'sidekick',
+      color: 'magenta',
+      evidence: [{ quote: 'ggg' }, { quote: 'hhhh' }, { quote: 'iiiii' }],
+    },
   ],
-  chapters: [
-    { id: 1, title: 'One' },
-  ],
+  chapters: [{ id: 1, title: 'One' }],
 });
 
 function chunksOf(text: string, size: number): string[] {
@@ -55,13 +68,13 @@ beforeEach(async () => {
   geminiRateLimiter._reset();
   /* writeInbox writes a real file under server/handoff/inbox/. Ensure the
      directory exists so the test doesn't trip over a missing parent. */
-  await mkdir(resolve(HANDOFF_ROOT, 'inbox'),  { recursive: true });
+  await mkdir(resolve(HANDOFF_ROOT, 'inbox'), { recursive: true });
   await mkdir(resolve(HANDOFF_ROOT, 'outbox'), { recursive: true });
 });
 
 async function* asyncFromArray<T>(items: T[], delayMs = 0): AsyncGenerator<T> {
   for (const item of items) {
-    if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
+    if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
     yield item;
   }
 }
@@ -70,7 +83,7 @@ describe('GeminiAnalyzer.runStage1 — streaming chunk feedback', () => {
   it('fires onChunk per stream chunk with monotonic receivedBytes and assembles the full response', async () => {
     const slices = chunksOf(STAGE1_RESPONSE, 64);
     expect(slices.length).toBeGreaterThan(2); // ensure we exercise multi-chunk
-    generateContentStream.mockResolvedValue(asyncFromArray(slices.map(text => ({ text }))));
+    generateContentStream.mockResolvedValue(asyncFromArray(slices.map((text) => ({ text }))));
 
     const { GeminiAnalyzer } = await import('./gemini.js');
     const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
@@ -81,10 +94,10 @@ describe('GeminiAnalyzer.runStage1 — streaming chunk feedback', () => {
     expect(generateContentStream).toHaveBeenCalledTimes(1);
     expect(onChunk).toHaveBeenCalledTimes(slices.length);
 
-    const calls = onChunk.mock.calls.map(args => args[0]);
+    const calls = onChunk.mock.calls.map((args) => args[0]);
     /* receivedBytes must be monotonically non-decreasing and end at the
        full assembled length. */
-    const lengths = calls.map(c => c.receivedBytes);
+    const lengths = calls.map((c) => c.receivedBytes);
     for (let i = 1; i < lengths.length; i += 1) {
       expect(lengths[i]).toBeGreaterThanOrEqual(lengths[i - 1]);
     }
@@ -99,7 +112,7 @@ describe('GeminiAnalyzer.runStage1 — streaming chunk feedback', () => {
 
     /* And the analyzer returned the parsed payload. */
     expect(result.characters).toHaveLength(3);
-    expect(result.characters.map(c => c.id)).toEqual(['narrator', 'Wren', 'Marlow']);
+    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'Wren', 'Marlow']);
   });
 
   it('skips empty chunks (text undefined) without firing onChunk', async () => {
@@ -108,7 +121,7 @@ describe('GeminiAnalyzer.runStage1 — streaming chunk feedback', () => {
     const withGaps = [
       { text: slices[0] },
       { text: undefined },
-      ...slices.slice(1).map(text => ({ text })),
+      ...slices.slice(1).map((text) => ({ text })),
     ];
     generateContentStream.mockResolvedValue(asyncFromArray(withGaps));
 
@@ -138,28 +151,40 @@ describe('GeminiAnalyzer.runStage1Chapter — Phase 0a per-chapter cast detectio
      test that we can't accidentally call the whole-book schema by mistake. */
   const PER_CHAPTER_RESPONSE = JSON.stringify({
     characters: [
-      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator',
-        evidence: [{ quote: 'a' }, { quote: 'bb' }] },
-      { id: 'Wren', name: 'Wren', role: 'protagonist', color: 'orange',
-        evidence: [{ quote: 'cc' }, { quote: 'dddd' }] },
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        role: 'narrator',
+        color: 'narrator',
+        evidence: [{ quote: 'a' }, { quote: 'bb' }],
+      },
+      {
+        id: 'Wren',
+        name: 'Wren',
+        role: 'protagonist',
+        color: 'orange',
+        evidence: [{ quote: 'cc' }, { quote: 'dddd' }],
+      },
     ],
   });
 
   it('reuses the same streaming path as runStage1 and returns parsed per-chapter output', async () => {
     const slices = chunksOf(PER_CHAPTER_RESPONSE, 32);
-    generateContentStream.mockResolvedValue(asyncFromArray(slices.map(text => ({ text }))));
+    generateContentStream.mockResolvedValue(asyncFromArray(slices.map((text) => ({ text }))));
 
     const { GeminiAnalyzer } = await import('./gemini.js');
     const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
 
     const onChunk = vi.fn();
-    const result = await analyzer.runStage1Chapter('m_test', 7, '# stage 1 chapter prompt', { onChunk });
+    const result = await analyzer.runStage1Chapter('m_test', 7, '# stage 1 chapter prompt', {
+      onChunk,
+    });
 
     expect(generateContentStream).toHaveBeenCalledTimes(1);
     expect(onChunk).toHaveBeenCalledTimes(slices.length);
 
     expect(result.characters).toHaveLength(2);
-    expect(result.characters.map(c => c.id)).toEqual(['narrator', 'Wren']);
+    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'Wren']);
     /* No chapters[] field on the per-chapter shape — the parser is the
        source of truth for the chapter list. */
     expect((result as unknown as { chapters?: unknown }).chapters).toBeUndefined();
@@ -170,7 +195,9 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
   /* Build an SDK-shaped ApiError so isRetryable5xx and parseRetryDelayMs
      find what they expect. */
   function apiError(status: number, body: object): Error {
-    const e = new Error(`got status: ${status}. ${JSON.stringify(body)}`) as Error & { status: number };
+    const e = new Error(`got status: ${status}. ${JSON.stringify(body)}`) as Error & {
+      status: number;
+    };
     e.status = status;
     return e;
   }
@@ -179,9 +206,17 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
     /* Two transient 503s, then success on the third attempt. */
     const ok = chunksOf(STAGE1_RESPONSE, 256);
     generateContentStream
-      .mockRejectedValueOnce(apiError(503, { error: { code: 503, message: 'service unavailable', status: 'UNAVAILABLE' } }))
-      .mockRejectedValueOnce(apiError(503, { error: { code: 503, message: 'service unavailable', status: 'UNAVAILABLE' } }))
-      .mockResolvedValueOnce(asyncFromArray(ok.map(text => ({ text }))));
+      .mockRejectedValueOnce(
+        apiError(503, {
+          error: { code: 503, message: 'service unavailable', status: 'UNAVAILABLE' },
+        }),
+      )
+      .mockRejectedValueOnce(
+        apiError(503, {
+          error: { code: 503, message: 'service unavailable', status: 'UNAVAILABLE' },
+        }),
+      )
+      .mockResolvedValueOnce(asyncFromArray(ok.map((text) => ({ text }))));
 
     const { GeminiAnalyzer } = await import('./gemini.js');
     const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
@@ -195,7 +230,7 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
        so onThrottle fired. */
     expect(onThrottle).toHaveBeenCalled();
     /* Reason is 'retry-after' for explicit retry sleeps. */
-    expect(onThrottle.mock.calls.some(c => c[1] === 'retry-after')).toBe(true);
+    expect(onThrottle.mock.calls.some((c) => c[1] === 'retry-after')).toBe(true);
   }, 30_000);
 
   it('gives up after MAX_ATTEMPTS=3 of 5xx, re-throwing the upstream error', async () => {
@@ -208,7 +243,9 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
     const { GeminiAnalyzer } = await import('./gemini.js');
     const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
 
-    await expect(analyzer.runStage1('m_5xx_exhaust', '# prompt', {})).rejects.toMatchObject({ status: 500 });
+    await expect(analyzer.runStage1('m_5xx_exhaust', '# prompt', {})).rejects.toMatchObject({
+      status: 500,
+    });
     expect(generateContentStream).toHaveBeenCalledTimes(3);
   }, 30_000);
 
@@ -218,15 +255,13 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
         code: 429,
         message: 'Resource has been exhausted (e.g. check quota).',
         status: 'RESOURCE_EXHAUSTED',
-        details: [
-          { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '2s' },
-        ],
+        details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '2s' }],
       },
     });
     const ok = chunksOf(STAGE1_RESPONSE, 256);
     generateContentStream
       .mockRejectedValueOnce(throttle)
-      .mockResolvedValueOnce(asyncFromArray(ok.map(text => ({ text }))));
+      .mockResolvedValueOnce(asyncFromArray(ok.map((text) => ({ text }))));
 
     const { GeminiAnalyzer } = await import('./gemini.js');
     const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
@@ -258,7 +293,9 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
     const { DailyQuotaExhaustedError } = await import('./rate-limit.js');
     const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
 
-    await expect(analyzer.runStage1('m_daily', '# prompt', {})).rejects.toBeInstanceOf(DailyQuotaExhaustedError);
+    await expect(analyzer.runStage1('m_daily', '# prompt', {})).rejects.toBeInstanceOf(
+      DailyQuotaExhaustedError,
+    );
     /* Daily 429 must NOT retry — exactly one upstream call. */
     expect(generateContentStream).toHaveBeenCalledTimes(1);
   }, 10_000);
@@ -266,9 +303,13 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
   it('parseRetryDelayMs handles "Ns", "N.Ns", and "Nms" forms', async () => {
     const { parseRetryDelayMs } = await import('./gemini.js');
     function build(delay: string): Error {
-      return new Error(JSON.stringify({
-        error: { details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: delay }] },
-      }));
+      return new Error(
+        JSON.stringify({
+          error: {
+            details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: delay }],
+          },
+        }),
+      );
     }
     expect(parseRetryDelayMs(build('15s'))).toBe(15_000);
     expect(parseRetryDelayMs(build('1.5s'))).toBe(1_500);
@@ -279,17 +320,17 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
 
 afterAll(async () => {
   /* Tidy the test inbox/outbox we touched so the workspace stays clean. */
-  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_test-stage1.md'),       { force: true });
-  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_skip_empty-stage1.md'), { force: true });
-  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_empty-stage1.md'),      { force: true });
-  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_test-stage1-ch7.md'),   { force: true });
-  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_retry_5xx-stage1.md'),  { force: true });
-  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_5xx_exhaust-stage1.md'), { force: true });
-  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_429_retry-stage1.md'),  { force: true });
-  await rm(resolve(HANDOFF_ROOT, 'inbox',  'm_daily-stage1.md'),      { force: true });
-  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_test-stage1.json'),       { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_test-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_skip_empty-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_empty-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_test-stage1-ch7.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_retry_5xx-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_5xx_exhaust-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_429_retry-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_daily-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_test-stage1.json'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_skip_empty-stage1.json'), { force: true });
-  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_test-stage1-ch7.json'),   { force: true });
-  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_retry_5xx-stage1.json'),  { force: true });
-  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_429_retry-stage1.json'),  { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_test-stage1-ch7.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_retry_5xx-stage1.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_429_retry-stage1.json'), { force: true });
 });

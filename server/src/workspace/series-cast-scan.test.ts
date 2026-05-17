@@ -30,50 +30,61 @@ beforeAll(async () => {
        - Bonus Marlow (confirmed) -- contributes 2 characters
        - Unlocked (NOT confirmed) -- excluded by library-cast-scan
      Plus one book in a different series to prove the series scope. */
-  const seed = (title: string, opts: {
-    confirmed: boolean; characters: Array<{ id: string; name: string }>;
-    series?: string; isStandalone?: boolean;
-  }) => {
+  const seed = (
+    title: string,
+    opts: {
+      confirmed: boolean;
+      characters: Array<{ id: string; name: string }>;
+      series?: string;
+      isStandalone?: boolean;
+    },
+  ) => {
     const series = opts.series ?? SERIES;
     const dir = join(workspaceRoot, 'books', AUTHOR, series, title);
     mkdirSync(join(dir, '.audiobook'), { recursive: true });
-    writeFileSync(join(dir, '.audiobook', 'state.json'), JSON.stringify({
-      bookId: `${AUTHOR.toLowerCase().replace(/\s+/g, '-')}__${series.toLowerCase().replace(/\s+/g, '-')}__${title.toLowerCase().replace(/\s+/g, '-')}`,
-      manuscriptId: `m_${title.toLowerCase().replace(/\s+/g, '_')}`,
-      title,
-      author: AUTHOR,
-      series,
-      seriesPosition: null,
-      isStandalone: opts.isStandalone === true,
-      manuscriptFile: 'manuscript.epub',
-      castConfirmed: opts.confirmed,
-      chapters: [],
-      coverGradient: ['#000', '#fff'],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }));
-    writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({
-      characters: opts.characters.map(c => ({ ...c, role: 'character', color: 'unset' })),
-    }));
+    writeFileSync(
+      join(dir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: `${AUTHOR.toLowerCase().replace(/\s+/g, '-')}__${series.toLowerCase().replace(/\s+/g, '-')}__${title.toLowerCase().replace(/\s+/g, '-')}`,
+        manuscriptId: `m_${title.toLowerCase().replace(/\s+/g, '_')}`,
+        title,
+        author: AUTHOR,
+        series,
+        seriesPosition: null,
+        isStandalone: opts.isStandalone === true,
+        manuscriptFile: 'manuscript.epub',
+        castConfirmed: opts.confirmed,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(dir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: opts.characters.map((c) => ({ ...c, role: 'character', color: 'unset' })),
+      }),
+    );
   };
 
   seed('The Hollow Tide', {
     confirmed: true,
     characters: [
       { id: 'narrator', name: 'Narrator' },
-      { id: 'Wren',   name: 'Wren' },
-      { id: 'Marlow',    name: 'Marlow' },
+      { id: 'Wren', name: 'Wren' },
+      { id: 'Marlow', name: 'Marlow' },
     ],
   });
   seed('the Coalfall Commission', {
     confirmed: true,
     characters: [
       { id: 'Marlow', name: 'Marlow' },
-      { id: 'ro',    name: 'Ro' },
+      { id: 'ro', name: 'Ro' },
     ],
   });
   seed('Unlocked', {
-    confirmed: false,    // analyzing now, no cast on disk yet
+    confirmed: false, // analyzing now, no cast on disk yet
     characters: [{ id: 'narrator', name: 'Narrator' }],
   });
   /* A standalone in the same author/series folder — must NOT show up
@@ -101,7 +112,7 @@ describe('scanSeriesCharacters', () => {
     const records = await scan.scanSeriesCharacters(AUTHOR, SERIES);
     /* the Hollow Tide (3) + Bonus Marlow (2) = 5. Unlocked excluded (castConfirmed=false). */
     expect(records).toHaveLength(5);
-    const ids = records.map(r => r.character.id).sort();
+    const ids = records.map((r) => r.character.id).sort();
     expect(ids).toEqual(['Marlow', 'Marlow', 'narrator', 'ro', 'Wren']);
   });
 
@@ -111,20 +122,20 @@ describe('scanSeriesCharacters', () => {
     });
     /* the Hollow Tide's 3 characters drop out; Bonus Marlow's 2 remain. */
     expect(records).toHaveLength(2);
-    const ids = records.map(r => r.character.id).sort();
+    const ids = records.map((r) => r.character.id).sort();
     expect(ids).toEqual(['Marlow', 'ro']);
   });
 
   it('excludes books in a different series even when the author matches', async () => {
     const records = await scan.scanSeriesCharacters(AUTHOR, SERIES);
-    expect(records.find(r => r.character.id === 'unrelated')).toBeUndefined();
+    expect(records.find((r) => r.character.id === 'unrelated')).toBeUndefined();
   });
 
   it('excludes standalones even when they live under the same series folder', async () => {
     /* state.isStandalone === true makes a book's cast NOT part of any
        series's continuity, regardless of where its directory sits. */
     const records = await scan.scanSeriesCharacters(AUTHOR, SERIES);
-    expect(records.find(r => r.character.id === 'lonely')).toBeUndefined();
+    expect(records.find((r) => r.character.id === 'lonely')).toBeUndefined();
   });
 
   it('returns empty for an author/series with no confirmed books', async () => {

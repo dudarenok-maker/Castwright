@@ -65,7 +65,8 @@ export function characterLinePositionsByChapter(
    per character per render. */
 export function linesDoneAt(positions: number[] | undefined, currentLine: number): number {
   if (!positions || positions.length === 0 || currentLine <= 0) return 0;
-  let lo = 0, hi = positions.length;
+  let lo = 0,
+    hi = positions.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
     if (positions[mid] <= currentLine) lo = mid + 1;
@@ -96,7 +97,7 @@ export function overallProgress(
      numerator nor denominator. Without this filter a 10-chapter book
      with 2 excluded would stall the bar at 80 % when 8/8 active
      chapters finish. */
-  const active = chapters.filter(c => !c.excluded);
+  const active = chapters.filter((c) => !c.excluded);
   if (active.length === 0) return 0;
 
   const knownWeights: number[] = [];
@@ -111,9 +112,8 @@ export function overallProgress(
     const w = baseWeight(c);
     if (w != null) knownWeights.push(w);
   }
-  const avgKnown = knownWeights.length > 0
-    ? knownWeights.reduce((a, b) => a + b, 0) / knownWeights.length
-    : 0;
+  const avgKnown =
+    knownWeights.length > 0 ? knownWeights.reduce((a, b) => a + b, 0) / knownWeights.length : 0;
 
   const weightOf = (c: Chapter): number => baseWeight(c) ?? (avgKnown > 0 ? avgKnown : 1);
 

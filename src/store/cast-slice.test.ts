@@ -15,28 +15,45 @@ const makeChar = (id: string, overrides: Partial<Character> = {}): Character => 
 
 const baseState = (characters: Character[]) => ({ characters });
 
-const matchResponse = (matches: VoiceMatchResponse['matches']): VoiceMatchResponse =>
-  ({ bookId: 'ns', matches });
+const matchResponse = (matches: VoiceMatchResponse['matches']): VoiceMatchResponse => ({
+  bookId: 'ns',
+  matches,
+});
 
 describe('castSlice — applyVoiceMatches', () => {
   it('assigns the top candidate to the matching character and flips voiceState to reused', () => {
     const start = baseState([
       makeChar('halloran', { voiceState: 'generated' }),
-      makeChar('eliza',    { voiceState: 'generated' }),
+      makeChar('eliza', { voiceState: 'generated' }),
     ]);
-    const next = castSlice.reducer(start, castActions.applyVoiceMatches(matchResponse([
-      {
-        characterId: 'halloran',
-        candidates: [
-          { voiceId: 'v_authority', fromBookId: 'solway_bay_book', fromBookTitle: 'Solway Bay',
-            fromCharacterId: 'halloran_lib', score: 0.91,
-            factors: [{ id: 'register', label: 'Register', score: 0.9 }] },
-          { voiceId: 'v_runner-up', fromBookId: 'other_book', fromBookTitle: 'Other',
-            fromCharacterId: 'halloran_lib_alt', score: 0.6 },
-        ],
-      },
-    ])));
-    const halloran = next.characters.find(c => c.id === 'halloran')!;
+    const next = castSlice.reducer(
+      start,
+      castActions.applyVoiceMatches(
+        matchResponse([
+          {
+            characterId: 'halloran',
+            candidates: [
+              {
+                voiceId: 'v_authority',
+                fromBookId: 'solway_bay_book',
+                fromBookTitle: 'Solway Bay',
+                fromCharacterId: 'halloran_lib',
+                score: 0.91,
+                factors: [{ id: 'register', label: 'Register', score: 0.9 }],
+              },
+              {
+                voiceId: 'v_runner-up',
+                fromBookId: 'other_book',
+                fromBookTitle: 'Other',
+                fromCharacterId: 'halloran_lib_alt',
+                score: 0.6,
+              },
+            ],
+          },
+        ]),
+      ),
+    );
+    const halloran = next.characters.find((c) => c.id === 'halloran')!;
     expect(halloran.voiceId).toBe('v_authority');
     expect(halloran.voiceState).toBe('reused');
     /* matchedFrom carries the cross-book identifiers needed by the
@@ -53,22 +70,21 @@ describe('castSlice — applyVoiceMatches', () => {
   it('leaves characters with no candidates untouched', () => {
     const start = baseState([
       makeChar('halloran', { voiceState: 'generated', voiceId: 'v_old' }),
-      makeChar('eliza',    { voiceState: 'tuned',     voiceId: 'v_eliza' }),
+      makeChar('eliza', { voiceState: 'tuned', voiceId: 'v_eliza' }),
     ]);
-    const next = castSlice.reducer(start, castActions.applyVoiceMatches(matchResponse([
-      { characterId: 'halloran', candidates: [] },
-    ])));
-    const halloran = next.characters.find(c => c.id === 'halloran')!;
-    const eliza    = next.characters.find(c => c.id === 'eliza')!;
+    const next = castSlice.reducer(
+      start,
+      castActions.applyVoiceMatches(matchResponse([{ characterId: 'halloran', candidates: [] }])),
+    );
+    const halloran = next.characters.find((c) => c.id === 'halloran')!;
+    const eliza = next.characters.find((c) => c.id === 'eliza')!;
     expect(halloran.voiceId).toBe('v_old');
     expect(halloran.voiceState).toBe('generated');
     expect(eliza.voiceState).toBe('tuned');
   });
 
   it('leaves characters not present in the matches response untouched', () => {
-    const start = baseState([
-      makeChar('halloran', { voiceState: 'generated', voiceId: 'v_old' }),
-    ]);
+    const start = baseState([makeChar('halloran', { voiceState: 'generated', voiceId: 'v_old' })]);
     const next = castSlice.reducer(start, castActions.applyVoiceMatches(matchResponse([])));
     expect(next.characters[0].voiceId).toBe('v_old');
     expect(next.characters[0].voiceState).toBe('generated');
@@ -100,11 +116,11 @@ describe('castSlice — lockVoice', () => {
   it('flips the targeted character voiceState to locked', () => {
     const start = baseState([
       makeChar('halloran', { voiceState: 'tuned' }),
-      makeChar('eliza',    { voiceState: 'generated' }),
+      makeChar('eliza', { voiceState: 'generated' }),
     ]);
     const next = castSlice.reducer(start, castActions.lockVoice('halloran'));
-    expect(next.characters.find(c => c.id === 'halloran')!.voiceState).toBe('locked');
-    expect(next.characters.find(c => c.id === 'eliza')!.voiceState).toBe('generated');
+    expect(next.characters.find((c) => c.id === 'halloran')!.voiceState).toBe('locked');
+    expect(next.characters.find((c) => c.id === 'eliza')!.voiceState).toBe('generated');
   });
 
   it('is a no-op for an unknown characterId', () => {
@@ -116,8 +132,13 @@ describe('castSlice — lockVoice', () => {
 
 describe('castSlice — hydrateFromAnalysis', () => {
   const baseAnalysis = (characters: Character[]): AnalyseResponse => ({
-    bookId: 'ns', manuscriptId: 'ms', title: 'Test', phaseTimings: [],
-    characters, chapters: [], sentences: [],
+    bookId: 'ns',
+    manuscriptId: 'ms',
+    title: 'Test',
+    phaseTimings: [],
+    characters,
+    chapters: [],
+    sentences: [],
   });
 
   it('defaults missing voiceState to "generated" so the Cast Status column renders a pill', () => {
@@ -128,13 +149,12 @@ describe('castSlice — hydrateFromAnalysis', () => {
     const { voiceState: _omit, ...narratorNoState } = makeChar('narrator');
     const next = castSlice.reducer(
       baseState([]),
-      castActions.hydrateFromAnalysis(baseAnalysis([
-        narratorNoState as Character,
-        makeChar('Marlow', { voiceState: 'locked' }),
-      ])),
+      castActions.hydrateFromAnalysis(
+        baseAnalysis([narratorNoState as Character, makeChar('Marlow', { voiceState: 'locked' })]),
+      ),
     );
-    expect(next.characters.find(c => c.id === 'narrator')!.voiceState).toBe('generated');
-    expect(next.characters.find(c => c.id === 'Marlow')!.voiceState).toBe('locked');
+    expect(next.characters.find((c) => c.id === 'narrator')!.voiceState).toBe('generated');
+    expect(next.characters.find((c) => c.id === 'Marlow')!.voiceState).toBe('locked');
   });
 
   it('is a no-op when the response has no characters', () => {
@@ -156,11 +176,11 @@ describe('castSlice — initial state (mock-leak regression)', () => {
 describe('castSlice — mergeCharacters (Phase 0a live cast snapshots)', () => {
   it('appends new characters in incoming order on an empty slice, defaulting voiceState', () => {
     const start = baseState([]);
-    const next = castSlice.reducer(start, castActions.mergeCharacters([
-      makeChar('narrator'),
-      makeChar('Wren'),
-    ]));
-    expect(next.characters.map(c => c.id)).toEqual(['narrator', 'Wren']);
+    const next = castSlice.reducer(
+      start,
+      castActions.mergeCharacters([makeChar('narrator'), makeChar('Wren')]),
+    );
+    expect(next.characters.map((c) => c.id)).toEqual(['narrator', 'Wren']);
     expect(next.characters[0].voiceState).toBe('generated');
   });
 
@@ -168,17 +188,27 @@ describe('castSlice — mergeCharacters (Phase 0a live cast snapshots)', () => {
     /* User had matched Wren to a previous-book voice + locked it; a
        later cast-update snapshot from the analyzer must NOT clobber
        voiceId / matchedFrom / voiceState='locked'. */
-    const start = baseState([makeChar('Wren', {
-      voiceState: 'locked',
-      voiceId: 'v_Wren_from_book1',
-      matchedFrom: { bookTitle: 'KOTC #1', confidence: 0.94 },
-    })]);
-    const next = castSlice.reducer(start, castActions.mergeCharacters([
-      /* Snapshot from a later chapter — analyzer doesn't know about the lock. */
-      { id: 'Wren', name: 'Wren Sparrow', role: 'protagonist', color: 'orange',
-        description: 'Updated richer description.' },
-    ]));
-    const Wren = next.characters.find(c => c.id === 'Wren')!;
+    const start = baseState([
+      makeChar('Wren', {
+        voiceState: 'locked',
+        voiceId: 'v_Wren_from_book1',
+        matchedFrom: { bookTitle: 'KOTC #1', confidence: 0.94 },
+      }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.mergeCharacters([
+        /* Snapshot from a later chapter — analyzer doesn't know about the lock. */
+        {
+          id: 'Wren',
+          name: 'Wren Sparrow',
+          role: 'protagonist',
+          color: 'orange',
+          description: 'Updated richer description.',
+        },
+      ]),
+    );
+    const Wren = next.characters.find((c) => c.id === 'Wren')!;
     expect(Wren.voiceId).toBe('v_Wren_from_book1');
     expect(Wren.voiceState).toBe('locked');
     expect(Wren.matchedFrom).toEqual({ bookTitle: 'KOTC #1', confidence: 0.94 });
@@ -189,25 +219,26 @@ describe('castSlice — mergeCharacters (Phase 0a live cast snapshots)', () => {
 
   it('appends new characters from a later snapshot at the end (preserves discovery order)', () => {
     const start = baseState([makeChar('Wren'), makeChar('Marlow')]);
-    const next = castSlice.reducer(start, castActions.mergeCharacters([
-      makeChar('Wren'),
-      makeChar('Marlow'),
-      makeChar('Maerin'), /* New in chapter 5 */
-    ]));
-    expect(next.characters.map(c => c.id)).toEqual(['Wren', 'Marlow', 'Maerin']);
+    const next = castSlice.reducer(
+      start,
+      castActions.mergeCharacters([
+        makeChar('Wren'),
+        makeChar('Marlow'),
+        makeChar('Maerin') /* New in chapter 5 */,
+      ]),
+    );
+    expect(next.characters.map((c) => c.id)).toEqual(['Wren', 'Marlow', 'Maerin']);
   });
 
   it('preserves locally-known characters the snapshot omitted (defensive — full snapshots in practice)', () => {
-    const start = baseState([
-      makeChar('Wren', { voiceState: 'locked' }),
-      makeChar('Marlow'),
-    ]);
+    const start = baseState([makeChar('Wren', { voiceState: 'locked' }), makeChar('Marlow')]);
     /* Snapshot only has 'Wren' — 'Marlow' should still be present. */
-    const next = castSlice.reducer(start, castActions.mergeCharacters([
-      makeChar('Wren', { description: 'updated' }),
-    ]));
-    expect(next.characters.map(c => c.id).sort()).toEqual(['Marlow', 'Wren']);
-    expect(next.characters.find(c => c.id === 'Wren')!.voiceState).toBe('locked');
+    const next = castSlice.reducer(
+      start,
+      castActions.mergeCharacters([makeChar('Wren', { description: 'updated' })]),
+    );
+    expect(next.characters.map((c) => c.id).sort()).toEqual(['Marlow', 'Wren']);
+    expect(next.characters.find((c) => c.id === 'Wren')!.voiceState).toBe('locked');
   });
 
   it('is a no-op for an empty incoming list', () => {
@@ -224,25 +255,41 @@ describe('castSlice — applyMerge (manual character merge response)', () => {
        lines/scenes recomputed), but it doesn't carry voiceId / voiceState
        — those are local / library-derived and the reducer must keep them. */
     const start = baseState([
-      makeChar('Wren',        { voiceState: 'generated' }),
+      makeChar('Wren', { voiceState: 'generated' }),
       makeChar('Wren-foster', {
         voiceState: 'locked',
         voiceId: 'v_Wren_from_book1',
         matchedFrom: { bookTitle: 'KOTC #1', confidence: 0.94 },
       }),
-      makeChar('Marlow',         { voiceState: 'tuned', voiceId: 'v_Marlow' }),
+      makeChar('Marlow', { voiceState: 'tuned', voiceId: 'v_Marlow' }),
     ]);
-    const next = castSlice.reducer(start, castActions.applyMerge({
-      characters: [
-        { id: 'Wren-foster', name: 'Wren Sparrow', role: 'protagonist',
-          color: 'orange', lines: 17, scenes: 6,
-          aliases: ['Wren'], voiceState: undefined as unknown as Character['voiceState'] },
-        { id: 'Marlow', name: 'Marlow Halden', role: 'sidekick', color: 'halloran',
-          lines: 7, scenes: 3 } as Character,
-      ],
-    }));
-    expect(next.characters.map(c => c.id)).toEqual(['Wren-foster', 'Marlow']);
-    const survivor = next.characters.find(c => c.id === 'Wren-foster')!;
+    const next = castSlice.reducer(
+      start,
+      castActions.applyMerge({
+        characters: [
+          {
+            id: 'Wren-foster',
+            name: 'Wren Sparrow',
+            role: 'protagonist',
+            color: 'orange',
+            lines: 17,
+            scenes: 6,
+            aliases: ['Wren'],
+            voiceState: undefined as unknown as Character['voiceState'],
+          },
+          {
+            id: 'Marlow',
+            name: 'Marlow Halden',
+            role: 'sidekick',
+            color: 'halloran',
+            lines: 7,
+            scenes: 3,
+          } as Character,
+        ],
+      }),
+    );
+    expect(next.characters.map((c) => c.id)).toEqual(['Wren-foster', 'Marlow']);
+    const survivor = next.characters.find((c) => c.id === 'Wren-foster')!;
     /* Server-authoritative fields flow through. */
     expect(survivor.aliases).toEqual(['Wren']);
     expect(survivor.lines).toBe(17);
@@ -252,15 +299,18 @@ describe('castSlice — applyMerge (manual character merge response)', () => {
     expect(survivor.voiceId).toBe('v_Wren_from_book1');
     expect(survivor.matchedFrom).toEqual({ bookTitle: 'KOTC #1', confidence: 0.94 });
     /* Untouched characters keep their local voice state too. */
-    expect(next.characters.find(c => c.id === 'Marlow')!.voiceId).toBe('v_Marlow');
-    expect(next.characters.find(c => c.id === 'Marlow')!.voiceState).toBe('tuned');
+    expect(next.characters.find((c) => c.id === 'Marlow')!.voiceId).toBe('v_Marlow');
+    expect(next.characters.find((c) => c.id === 'Marlow')!.voiceState).toBe('tuned');
   });
 
   it('is a no-op when the payload is missing characters', () => {
     const start = baseState([makeChar('Wren')]);
-    const next = castSlice.reducer(start, castActions.applyMerge({
-      characters: undefined as unknown as Character[],
-    }));
+    const next = castSlice.reducer(
+      start,
+      castActions.applyMerge({
+        characters: undefined as unknown as Character[],
+      }),
+    );
     expect(next.characters).toEqual(start.characters);
   });
 });
@@ -269,19 +319,32 @@ describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () =
   it('writes matchedFrom + voiceId + reused state on the targeted character', () => {
     const start = baseState([
       makeChar('Hartwell-alvin-Vale', { voiceState: 'generated' }),
-      makeChar('Wren',              { voiceState: 'generated' }),
+      makeChar('Wren', { voiceState: 'generated' }),
     ]);
-    const next = castSlice.reducer(start, castActions.applyManualMatch({
-      characterId: 'Hartwell-alvin-Vale',
-      matchedFrom: { bookId: 'the Hollow Tide_1', characterId: 'Hart', bookTitle: 'Keeper #1', confidence: 1 },
-      voiceId: 'v_Hart',
-    }));
-    const Hart = next.characters.find(c => c.id === 'Hartwell-alvin-Vale')!;
+    const next = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({
+        characterId: 'Hartwell-alvin-Vale',
+        matchedFrom: {
+          bookId: 'the Hollow Tide_1',
+          characterId: 'Hart',
+          bookTitle: 'Keeper #1',
+          confidence: 1,
+        },
+        voiceId: 'v_Hart',
+      }),
+    );
+    const Hart = next.characters.find((c) => c.id === 'Hartwell-alvin-Vale')!;
     expect(Hart.voiceId).toBe('v_Hart');
     expect(Hart.voiceState).toBe('reused');
-    expect(Hart.matchedFrom).toEqual({ bookId: 'the Hollow Tide_1', characterId: 'Hart', bookTitle: 'Keeper #1', confidence: 1 });
+    expect(Hart.matchedFrom).toEqual({
+      bookId: 'the Hollow Tide_1',
+      characterId: 'Hart',
+      bookTitle: 'Keeper #1',
+      confidence: 1,
+    });
     /* Untouched character is untouched. */
-    expect(next.characters.find(c => c.id === 'Wren')!.voiceState).toBe('generated');
+    expect(next.characters.find((c) => c.id === 'Wren')!.voiceState).toBe('generated');
   });
 
   it('preserves a locked or tuned voice — only matchedFrom is updated', () => {
@@ -294,11 +357,19 @@ describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () =
         voiceId: 'v_Hartwell_tuned',
       }),
     ]);
-    const next = castSlice.reducer(start, castActions.applyManualMatch({
-      characterId: 'Hartwell-alvin-Vale',
-      matchedFrom: { bookId: 'the Hollow Tide_1', characterId: 'Hart', bookTitle: 'Keeper #1', confidence: 1 },
-      voiceId: 'v_Hart_from_prior',
-    }));
+    const next = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({
+        characterId: 'Hartwell-alvin-Vale',
+        matchedFrom: {
+          bookId: 'the Hollow Tide_1',
+          characterId: 'Hart',
+          bookTitle: 'Keeper #1',
+          confidence: 1,
+        },
+        voiceId: 'v_Hart_from_prior',
+      }),
+    );
     const Hart = next.characters[0];
     expect(Hart.voiceId).toBe('v_Hartwell_tuned');
     expect(Hart.voiceState).toBe('tuned');
@@ -307,10 +378,13 @@ describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () =
 
   it('is a no-op for an unknown characterId', () => {
     const start = baseState([makeChar('halloran')]);
-    const next = castSlice.reducer(start, castActions.applyManualMatch({
-      characterId: 'not-a-character',
-      matchedFrom: { bookId: 'b', characterId: 'c', bookTitle: 't', confidence: 1 },
-    }));
+    const next = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({
+        characterId: 'not-a-character',
+        matchedFrom: { bookId: 'b', characterId: 'c', bookTitle: 't', confidence: 1 },
+      }),
+    );
     expect(next.characters).toEqual(start.characters);
   });
 });

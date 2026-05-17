@@ -104,9 +104,14 @@ interface SeedOpts {
   /** Snapshot of the cast at synthesis time (lives in <slug>.segments.json). */
   snapshots: Record<string, CharacterSnapshot>;
   /** Current cast.json (what the user has now). */
-  cast: Array<{ id: string; tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
-                  gender?: 'male' | 'female' | 'neutral'; ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
-                  voiceId?: string; attributes?: string[] }>;
+  cast: Array<{
+    id: string;
+    tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
+    gender?: 'male' | 'female' | 'neutral';
+    ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+    voiceId?: string;
+    attributes?: string[];
+  }>;
   dismissed?: string[];
 }
 
@@ -114,10 +119,22 @@ function seed({ snapshots, cast, dismissed }: SeedOpts): void {
   writeFileSync(
     join(audioRoot, '01-chapter-one.segments.json'),
     JSON.stringify({
-      bookId, chapterId: 1, chapterTitle: 'Chapter One',
-      durationSec: 12, sampleRate: 24000, modelKey: 'coqui-xtts-v2',
+      bookId,
+      chapterId: 1,
+      chapterTitle: 'Chapter One',
+      durationSec: 12,
+      sampleRate: 24000,
+      modelKey: 'coqui-xtts-v2',
       synthesizedAt: '2026-01-01T12:00:00.000Z',
-      segments: [{ groupIndex: 0, characterId: Object.keys(snapshots)[0] ?? 'narrator', sentenceIds: [1], startSec: 0, endSec: 12 }],
+      segments: [
+        {
+          groupIndex: 0,
+          characterId: Object.keys(snapshots)[0] ?? 'narrator',
+          sentenceIds: [1],
+          startSec: 0,
+          endSec: 12,
+        },
+      ],
       characterSnapshots: snapshots,
     }),
   );
@@ -135,9 +152,12 @@ describe('GET /api/books/:bookId/revisions — basic shape', () => {
   });
 
   it('returns empty drift when no segments files exist', async () => {
-    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({
-      characters: [{ id: 'eliza', voiceId: 'v1' }],
-    }));
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [{ id: 'eliza', voiceId: 'v1' }],
+      }),
+    );
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ pending: [], drift: [] });
@@ -186,16 +206,16 @@ describe('GET /api/books/:bookId/revisions — hard-signal drift (always severe)
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.status).toBe(200);
     const drift = res.body.drift as DriftEventOut[];
-    const factors = drift.map(d => d.factor).sort();
+    const factors = drift.map((d) => d.factor).sort();
     expect(factors).toEqual(['ageRange', 'gender']);
-    expect(drift.every(d => d.severity === 'severe')).toBe(true);
+    expect(drift.every((d) => d.severity === 'severe')).toBe(true);
   });
 
   it('does not emit drift when a snapshot field is missing on one side', async () => {
     /* No gender in snapshot — synthesis ran before that field was captured.
        Can't fairly diff, so the detector stays quiet. */
     seed({
-      snapshots: { eliza: { voiceId: 'v1' } },                // gender absent
+      snapshots: { eliza: { voiceId: 'v1' } }, // gender absent
       cast: [{ id: 'eliza', voiceId: 'v1', gender: 'female' }], // gender present
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
@@ -208,7 +228,7 @@ describe('GET /api/books/:bookId/revisions — tone-metric thresholds', () => {
   it('emits no drift when tone delta is below 25', async () => {
     seed({
       snapshots: { eliza: { tone: { warmth: 50 } } },
-      cast: [{ id: 'eliza', tone: { warmth: 70 } }],          // delta 20
+      cast: [{ id: 'eliza', tone: { warmth: 70 } }], // delta 20
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.body.drift).toEqual([]);
@@ -217,7 +237,7 @@ describe('GET /api/books/:bookId/revisions — tone-metric thresholds', () => {
   it('emits moderate drift when delta is 25-39', async () => {
     seed({
       snapshots: { eliza: { tone: { pace: 40 } } },
-      cast: [{ id: 'eliza', tone: { pace: 70 } }],           // delta 30
+      cast: [{ id: 'eliza', tone: { pace: 70 } }], // delta 30
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     const drift = res.body.drift as DriftEventOut[];
@@ -228,7 +248,7 @@ describe('GET /api/books/:bookId/revisions — tone-metric thresholds', () => {
   it('emits severe drift when delta is ≥ 40', async () => {
     seed({
       snapshots: { eliza: { tone: { authority: 20 } } },
-      cast: [{ id: 'eliza', tone: { authority: 70 } }],      // delta 50
+      cast: [{ id: 'eliza', tone: { authority: 70 } }], // delta 50
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     const drift = res.body.drift as DriftEventOut[];
@@ -243,8 +263,8 @@ describe('GET /api/books/:bookId/revisions — tone-metric thresholds', () => {
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     const drift = res.body.drift as DriftEventOut[];
-    const factors = drift.map(d => d.factor).sort();
-    expect(factors).toEqual(['pace', 'warmth']);            // emotion delta=0, no event
+    const factors = drift.map((d) => d.factor).sort();
+    expect(factors).toEqual(['pace', 'warmth']); // emotion delta=0, no event
   });
 });
 
@@ -317,7 +337,7 @@ describe('GET /api/books/:bookId/revisions — attribute drift (set-symmetric-di
        against. Detector stays quiet rather than treating "added everything"
        as drift on every previously-rendered character. */
     seed({
-      snapshots: { Oduvan: { voiceId: 'v1' } },           // no attributes captured
+      snapshots: { Oduvan: { voiceId: 'v1' } }, // no attributes captured
       cast: [{ id: 'Oduvan', voiceId: 'v1', attributes: ['kind'] }],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
@@ -351,7 +371,7 @@ describe('GET /api/books/:bookId/revisions — autoQueueable flag (plan 20 C1+C2
   it('marks severe tone drift (≥40 delta) as autoQueueable=true', async () => {
     seed({
       snapshots: { eliza: { tone: { authority: 20 } } },
-      cast: [{ id: 'eliza', tone: { authority: 70 } }],   // delta 50
+      cast: [{ id: 'eliza', tone: { authority: 70 } }], // delta 50
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     const drift = res.body.drift as DriftEventOut[];
@@ -363,7 +383,7 @@ describe('GET /api/books/:bookId/revisions — autoQueueable flag (plan 20 C1+C2
   it('leaves moderate tone drift (25-39) without the autoQueueable flag', async () => {
     seed({
       snapshots: { eliza: { tone: { pace: 40 } } },
-      cast: [{ id: 'eliza', tone: { pace: 70 } }],         // delta 30
+      cast: [{ id: 'eliza', tone: { pace: 70 } }], // delta 30
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     const drift = res.body.drift as DriftEventOut[];
@@ -407,7 +427,7 @@ describe('GET /api/books/:bookId/revisions — dismissed filter', () => {
       dismissed: ['drift:1:eliza:voice'],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
-    const factors = (res.body.drift as DriftEventOut[]).map(d => d.factor);
+    const factors = (res.body.drift as DriftEventOut[]).map((d) => d.factor);
     expect(factors).toEqual(['gender']);
   });
 });

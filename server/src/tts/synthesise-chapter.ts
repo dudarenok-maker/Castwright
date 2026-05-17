@@ -93,11 +93,7 @@ export interface SynthesiseChapterOpts {
       what is actually healthy in-progress work. Letting the route handler
       emit a "synthesising group N" tick here resets the client-side stall
       timer at each group boundary. */
-  onGroupStart?: (e: {
-    group: SentenceGroup;
-    totalGroups: number;
-    accumulatedSec: number;
-  }) => void;
+  onGroupStart?: (e: { group: SentenceGroup; totalGroups: number; accumulatedSec: number }) => void;
   /** Notification on each group completion. Optional. */
   onGroupComplete?: (e: {
     group: SentenceGroup;
@@ -170,7 +166,7 @@ function toVoiceLike(c: CastCharacter): VoiceLike {
     narrator-cool. */
 export function buildHintFromCast(c: CastCharacter): CharacterHint {
   const evidence = (c.evidence ?? [])
-    .map(e => (typeof e === 'string' ? e : e?.quote))
+    .map((e) => (typeof e === 'string' ? e : e?.quote))
     .filter((q): q is string => typeof q === 'string' && q.length > 0);
   return {
     description: c.description,
@@ -182,10 +178,22 @@ export function buildHintFromCast(c: CastCharacter): CharacterHint {
   };
 }
 
-export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<ChapterSynthesisResult> {
-  const { sentences, cast, provider, modelKey, engine, onGroupStart, onGroupComplete, onGroupRetry, signal } = opts;
+export async function synthesiseChapter(
+  opts: SynthesiseChapterOpts,
+): Promise<ChapterSynthesisResult> {
+  const {
+    sentences,
+    cast,
+    provider,
+    modelKey,
+    engine,
+    onGroupStart,
+    onGroupComplete,
+    onGroupRetry,
+    signal,
+  } = opts;
 
-  const castById = new Map(cast.map(c => [c.id, c]));
+  const castById = new Map(cast.map((c) => [c.id, c]));
   const groups = buildSentenceGroups(sentences);
 
   const chunks: Buffer[] = [];
@@ -203,7 +211,11 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
       throw new DOMException('synthesiseChapter aborted', 'AbortError');
     }
     const character = castById.get(group.characterId) ?? { id: group.characterId };
-    const voiceName = pickVoiceForEngine(engine, toVoiceLike(character), buildHintFromCast(character));
+    const voiceName = pickVoiceForEngine(
+      engine,
+      toVoiceLike(character),
+      buildHintFromCast(character),
+    );
 
     /* Tick BEFORE the synth call. Each TTS call can be minutes on CPU, and
        the client's stall detector only sees inactivity, not "active work on
@@ -232,21 +244,23 @@ export async function synthesiseChapter(opts: SynthesiseChapterOpts): Promise<Ch
        CUDA state, retry-exhausted) bubble out of the wrapper unchanged
        and surface as today's per-chapter `chapter_failed`. */
     const result = await withTtsRetry(
-      () => provider.synthesize({
-        text: normaliseForTts(group.text),
-        voiceName,
-        modelKey,
-        signal,
-      }),
+      () =>
+        provider.synthesize({
+          text: normaliseForTts(group.text),
+          voiceName,
+          modelKey,
+          signal,
+        }),
       {
         signal,
-        onRetry: info => onGroupRetry?.({
-          group,
-          totalGroups: groups.length,
-          attempt: info.attempt,
-          backoffMs: info.backoffMs,
-          reason: info.reason,
-        }),
+        onRetry: (info) =>
+          onGroupRetry?.({
+            group,
+            totalGroups: groups.length,
+            attempt: info.attempt,
+            backoffMs: info.backoffMs,
+            reason: info.reason,
+          }),
       },
     );
 

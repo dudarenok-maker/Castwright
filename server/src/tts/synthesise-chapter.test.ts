@@ -16,8 +16,15 @@ import { synthesiseChapter, type CastCharacter } from './synthesise-chapter.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
 
-const GEMINI_MALE_VOICES   = new Set(['Charon', 'Algieba', 'Puck', 'Orus', 'Iapetus', 'Sadachbia']);
-const GEMINI_FEMALE_VOICES = new Set(['Despina', 'Vindemiatrix', 'Kore', 'Leda', 'Aoede', 'Callirrhoe']);
+const GEMINI_MALE_VOICES = new Set(['Charon', 'Algieba', 'Puck', 'Orus', 'Iapetus', 'Sadachbia']);
+const GEMINI_FEMALE_VOICES = new Set([
+  'Despina',
+  'Vindemiatrix',
+  'Kore',
+  'Leda',
+  'Aoede',
+  'Callirrhoe',
+]);
 const GEMINI_NARRATOR_VOICES = new Set(['Zephyr', 'Sulafat', 'Algenib', 'Achernar']);
 
 function makeProvider(): TtsProvider & { calls: Array<SynthesizeInput> } {
@@ -41,9 +48,14 @@ function sentence(id: number, characterId: string, text = 'Line.'): SentenceOutp
 describe('synthesiseChapter voice routing', () => {
   it('routes a male character to the male voice bucket when gender is set on the cast', async () => {
     const cast: CastCharacter[] = [
-      { id: 'Oduvan', name: 'Oduvan', gender: 'male', ageRange: 'adult',
+      {
+        id: 'Oduvan',
+        name: 'Oduvan',
+        gender: 'male',
+        ageRange: 'adult',
         attributes: ['caring', 'firm', 'patient'],
-        description: 'A medical professional balancing genuine care with firmness.' },
+        description: 'A medical professional balancing genuine care with firmness.',
+      },
     ];
     const provider = makeProvider();
 
@@ -63,9 +75,14 @@ describe('synthesiseChapter voice routing', () => {
 
   it('routes a female character to the female voice bucket when gender is set on the cast', async () => {
     const cast: CastCharacter[] = [
-      { id: 'ro', name: 'Ro', gender: 'female', ageRange: 'adult',
+      {
+        id: 'ro',
+        name: 'Ro',
+        gender: 'female',
+        ageRange: 'adult',
         attributes: ['sarcastic', 'blunt', 'intimidating'],
-        description: 'A sharp-tongued goblin with brutal honesty.' },
+        description: 'A sharp-tongued goblin with brutal honesty.',
+      },
     ];
     const provider = makeProvider();
 
@@ -79,13 +96,19 @@ describe('synthesiseChapter voice routing', () => {
 
     const used = provider.calls[0].voiceName;
     expect(GEMINI_FEMALE_VOICES, `Expected ${used} in female bucket`).toContain(used);
-    expect(GEMINI_NARRATOR_VOICES, `Got narrator voice ${used} for female cast`).not.toContain(used);
+    expect(GEMINI_NARRATOR_VOICES, `Got narrator voice ${used} for female cast`).not.toContain(
+      used,
+    );
   });
 
   it('keeps the narrator on a narrator voice', async () => {
     const cast: CastCharacter[] = [
-      { id: 'narrator', name: 'Narrator', attributes: ['observational'],
-        tone: { warmth: 24, pace: 65, authority: 70, emotion: 59 } },
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        attributes: ['observational'],
+        tone: { warmth: 24, pace: 65, authority: 70, emotion: 59 },
+      },
     ];
     const provider = makeProvider();
 
@@ -106,18 +129,28 @@ describe('synthesiseChapter voice routing', () => {
        Oduvan and Ro both collapsed onto the narrator-cool bucket. */
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
-      { id: 'Oduvan', name: 'Oduvan', gender: 'male', ageRange: 'adult',
-        attributes: ['caring', 'firm'] },
-      { id: 'ro',    name: 'Ro',    gender: 'female', ageRange: 'adult',
-        attributes: ['sarcastic', 'blunt'] },
+      {
+        id: 'Oduvan',
+        name: 'Oduvan',
+        gender: 'male',
+        ageRange: 'adult',
+        attributes: ['caring', 'firm'],
+      },
+      {
+        id: 'ro',
+        name: 'Ro',
+        gender: 'female',
+        ageRange: 'adult',
+        attributes: ['sarcastic', 'blunt'],
+      },
     ];
     const provider = makeProvider();
 
     await synthesiseChapter({
       sentences: [
         sentence(1, 'narrator', 'And it made Marlow queasier.'),
-        sentence(2, 'Oduvan',    'Lifetime of pain if you do not listen.'),
-        sentence(3, 'ro',       'Moving from denial mode to sulky boy.'),
+        sentence(2, 'Oduvan', 'Lifetime of pain if you do not listen.'),
+        sentence(3, 'ro', 'Moving from denial mode to sulky boy.'),
       ],
       cast,
       provider,
@@ -126,11 +159,11 @@ describe('synthesiseChapter voice routing', () => {
     });
 
     expect(provider.calls).toHaveLength(3);
-    const [narratorVoice, OduvanVoice, roVoice] = provider.calls.map(c => c.voiceName);
+    const [narratorVoice, OduvanVoice, roVoice] = provider.calls.map((c) => c.voiceName);
 
     expect(GEMINI_NARRATOR_VOICES, `narrator → ${narratorVoice}`).toContain(narratorVoice);
-    expect(GEMINI_MALE_VOICES,     `Oduvan → ${OduvanVoice}`).toContain(OduvanVoice);
-    expect(GEMINI_FEMALE_VOICES,   `ro → ${roVoice}`).toContain(roVoice);
+    expect(GEMINI_MALE_VOICES, `Oduvan → ${OduvanVoice}`).toContain(OduvanVoice);
+    expect(GEMINI_FEMALE_VOICES, `ro → ${roVoice}`).toContain(roVoice);
 
     /* All three must be distinct — the original bug collapsed them onto the
        same narrator voice. */
@@ -145,8 +178,8 @@ describe('synthesiseChapter voice routing', () => {
        on CPU). This is what unstuck the pause→resume loop. */
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
-      { id: 'Oduvan',    name: 'Oduvan', gender: 'male',   attributes: ['caring'] },
-      { id: 'ro',       name: 'Ro',    gender: 'female', attributes: ['blunt'] },
+      { id: 'Oduvan', name: 'Oduvan', gender: 'male', attributes: ['caring'] },
+      { id: 'ro', name: 'Ro', gender: 'female', attributes: ['blunt'] },
     ];
     const controller = new AbortController();
     const provider = makeProvider();
@@ -157,18 +190,20 @@ describe('synthesiseChapter voice routing', () => {
       return out;
     };
 
-    await expect(synthesiseChapter({
-      sentences: [
-        sentence(1, 'narrator', 'First group.'),
-        sentence(2, 'Oduvan',    'Second group.'),
-        sentence(3, 'ro',       'Third group.'),
-      ],
-      cast,
-      provider,
-      modelKey: 'gemini-2.5-flash',
-      engine: 'gemini',
-      signal: controller.signal,
-    })).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(
+      synthesiseChapter({
+        sentences: [
+          sentence(1, 'narrator', 'First group.'),
+          sentence(2, 'Oduvan', 'Second group.'),
+          sentence(3, 'ro', 'Third group.'),
+        ],
+        cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
 
     /* Group 1 ran (and fired abort); groups 2 and 3 must NOT have run. */
     expect(provider.calls).toHaveLength(1);
@@ -213,7 +248,7 @@ describe('synthesiseChapter voice routing', () => {
        regress the stall UX. */
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
-      { id: 'Oduvan',    name: 'Oduvan', gender: 'male', attributes: ['caring'] },
+      { id: 'Oduvan', name: 'Oduvan', gender: 'male', attributes: ['caring'] },
     ];
     const events: string[] = [];
     const provider: TtsProvider = {
@@ -224,10 +259,7 @@ describe('synthesiseChapter voice routing', () => {
     };
 
     await synthesiseChapter({
-      sentences: [
-        sentence(1, 'narrator', 'First.'),
-        sentence(2, 'Oduvan',    'Second.'),
-      ],
+      sentences: [sentence(1, 'narrator', 'First.'), sentence(2, 'Oduvan', 'Second.')],
       cast,
       provider,
       modelKey: 'gemini-2.5-flash',
@@ -268,8 +300,16 @@ describe('synthesiseChapter voice routing', () => {
     await synthesiseChapter({
       sentences: [
         sentence(1, 'narrator', 'THE NEXT SECOND WAS A BLUR.'),
-        sentence(2, 'narrator', 'The car swerved right—missing Wren by inches—then jumped the curb and sideswiped a streetlight.'),
-        sentence(3, 'narrator', 'The heavy steel lantern cracked from its base and plummeted toward Wren.'),
+        sentence(
+          2,
+          'narrator',
+          'The car swerved right—missing Wren by inches—then jumped the curb and sideswiped a streetlight.',
+        ),
+        sentence(
+          3,
+          'narrator',
+          'The heavy steel lantern cracked from its base and plummeted toward Wren.',
+        ),
       ],
       cast,
       provider,
@@ -315,7 +355,7 @@ describe('synthesiseChapter voice routing', () => {
     const result = await synthesiseChapter({
       sentences: [
         sentence(1, 'narrator', 'First group.'),
-        sentence(2, 'Oduvan',    'Second group with a different rate.'),
+        sentence(2, 'Oduvan', 'Second group with a different rate.'),
       ],
       cast,
       provider,
@@ -342,8 +382,13 @@ describe('synthesiseChapter voice routing', () => {
        `gender:`, the prose description still carries enough signal to land
        in the right bucket. */
     const cast: CastCharacter[] = [
-      { id: 'Marlow', name: 'Marlow', attributes: ['playful', 'witty'],
-        description: 'A witty young man recovering from his injuries. He often grins and jokes when he is scared. He keeps trying to reassure himself.' },
+      {
+        id: 'Marlow',
+        name: 'Marlow',
+        attributes: ['playful', 'witty'],
+        description:
+          'A witty young man recovering from his injuries. He often grins and jokes when he is scared. He keeps trying to reassure himself.',
+      },
     ];
     const provider = makeProvider();
 
@@ -356,7 +401,10 @@ describe('synthesiseChapter voice routing', () => {
     });
 
     const used = provider.calls[0].voiceName;
-    expect(GEMINI_MALE_VOICES, `Expected description-based fallback to male, got ${used}`).toContain(used);
+    expect(
+      GEMINI_MALE_VOICES,
+      `Expected description-based fallback to male, got ${used}`,
+    ).toContain(used);
   });
 });
 
@@ -369,7 +417,7 @@ describe('synthesiseChapter voice routing', () => {
    `retry.test.ts`; these tests pin the wiring at the call site. */
 
 describe('synthesiseChapter auto-retry on transient TTS failures', () => {
-  it('absorbs two transient 503s and returns the third attempt\'s audio', async () => {
+  it("absorbs two transient 503s and returns the third attempt's audio", async () => {
     /* The headline plan-13 scenario: sidecar returns 503 twice (e.g. brief
        CUDA OOM, mid-restart 502 surfaced as 503), then a 200. The retry
        wrapper inside the per-group loop must replay the call so the
@@ -384,10 +432,10 @@ describe('synthesiseChapter auto-retry on transient TTS failures', () => {
         attemptIndex += 1;
         events.push(`attempt:${attemptIndex}`);
         if (attemptIndex < 3) {
-          throw Object.assign(
-            new Error(`Local TTS sidecar returned 503: model loading`),
-            { transient: true as const, status: 503 },
-          );
+          throw Object.assign(new Error(`Local TTS sidecar returned 503: model loading`), {
+            transient: true as const,
+            status: 503,
+          });
         }
         return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
       },
@@ -430,13 +478,15 @@ describe('synthesiseChapter auto-retry on transient TTS failures', () => {
       },
     };
 
-    await expect(synthesiseChapter({
-      sentences: [sentence(1, 'narrator', 'Line.')],
-      cast,
-      provider,
-      modelKey: 'gemini-2.5-flash',
-      engine: 'gemini',
-    })).rejects.toThrow(/persistent #3/);
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'narrator', 'Line.')],
+        cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+      }),
+    ).rejects.toThrow(/persistent #3/);
 
     /* 3 attempts = 1 primary + 2 retries. */
     expect(attemptIndex).toBe(3);
@@ -453,20 +503,22 @@ describe('synthesiseChapter auto-retry on transient TTS failures', () => {
     const provider: TtsProvider = {
       async synthesize(_input: SynthesizeInput): Promise<SynthesizeOutput> {
         attemptIndex += 1;
-        throw Object.assign(
-          new Error(`Local TTS sidecar returned 400: unknown model 'wat'`),
-          { transient: false as const, status: 400 },
-        );
+        throw Object.assign(new Error(`Local TTS sidecar returned 400: unknown model 'wat'`), {
+          transient: false as const,
+          status: 400,
+        });
       },
     };
 
-    await expect(synthesiseChapter({
-      sentences: [sentence(1, 'narrator', 'Line.')],
-      cast,
-      provider,
-      modelKey: 'gemini-2.5-flash',
-      engine: 'gemini',
-    })).rejects.toThrow(/unknown model/);
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'narrator', 'Line.')],
+        cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+      }),
+    ).rejects.toThrow(/unknown model/);
 
     expect(attemptIndex).toBe(1);
   });
@@ -492,13 +544,15 @@ describe('synthesiseChapter auto-retry on transient TTS failures', () => {
       },
     };
 
-    await expect(synthesiseChapter({
-      sentences: [sentence(1, 'narrator', 'Line.')],
-      cast,
-      provider,
-      modelKey: 'gemini-2.5-flash',
-      engine: 'gemini',
-    })).rejects.toThrow(/poisoned/);
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'narrator', 'Line.')],
+        cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+      }),
+    ).rejects.toThrow(/poisoned/);
 
     expect(attemptIndex).toBe(1);
   });
@@ -518,22 +572,24 @@ describe('synthesiseChapter auto-retry on transient TTS failures', () => {
         /* Trigger abort once the first transient has thrown — the retry
            wrapper's sleep should pick this up immediately. */
         setTimeout(() => controller.abort(), 5);
-        throw Object.assign(
-          new Error(`Local TTS sidecar returned 503: brief flake`),
-          { transient: true as const, status: 503 },
-        );
+        throw Object.assign(new Error(`Local TTS sidecar returned 503: brief flake`), {
+          transient: true as const,
+          status: 503,
+        });
       },
     };
 
     const start = Date.now();
-    await expect(synthesiseChapter({
-      sentences: [sentence(1, 'narrator', 'Line.')],
-      cast,
-      provider,
-      modelKey: 'gemini-2.5-flash',
-      engine: 'gemini',
-      signal: controller.signal,
-    })).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'narrator', 'Line.')],
+        cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
     const elapsed = Date.now() - start;
 
     /* Only the primary attempt ran; the retry sleep was aborted before

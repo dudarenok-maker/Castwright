@@ -78,24 +78,24 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const [selectedVoiceIds, setSelectedVoiceIds] = useState<string[]>([]);
   const [compareIds, setCompareIds] = useState<[string, string] | null>(null);
   const dispatch = useAppDispatch();
-  const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
-  const baseVoices = useAppSelector(s => s.voices.baseVoices);
-  const baseVoicesLoaded = useAppSelector(s => s.voices.baseVoicesLoaded);
+  const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
+  const baseVoices = useAppSelector((s) => s.voices.baseVoices);
+  const baseVoicesLoaded = useAppSelector((s) => s.voices.baseVoicesLoaded);
   /* Open book id (null on the global `#/voices` tab). Used to gate Compare:
      v1 only supports comparing voices that belong to the currently-open
      book, because that's the only book whose cast is hydrated in the
      redux store. Cross-book + same-book-from-global Compare are
      follow-ups tracked in `docs/BACKLOG.md` (Could bucket). */
-  const currentBookId = useAppSelector(s =>
-    s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null
+  const currentBookId = useAppSelector((s) =>
+    s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null,
   );
-  const characters = useAppSelector(s => s.cast.characters);
+  const characters = useAppSelector((s) => s.cast.characters);
   const playback = useSamplePlayback();
   const activeEngine = engineForModelKey(ttsModelKey);
 
   const toggleSelect = (v: Voice) => {
-    setSelectedVoiceIds(prev =>
-      prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]
+    setSelectedVoiceIds((prev) =>
+      prev.includes(v.id) ? prev.filter((id) => id !== v.id) : [...prev, v.id],
     );
   };
 
@@ -105,10 +105,17 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      honest after a sidecar bounce. */
   useEffect(() => {
     let cancelled = false;
-    api.getBaseVoices()
-      .then(res => { if (!cancelled) dispatch(voicesActions.hydrateBaseVoices(res.voices)); })
-      .catch(err => { console.error('[voices] base catalog hydrate failed', err); });
-    return () => { cancelled = true; };
+    api
+      .getBaseVoices()
+      .then((res) => {
+        if (!cancelled) dispatch(voicesActions.hydrateBaseVoices(res.voices));
+      })
+      .catch((err) => {
+        console.error('[voices] base catalog hydrate failed', err);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [dispatch]);
 
   /* Group voices into families. The key is (engine, name) on ttsVoice —
@@ -116,13 +123,13 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      characters with the same engine+name appear under the same family
      regardless of how they got there. */
   const families = useMemo(() => buildFamilies(library, tab), [library, tab]);
-  const books = [...new Set(library.map(v => v.bookId))];
+  const books = [...new Set(library.map((v) => v.bookId))];
 
   /* Compare derivations. Memoised so a transient render doesn't recompute
      the same-base / different-base lookup or the disabled-reason string. */
   const compareDerivations = useMemo(() => {
     const selectedVoices = selectedVoiceIds
-      .map(id => library.find(v => v.id === id))
+      .map((id) => library.find((v) => v.id === id))
       .filter((v): v is Voice => !!v);
     let badge: 'same' | 'different' | null = null;
     if (selectedVoices.length === 2 && selectedVoices[0].ttsVoice && selectedVoices[1].ttsVoice) {
@@ -136,11 +143,11 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       compareDisabledReason = 'Select exactly 2 voices';
     } else if (currentBookId === null) {
       compareDisabledReason = 'Open a book to compare its voices';
-    } else if (!selectedVoices.every(v => v.bookId === currentBookId)) {
+    } else if (!selectedVoices.every((v) => v.bookId === currentBookId)) {
       compareDisabledReason = 'Cross-book compare not supported yet';
     } else {
-      const linkedCharacters = selectedVoices.map(v => findCharacterForVoice(v, characters));
-      if (linkedCharacters.some(c => !c)) {
+      const linkedCharacters = selectedVoices.map((v) => findCharacterForVoice(v, characters));
+      if (linkedCharacters.some((c) => !c)) {
         compareDisabledReason = 'Selected voice is no longer linked to a character';
       } else {
         canCompare = true;
@@ -153,7 +160,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   function togglePin(voice: Voice) {
     const next = !voice.pinned;
     dispatch(voicesActions.setPinned({ voiceId: voice.id, pinned: next }));
-    api.setVoicePin(voice.id, next).catch(err => {
+    api.setVoicePin(voice.id, next).catch((err) => {
       console.error('[voices] pin failed', err);
       dispatch(voicesActions.setPinned({ voiceId: voice.id, pinned: !next }));
     });
@@ -166,9 +173,10 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         args: { engine: family.engine, speakerName: family.name, modelKey: ttsModelKey },
         playback,
         onStatus: (status) => {
-          if (status === 'evicting')     setFamilyStatus({ key: family.key, label: 'Freeing memory…' });
-          if (status === 'loading-tts')  setFamilyStatus({ key: family.key, label: 'Loading TTS…' });
-          if (status === 'synthesizing') setFamilyStatus({ key: family.key, label: 'Synthesising…' });
+          if (status === 'evicting') setFamilyStatus({ key: family.key, label: 'Freeing memory…' });
+          if (status === 'loading-tts') setFamilyStatus({ key: family.key, label: 'Loading TTS…' });
+          if (status === 'synthesizing')
+            setFamilyStatus({ key: family.key, label: 'Synthesising…' });
         },
       });
     } catch (err) {
@@ -189,8 +197,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         args: { engine: bv.engine, speakerName: bv.name, modelKey: ttsModelKey },
         playback,
         onStatus: (status) => {
-          if (status === 'evicting')     setFamilyStatus({ key, label: 'Freeing memory…' });
-          if (status === 'loading-tts')  setFamilyStatus({ key, label: 'Loading TTS…' });
+          if (status === 'evicting') setFamilyStatus({ key, label: 'Freeing memory…' });
+          if (status === 'loading-tts') setFamilyStatus({ key, label: 'Loading TTS…' });
           if (status === 'synthesizing') setFamilyStatus({ key, label: 'Synthesising…' });
         },
       });
@@ -216,13 +224,18 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   }, [library]);
 
   const tabs: Array<{ id: Tab; label: string }> = [
-    { id: 'all',     label: `All (${library.length})` },
-    { id: 'current', label: `This book (${library.filter(v => v.source === 'current').length})` },
-    { id: 'library', label: `Series & older (${library.filter(v => v.source === 'library').length})` },
-    { id: 'base',    label: `Base voices${baseVoicesLoaded ? ` (${baseVoices.length})` : ''}` },
+    { id: 'all', label: `All (${library.length})` },
+    { id: 'current', label: `This book (${library.filter((v) => v.source === 'current').length})` },
+    {
+      id: 'library',
+      label: `Series & older (${library.filter((v) => v.source === 'library').length})`,
+    },
+    { id: 'base', label: `Base voices${baseVoicesLoaded ? ` (${baseVoices.length})` : ''}` },
   ];
 
-  const familyCount = new Set(library.filter(v => v.ttsVoice).map(v => `${v.ttsVoice!.provider}|${v.ttsVoice!.name}`)).size;
+  const familyCount = new Set(
+    library.filter((v) => v.ttsVoice).map((v) => `${v.ttsVoice!.provider}|${v.ttsVoice!.name}`),
+  ).size;
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 py-10">
@@ -230,9 +243,12 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         <div>
           <SectionLabel>Voice library</SectionLabel>
           <div className="mt-4">
-            <MixedHeading regular="Every voice you've" bold="ever generated" level="h1"/>
+            <MixedHeading regular="Every voice you've" bold="ever generated" level="h1" />
           </div>
-          <p className="mt-3 text-ink/60 max-w-2xl">Voices are grouped by the model voice they resolve to. Expand a family to see every cast member using it across books — handy when one base voice carries through a whole series.</p>
+          <p className="mt-3 text-ink/60 max-w-2xl">
+            Voices are grouped by the model voice they resolve to. Expand a family to see every cast
+            member using it across books — handy when one base voice carries through a whole series.
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <TtsEngineModelPicker
@@ -243,15 +259,21 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       </div>
 
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <StatTile label="Voices"    value={library.length}/>
-        <StatTile label="Families"  value={familyCount}/>
-        <StatTile label="Books"     value={books.length}/>
-        <StatTile label="Pinned"    value={library.filter(v => v.pinned).length}/>
+        <StatTile label="Voices" value={library.length} />
+        <StatTile label="Families" value={familyCount} />
+        <StatTile label="Books" value={books.length} />
+        <StatTile label="Pinned" value={library.filter((v) => v.pinned).length} />
       </div>
 
       <div className="flex items-center gap-1 mb-6 flex-wrap">
-        {tabs.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${tab === t.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/[0.04]'}`}>{t.label}</button>
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${tab === t.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/[0.04]'}`}
+          >
+            {t.label}
+          </button>
         ))}
       </div>
 
@@ -267,11 +289,14 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       ) : families.length === 0 ? (
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
           <p className="text-sm font-bold text-ink">No voices yet</p>
-          <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">Finish setting up a book — once you confirm its cast, every character will appear here as a reusable voice.</p>
+          <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
+            Finish setting up a book — once you confirm its cast, every character will appear here
+            as a reusable voice.
+          </p>
         </div>
       ) : (
         <div className={`space-y-8 ${draggingVoiceId ? 'dragging-voice' : ''}`}>
-          {families.map(f => (
+          {families.map((f) => (
             <VoiceFamilySection
               key={f.key}
               family={f}
@@ -292,7 +317,9 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 fade-in">
           <div className="bg-ink text-canvas rounded-full shadow-float px-4 py-2 flex items-center gap-3">
             <span className="text-xs text-canvas/60">Selected</span>
-            <span className="px-2 py-0.5 rounded-full bg-canvas/15 text-canvas font-bold text-sm tabular-nums">{selectedVoiceIds.length}</span>
+            <span className="px-2 py-0.5 rounded-full bg-canvas/15 text-canvas font-bold text-sm tabular-nums">
+              {selectedVoiceIds.length}
+            </span>
             {badge === 'same' && (
               <span
                 role="status"
@@ -311,7 +338,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                 different base voices
               </span>
             )}
-            <span className="w-px h-5 bg-canvas/20"/>
+            <span className="w-px h-5 bg-canvas/20" />
             <button
               onClick={() => {
                 if (canCompare && selectedVoiceIds.length === 2) {
@@ -319,35 +346,44 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                 }
               }}
               disabled={!canCompare}
-              title={canCompare ? 'Compare these two voices' : compareDisabledReason ?? undefined}
+              title={canCompare ? 'Compare these two voices' : (compareDisabledReason ?? undefined)}
               className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Compare
             </button>
-            <button onClick={() => setSelectedVoiceIds([])} className="text-xs text-canvas/70 hover:text-canvas font-medium">Clear</button>
+            <button
+              onClick={() => setSelectedVoiceIds([])}
+              className="text-xs text-canvas/70 hover:text-canvas font-medium"
+            >
+              Clear
+            </button>
           </div>
         </div>
       )}
 
-      {compareIds && (() => {
-        const [aId, bId] = compareIds;
-        const va = selectedVoices.find(v => v.id === aId);
-        const vb = selectedVoices.find(v => v.id === bId);
-        if (!va || !vb) return null;
-        const charA = findCharacterForVoice(va, characters);
-        const charB = findCharacterForVoice(vb, characters);
-        if (!charA || !charB) return null;
-        return (
-          <CompareCastModal
-            characters={[charA, charB]}
-            library={library}
-            ttsModelKey={ttsModelKey}
-            onSaveSide={(next) => dispatch(castActions.updateCharacter(next))}
-            onClose={() => setCompareIds(null)}
-            onOpenProfile={(id) => { setCompareIds(null); dispatch(uiActions.setOpenProfileId(id)); }}
-          />
-        );
-      })()}
+      {compareIds &&
+        (() => {
+          const [aId, bId] = compareIds;
+          const va = selectedVoices.find((v) => v.id === aId);
+          const vb = selectedVoices.find((v) => v.id === bId);
+          if (!va || !vb) return null;
+          const charA = findCharacterForVoice(va, characters);
+          const charB = findCharacterForVoice(vb, characters);
+          if (!charA || !charB) return null;
+          return (
+            <CompareCastModal
+              characters={[charA, charB]}
+              library={library}
+              ttsModelKey={ttsModelKey}
+              onSaveSide={(next) => dispatch(castActions.updateCharacter(next))}
+              onClose={() => setCompareIds(null)}
+              onOpenProfile={(id) => {
+                setCompareIds(null);
+                dispatch(uiActions.setOpenProfileId(id));
+              }}
+            />
+          );
+        })()}
     </div>
   );
 }
@@ -363,8 +399,11 @@ interface FamilyAccumulator extends VoiceFamily {
 /* Build voice families from the flat library list. Filters by tab first
    (so 'current' / 'library' don't leak voices the user isn't asking about
    into the family count), then groups, then sub-groups by series → book. */
-function buildFamilies(library: Voice[], tab: Tab): Array<VoiceFamily & { seriesGroups: SeriesGroup[] }> {
-  const filtered = library.filter(v => {
+function buildFamilies(
+  library: Voice[],
+  tab: Tab,
+): Array<VoiceFamily & { seriesGroups: SeriesGroup[] }> {
+  const filtered = library.filter((v) => {
     if (tab === 'all' || tab === 'base') return true;
     return v.source === tab;
   });
@@ -414,7 +453,8 @@ function buildFamilies(library: Voice[], tab: Tab): Array<VoiceFamily & { series
     const seriesGroups: SeriesGroup[] = [];
     for (const [seriesKey, books] of fam.seriesBuckets) {
       seriesGroups.push({
-        series: seriesKey === 'standalone' ? null : (fam.seriesOrder.get(seriesKey) as string | null),
+        series:
+          seriesKey === 'standalone' ? null : (fam.seriesOrder.get(seriesKey) as string | null),
         books: books.sort((a, b) => a.bookTitle.localeCompare(b.bookTitle)),
       });
     }
@@ -453,7 +493,17 @@ interface FamilyProps {
   selectedVoiceIds: string[];
   onToggleSelect: (v: Voice) => void;
 }
-function VoiceFamilySection({ family, draggingVoiceId, setDraggingVoiceId, onTogglePin, onPlay, status, onOpenCharacter, selectedVoiceIds, onToggleSelect }: FamilyProps) {
+function VoiceFamilySection({
+  family,
+  draggingVoiceId,
+  setDraggingVoiceId,
+  onTogglePin,
+  onPlay,
+  status,
+  onOpenCharacter,
+  selectedVoiceIds,
+  onToggleSelect,
+}: FamilyProps) {
   const seriesGroups = family.seriesGroups;
   const isBusy = status?.key === family.key;
   /* Build a Voice-shaped stand-in for the family header swatch so VoiceSwatch
@@ -469,7 +519,12 @@ function VoiceFamilySection({ family, draggingVoiceId, setDraggingVoiceId, onTog
       <header className="mb-3 flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3 min-w-0">
           <span onClick={(e) => e.stopPropagation()}>
-            <VoiceSwatch voice={headerVoice} size="sm" showLabel={false} onSelect={() => onPlay(family)}/>
+            <VoiceSwatch
+              voice={headerVoice}
+              size="sm"
+              showLabel={false}
+              onSelect={() => onPlay(family)}
+            />
           </span>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
@@ -482,36 +537,41 @@ function VoiceFamilySection({ family, draggingVoiceId, setDraggingVoiceId, onTog
               )}
             </div>
             <p className="text-xs text-ink/50">
-              {family.members.length} {family.members.length === 1 ? 'cast member' : 'cast members'} ·{' '}
-              {seriesGroups.length} {seriesGroups.length === 1 ? 'series/standalone bucket' : 'series/standalone buckets'}
+              {family.members.length} {family.members.length === 1 ? 'cast member' : 'cast members'}{' '}
+              · {seriesGroups.length}{' '}
+              {seriesGroups.length === 1 ? 'series/standalone bucket' : 'series/standalone buckets'}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           {isBusy && (
-            <span className="text-[11px] text-ink/60 italic" aria-live="polite">{status?.label}</span>
+            <span className="text-[11px] text-ink/60 italic" aria-live="polite">
+              {status?.label}
+            </span>
           )}
           <button
             type="button"
             onClick={() => onPlay(family)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink/[0.04] hover:bg-ink/[0.08] text-xs font-medium text-ink transition-colors"
           >
-            <IconPlay className="w-3.5 h-3.5"/> Audition base voice
+            <IconPlay className="w-3.5 h-3.5" /> Audition base voice
           </button>
         </div>
       </header>
       <div className="space-y-4">
-        {seriesGroups.map(sg => (
+        {seriesGroups.map((sg) => (
           <div key={sg.series ?? '~standalone'} className="pl-2 border-l-2 border-ink/[0.06]">
             {sg.series && (
-              <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/40 mb-2 pl-2">{sg.series}</p>
+              <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/40 mb-2 pl-2">
+                {sg.series}
+              </p>
             )}
             <div className="space-y-3">
-              {sg.books.map(b => (
+              {sg.books.map((b) => (
                 <div key={b.bookId}>
                   <p className="text-xs font-semibold text-ink/70 mb-1.5 pl-2">{b.bookTitle}</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pl-2">
-                    {b.voices.map(v => (
+                    {b.voices.map((v) => (
                       <VoiceCard
                         key={v.id}
                         voice={v}
@@ -545,12 +605,22 @@ interface BasePanelProps {
   onPlay: (bv: BaseVoice) => void;
   status: { key: string; label: string } | null;
 }
-function BaseVoiceCatalogPanel({ baseVoices, baseVoicesLoaded, usage, activeEngine, onPlay, status }: BasePanelProps) {
+function BaseVoiceCatalogPanel({
+  baseVoices,
+  baseVoicesLoaded,
+  usage,
+  activeEngine,
+  onPlay,
+  status,
+}: BasePanelProps) {
   if (!baseVoicesLoaded) {
     return (
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
         <p className="text-sm font-bold text-ink">Loading base voices…</p>
-        <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">If this stays empty, load the TTS sidecar from the model pill — the Coqui catalog is fetched live from the loaded model.</p>
+        <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
+          If this stays empty, load the TTS sidecar from the model pill — the Coqui catalog is
+          fetched live from the loaded model.
+        </p>
       </div>
     );
   }
@@ -558,7 +628,10 @@ function BaseVoiceCatalogPanel({ baseVoices, baseVoicesLoaded, usage, activeEngi
     return (
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
         <p className="text-sm font-bold text-ink">No base voices available</p>
-        <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">The TTS sidecar isn't reachable, or the loaded model has no published speakers. Load a model to populate this list.</p>
+        <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
+          The TTS sidecar isn't reachable, or the loaded model has no published speakers. Load a
+          model to populate this list.
+        </p>
       </div>
     );
   }
@@ -584,7 +657,7 @@ function BaseVoiceCatalogPanel({ baseVoices, baseVoicesLoaded, usage, activeEngi
             )}
           </header>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {list.map(bv => {
+            {list.map((bv) => {
               const key = `${bv.engine}|${bv.name}`;
               const inUse = usage.get(key) ?? 0;
               const isBusy = status?.key === key;
@@ -600,17 +673,29 @@ function BaseVoiceCatalogPanel({ baseVoices, baseVoicesLoaded, usage, activeEngi
                 ttsVoice: { provider: bv.engine, name: bv.name, description: '' },
               };
               return (
-                <div key={key} className="flex items-start gap-3 p-3 rounded-2xl border bg-canvas border-ink/10">
+                <div
+                  key={key}
+                  className="flex items-start gap-3 p-3 rounded-2xl border bg-canvas border-ink/10"
+                >
                   <span onClick={(e) => e.stopPropagation()}>
-                    <VoiceSwatch voice={swatchVoice} size="sm" showLabel={false} onSelect={() => onPlay(bv)}/>
+                    <VoiceSwatch
+                      voice={swatchVoice}
+                      size="sm"
+                      showLabel={false}
+                      onSelect={() => onPlay(bv)}
+                    />
                   </span>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold text-ink truncate">{bv.name}</p>
                     <p className="text-[11px] text-ink/50">
-                      {inUse > 0 ? `Used by ${inUse} cast ${inUse === 1 ? 'member' : 'members'}` : 'Unused'}
+                      {inUse > 0
+                        ? `Used by ${inUse} cast ${inUse === 1 ? 'member' : 'members'}`
+                        : 'Unused'}
                     </p>
                     {isBusy && (
-                      <p className="text-[11px] text-ink/60 italic mt-1" aria-live="polite">{status?.label}</p>
+                      <p className="text-[11px] text-ink/60 italic mt-1" aria-live="polite">
+                        {status?.label}
+                      </p>
                     )}
                   </div>
                 </div>
@@ -632,7 +717,7 @@ interface TtsEngineModelPickerProps {
 }
 function TtsEngineModelPicker({ modelKey, onChange }: TtsEngineModelPickerProps) {
   const currentEngine = engineGroupForModelKey(modelKey);
-  const engineGroup = TTS_ENGINES.find(g => g.id === currentEngine) ?? TTS_ENGINES[0];
+  const engineGroup = TTS_ENGINES.find((g) => g.id === currentEngine) ?? TTS_ENGINES[0];
   return (
     <>
       <label className="inline-flex items-center gap-2 text-xs text-ink/60">
@@ -640,15 +725,17 @@ function TtsEngineModelPicker({ modelKey, onChange }: TtsEngineModelPickerProps)
         <select
           value={currentEngine}
           onChange={(e) => {
-            const nextGroup = TTS_ENGINES.find(g => g.id === (e.target.value as TtsEngineId));
+            const nextGroup = TTS_ENGINES.find((g) => g.id === (e.target.value as TtsEngineId));
             if (!nextGroup) return;
             onChange(nextGroup.models[0].id);
           }}
           className="px-3 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink hover:bg-ink/[0.04] focus:outline-none focus:ring-2 focus:ring-magenta/30"
           title={engineGroup.hint}
         >
-          {TTS_ENGINES.map(g => (
-            <option key={g.id} value={g.id}>{g.label}</option>
+          {TTS_ENGINES.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.label}
+            </option>
           ))}
         </select>
       </label>
@@ -659,8 +746,10 @@ function TtsEngineModelPicker({ modelKey, onChange }: TtsEngineModelPickerProps)
           onChange={(e) => onChange(e.target.value as TtsModelKey)}
           className="px-3 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink hover:bg-ink/[0.04] focus:outline-none focus:ring-2 focus:ring-magenta/30"
         >
-          {engineGroup.models.map(m => (
-            <option key={m.id} value={m.id}>{m.label}</option>
+          {engineGroup.models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
           ))}
         </select>
       </label>

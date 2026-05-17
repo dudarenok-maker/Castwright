@@ -87,7 +87,7 @@ const TONE_MODERATE = 25;
 const TONE_SEVERE = 40;
 
 const TONE_KEYS = ['warmth', 'pace', 'authority', 'emotion'] as const;
-type ToneKey = typeof TONE_KEYS[number];
+type ToneKey = (typeof TONE_KEYS)[number];
 
 const TONE_LABELS: Record<ToneKey, string> = {
   warmth: 'Warmth',
@@ -110,7 +110,7 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
       // No cast confirmed yet — nothing to compare against.
       return res.json({ pending: [], drift: [] });
     }
-    const castById = new Map(cast.map(c => [c.id, c]));
+    const castById = new Map(cast.map((c) => [c.id, c]));
 
     const persisted = await readJson<RevisionsPersisted>(revisionsJsonPath(bookDir));
     const dismissed = new Set(Array.isArray(persisted?.dismissed) ? persisted!.dismissed! : []);
@@ -122,19 +122,16 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
       const snapshots = seg.characterSnapshots ?? {};
       for (const [characterId, snapshot] of Object.entries(snapshots)) {
         const current = castById.get(characterId);
-        if (!current) continue;          // character removed from cast — nothing actionable here
+        if (!current) continue; // character removed from cast — nothing actionable here
         const detectedAt = seg.synthesizedAt ?? new Date().toISOString();
         const ctx = { chapterId: seg.chapterId, characterId, snapshot, current, detectedAt };
         /* No engine-drift factor: engine isn't stored in cast.json (it's per-
            generation, set on the Generate view), so there's no current value
            to compare against. A voiceId swap covers the cross-engine case in
            practice — voice ids are engine-scoped. */
-        pushHardDrift(drift, ctx, 'voice', 'Voice',
-          snapshot.voiceId, current.voiceId);
-        pushHardDrift(drift, ctx, 'gender', 'Gender',
-          snapshot.gender, current.gender);
-        pushHardDrift(drift, ctx, 'ageRange', 'Age range',
-          snapshot.ageRange, current.ageRange);
+        pushHardDrift(drift, ctx, 'voice', 'Voice', snapshot.voiceId, current.voiceId);
+        pushHardDrift(drift, ctx, 'gender', 'Gender', snapshot.gender, current.gender);
+        pushHardDrift(drift, ctx, 'ageRange', 'Age range', snapshot.ageRange, current.ageRange);
         for (const key of TONE_KEYS) {
           pushToneDrift(drift, ctx, key);
         }
@@ -142,7 +139,7 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
       }
     }
 
-    const filtered = drift.filter(d => !dismissed.has(d.id));
+    const filtered = drift.filter((d) => !dismissed.has(d.id));
     res.json({ pending: [], drift: filtered });
   } catch (e) {
     console.error('[revisions] GET failed', e);
@@ -207,17 +204,17 @@ function pushHardDrift(
    real false-positive shows up. */
 function pushAttributesDrift(out: DriftEvent[], ctx: DriftContext): void {
   const before = ctx.snapshot.attributes;
-  const after  = ctx.current.attributes;
-  if (!Array.isArray(before) || !Array.isArray(after)) return;   // no signal
-  const beforeSet = new Set(before.map(s => s.trim().toLowerCase()).filter(Boolean));
-  const afterSet  = new Set(after.map(s => s.trim().toLowerCase()).filter(Boolean));
-  const added: string[]   = [];
+  const after = ctx.current.attributes;
+  if (!Array.isArray(before) || !Array.isArray(after)) return; // no signal
+  const beforeSet = new Set(before.map((s) => s.trim().toLowerCase()).filter(Boolean));
+  const afterSet = new Set(after.map((s) => s.trim().toLowerCase()).filter(Boolean));
+  const added: string[] = [];
   const removed: string[] = [];
-  for (const s of afterSet)  if (!beforeSet.has(s)) added.push(s);
-  for (const s of beforeSet) if (!afterSet.has(s))  removed.push(s);
+  for (const s of afterSet) if (!beforeSet.has(s)) added.push(s);
+  for (const s of beforeSet) if (!afterSet.has(s)) removed.push(s);
   if (added.length === 0 && removed.length === 0) return;
   const parts: string[] = [];
-  if (added.length)   parts.push(`added ${formatList(added)}`);
+  if (added.length) parts.push(`added ${formatList(added)}`);
   if (removed.length) parts.push(`removed ${formatList(removed)}`);
   out.push({
     id: driftId(ctx, 'attributes'),
@@ -235,7 +232,12 @@ function pushAttributesDrift(out: DriftEvent[], ctx: DriftContext): void {
 function formatList(items: string[]): string {
   if (items.length === 1) return `"${items[0]}"`;
   if (items.length === 2) return `"${items[0]}" and "${items[1]}"`;
-  return items.slice(0, -1).map(s => `"${s}"`).join(', ') + `, and "${items[items.length - 1]}"`;
+  return (
+    items
+      .slice(0, -1)
+      .map((s) => `"${s}"`)
+      .join(', ') + `, and "${items[items.length - 1]}"`
+  );
 }
 
 function pushToneDrift(out: DriftEvent[], ctx: DriftContext, key: ToneKey): void {
@@ -275,7 +277,9 @@ async function loadSegmentsFiles(
     for (const f of readdirSync(root)) {
       if (f.endsWith('.segments.json')) filesOnDisk.add(f);
     }
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 
   const out: SegmentsFile[] = [];
   for (const ch of chapters) {

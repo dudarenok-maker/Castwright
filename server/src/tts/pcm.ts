@@ -2,7 +2,7 @@
    in this shape; Node-side encoders (currently `./mp3.ts`) consume it. */
 
 export const BYTES_PER_SAMPLE = 2; // 16-bit
-export const CHANNELS = 1;          // mono
+export const CHANNELS = 1; // mono
 
 /** Duration in seconds of a raw 16-bit mono PCM buffer of `pcmBytes` length
     at `sampleRate`. */

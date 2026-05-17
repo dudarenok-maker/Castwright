@@ -53,25 +53,31 @@ interface LinkPriorBody {
 castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: Response) => {
   const sourceBookId = req.params.bookId;
   const body = (req.body ?? {}) as LinkPriorBody;
-  const sourceCharacterId = typeof body.sourceCharacterId === 'string' ? body.sourceCharacterId.trim() : '';
-  const targetBookId      = typeof body.targetBookId      === 'string' ? body.targetBookId.trim()      : '';
-  const targetCharacterId = typeof body.targetCharacterId === 'string' ? body.targetCharacterId.trim() : '';
+  const sourceCharacterId =
+    typeof body.sourceCharacterId === 'string' ? body.sourceCharacterId.trim() : '';
+  const targetBookId = typeof body.targetBookId === 'string' ? body.targetBookId.trim() : '';
+  const targetCharacterId =
+    typeof body.targetCharacterId === 'string' ? body.targetCharacterId.trim() : '';
 
   if (!sourceBookId || !sourceCharacterId || !targetBookId || !targetCharacterId) {
     return res.status(400).json({
-      error: 'bookId (path), sourceCharacterId, targetBookId, and targetCharacterId are all required.',
+      error:
+        'bookId (path), sourceCharacterId, targetBookId, and targetCharacterId are all required.',
     });
   }
   if (sourceBookId === targetBookId) {
     return res.status(400).json({
-      error: 'targetBookId must differ from the path bookId — use POST /:bookId/cast/merge for in-book merges.',
+      error:
+        'targetBookId must differ from the path bookId — use POST /:bookId/cast/merge for in-book merges.',
     });
   }
 
   const sourceLocated = await findBookByBookId(sourceBookId);
-  if (!sourceLocated) return res.status(404).json({ error: `Source book "${sourceBookId}" not found.` });
+  if (!sourceLocated)
+    return res.status(404).json({ error: `Source book "${sourceBookId}" not found.` });
   const targetLocated = await findBookByBookId(targetBookId);
-  if (!targetLocated) return res.status(404).json({ error: `Target book "${targetBookId}" not found.` });
+  if (!targetLocated)
+    return res.status(404).json({ error: `Target book "${targetBookId}" not found.` });
 
   /* Series-scope guard: same author + series, neither standalone.
      Mirrors the filter scanSeriesCharactersForBookId applies, so the
@@ -90,16 +96,20 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
   const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
   const targetCast = await readJson<CastFile>(castJsonPath(targetLocated.bookDir));
   if (!sourceCast?.characters?.length) {
-    return res.status(409).json({ error: 'Source book has no cast on disk yet. Run analysis before linking.' });
+    return res
+      .status(409)
+      .json({ error: 'Source book has no cast on disk yet. Run analysis before linking.' });
   }
   if (!targetCast?.characters?.length) {
     return res.status(409).json({ error: 'Target book has no cast on disk.' });
   }
 
-  const source = sourceCast.characters.find(c => c.id === sourceCharacterId);
-  if (!source) return res.status(404).json({ error: `Source character "${sourceCharacterId}" not found.` });
-  const target = targetCast.characters.find(c => c.id === targetCharacterId);
-  if (!target) return res.status(404).json({ error: `Target character "${targetCharacterId}" not found.` });
+  const source = sourceCast.characters.find((c) => c.id === sourceCharacterId);
+  if (!source)
+    return res.status(404).json({ error: `Source character "${sourceCharacterId}" not found.` });
+  const target = targetCast.characters.find((c) => c.id === targetCharacterId);
+  if (!target)
+    return res.status(404).json({ error: `Target character "${targetCharacterId}" not found.` });
 
   /* Append source.name + source.aliases to target.aliases (case-insensitive
      dedup, drop target.name itself). The matcher uses these on future
@@ -110,15 +120,17 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
 
   if (aliasesChanged) {
     const mergedTarget: CharacterOutput = { ...target, aliases: nextAliases };
-    const nextTargetCharacters = targetCast.characters.map(c =>
+    const nextTargetCharacters = targetCast.characters.map((c) =>
       c.id === targetCharacterId ? mergedTarget : c,
     );
-    await writeJsonAtomic(castJsonPath(targetLocated.bookDir), { characters: nextTargetCharacters });
+    await writeJsonAtomic(castJsonPath(targetLocated.bookDir), {
+      characters: nextTargetCharacters,
+    });
   }
 
   console.log(
     `[cast-link-prior] ${sourceBookId}/${sourceCharacterId} → ${targetBookId}/${targetCharacterId}` +
-    (aliasesChanged ? ' (alias added)' : ' (no-op: alias already present)'),
+      (aliasesChanged ? ' (alias added)' : ' (no-op: alias already present)'),
   );
 
   return res.json({

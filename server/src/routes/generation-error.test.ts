@@ -12,13 +12,17 @@ import { describeSynthesisError, newCascadeState, recordNonFatal } from './gener
 
 describe('describeSynthesisError', () => {
   it('flags sidecar-down (ECONNREFUSED) as fatal', () => {
-    const out = describeSynthesisError(new Error('fetch failed: connect ECONNREFUSED 127.0.0.1:9000'));
+    const out = describeSynthesisError(
+      new Error('fetch failed: connect ECONNREFUSED 127.0.0.1:9000'),
+    );
     expect(out.fatal).toBe(true);
     expect(out.errorReason).toMatch(/sidecar not running/i);
   });
 
   it('flags sidecar-down ("not reachable" text) as fatal', () => {
-    const out = describeSynthesisError(new Error('Local TTS sidecar not reachable at http://localhost:9000.'));
+    const out = describeSynthesisError(
+      new Error('Local TTS sidecar not reachable at http://localhost:9000.'),
+    );
     expect(out.fatal).toBe(true);
   });
 
@@ -41,13 +45,17 @@ describe('describeSynthesisError', () => {
        error inside Coqui XTTS when the substituted speaker passes manifest
        validation but the model's internal embedding lookup fails. It's
        deterministic across chapters, so retrying just burns the queue. */
-    const out = describeSynthesisError(new Error('Local TTS sidecar returned 500: {"detail":"index out of range in self"}'));
+    const out = describeSynthesisError(
+      new Error('Local TTS sidecar returned 500: {"detail":"index out of range in self"}'),
+    );
     expect(out.fatal).toBe(true);
     expect(out.errorReason).toMatch(/voice catalog is out of sync/i);
   });
 
   it('flags PyTorch IndexError text as fatal', () => {
-    const out = describeSynthesisError(new Error('IndexError: tensors used as indices must be long, int, byte or bool'));
+    const out = describeSynthesisError(
+      new Error('IndexError: tensors used as indices must be long, int, byte or bool'),
+    );
     expect(out.fatal).toBe(true);
   });
 
@@ -60,9 +68,11 @@ describe('describeSynthesisError', () => {
        guarantees the user gets a single banner instead of the cascade
        detector burning two chapters' worth of identical 500s before it
        bails on its own. */
-    const out = describeSynthesisError(new Error(
-      'Local TTS sidecar returned 500: {"detail":"CUDA error: device-side assert triggered\\nCUDA kernel errors might be asynchronously reported…"}',
-    ));
+    const out = describeSynthesisError(
+      new Error(
+        'Local TTS sidecar returned 500: {"detail":"CUDA error: device-side assert triggered\\nCUDA kernel errors might be asynchronously reported…"}',
+      ),
+    );
     expect(out.fatal).toBe(true);
     expect(out.errorReason).toMatch(/auto-restart/i);
     expect(out.errorReason).toMatch(/retry/i);
@@ -75,9 +85,11 @@ describe('describeSynthesisError', () => {
        `"poisoned": true` in the body. The classifier must catch that
        shape too so the second chapter doesn't get misread as a different
        (non-fatal) class of failure. */
-    const out = describeSynthesisError(new Error(
-      'Local TTS sidecar returned 503: {"detail":"TTS sidecar is in a poisoned CUDA state…","poisoned":true}',
-    ));
+    const out = describeSynthesisError(
+      new Error(
+        'Local TTS sidecar returned 503: {"detail":"TTS sidecar is in a poisoned CUDA state…","poisoned":true}',
+      ),
+    );
     expect(out.fatal).toBe(true);
     expect(out.errorReason).toMatch(/auto-restart/i);
   });

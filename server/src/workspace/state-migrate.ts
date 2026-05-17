@@ -38,10 +38,13 @@ export const CURRENT_STATE_SCHEMA = 1;
  *  surface this to the user as "please upgrade the server" rather than
  *  retrying. */
 export class UnsupportedStateSchemaError extends Error {
-  constructor(public readonly observedSchema: number, public readonly currentSchema: number) {
+  constructor(
+    public readonly observedSchema: number,
+    public readonly currentSchema: number,
+  ) {
     super(
       `state.json declares schema=${observedSchema} but this server only understands up to schema=${currentSchema}. ` +
-      `Refusing to read the file — upgrade the server to a version that knows schema=${observedSchema} before editing this book.`,
+        `Refusing to read the file — upgrade the server to a version that knows schema=${observedSchema} before editing this book.`,
     );
     this.name = 'UnsupportedStateSchemaError';
   }
@@ -84,7 +87,7 @@ export function migrateStateJson(raw: unknown): BookStateJson & { schema: number
      than v1 (we treat field-absent as v1 above). */
   throw new Error(
     `No migration registered from state.json schema=${declared} to ${CURRENT_STATE_SCHEMA}. ` +
-    `Add a transform in server/src/workspace/state-migrate.ts.`,
+      `Add a transform in server/src/workspace/state-migrate.ts.`,
   );
 }
 
@@ -124,8 +127,6 @@ export async function writeStateJsonAtomic(path: string, state: BookStateJson): 
  *  book today; recovery lets the book stay visible). Direct strict
  *  reads via `readJson` are still valid for callers that prefer the
  *  fast-fail diagnostic. */
-export async function readStateJsonWithRecovery(
-  path: string,
-): Promise<BookStateJson | null> {
+export async function readStateJsonWithRecovery(path: string): Promise<BookStateJson | null> {
   return readJsonWithRecovery<BookStateJson>(path, { keep: STATE_BACKUP_KEEP });
 }

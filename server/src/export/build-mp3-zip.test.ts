@@ -17,8 +17,11 @@ import { buildMp3Zip, ExportIncompleteError, sanitiseForZip } from './build-mp3-
 import type { BookStateJson } from '../workspace/scan.js';
 
 const ffmpegPresent = (() => {
-  try { return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0; }
-  catch { return false; }
+  try {
+    return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+  } catch {
+    return false;
+  }
 })();
 const describeIfFfmpeg = ffmpegPresent ? describe : describe.skip;
 
@@ -34,7 +37,10 @@ function readZipEntries(zip: Buffer): Array<{ name: string; data: Buffer }> {
      in the wild, but our tests don't write comments). */
   let eocdOff = -1;
   for (let i = zip.length - 22; i >= 0; i--) {
-    if (zip.readUInt32LE(i) === 0x06054b50) { eocdOff = i; break; }
+    if (zip.readUInt32LE(i) === 0x06054b50) {
+      eocdOff = i;
+      break;
+    }
   }
   if (eocdOff < 0) throw new Error('Not a zip (no EOCD)');
   const cdCount = zip.readUInt16LE(eocdOff + 10);
@@ -60,7 +66,9 @@ function readZipEntries(zip: Buffer): Array<{ name: string; data: Buffer }> {
     const dataStart = localOff + 30 + lhNameLen + lhExtraLen;
     const data = zip.subarray(dataStart, dataStart + compSize);
     if (compMethod !== 0) {
-      throw new Error('Test expects stored (no-deflate) entries; bigger files would zlib-inflate here.');
+      throw new Error(
+        'Test expects stored (no-deflate) entries; bigger files would zlib-inflate here.',
+      );
     }
     entries.push({ name, data: Buffer.from(data) });
     p += 46 + nameLen + extraLen + commentLen;
@@ -70,7 +78,8 @@ function readZipEntries(zip: Buffer): Array<{ name: string; data: Buffer }> {
 
 function readId3Title(mp3: Buffer): string | null {
   if (mp3[0] !== 0x49 || mp3[1] !== 0x44 || mp3[2] !== 0x33) return null;
-  const tagSize = ((mp3[6] & 0x7f) << 21) | ((mp3[7] & 0x7f) << 14) | ((mp3[8] & 0x7f) << 7) | (mp3[9] & 0x7f);
+  const tagSize =
+    ((mp3[6] & 0x7f) << 21) | ((mp3[7] & 0x7f) << 14) | ((mp3[8] & 0x7f) << 7) | (mp3[9] & 0x7f);
   let p = 10;
   while (p < 10 + tagSize - 10) {
     const frameId = mp3.subarray(p, p + 4).toString('latin1');
@@ -95,7 +104,8 @@ function readId3Title(mp3: Buffer): string | null {
 
 function readId3Track(mp3: Buffer): string | null {
   if (mp3[0] !== 0x49 || mp3[1] !== 0x44 || mp3[2] !== 0x33) return null;
-  const tagSize = ((mp3[6] & 0x7f) << 21) | ((mp3[7] & 0x7f) << 14) | ((mp3[8] & 0x7f) << 7) | (mp3[9] & 0x7f);
+  const tagSize =
+    ((mp3[6] & 0x7f) << 21) | ((mp3[7] & 0x7f) << 14) | ((mp3[8] & 0x7f) << 7) | (mp3[9] & 0x7f);
   let p = 10;
   while (p < 10 + tagSize - 10) {
     const frameId = mp3.subarray(p, p + 4).toString('latin1');
@@ -126,9 +136,9 @@ function makeState(): BookStateJson {
     castConfirmed: true,
     chapters: [
       { id: 1, title: 'Chapter 1 — Opening', slug: '01-chapter-1', duration: '0:00' },
-      { id: 2, title: 'Chapter 2',            slug: '02-chapter-2', duration: '0:00' },
-      { id: 3, title: 'Front matter',         slug: '00-front-matter', excluded: true },
-      { id: 4, title: 'Chapter 3',            slug: '04-chapter-3', duration: '0:00' },
+      { id: 2, title: 'Chapter 2', slug: '02-chapter-2', duration: '0:00' },
+      { id: 3, title: 'Front matter', slug: '00-front-matter', excluded: true },
+      { id: 4, title: 'Chapter 3', slug: '04-chapter-3', duration: '0:00' },
     ],
     coverGradient: ['#abc', '#def'],
     createdAt: '2025-01-01T00:00:00Z',
@@ -158,7 +168,9 @@ describeIfFfmpeg('buildMp3Zip', () => {
     }
   });
 
-  afterAll(() => { rmSync(tmpRoot, { recursive: true, force: true }); });
+  afterAll(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
 
   it('packs the non-excluded chapters in order with 2-digit prefixes', async () => {
     const result = await buildMp3Zip({ bookDir, state: makeState(), outPath });
@@ -172,7 +184,7 @@ describeIfFfmpeg('buildMp3Zip', () => {
 
     const zip = readFileSync(outPath);
     const entries = readZipEntries(zip);
-    expect(entries.map(e => e.name)).toEqual(result.entries);
+    expect(entries.map((e) => e.name)).toEqual(result.entries);
 
     /* Each entry carries TIT2 and TRCK = `N/3`. */
     expect(readId3Title(entries[0].data)).toBe('Chapter 1 — Opening');

@@ -2,9 +2,13 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  bookMetaSlice, bookMetaActions, selectEffectiveMeta, selectIsDirty,
+  bookMetaSlice,
+  bookMetaActions,
+  selectEffectiveMeta,
+  selectIsDirty,
   narratorNameFromCast,
-  type BookMetaState, type EditableBookMeta,
+  type BookMetaState,
+  type EditableBookMeta,
 } from './book-meta-slice';
 import type { Character } from '../lib/types';
 import type { RootState } from './index';
@@ -26,17 +30,20 @@ const reducer = bookMetaSlice.reducer;
 describe('bookMetaSlice — hydrateFromBookState', () => {
   it('seeds saved[bookId] from BookStateJson and wipes any draft', () => {
     const start: BookMetaState = { draft: { title: 'stale draft' }, saved: {} };
-    const next = reducer(start, bookMetaActions.hydrateFromBookState({
-      bookId: 'ns',
-      state: {
-        title: 'The Northern Star',
-        author: 'Mike Dudarenok',
-        series: 'NCT · Book 2',
-        narratorCredit: 'Anders Vale',
-        genre: 'Literary fiction',
-        publicationDate: '2026-05-09',
-      },
-    }));
+    const next = reducer(
+      start,
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'ns',
+        state: {
+          title: 'The Northern Star',
+          author: 'Mike Dudarenok',
+          series: 'NCT · Book 2',
+          narratorCredit: 'Anders Vale',
+          genre: 'Literary fiction',
+          publicationDate: '2026-05-09',
+        },
+      }),
+    );
     expect(next.draft).toBeNull();
     expect(next.saved.ns).toEqual({
       title: 'The Northern Star',
@@ -49,35 +56,44 @@ describe('bookMetaSlice — hydrateFromBookState', () => {
   });
 
   it('falls back to narratorFallback when state.narratorCredit is missing', () => {
-    const next = reducer(initial(), bookMetaActions.hydrateFromBookState({
-      bookId: 'ns',
-      state: { title: 'X', author: 'A', series: 'S' },
-      narratorFallback: 'Narrator',
-    }));
+    const next = reducer(
+      initial(),
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'ns',
+        state: { title: 'X', author: 'A', series: 'S' },
+        narratorFallback: 'Narrator',
+      }),
+    );
     expect(next.saved.ns.narratorCredit).toBe('Narrator');
     expect(next.saved.ns.genre).toBeNull();
     expect(next.saved.ns.publicationDate).toBeNull();
   });
 
   it('uses null when both state.narratorCredit and fallback are missing', () => {
-    const next = reducer(initial(), bookMetaActions.hydrateFromBookState({
-      bookId: 'ns',
-      state: { title: 'X', author: 'A', series: 'S' },
-    }));
+    const next = reducer(
+      initial(),
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'ns',
+        state: { title: 'X', author: 'A', series: 'S' },
+      }),
+    );
     expect(next.saved.ns.narratorCredit).toBeNull();
   });
 });
 
 describe('bookMetaSlice — setDraftField + cancelDraft', () => {
   it('stages a single-field edit into a new draft buffer', () => {
-    const next = reducer(initial(), bookMetaActions.setDraftField({ field: 'title', value: 'New Title' }));
+    const next = reducer(
+      initial(),
+      bookMetaActions.setDraftField({ field: 'title', value: 'New Title' }),
+    );
     expect(next.draft).toEqual({ title: 'New Title' });
   });
 
   it('accumulates multiple field edits in the same draft', () => {
-    let s = reducer(initial(), bookMetaActions.setDraftField({ field: 'title',  value: 'A' }));
-    s     = reducer(s,         bookMetaActions.setDraftField({ field: 'author', value: 'B' }));
-    s     = reducer(s,         bookMetaActions.setDraftField({ field: 'genre',  value: null }));
+    let s = reducer(initial(), bookMetaActions.setDraftField({ field: 'title', value: 'A' }));
+    s = reducer(s, bookMetaActions.setDraftField({ field: 'author', value: 'B' }));
+    s = reducer(s, bookMetaActions.setDraftField({ field: 'genre', value: null }));
     expect(s.draft).toEqual({ title: 'A', author: 'B', genre: null });
   });
 
@@ -157,24 +173,25 @@ describe('selectors', () => {
 
 describe('narratorNameFromCast', () => {
   const ch = (id: string, name: string): Character =>
-    ({ id, name, role: '', color: 'narrator' } as Character);
+    ({ id, name, role: '', color: 'narrator' }) as Character;
 
   it('returns null when the cast is empty', () => {
     expect(narratorNameFromCast([])).toBeNull();
   });
 
   it("returns the explicit narrator character's name when present", () => {
-    expect(narratorNameFromCast([
-      ch('halloran', 'Halloran'),
-      ch('narrator', 'Narrator'),
-      ch('eliza', 'Eliza'),
-    ])).toBe('Narrator');
+    expect(
+      narratorNameFromCast([
+        ch('halloran', 'Halloran'),
+        ch('narrator', 'Narrator'),
+        ch('eliza', 'Eliza'),
+      ]),
+    ).toBe('Narrator');
   });
 
   it('falls back to the first character when there is no narrator id', () => {
-    expect(narratorNameFromCast([
-      ch('halloran', 'Captain Halloran'),
-      ch('eliza',    'Eliza Gray'),
-    ])).toBe('Captain Halloran');
+    expect(
+      narratorNameFromCast([ch('halloran', 'Captain Halloran'), ch('eliza', 'Eliza Gray')]),
+    ).toBe('Captain Halloran');
   });
 });

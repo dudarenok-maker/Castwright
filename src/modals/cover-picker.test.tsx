@@ -30,7 +30,12 @@ vi.mock('../lib/api', () => ({
     patchCoverFraming: (...args: unknown[]) => patchCoverFraming(...args),
   },
   UploadCoverError: class extends Error {
-    constructor(public kind: string, message: string) { super(message); }
+    constructor(
+      public kind: string,
+      message: string,
+    ) {
+      super(message);
+    }
   },
 }));
 
@@ -231,7 +236,10 @@ describe('CoverPicker — Upload tab (plan 40)', () => {
 
   it('uploads a JPEG and auto-switches to the Frame tab on success', async () => {
     findCoverCandidates.mockResolvedValue({ candidates: [] });
-    uploadCover.mockResolvedValue({ coverImageUrl: '/api/books/bk_test/cover', originalFilename: 'mine.jpg' });
+    uploadCover.mockResolvedValue({
+      coverImageUrl: '/api/books/bk_test/cover',
+      originalFilename: 'mine.jpg',
+    });
 
     const { onPicked } = renderPicker({ defaultTab: 'upload' });
     const input = await screen.findByTestId('upload-input');
@@ -313,7 +321,12 @@ describe('CoverPicker — Frame tab (plan 40)', () => {
     fireEvent.click(await screen.findByTestId('frame-reset'));
 
     await waitFor(
-      () => expect(patchCoverFraming).toHaveBeenCalledWith('bk_test', { offsetX: 0, offsetY: 0, zoom: 1 }),
+      () =>
+        expect(patchCoverFraming).toHaveBeenCalledWith('bk_test', {
+          offsetX: 0,
+          offsetY: 0,
+          zoom: 1,
+        }),
       { timeout: 1500 },
     );
   });

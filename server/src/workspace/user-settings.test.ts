@@ -132,10 +132,14 @@ describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
   });
 
   it("accepts 'search' and 'upload'", () => {
-    expect(userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, coverPickerDefaultTab: 'search' })
-      .coverPickerDefaultTab).toBe('search');
-    expect(userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, coverPickerDefaultTab: 'upload' })
-      .coverPickerDefaultTab).toBe('upload');
+    expect(
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, coverPickerDefaultTab: 'search' })
+        .coverPickerDefaultTab,
+    ).toBe('search');
+    expect(
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, coverPickerDefaultTab: 'upload' })
+        .coverPickerDefaultTab,
+    ).toBe('upload');
   });
 
   it("rejects unknown values such as 'frame' (Frame tab is never a valid default)", () => {
@@ -167,7 +171,9 @@ describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
       expect(reread.coverPickerDefaultTab).toBe('upload');
     } finally {
       // Restore so we don't pollute the dev's user-settings.json.
-      await mod.writeUserSettings({ coverPickerDefaultTab: before.coverPickerDefaultTab ?? 'search' });
+      await mod.writeUserSettings({
+        coverPickerDefaultTab: before.coverPickerDefaultTab ?? 'search',
+      });
       mod._resetUserSettingsCache();
     }
   });

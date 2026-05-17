@@ -18,14 +18,11 @@ import { librarySlice } from '../store/library-slice';
 import { useReverseLocalAnalyzerGuard } from './use-reverse-local-analyzer-guard';
 import type { LibraryBook } from '../lib/types';
 
-function makeStore(opts: {
-  activeStream: AnalysisStreamSnapshot | null;
-  books?: LibraryBook[];
-}) {
+function makeStore(opts: { activeStream: AnalysisStreamSnapshot | null; books?: LibraryBook[] }) {
   const store = configureStore({
     reducer: {
       analysis: analysisSlice.reducer,
-      library:  librarySlice.reducer,
+      library: librarySlice.reducer,
     },
   });
   if (opts.activeStream) {
@@ -69,7 +66,11 @@ describe('useReverseLocalAnalyzerGuard', () => {
   it('passes through immediately when no analysis is active', () => {
     const store = makeStore({ activeStream: null });
     const proceed = vi.fn();
-    render(<Provider store={store}><Harness onProceed={proceed}/></Provider>);
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} />
+      </Provider>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
 
@@ -81,7 +82,11 @@ describe('useReverseLocalAnalyzerGuard', () => {
   it('passes through immediately when the active analysis is on a remote (Gemini) engine', () => {
     const store = makeStore({ activeStream: liveGeminiSnapshot });
     const proceed = vi.fn();
-    render(<Provider store={store}><Harness onProceed={proceed}/></Provider>);
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} />
+      </Provider>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
 
@@ -94,7 +99,11 @@ describe('useReverseLocalAnalyzerGuard', () => {
   it('opens the confirm modal when a LOCAL analysis is active; Confirm pauses then proceeds', () => {
     const store = makeStore({ activeStream: liveLocalSnapshot });
     const proceed = vi.fn();
-    render(<Provider store={store}><Harness onProceed={proceed}/></Provider>);
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} />
+      </Provider>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
 
@@ -116,7 +125,11 @@ describe('useReverseLocalAnalyzerGuard', () => {
   it('opens the modal and Cancel closes it without dispatching setPaused or running proceed', () => {
     const store = makeStore({ activeStream: liveLocalSnapshot });
     const proceed = vi.fn();
-    render(<Provider store={store}><Harness onProceed={proceed}/></Provider>);
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} />
+      </Provider>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
     expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
@@ -135,22 +148,28 @@ describe('useReverseLocalAnalyzerGuard', () => {
     };
     const store = makeStore({
       activeStream: snapshotWithoutTitle,
-      books: [{
-        bookId: 'b_Marlow',
-        manuscriptId: 'm_Marlow',
-        title: 'Library Title for Marlow',
-        author: 'Della Renwick',
-        series: 'The Hollow Tide',
-        chapters: [],
-        cast: [],
-        status: 'analysing',
-        coverGradient: ['#fff', '#000'],
-        castConfirmed: false,
-        isStandalone: false,
-        seriesPosition: null,
-      }] as unknown as LibraryBook[],
+      books: [
+        {
+          bookId: 'b_Marlow',
+          manuscriptId: 'm_Marlow',
+          title: 'Library Title for Marlow',
+          author: 'Della Renwick',
+          series: 'The Hollow Tide',
+          chapters: [],
+          cast: [],
+          status: 'analysing',
+          coverGradient: ['#fff', '#000'],
+          castConfirmed: false,
+          isStandalone: false,
+          seriesPosition: null,
+        },
+      ] as unknown as LibraryBook[],
     });
-    render(<Provider store={store}><Harness onProceed={vi.fn()}/></Provider>);
+    render(
+      <Provider store={store}>
+        <Harness onProceed={vi.fn()} />
+      </Provider>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
     expect(screen.getByText(/Library Title for Marlow/)).toBeInTheDocument();
@@ -162,7 +181,11 @@ describe('useReverseLocalAnalyzerGuard', () => {
       bookTitle: undefined,
     };
     const store = makeStore({ activeStream: snapshotWithoutTitle });
-    render(<Provider store={store}><Harness onProceed={vi.fn()}/></Provider>);
+    render(
+      <Provider store={store}>
+        <Harness onProceed={vi.fn()} />
+      </Provider>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
     expect(screen.getByText(/b_Marlow/)).toBeInTheDocument();

@@ -9,15 +9,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { FallbackAnalyzer } from './index.js';
 import { LocalUnreachableError, AnalysisAbortedError } from './ollama.js';
 import type { Analyzer, StageCall } from './index.js';
-import type {
-  Stage1Output,
-  Stage1ChapterOutput,
-  Stage2ChapterOutput,
-} from '../handoff/schemas.js';
+import type { Stage1Output, Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schemas.js';
 
 const STAGE1_RESULT: Stage1Output = {
   characters: [{ id: 'n', name: 'Narrator', role: 'narrator', color: 'narrator' }],
-  chapters:   [{ id: 1, title: 'One' }],
+  chapters: [{ id: 1, title: 'One' }],
 };
 const STAGE1_CHAPTER_RESULT: Stage1ChapterOutput = {
   characters: [{ id: 'n', name: 'Narrator', role: 'narrator', color: 'narrator' }],
@@ -32,8 +28,10 @@ function makeAnalyzer(impl: Partial<Analyzer>): Analyzer & {
   runStage2Chapter: ReturnType<typeof vi.fn>;
 } {
   return {
-    runStage1:        vi.fn(impl.runStage1        ?? (() => Promise.resolve(STAGE1_RESULT))),
-    runStage1Chapter: vi.fn(impl.runStage1Chapter ?? (() => Promise.resolve(STAGE1_CHAPTER_RESULT))),
+    runStage1: vi.fn(impl.runStage1 ?? (() => Promise.resolve(STAGE1_RESULT))),
+    runStage1Chapter: vi.fn(
+      impl.runStage1Chapter ?? (() => Promise.resolve(STAGE1_CHAPTER_RESULT)),
+    ),
     runStage2Chapter: vi.fn(impl.runStage2Chapter ?? (() => Promise.resolve(STAGE2_RESULT))),
   };
 }
@@ -42,7 +40,7 @@ const CALL: StageCall = {};
 
 describe('FallbackAnalyzer.runStage1Chapter — fallback policy', () => {
   it('routes to the primary when it succeeds; fallback is never invoked', async () => {
-    const primary  = makeAnalyzer({});
+    const primary = makeAnalyzer({});
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
 
@@ -53,7 +51,9 @@ describe('FallbackAnalyzer.runStage1Chapter — fallback policy', () => {
   });
 
   it('falls back to the secondary on LocalUnreachableError', async () => {
-    const primary  = makeAnalyzer({ runStage1Chapter: () => Promise.reject(new LocalUnreachableError('daemon down')) });
+    const primary = makeAnalyzer({
+      runStage1Chapter: () => Promise.reject(new LocalUnreachableError('daemon down')),
+    });
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
 
@@ -64,7 +64,9 @@ describe('FallbackAnalyzer.runStage1Chapter — fallback policy', () => {
   });
 
   it('does NOT fall back on a plain Error — the error propagates and the secondary is untouched', async () => {
-    const primary  = makeAnalyzer({ runStage1Chapter: () => Promise.reject(new Error('validation failed')) });
+    const primary = makeAnalyzer({
+      runStage1Chapter: () => Promise.reject(new Error('validation failed')),
+    });
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
 
@@ -73,8 +75,11 @@ describe('FallbackAnalyzer.runStage1Chapter — fallback policy', () => {
   });
 
   it('does NOT fall back on an HTTP-like Error (e.g. Ollama returned 500) — the daemon was reachable, so fallback is forbidden', async () => {
-    const primary  = makeAnalyzer({
-      runStage1Chapter: () => Promise.reject(new Error('Ollama http://localhost:11434 returned 500 Internal Server Error')),
+    const primary = makeAnalyzer({
+      runStage1Chapter: () =>
+        Promise.reject(
+          new Error('Ollama http://localhost:11434 returned 500 Internal Server Error'),
+        ),
     });
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
@@ -90,24 +95,30 @@ describe('FallbackAnalyzer.runStage1Chapter — fallback policy', () => {
    on output nobody can receive. */
 describe('FallbackAnalyzer — abort policy', () => {
   it('does NOT fall back on AnalysisAbortedError; the abort propagates verbatim', async () => {
-    const primary  = makeAnalyzer({ runStage1Chapter: () => Promise.reject(new AnalysisAbortedError('client gone')) });
+    const primary = makeAnalyzer({
+      runStage1Chapter: () => Promise.reject(new AnalysisAbortedError('client gone')),
+    });
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
 
-    await expect(f.runStage1Chapter('m', 1, '# p', CALL)).rejects.toBeInstanceOf(AnalysisAbortedError);
+    await expect(f.runStage1Chapter('m', 1, '# p', CALL)).rejects.toBeInstanceOf(
+      AnalysisAbortedError,
+    );
     expect(fallback.runStage1Chapter).not.toHaveBeenCalled();
   });
 
   it('abort propagation also applies to runStage1 and runStage2Chapter', async () => {
-    const primary  = makeAnalyzer({
-      runStage1:        () => Promise.reject(new AnalysisAbortedError('client gone')),
+    const primary = makeAnalyzer({
+      runStage1: () => Promise.reject(new AnalysisAbortedError('client gone')),
       runStage2Chapter: () => Promise.reject(new AnalysisAbortedError('client gone')),
     });
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
 
     await expect(f.runStage1('m', '# p', CALL)).rejects.toBeInstanceOf(AnalysisAbortedError);
-    await expect(f.runStage2Chapter('m', 1, '# p', CALL)).rejects.toBeInstanceOf(AnalysisAbortedError);
+    await expect(f.runStage2Chapter('m', 1, '# p', CALL)).rejects.toBeInstanceOf(
+      AnalysisAbortedError,
+    );
     expect(fallback.runStage1).not.toHaveBeenCalled();
     expect(fallback.runStage2Chapter).not.toHaveBeenCalled();
   });
@@ -115,7 +126,9 @@ describe('FallbackAnalyzer — abort policy', () => {
 
 describe('FallbackAnalyzer — all three Analyzer methods share the same policy', () => {
   it('runStage1 follows the same fallback rule', async () => {
-    const primary  = makeAnalyzer({ runStage1: () => Promise.reject(new LocalUnreachableError('down')) });
+    const primary = makeAnalyzer({
+      runStage1: () => Promise.reject(new LocalUnreachableError('down')),
+    });
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
     await f.runStage1('m', '# p', CALL);
@@ -123,7 +136,9 @@ describe('FallbackAnalyzer — all three Analyzer methods share the same policy'
   });
 
   it('runStage2Chapter follows the same fallback rule', async () => {
-    const primary  = makeAnalyzer({ runStage2Chapter: () => Promise.reject(new LocalUnreachableError('down')) });
+    const primary = makeAnalyzer({
+      runStage2Chapter: () => Promise.reject(new LocalUnreachableError('down')),
+    });
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
     await f.runStage2Chapter('m', 1, '# p', CALL);

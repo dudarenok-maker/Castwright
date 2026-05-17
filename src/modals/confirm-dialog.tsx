@@ -60,21 +60,31 @@ export function ConfirmDialog({
   const isDanger = variant === 'danger';
   return (
     <>
-      <div onClick={onClose} className="fixed inset-0 bg-ink/40 z-50 fade-in"/>
+      <div onClick={onClose} className="fixed inset-0 bg-ink/40 z-50 fade-in" />
       <div className="fixed inset-0 z-50 grid place-items-center p-6 pointer-events-none">
         <div className="bg-white rounded-3xl shadow-float w-full max-w-lg pointer-events-auto fade-in overflow-hidden">
           <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
             {icon && (
-              <span className={`w-9 h-9 rounded-full grid place-items-center shrink-0 ${isDanger ? 'bg-red-50 text-red-700' : 'bg-peach/15 text-magenta'}`}>
+              <span
+                className={`w-9 h-9 rounded-full grid place-items-center shrink-0 ${isDanger ? 'bg-red-50 text-red-700' : 'bg-peach/15 text-magenta'}`}
+              >
                 {icon}
               </span>
             )}
             <div className="flex-1 min-w-0">
-              {eyebrow && <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">{eyebrow}</p>}
+              {eyebrow && (
+                <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
+                  {eyebrow}
+                </p>
+              )}
               <h3 className="text-base font-bold text-ink truncate">{title}</h3>
             </div>
-            <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60" aria-label="Close">
-              <IconClose className="w-4 h-4"/>
+            <button
+              onClick={onClose}
+              className="p-2 rounded-full hover:bg-ink/5 text-ink/60"
+              aria-label="Close"
+            >
+              <IconClose className="w-4 h-4" />
             </button>
           </div>
 
@@ -95,7 +105,9 @@ export function ConfirmDialog({
                   onPrimaryAction?.();
                   onClose();
                 }}
-              >{primaryLabel ?? 'OK'}</PrimaryButton>
+              >
+                {primaryLabel ?? 'OK'}
+              </PrimaryButton>
             ) : isDanger ? (
               <button
                 onClick={onConfirm}
@@ -104,7 +116,9 @@ export function ConfirmDialog({
                 {confirmLabel}
               </button>
             ) : (
-              <PrimaryButton variant="dark" onClick={onConfirm ?? onClose}>{confirmLabel}</PrimaryButton>
+              <PrimaryButton variant="dark" onClick={onConfirm ?? onClose}>
+                {confirmLabel}
+              </PrimaryButton>
             )}
           </div>
         </div>

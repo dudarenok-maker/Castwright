@@ -45,7 +45,9 @@ export async function preserveExistingAsPrevious(
     await renameWithRetry(existing.path, previousAudio);
   } catch (err) {
     /* eslint-disable-next-line no-console */
-    console.warn(`[preserve-previous-audio] audio rename failed for ${slug}: ${(err as Error).message}`);
+    console.warn(
+      `[preserve-previous-audio] audio rename failed for ${slug}: ${(err as Error).message}`,
+    );
     return { preserved: false };
   }
 
@@ -58,7 +60,9 @@ export async function preserveExistingAsPrevious(
          take). Log and continue. The sibling fsck will pair these up on
          next book open. */
       /* eslint-disable-next-line no-console */
-      console.warn(`[preserve-previous-audio] segments rename failed for ${slug}: ${(err as Error).message}`);
+      console.warn(
+        `[preserve-previous-audio] segments rename failed for ${slug}: ${(err as Error).message}`,
+      );
     }
   }
 

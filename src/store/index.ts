@@ -15,7 +15,12 @@ import { useDispatch, useSelector, type TypedUseSelectorHook } from 'react-redux
 import {
   persistReducer,
   persistStore,
-  FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER,
+  FLUSH,
+  REHYDRATE,
+  PAUSE,
+  PERSIST,
+  PURGE,
+  REGISTER,
   type PersistConfig,
 } from 'redux-persist';
 import storage from 'redux-persist/lib/storage';
@@ -94,33 +99,30 @@ const persistedManuscriptReducer = persistReducer(manuscriptPersistConfig, manus
 
 export const store = configureStore({
   reducer: {
-    ui:         persistedUiReducer,
-    account:    accountSlice.reducer,
-    cast:       castSlice.reducer,
-    chapters:   chaptersSlice.reducer,
-    revisions:  revisionsSlice.reducer,
+    ui: persistedUiReducer,
+    account: accountSlice.reducer,
+    cast: castSlice.reducer,
+    chapters: chaptersSlice.reducer,
+    revisions: revisionsSlice.reducer,
     manuscript: persistedManuscriptReducer,
-    library:    librarySlice.reducer,
-    voices:     voicesSlice.reducer,
-    changeLog:  changeLogSlice.reducer,
-    bookMeta:   bookMetaSlice.reducer,
-    exports:    exportsSlice.reducer,
-    analysis:   analysisSlice.reducer,
+    library: librarySlice.reducer,
+    voices: voicesSlice.reducer,
+    changeLog: changeLogSlice.reducer,
+    bookMeta: bookMetaSlice.reducer,
+    exports: exportsSlice.reducer,
+    analysis: analysisSlice.reducer,
   },
-  middleware: (getDefault) => getDefault({
-    /* redux-persist dispatches lifecycle actions whose payload includes
+  middleware: (getDefault) =>
+    getDefault({
+      /* redux-persist dispatches lifecycle actions whose payload includes
        the persistor instance + a `rehydrate` callback — both non-
        serializable by design. Add the canonical action types to the
        ignore list so RTK's default serializableCheck doesn't fire a
        warning on every persisted slice's REHYDRATE. */
-    serializableCheck: {
-      ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
-    },
-  }).concat(
-    persistenceMiddleware,
-    generationStreamMiddleware,
-    analysisStreamMiddleware,
-  ),
+      serializableCheck: {
+        ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
+      },
+    }).concat(persistenceMiddleware, generationStreamMiddleware, analysisStreamMiddleware),
 });
 
 /** Persistor for the store. Wrap the app in `<PersistGate>` from
@@ -133,7 +135,7 @@ export const store = configureStore({
  *  practice. */
 export const persistor = persistStore(store);
 
-export type RootState   = ReturnType<typeof store.getState>;
+export type RootState = ReturnType<typeof store.getState>;
 export type AppDispatch = typeof store.dispatch;
 
 export const useAppDispatch: () => AppDispatch = useDispatch;

@@ -18,28 +18,37 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('manual continuity link', () => {
-  test('confirm → drawer → prior-roster optgroup → link → Continuity preserved footer', async ({ page }) => {
+  test('confirm → drawer → prior-roster optgroup → link → Continuity preserved footer', async ({
+    page,
+  }) => {
     /* Step 1: cold boot to library. */
     await page.goto('/');
-    await expect(page.getByRole('button', { name: /Start a new book/i }).first())
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     /* Step 2: Start a new book. */
-    await page.getByRole('button', { name: /Start a new book/i }).first().click();
+    await page
+      .getByRole('button', { name: /Start a new book/i })
+      .first()
+      .click();
     await expect(page).toHaveURL(/#\/new$/);
 
     /* Step 3: paste a tiny manuscript so the analyser mock has something
        to consume. The H1 becomes the title. */
     await page.getByRole('button', { name: /Paste text/i }).click();
-    await page.locator('textarea').fill(
-      '# Continuity Test Book\n\n# Chapter 1\n\nA tiny test paragraph.\n\n' +
-      '# Chapter 2\n\nA second paragraph.\n',
-    );
+    await page
+      .locator('textarea')
+      .fill(
+        '# Continuity Test Book\n\n# Chapter 1\n\nA tiny test paragraph.\n\n' +
+          '# Chapter 2\n\nA second paragraph.\n',
+      );
     await page.getByRole('button', { name: /Upload pasted text/i }).click();
 
     /* Step 4: confirm metadata. Standalone defaults to checked. */
-    await expect(page.getByRole('button', { name: /Save book and start analysis/i }))
-      .toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /Save book and start analysis/i })).toBeVisible({
+      timeout: 5_000,
+    });
     await page.getByPlaceholder(/Ursula K\. Le Guin/i).fill('E2E Author');
     await page.getByRole('button', { name: /Save book and start analysis/i }).click();
 
@@ -77,7 +86,9 @@ test.describe('manual continuity link', () => {
        (Narrator / Eliza / Marcus, excluding Halloran himself). */
     const select = page.getByRole('combobox', { name: /Merge target/i });
     await expect(select).toBeVisible();
-    await expect(select.getByRole('option', { name: /Captain James Halloran.*Solway Bay/i })).toHaveCount(1);
+    await expect(
+      select.getByRole('option', { name: /Captain James Halloran.*Solway Bay/i }),
+    ).toHaveCount(1);
     await expect(select.getByRole('option', { name: /Mae Vance.*Solway Bay/i })).toHaveCount(1);
     await expect(select.getByRole('option', { name: 'Eliza Gray' })).toHaveCount(1);
 

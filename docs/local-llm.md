@@ -4,7 +4,7 @@
 > 8B and still keep everything resident?". Written 2026-05-15.
 
 This is not a regression plan (those live in `docs/features/29-…` for the
-analyzer surface and `…/14-…` for the TTS sidecar). This is the *why* — the
+analyzer surface and `…/14-…` for the TTS sidecar). This is the _why_ — the
 shape of the VRAM budget, the role the LLM plays, and the tradeoffs we'd hit
 moving up a model size.
 
@@ -48,13 +48,13 @@ and the policy is documented at the top of the same file.
 
 8 GB total on the dev box. Three things compete for it:
 
-| Tenant                  | Resident size       | When it's loaded                    |
-| ----------------------- | ------------------- | ----------------------------------- |
-| Analyzer (qwen3.5:4b)   | ~3.0 GB             | During Stage 1 + Stage 2            |
-| Analyzer (qwen3.5:9b)   | ~6.6 GB             | During Stage 1 + Stage 2            |
-| Analyzer (llama3.1:8b)  | ~5.0 GB             | During Stage 1 + Stage 2            |
-| XTTS v2 (Coqui)         | ~3.5 GB w/ fp16     | During generation                   |
-| KV cache (16K ctx)      | ~1.0–1.5 GB extra   | Same window as the analyzer weights |
+| Tenant                 | Resident size     | When it's loaded                    |
+| ---------------------- | ----------------- | ----------------------------------- |
+| Analyzer (qwen3.5:4b)  | ~3.0 GB           | During Stage 1 + Stage 2            |
+| Analyzer (qwen3.5:9b)  | ~6.6 GB           | During Stage 1 + Stage 2            |
+| Analyzer (llama3.1:8b) | ~5.0 GB           | During Stage 1 + Stage 2            |
+| XTTS v2 (Coqui)        | ~3.5 GB w/ fp16   | During generation                   |
+| KV cache (16K ctx)     | ~1.0–1.5 GB extra | Same window as the analyzer weights |
 
 These numbers are at default Ollama Q4_K_M quant. They are not gospel — Ollama
 shows the true resident size in `/api/ps`, which our health probe already
@@ -160,7 +160,7 @@ Three reasons, in order of weight:
    to only emit tokens that keep the output a valid prefix of a value
    matching that schema. The 4B can't go off the rails structurally; the
    remaining variance is semantic, which is where bigger models help — but
-   *less* than they would without constrained decoding.
+   _less_ than they would without constrained decoding.
 3. **Retry policy already absorbs most failures.** Validation-retry handles
    schema near-misses (replay-and-correct at low temperature), and
    `invalid-json` failures get a temperature bump + assistant-turn drop on
@@ -201,7 +201,7 @@ If the goal is **"keep the analyzer resident across the loop, with a real
    load. The existing test (`src/views/analysing.test.tsx:365`) covers the
    reverse direction; an 8B that won't evict on demand is the main risk.
 
-### What would *not* fit
+### What would _not_ fit
 
 - **qwen3.5:9b held resident across the loop.** 6.6 GB weights + ~1.5 GB KV
   at 16K = 8.1 GB. Over budget. Either drop to `num_ctx: 8192` (smaller KV,
@@ -216,14 +216,14 @@ If the goal is **"keep the analyzer resident across the loop, with a real
 
 We're using whatever Ollama defaults to per tag (Q4_K_M for most). The
 budgets above are at that quant. Q5_K_M / Q6_K push the resident size up
-~15–25% per step and *might* recover some accuracy; Q3 quants shrink the
+~15–25% per step and _might_ recover some accuracy; Q3 quants shrink the
 weights but hit quality more visibly than schema-constrained decoding can
 mask. Worth a measurement pass if the 8B move happens, but it's a separate
 investigation — don't fold it in.
 
 ## Things to measure before flipping the default
 
-The 4B is the default because it's *predictable*, not because it's
+The 4B is the default because it's _predictable_, not because it's
 necessarily the best quality/throughput trade. Before changing
 `DEFAULT_MODEL` (which is sourced from `FRONTEND_ACCOUNT_DEFAULTS` at
 `src/lib/account-defaults.ts`), measure:

@@ -63,11 +63,11 @@ export const bookMetaSlice = createSlice({
     hydrateFromBookState: (s, a: PayloadAction<HydratePayload>) => {
       const { bookId, state, narratorFallback } = a.payload;
       s.saved[bookId] = {
-        title:           state.title,
-        author:          state.author,
-        series:          state.series,
-        narratorCredit:  state.narratorCredit ?? narratorFallback ?? null,
-        genre:           state.genre ?? null,
+        title: state.title,
+        author: state.author,
+        series: state.series,
+        narratorCredit: state.narratorCredit ?? narratorFallback ?? null,
+        genre: state.genre ?? null,
         publicationDate: state.publicationDate ?? null,
       };
       s.draft = null;
@@ -85,7 +85,9 @@ export const bookMetaSlice = createSlice({
     },
 
     /* Discard pending edits — Cancel button. */
-    cancelDraft: (s) => { s.draft = null; },
+    cancelDraft: (s) => {
+      s.draft = null;
+    },
 
     /* Fold the draft into `saved[bookId]` atomically. This is the action the
        persistence-middleware watches to fire a PUT — keep it dispatching even
@@ -114,7 +116,8 @@ export const bookMetaActions = bookMetaSlice.actions;
 /** Resolves the currently-displayed metadata for a book by overlaying any
     in-flight draft on top of the saved snapshot. Returns null if the book
     has not been hydrated. */
-export const selectEffectiveMeta = (bookId: string | null) =>
+export const selectEffectiveMeta =
+  (bookId: string | null) =>
   (s: RootState): EditableBookMeta | null => {
     if (!bookId) return null;
     const saved = s.bookMeta.saved[bookId];
@@ -134,6 +137,6 @@ export const selectIsDirty = (s: RootState): boolean =>
     designated narrator; fall back to the first character otherwise. */
 export function narratorNameFromCast(characters: Character[]): string | null {
   if (characters.length === 0) return null;
-  const explicit = characters.find(c => c.id === 'narrator');
+  const explicit = characters.find((c) => c.id === 'narrator');
   return (explicit ?? characters[0]).name;
 }

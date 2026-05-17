@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { isLikelyFrontMatter, FRONT_MATTER_WORD_THRESHOLD, chapterSlug } from './chapter-heuristics';
+import {
+  isLikelyFrontMatter,
+  FRONT_MATTER_WORD_THRESHOLD,
+  chapterSlug,
+} from './chapter-heuristics';
 
 describe('isLikelyFrontMatter — title patterns', () => {
   it.each([
@@ -11,7 +15,7 @@ describe('isLikelyFrontMatter — title patterns', () => {
     'Preface',
     'Foreword',
     'Acknowledgements',
-    'Acknowledgments',           // US spelling
+    'Acknowledgments', // US spelling
     'About the Author',
     'About the Publisher',
     'Table of Contents',
@@ -29,13 +33,13 @@ describe('isLikelyFrontMatter — title patterns', () => {
     'Index',
     'Glossary',
     "Author's Note",
-    'Author’s Note',          // smart-quote variant
+    'Author’s Note', // smart-quote variant
     "Translator's Note",
     "Publisher's Note",
     'Half-Title',
     'Halftitle',
     'Imprint',
-  ])('matches "%s" as front matter regardless of length', title => {
+  ])('matches "%s" as front matter regardless of length', (title) => {
     expect(isLikelyFrontMatter(title, 50_000)).toBe(true);
   });
 

@@ -51,7 +51,7 @@ owner: null
 - **`window.__store__`** — the Redux store is exposed on `window` in `import.meta.env.DEV` builds (`npm run dev` on port 5173) and in `--mode e2e` builds (Playwright on port 5174). Gated in `src/main.tsx`; never set in production builds (`vite build`) because the gate tree-shakes. Use it in specs as:
 
   ```ts
-  await page.evaluate(() => window.__store__!.getState().ui.stage.kind)
+  await page.evaluate(() => window.__store__!.getState().ui.stage.kind);
   ```
 
   Don't add untyped writes to the store from specs — assertions only. The spec helper `getStageKind(page)` in `e2e/new-book-flow.spec.ts` is the canonical read pattern.
@@ -84,7 +84,7 @@ Run from a clean checkout:
 
 ## Out of scope (follow-ups)
 
-- **More golden paths.** Voice library tab. Each gets its own spec, all reuse the mock backend. (Upload → analysing → confirm → ready *shipped 2026-05-17 as `e2e/new-book-flow.spec.ts`*; Listen-view playback *shipped 2026-05-17 as `e2e/listen-playback.spec.ts` with the `MOCK_BOOK_STATES['sb']` seed*; Visual baselines *shipped 2026-05-17 as `e2e/visual.spec.ts` covering six core surfaces*.)
+- **More golden paths.** Voice library tab. Each gets its own spec, all reuse the mock backend. (Upload → analysing → confirm → ready _shipped 2026-05-17 as `e2e/new-book-flow.spec.ts`_; Listen-view playback _shipped 2026-05-17 as `e2e/listen-playback.spec.ts` with the `MOCK_BOOK_STATES['sb']` seed_; Visual baselines _shipped 2026-05-17 as `e2e/visual.spec.ts` covering six core surfaces_.)
 - **CI integration.** No CI runs anything yet. When CI exists, `test:e2e` is the slowest job; budget accordingly.
 
 ## Ship notes

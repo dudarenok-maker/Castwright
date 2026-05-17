@@ -18,7 +18,8 @@ vi.mock('../store', async () => {
   return {
     ...actual,
     useAppDispatch: () => sharedStore.dispatch,
-    useAppSelector: <T,>(sel: (s: ReturnType<typeof sharedStore.getState>) => T): T => sel(sharedStore.getState()),
+    useAppSelector: <T,>(sel: (s: ReturnType<typeof sharedStore.getState>) => T): T =>
+      sel(sharedStore.getState()),
   };
 });
 
@@ -27,9 +28,9 @@ let sharedStore: ReturnType<typeof makeStore>;
 function makeStore() {
   return configureStore({
     reducer: {
-      ui:        uiSlice.reducer,
-      cast:      castSlice.reducer,
-      chapters:  chaptersSlice.reducer,
+      ui: uiSlice.reducer,
+      cast: castSlice.reducer,
+      chapters: chaptersSlice.reducer,
       changeLog: changeLogSlice.reducer,
     },
   });
@@ -48,17 +49,40 @@ beforeEach(() => {
   /* Seed chapters with halloran in their character map and a 'done' state
      so the chapters slice's regenerateCharacter loop has something to
      flip to 'in_progress' + populate pendingRegen with. */
-  sharedStore.dispatch(chaptersSlice.actions.setChapters([
-    { id: 1, title: 'Ch 1', duration: '00:30', state: 'done', progress: 1, characters: { halloran: 'done' } },
-    { id: 2, title: 'Ch 2', duration: '00:30', state: 'done', progress: 1, characters: { halloran: 'done' } },
-    { id: 3, title: 'Ch 3', duration: '00:30', state: 'done', progress: 1, characters: { halloran: 'done' } },
-  ]));
+  sharedStore.dispatch(
+    chaptersSlice.actions.setChapters([
+      {
+        id: 1,
+        title: 'Ch 1',
+        duration: '00:30',
+        state: 'done',
+        progress: 1,
+        characters: { halloran: 'done' },
+      },
+      {
+        id: 2,
+        title: 'Ch 2',
+        duration: '00:30',
+        state: 'done',
+        progress: 1,
+        characters: { halloran: 'done' },
+      },
+      {
+        id: 3,
+        title: 'Ch 3',
+        duration: '00:30',
+        state: 'done',
+        progress: 1,
+        characters: { halloran: 'done' },
+      },
+    ]),
+  );
 });
 
 function renderBanner() {
   return render(
     <Provider store={sharedStore}>
-      <StaleAudioBanner/>
+      <StaleAudioBanner />
     </Provider>,
   );
 }
@@ -70,21 +94,25 @@ describe('StaleAudioBanner', () => {
   });
 
   it('renders nothing when chapterIds is empty (no audio at risk)', () => {
-    sharedStore.dispatch(uiSlice.actions.setStaleAudio({
-      characterId: 'halloran',
-      characterName: 'Halloran',
-      chapterIds: [],
-    }));
+    sharedStore.dispatch(
+      uiSlice.actions.setStaleAudio({
+        characterId: 'halloran',
+        characterName: 'Halloran',
+        chapterIds: [],
+      }),
+    );
     const { container } = renderBanner();
     expect(container.firstChild).toBeNull();
   });
 
   it('renders character name and chapter count when set', () => {
-    sharedStore.dispatch(uiSlice.actions.setStaleAudio({
-      characterId: 'halloran',
-      characterName: 'Halloran',
-      chapterIds: [1, 2, 3],
-    }));
+    sharedStore.dispatch(
+      uiSlice.actions.setStaleAudio({
+        characterId: 'halloran',
+        characterName: 'Halloran',
+        chapterIds: [1, 2, 3],
+      }),
+    );
     renderBanner();
     expect(screen.getByTestId('stale-audio-banner')).toBeInTheDocument();
     expect(screen.getByText(/Halloran/)).toBeInTheDocument();
@@ -92,29 +120,35 @@ describe('StaleAudioBanner', () => {
   });
 
   it('uses singular "chapter" for n=1', () => {
-    sharedStore.dispatch(uiSlice.actions.setStaleAudio({
-      characterId: 'halloran',
-      characterName: 'Halloran',
-      chapterIds: [1],
-    }));
+    sharedStore.dispatch(
+      uiSlice.actions.setStaleAudio({
+        characterId: 'halloran',
+        characterName: 'Halloran',
+        chapterIds: [1],
+      }),
+    );
     renderBanner();
     expect(screen.getByText(/1 chapter\b/)).toBeInTheDocument();
   });
 
   it('Regenerate now dispatches regenerateCharacter + clears banner + switches to generate view', () => {
-    sharedStore.dispatch(uiSlice.actions.setStaleAudio({
-      characterId: 'halloran',
-      characterName: 'Halloran',
-      chapterIds: [1, 3],
-    }));
+    sharedStore.dispatch(
+      uiSlice.actions.setStaleAudio({
+        characterId: 'halloran',
+        characterName: 'Halloran',
+        chapterIds: [1, 3],
+      }),
+    );
     /* Need a ready stage for changeView to actually change anything;
        set one explicitly. */
     sharedStore.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'complete' }));
-    sharedStore.dispatch(uiSlice.actions.setStaleAudio({
-      characterId: 'halloran',
-      characterName: 'Halloran',
-      chapterIds: [1, 3],
-    }));
+    sharedStore.dispatch(
+      uiSlice.actions.setStaleAudio({
+        characterId: 'halloran',
+        characterName: 'Halloran',
+        chapterIds: [1, 3],
+      }),
+    );
 
     renderBanner();
     fireEvent.click(screen.getByRole('button', { name: /Regenerate now/i }));
@@ -126,22 +160,26 @@ describe('StaleAudioBanner', () => {
     expect(state.ui.staleAudio).toBeNull();
     expect(state.chapters.pendingRegen?.chapterIds).toEqual([1, 3]);
     expect(state.chapters.pendingRegen?.force).toBe(true);
-    expect(state.changeLog.events.some(e => e.type === 'regenerate' && e.title?.includes('Halloran'))).toBe(true);
+    expect(
+      state.changeLog.events.some((e) => e.type === 'regenerate' && e.title?.includes('Halloran')),
+    ).toBe(true);
     expect((state.ui.stage as { view?: string }).view).toBe('generate');
   });
 
   it('Dismiss clears the slice flag without dispatching regenerate', () => {
-    sharedStore.dispatch(uiSlice.actions.setStaleAudio({
-      characterId: 'halloran',
-      characterName: 'Halloran',
-      chapterIds: [1, 2],
-    }));
+    sharedStore.dispatch(
+      uiSlice.actions.setStaleAudio({
+        characterId: 'halloran',
+        characterName: 'Halloran',
+        chapterIds: [1, 2],
+      }),
+    );
     renderBanner();
     fireEvent.click(screen.getByLabelText('Dismiss stale-audio banner'));
 
     const state = sharedStore.getState();
     expect(state.ui.staleAudio).toBeNull();
     expect(state.chapters.pendingRegen).toBeNull();
-    expect(state.changeLog.events.some(e => e.type === 'regenerate')).toBe(false);
+    expect(state.changeLog.events.some((e) => e.type === 'regenerate')).toBe(false);
   });
 });

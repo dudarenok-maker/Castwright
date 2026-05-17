@@ -78,10 +78,10 @@ export function useSystemTheme(): ResolvedTheme {
 /** Read the resolved theme and write it to `<html data-theme="…">` on every
     change. Intended to be mounted once at the root (layout.tsx). */
 export function useTheme(): ResolvedTheme {
-  const override       = useAppSelector(s => s.ui.themeOverride);
-  const accountDefault = useAppSelector(s => s.account.defaultThemePreference ?? 'system');
-  const systemTheme    = useSystemTheme();
-  const theme          = resolveTheme(override, accountDefault, systemTheme);
+  const override = useAppSelector((s) => s.ui.themeOverride);
+  const accountDefault = useAppSelector((s) => s.account.defaultThemePreference ?? 'system');
+  const systemTheme = useSystemTheme();
+  const theme = resolveTheme(override, accountDefault, systemTheme);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;

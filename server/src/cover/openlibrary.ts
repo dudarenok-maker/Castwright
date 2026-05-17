@@ -38,7 +38,10 @@ export interface CoverCandidate {
 export type OpenLibraryErrorKind = 'timeout' | 'http' | 'invalid' | 'too_large';
 
 export class OpenLibraryError extends Error {
-  constructor(public kind: OpenLibraryErrorKind, message: string) {
+  constructor(
+    public kind: OpenLibraryErrorKind,
+    message: string,
+  ) {
     super(message);
     this.name = 'OpenLibraryError';
   }
@@ -58,7 +61,7 @@ export async function searchCovers(title: string, author: string): Promise<Cover
   if (!trimmedTitle && !trimmedAuthor) return [];
 
   const params = new URLSearchParams();
-  if (trimmedTitle)  params.set('title',  trimmedTitle);
+  if (trimmedTitle) params.set('title', trimmedTitle);
   if (trimmedAuthor) params.set('author', trimmedAuthor);
   params.set('limit', '20');
   const url = `https://openlibrary.org/search.json?${params.toString()}`;
@@ -69,7 +72,11 @@ export async function searchCovers(title: string, author: string): Promise<Cover
   try {
     res = await fetch(url, {
       signal: ctrl.signal,
-      headers: { Accept: 'application/json', 'User-Agent': 'audiobook-generator/1.0 (https://github.com/dudarenok-maker/audiobook-generator)' },
+      headers: {
+        Accept: 'application/json',
+        'User-Agent':
+          'audiobook-generator/1.0 (https://github.com/dudarenok-maker/audiobook-generator)',
+      },
     });
   } catch (e) {
     if ((e as Error).name === 'AbortError') {
@@ -128,7 +135,10 @@ export async function downloadCover(url: string, destPath: string): Promise<{ by
   try {
     res = await fetch(url, {
       signal: ctrl.signal,
-      headers: { 'User-Agent': 'audiobook-generator/1.0 (https://github.com/dudarenok-maker/audiobook-generator)' },
+      headers: {
+        'User-Agent':
+          'audiobook-generator/1.0 (https://github.com/dudarenok-maker/audiobook-generator)',
+      },
     });
   } catch (e) {
     if ((e as Error).name === 'AbortError') {
@@ -145,7 +155,10 @@ export async function downloadCover(url: string, destPath: string): Promise<{ by
 
   const ctype = res.headers.get('content-type') ?? '';
   if (!ctype.toLowerCase().startsWith('image/')) {
-    throw new OpenLibraryError('invalid', `Response is not an image (content-type: ${ctype || 'unknown'}).`);
+    throw new OpenLibraryError(
+      'invalid',
+      `Response is not an image (content-type: ${ctype || 'unknown'}).`,
+    );
   }
 
   const buffer = Buffer.from(await res.arrayBuffer());
@@ -153,7 +166,10 @@ export async function downloadCover(url: string, destPath: string): Promise<{ by
     throw new OpenLibraryError('invalid', 'Cover body is empty.');
   }
   if (buffer.length > MAX_COVER_BYTES) {
-    throw new OpenLibraryError('too_large', `Cover exceeds ${MAX_COVER_BYTES} bytes (got ${buffer.length}).`);
+    throw new OpenLibraryError(
+      'too_large',
+      `Cover exceeds ${MAX_COVER_BYTES} bytes (got ${buffer.length}).`,
+    );
   }
 
   await mkdir(dirname(destPath), { recursive: true });
@@ -162,7 +178,9 @@ export async function downloadCover(url: string, destPath: string): Promise<{ by
   try {
     await renameWithRetry(tmp, destPath);
   } catch (e) {
-    await unlink(tmp).catch(() => { /* best-effort */ });
+    await unlink(tmp).catch(() => {
+      /* best-effort */
+    });
     throw e;
   }
   return { bytes: buffer.length };
@@ -179,7 +197,7 @@ export async function findCandidateById(
   openLibraryId: string,
 ): Promise<CoverCandidate | null> {
   const candidates = await searchCovers(title, author);
-  return candidates.find(c => c.openLibraryId === openLibraryId) ?? null;
+  return candidates.find((c) => c.openLibraryId === openLibraryId) ?? null;
 }
 
 /** Fire-and-forget convenience for the import route. Picks the top
