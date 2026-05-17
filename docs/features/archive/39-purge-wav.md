@@ -1,17 +1,17 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-05-17
 owner: null
 ---
 
 # Purge WAV — MP3 is the only audio format
 
-> Status: draft
+> Status: stable
 > Key files: `server/src/workspace/chapter-audio-file.ts`, `server/src/routes/chapter-audio.ts`, `server/src/workspace/preserve-previous-audio.ts`, `server/src/workspace/scan.ts`, `server/src/routes/book-state.ts`, `server/src/tts/wav.ts`, `server/src/routes/voice-sample.ts`, `server/src/tts/synthesise-chapter.ts`, `server/src/routes/generation.ts`, `server/src/export/build-mp3-zip.ts`, `server/src/index.ts`, `server/tts-sidecar/main.py`, `src/views/generation.tsx`, `src/lib/api.ts`, `src/lib/use-sample-playback.test.ts`, `src/mocks/audio/stub-a.wav`, `src/mocks/audio/stub-b.wav`, `openapi.yaml`
 > URL surface: removes `GET …/audio.wav` and `GET …/audio/previous.wav`; live surface collapses to `GET …/audio.mp3` and `GET …/audio/previous.mp3`.
 > OpenAPI ops: `ChapterAudio` (drop `.wav` URL variant from description), `streamGeneration` (drop legacy-fallback narrative), `delete previous audio` (scope narrows to `.previous.mp3`).
 > Paired tests: `server/src/routes/chapter-audio.test.ts`, `server/src/workspace/preserve-previous-audio.test.ts`, `server/src/tts/pcm.test.ts` (renamed from `wav.test.ts`), `server/src/export/build-mp3-zip.test.ts`, `server/src/export/build-mp3-folder.test.ts`, `server/src/export/build-m4b.test.ts`, `src/lib/use-sample-playback.test.ts`
-> Cross-links: [28 — Audio output format](28-chapter-audio-format.md) (this plan retires the legacy-WAV fallback documented there).
+> Cross-links: [28 — Audio output format](../28-chapter-audio-format.md) (this plan retired the legacy-WAV fallback documented there).
 
 ## Benefit / Rationale
 
@@ -246,4 +246,37 @@ These replace the analogous clauses in plan 28:
 
 ## Ship notes
 
-(Filled when status flips to `stable`.)
+Shipped 2026-05-17 on branch `chore/server-purge-wav`.
+
+- `e6fcf77` chore(server,sidecar): purge WAV from server runtime and sidecar
+- `4d06a4f` chore(frontend,openapi): purge WAV from frontend and OpenAPI spec
+- (final commit, this file) docs(docs): rewrite plan 28, archive plan 39, sweep WAV from feature docs
+
+Spec deltas from the plan body:
+
+- Plan 28 was rewritten in place (not re-archived) to remove every WAV
+  clause from invariants / URL surface / Paired tests / Out of scope and
+  to drop step 8 from the e2e recipe.
+- Sidecar `import io` was removed alongside `import wave` — it was used
+  only by the deleted `_wav_bytes` helper, so dropping it kept the
+  module imports tight.
+- `voice-sample.test.ts` line-86 comment was generalised ("not a WAV
+  with a misleading suffix" → "not raw PCM with a misleading suffix")
+  to keep the magic-bytes-vs-extension point without resurfacing WAV.
+- Plan 20 (revisions) carried a stray `audio/<slug>.{mp3,wav}` mention
+  not enumerated in the plan; swept in the same docs commit.
+
+New regression coverage added on top of the rewrites enumerated in the
+plan:
+
+- `server/src/routes/chapter-audio.test.ts` — explicit "GET …/audio.wav
+  → 404" assertions in both the mp3-chapter and no-audio describe
+  blocks plus a new "legacy .wav on disk is invisible" describe.
+- `server/src/workspace/chapter-audio-file.test.ts` (new) — `findChapterAudio`
+  + `chapterAudioExists` regression suite proving `.wav` on disk is
+  ignored.
+
+Verification: `npm run typecheck`, `npm run test` (frontend, 747 passed),
+`cd server && npm run test` (server, 735 passed), `npm run build`.
+Pre-commit's parallel-vitest worker exhibited occasional Windows
+worker-exit flakes; the same battery passed clean when re-run.

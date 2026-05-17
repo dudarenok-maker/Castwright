@@ -63,12 +63,11 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [14 — Coqui XTTS sidecar](14-tts-sidecar-coqui.md) — Local sidecar alternate (zero-shot voice cloning).
 - [14a — Kokoro v1 TTS engine](14a-tts-sidecar-kokoro.md) — Local sidecar default, English-only, per-engine cast voice profiles.
 - [15 — Gemini cloud TTS](15-tts-gemini-cloud.md) — Cloud opt-in.
-- [39 — Purge WAV (MP3 is the only format)](39-purge-wav.md) — Drops the legacy-WAV fallback documented in plan 28; locator + routes + types collapse to MP3-only; mock fixtures, UI label, OpenAPI, and 8 feature docs reworded. **draft**.
 
 ### G. Generation
 - [16 — Generation stream](16-generation-stream.md) — Chapter audio SSE stream. Cross-links to plan 28 for the on-disk format.
 - [17 — Regenerate this/forward](17-regenerate-this-or-forward.md) — Per-chapter + per-character regen.
-- [28 — Audio output format](28-chapter-audio-format.md) — Chapter audio + voice samples both MP3 VBR V2 via ffmpeg; legacy `.wav` fallback for chapters; ffmpeg preflight in `start-app.ps1`.
+- [28 — Audio output format](28-chapter-audio-format.md) — Chapter audio + voice samples both MP3 VBR V2 via ffmpeg; ffmpeg preflight in `start-app.ps1`.
 - [31 — Sticky generation across navigation](31-sticky-generation.md) — Generation survives every navigation except an explicit Stop or queue drain; local-analyzer triggers prompt for pause-and-analyse when a run is alive.
 - [32 — Sticky analysis across navigation](32-sticky-analysis.md) — Analysis survives every navigation except `/pause` or `fresh:true` displacement; server-owned job + multi-subscriber catch-up replay; `AnalysisPill` in the top-bar mirrors the generation pill.
 - [35 — Per-chapter engine drift detection](35-engine-drift-detection.md) — Stamp each rendered chapter with its TTS engine; surface drift when the project's active engine differs.
@@ -120,3 +119,4 @@ Plans that shipped and are no longer load-bearing for in-flight work live in
 breadcrumb so cross-references still resolve.
 
 - [22a — Voice library compare](archive/22a-voice-library-compare.md) — Two-cast-member compare entry point on the Voices tab; reuses `CompareCastModal`; same-/different-base-voice badge on the selection pill. Shipped 2026-05-17.
+- [39 — Purge WAV (MP3 is the only format)](archive/39-purge-wav.md) — Dropped the legacy-WAV fallback once documented in plan 28; locator + routes + types now MP3-only. Shipped 2026-05-17.

@@ -83,7 +83,7 @@ describe('voice-sample router', () => {
       expect(typeof res1.body.durationSec).toBe('number');
       expect(res1.body.durationSec).toBeGreaterThan(0);
 
-      /* File on disk is a real MP3 (not a WAV with a misleading suffix). */
+      /* File on disk is a real MP3 (not raw PCM with a misleading suffix). */
       const fileName = res1.body.url.split('/').pop() as string;
       const fileBuf = readFileSync(join(audioDir, fileName));
       expect(isMp3Magic(fileBuf)).toBe(true);

@@ -80,7 +80,7 @@ That paragraph is the thing I wish I'd known to build first.
 
 **Cross-book voice continuity, end-to-end.** The whole reason this project exists for a *series* and not a *book* is that you want the cast in Book 2 to sound like the cast in Book 1. When you confirm the cast on a new manuscript in an existing series, the matcher scores every existing voice in your library against the new manuscript's characters by name, alias, and token overlap on the descriptors. Returning characters get offered back with a *From [Book]* provenance pill before you've clicked. Manual cast merge writes the source character's name into the target's aliases — so a character introduced as *the swordsmith* in Book 1 and as *Aldric Verrin* in Book 2 still lands on the same voice the next time around.
 
-**Audio is MP3 VBR V2 via ffmpeg**, chapter markers wired, legacy WAV fallback for pre-format chapters, and an ffmpeg preflight in the start-app script so a fresh machine fails fast.
+**Audio is MP3 VBR V2 via ffmpeg**, chapter markers wired, and an ffmpeg preflight in the start-app script so a fresh machine fails fast.
 
 **Persistence is a single `.audiobook/` directory per book.** `state.json` for the slice payload, `cast.json` for the live cast (persisted incrementally during analysis), `dropped-quotes.json` as the verifier's append-only audit ledger, chapter audio and voice samples beside them. The frontend hydrates from these on load and PUTs slice patches back as you edit. Re-parse preserves manuscript edits and surfaces drift from the saved snapshot — so if you accept new metadata and chapter boundaries move, you see exactly what shifted.
 

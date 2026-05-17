@@ -198,7 +198,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     let completedSlugs: string[] = [];
     try {
       const files = existsSync(audioDir(bookDir)) ? await readdir(audioDir(bookDir)) : [];
-      const audioFiles = files.filter(f => /\.(mp3|m4a|wav|opus)$/i.test(f));
+      const audioFiles = files.filter(f => /\.(mp3|m4a|opus)$/i.test(f));
       completedSlugs = state.chapters
         .filter(c => audioFiles.some(f => f.startsWith(c.slug)))
         .map(c => c.slug);
@@ -718,7 +718,7 @@ bookStateRouter.post('/:bookId/chapters/:chapterId/exclude', async (req: Request
     if (excluded) {
       const audioRoot = audioDir(bookDir);
       const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
-      const audioCandidates = ['mp3', 'm4a', 'wav', 'opus'].map(ext => join(audioRoot, `${current.slug}.${ext}`));
+      const audioCandidates = ['mp3', 'm4a', 'opus'].map(ext => join(audioRoot, `${current.slug}.${ext}`));
       for (const p of [segmentsPath, ...audioCandidates]) {
         if (existsSync(p)) {
           await rm(p, { force: true }).catch(() => { /* best effort */ });

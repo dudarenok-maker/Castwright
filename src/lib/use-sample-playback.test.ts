@@ -50,7 +50,7 @@ describe('useSamplePlayback', () => {
     const { useSamplePlayback } = await import('./use-sample-playback');
     const { result } = renderHook(() => useSamplePlayback());
 
-    await act(async () => { await result.current.play('/audio/voices/x.wav'); });
+    await act(async () => { await result.current.play('/audio/voices/x.mp3'); });
     expect(result.current.isPlaying).toBe(true);
 
     const pending = result.current.playUntilEnded();
@@ -63,7 +63,7 @@ describe('useSamplePlayback', () => {
     const { useSamplePlayback } = await import('./use-sample-playback');
     const { result } = renderHook(() => useSamplePlayback());
 
-    await act(async () => { await result.current.play('/audio/voices/x.wav'); });
+    await act(async () => { await result.current.play('/audio/voices/x.mp3'); });
 
     const pending = result.current.playUntilEnded();
     await act(async () => { result.current.stop(); });
@@ -84,9 +84,9 @@ describe('useSamplePlayback', () => {
     const { useSamplePlayback } = await import('./use-sample-playback');
     const { result } = renderHook(() => useSamplePlayback());
 
-    await act(async () => { await result.current.play('/audio/voices/a.wav'); });
+    await act(async () => { await result.current.play('/audio/voices/a.mp3'); });
     const pending = result.current.playUntilEnded();
-    await act(async () => { await result.current.play('/audio/voices/b.wav'); });
+    await act(async () => { await result.current.play('/audio/voices/b.mp3'); });
     await expect(pending).resolves.toEqual({ cancelled: true });
   });
 });

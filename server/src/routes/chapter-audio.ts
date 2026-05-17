@@ -3,20 +3,17 @@
    GET /api/books/:bookId/chapters/:chapterId/audio
      → JSON { url, durationSec, peaks, sampleRate, segments }
    GET /api/books/:bookId/chapters/:chapterId/audio.mp3
-     → the MP3 file, with range-request support (new generations).
-   GET /api/books/:bookId/chapters/:chapterId/audio.wav
-     → the WAV file, with range-request support (legacy chapters from
-       before the MP3 switch).
+     → the MP3 file, with range-request support.
 
    GET /api/books/:bookId/chapters/:chapterId/audio/previous
      → JSON pointing at the PRESERVED prior render. Available only after
        a regen has happened and before the user accepts/rejects. 404
-       when no preserved pair exists (legacy chapters or first renders).
+       when no preserved pair exists (first renders, or chapters that
+       predate the rollback-preservation feature).
    GET /api/books/:bookId/chapters/:chapterId/audio/previous.mp3
-   GET /api/books/:bookId/chapters/:chapterId/audio/previous.wav
-     → binary previews of the preserved file with range-support.
+     → binary preview of the preserved file with range-support.
    DELETE /api/books/:bookId/chapters/:chapterId/audio/previous
-     → ACCEPT — the new render wins. Removes both .previous.* files.
+     → ACCEPT — the new render wins. Removes the .previous.* pair.
    POST   /api/books/:bookId/chapters/:chapterId/audio/previous/restore
      → REJECT — the prior render wins. Renames .previous.* over the
        live names, clobbering the just-rendered audio. 409 when a
@@ -27,9 +24,9 @@
 
    Why this route exists rather than reusing the /workspace static mount: the
    workspace directory tree uses display strings (`<Author>/<Series>/<Title>/
-   audio/<slug>.{mp3,wav}`) with spaces and possibly diacritics. A bookId-
-   keyed route is opaque, survives renames, and doesn't depend on
-   URL-encoding every path segment correctly. */
+   audio/<slug>.mp3`) with spaces and possibly diacritics. A bookId-keyed
+   route is opaque, survives renames, and doesn't depend on URL-encoding
+   every path segment correctly. */
 
 import { Router, type Request, type Response } from 'express';
 import { existsSync } from 'node:fs';
@@ -39,13 +36,10 @@ import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId } from '../workspace/scan.js';
-import { findChapterAudio, type ChapterAudioFile, type ChapterAudioExt } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio, type ChapterAudioFile } from '../workspace/chapter-audio-file.js';
 import { isGenerationActive } from './generation.js';
 
-const EXT_MIME: Record<ChapterAudioExt, 'audio/mpeg' | 'audio/wav'> = {
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-};
+const MP3_MIME = 'audio/mpeg';
 
 interface ChapterSegmentsFile {
   bookId: string;
@@ -79,10 +73,8 @@ export const chapterAudioRouter = Router();
 
 type AudioVariant = 'current' | 'previous';
 
-/** Look up the live (`<slug>.{mp3,wav}`) or preserved (`<slug>.previous.*`)
-    audio pair. The previous variant probes both extensions explicitly
-    rather than reusing findChapterAudio because previous files are named
-    differently. */
+/** Look up the live (`<slug>.mp3`) or preserved (`<slug>.previous.mp3`)
+    audio pair. */
 async function locateChapterAudio(
   bookId: string,
   chapterIdRaw: string,
@@ -110,19 +102,11 @@ async function locateChapterAudio(
   return { audio, segPath, chapterId, chapterTitle: chapter.title };
 }
 
-/** Mirror of findChapterAudio but for the `.previous.*` siblings. Probes
-    mp3 first (matching the live preference order), falls back to wav for
-    legacy chapters whose preserved pair is .wav. */
+/** Mirror of findChapterAudio but for the `.previous.mp3` sibling. */
 function findPreviousChapterAudio(audioRoot: string, slug: string): ChapterAudioFile | null {
-  for (const ext of ['mp3', 'wav'] as const) {
-    const path = join(audioRoot, `${slug}.previous.${ext}`);
-    if (existsSync(path)) {
-      return ext === 'mp3'
-        ? { path, ext, mime: 'audio/mpeg', urlSuffix: 'audio.mp3' }
-        : { path, ext, mime: 'audio/wav',  urlSuffix: 'audio.wav' };
-    }
-  }
-  return null;
+  const path = join(audioRoot, `${slug}.previous.mp3`);
+  if (!existsSync(path)) return null;
+  return { path, ext: 'mp3', mime: 'audio/mpeg', urlSuffix: 'audio.mp3' };
 }
 
 chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio', async (req: Request, res: Response) => {
@@ -150,9 +134,9 @@ chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio', async (req: Request
 });
 
 /* The preserved variant: same JSON shape as current, URL points at the
-   `previous.{mp3,wav}` binary endpoints below. The revision-diff a/b
-   player fetches BOTH this and the live `/audio` endpoint and renders
-   one A audio element + one B audio element. */
+   `previous.mp3` binary endpoint below. The revision-diff a/b player
+   fetches BOTH this and the live `/audio` endpoint and renders one A
+   audio element + one B audio element. */
 chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio/previous', async (req: Request, res: Response) => {
   const found = await locateChapterAudio(req.params.bookId, req.params.chapterId, 'previous');
   if (!found) return res.status(404).json({ message: 'No preserved previous audio.' });
@@ -163,12 +147,8 @@ chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio/previous', async (req
     characterId: s.characterId,
     sentenceId: s.sentenceIds[0],
   }));
-  /* URL suffix for the previous variant is `audio/previous.{mp3,wav}`,
-     hand-formatted because the ChapterAudioFile descriptor's urlSuffix
-     hardcodes `audio.{mp3,wav}` for the live names. */
-  const ext = found.audio.ext;
   res.json({
-    url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/audio/previous.${ext}`,
+    url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/audio/previous.mp3`,
     durationSec: meta?.durationSec ?? 0,
     peaks: [],
     sampleRate: meta?.sampleRate ?? 24000,
@@ -176,12 +156,8 @@ chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio/previous', async (req
   });
 });
 
-function makeFileHandler(expectedExt: ChapterAudioExt, variant: AudioVariant = 'current') {
+function makeFileHandler(variant: AudioVariant = 'current') {
   return async (req: Request, res: Response) => {
-    /* Probe directly for the requested extension — don't reuse
-       locateChapterAudio's prefer-mp3 ordering, because then a chapter that
-       had both files (e.g. legacy .wav left around after regenerate) would
-       always 404 the legacy .wav endpoint even though the file is there. */
     const chapterId = Number.parseInt(req.params.chapterId, 10);
     if (!Number.isInteger(chapterId)) return res.status(404).json({ message: 'Chapter audio not found.' });
     const located = await findBookByBookId(req.params.bookId);
@@ -189,24 +165,22 @@ function makeFileHandler(expectedExt: ChapterAudioExt, variant: AudioVariant = '
     const chapter = located.state.chapters.find(c => c.id === chapterId);
     if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
     const fileName = variant === 'current'
-      ? `${chapter.slug}.${expectedExt}`
-      : `${chapter.slug}.previous.${expectedExt}`;
+      ? `${chapter.slug}.mp3`
+      : `${chapter.slug}.previous.mp3`;
     const path = join(audioDir(located.bookDir), fileName);
     if (!existsSync(path)) return res.status(404).json({ message: 'Chapter audio not found.' });
     res.sendFile(path, {
-      headers: { 'Content-Type': EXT_MIME[expectedExt], 'Cache-Control': 'no-cache' },
+      headers: { 'Content-Type': MP3_MIME, 'Cache-Control': 'no-cache' },
     }, err => {
       if (err && !res.headersSent) res.status(500).end();
     });
   };
 }
 
-chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio.mp3', makeFileHandler('mp3'));
-chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio.wav', makeFileHandler('wav'));
-chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio/previous.mp3', makeFileHandler('mp3', 'previous'));
-chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio/previous.wav', makeFileHandler('wav', 'previous'));
+chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio.mp3', makeFileHandler('current'));
+chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio/previous.mp3', makeFileHandler('previous'));
 
-/* ACCEPT — the user has chosen the new render. Delete both .previous.* files.
+/* ACCEPT — the user has chosen the new render. Delete the .previous.* pair.
    404 when nothing to delete (caller didn't audition first, or already
    accepted/rejected). 204 on success. */
 chapterAudioRouter.delete('/:bookId/chapters/:chapterId/audio/previous', async (req: Request, res: Response) => {
@@ -245,9 +219,7 @@ chapterAudioRouter.post('/:bookId/chapters/:chapterId/audio/previous/restore', a
   if (!previous) return res.status(404).json({ message: 'No preserved previous audio.' });
 
   /* Delete the live render first so the previous → live rename doesn't
-     race a still-present current file. The live extension may differ from
-     the previous extension (e.g. previous.wav restored over an mp3
-     re-render), so probe via findChapterAudio. */
+     race a still-present current file. */
   const currentLive = findChapterAudio(root, chapter.slug);
   if (currentLive) await unlink(currentLive.path).catch(() => {});
   const liveSegments = join(root, `${chapter.slug}.segments.json`);

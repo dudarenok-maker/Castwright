@@ -105,16 +105,16 @@ describeIfFfmpeg('buildMp3Folder', () => {
     expect(readId3Frame(ch2, 'TRCK')).toBe('2/2');
   }, 30_000);
 
-  it('refuses with ExportIncompleteError when a non-excluded chapter has only a .wav', async () => {
-    const legacyAudio = join(tmpRoot, 'legacy-book', 'audio');
-    mkdirSync(legacyAudio, { recursive: true });
+  it('refuses with ExportIncompleteError when a non-excluded chapter has no audio file', async () => {
+    const incompleteAudio = join(tmpRoot, 'incomplete-book', 'audio');
+    mkdirSync(incompleteAudio, { recursive: true });
     const mp3 = await encodePcmToMp3(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
-    writeFileSync(join(legacyAudio, '01-chapter-1.mp3'), mp3);
-    writeFileSync(join(legacyAudio, '02-chapter-2.wav'), Buffer.from([0x52, 0x49, 0x46, 0x46]));
+    writeFileSync(join(incompleteAudio, '01-chapter-1.mp3'), mp3);
+    /* No audio at all for chapter 2 — precheck must reject. */
 
     await expect(
       buildMp3Folder({
-        bookDir: join(tmpRoot, 'legacy-book'),
+        bookDir: join(tmpRoot, 'incomplete-book'),
         state: makeState(),
         outDir: join(tmpRoot, 'export-incomplete', 'Bonus Keefe Story'),
       }),
