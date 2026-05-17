@@ -27,21 +27,13 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 1 · Should 12 · Could 13 · Won't 13
+**Counts as of 2026-05-17:** Must 0 · Should 12 · Could 13 · Won't 13
 
 ---
 
 ## Must — blocks v1 ship or hurts existing users
 
-### 1. Purge WAV from the codebase (MP3 is the only format)
-
-Source: [`39-purge-wav.md`](features/39-purge-wav.md) (draft).
-
-- *What:* Delete every WAV branch, route, type literal, comment, UI label, mock fixture, and doc reference. Locator probes `.mp3` only; `audio.wav` + `audio/previous.wav` routes deleted; `ChapterAudioExt` narrows to `'mp3'`; `preserve-previous-audio` returns `{ preserved }` (no `ext`); audio-file regexes drop `wav`; `server/src/tts/wav.ts` deleted, `pcmDurationSec` moved to `server/src/tts/pcm.ts`; Generation view footer reads "Output: MP3 (VBR V2)"; mock `stub-a.wav` / `stub-b.wav` transcoded to MP3; sidecar `import wave` + `_wav_bytes` removed; `openapi.yaml` + 8 feature docs reworded; legacy on-disk `.wav` files become invisible (no migration).
-- *Acceptance:* `grep -rin 'wav\|WAV' src/ server/src/ openapi.yaml docs/features/` returns only `Waveform` component imports and the `peaks` "waveform envelope" description (visualization terms — not the format). `npm run verify` green. New tests pin `GET …/audio.wav` → 404 and `findChapterAudio` ignores `.wav` files on disk.
-- *Key files:* see the plan's "Key files" header — `chapter-audio-file.ts`, `chapter-audio.ts`, `preserve-previous-audio.ts`, `scan.ts`, `book-state.ts`, `tts/wav.ts`, `voice-sample.ts`, `synthesise-chapter.ts`, `generation.ts`, `build-mp3-zip.ts`, `index.ts`, sidecar `main.py`, `src/views/generation.tsx`, `src/lib/api.ts`, `use-sample-playback.test.ts`, `src/mocks/audio/stub-{a,b}.wav`, `openapi.yaml`, and the eight doc files enumerated in the plan.
-- *Depends on:* none — pure subtraction on existing surfaces.
-- *Benefit (architectural):* locks "chapter audio is MP3" as a one-format invariant; deletes ~150 lines of dead branches; removes the misleading "Output: WAV (16-bit PCM)" UI label that contradicts actual output.
+_All v1-blocker items shipped 2026-05-17 (plans 22a, 27, 32, 39)._
 
 ---
 

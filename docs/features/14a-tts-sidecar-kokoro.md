@@ -116,7 +116,7 @@ the cast UI ever surfaces "upload a reference clip per character").
    - 200 OK
    - `X-Sample-Rate: 24000`
    - `Content-Type: audio/L16;codec=pcm;rate=24000`
-   - body is mono 16-bit LE PCM (audible if wrapped in WAV)
+   - body is mono 16-bit LE PCM (audible after the Node-side MP3 encode)
 3. **Non-English voice falls back**: `voice=ef_dora` → 200 OK with
    `X-Voice-Substituted-From: ef_dora`, audio uses `af_heart`.
 

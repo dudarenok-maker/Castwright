@@ -220,16 +220,16 @@ describeIfTools('buildM4b', () => {
     expect(sumChapters).toBeGreaterThan(0);
   }, 30_000);
 
-  it('refuses with ExportIncompleteError when a non-excluded chapter has only a .wav', async () => {
-    const legacyDir = join(tmpRoot, 'legacy', 'audio');
-    mkdirSync(legacyDir, { recursive: true });
+  it('refuses with ExportIncompleteError when a non-excluded chapter has no audio file', async () => {
+    const incompleteDir = join(tmpRoot, 'incomplete', 'audio');
+    mkdirSync(incompleteDir, { recursive: true });
     const mp3 = await encodePcmToMp3(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
-    writeFileSync(join(legacyDir, '01-chapter-1.mp3'), mp3);
-    writeFileSync(join(legacyDir, '02-chapter-2.wav'), Buffer.from([0x52, 0x49, 0x46, 0x46]));
+    writeFileSync(join(incompleteDir, '01-chapter-1.mp3'), mp3);
+    /* No audio at all for chapter 2 — precheck must reject. */
 
     await expect(
       buildM4b({
-        bookDir: join(tmpRoot, 'legacy'),
+        bookDir: join(tmpRoot, 'incomplete'),
         state: makeState(),
         outPath: join(tmpRoot, 'incomplete.m4b'),
       }),

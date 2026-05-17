@@ -22,12 +22,10 @@ that's fine. Read the license before redistributing audio you generate.
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import os
 import re
 import threading
-import wave
 from typing import Any, Optional
 
 import numpy as np
@@ -139,8 +137,9 @@ class SynthResult:
 
 class Engine:
     """Each engine returns mono PCM as int16 little-endian + a sample rate.
-    We never persist audio here — the Node side wraps PCM in WAV and writes
-    the file. Keeps this process stateless except for the loaded model."""
+    We never persist audio here — the Node side encodes PCM to MP3 and
+    writes the file. Keeps this process stateless except for the loaded
+    model."""
 
     name: str
 
@@ -443,7 +442,7 @@ class KokoroEngine(Engine):
 
     # Kokoro v1 native output sample rate. Hardcoded because kokoro-onnx
     # versions have shuffled where they expose this; matching XTTS's 24 kHz
-    # means the Node side doesn't need to special-case the WAV header.
+    # keeps the Node-side MP3 encoder on a single sample-rate path.
     NATIVE_SAMPLE_RATE = 24000
 
     def __init__(self) -> None:
@@ -874,13 +873,3 @@ async def synthesize(req: Request) -> Response:
     )
 
 
-def _wav_bytes(pcm: bytes, sample_rate: int) -> bytes:
-    """Debug helper: wrap raw PCM in WAV. Not used by the wire protocol — the
-    Node side does that — but useful when curling /synthesize manually."""
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sample_rate)
-        w.writeframes(pcm)
-    return buf.getvalue()

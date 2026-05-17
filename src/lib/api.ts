@@ -30,8 +30,8 @@ import { parseDuration } from './time';
    VITE_USE_MOCKS. ~88 KB each. stub-a (440 Hz) is the "current/A" /
    preserved-previous tone, stub-b (880 Hz) is the "new/B" / fresh-render
    tone. Audibly distinct so a/b in mock mode tells a real story. */
-import stubAudioA from '../mocks/audio/stub-a.wav?url';
-import stubAudioB from '../mocks/audio/stub-b.wav?url';
+import stubAudioA from '../mocks/audio/stub-a.mp3?url';
+import stubAudioB from '../mocks/audio/stub-b.mp3?url';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 
@@ -188,7 +188,7 @@ export interface StreamArgs {
   modelKey: TtsModelKey;
   /** Optional chapter subset; defaults to all chapters lacking audio on disk. */
   chapterIds?: number[];
-  /** Re-synthesise even if a chapter's WAV already exists. */
+  /** Re-synthesise even if a chapter's MP3 already exists. */
   force?: boolean;
   /** Used by the mock to drive its in-memory progress; ignored by the real
       implementation (the server knows what's on disk). Keep it optional so

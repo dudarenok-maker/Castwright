@@ -1,8 +1,8 @@
 /* Rollback preservation for chapter audio. Called from the generation route
-   right before it clobbers the live `audio/<slug>.{mp3,wav}` + segments.json
-   pair with a fresh render. Renames the existing pair to `.previous.*` so the
-   revision-diff player can audition A (preserved) vs B (new) and the user
-   can accept (delete `.previous.*`) or reject (restore over the new).
+   right before it clobbers the live `audio/<slug>.mp3` + segments.json
+   pair with a fresh render. Renames the existing pair to `.previous.*` so
+   the revision-diff player can audition A (preserved) vs B (new) and the
+   user can accept (delete `.previous.*`) or reject (restore over the new).
 
    Behaviour:
    - First render (no existing audio): no-op.
@@ -26,8 +26,6 @@ export interface PreserveResult {
   /** True when an existing audio file was found and the rename succeeded.
       False on first render (nothing to preserve) and on rename failures. */
   preserved: boolean;
-  /** The extension we preserved. Null when nothing was preserved. */
-  ext: 'mp3' | 'wav' | null;
 }
 
 export async function preserveExistingAsPrevious(
@@ -35,9 +33,9 @@ export async function preserveExistingAsPrevious(
   slug: string,
 ): Promise<PreserveResult> {
   const existing = findChapterAudio(audioRoot, slug);
-  if (!existing) return { preserved: false, ext: null };
+  if (!existing) return { preserved: false };
 
-  const previousAudio = join(audioRoot, `${slug}.previous.${existing.ext}`);
+  const previousAudio = join(audioRoot, `${slug}.previous.mp3`);
   const segmentsPath = join(audioRoot, `${slug}.segments.json`);
   const previousSegments = join(audioRoot, `${slug}.previous.segments.json`);
 
@@ -48,7 +46,7 @@ export async function preserveExistingAsPrevious(
   } catch (err) {
     /* eslint-disable-next-line no-console */
     console.warn(`[preserve-previous-audio] audio rename failed for ${slug}: ${(err as Error).message}`);
-    return { preserved: false, ext: null };
+    return { preserved: false };
   }
 
   if (existsSync(segmentsPath)) {
@@ -64,14 +62,13 @@ export async function preserveExistingAsPrevious(
     }
   }
 
-  return { preserved: true, ext: existing.ext };
+  return { preserved: true };
 }
 
-/** Probe whether a preserved (`.previous.*`) audio pair exists for the
+/** Probe whether a preserved (`.previous.mp3`) audio pair exists for the
     chapter. Used by the revisions detector to set `hasPreviousAudio` on
     pending revisions so the UI knows whether to render the A play button
     or fall back to "Original audio not preserved." */
 export function hasPreviousAudio(audioRoot: string, slug: string): boolean {
-  return existsSync(join(audioRoot, `${slug}.previous.mp3`))
-    || existsSync(join(audioRoot, `${slug}.previous.wav`));
+  return existsSync(join(audioRoot, `${slug}.previous.mp3`));
 }

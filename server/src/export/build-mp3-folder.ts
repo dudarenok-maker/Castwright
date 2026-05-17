@@ -60,7 +60,7 @@ export async function buildMp3Folder(opts: BuildMp3FolderOptions): Promise<Build
   const resolved: Array<{ chapter: typeof chapters[number]; mp3Path: string }> = [];
   for (const chapter of chapters) {
     const audio = findChapterAudio(root, chapter.slug);
-    if (!audio || audio.ext !== 'mp3') {
+    if (!audio) {
       missing.push(chapter.slug);
       continue;
     }

@@ -343,8 +343,8 @@ time and ~3 GB resident memory for XTTS v2 on CPU.
 Invoke-RestMethod http://localhost:9000/health
 
 # Synthesize a sentence. The response is raw 16-bit LE mono PCM at the
-# rate in X-Sample-Rate. Node wraps it in WAV; for a standalone test, save
-# the raw bytes and inspect the header.
+# rate in X-Sample-Rate. Node encodes it to MP3 before persisting; for a
+# standalone test, save the raw bytes and feed them to ffmpeg manually.
 $body = @{ engine='coqui'; model='xtts_v2'; voice='Claribel Dervla'; text='Hello, this is a test of the local TTS sidecar.' } | ConvertTo-Json
 $resp = Invoke-WebRequest -Uri http://localhost:9000/synthesize -Method Post -ContentType 'application/json' -Body $body
 $resp.Headers['X-Sample-Rate']
