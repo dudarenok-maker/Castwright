@@ -9,6 +9,39 @@ import { router } from './routes';
 import { ErrorBoundary } from './components/error-boundary';
 import './styles.css';
 
+/* Plan 41 — pre-mount paint guard. Reads the persisted ui-slice blob
+   from localStorage and sets <html data-theme> BEFORE React mounts so
+   dark-mode users don't see a one-frame white flash on cold boot.
+   redux-persist hydrates async, which is too late to avoid the flash.
+   The account-default fallback is intentionally NOT read here — the
+   account hasn't fetched yet, so a system-prefer-dark user with
+   override=null and account=light gets dark for one frame before
+   useTheme() corrects to light. Accepted single-frame correction. */
+(function applyPreMountTheme() {
+  try {
+    const raw = window.localStorage.getItem('persist:ui');
+    if (!raw) {
+      document.documentElement.dataset.theme =
+        window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      return;
+    }
+    const wrapper = JSON.parse(raw) as Record<string, string>;
+    /* redux-persist double-encodes each key as JSON inside the wrapper. */
+    const themeOverride = wrapper.themeOverride
+      ? (JSON.parse(wrapper.themeOverride) as 'light' | 'dark' | 'system' | null)
+      : null;
+    const mode = themeOverride
+      ?? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.dataset.theme =
+      mode === 'system'
+        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : mode;
+  } catch {
+    /* localStorage disabled or JSON malformed — fall through with no
+       attribute set. styles.css :root tokens cover the light default. */
+  }
+})();
+
 /* Expose the store on window for DEV + e2e builds so Playwright specs
    (and interactive dev-time inspection) can read Redux state via
    `page.evaluate(() => window.__store__.getState())`. The branch is

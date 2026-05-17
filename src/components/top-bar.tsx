@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { IconArrowLeft, IconAB, IconSpinner, IconClock, IconWarning } from '../lib/icons';
 import { Avatar } from './primitives';
+import { ThemeToggleButton } from './theme-toggle';
 import type { Stage, View } from '../lib/types';
 
 export type GenerationPillState = 'running' | 'stalled' | 'halted';
@@ -150,6 +151,7 @@ export function TopBar({ stage, view, setView, projectTitle, onHome, onTitleClic
               {pendingRevisionsCount} revision{pendingRevisionsCount === 1 ? '' : 's'}
             </button>
           )}
+          <ThemeToggleButton/>
           <button type="button" onClick={onOpenAccount}
             aria-label={`Account — ${userDisplayName || 'unnamed user'}`}
             className={`rounded-full transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-magenta/40 ${stage === 'account' ? 'ring-2 ring-magenta/60' : ''}`}>

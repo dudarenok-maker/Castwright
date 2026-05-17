@@ -25,6 +25,7 @@ const baseState = (stage: Stage): UiState => ({
   ttsModelKey: DEFAULT_TTS_MODEL,
   selectedModelExplicit: false,
   ttsModelKeyExplicit: false,
+  themeOverride: null,
 });
 
 describe('uiSlice — openBook status→stage routing', () => {
