@@ -262,8 +262,20 @@ export function Layout() {
        the bookId check, navigating from analysing Book A to generating Book B
        (e.g. the user clicks the global generation pill) would skip the disk
        hydrate and leave every per-book slice — manuscript title, chapters,
-       cast, revisions, change log, book meta — pinned to Book A. */
-    if (manuscript.bookId === bookId && manuscript.manuscriptId && manuscript.title) return;
+       cast, revisions, change log, book meta — pinned to Book A.
+
+       The cast-non-empty leg only applies to confirm/ready: analysing
+       legitimately starts with cast=[] and grows it via streamed Phase 0a
+       cast-update events, so demanding cast there would re-fetch from disk
+       mid-stream and clobber the live roster. Confirm/ready can't survive
+       cast=[] (the views render "0 speaking characters detected"), so when
+       manuscript hydrated but cast did NOT — analyseManuscript's `result`
+       event landed with characters absent, or the streaming flow skipped
+       the merge-characters path on a Phase 0 cache resume — fall through
+       to the fetch so disk fills the gap. */
+    const needsCast = stageKind === 'confirm' || stageKind === 'ready';
+    const castReady = !needsCast || characters.length > 0;
+    if (manuscript.bookId === bookId && manuscript.manuscriptId && manuscript.title && castReady) return;
     let cancelled = false;
     api.getBookState(bookId)
       .then(res => {
