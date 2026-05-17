@@ -5,19 +5,27 @@
    instead of the static BOOKS seed. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { LibraryBook, LibraryResponse } from '../lib/types';
+import type { ActiveAnalysisSummary, LibraryBook, LibraryResponse } from '../lib/types';
 
 export interface LibraryState {
   loaded: boolean;
   authors: LibraryResponse['authors'];
   /** Flat denormalised list for quick lookup by bookId. */
   books: LibraryBook[];
+  /** Paused/halted snapshots keyed by bookId, populated by the
+   *  cold-boot `getActiveAnalyses()` scan. Kept as a separate map
+   *  (rather than projected onto `books[].pausedSnapshot` directly)
+   *  so the library-hydrate and snapshot-hydrate effects don't race —
+   *  the BookCard reads via a `pausedSnapshotForBook` selector that
+   *  looks the snapshot up at render time. */
+  pausedSnapshots: Record<string, ActiveAnalysisSummary>;
 }
 
 const initialState: LibraryState = {
   loaded: false,
   authors: [],
   books: [],
+  pausedSnapshots: {},
 };
 
 function flattenAuthors(authors: LibraryResponse['authors']): LibraryBook[] {
@@ -42,7 +50,30 @@ export const librarySlice = createSlice({
       if (existing >= 0) s.books[existing] = a.payload;
       else s.books.push(a.payload);
     },
+    /** Replace the paused/halted snapshot map from a single
+     *  `getActiveAnalyses()` response. Called from Layout's cold-boot
+     *  effect — one network call serves both the top-bar pill hydrate
+     *  and the per-card badge hydrate. */
+    hydratePausedSnapshots: (s, a: PayloadAction<ActiveAnalysisSummary[]>) => {
+      const next: Record<string, ActiveAnalysisSummary> = {};
+      for (const snap of a.payload) next[snap.bookId] = snap;
+      s.pausedSnapshots = next;
+    },
   },
 });
+
+/** Selector — paused/halted snapshot for a specific book, or null when
+ *  the book has no on-disk paused analysis. Used by BookCard to gate
+ *  the "Paused — resume?" badge.
+ *
+ *  Defensive read on `pausedSnapshots` covers a test-harness path where
+ *  `preloadedState.library` is constructed without all initial fields
+ *  (a real production store always has it via `initialState`). */
+export function selectPausedSnapshotForBook(
+  state: { library: LibraryState },
+  bookId: string,
+): ActiveAnalysisSummary | null {
+  return state.library.pausedSnapshots?.[bookId] ?? null;
+}
 
 export const libraryActions = librarySlice.actions;

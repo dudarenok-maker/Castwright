@@ -14,6 +14,7 @@ import { EditBookMetaModal, type EditBookMetaPatch } from '../modals/edit-book-m
 import { CoverPicker } from '../modals/cover-picker';
 import { api, type WorkspaceInfo } from '../lib/api';
 import { useAppSelector } from '../store';
+import { selectPausedSnapshotForBook } from '../store/library-slice';
 import type { LibraryAuthor, LibraryBook, LibraryBookStatus } from '../lib/types';
 
 type Filter = 'all' | 'in_progress' | 'complete';
@@ -210,6 +211,13 @@ function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit, onCoverCh
   const [from, to] = book.coverGradient;
   const grad = `linear-gradient(135deg, ${from}, ${to})`;
   const meta = STATUS_UI[book.status];
+  /* Paused/halted snapshot from the cold-boot active-analyses scan.
+     Drives the "Paused — resume?" / "Halted — review?" badge. Only
+     rendered when the card is NOT the currently-open book — when it
+     IS the open card the top-bar AnalysisPill already conveys the
+     same information, and the cover badge would collide with the
+     "Open" badge. */
+  const pausedSnapshot = useAppSelector(s => selectPausedSnapshotForBook(s, book.bookId));
   const seriesLine = book.isStandalone
     ? 'Standalone'
     : book.seriesPosition != null
@@ -272,6 +280,18 @@ function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit, onCoverCh
         ) : null}
         {active && (
           <span className="absolute top-4 right-4 px-2 py-0.5 rounded-full bg-peach text-ink text-[10px] font-bold uppercase tracking-wider">Open</span>
+        )}
+        {!active && pausedSnapshot && (
+          <span
+            data-testid={`paused-badge-${book.bookId}`}
+            className={`absolute top-4 right-4 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
+              pausedSnapshot.state === 'halted'
+                ? 'bg-rose-100 text-rose-800 border-rose-200'
+                : 'bg-amber-100 text-amber-800 border-amber-200'
+            }`}
+          >
+            {pausedSnapshot.state === 'halted' ? 'Halted — review?' : 'Paused — resume?'}
+          </span>
         )}
         <div ref={menuRef} className="absolute top-3.5 right-3.5">
           <button
