@@ -4,6 +4,7 @@ import {
   IconExternal, IconDownload, IconEye, IconRefresh, IconUpload, IconImage,
 } from '../lib/icons';
 import { CoverPicker } from '../modals/cover-picker';
+import { type CoverFraming, computeCoverStyle } from '../lib/cover-framing';
 import {
   SectionLabel, MixedHeading, PrimaryButton, Pill, ComingSoonBadge, MockedPreviewBanner,
 } from '../components/primitives';
@@ -41,6 +42,8 @@ interface Props {
   /** Server-relative URL for the cached OpenLibrary cover image when
       one exists for this book. Null falls back to the gradient. */
   bookCoverImageUrl?: string | null;
+  /** Plan 40 — render-time pan + zoom applied to bookCoverImageUrl. */
+  bookCoverFraming?: CoverFraming;
   /** Fired by the CoverPicker after a successful save/remove so the
       parent can refresh the library slice. */
   onCoverChanged?: () => Promise<void> | void;
@@ -53,7 +56,7 @@ interface Props {
 export function ListenView({
   bookId,
   chapters, characters, currentTrack, setCurrentTrack, onSendApp, onRegenerate, onEnterPreview,
-  bookMeta, bookCoverGradient, bookCoverImageUrl, onCoverChanged,
+  bookMeta, bookCoverGradient, bookCoverImageUrl, bookCoverFraming, onCoverChanged,
   onEditMetaField, onCommitMeta, onCancelMeta, isMetaDirty,
 }: Props) {
   /* CoverPicker modal state, plus a local override so the new image
@@ -63,6 +66,10 @@ export function ListenView({
      pattern as BookCard in book-library.tsx. */
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
   const [coverOverride, setCoverOverride] = useState<string | null>(null);
+  /* Local framing override mirrors coverOverride for instant feedback
+     between the picker's debounced PATCH and the slice rehydrate. */
+  const [framingOverride, setFramingOverride] = useState<CoverFraming | null>(null);
+  const effectiveFraming = framingOverride ?? bookCoverFraming;
   const [coverLoadFailed, setCoverLoadFailed] = useState(false);
   const effectiveCoverUrl =
     coverOverride !== null
@@ -120,6 +127,7 @@ export function ListenView({
           title={title}
           gradient={bookCoverGradient}
           imageUrl={!coverLoadFailed ? effectiveCoverUrl : null}
+          framing={effectiveFraming}
           onImageError={() => setCoverLoadFailed(true)}
           runtime={formatTime(totalSec)}
           narrator={narratorName}
@@ -231,14 +239,19 @@ export function ListenView({
         bookTitle={title}
         bookAuthor={author}
         currentCoverUrl={effectiveCoverUrl ?? undefined}
+        currentFraming={effectiveFraming}
         onClose={() => setCoverPickerOpen(false)}
         onPicked={(newUrl) => {
           setCoverLoadFailed(false);
           /* Empty string from a "Remove cover" pick — shadow the slice
              with an empty override until the parent refresh hydrates. */
           setCoverOverride(newUrl ? `${newUrl}?t=${Date.now()}` : '');
+          /* New image deserves fresh framing — clear local override so
+             the prop (which the slice will refresh to default) wins. */
+          setFramingOverride(null);
           void onCoverChanged?.();
         }}
+        onFramingChanged={(f) => setFramingOverride(f)}
       />
     </div>
   );
@@ -250,6 +263,8 @@ interface CoverArtProps {
   /** Server-relative cover URL when one is on disk; null/undefined
       renders the gradient skeleton only. */
   imageUrl?: string | null;
+  /** Plan 40 render-time pan + zoom. Absent → bare object-cover. */
+  framing?: CoverFraming;
   /** Called when the `<img>` 404s / errors out. Parent flips to
       gradient-only render. */
   onImageError?: () => void;
@@ -258,7 +273,7 @@ interface CoverArtProps {
   /** Reveals a small hover-only "Change cover" button on the cover. */
   onChangeCover?: () => void;
 }
-function CoverArt({ title, gradient, imageUrl, onImageError, runtime, narrator, onChangeCover }: CoverArtProps) {
+function CoverArt({ title, gradient, imageUrl, framing, onImageError, runtime, narrator, onChangeCover }: CoverArtProps) {
   const styled = gradient
     ? { background: `linear-gradient(135deg, ${gradient[0]}, ${gradient[1]})` }
     : undefined;
@@ -278,6 +293,7 @@ function CoverArt({ title, gradient, imageUrl, onImageError, runtime, narrator, 
           src={imageUrl}
           alt=""
           className="absolute inset-0 w-full h-full object-cover"
+          style={computeCoverStyle(framing)}
           onError={onImageError}
         />
       )}

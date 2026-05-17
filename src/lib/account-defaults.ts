@@ -22,6 +22,7 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<UserSettings,
   | 'ollamaUrl'
   | 'workspaceDirOverride'
   | 'minorCastMinLines'
+  | 'coverPickerDefaultTab'
 > = {
   displayName:          'Mike Dudarenok',
   /* Gemini 3.1 Flash Lite over the Google API key is the new default
@@ -44,4 +45,10 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<UserSettings,
   ollamaUrl:            'http://localhost:11434',
   workspaceDirOverride: null,
   minorCastMinLines:    3,
+  /* Plan 40 — which CoverPicker tab opens first. `'search'` matches
+     today's behaviour (OpenLibrary candidates first). Users who lean
+     on local artwork can flip to `'upload'` in the Account view.
+     Flip in lockstep with server/src/workspace/user-settings.ts
+     DEFAULT_USER_SETTINGS. */
+  coverPickerDefaultTab: 'search',
 };

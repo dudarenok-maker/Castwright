@@ -1,6 +1,6 @@
-/* /api/books/:bookId/cover{,/candidates}
+/* /api/books/:bookId/cover{,/candidates,/upload,/framing}
 
-   Four endpoints:
+   Six endpoints (plan 36 shipped the first four; plan 40 adds upload + framing):
    - GET  /:bookId/cover/candidates → up to 6 OpenLibrary candidates for the
      picker modal. Used by the manual "Find cover image" flow on the
      library card and the Listen header.
@@ -9,11 +9,17 @@
    - GET  /:bookId/cover            → serve the cached JPEG bytes off disk.
    - DELETE /:bookId/cover          → remove the cached file and clear the
      state.json metadata; UI falls back to the procedural gradient.
+   - POST /:bookId/cover/upload     → (plan 40) multipart upload of local
+     cover JPEG/PNG (PNG transcoded server-side), atomic write, patches
+     state.json with `source: 'local'`.
+   - PATCH /:bookId/cover/framing   → (plan 40) persist render-time pan +
+     zoom onto state.json.coverImage.framing.
 
    The auto-fetch on import lives in routes/import.ts and bypasses this
    router — it calls backgroundFetchCover directly. */
 
 import { Router, type Request, type Response } from 'express';
+import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { findBookByBookId } from '../workspace/scan.js';
@@ -26,8 +32,22 @@ import {
   patchStateCover,
   searchCovers,
 } from '../cover/openlibrary.js';
+import {
+  MAX_UPLOAD_BYTES,
+  UploadError,
+  patchStateFraming,
+  patchStateLocalCover,
+  validateUpload,
+  writeUploadedCover,
+  type UploadMimeType,
+} from '../cover/upload.js';
 
 export const coverRouter = Router();
+
+const uploadMw = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+});
 
 coverRouter.get('/:bookId/cover/candidates', async (req: Request, res: Response) => {
   try {
@@ -115,5 +135,90 @@ coverRouter.delete('/:bookId/cover', async (req: Request, res: Response) => {
   } catch (e) {
     console.error('[cover] DELETE failed', e);
     res.status(500).json({ error: (e as Error).message || 'Cover delete failed.' });
+  }
+});
+
+coverRouter.post(
+  '/:bookId/cover/upload',
+  (req: Request, res: Response, next: (err?: unknown) => void) => {
+    uploadMw.single('image')(req, res, (err: unknown) => {
+      if (err) {
+        const code = (err as { code?: string }).code;
+        if (code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({
+            error: `Cover must be under ${MAX_UPLOAD_BYTES} bytes.`,
+            kind: 'oversize',
+          });
+        }
+        return res.status(400).json({ error: (err as Error).message || 'Upload error.' });
+      }
+      next();
+    });
+  },
+  async (req: Request, res: Response) => {
+    try {
+      const located = await findBookByBookId(req.params.bookId);
+      if (!located) return res.status(404).json({ error: 'Book not found.' });
+      const { bookDir, state } = located;
+
+      const file = req.file;
+      try {
+        validateUpload(file?.buffer, file?.mimetype);
+      } catch (e) {
+        if (e instanceof UploadError) {
+          const status = e.kind === 'oversize' ? 413 : e.kind === 'invalid_mime' ? 415 : 400;
+          return res.status(status).json({ error: e.message, kind: e.kind });
+        }
+        throw e;
+      }
+
+      try {
+        await writeUploadedCover(
+          file!.buffer,
+          file!.mimetype as UploadMimeType,
+          coverImagePath(bookDir),
+        );
+      } catch (e) {
+        if (e instanceof UploadError && e.kind === 'transcode_failed') {
+          return res.status(502).json({ error: e.message, kind: e.kind });
+        }
+        throw e;
+      }
+
+      const originalFilename = file!.originalname || null;
+      await patchStateLocalCover(bookDir, originalFilename);
+
+      res.json({
+        coverImageUrl: `/api/books/${state.bookId}/cover`,
+        originalFilename,
+      });
+    } catch (e) {
+      console.error('[cover] upload failed', e);
+      res.status(500).json({ error: (e as Error).message || 'Cover upload failed.' });
+    }
+  },
+);
+
+coverRouter.patch('/:bookId/cover/framing', async (req: Request, res: Response) => {
+  try {
+    const located = await findBookByBookId(req.params.bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const { bookDir } = located;
+
+    const body = req.body as { offsetX?: unknown; offsetY?: unknown; zoom?: unknown };
+    const offsetX = Number(body?.offsetX);
+    const offsetY = Number(body?.offsetY);
+    const zoom = Number(body?.zoom);
+    if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY) || !Number.isFinite(zoom)) {
+      return res.status(400).json({ error: '`offsetX`, `offsetY`, `zoom` are required and must be numbers.' });
+    }
+
+    const ok = await patchStateFraming(bookDir, { offsetX, offsetY, zoom });
+    if (!ok) return res.status(404).json({ error: 'No cover pinned for this book — set a cover first.' });
+
+    res.status(204).end();
+  } catch (e) {
+    console.error('[cover] framing PATCH failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Cover framing save failed.' });
   }
 });

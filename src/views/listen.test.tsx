@@ -63,6 +63,7 @@ function renderView(overrides: {
   isDirty?: boolean;
   currentTrack?: number | null;
   coverImageUrl?: string | null;
+  coverFraming?: { offsetX: number; offsetY: number; zoom: number };
 } = {}) {
   const handlers = baseHandlers();
   render(
@@ -72,6 +73,7 @@ function renderView(overrides: {
         bookMeta={overrides.meta === undefined ? baseMeta() : overrides.meta}
         bookCoverGradient={overrides.gradient ?? ['#2C7A4B', '#0F3A23']}
         bookCoverImageUrl={overrides.coverImageUrl ?? null}
+        bookCoverFraming={overrides.coverFraming}
         isMetaDirty={overrides.isDirty ?? false}
         {...handlers}/>
     </Provider>
@@ -125,6 +127,23 @@ describe('ListenView — CoverArt cover-image overlay', () => {
     renderView({ coverImageUrl: '/api/books/bk_test/cover' });
     const img = screen.getByTestId('listen-cover-art-image') as HTMLImageElement;
     expect(img.getAttribute('src')).toBe('/api/books/bk_test/cover');
+  });
+
+  it('applies coverFraming to the <img> when set (plan 40)', () => {
+    renderView({
+      coverImageUrl: '/api/books/bk_test/cover',
+      coverFraming: { offsetX: 50, offsetY: -50, zoom: 2 },
+    });
+    const img = screen.getByTestId('listen-cover-art-image') as HTMLImageElement;
+    expect(img.style.objectPosition).toBe('75% 25%');
+    expect(img.style.transform).toContain('scale(2)');
+  });
+
+  it('emits no extra style when coverFraming is absent (legacy / pre-plan-40 books)', () => {
+    renderView({ coverImageUrl: '/api/books/bk_test/cover' });
+    const img = screen.getByTestId('listen-cover-art-image') as HTMLImageElement;
+    expect(img.style.objectPosition).toBe('');
+    expect(img.style.transform).toBe('');
   });
 });
 

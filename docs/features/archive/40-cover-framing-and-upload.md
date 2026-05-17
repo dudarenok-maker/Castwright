@@ -1,15 +1,15 @@
 ---
-status: draft
-shipped: null
-owner: null
+status: stable
+shipped: 2026-05-17
+owner: dudarenok-maker
 ---
 
 # 40 — Cover framing + local-disk upload
 
-> Status: draft
-> Key files (planned): `src/modals/cover-picker.tsx`, `src/views/book-library.tsx`, `src/views/listen.tsx`, `src/lib/cover-framing.ts` (new), `server/src/routes/cover.ts`, `server/src/cover/upload.ts` (new), `openapi.yaml`
+> Status: stable (shipped 2026-05-17)
+> Key files: `src/modals/cover-picker.tsx`, `src/views/book-library.tsx`, `src/views/listen.tsx`, `src/lib/cover-framing.ts`, `src/views/account.tsx` (account default), `server/src/routes/cover.ts`, `server/src/cover/upload.ts`, `server/src/workspace/user-settings.ts` (account default), `openapi.yaml`
 > URL surface: indirect — invoked from the BookCard "..." menu and the Listen view's "Change cover" hover button (both established in plan [36](36-book-covers.md)).
-> OpenAPI ops: `POST /api/books/{bookId}/cover/upload` (new), `PATCH /api/books/{bookId}/cover/framing` (new). Augments plan 36's existing four endpoints.
+> OpenAPI ops: `POST /api/books/{bookId}/cover/upload`, `PATCH /api/books/{bookId}/cover/framing`. Augments plan 36's existing four endpoints. `UserSettings.coverPickerDefaultTab` also added (account-level default for which tab opens first).
 
 ## Benefit / Rationale
 
@@ -83,6 +83,27 @@ Canonical end-to-end manuscript: `C:\Users\dudar\Downloads\the Coalfall Commissi
 7. **Remove + fallback.** Modal footer → **Remove cover**. Gradient skeleton returns on both surfaces; framing block is gone from `state.json`.
 8. **Pre-existing book.** Open a book whose cover was set under plan 36 (before this change shipped). Confirm it still renders with default (un-framed) `object-cover` — no visual regression.
 
+## Account-level defaults
+
+`UserSettings.coverPickerDefaultTab` (enum `'search' | 'upload'`, default
+`'search'`) controls which tab the modal opens on first paint. Persisted
+to `server/user-settings.json` via the existing user-settings Zod schema
+(`server/src/workspace/user-settings.ts`). Read at modal mount via
+`useAppSelector(s => s.account.coverPickerDefaultTab)` so account-wide
+preference takes effect on the next picker open without a refresh.
+
+The Frame tab is never a valid default — it requires a cover, which a
+new book may not have. The schema enum explicitly excludes it.
+
+**Parked follow-ups (deferred this round, not part of v1):**
+
+- `defaultFramingZoom` (per-account default zoom). Covers vary enough
+  that a global value isn't useful; per-cover framing on the Frame tab
+  handles the real case.
+- `autoFetchCoverOnBookCreate` (new background behaviour — auto-pick the
+  top OpenLibrary candidate at book-create time). Larger scope, separate
+  follow-up plan.
+
 ## Out of scope
 
 - **Per-surface framing.** Same framing applies to both `BookCard` (16:10) and `CoverArt` (1:1). A future iteration could split.
@@ -94,4 +115,44 @@ Canonical end-to-end manuscript: `C:\Users\dudar\Downloads\the Coalfall Commissi
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Shipped 2026-05-17 across four commits on `feat/frontend-plan-40`:
+
+1. **Phase 1 — Foundation** (commit `513bc54`): OpenAPI extensions
+   (`UserSettings.coverPickerDefaultTab`, `CoverFraming` schema,
+   `LibraryBook.coverFraming`, `POST /cover/upload`,
+   `PATCH /cover/framing`). `src/lib/cover-framing.ts` pure helper
+   (`computeCoverStyle`, `clampFraming`, `DEFAULT_FRAMING`) +
+   15 Vitest cases.
+2. **Phase 2 — Server** (commit `ac15540`): multipart upload via
+   multer with `LIMIT_FILE_SIZE` → 413 mapping, PNG → JPEG transcode
+   via `sharp@^0.34` (q=85), atomic write through
+   `workspace/atomic-rename`. `patchStateFraming` clamps server-side
+   to [-100,100] / [1.0, 3.0]. `BookStateJson.coverImage` shape
+   extended (legacy records infer `source: 'openlibrary'` from
+   `openLibraryId`); `LibraryBook.coverFraming` surfaced by scan when
+   both file and state are present. +32 server tests across
+   `upload.test.ts`, `cover.test.ts` (extended),
+   `user-settings.test.ts` (new).
+3. **Phase 3 — Frontend API + account** (commit `4885dba`):
+   `api.uploadCover`, `api.patchCoverFraming`, `UploadCoverError`
+   typed envelope. `setCoverPickerDefaultTab` reducer on the account
+   slice. "Covers" FormCard in `src/views/account.tsx`. +3
+   account-slice tests.
+4. **Phase 4 — UI + render integration** (commit `a03a5cc`):
+   Three-tab CoverPicker (Search / Upload / Frame) with the account
+   default seeding the initial tab. Upload tab does client
+   pre-validation (MIME + size); on success the modal auto-switches
+   to Frame for immediate reframing. Frame tab is a square preview
+   with Pointer-Events drag (touch + mouse via the unified API),
+   zoom range 1.0–3.0× step 0.05, Reset button. PATCH debounced
+   300 ms after last interaction. `BookCard` + `CoverArt` apply
+   `computeCoverStyle(framing)` to the `<img>` style; routes/index
+   threads `bookCoverFraming` through to ListenView. +13 frontend
+   tests across `cover-picker.test.tsx`, `book-library.test.tsx`,
+   `listen.test.tsx`. +1 e2e spec (`e2e/cover-framing.spec.ts`)
+   exercising the upload → Frame auto-switch → zoom → Reset path.
+
+Net diff vs main at ship: ~20 files / +2k lines (incl. test fixtures
+and regenerated `api-types.ts`). Full pre-push verify green; the only
+intermittent miss was the pre-existing `export.test.ts` DELETE-cancels
+flake, unrelated and known.

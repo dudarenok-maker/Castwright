@@ -282,6 +282,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/cover/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload a local cover image (JPEG/PNG) and pin it as this book's cover
+         * @description Multipart upload route for user-supplied cover art. Accepts a
+         *     single `image` field with `image/jpeg` or `image/png` content
+         *     type, up to 10 MB. PNG payloads are transcoded server-side to
+         *     JPEG (q=85) so the export pipeline's `covr` / `APIC` frames
+         *     stay JPEG. Writes atomically to `<bookDir>/.audiobook/cover.jpg`,
+         *     replacing any prior cover, and patches `state.json.coverImage`
+         *     with `source: 'local'`, `originalFilename`, and `uploadedAt`.
+         *     Plan [40](docs/features/40-cover-framing-and-upload.md).
+         */
+        post: operations["uploadCover"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cover/framing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set pan + zoom framing for the book's current cover
+         * @description Persists a `CoverFraming` record onto `state.json.coverImage`,
+         *     which the next library scan exposes as `LibraryBook.coverFraming`.
+         *     Render-time only — does not modify the on-disk JPEG bytes, so the
+         *     export pipeline is unaffected. Server clamps `offsetX`/`offsetY`
+         *     to [-100, 100] and `zoom` to [1.0, 3.0]. To reset framing to
+         *     defaults, PATCH `{ offsetX: 0, offsetY: 0, zoom: 1.0 }`.
+         *     Plan [40](docs/features/40-cover-framing-and-upload.md).
+         */
+        patch: operations["setCoverFraming"];
+        trace?: never;
+    };
     "/api/voices/base": {
         parameters: {
             query?: never;
@@ -743,6 +796,15 @@ export interface components {
              */
             minorCastMinLines: number;
             /**
+             * @description Which tab the CoverPicker modal opens on by default. `search`
+             *     (the default) preserves today's behaviour: OpenLibrary
+             *     candidates first. `upload` is for users who routinely bring
+             *     their own cover art and want the file-picker tab front.
+             *     Plan [40](docs/features/40-cover-framing-and-upload.md).
+             * @enum {string}
+             */
+            coverPickerDefaultTab?: "search" | "upload";
+            /**
              * @description Whether process.env.GEMINI_API_KEY is non-empty. The key value
              *     itself is never returned over the wire — the UI uses this flag
              *     to render a "set in server/.env" pill.
@@ -779,6 +841,8 @@ export interface components {
             workspaceDirOverride?: string | null;
             exportSyncFolder?: string | null;
             minorCastMinLines?: number;
+            /** @enum {string} */
+            coverPickerDefaultTab?: "search" | "upload";
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];
@@ -804,6 +868,23 @@ export interface components {
             coverUrl: string;
             /** @description Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy. */
             edition?: string;
+        };
+        /**
+         * @description Pan + zoom transform applied to the on-disk cover image at render
+         *     time. Pure metadata — does not re-encode the JPEG. Consumed by
+         *     `computeCoverStyle` (src/lib/cover-framing.ts) which translates
+         *     to CSS `object-position: <offsetX>% <offsetY>%; transform:
+         *     scale(<zoom>)` on the `<img>` element. Server clamps to the
+         *     ranges below; client should too for live preview. Plan
+         *     [40](docs/features/40-cover-framing-and-upload.md).
+         */
+        CoverFraming: {
+            /** @description Horizontal pan as `object-position` percentage. 0 = centred. */
+            offsetX: number;
+            /** @description Vertical pan as `object-position` percentage. 0 = centred. Negative shifts the image up (showing the top). */
+            offsetY: number;
+            /** @description Scale factor. 1.0 = `object-cover` default; up to 3.0× tighter crop. */
+            zoom: number;
         };
         LibraryBook: {
             /** @description slug(author)__slug(series)__slug(title) */
@@ -836,6 +917,13 @@ export interface components {
              *     absent, the UI falls back to `coverGradient`.
              */
             coverImageUrl?: string;
+            /**
+             * @description Optional pan + zoom for the cover. Absent → renderers fall
+             *     back to bare `object-cover` (the default before plan 40
+             *     shipped). Always paired with `coverImageUrl` — framing on a
+             *     book without a cover is meaningless.
+             */
+            coverFraming?: components["schemas"]["CoverFraming"];
             pinned?: boolean;
         };
         ImportCandidate: {
@@ -1904,6 +1992,112 @@ export interface operations {
         responses: {
             /** @description Cover removed (or was never present) */
             204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    uploadCover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    image: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Cover saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uri-reference */
+                        coverImageUrl: string;
+                        originalFilename?: string | null;
+                    };
+                };
+            };
+            /** @description Missing `image` field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upload exceeds 10 MB */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Content type is not `image/jpeg` or `image/png` */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description PNG → JPEG transcode failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setCoverFraming: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoverFraming"];
+            };
+        };
+        responses: {
+            /** @description Framing saved */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Body is missing fields or contains non-numeric values */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
