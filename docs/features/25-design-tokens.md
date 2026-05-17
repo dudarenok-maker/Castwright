@@ -29,6 +29,7 @@ All theme colours and core spacings live as CSS custom properties declared in `s
 
 ## Out of scope
 
-- Dark mode implementation (the system supports it but v1 is light-only).
 - Token semantics (semantic naming vs role-based) — current set is mixed and documented in `styles.css`.
 - Cross-platform native theming.
+
+> Dark mode was promoted from this plan's out-of-scope list into the active backlog on 2026-05-17 (see `docs/BACKLOG.md` Should #3). The token system here is the substrate; the dark-theme overrides will land as a `[data-theme="dark"]` block alongside the existing root tokens.
