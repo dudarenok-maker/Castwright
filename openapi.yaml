@@ -9,7 +9,7 @@
 openapi: 3.0.3
 info:
   title: Audiobook generator API
-  version: 0.1.0
+  version: 1.0.0
   description: |
     Pipeline endpoints for turning a manuscript into a cast-voiced
     audiobook. Six endpoints span the full flow: upload → analyse →
