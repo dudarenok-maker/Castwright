@@ -28,10 +28,12 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { analysisActions } from '../store/analysis-slice';
 import { api, AnalysisError } from '../lib/api';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
+import { MODEL_OPTIONS } from '../lib/models';
 import { ttsModelLabel } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
@@ -94,6 +96,10 @@ export function GenerationView({
   const sentences           = useAppSelector(s => s.manuscript.sentences);
   const manuscriptId        = useAppSelector(s => s.manuscript.manuscriptId);
   const activityEvents      = useAppSelector(s => s.changeLog.events);
+  /* Default analyzer engine used by the subset retry below (un-exclude
+     path). Read at click time, not memoised, so a model switch between
+     un-excludes is reflected on the next retry. */
+  const selectedAnalyzerModelId = useAppSelector(s => s.ui.selectedModel);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   /* Per-chapter subset-analysis state for the un-exclude flow. Lives only
      for the duration of the inline run — once the chapter transitions
@@ -170,6 +176,28 @@ export function GenerationView({
       },
     }));
 
+    /* Plan 32 follow-up: cross-navigation snapshot for the un-exclude
+       subset retry. Without this, navigating away mid-retry drops the
+       AnalysisPill and the middleware can't re-attach to the in-flight
+       server job (it tries the main route's map, which is empty).
+       Captured engine: ui.selectedModel — the analyzer that will
+       handle this subset retry. */
+    const engine = MODEL_OPTIONS.find(m => m.id === selectedAnalyzerModelId)?.engine;
+    dispatch(analysisActions.setActiveStream({
+      bookId,
+      manuscriptId,
+      bookTitle: title ?? undefined,
+      engine,
+      phaseId: 0,
+      phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
+      phaseProgress: 0,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'subset',
+      subsetChapterIds: [chapterId],
+    }));
+
     try {
       await api.setChapterExcluded(bookId, chapterId, false);
       dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: false }));
@@ -182,6 +210,15 @@ export function GenerationView({
             phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? ANALYSIS_PHASES[0].label,
             progress,
           });
+          /* Snapshot tick — middleware uses this to attach a sticky
+             subscriber against the subset route's in-flight map. */
+          dispatch(analysisActions.applyAnalysisSnapshotTick({
+            manuscriptId,
+            phaseId,
+            phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
+            phaseProgress: progress,
+            lastTickAt: Date.now(),
+          }));
         },
         onCastUpdate: ({ characters }) => {
           dispatch(castActions.mergeCharacters(characters));
@@ -210,6 +247,9 @@ export function GenerationView({
         const { [chapterId]: _, ...rest } = prev;
         return rest;
       });
+      /* Subset retry done — drop the snapshot so the AnalysisPill
+         disappears. */
+      dispatch(analysisActions.clearActiveStream());
     } catch (e) {
       /* AbortError = user clicked Cancel; any other error = subset
          analysis failed (network, analyzer offline, server-side
@@ -225,6 +265,11 @@ export function GenerationView({
       await rollbackInclude(chapterId).catch(rollbackErr => {
         console.warn('[generation] include rollback failed', rollbackErr);
       });
+      /* Drop the snapshot on either abort or terminal failure — the
+         server-side job already ended (abort) or surfaced an error,
+         and the row's own error state inside subsetByChapter carries
+         the message for the user. */
+      dispatch(analysisActions.clearActiveStream());
       if (isAbort) {
         setSubsetByChapter(prev => {
           const { [chapterId]: _, ...rest } = prev;

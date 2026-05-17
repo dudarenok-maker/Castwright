@@ -28,6 +28,7 @@ import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './a
 
 const pauseAnalysisSpy = vi.fn().mockResolvedValue(undefined);
 const analyseManuscriptMock = vi.fn();
+const runAnalysisForChaptersMock = vi.fn();
 
 vi.mock('../lib/api', () => {
   /* Re-derive AnalysisError inside the factory so `e instanceof AnalysisError`
@@ -54,6 +55,8 @@ vi.mock('../lib/api', () => {
       pauseAnalysis: (args: { manuscriptId: string }) => pauseAnalysisSpy(args),
       analyseManuscript: (manuscriptId: string, opts: unknown) =>
         analyseManuscriptMock(manuscriptId, opts),
+      runAnalysisForChapters: (manuscriptId: string, chapterIds: number[], opts: unknown) =>
+        runAnalysisForChaptersMock(manuscriptId, chapterIds, opts),
     },
     AnalysisError,
   };
@@ -64,6 +67,8 @@ import { AnalysisError } from '../lib/api';
 
 interface CapturedAnalysisCall {
   manuscriptId: string;
+  kind: 'main' | 'subset';
+  chapterIds?: number[];
   signal: AbortSignal;
   onPhase?: (e: { phaseId: number; progress: number }) => void;
   onEta?: (e: { remainingMs: number }) => void;
@@ -101,16 +106,30 @@ function buildStore() {
 beforeEach(() => {
   pauseAnalysisSpy.mockClear();
   analyseManuscriptMock.mockReset();
+  runAnalysisForChaptersMock.mockReset();
   captured = [];
-  analyseManuscriptMock.mockImplementation((manuscriptId: string, opts: {
-    signal: AbortSignal;
-    onPhase?: (e: { phaseId: number; progress: number }) => void;
-    onEta?: (e: { remainingMs: number }) => void;
-    onSeriesPrior?: (e: { count: number; names: string[] }) => void;
-  }) => {
+  const makeImpl = (kindMarker: 'main' | 'subset') => (
+    manuscriptId: string,
+    chapterIdsOrOpts: number[] | { signal: AbortSignal },
+    maybeOpts?: {
+      signal: AbortSignal;
+      onPhase?: (e: { phaseId: number; progress: number }) => void;
+      onEta?: (e: { remainingMs: number }) => void;
+      onSeriesPrior?: (e: { count: number; names: string[] }) => void;
+    },
+  ) => {
+    const opts = (kindMarker === 'subset' ? maybeOpts : chapterIdsOrOpts) as {
+      signal: AbortSignal;
+      onPhase?: (e: { phaseId: number; progress: number }) => void;
+      onEta?: (e: { remainingMs: number }) => void;
+      onSeriesPrior?: (e: { count: number; names: string[] }) => void;
+    };
+    const chapterIds = kindMarker === 'subset' ? (chapterIdsOrOpts as number[]) : undefined;
     return new Promise<void>((resolve, reject) => {
       const entry: CapturedAnalysisCall = {
         manuscriptId,
+        kind: kindMarker,
+        chapterIds,
         signal: opts.signal,
         onPhase: opts.onPhase,
         onEta: opts.onEta,
@@ -125,7 +144,9 @@ beforeEach(() => {
         reject(err);
       });
     });
-  });
+  };
+  analyseManuscriptMock.mockImplementation(makeImpl('main'));
+  runAnalysisForChaptersMock.mockImplementation(makeImpl('subset'));
 });
 
 describe('analysisStreamMiddleware — pause-bridge (pre-D1 contract, still pinned)', () => {
@@ -390,5 +411,121 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     await Promise.resolve();
     const snap = store.getState().analysis.activeStream;
     expect(snap?.manuscriptId).toBe('m2');
+  });
+});
+
+describe('analysisStreamMiddleware — subset-retry route (plan 32 follow-up)', () => {
+  /* The main route's sticky behaviour landed in D1; subset retries
+     followed the same in-flight-map shape on the server but the
+     middleware only knew the main route. Result: a navigation away
+     mid-subset-retry would have the middleware's subscribe POST land
+     on the main route's dispatcher and either join the wrong job or
+     start a fresh main run. These specs pin the corrected behaviour:
+     when the snapshot carries kind === 'subset', the middleware
+     subscribes via api.runAnalysisForChapters with the snapshot's
+     chapterIds — landing on the subset dispatcher which joins the
+     existing subset job. */
+
+  const subsetSnapshot: AnalysisStreamSnapshot = {
+    ...baseSnapshot,
+    kind: 'subset',
+    subsetChapterIds: [4, 7],
+  };
+
+  it('routes the subscribe POST to runAnalysisForChapters when kind === subset', () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
+      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
+    }));
+    expect(runAnalysisForChaptersMock).toHaveBeenCalledTimes(1);
+    expect(analyseManuscriptMock).not.toHaveBeenCalled();
+    const args = runAnalysisForChaptersMock.mock.calls[0];
+    expect(args[0]).toBe('m1');
+    expect(args[1]).toEqual([4, 7]);
+    const opts = args[2] as { signal: AbortSignal };
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('stays on the main route when kind is undefined (legacy snapshot)', () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
+      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
+    }));
+    expect(analyseManuscriptMock).toHaveBeenCalledTimes(1);
+    expect(runAnalysisForChaptersMock).not.toHaveBeenCalled();
+  });
+
+  it('dispatches phase ticks from the subset SSE onPhase callback', () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
+      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
+    }));
+    lastCall().onPhase?.({ phaseId: 1, progress: 0.42 });
+    const snap = store.getState().analysis.activeStream;
+    expect(snap?.phaseId).toBe(1);
+    expect(snap?.phaseProgress).toBeCloseTo(0.42);
+  });
+
+  it('closes the subset handle on setPaused', () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
+      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
+    }));
+    expect(captured[0]?.signal.aborted).toBe(false);
+    store.dispatch(analysisActions.setPaused({ manuscriptId: 'm1' }));
+    expect(captured[0]?.signal.aborted).toBe(true);
+  });
+
+  it('re-opens the handle when kind flips on the same manuscriptId', () => {
+    /* Real-world flow: main run is alive, user clicks Retry on a
+       failed chapter; the view dispatches setActiveStream with
+       kind=subset on the SAME manuscriptId. The middleware must
+       treat this as displacement (close the main handle, open a
+       subset one on the next tick) rather than no-op. */
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
+      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
+    }));
+    expect(analyseManuscriptMock).toHaveBeenCalledTimes(1);
+    const mainSignal = captured[0]?.signal;
+
+    /* Shift to subset on the same manuscriptId. The SET_ACTIVE_TYPE
+       handler must close the main handle; the new subset handle
+       opens on its own first tick. */
+    store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
+    expect(mainSignal?.aborted).toBe(true);
+    expect(captured).toHaveLength(1);
+
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
+      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
+    }));
+    expect(runAnalysisForChaptersMock).toHaveBeenCalledTimes(1);
+    expect(captured).toHaveLength(2);
+    expect(captured[1]?.kind).toBe('subset');
+    expect(captured[1]?.chapterIds).toEqual([4, 7]);
+  });
+
+  it('passes an empty chapterIds array through when the snapshot omits subsetChapterIds', () => {
+    /* Defensive: a snapshot tagged kind=subset but missing chapterIds
+       (malformed dispatch or cold-boot rehydration where the field
+       was absent on disk). The middleware should pass [] through
+       rather than throwing or accidentally calling the main route —
+       the server will 400 the request and the middleware's error
+       handler will surface the error via setHalted. */
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream({
+      ...subsetSnapshot,
+      subsetChapterIds: undefined,
+    }));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
+      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
+    }));
+    expect(runAnalysisForChaptersMock).toHaveBeenCalledTimes(1);
+    expect(runAnalysisForChaptersMock.mock.calls[0][1]).toEqual([]);
   });
 });
