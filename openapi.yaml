@@ -800,6 +800,22 @@ paths:
               schema: { $ref: '#/components/schemas/BookExportJob' }
         '404':
           description: Job id unknown
+    delete:
+      summary: Cancel a running export
+      operationId: cancelBookExport
+      description: |
+        Signals the running build to abort and flips the job to
+        `cancelled`. Idempotent on already-terminal jobs (returns 204
+        without touching state). Best-effort cleanup of the staging dir
+        so partial artifacts don't leak.
+      parameters:
+        - { in: path, name: bookId,   required: true, schema: { type: string } }
+        - { in: path, name: exportId, required: true, schema: { type: string } }
+      responses:
+        '204':
+          description: Cancel accepted (or job already terminal — idempotent)
+        '404':
+          description: Book or job id unknown
 
   /api/books/{bookId}/exports/{exportId}/download:
     get:
@@ -1779,7 +1795,7 @@ components:
         destination: { type: string, enum: [download, sync-folder] }
         status:
           type: string
-          enum: [queued, in_progress, done, failed]
+          enum: [queued, in_progress, done, failed, cancelled]
         filename:    { type: string, description: "e.g. 'The Northern Star.zip'" }
         sizeBytes:   { type: integer, nullable: true, description: "Final size once status === 'done'." }
         progress:    { type: number, minimum: 0, maximum: 1, nullable: true, description: "0..1 while in_progress; null otherwise." }

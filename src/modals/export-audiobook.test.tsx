@@ -24,6 +24,7 @@ vi.mock('../lib/api', async () => {
     api: {
       createBookExport: vi.fn(),
       getBookExport: vi.fn(),
+      cancelBookExport: vi.fn(async () => undefined),
       getExportLanUrls: vi.fn(async () => ({ urls: ['http://192.168.1.42:8080'], port: 8080 })),
       getUserSettings: vi.fn(async () => ({} as unknown)),
       putUserSettings: vi.fn(),
@@ -37,6 +38,7 @@ import { api, ExportIncompleteError } from '../lib/api';
 const mockedApi = api as unknown as {
   createBookExport: ReturnType<typeof vi.fn>;
   getBookExport: ReturnType<typeof vi.fn>;
+  cancelBookExport: ReturnType<typeof vi.fn>;
   getExportLanUrls: ReturnType<typeof vi.fn>;
 };
 
@@ -178,6 +180,72 @@ describe('ExportAudiobookModal', () => {
     });
     expect(screen.getByText('02-chapter-two')).toBeInTheDocument();
     expect(screen.getByText('07-epilogue')).toBeInTheDocument();
+  });
+
+  it('cancels a running export and returns the modal to the picker', async () => {
+    mockedApi.createBookExport.mockResolvedValue(makeJob({ id: 'exp_run', status: 'in_progress', progress: 0 }));
+    /* Poll keeps returning in_progress so Cancel is the only way out. */
+    mockedApi.getBookExport.mockResolvedValue(makeJob({ id: 'exp_run', status: 'in_progress', progress: 0.3 }));
+
+    renderModal();
+    const submit = await waitFor(() => {
+      const btn = screen.getByTestId('export-submit');
+      if ((btn as HTMLButtonElement).disabled) throw new Error('still disabled');
+      return btn;
+    });
+    fireEvent.click(submit);
+
+    /* Wait for the EXPORTING state to render the Cancel button. */
+    const cancelBtn = await screen.findByTestId('export-cancel');
+    fireEvent.click(cancelBtn);
+
+    await waitFor(() => {
+      expect(mockedApi.cancelBookExport).toHaveBeenCalledWith('demo__sa__test', 'exp_run');
+    });
+    /* Picker reappears (submit returns), active-job card is gone. */
+    await waitFor(() => {
+      expect(screen.queryByTestId('export-active-job')).toBeNull();
+      expect(screen.getByTestId('export-submit')).toBeInTheDocument();
+    });
+  });
+
+  it('retries from FAILED by re-POSTing the same format/destination', async () => {
+    /* First create resolves with a job that polls to failed; second
+       create (from Retry) resolves with a fresh in_progress job. */
+    mockedApi.createBookExport
+      .mockResolvedValueOnce(makeJob({ id: 'exp_fail', status: 'in_progress', progress: 0 }))
+      .mockResolvedValueOnce(makeJob({ id: 'exp_retry', status: 'in_progress', progress: 0 }));
+    mockedApi.getBookExport
+      .mockResolvedValueOnce(makeJob({ id: 'exp_fail', status: 'failed', errorReason: 'ffmpeg crashed', progress: 0.4 }))
+      .mockResolvedValue(makeJob({ id: 'exp_retry', status: 'in_progress', progress: 0.2 }));
+
+    renderModal();
+    /* MP3.ZIP so the retried submit can be checked for format propagation. */
+    fireEvent.click(screen.getByTestId('export-format-mp3-zip'));
+    const submit = await waitFor(() => {
+      const btn = screen.getByTestId('export-submit');
+      if ((btn as HTMLButtonElement).disabled) throw new Error('still disabled');
+      return btn;
+    });
+    fireEvent.click(submit);
+
+    /* Wait for FAILED to surface the Retry button. */
+    const retryBtn = await screen.findByTestId('export-retry');
+    fireEvent.click(retryBtn);
+
+    await waitFor(() => {
+      expect(mockedApi.createBookExport).toHaveBeenCalledTimes(2);
+    });
+    /* Both calls used the same shape — mp3-zip + download. */
+    expect(mockedApi.createBookExport).toHaveBeenNthCalledWith(2, 'demo__sa__test', {
+      format: 'mp3-zip',
+      destination: 'download',
+    });
+    /* Picker did NOT reappear — active-job card stays rendered against
+       the new job. */
+    await waitFor(() => {
+      expect(screen.getByTestId('export-active-job')).toBeInTheDocument();
+    });
   });
 });
 
