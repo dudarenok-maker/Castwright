@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18:** Must 1 · Should 1 · Could 14 · Won't 9
+**Counts as of 2026-05-18:** Must 1 · Should 1 · Could 13 · Won't 9
 
 ---
 
@@ -69,15 +69,6 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - _Acceptance:_ PRs that break tests are blocked from merge. Workflow runs in under 10 min cold, under 5 min warm.
 - _Key files:_ new `.github/workflows/verify.yml`.
 - _Benefit (technical):_ eliminates the "works on my machine" gap. Pairs with the visual baselines shipped 2026-05-17 (`e2e/visual.spec.ts`) — without CI, the baselines are a tree-falling-in-a-forest.
-
-### 2. ESLint + Prettier + axe-core a11y pass
-
-Source: CLAUDE.md "Suggested follow-ups".
-
-- _What:_ Add ESLint with `@typescript-eslint`, `eslint-plugin-react`, `eslint-plugin-jsx-a11y`; Prettier with a minimal config; an axe-core check that runs against the rendered library, upload, confirm, and listen views via Vitest+React Testing Library. The `npm run lint` script is already wired in `package.json:17`; this PR fills in the missing config + devDependencies.
-- _Acceptance:_ `npm run lint` passes on the current tree (after one auto-fix pass); a new `npm run test:a11y` exists and asserts zero a11y violations on the four views. Hook these into `npm run verify`.
-- _Key files:_ new `.eslintrc.cjs`, `.prettierrc`; `package.json` scripts.
-- _Benefit (technical):_ baseline code hygiene + first a11y net. Doing this earlier means the auto-fix noise lands once on a clean tree, not buried inside future feature PRs.
 
 ### 3. Listening progress / resume bookmarks
 
