@@ -38,10 +38,6 @@ Run `VITE_USE_MOCKS=true`, navigate to `#/books/<id>/manuscript`.
 9. **Large-book sidebar** — load a 500-chapter book (e.g. the new bulk fixture, 509 chapters / 30 cast). The Detected card is visible at the bottom of the sidebar without scrolling. Mouse-wheel over the Chapters card scrolls the chapter list in place; the cast card does not move. Type `epilogue` into `Filter chapters…` and the list collapses to matching rows. Clear the filter and all rows return. Click Next from chapter 200 and the active row is scrolled into the chapter scroll region on its own.
 10. **Large-cast inspector** — on the same 30-cast book, click any paragraph in the middle pane. The right-pane inspector opens and the "Reassign whole segment to" list scrolls inside the inspector card; the segment header (name + confidence) stays pinned at the top and the highlight-text / drag-boundary help line stays pinned at the bottom. Neither pushes past the viewport.
 
-## KNOWN: scaffolded
-
-- `mockGetBookState` throws "Book state hydration is not available in mock mode (no disk workspace)." — mock mode never round-trips manuscript edits.
-
 ## Out of scope
 
 - Inline tag editing.

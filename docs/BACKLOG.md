@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 4 · Should 12 · Could 11 · Won't 13
+**Counts as of 2026-05-17:** Must 2 · Should 12 · Could 11 · Won't 13
 
 ---
 
@@ -52,24 +52,6 @@ Source: [`22a-voice-library-compare.md`](features/22a-voice-library-compare.md) 
 - *Key files:* `src/views/voices.tsx` (selection + pill); `src/components/voice-library-panel.tsx` (`VoiceCard` props extension); `src/modals/compare-cast-modal.tsx` (consumed unchanged); `src/lib/voice-character-link.ts` (add inverse `findCharacterForVoice` helper); pattern source-of-truth at `src/views/cast.tsx:284-310`.
 - *Depends on:* none — pure additive on existing surface.
 - *Benefit (user):* the highest-signal compare today — two characters routed to the same base voice but sounding subtly different — requires bouncing Voices → Cast → select → Compare. Putting the entry point next to the family grouping collapses that into a single tab, where the user is already looking at the "same voice" cohort.
-
-### 3. `mockGetBookState` mock implementation
-
-Source: [`12-manuscript-view.md`](features/12-manuscript-view.md) (KNOWN: scaffolded).
-
-- *What:* Replace the `throw` at `src/lib/api.ts:280` with a real in-memory mock that returns the previously-persisted state (or `null` for a never-touched book), so the persistence-middleware round-trips under mocks.
-- *Acceptance:* `mockGetBookState(bookId)` returns `null` on a fresh boot, or the most-recently-`mockPutBookState`-d patch-merged value on subsequent reads. `src/store/persistence-middleware.test.ts` continues to pass; an additional test asserts hydrate-then-mutate-then-rehydrate under mocks.
-- *Key files:* `src/lib/api.ts:276-285` (mockGetBookState + mockPutBookState); `src/store/persistence-middleware.ts`; `docs/features/27-book-state-persistence.md` for the round-trip contract.
-- *Benefit (technical):* mock mode is the only environment that boots without a Node backend + sidecar. A throwing mock breaks design fixtures, demo recordings, and any Vitest+jsdom test that hits the persistence path.
-
-### 4. Cancel / dismiss / retry on running export jobs
-
-Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
-
-- *What:* On the export modal in `EXPORTING` state add a Cancel button; in `FAILED` state add a Retry button. Frontend-only dismiss is acceptable for v1 (orphans the server job, but UX recovers). A backend cancel endpoint can land as a follow-up if the orphaned-job cost grows.
-- *Acceptance:* A long-running export shows Cancel; clicking it stops polling, clears the slice, returns the modal to the picker. A failed export shows Retry that re-POSTs the same export spec without re-opening the picker. Vitest covers both transitions in `src/store/exports-slice.test.ts`; if a backend cancel endpoint lands, `server/src/routes/export.ts` gets a `DELETE` handler with a paired test.
-- *Key files:* `src/modals/export-audiobook.tsx` (no `cancel`/`retry` strings exist today — confirmed via grep); `src/store/exports-slice.ts`; `server/src/routes/export.ts` (no cancel handler today — backend extension is optional for the frontend-dismiss approach).
-- *Benefit (user):* a wedged export today can only be cleared by reloading the app. Users hit this once and lose trust in the export flow; the affordance is cheap to add and high-trust per click.
 
 ---
 
