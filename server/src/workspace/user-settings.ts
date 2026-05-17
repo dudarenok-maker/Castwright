@@ -26,6 +26,7 @@ export const TTS_MODEL_KEY_VALUES = [
   'gemini-2.5-flash',
   'gemini-3.1-flash',
 ] as const;
+export const COVER_PICKER_TAB_VALUES = ['search', 'upload'] as const;
 
 export const userSettingsSchema = z.object({
   displayName:          z.string().max(120),
@@ -54,6 +55,12 @@ export const userSettingsSchema = z.object({
      still fold). Cap at 50 since beyond that the bucket would swallow
      genuine cast members and the UI loses meaning. */
   minorCastMinLines:    z.number().int().min(0).max(50),
+  /* Plan 40 — which tab the CoverPicker modal opens on by default.
+     `search` preserves the pre-plan-40 behaviour (OpenLibrary
+     candidates first); `upload` is for users who routinely bring
+     their own art. Optional with a 'search' default so legacy
+     user-settings.json files load unchanged. */
+  coverPickerDefaultTab: z.enum(COVER_PICKER_TAB_VALUES).optional(),
 });
 
 export type UserSettings = z.infer<typeof userSettingsSchema>;
@@ -85,6 +92,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   workspaceDirOverride: null,
   exportSyncFolder:     null,
   minorCastMinLines:    3,
+  coverPickerDefaultTab: 'search',
 };
 
 let cached: UserSettings | null = null;

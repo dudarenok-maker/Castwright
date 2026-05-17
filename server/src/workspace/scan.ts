@@ -68,13 +68,30 @@ export interface BookStateJson {
   /** Cached cover-image metadata. Bytes live next to state.json at
       .audiobook/cover.jpg (see `coverImagePath` in workspace/paths.ts).
       Populated by the OpenLibrary fetch (server/src/cover/openlibrary.ts)
-      and reverted by DELETE /api/books/:bookId/cover. Optional so books
-      imported before this feature continue to load and fall back to the
-      procedural gradient on the card. */
+      OR by a local upload (server/src/cover/upload.ts) and reverted by
+      DELETE /api/books/:bookId/cover. Optional so books imported before
+      this feature continue to load and fall back to the procedural
+      gradient on the card.
+
+      Plan 36 shipped `openLibraryId`/`originalUrl`/`fetchedAt`; plan 40
+      added `source` (discriminator), `originalFilename` + `uploadedAt`
+      (local uploads only), and `framing` (render-time pan + zoom). All
+      added fields are optional; legacy records without `source` infer
+      `source: 'openlibrary'` by the presence of `openLibraryId`. */
   coverImage?: {
-    openLibraryId: string;
-    originalUrl: string;
-    fetchedAt: string;
+    /** Plan 40 — discriminator. Absent on legacy records; presence of
+        `openLibraryId` infers `'openlibrary'`. */
+    source?: 'openlibrary' | 'local';
+    openLibraryId?: string;
+    originalUrl?: string;
+    fetchedAt?: string;
+    originalFilename?: string | null;
+    uploadedAt?: string;
+    framing?: {
+      offsetX: number;
+      offsetY: number;
+      zoom: number;
+    };
   };
   createdAt: string;
   updatedAt: string;
@@ -116,6 +133,10 @@ export interface LibraryBook {
       been fetched / picked — the card / Listen header fall back to the
       procedural gradient. */
   coverImageUrl?: string;
+  /** Plan 40 — optional pan + zoom applied at render time. Absent →
+      bare `object-cover` (pre-plan-40 behaviour). Only meaningful
+      when `coverImageUrl` is present too. */
+  coverFraming?: { offsetX: number; offsetY: number; zoom: number };
   pinned?: boolean;
 }
 
@@ -251,6 +272,7 @@ async function scanBook(author: string, series: string, title: string): Promise<
   const coverImageUrl = state?.coverImage && existsSync(coverImagePath(bookDir))
     ? `/api/books/${bookId}/cover`
     : undefined;
+  const coverFraming = coverImageUrl ? state?.coverImage?.framing : undefined;
   /* Excluded chapters (front/back-matter the user opted out of narrating)
      don't count toward the chapterCount or completion math — otherwise a
      12-chapter book with 2 excluded would stall at 10/12 forever. */
@@ -369,6 +391,7 @@ async function scanBook(author: string, series: string, title: string): Promise<
     lastWorkedOn,
     coverGradient,
     coverImageUrl,
+    coverFraming,
   };
 }
 

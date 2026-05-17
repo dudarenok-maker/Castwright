@@ -21,6 +21,7 @@
     "nanoid": "^5.0.7",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^4.10.38",
+    "sharp": "^0.34.5",
     "yazl": "^3.3.1",
     "zod": "^3.23.8",
     "zod-to-json-schema": "^3.23.5"
