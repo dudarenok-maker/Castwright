@@ -1,0 +1,35 @@
+name: PR title lint
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Validate PR title against commit convention
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Write PR title to a temp file
+        # Use the GITHUB_ENV / file-passing pattern so the title can't be
+        # interpreted as a shell expression. The validator reads from a file.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          printf '%s\n' "$PR_TITLE" > "$RUNNER_TEMP/pr-title.txt"
+
+      - name: Validate PR title
+        # Reuses the exact same validator the local commit-msg hook calls.
+        # Adding a new type/scope in scripts/validate-commit-msg.mjs auto-
+        # propagates here with no workflow edit.
+        run: node scripts/validate-commit-msg.mjs "$RUNNER_TEMP/pr-title.txt"
