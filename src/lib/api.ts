@@ -1665,6 +1665,18 @@ async function realGetBookExport(bookId: string, exportId: string): Promise<Book
   return res.json();
 }
 
+/* Cancels a running export. Idempotent on already-terminal jobs (server
+   returns 204 either way). 404 is treated as a no-op — the modal still
+   wants to dismiss locally even if the server lost the job. */
+async function realCancelBookExport(bookId: string, exportId: string): Promise<void> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/exports/${encodeURIComponent(exportId)}`,
+    { method: 'DELETE' },
+  );
+  if (res.status === 404 || res.status === 204) return;
+  if (!res.ok) throw new Error(`Export cancel failed (${res.status}): ${(await res.text()) || res.statusText}`);
+}
+
 async function realGetExportLanUrls(): Promise<ExportLanInfo> {
   const res = await fetch(`/api/export/lan`);
   if (!res.ok) throw new Error(`LAN URL probe failed (${res.status}): ${(await res.text()) || res.statusText}`);
@@ -1731,6 +1743,24 @@ async function mockGetBookExport(_bookId: string, exportId: string): Promise<Boo
   const job = MOCK_EXPORT_JOBS.get(exportId);
   if (!job) throw new Error('Mock export not found.');
   return job;
+}
+
+async function mockCancelBookExport(_bookId: string, exportId: string): Promise<void> {
+  await wait(20);
+  const timers = MOCK_EXPORT_TIMERS.get(exportId);
+  if (timers) {
+    for (const t of timers) clearTimeout(t);
+    MOCK_EXPORT_TIMERS.delete(exportId);
+  }
+  const job = MOCK_EXPORT_JOBS.get(exportId);
+  if (job && job.status !== 'done' && job.status !== 'failed' && job.status !== 'cancelled') {
+    MOCK_EXPORT_JOBS.set(exportId, {
+      ...job,
+      status: 'cancelled',
+      completedAt: new Date().toISOString(),
+      errorReason: 'Cancelled by user.',
+    });
+  }
 }
 
 async function mockGetExportLanUrls(): Promise<ExportLanInfo> {
@@ -1866,6 +1896,7 @@ const real = {
   getWorkspaceChangelog: realGetWorkspaceChangelog,
   createBookExport:  realCreateBookExport,
   getBookExport:     realGetBookExport,
+  cancelBookExport:  realCancelBookExport,
   getExportLanUrls:  realGetExportLanUrls,
   getChapterAudio:   async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
@@ -1955,6 +1986,7 @@ const mock = {
   getWorkspaceChangelog: mockGetWorkspaceChangelog,
   createBookExport:  mockCreateBookExport,
   getBookExport:     mockGetBookExport,
+  cancelBookExport:  mockCancelBookExport,
   getExportLanUrls:  mockGetExportLanUrls,
   getChapterAudio:   mockGetChapterAudio,
   getChapterAudioPrevious: mockGetChapterAudioPrevious,

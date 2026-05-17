@@ -605,7 +605,14 @@ export interface paths {
         get: operations["getBookExport"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Cancel a running export
+         * @description Signals the running build to abort and flips the job to
+         *     `cancelled`. Idempotent on already-terminal jobs (returns 204
+         *     without touching state). Best-effort cleanup of the staging dir
+         *     so partial artifacts don't leak.
+         */
+        delete: operations["cancelBookExport"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1394,7 +1401,7 @@ export interface components {
             /** @enum {string} */
             destination: "download" | "sync-folder";
             /** @enum {string} */
-            status: "queued" | "in_progress" | "done" | "failed";
+            status: "queued" | "in_progress" | "done" | "failed" | "cancelled";
             /** @description e.g. 'The Northern Star.zip' */
             filename: string;
             /** @description Final size once status === 'done'. */
@@ -2350,6 +2357,34 @@ export interface operations {
                 };
             };
             /** @description Job id unknown */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    cancelBookExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                exportId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancel accepted (or job already terminal — idempotent) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or job id unknown */
             404: {
                 headers: {
                     [name: string]: unknown;
