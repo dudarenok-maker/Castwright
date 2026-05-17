@@ -6,7 +6,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_USER_SETTINGS, userSettingsSchema } from './user-settings.js';
+import {
+  DEFAULT_USER_SETTINGS,
+  userSettingsSchema,
+  getResolvedAutoStartSidecar,
+  _resetUserSettingsCache,
+} from './user-settings.js';
 
 let workspaceRoot: string;
 
@@ -62,6 +67,62 @@ describe('userSettingsSchema — defaultThemePreference (plan 41)', () => {
       });
       mod._resetUserSettingsCache();
     }
+  });
+});
+
+describe('userSettingsSchema — autoStartSidecar (plan 43)', () => {
+  it('defaults to true on a fresh user-settings document', () => {
+    expect(DEFAULT_USER_SETTINGS.autoStartSidecar).toBe(true);
+  });
+
+  it('accepts true and false', () => {
+    expect(
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, autoStartSidecar: true })
+        .autoStartSidecar,
+    ).toBe(true);
+    expect(
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, autoStartSidecar: false })
+        .autoStartSidecar,
+    ).toBe(false);
+  });
+
+  it("rejects non-boolean values such as 'yes'", () => {
+    expect(() =>
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, autoStartSidecar: 'yes' }),
+    ).toThrow();
+  });
+
+  it('treats the field as optional — legacy settings files without it parse cleanly', () => {
+    const { autoStartSidecar, ...legacy } = DEFAULT_USER_SETTINGS;
+    const parsed = userSettingsSchema.parse(legacy);
+    expect(parsed.autoStartSidecar).toBeUndefined();
+  });
+
+  describe('getResolvedAutoStartSidecar', () => {
+    beforeEach(() => {
+      _resetUserSettingsCache();
+      delete process.env.DISABLE_AUTOSTART_SIDECAR;
+    });
+
+    afterEach(() => {
+      delete process.env.DISABLE_AUTOSTART_SIDECAR;
+    });
+
+    it('returns the default (true) when nothing is cached and no env override', () => {
+      expect(getResolvedAutoStartSidecar()).toBe(true);
+    });
+
+    it('returns false when DISABLE_AUTOSTART_SIDECAR=1 regardless of preference', () => {
+      process.env.DISABLE_AUTOSTART_SIDECAR = '1';
+      expect(getResolvedAutoStartSidecar()).toBe(false);
+    });
+
+    it('ignores DISABLE_AUTOSTART_SIDECAR values other than "1"', () => {
+      process.env.DISABLE_AUTOSTART_SIDECAR = 'true';
+      expect(getResolvedAutoStartSidecar()).toBe(true);
+      process.env.DISABLE_AUTOSTART_SIDECAR = '0';
+      expect(getResolvedAutoStartSidecar()).toBe(true);
+    });
   });
 });
 

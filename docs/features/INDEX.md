@@ -64,6 +64,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [14 — Coqui XTTS sidecar](14-tts-sidecar-coqui.md) — Local sidecar alternate (zero-shot voice cloning).
 - [14a — Kokoro v1 TTS engine](14a-tts-sidecar-kokoro.md) — Local sidecar default, English-only, per-engine cast voice profiles.
 - [15 — Gemini cloud TTS](15-tts-gemini-cloud.md) — Cloud opt-in.
+- [43 — Auto-start TTS sidecar](43-auto-start-sidecar.md) — Per-user `autoStartSidecar` preference (default ON); Node owns the sidecar child-process lifecycle so `start-app.bat` brings up TTS in one shot. **Status: active.**
 
 ### G. Generation
 - [16 — Generation stream](16-generation-stream.md) — Chapter audio SSE stream. Cross-links to plan 28 for the on-disk format.

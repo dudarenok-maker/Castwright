@@ -816,6 +816,17 @@ export interface components {
              */
             defaultThemePreference?: "light" | "dark" | "system";
             /**
+             * @description When true (default), the Node server spawns the Python TTS
+             *     sidecar as a child process at app.listen time, with
+             *     `PRELOAD_COQUI=1` propagated iff `defaultTtsModelKey` is
+             *     `coqui-xtts-v2`. When false, the user manages the sidecar
+             *     themselves (e.g. `npm run tts:sidecar` in a second terminal)
+             *     and the Node server still serves requests over a red
+             *     /api/sidecar/health until they do.
+             *     Plan [43](docs/features/43-auto-start-sidecar.md).
+             */
+            autoStartSidecar?: boolean;
+            /**
              * @description Whether process.env.GEMINI_API_KEY is non-empty. The key value
              *     itself is never returned over the wire — the UI uses this flag
              *     to render a "set in server/.env" pill.
@@ -856,6 +867,7 @@ export interface components {
             coverPickerDefaultTab?: "search" | "upload";
             /** @enum {string} */
             defaultThemePreference?: "light" | "dark" | "system";
+            autoStartSidecar?: boolean;
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];

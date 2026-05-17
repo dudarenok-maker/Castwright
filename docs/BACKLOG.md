@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 0 · Should 1 · Could 14 · Won't 10
+**Counts as of 2026-05-17:** Must 0 · Should 1 · Could 14 · Won't 9
 
 ---
 
@@ -165,7 +165,7 @@ Source: net-new (2026-05-17). Validated absent in frontend.
 - *What:* Open `new BroadcastChannel('audiobook-state')` in store init; broadcast post-mutation snapshots of the analysis + generation slices keyed by `bookId`. Listening tabs hydrate without a network round-trip.
 - *Acceptance:* Open the same book in two tabs, start an analysis in tab A → tab B's top-bar pill updates without a refresh. New Vitest spec under jsdom mocks `BroadcastChannel` and asserts inbound messages drive the right reducer.
 - *Key files:* `src/store/index.ts`; new `src/store/broadcast-middleware.ts`; `src/store/analysis-slice.ts`; `src/store/chapters-slice.ts`.
-- *Depends on:* none structural. Note the tension with Won't #6 (multi-tab catch-up race resilience parked) — this entry covers the cooperative cross-tab case, not the racing-writes case.
+- *Depends on:* none structural. Note the tension with Won't #3 (multi-tab catch-up race resilience parked) — this entry covers the cooperative cross-tab case, not the racing-writes case.
 - *Benefit (technical):* eliminates the cold-boot endpoint round-trip (the `/api/library/active-analyses` lookup, shipped 2026-05-17) when a sibling tab already has the state. Single-user-per-workspace assumption still holds.
 
 ### 13. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
@@ -200,65 +200,58 @@ Source: [`29-analyzer-ollama-local.md`](features/29-analyzer-ollama-local.md).
 - *Why parked:* installer + `ollama pull` are platform-specific and fragile under the OneDrive workspace path; the README addendum + explicit user opt-in is the v1 contract.
 - *Wake when:* Ollama upstream ships a stable cross-platform headless installer, OR a CI / dev-container path needs one-command bring-up. Likely two separate items then.
 
-### 2. Auto-start TTS sidecar
-
-Source: [`14-tts-sidecar-coqui.md`](features/14-tts-sidecar-coqui.md).
-
-- *Why parked:* sidecar cold-start is ~10–20 s and competes with the analyzer Ollama for the 8 GB VRAM budget; explicit `npm run tts:sidecar` keeps the timing + VRAM tradeoff visible to the user. v1 scaffolding choice.
-- *Wake when:* sidecar cold-start drops below ~2 s AND VRAM gating is no longer load-bearing (e.g. dedicated GPU per process). At that point, auto-launch from `cd server && npm run dev` is reasonable.
-
-### 3. Multi-model fan-out for Gemini analyzer
+### 2. Multi-model fan-out for Gemini analyzer
 
 Source: [`06-analyzer-gemini.md`](features/06-analyzer-gemini.md).
 
 - *Why parked:* one model per run keeps cost predictable and the SSE stream simple; A/B comparison today is two sequential runs.
 - *Wake when:* a real product use case for "render the same chapter under two models side-by-side in one view" emerges. The audio-layer a/b audition (plan 20) covers the listening-side intent today.
 
-### 4. Multi-tab catch-up race resilience
+### 3. Multi-tab catch-up race resilience
 
 Source: [`32-sticky-analysis.md`](features/32-sticky-analysis.md).
 
 - *Why parked:* disk `state.json` is authoritative + single-user-per-workspace, so two tabs on the same book never compete on writes. Tab B catches up by re-reading state on focus.
-- *Wake when:* multi-user collab on a shared workspace becomes a real use case. Pairs with Won't #10 — both wake under the same trigger.
+- *Wake when:* multi-user collab on a shared workspace becomes a real use case. Pairs with Won't #9 — both wake under the same trigger.
 
-### 5. Multi-book parallel generation
+### 4. Multi-book parallel generation
 
 Source: [`16-generation-stream.md`](features/16-generation-stream.md).
 
 - *Why parked:* single 8 GB GPU can't hold two XTTS/Kokoro instances; the generation queue is serial per workspace by design.
 - *Wake when:* either cloud TTS becomes the dominant generation path so VRAM is no longer the bottleneck, or the user adds a dedicated per-book GPU. Neither is on the v1 roadmap.
 
-### 6. Voice creation from scratch
+### 5. Voice creation from scratch
 
 Source: [`22-voice-library.md`](features/22-voice-library.md).
 
 - *Why parked:* the library is a read-only view over the sidecar's voice catalog (28 Kokoro + Coqui's bundled set). Authoring a voice means a separate Coqui voice-cloning UI that's its own product surface.
 - *Wake when:* user wants to author / fine-tune voices in-app rather than dropping pre-made reference `.wav`s into the sidecar's `voices/` folder. Likely depends on a much bigger Coqui training pipeline first.
 
-### 7. Bulk pin / bulk delete in voice library
+### 6. Bulk pin / bulk delete in voice library
 
 Source: [`22-voice-library.md`](features/22-voice-library.md).
 
 - *Why parked:* v1 voice library has fewer than 50 entries (28 Kokoro + ~12 Coqui defaults); per-voice click is fast enough.
-- *Wake when:* user-created voices push the library past ~50 entries and per-voice clicking becomes painful (track via user complaint, not preemptive). Pairs with Won't #6 — without an author flow there's nothing to bulk-operate on.
+- *Wake when:* user-created voices push the library past ~50 entries and per-voice clicking becomes painful (track via user complaint, not preemptive). Pairs with Won't #5 — without an author flow there's nothing to bulk-operate on.
 
-### 8. Live `VITE_USE_MOCKS` toggle in running UI
+### 7. Live `VITE_USE_MOCKS` toggle in running UI
 
 Source: [`23-mock-toggle.md`](features/23-mock-toggle.md).
 
 - *Why parked:* the mock layer swaps the entire `api` module at module-load via the env flag; flipping at runtime would need a different architecture (e.g. mock middleware around the api object).
 - *Wake when:* demo / QA flow requires mid-session real↔mock flipping. Today rebuilding with `VITE_USE_MOCKS=true` takes 5 s — building the runtime toggle would cost more than the friction it removes.
 
-### 9. Partial mock mode (some endpoints mocked, others real)
+### 8. Partial mock mode (some endpoints mocked, others real)
 
 Source: [`23-mock-toggle.md`](features/23-mock-toggle.md).
 
 - *Why parked:* all-or-nothing keeps the type contract clean — every component imports from `api.*` without knowing which side it's hitting.
 - *Wake when:* a specific endpoint needs mock-while-rest-real (e.g. mocking a flaky third-party while testing everything else live). The cheapest path then is likely a per-endpoint override in the mock layer, not the architecture change above.
 
-### 10. Conflict resolution for two simultaneous `state.json` writers
+### 9. Conflict resolution for two simultaneous `state.json` writers
 
 Source: [`27-book-state-persistence.md`](features/27-book-state-persistence.md).
 
 - *Why parked:* single-user-per-workspace assumption; file locking is advisory at best on Windows network shares.
-- *Wake when:* multi-user collab on a shared workspace becomes a real use case. Pairs with Won't #4 — both wake under the same trigger.
+- *Wake when:* multi-user collab on a shared workspace becomes a real use case. Pairs with Won't #3 — both wake under the same trigger.

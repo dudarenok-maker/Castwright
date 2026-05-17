@@ -319,3 +319,50 @@ describe('AccountView — Appearance (plan 41)', () => {
     expect(screen.queryByTestId('theme-override-pill')).toBeNull();
   });
 });
+
+describe('AccountView — TTS sidecar auto-start (plan 43)', () => {
+  it('renders the auto-start toggle checked when the preference is true', () => {
+    renderView({ autoStartSidecar: true });
+    const checkbox = screen.getByTestId('account-auto-start-sidecar') as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+    expect(screen.getByText(/will spawn the sidecar at boot/i)).toBeInTheDocument();
+  });
+
+  it('renders the auto-start toggle unchecked when the preference is false', () => {
+    renderView({ autoStartSidecar: false });
+    const checkbox = screen.getByTestId('account-auto-start-sidecar') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    expect(screen.getByText(/you manage the sidecar process yourself/i)).toBeInTheDocument();
+  });
+
+  it("defaults to true when the field is absent (legacy settings file)", () => {
+    renderView({ autoStartSidecar: undefined });
+    const checkbox = screen.getByTestId('account-auto-start-sidecar') as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it('round-trips autoStartSidecar=false through the Save patch', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      autoStartSidecar: false,
+    });
+    const user = userEvent.setup();
+    renderView({ autoStartSidecar: true });
+    const checkbox = screen.getByTestId('account-auto-start-sidecar');
+    await user.click(checkbox);
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+    const [patch] = (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch.autoStartSidecar).toBe(false);
+  });
+
+  it('shows the restart-required pill as soon as the toggle is flipped', async () => {
+    const user = userEvent.setup();
+    renderView({ autoStartSidecar: true });
+    expect(screen.queryByText(/restart the server to apply this change/i)).toBeNull();
+    await user.click(screen.getByTestId('account-auto-start-sidecar'));
+    expect(screen.getByText(/restart the server to apply this change/i)).toBeInTheDocument();
+  });
+});
