@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 0 · Should 4 · Could 14 · Won't 12
+**Counts as of 2026-05-17:** Must 0 · Should 3 · Could 14 · Won't 12
 
 ---
 
@@ -39,17 +39,7 @@ _All v1-blocker items shipped 2026-05-17 (plans 22a, 27, 32, 39)._
 
 ## Should — important, not blocking ship
 
-### 1. E2E coverage: listen view + mini-player
-
-Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
-
-- *What:* The existing `e2e/listen-playback.spec.ts` opens Solway Bay and asserts play click flips `<audio>.paused`. Tracking item to add a progressing-duration assertion (mini-player time changes after N ms of play) and chapter-switch + resume-from-position cases once Could #3 (listening progress / resume bookmarks) lands.
-- *Acceptance:* `e2e/listen-playback.spec.ts` adds the duration-tick + chapter-switch assertions.
-- *Key files:* `e2e/listen-playback.spec.ts`; `src/views/listen.tsx`; `src/components/mini-player.tsx`.
-- *Depends on:* Could #3 (resume bookmarks) for the resume-from-position case; the duration-tick case is unblocked today.
-- *Benefit (technical):* listen + playback is the second-highest-blast-radius surface.
-
-### 2. Dark mode
+### 1. Dark mode
 
 Source: [`25-design-tokens.md`](features/25-design-tokens.md) (was Won't #6; promoted 2026-05-17 per user prioritisation).
 
@@ -59,7 +49,7 @@ Source: [`25-design-tokens.md`](features/25-design-tokens.md) (was Won't #6; pro
 - *Depends on:* none structural — the visual-baselines harness (`e2e/visual.spec.ts`) is already in place; dark-mode adds a second-theme baseline pass on top.
 - *Benefit (user):* the single most-requested visual polish missing from v1; 9 PM listening sessions stop blasting white.
 
-### 3. Adjustable cover framing + local-disk upload
+### 2. Adjustable cover framing + local-disk upload
 
 Source: [`40-cover-framing-and-upload.md`](features/40-cover-framing-and-upload.md) (draft).
 
@@ -69,7 +59,7 @@ Source: [`40-cover-framing-and-upload.md`](features/40-cover-framing-and-upload.
 - *Depends on:* none structural. Plan 36's data model and endpoints are extended, not replaced; the plan 27 schema-versioning seam (already shipped) accommodates the additive `coverImage.framing` field.
 - *Benefit (user):* OpenLibrary covers crop the title/author away in our square frame today, and books with no OpenLibrary match are stuck on the procedural gradient forever. Both gaps close in one round.
 
-### 4. Bulk-apply library sync on confirm-cast
+### 3. Bulk-apply library sync on confirm-cast
 
 Source: [`41-bulk-library-sync.md`](features/41-bulk-library-sync.md) (draft) — supersedes plan 09 §"Bulk-accept-all UI".
 
