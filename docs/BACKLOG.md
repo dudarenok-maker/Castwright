@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 0 · Should 13 · Could 17 · Won't 12
+**Counts as of 2026-05-17:** Must 0 · Should 9 · Could 16 · Won't 12
 
 ---
 
@@ -39,74 +39,46 @@ _All v1-blocker items shipped 2026-05-17 (plans 22a, 27, 32, 39)._
 
 ## Should — important, not blocking ship
 
-### 1. Cold-load tab discovery of in-flight server analyses
+### 1. Library-home pill for paused-but-unopened books
 
 Source: [`32-sticky-analysis.md`](features/32-sticky-analysis.md) follow-ups.
 
-- *What:* Add a `GET /api/books/active-analyses` endpoint that scans every workspace `.audiobook/analysis-state.json` and returns the most-recent paused/halted snapshot. Frontend Layout mounts an effect that hits it on cold boot and seeds the analysis slice so the top-bar pill appears without the user having to navigate to the analysing route first.
-- *Acceptance:* Refreshing the page while an analysis is paused on book X immediately surfaces the pill on the Books library; clicking the pill navigates to `#/books/X/analysing`.
-- *Key files:* new endpoint in `server/src/routes/` (mirror the pattern in `server/src/routes/analysis.ts`); `src/components/layout.tsx` cold-boot effect; `src/store/analysis-slice.ts` for the hydrate action.
-- *Benefit (user):* the top-bar pill is the whole point of sticky analysis. If it appears only after you've already navigated to the running job, the pill is decorative.
-
-### 2. Library-home pill for paused-but-unopened books
-
-Source: [`32-sticky-analysis.md`](features/32-sticky-analysis.md) follow-ups.
-
-- *What:* Pills today are per-currently-opened-book. Surface a per-book badge on the library card for any book whose `.audiobook/analysis-state.json` shows a paused/halted run, so the user sees at a glance "you have unfinished analysis on book X" without opening it.
+- *What:* Pills today are per-currently-opened-book (and the top-bar pill on Books now hydrates from the freshest paused snapshot). Surface a per-book badge on the library card for any book whose `.audiobook/analysis-state.json` shows a paused/halted run, so the user sees at a glance "you have unfinished analysis on book X" without opening it.
 - *Acceptance:* From the Books library, a book with a paused analysis shows a "Paused — resume?" badge on its card; clicking the card opens the book and the existing top-bar pill takes over.
-- *Key files:* `src/views/book-library.tsx` (`BookCard`); the same endpoint from Should #1; `src/store/library-slice.ts` for the new field on `LibraryBook`.
-- *Depends on:* Should #1 (same endpoint; consolidate into one round trip).
+- *Key files:* `src/views/book-library.tsx` (`BookCard`); the `GET /api/library/active-analyses` endpoint (shipped 2026-05-17 with the cold-boot pill); `src/store/library-slice.ts` for the new field on `LibraryBook`.
+- *Depends on:* none structural — the endpoint already returns the full snapshot list so the card-badge consumer just picks per-book entries.
 - *Benefit (user):* prevents the "started yesterday, forgot where" failure mode.
 
-### 3. Dark mode
+### 2. Dark mode
 
 Source: [`25-design-tokens.md`](features/25-design-tokens.md) (was Won't #6; promoted 2026-05-17 per user prioritisation).
 
-- *What:* Add a `[data-theme="dark"]` token override block in `src/styles.css` for every `--peach`/`--ink`/`--magenta`/`--canvas`/`--ink-soft` token. Add a theme toggle in the top bar (`src/components/layout.tsx`). Persist preference via the `ui` slice (rides on Could #3 redux-persist) and read `prefers-color-scheme` as the first-visit default.
-- *Acceptance:* Toggling the affordance flips every surface (library, upload, analysing, confirm, ready, listen, voices, modals) without a single hex literal needing change. The grep test in plan 25 still returns zero hits. Refresh preserves the user's choice. New Playwright spec captures `toHaveScreenshot()` for both themes on the five core stages (or defers the dark-theme baselines if Should #9 hasn't landed).
-- *Key files:* `src/styles.css` (dark-token block); `tailwind.config.ts` (already references `var(--token)`, no changes expected); `src/components/layout.tsx` (toggle); `src/store/ui-slice.ts` (theme field); `docs/features/25-design-tokens.md` (drop the "out of scope" bullet, add a "Dark mode" invariants section).
-- *Depends on:* none structural; co-lands well with Could #3 (redux-persist) for cheap preference persistence.
+- *What:* Add a `[data-theme="dark"]` token override block in `src/styles.css` for every `--peach`/`--ink`/`--magenta`/`--canvas`/`--ink-soft` token. Add a theme toggle in the top bar (`src/components/layout.tsx`). Persist preference via the `ui` slice (rides on the redux-persist wiring shipped 2026-05-17 — extend `UI_PERSIST_WHITELIST` with the new `theme` field in `src/store/index.ts`) and read `prefers-color-scheme` as the first-visit default.
+- *Acceptance:* Toggling the affordance flips every surface (library, upload, analysing, confirm, ready, listen, voices, modals) without a single hex literal needing change. The grep test in plan 25 still returns zero hits. Refresh preserves the user's choice. New Playwright spec captures `toHaveScreenshot()` for both themes on the five core stages (or defers the dark-theme baselines if Should #5 hasn't landed).
+- *Key files:* `src/styles.css` (dark-token block); `tailwind.config.ts` (already references `var(--token)`, no changes expected); `src/components/layout.tsx` (toggle); `src/store/ui-slice.ts` (theme field); `src/store/index.ts` (extend `UI_PERSIST_WHITELIST`); `docs/features/25-design-tokens.md` (drop the "out of scope" bullet, add a "Dark mode" invariants section).
+- *Depends on:* none structural.
 - *Benefit (user):* the single most-requested visual polish missing from v1; 9 PM listening sessions stop blasting white.
 
-### 4. Concurrent-synthesis / thread-pool saturation tests for the TTS sidecar
-
-Source: CLAUDE.md commit-gate section ("next milestone").
-
-- *What:* Add pytest coverage that fires N parallel `/synthesize` requests through the sidecar's thread pool and asserts each output's audio integrity (frame count, sample-rate, no silent frames, no cross-request bleed).
-- *Acceptance:* New file `server/tts-sidecar/tests/test_concurrent_synthesis.py` exercises Kokoro (default) and Coqui (when loaded). Tests gate on `torch.cuda.is_available()` so they skip cleanly on a non-GPU dev box.
-- *Key files:* `server/tts-sidecar/tests/test_runtime_wiring.py` (existing pattern to mirror); `server/tts-sidecar/main.py` for the thread-pool wiring.
-- *Benefit (technical):* current pytest pins the single-request CUDA+DeepSpeed+fp16 path but says nothing about thread-pool behaviour under parallel load — exactly the regression class that produces silent audio corruption.
-
-### 5. Rotating `state.json` backups
-
-Source: net-new (2026-05-17). Validated absent in `server/src/workspace/state-io.ts` (atomic temp-file-rename only, no history).
-
-- *What:* Extend the atomic-rename writer in `server/src/workspace/state-io.ts` to rotate prior versions: `state.json` → `state.json.bak.1`, shift `bak.1 → bak.2`, keep last N=3. Add a `recoverFromBackup()` helper that the API uses on JSON-parse failure with a one-shot warning log.
-- *Acceptance:* Server Vitest writes 5 times and asserts `bak.1`/`bak.2`/`bak.3` exist with correct content; separate spec corrupts `state.json` and asserts reader falls back to `bak.1`. No-op on first write (no prior file to rotate).
-- *Key files:* `server/src/workspace/state-io.ts`; `server/src/routes/book-state.ts`; new section in `docs/features/27-book-state-persistence.md` (or new `27a-state-snapshot-rotation.md`).
-- *Depends on:* none. The schema-versioning seam (plan 27, shipped 2026-05-17) is now in place — rotation provides the rollback target a future v1→v2 migration can fall back to if the transform corrupts data.
-- *Benefit (architectural):* `state.json` holds cast, chapters, voices, revision graph — the entire book. One corrupted write = lost work. Cheap insurance, especially before schema-shape mutations begin.
-
-### 6. E2E coverage: upload → analysing → confirm → ready
+### 3. E2E coverage: upload → analysing → confirm → ready
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
-- *What:* Add a Playwright spec that walks the cold-boot → "Start a new book" → paste a tiny manuscript → wait for `analysing` → wait for `confirm` → click Confirm → land on `ready`. Use the mock backend so it doesn't need a sidecar.
-- *Acceptance:* New file `e2e/new-book-flow.spec.ts`. Wall-clock under 30 s on a warm cache. URL transitions asserted at each step; the smoke spec at `e2e/smoke.spec.ts` stays untouched.
-- *Key files:* `e2e/smoke.spec.ts` (pattern to mirror); `playwright.config.ts`; mock fixtures in `src/mocks/canned-data.ts` are already wired for this flow.
-- *Benefit (technical):* the full new-book flow is the highest-blast-radius user journey and currently has zero browser-level regression coverage.
+- *What:* The existing `e2e/new-book-flow.spec.ts` walks the cold-boot → "Start a new book" → confirm → ready flow under mocks. Tracking item to extend it with the deeper coverage the original Should #6 entry called out: per-step Redux assertions, hashchange timing on the analysing→confirm boundary, and a refresh-restores-stage assertion that exercises the redux-persist wiring shipped 2026-05-17.
+- *Acceptance:* `e2e/new-book-flow.spec.ts` adds assertions on intermediate Redux state at each stage transition + a refresh in the `ready` stage that lands back at the same view + selected chapter. Wall-clock under 30 s on a warm cache.
+- *Key files:* `e2e/new-book-flow.spec.ts`; mock fixtures in `src/mocks/canned-data.ts`.
+- *Benefit (technical):* depth on top of the golden-path coverage already in place.
 
-### 7. E2E coverage: listen view + mini-player
+### 4. E2E coverage: listen view + mini-player
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
-- *What:* Add a Playwright spec that opens a `ready`-state book under mocks, navigates to Listen, clicks play on the first chapter, and asserts the mini-player shows a play/pause toggle and a progressing duration.
-- *Acceptance:* New file `e2e/listen-playback.spec.ts`. Asserts the `<audio>` element has a non-empty `src` and `paused` flips false after the play click.
-- *Key files:* `e2e/smoke.spec.ts`; `src/views/listen.tsx` for the playback affordances.
-- *Depends on:* mock-mode chapter seeding — `mockGetBookState` (Must #3) needs to populate the chapters slice so the listen view can render a track list. Mock audio URLs are now live (former Must #5 shipped 2026-05-17 with plan 20 a/b audio), so the URL plumbing is unblocked; the remaining blocker is the chapters not appearing in `state.chapters.chapters` when a complete book is opened under mocks.
+- *What:* The existing `e2e/listen-playback.spec.ts` opens Solway Bay and asserts play click flips `<audio>.paused`. Tracking item to add a progressing-duration assertion (mini-player time changes after N ms of play) and chapter-switch + resume-from-position cases once Could #2 (listening progress / resume bookmarks) lands.
+- *Acceptance:* `e2e/listen-playback.spec.ts` adds the duration-tick + chapter-switch assertions.
+- *Key files:* `e2e/listen-playback.spec.ts`; `src/views/listen.tsx`; `src/components/mini-player.tsx`.
+- *Depends on:* Could #2 (resume bookmarks) for the resume-from-position case; the duration-tick case is unblocked today.
 - *Benefit (technical):* listen + playback is the second-highest-blast-radius surface.
 
-### 8. Slice unit tests: `applyGenerationTick`, `applyVoiceMatches`
+### 5. Slice unit tests: `applyGenerationTick`, `applyVoiceMatches`
 
 Source: CLAUDE.md "Suggested follow-ups".
 
@@ -115,26 +87,17 @@ Source: CLAUDE.md "Suggested follow-ups".
 - *Key files:* `src/store/chapters-slice.ts` (likely owns `applyGenerationTick`); `src/store/cast-slice.ts` (likely owns `applyVoiceMatches`); existing `*-slice.test.ts` files for the pattern.
 - *Benefit (technical):* the two slice reducers with the most regression history, currently exercised only via integration. Unit coverage shrinks the blast radius of any future refactor of either.
 
-### 9. Visual-regression baselines via Playwright `toHaveScreenshot()`
+### 6. Visual-regression baselines via Playwright `toHaveScreenshot()`
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups + open question.
 
 - *What:* Capture screenshot baselines for the five core stages (library, upload, analysing, confirm, ready) plus the listen view, using Playwright's native `toHaveScreenshot()`. Decide and document: per-platform baselines (`e2e/__screenshots__/{platform}/`) vs. single committed artwork. CI implications differ per choice.
 - *Acceptance:* `npm run test:e2e` includes a `visual.spec.ts` that captures and diffs the six baselines; first run blesses, subsequent runs diff. `docs/features/37-e2e-playwright.md` gets a new "Visual baselines" section documenting the storage decision.
 - *Key files:* new `e2e/visual.spec.ts`; `playwright.config.ts` (may need a project for `--update-snapshots` toggling); `docs/features/37-e2e-playwright.md`.
-- *Depends on:* Should #6 (need the new-book flow spec landing first so the analysing/confirm/ready stages can be captured under the same mock-data shape).
+- *Depends on:* the new-book flow spec is in place (`e2e/new-book-flow.spec.ts`); visual baselines can build on the same mock-data shape.
 - *Benefit (technical):* first defence against the silent CSS-token / Tailwind / icon-set drift that unit tests can't catch.
 
-### 10. Automatic retry of transient TTS sidecar failures
-
-Source: [`14-tts-sidecar-coqui.md`](features/14-tts-sidecar-coqui.md) (KNOWN: scaffolded behaviour).
-
-- *What:* Wrap the per-sentence sidecar synth call in an in-band retry with exponential backoff (e.g. 1 attempt + 2 retries at 500ms / 2s) on transient errors (HTTP 5xx, connection-refused, timeout). Distinguish transient-and-retried from persistent-and-surfaced so the queue keeps moving on flakes.
-- *Acceptance:* A new Vitest spec in `server/src/tts/synthesise-chapter.test.ts` mocks two consecutive 503s followed by a 200 and asserts the third attempt's audio is returned. The UI's existing "Retry" button now only appears on retry-exhausted failures.
-- *Key files:* `server/src/tts/synthesise-chapter.ts`; `server/src/tts/sidecar.ts` (the HTTP client to the sidecar); existing retry pattern in `server/src/analyzer/gemini.ts` for reference (see `generateWithLimiter`).
-- *Benefit (user):* a long generation run with one flaky sentence today wedges the queue until the user notices and clicks Retry. A single auto-retry restores hands-off operation.
-
-### 11. Top-bar TTS pill — third-surface consolidation trigger
+### 7. Top-bar TTS pill — third-surface consolidation trigger
 
 Source: [`30-global-model-control.md`](features/30-global-model-control.md).
 
@@ -144,7 +107,7 @@ Source: [`30-global-model-control.md`](features/30-global-model-control.md).
 - *Depends on:* the actual third surface materialising.
 - *Benefit (architectural):* prevents the duplicated-poll explosion that motivated plan 30 G1's hook consolidation in the first place.
 
-### 12. Adjustable cover framing + local-disk upload
+### 8. Adjustable cover framing + local-disk upload
 
 Source: [`40-cover-framing-and-upload.md`](features/40-cover-framing-and-upload.md) (draft).
 
@@ -154,7 +117,7 @@ Source: [`40-cover-framing-and-upload.md`](features/40-cover-framing-and-upload.
 - *Depends on:* none structural. Plan 36's data model and endpoints are extended, not replaced; the plan 27 schema-versioning seam (already shipped) accommodates the additive `coverImage.framing` field.
 - *Benefit (user):* OpenLibrary covers crop the title/author away in our square frame today, and books with no OpenLibrary match are stuck on the procedural gradient forever. Both gaps close in one round.
 
-### 13. Bulk-apply library sync on confirm-cast
+### 9. Bulk-apply library sync on confirm-cast
 
 Source: [`41-bulk-library-sync.md`](features/41-bulk-library-sync.md) (draft) — supersedes plan 09 §"Bulk-accept-all UI".
 
@@ -162,7 +125,7 @@ Source: [`41-bulk-library-sync.md`](features/41-bulk-library-sync.md) (draft) �
 - *Acceptance:* Pill appears when at least one character has `matchedFrom.bookId + characterId` set; click ticks every such character's checkbox; click again clears; per-character untick still works as the exception path. New Vitest covers pill render + bulk-toggle logic; new Playwright spec walks cold-boot → confirm → click pill → click Confirm cast.
 - *Key files:* `src/views/confirm-cast.tsx`; new `src/views/confirm-cast.test.tsx`; new `e2e/bulk-sync-library.spec.ts`; new `docs/features/41-bulk-library-sync.md`.
 - *Depends on:* none. Plan 09's per-character override (shipped) is the API path; this is purely a UI compression.
-- *Benefit (user):* large manuscripts in long-running series (12+ carryovers) currently demand a click per character before "Confirm cast". One-click bulk + exception ticking matches how the user actually thinks ("reuse all, except these"). The user can rank this higher than #13 in a separate reprioritisation pass — placement at the bottom of Should is a churn-avoidance default, not a priority signal.
+- *Benefit (user):* large manuscripts in long-running series (12+ carryovers) currently demand a click per character before "Confirm cast". One-click bulk + exception ticking matches how the user actually thinks ("reuse all, except these"). The user can rank this higher than #8 in a separate reprioritisation pass — placement at the bottom of Should is a churn-avoidance default, not a priority signal.
 
 ---
 
@@ -187,16 +150,7 @@ Source: net-new (2026-05-17). Validated absent in `src/views/listen.tsx` + `src/
 - *Depends on:* persistence-model decision (recommendation: sibling file).
 - *Benefit (user):* the single feature audiobook users assume exists. Today's behaviour (reset to 0) actively trains the user not to refresh.
 
-### 3. `redux-persist` on `ui` and `manuscript` slices
-
-Source: CLAUDE.md "Suggested follow-ups".
-
-- *What:* Install redux-persist, wire it to the two slices that hold last-visited stage and last-edited manuscript state, so a page refresh keeps the user where they were instead of bouncing back to Books.
-- *Acceptance:* Refresh on `#/books/<id>/manuscript` restores the same view and the same selected chapter. Existing Vitest specs still pass; new spec asserts the persisted shape's stability across slice version bumps.
-- *Key files:* `src/store/index.ts`; `src/store/ui-slice.ts`; `src/store/manuscript-slice.ts`.
-- *Benefit (user):* page refresh today resets `ui.stage` to `{ kind: 'books' }`; persist keeps the user where they were.
-
-### 4. Global error toast / banner surface
+### 3. Global error toast / banner surface
 
 Source: net-new (2026-05-17). Today errors land in `chapters.lastError`; only `src/components/stale-audio-banner.tsx` is wired as a domain banner.
 
@@ -206,7 +160,7 @@ Source: net-new (2026-05-17). Today errors land in `chapters.lastError`; only `s
 - *Depends on:* none.
 - *Benefit (user):* transient failures today are invisible to the user — they just see the UI not advance. A toast surface closes the "did anything happen?" gap.
 
-### 5. Audio loudness normalization (ffmpeg `loudnorm`)
+### 4. Audio loudness normalization (ffmpeg `loudnorm`)
 
 Source: net-new (2026-05-17). Validated absent in `server/src/tts/mp3.ts` (raw PCM → LAME VBR, no loudness filter).
 
@@ -216,7 +170,7 @@ Source: net-new (2026-05-17). Validated absent in `server/src/tts/mp3.ts` (raw P
 - *Depends on:* none. Encode latency cost is ~20-40% for single-pass loudnorm; document the trade-off.
 - *Benefit (user):* per-voice volume drift across chapters today forces the listener to ride the volume knob. Loudnorm makes the book sit at one level.
 
-### 6. Swap `src/lib/router.ts` for `react-router` v6 `createHashRouter`
+### 5. Swap `src/lib/router.ts` for `react-router` v6 `createHashRouter`
 
 Source: CLAUDE.md "Suggested follow-ups".
 
@@ -225,17 +179,17 @@ Source: CLAUDE.md "Suggested follow-ups".
 - *Key files:* `src/lib/router.ts`; `src/store/index.ts` (router install); `docs/features/01-hash-router.md`.
 - *Benefit (technical):* eliminates a hand-rolled router and its bespoke `RouterStore` adapter — one less maintenance load.
 
-### 7. Real `<audio>` element in `MiniPlayer`
+### 6. Real `<audio>` element in `MiniPlayer`
 
 Source: CLAUDE.md "Suggested follow-ups".
 
 - *What:* Replace the visual stub mini-player with a real `<audio>` element wired to `getChapterAudio({ chapterId })`; respond to spacebar pause-play and arrow seek.
-- *Acceptance:* Clicking play on the mini-player plays the chapter audio in real mode; the Listen e2e spec (Should #7) asserts playback state.
+- *Acceptance:* Clicking play on the mini-player plays the chapter audio in real mode; the Listen e2e spec (Should #4) asserts playback state.
 - *Key files:* `src/components/MiniPlayer.tsx` (or wherever `MiniPlayer` is defined).
-- *Depends on:* Should #7 (e2e coverage). Mock audio URLs shipped 2026-05-17 with plan 20.
+- *Depends on:* Should #4 (e2e coverage tracking item). Mock audio URLs shipped 2026-05-17 with plan 20.
 - *Benefit (user):* listen view becomes actually-listenable.
 
-### 8. ESLint + Prettier + axe-core a11y pass
+### 7. ESLint + Prettier + axe-core a11y pass
 
 Source: CLAUDE.md "Suggested follow-ups".
 
@@ -244,7 +198,7 @@ Source: CLAUDE.md "Suggested follow-ups".
 - *Key files:* new `.eslintrc.cjs`, `.prettierrc`; `package.json` scripts.
 - *Benefit (technical):* baseline code hygiene + first a11y net.
 
-### 9. JSON-schema-mode structured output for Ollama
+### 8. JSON-schema-mode structured output for Ollama
 
 Source: [`29-analyzer-ollama-local.md`](features/29-analyzer-ollama-local.md) out-of-scope.
 
@@ -253,7 +207,7 @@ Source: [`29-analyzer-ollama-local.md`](features/29-analyzer-ollama-local.md) ou
 - *Key files:* `server/src/analyzer/ollama.ts`; `server/src/analyzer/schemas.ts` (or wherever the zod schemas live); add `zod-to-json-schema` to server deps.
 - *Benefit (technical):* current failures cluster on free-text parsing — exactly the dimension structured output cuts.
 
-### 10. Long-form description (`desc` / `ldes`) for Voice export
+### 9. Long-form description (`desc` / `ldes`) for Voice export
 
 Source: [`33-voice-export.md`](features/33-voice-export.md) known gap.
 
@@ -262,7 +216,7 @@ Source: [`33-voice-export.md`](features/33-voice-export.md) known gap.
 - *Key files:* `src/modals/edit-book-meta.tsx`; `server/src/export/build-m4b.ts`; `openapi.yaml` (BookMetadata schema).
 - *Benefit (user):* richer "About this audiobook" panel in Live Voice.
 
-### 11. Streaming audio for live playback during chapter generation
+### 10. Streaming audio for live playback during chapter generation
 
 Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
 
@@ -271,7 +225,7 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - *Key files:* `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/MiniPlayer.tsx` (or wherever playback lives) for the MediaSource consumer.
 - *Benefit (user):* "listen as it generates" is the magic moment audiobook tools sell on.
 
-### 12. CI integration for the test suite
+### 11. CI integration for the test suite
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
@@ -280,7 +234,7 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - *Key files:* new `.github/workflows/verify.yml`.
 - *Benefit (technical):* eliminates the "works on my machine" gap.
 
-### 13. More e2e golden paths (voices, cast, profile drawer)
+### 12. More e2e golden paths (voices, cast, profile drawer)
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
@@ -289,7 +243,7 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - *Key files:* `e2e/smoke.spec.ts` (pattern to mirror); `src/views/voices.tsx`; `src/modals/profile-drawer.tsx`.
 - *Benefit (technical):* incremental low-cost coverage growth.
 
-### 14. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
+### 13. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
 
 Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 
@@ -298,7 +252,7 @@ Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 - *Key files:* new tile config in `src/data/listener-apps.ts`; `src/modals/export-audiobook.tsx`; `server/src/export/` for any new transport.
 - *Benefit (user):* true sideload-free path. Low priority because LAN download + sync folder already work.
 
-### 15. Voice compare from the global `#/voices` tab for same-book pairs
+### 14. Voice compare from the global `#/voices` tab for same-book pairs
 
 Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
 
@@ -308,17 +262,17 @@ Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-comp
 - *Depends on:* none structural; orthogonal to Must #2 (`mockGetBookState`) but the latter unblocks proper e2e coverage under mocks.
 - *Benefit (user):* closes the gap in the Voice library global view — today the global tab's Compare is fully disabled, even for pairs that would resolve cleanly with one fetch.
 
-### 16. Cross-book voice compare
+### 15. Cross-book voice compare
 
 Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
 
 - *What:* Lift the cross-book guard. When the two selected voices belong to different `bookId`s, fetch each book's cast (one of them may be the open book — short-circuit) and pass both characters into `CompareCastModal`. Decide and document: do we route saves back to each character's source book's cast slice, or refuse the save and surface a "viewing only" banner?
 - *Acceptance:* The Compare button enables for cross-book pairs; the modal opens with both characters; the Save behaviour is documented and tested. The e2e gains a cross-book pair assertion.
 - *Key files:* `src/views/voices.tsx`; `src/store/cast-slice.ts` (Save routing); `src/modals/compare-cast-modal.tsx` (if the viewing-only banner is needed).
-- *Depends on:* Could #15 (the same on-demand fetch machinery).
+- *Depends on:* Could #14 (the same on-demand fetch machinery).
 - *Benefit (user):* enables A/B for users who reuse the same TTS voice across books — e.g. comparing the same narrator across two books in a series to spot drift.
 
-### 17. Cross-tab `BroadcastChannel` state sync
+### 16. Cross-tab `BroadcastChannel` state sync
 
 Source: net-new (2026-05-17). Validated absent in frontend.
 
@@ -326,7 +280,7 @@ Source: net-new (2026-05-17). Validated absent in frontend.
 - *Acceptance:* Open the same book in two tabs, start an analysis in tab A → tab B's top-bar pill updates without a refresh. New Vitest spec under jsdom mocks `BroadcastChannel` and asserts inbound messages drive the right reducer.
 - *Key files:* `src/store/index.ts`; new `src/store/broadcast-middleware.ts`; `src/store/analysis-slice.ts`; `src/store/chapters-slice.ts`.
 - *Depends on:* none structural. Note the tension with Won't #6 (multi-tab catch-up race resilience parked) — this entry covers the cooperative cross-tab case, not the racing-writes case.
-- *Benefit (technical):* eliminates the cold-boot endpoint round-trip (Should #1) when a sibling tab already has the state. Single-user-per-workspace assumption still holds.
+- *Benefit (technical):* eliminates the cold-boot endpoint round-trip (Should #1 cold-load, shipped 2026-05-17) when a sibling tab already has the state. Single-user-per-workspace assumption still holds.
 
 ---
 
