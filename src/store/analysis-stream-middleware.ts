@@ -50,6 +50,13 @@ interface AnalysisRootState {
 
 interface OpenHandle {
   manuscriptId: string;
+  /* Discriminator for which server route the subscribe POST hits.
+     'main' → POST /analysis (joins inFlightAnalysisByManuscript);
+     'subset' → POST /analysis/chapters (joins
+     inFlightSubsetByManuscript). Plan 32 follow-up — without the
+     branch the middleware always hit the main route and either joined
+     the wrong job or started a fresh one mid-subset-retry. */
+  kind: 'main' | 'subset';
   controller: AbortController;
 }
 
@@ -70,45 +77,57 @@ export const analysisStreamMiddleware: Middleware = (store) => {
     handle = null;
   };
 
-  const openHandle = (manuscriptId: string): void => {
-    if (handle && handle.manuscriptId === manuscriptId) return;
+  const openHandle = (snap: AnalysisStreamSnapshot): void => {
+    const desiredKind: 'main' | 'subset' = snap.kind === 'subset' ? 'subset' : 'main';
+    if (handle && handle.manuscriptId === snap.manuscriptId && handle.kind === desiredKind) return;
     if (handle) closeHandle();
 
+    const manuscriptId = snap.manuscriptId;
     const controller = new AbortController();
-    const localHandle: OpenHandle = { manuscriptId, controller };
+    const localHandle: OpenHandle = { manuscriptId, kind: desiredKind, controller };
     handle = localHandle;
+
+    const callbacks = {
+      signal: controller.signal,
+      onPhase: ({ phaseId, progress }: { phaseId: number; progress: number }) => {
+        dispatch(analysisActions.applyAnalysisSnapshotTick({
+          manuscriptId,
+          phaseId,
+          phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
+          phaseProgress: progress,
+          lastTickAt: Date.now(),
+        }));
+      },
+      onEta: ({ remainingMs }: { remainingMs: number }) => {
+        dispatch(analysisActions.applyAnalysisSnapshotTick({
+          manuscriptId,
+          remainingMs,
+          lastTickAt: Date.now(),
+        }));
+      },
+      onSeriesPrior: ({ count, names }: { count: number; names: string[] }) => {
+        dispatch(analysisActions.setSeriesPrior({ manuscriptId, count, names }));
+      },
+      /* Intentionally NOT consumed by the middleware (view-only):
+         onLog, onCastUpdate, onChapterFailed, onChapterResolved,
+         onHeartbeat, onThrottle. */
+    };
 
     /* Subscribe-only POST: no model / fresh / allowStage1Shrink. The
        view's POST owns the start decision; this one is guaranteed to
        take the server dispatcher's subscribe path because we wait for
-       the first tick (proof the view's POST landed) before firing. */
+       the first tick (proof the view's POST landed) before firing.
+       Subset branch passes chapterIds so the server route validates
+       against the existing job's subsetChapterIds — matching ids join
+       the existing subscriber set, mismatched would 409. */
     void (async () => {
       try {
-        await api.analyseManuscript(manuscriptId, {
-          signal: controller.signal,
-          onPhase: ({ phaseId, progress }) => {
-            dispatch(analysisActions.applyAnalysisSnapshotTick({
-              manuscriptId,
-              phaseId,
-              phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
-              phaseProgress: progress,
-              lastTickAt: Date.now(),
-            }));
-          },
-          onEta: ({ remainingMs }) => {
-            dispatch(analysisActions.applyAnalysisSnapshotTick({
-              manuscriptId,
-              remainingMs,
-              lastTickAt: Date.now(),
-            }));
-          },
-          onSeriesPrior: ({ count, names }) => {
-            dispatch(analysisActions.setSeriesPrior({ manuscriptId, count, names }));
-          },
-          /* Intentionally NOT consumed by the middleware (view-only):
-             onLog, onCastUpdate, onChapterFailed, onChapterResolved,
-             onHeartbeat, onThrottle. */
-        });
+        if (desiredKind === 'subset') {
+          const chapterIds = snap.subsetChapterIds ?? [];
+          await api.runAnalysisForChapters(manuscriptId, chapterIds, callbacks);
+        } else {
+          await api.analyseManuscript(manuscriptId, callbacks);
+        }
         /* Terminal success — the server's `result` event ended the
            stream cleanly. Only clear if we're still the active handle
            (a displacement to a different manuscript may have aborted
@@ -164,15 +183,21 @@ export const analysisStreamMiddleware: Middleware = (store) => {
     }
 
     if (a.type === SET_ACTIVE_TYPE) {
-      /* Cross-manuscript displacement only. A new setActiveStream for
-         a DIFFERENT manuscriptId means an earlier run was replaced
+      /* Displacement on (manuscriptId, kind). A new setActiveStream
+         for a different manuscriptId means an earlier run was replaced
          (e.g. user navigated to a new book and started fresh
-         analysis there). Close the stale handle; the new handle
-         opens on its own first tick. */
+         analysis there). A new setActiveStream for the same
+         manuscriptId but a different kind means the run shifted shape
+         (main → subset for a Retry, or subset → main when restoring
+         after retry completes). Either way: close the stale handle;
+         the new handle opens on its own first tick. */
       const state = store.getState() as AnalysisRootState;
       const snap = state.analysis.activeStream;
-      if (handle && snap && handle.manuscriptId !== snap.manuscriptId) {
-        closeHandle();
+      if (handle && snap) {
+        const newKind: 'main' | 'subset' = snap.kind === 'subset' ? 'subset' : 'main';
+        if (handle.manuscriptId !== snap.manuscriptId || handle.kind !== newKind) {
+          closeHandle();
+        }
       }
       return result;
     }
@@ -185,7 +210,7 @@ export const analysisStreamMiddleware: Middleware = (store) => {
       const state = store.getState() as AnalysisRootState;
       const snap = state.analysis.activeStream;
       if (snap && !handle) {
-        openHandle(snap.manuscriptId);
+        openHandle(snap);
       }
       return result;
     }
