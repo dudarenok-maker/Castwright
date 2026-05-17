@@ -29,7 +29,7 @@ const responseWith = (...books: LibraryBook[]): LibraryResponse => ({
 
 describe('librarySlice — initial state', () => {
   it('starts empty and not loaded', () => {
-    expect(librarySlice.getInitialState()).toEqual({ loaded: false, authors: [], books: [] });
+    expect(librarySlice.getInitialState()).toEqual({ loaded: false, authors: [], books: [], pausedSnapshots: {} });
   });
 });
 

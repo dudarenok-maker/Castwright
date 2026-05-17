@@ -8,7 +8,7 @@ import { render, screen, act } from '@testing-library/react';
 import { accountSlice } from '../store/account-slice';
 import { librarySlice, libraryActions } from '../store/library-slice';
 import { BookLibraryView } from './book-library';
-import type { LibraryAuthor, LibraryBook } from '../lib/types';
+import type { ActiveAnalysisSummary, LibraryAuthor, LibraryBook } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -46,7 +46,7 @@ function renderView({ loaded, authors }: { loaded: boolean; authors: LibraryAuth
       library: librarySlice.reducer,
     },
     preloadedState: {
-      library: { loaded, authors, books: authors.flatMap(a => a.series.flatMap(s => s.books)) },
+      library: { loaded, authors, books: authors.flatMap(a => a.series.flatMap(s => s.books)), pausedSnapshots: {} },
     },
   });
   return {
@@ -112,6 +112,152 @@ describe('BookLibraryView — loading affordance', () => {
     expect(screen.queryByTestId('book-cover-b1')).not.toBeInTheDocument();
   });
 
+  it('renders the "Paused — resume?" badge when the cold-boot scan reports a paused snapshot', () => {
+    const pausedSnap: ActiveAnalysisSummary = {
+      bookId: 'b1',
+      bookTitle: 'The Hollow Tide',
+      manuscriptId: 'mns_b1',
+      phaseId: 1,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 0.42,
+      state: 'paused',
+      lastTickAt: Date.now(),
+      writtenAt: Date.now(),
+    };
+    const store = configureStore({
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+      preloadedState: {
+        library: {
+          loaded: true,
+          authors: [oneAuthor],
+          books: [oneBook],
+          pausedSnapshots: { b1: pausedSnap },
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <BookLibraryView
+          authors={[oneAuthor]}
+          activeBookId={null}
+          onOpenBook={vi.fn()}
+          onDeleteBook={vi.fn()}
+          onReparseBook={vi.fn()}
+          onEditBook={vi.fn()}
+          onStartNew={vi.fn()}
+        />
+      </Provider>,
+    );
+    const badge = screen.getByTestId('paused-badge-b1');
+    expect(badge).toBeInTheDocument();
+    expect(badge.textContent).toMatch(/Paused — resume\?/);
+  });
+
+  it('renders the "Halted — review?" badge when the snapshot state is halted', () => {
+    const haltedSnap: ActiveAnalysisSummary = {
+      bookId: 'b1',
+      bookTitle: 'The Hollow Tide',
+      manuscriptId: 'mns_b1',
+      phaseId: 2,
+      phaseLabel: 'Linking refs',
+      phaseProgress: 0.7,
+      state: 'halted',
+      haltCode: 'stage1_shrink_refused',
+      haltReason: 'cast shrunk from 20 → 4',
+      lastTickAt: Date.now(),
+      writtenAt: Date.now(),
+    };
+    const store = configureStore({
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+      preloadedState: {
+        library: {
+          loaded: true,
+          authors: [oneAuthor],
+          books: [oneBook],
+          pausedSnapshots: { b1: haltedSnap },
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <BookLibraryView
+          authors={[oneAuthor]}
+          activeBookId={null}
+          onOpenBook={vi.fn()}
+          onDeleteBook={vi.fn()}
+          onReparseBook={vi.fn()}
+          onEditBook={vi.fn()}
+          onStartNew={vi.fn()}
+        />
+      </Provider>,
+    );
+    const badge = screen.getByTestId('paused-badge-b1');
+    expect(badge.textContent).toMatch(/Halted — review\?/);
+  });
+
+  it('omits the paused badge when no snapshot is present for the book', () => {
+    renderView({ loaded: true, authors: [oneAuthor] });
+    expect(screen.queryByTestId('paused-badge-b1')).not.toBeInTheDocument();
+  });
+
+  it('omits the paused badge when the book is the currently-active card (top-bar pill takes over)', () => {
+    const pausedSnap: ActiveAnalysisSummary = {
+      bookId: 'b1',
+      bookTitle: 'The Hollow Tide',
+      manuscriptId: 'mns_b1',
+      phaseId: 1,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 0.42,
+      state: 'paused',
+      lastTickAt: Date.now(),
+      writtenAt: Date.now(),
+    };
+    const store = configureStore({
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+      preloadedState: {
+        library: {
+          loaded: true,
+          authors: [oneAuthor],
+          books: [oneBook],
+          pausedSnapshots: { b1: pausedSnap },
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <BookLibraryView
+          authors={[oneAuthor]}
+          activeBookId="b1"
+          onOpenBook={vi.fn()}
+          onDeleteBook={vi.fn()}
+          onReparseBook={vi.fn()}
+          onEditBook={vi.fn()}
+          onStartNew={vi.fn()}
+        />
+      </Provider>,
+    );
+    expect(screen.queryByTestId('paused-badge-b1')).not.toBeInTheDocument();
+  });
+
+  it('reducer hydratePausedSnapshots replaces the map (entries dropped from the response are cleared)', () => {
+    const snapA: ActiveAnalysisSummary = {
+      bookId: 'a', bookTitle: 'A', manuscriptId: 'm', phaseId: 0, phaseLabel: 'p',
+      phaseProgress: 0, state: 'paused', lastTickAt: 0, writtenAt: 0,
+    };
+    const snapB: ActiveAnalysisSummary = { ...snapA, bookId: 'b', bookTitle: 'B' };
+    const store = configureStore({
+      reducer: { library: librarySlice.reducer },
+      preloadedState: {
+        library: {
+          loaded: true, authors: [], books: [],
+          pausedSnapshots: { a: snapA, b: snapB },
+        },
+      },
+    });
+    act(() => { store.dispatch(libraryActions.hydratePausedSnapshots([snapA])); });
+    expect(store.getState().library.pausedSnapshots).toEqual({ a: snapA });
+  });
+
   it('swaps skeleton → populated grid when hydrate dispatches', () => {
     /* The view's `authors` is a prop, not a selector — the parent route
        (routes/index.tsx) reads `library.authors` from the store and passes
@@ -120,7 +266,7 @@ describe('BookLibraryView — loading affordance', () => {
        on slice changes. */
     const store = configureStore({
       reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
-      preloadedState: { library: { loaded: false, authors: [], books: [] } },
+      preloadedState: { library: { loaded: false, authors: [], books: [], pausedSnapshots: {} } },
     });
     const handlers = {
       onOpenBook: vi.fn(), onDeleteBook: vi.fn(), onReparseBook: vi.fn(),

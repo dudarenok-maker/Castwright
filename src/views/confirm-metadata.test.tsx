@@ -50,7 +50,7 @@ function renderView(libraryBooks: LibraryBook[] = []) {
     },
     preloadedState: {
       manuscript: { ...manuscriptSlice.getInitialState(), importCandidate: candidate },
-      library:    { loaded: true, authors: [], books: libraryBooks },
+      library:    { loaded: true, authors: [], books: libraryBooks, pausedSnapshots: {} },
     },
   });
   return {

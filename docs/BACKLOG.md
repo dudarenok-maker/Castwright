@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 0 · Should 6 · Could 14 · Won't 12
+**Counts as of 2026-05-17:** Must 0 · Should 5 · Could 14 · Won't 12
 
 ---
 
@@ -39,17 +39,7 @@ _All v1-blocker items shipped 2026-05-17 (plans 22a, 27, 32, 39)._
 
 ## Should — important, not blocking ship
 
-### 1. Library-home pill for paused-but-unopened books
-
-Source: [`32-sticky-analysis.md`](features/32-sticky-analysis.md) follow-ups.
-
-- *What:* Pills today are per-currently-opened-book (and the top-bar pill on Books now hydrates from the freshest paused snapshot). Surface a per-book badge on the library card for any book whose `.audiobook/analysis-state.json` shows a paused/halted run, so the user sees at a glance "you have unfinished analysis on book X" without opening it.
-- *Acceptance:* From the Books library, a book with a paused analysis shows a "Paused — resume?" badge on its card; clicking the card opens the book and the existing top-bar pill takes over.
-- *Key files:* `src/views/book-library.tsx` (`BookCard`); the `GET /api/library/active-analyses` endpoint (shipped 2026-05-17 with the cold-boot pill); `src/store/library-slice.ts` for the new field on `LibraryBook`.
-- *Depends on:* none structural — the endpoint already returns the full snapshot list so the card-badge consumer just picks per-book entries.
-- *Benefit (user):* prevents the "started yesterday, forgot where" failure mode.
-
-### 2. E2E coverage: upload → analysing → confirm → ready
+### 1. E2E coverage: upload → analysing → confirm → ready
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
@@ -58,7 +48,7 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - *Key files:* `e2e/new-book-flow.spec.ts`; mock fixtures in `src/mocks/canned-data.ts`.
 - *Benefit (technical):* depth on top of the golden-path coverage already in place.
 
-### 3. E2E coverage: listen view + mini-player
+### 2. E2E coverage: listen view + mini-player
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
@@ -68,7 +58,7 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - *Depends on:* Could #3 (resume bookmarks) for the resume-from-position case; the duration-tick case is unblocked today.
 - *Benefit (technical):* listen + playback is the second-highest-blast-radius surface.
 
-### 4. Dark mode
+### 3. Dark mode
 
 Source: [`25-design-tokens.md`](features/25-design-tokens.md) (was Won't #6; promoted 2026-05-17 per user prioritisation).
 
@@ -78,7 +68,7 @@ Source: [`25-design-tokens.md`](features/25-design-tokens.md) (was Won't #6; pro
 - *Depends on:* none structural — the visual-baselines harness (`e2e/visual.spec.ts`) is already in place; dark-mode adds a second-theme baseline pass on top.
 - *Benefit (user):* the single most-requested visual polish missing from v1; 9 PM listening sessions stop blasting white.
 
-### 5. Adjustable cover framing + local-disk upload
+### 4. Adjustable cover framing + local-disk upload
 
 Source: [`40-cover-framing-and-upload.md`](features/40-cover-framing-and-upload.md) (draft).
 
@@ -88,7 +78,7 @@ Source: [`40-cover-framing-and-upload.md`](features/40-cover-framing-and-upload.
 - *Depends on:* none structural. Plan 36's data model and endpoints are extended, not replaced; the plan 27 schema-versioning seam (already shipped) accommodates the additive `coverImage.framing` field.
 - *Benefit (user):* OpenLibrary covers crop the title/author away in our square frame today, and books with no OpenLibrary match are stuck on the procedural gradient forever. Both gaps close in one round.
 
-### 6. Bulk-apply library sync on confirm-cast
+### 5. Bulk-apply library sync on confirm-cast
 
 Source: [`41-bulk-library-sync.md`](features/41-bulk-library-sync.md) (draft) — supersedes plan 09 §"Bulk-accept-all UI".
 

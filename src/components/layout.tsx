@@ -191,7 +191,15 @@ export function Layout() {
   useEffect(() => {
     let cancelled = false;
     void Promise.resolve(api.getActiveAnalyses?.()).then(res => {
-      if (cancelled || !res || res.snapshots.length === 0) return;
+      if (cancelled || !res) return;
+      /* Fan the same snapshot list into two slices on one network
+         round-trip: the analysis slice gets the freshest entry (drives
+         the top-bar pill); the library slice gets the whole list
+         (drives per-card "Paused — resume?" badges on the library
+         home). Order matters: dispatch the library hydrate first so a
+         visible badge never leads its top-bar pill by a render. */
+      dispatch(libraryActions.hydratePausedSnapshots(res.snapshots));
+      if (res.snapshots.length === 0) return;
       const top = res.snapshots[0];
       dispatch(analysisActions.hydrateColdBoot({
         bookId: top.bookId,
