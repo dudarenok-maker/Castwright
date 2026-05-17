@@ -107,6 +107,28 @@ export const castSlice = createSlice({
         };
       });
     },
+    /* From POST /api/books/:bookId/cast/link-prior — the user just
+       manually declared "this character is the same person as that one
+       from a prior series book." Single-row analogue of applyVoiceMatches
+       (no candidates list, no factors): write matchedFrom + voiceId +
+       voiceState='reused' so the confirm card's "Continuity preserved"
+       footer + "Sync profile" checkbox light up exactly like the
+       auto-match path. Tuned voice (voiceState='locked' / 'tuned') is
+       preserved — the user already invested effort in it. */
+    applyManualMatch: (s, a: PayloadAction<{
+      characterId: string;
+      matchedFrom: NonNullable<Character['matchedFrom']>;
+      voiceId?: string;
+    }>) => {
+      const { characterId, matchedFrom, voiceId } = a.payload;
+      const c = s.characters.find(x => x.id === characterId);
+      if (!c) return;
+      c.matchedFrom = matchedFrom;
+      if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') {
+        c.voiceId = voiceId ?? c.voiceId;
+        c.voiceState = 'reused';
+      }
+    },
     /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
        through to matchedFrom so the confirm view's override toggle has a
        stable handle on the library record (POST /api/library-cast/override). */

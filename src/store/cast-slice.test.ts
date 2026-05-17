@@ -264,3 +264,53 @@ describe('castSlice — applyMerge (manual character merge response)', () => {
     expect(next.characters).toEqual(start.characters);
   });
 });
+
+describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () => {
+  it('writes matchedFrom + voiceId + reused state on the targeted character', () => {
+    const start = baseState([
+      makeChar('Hartwell-alvin-Vale', { voiceState: 'generated' }),
+      makeChar('Wren',              { voiceState: 'generated' }),
+    ]);
+    const next = castSlice.reducer(start, castActions.applyManualMatch({
+      characterId: 'Hartwell-alvin-Vale',
+      matchedFrom: { bookId: 'the Hollow Tide_1', characterId: 'Hart', bookTitle: 'Keeper #1', confidence: 1 },
+      voiceId: 'v_Hart',
+    }));
+    const Hart = next.characters.find(c => c.id === 'Hartwell-alvin-Vale')!;
+    expect(Hart.voiceId).toBe('v_Hart');
+    expect(Hart.voiceState).toBe('reused');
+    expect(Hart.matchedFrom).toEqual({ bookId: 'the Hollow Tide_1', characterId: 'Hart', bookTitle: 'Keeper #1', confidence: 1 });
+    /* Untouched character is untouched. */
+    expect(next.characters.find(c => c.id === 'Wren')!.voiceState).toBe('generated');
+  });
+
+  it('preserves a locked or tuned voice — only matchedFrom is updated', () => {
+    /* User already invested in tuning Hartwell's voice; manually linking
+       to the prior should record the continuity link without overwriting
+       the tuned voiceId or downgrading voiceState. */
+    const start = baseState([
+      makeChar('Hartwell-alvin-Vale', {
+        voiceState: 'tuned',
+        voiceId: 'v_Hartwell_tuned',
+      }),
+    ]);
+    const next = castSlice.reducer(start, castActions.applyManualMatch({
+      characterId: 'Hartwell-alvin-Vale',
+      matchedFrom: { bookId: 'the Hollow Tide_1', characterId: 'Hart', bookTitle: 'Keeper #1', confidence: 1 },
+      voiceId: 'v_Hart_from_prior',
+    }));
+    const Hart = next.characters[0];
+    expect(Hart.voiceId).toBe('v_Hartwell_tuned');
+    expect(Hart.voiceState).toBe('tuned');
+    expect(Hart.matchedFrom?.characterId).toBe('Hart');
+  });
+
+  it('is a no-op for an unknown characterId', () => {
+    const start = baseState([makeChar('halloran')]);
+    const next = castSlice.reducer(start, castActions.applyManualMatch({
+      characterId: 'not-a-character',
+      matchedFrom: { bookId: 'b', characterId: 'c', bookTitle: 't', confidence: 1 },
+    }));
+    expect(next.characters).toEqual(start.characters);
+  });
+});
