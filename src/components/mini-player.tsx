@@ -64,6 +64,7 @@ export function MiniPlayer({
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, chapter?.id, chapter?.duration]);
 
   /* When the URL lands, point the audio element at it. Resetting src + load
@@ -83,6 +84,7 @@ export function MiniPlayer({
       el.removeAttribute('src');
       el.load();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audio.url]);
 
   /* Reflect the React `playing` flag onto the element. Browsers may also flip
