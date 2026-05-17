@@ -60,6 +60,7 @@ export const accountSlice = createSlice({
     setDefaultTtsModelKey:   (s, a: PayloadAction<UserSettings['defaultTtsModelKey']>) => { s.defaultTtsModelKey = a.payload; },
     setSidecarUrl:           (s, a: PayloadAction<string>) => { s.sidecarUrl = a.payload; },
     setWorkspaceDirOverride: (s, a: PayloadAction<string | null>) => { s.workspaceDirOverride = a.payload; },
+    setCoverPickerDefaultTab: (s, a: PayloadAction<UserSettings['coverPickerDefaultTab']>) => { s.coverPickerDefaultTab = a.payload; },
   },
   extraReducers: (builder) => {
     builder

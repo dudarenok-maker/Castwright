@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
 import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
-import type { TtsModelKey, UserSettingsPatch } from '../lib/types';
+import type { TtsModelKey, UserSettings, UserSettingsPatch } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import { fetchAccountSettings, saveAccountSettings } from '../store/account-slice';
 
@@ -30,6 +30,7 @@ export function AccountView() {
   const [ollamaUrl,             setOllamaUrl]             = useState(account.ollamaUrl);
   const [workspaceDirOverride,  setWorkspaceDirOverride]  = useState<string>(account.workspaceDirOverride ?? '');
   const [minorCastMinLines,     setMinorCastMinLines]     = useState<number>(account.minorCastMinLines);
+  const [coverPickerDefaultTab, setCoverPickerDefaultTab] = useState<NonNullable<UserSettings['coverPickerDefaultTab']>>(account.coverPickerDefaultTab ?? 'search');
   const [showSaved,             setShowSaved]             = useState(false);
 
   useEffect(() => {
@@ -42,11 +43,13 @@ export function AccountView() {
     setOllamaUrl(account.ollamaUrl);
     setWorkspaceDirOverride(account.workspaceDirOverride ?? '');
     setMinorCastMinLines(account.minorCastMinLines);
+    setCoverPickerDefaultTab(account.coverPickerDefaultTab ?? 'search');
   }, [account.hydrated, account.displayName, account.defaultAnalysisModel,
       account.defaultTtsEngine, account.defaultTtsModelKey,
       account.sidecarUrl, account.analysisEngine, account.ollamaUrl,
       account.workspaceDirOverride,
-      account.minorCastMinLines]);
+      account.minorCastMinLines,
+      account.coverPickerDefaultTab]);
 
   /* When the engine switches, the selected modelKey may not belong to the
      new engine's group. Default to the new group's first model so the
@@ -74,10 +77,11 @@ export function AccountView() {
         || analysisEngine        !== account.analysisEngine
         || ollamaUrl             !== account.ollamaUrl
         || minorCastMinLines     !== account.minorCastMinLines
+        || coverPickerDefaultTab !== (account.coverPickerDefaultTab ?? 'search')
         || workspaceDirty;
   }, [displayName, defaultAnalysisModel, defaultTtsEngine, defaultTtsModelKey,
       sidecarUrl, analysisEngine, ollamaUrl,
-      minorCastMinLines, workspaceDirty, account]);
+      minorCastMinLines, coverPickerDefaultTab, workspaceDirty, account]);
 
   const onSave = async () => {
     const patch: UserSettingsPatch = {
@@ -90,6 +94,7 @@ export function AccountView() {
       ollamaUrl,
       workspaceDirOverride: workspaceDirOverride.trim() === '' ? null : workspaceDirOverride.trim(),
       minorCastMinLines,
+      coverPickerDefaultTab,
     };
     const action = await dispatch(saveAccountSettings(patch));
     if (saveAccountSettings.fulfilled.match(action)) {
@@ -238,6 +243,20 @@ export function AccountView() {
                 }
               }}
               className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"/>
+          </FieldRow>
+        </FormCard>
+
+        <FormCard title="Covers"
+          hint="How the cover picker opens for new books. Plan 40 added local-disk upload alongside the OpenLibrary search.">
+          <FieldRow label="Default cover picker tab"
+            sublabel="Which tab opens first when you click 'Cover image' on a book. Search (the default) shows OpenLibrary candidates; Upload jumps straight to the file picker for users who routinely bring their own art.">
+            <select
+              value={coverPickerDefaultTab}
+              onChange={(e) => setCoverPickerDefaultTab(e.target.value as 'search' | 'upload')}
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30">
+              <option value="search">Search OpenLibrary (default)</option>
+              <option value="upload">Upload local</option>
+            </select>
           </FieldRow>
         </FormCard>
 
