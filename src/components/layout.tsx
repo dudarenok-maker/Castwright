@@ -19,7 +19,7 @@ import {
   buildVoiceTuneEvent,
   buildVoiceLockEvent,
 } from '../lib/change-log';
-import { api } from '../lib/api';
+import { api, type SeriesRosterEntry } from '../lib/api';
 import { engineForModelKey } from '../lib/tts-models';
 import { stageToHash } from '../lib/router';
 import { TopBar, type GenerationPillData, type AnalysisPillData } from './top-bar';
@@ -143,6 +143,28 @@ export function Layout() {
     void dispatch(fetchAccountSettings());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* Prior-series roster cache, keyed by source bookId. Lazily fetched the
+     first time the user opens the profile drawer for a given book so
+     the manual continuity-link picker (ProfileDrawer's "From prior books
+     in this series" optgroup) has data to render. Cached so reopening
+     the drawer within the same book doesn't refetch.
+     Errors are stored as empty arrays so a failing fetch doesn't loop. */
+  const [priorRosterByBook, setPriorRosterByBook] = useState<Map<string, SeriesRosterEntry[]>>(new Map());
+  useEffect(() => {
+    if (!openProfileId || !bookId) return;
+    if (priorRosterByBook.has(bookId)) return;
+    let cancelled = false;
+    void api.getSeriesRoster(bookId).then(res => {
+      if (cancelled) return;
+      setPriorRosterByBook(prev => new Map(prev).set(bookId, res.characters));
+    }).catch(err => {
+      if (cancelled) return;
+      console.warn('[series-roster] fetch failed', err);
+      setPriorRosterByBook(prev => new Map(prev).set(bookId, []));
+    });
+    return () => { cancelled = true; };
+  }, [openProfileId, bookId, priorRosterByBook]);
 
   /* Library hydration — fetch the on-disk workspace whenever the user
      returns to the books stage, and once at mount. */
@@ -599,17 +621,50 @@ export function Layout() {
           }}
           onDismiss={(eventId) => dispatch(revisionsActions.dismissDrift(eventId))}/>
       )}
-      {profileCharacter && (
+      {profileCharacter && (() => {
+        /* Build the manual-link picker's prior-roster list. Strip any
+           entries that have already been auto-matched (any local cast
+           member's matchedFrom points at them) — re-linking would just
+           be a no-op alias re-write. Bucket on (bookId, characterId)
+           since two different prior books could each have a character
+           named "Sophie" with the same id. */
+        const priorRoster = bookId ? priorRosterByBook.get(bookId) ?? [] : [];
+        const alreadyLinked = new Set<string>();
+        for (const c of characters) {
+          const mf = c.matchedFrom;
+          if (mf?.bookId && mf?.characterId) {
+            alreadyLinked.add(`${mf.bookId}::${mf.characterId}`);
+          }
+        }
+        const mergeCandidatesPrior = priorRoster
+          .filter(p => !alreadyLinked.has(`${p.bookId}::${p.id}`))
+          .map(p => ({ id: p.id, name: p.name, bookId: p.bookId, bookTitle: p.bookTitle }));
+        return (
         <ProfileDrawer
           character={profileCharacter}
           voice={profileVoice ?? undefined}
           mergeCandidates={bookId ? characters.filter(c => c.id !== profileCharacter.id) : undefined}
+          mergeCandidatesPrior={bookId ? mergeCandidatesPrior : undefined}
           onMerge={bookId ? async (sourceId, targetId) => {
             const res = await api.mergeCharacters({ bookId, sourceId, targetId });
             dispatch(castActions.applyMerge({ characters: res.characters }));
             /* Source character has just disappeared from the cast — drop the
                drawer so React doesn't try to render a profile for a missing
                id on the next pass. */
+            dispatch(uiActions.setOpenProfileId(null));
+          } : undefined}
+          onLinkPrior={bookId ? async (sourceId, targetBookId, targetCharacterId) => {
+            const res = await api.linkPriorCharacter({
+              bookId, sourceCharacterId: sourceId, targetBookId, targetCharacterId,
+            });
+            dispatch(castActions.applyManualMatch({
+              characterId: sourceId,
+              matchedFrom: res.matchedFrom,
+              voiceId: res.voiceId,
+            }));
+            /* Close so the user lands back on the confirm card and can see
+               the "Continuity preserved" footer + "Sync profile" checkbox
+               that the new matchedFrom triggers. Mirrors onMerge's close. */
             dispatch(uiActions.setOpenProfileId(null));
           } : undefined}
           onClose={() => dispatch(uiActions.setOpenProfileId(null))}
@@ -664,7 +719,8 @@ export function Layout() {
           }}
           onShowMatchDetail={(id) => dispatch(uiActions.setMatchDetailFor(id))}
           onRegenerateCharacter={(charId) => dispatch(uiActions.setRegenCharacterCtx({ characterId: charId }))}/>
-      )}
+        );
+      })()}
       {ui.showRevisionPlayer && pending[0] && bookId && (
         <RevisionDiffPlayer revision={pending[0]}
           bookId={bookId}

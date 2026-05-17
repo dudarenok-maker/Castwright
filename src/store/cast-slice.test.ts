@@ -264,3 +264,53 @@ describe('castSlice — applyMerge (manual character merge response)', () => {
     expect(next.characters).toEqual(start.characters);
   });
 });
+
+describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () => {
+  it('writes matchedFrom + voiceId + reused state on the targeted character', () => {
+    const start = baseState([
+      makeChar('dexter-alvin-diznee', { voiceState: 'generated' }),
+      makeChar('sophie',              { voiceState: 'generated' }),
+    ]);
+    const next = castSlice.reducer(start, castActions.applyManualMatch({
+      characterId: 'dexter-alvin-diznee',
+      matchedFrom: { bookId: 'kotlc_1', characterId: 'dex', bookTitle: 'Keeper #1', confidence: 1 },
+      voiceId: 'v_dex',
+    }));
+    const dex = next.characters.find(c => c.id === 'dexter-alvin-diznee')!;
+    expect(dex.voiceId).toBe('v_dex');
+    expect(dex.voiceState).toBe('reused');
+    expect(dex.matchedFrom).toEqual({ bookId: 'kotlc_1', characterId: 'dex', bookTitle: 'Keeper #1', confidence: 1 });
+    /* Untouched character is untouched. */
+    expect(next.characters.find(c => c.id === 'sophie')!.voiceState).toBe('generated');
+  });
+
+  it('preserves a locked or tuned voice — only matchedFrom is updated', () => {
+    /* User already invested in tuning Dexter's voice; manually linking
+       to the prior should record the continuity link without overwriting
+       the tuned voiceId or downgrading voiceState. */
+    const start = baseState([
+      makeChar('dexter-alvin-diznee', {
+        voiceState: 'tuned',
+        voiceId: 'v_dexter_tuned',
+      }),
+    ]);
+    const next = castSlice.reducer(start, castActions.applyManualMatch({
+      characterId: 'dexter-alvin-diznee',
+      matchedFrom: { bookId: 'kotlc_1', characterId: 'dex', bookTitle: 'Keeper #1', confidence: 1 },
+      voiceId: 'v_dex_from_prior',
+    }));
+    const dex = next.characters[0];
+    expect(dex.voiceId).toBe('v_dexter_tuned');
+    expect(dex.voiceState).toBe('tuned');
+    expect(dex.matchedFrom?.characterId).toBe('dex');
+  });
+
+  it('is a no-op for an unknown characterId', () => {
+    const start = baseState([makeChar('halloran')]);
+    const next = castSlice.reducer(start, castActions.applyManualMatch({
+      characterId: 'not-a-character',
+      matchedFrom: { bookId: 'b', characterId: 'c', bookTitle: 't', confidence: 1 },
+    }));
+    expect(next.characters).toEqual(start.characters);
+  });
+});

@@ -1,9 +1,9 @@
 # Voice match pipeline
 
 > Status: stable
-> Key files: `src/views/confirm-cast.tsx`, `src/store/cast-slice.ts`, `src/lib/api.ts` (`matchVoices`, `overrideLibraryCast`), `server/src/routes/voice-match.ts`, `server/src/routes/library-cast-override.ts`, `server/src/workspace/library-cast-scan.ts`, `server/src/util/text-match.ts`, `src/modals/match-detail.tsx`
+> Key files: `src/views/confirm-cast.tsx`, `src/store/cast-slice.ts`, `src/lib/api.ts` (`matchVoices`, `overrideLibraryCast`, `getSeriesRoster`, `linkPriorCharacter`), `src/modals/profile-drawer.tsx`, `src/components/layout.tsx`, `server/src/routes/voice-match.ts`, `server/src/routes/library-cast-override.ts`, `server/src/routes/cast-link-prior.ts`, `server/src/routes/series-roster.ts`, `server/src/workspace/library-cast-scan.ts`, `server/src/workspace/series-cast-scan.ts`, `server/src/util/text-match.ts`, `src/modals/match-detail.tsx`
 > URL surface: `#/books/:bookId/confirm`
-> OpenAPI ops: `POST /api/books/:bookId/voice-match`, `POST /api/library-cast/override` (path not in openapi.yaml — mirrors `cast/merge`)
+> OpenAPI ops: `POST /api/books/:bookId/voice-match`, `POST /api/library-cast/override` (path not in openapi.yaml — mirrors `cast/merge`), `POST /api/books/:bookId/cast/link-prior` + `GET /api/books/:bookId/series-roster` (also kept out of openapi.yaml — same precedent)
 
 ## What this covers
 
@@ -51,6 +51,18 @@ When the current book contains a richer profile of a recurring character than th
 - **Decline interaction:** if the user toggles override on and then switches the decision tile to "Generate fresh," the override is skipped (the toggle is only meaningful when `decision === 'match'`). The view's `handleConfirm` re-checks `decisions[c.id] === 'match'` before queueing the request.
 - **What it does NOT touch:** the target book's `manuscript-edits.json`, `analysis-cache`, or `chapterCast`. Override is profile-only; sentence attributions reference characters by `id`, which is preserved.
 
+## Manual continuity link (when auto-match misses)
+
+When the auto-matcher's `nameScore < 0.34` floor drops a legitimate link — e.g. the new book has "Dexter Alvin Diznee" and the prior book has the canonical "Dex" (token Jaccard = 0, alias not pre-seeded) — the user has no way to fix it from the existing UI: the Profile Drawer's "Merge into another character…" dropdown only listed in-book candidates, so the prior character was unreachable. This section covers the manual-link affordance that closes that gap.
+
+- **Endpoint:** `POST /api/books/{bookId}/cast/link-prior`. Body: `{ sourceCharacterId, targetBookId, targetCharacterId }`. Response: `{ matchedFrom: { bookId, characterId, bookTitle, confidence: 1 }, voiceId? }`. Route at `server/src/routes/cast-link-prior.ts`.
+- **Roster endpoint:** `GET /api/books/{bookId}/series-roster`. Returns `{ characters: Array<{ id, name, bookId, bookTitle, voiceId?, aliases?, gender?, ageRange? }> }` — a thin wrapper around `scanSeriesCharactersForBookId()` so the frontend's optgroup picker has data to render. Route at `server/src/routes/series-roster.ts`. Neither route is in `openapi.yaml` — same precedent as `cast/merge` and `library-cast/override`.
+- **Side effect on disk:** the link-prior call appends `source.name` (plus any of `source.aliases`) to the prior book's character `aliases` in its on-disk `cast.json` (atomic-rename, case-insensitive dedup, drops the target's own name). The matcher uses these on future books to recognise either surface form, so the link is durable even though the source book's `matchedFrom` lives only in Redux for the confirm session.
+- **Series-scope guard:** the route rejects 404 when target is not a series-mate of source — same (author, series) + neither side is a standalone. Mirrors the filter `scanSeriesCharacters` already applies; the frontend dropdown and server accept-set therefore agree.
+- **UI:** the Profile Drawer's existing "Merge X into another character…" picker grows a second `<optgroup label="From prior books in this series">` populated from `getSeriesRoster()`. Each prior option carries a `prior:${index}` discriminator value; the drawer's change handler routes the selection to `onLinkPrior` instead of `onMerge`, and the primary button label flips from "Merge" to "Link". Layout filters priors whose `id` is already the `matchedFrom.characterId` of a current cast member (already auto-matched → no need to manually re-link). Series-roster fetches are cached per-bookId so reopening the drawer within the same book doesn't refetch.
+- **Frontend dispatch:** on a successful `link-prior` response, Layout dispatches `castActions.applyManualMatch({ characterId, matchedFrom, voiceId })` (single-row analogue of `applyVoiceMatches`; preserves `voiceState='locked'`/`'tuned'`). The "Continuity preserved" footer + "Sync profile" checkbox light up exactly like an auto-match — same code path in `confirm-cast.tsx`. The user can then tick the existing `library-cast/override` checkbox to symmetric-sync the richer profile across both books.
+- **What it does NOT touch:** the source book's `cast.json` (the manual link is observed in Redux for this session; a re-run of voice-match reconstructs `matchedFrom` from the new alias on the prior). Voice tuning state on the source character is preserved.
+
 ## Acceptance walkthrough
 
 Run `VITE_USE_MOCKS=true`. Upload and analyse a book until confirm-cast loads.
@@ -74,6 +86,7 @@ The canonical e2e manuscript for cross-book matching is `~/Downloads/Bonus Keefe
 3. **Open MatchDetail** on the Keefe row → factors include `name_exact` (score 1.0 when names match cleanly) or `name_tokens` (e.g. ½ when the prior book had "Keefe" and this one has "Keefe Sencen"). Plus gender/age_range/attributes when they contribute.
 4. **Non-recurring characters** (only in the new book) → render as Generated with no Matched pill.
 5. **Override toggle** (e.g. when the current book has a fuller portrait than the prior one): check "Update library profile from this manuscript" inside the continuity footer for any matched row, then click Confirm cast. The prior book's `cast.json` should now carry the richer `description` / `attributes` / `aliases` from this manuscript while its `voiceId` and chapter audio stay intact (`books/{author}/{series}/{prior-title}/.audiobook/cast.json`). Source's `name` lands in the library record's `aliases` if the names differed.
+6. **Manual link** (auto-matcher missed): on the new book, open the drawer for a character that has no continuity footer (e.g. "Dexter Alvin Diznee"). Click "Merge … into another character…", expand the dropdown, and pick the matching prior under the "From prior books in this series" optgroup (e.g. "Dex"). Click "Link". The drawer closes and the cast card now shows the same "Continuity preserved" footer with "Sync profile" checkbox the auto-match path produces. On disk, the prior book's character `aliases` now includes the new book's character name (`books/{author}/{series}/{prior-title}/.audiobook/cast.json`). A subsequent voice-match run on any series book will pick up the new alias and surface a real `matchedFrom` for the new character automatically.
 
 ## Out of scope
 

@@ -28,11 +28,31 @@ interface Props {
       (i.e. the surviving identity). When omitted or empty, the merge
       affordance hides itself. Layout passes `cast \ this`. */
   mergeCandidates?: Character[];
+  /** Characters from prior books in the same series — rendered as a
+      separate optgroup under the in-book candidates so the user can
+      manually link a duplicate ("Dexter Alvin Diznee") to its canonical
+      form ("Dex" from book 1) when the auto-matcher's name-score floor
+      missed the connection. Each entry carries the prior bookId so the
+      link-prior endpoint can address it. */
+  mergeCandidatesPrior?: PriorMergeCandidate[];
   /** Fold this character (source) into another (target). Surviving target
       gains `source.name` in its aliases list; all sentences source said are
       reattributed to target. Returns a promise so the UI can show progress
       / surface errors. Drawer closes on resolve. */
   onMerge?: (sourceId: string, targetId: string) => Promise<void>;
+  /** Manual continuity link — declares "this character (source) is the
+      same person as that one (target) from a prior book in the same
+      series." Server appends source.name to target's aliases on disk and
+      returns a matchedFrom payload the parent uses to seed the
+      "Continuity preserved" footer. */
+  onLinkPrior?: (sourceId: string, targetBookId: string, targetCharacterId: string) => Promise<void>;
+}
+
+export interface PriorMergeCandidate {
+  id: string;
+  name: string;
+  bookId: string;
+  bookTitle: string;
 }
 
 type CharGender   = NonNullable<Character['gender']>;
@@ -45,6 +65,13 @@ type CharAgeRange = NonNullable<Character['ageRange']>;
 const UNKNOWN_MALE_ID   = 'unknown-male';
 const UNKNOWN_FEMALE_ID = 'unknown-female';
 const NARRATOR_ID       = 'narrator';
+/* Discriminator for prior-book options in the merge dropdown so the
+   change handler can distinguish "fold into another in-book character"
+   from "link to a prior series character" without parsing bookIds
+   (which contain `__` separators). Option value is
+   `${PRIOR_PREFIX}${index}` for priors; the index resolves back to the
+   PriorMergeCandidate via the priorByKey Map at render time. */
+const PRIOR_PREFIX      = 'prior:';
 const GENDER_OPTIONS: Array<{ value: CharGender; label: string }> = [
   { value: 'male',    label: 'Male' },
   { value: 'female',  label: 'Female' },
@@ -57,7 +84,7 @@ const AGE_OPTIONS: Array<{ value: CharAgeRange; label: string }> = [
   { value: 'elderly', label: 'Elderly' },
 ];
 
-export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onShowMatchDetail, onRegenerateCharacter, mergeCandidates, onMerge }: Props) {
+export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onShowMatchDetail, onRegenerateCharacter, mergeCandidates, mergeCandidatesPrior, onMerge, onLinkPrior }: Props) {
   const [tone, setTone] = useState(character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 });
   /* Editable identity. The analyzer's guess (or the absence of one) seeds
      these; saving the drawer persists them onto the character. They drive
@@ -113,6 +140,26 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
       setMergeTargetId('');
     } catch (e) {
       setMergeError((e as Error).message || 'Merge failed.');
+    } finally {
+      setMergeBusy(false);
+    }
+  }
+
+  /* Manual continuity link — picker variant when the user selected a
+     prior-book character (option value carries the PRIOR_PREFIX
+     discriminator). Hits the link-prior callback instead of the in-book
+     merge; on success the drawer closes and the parent's
+     applyManualMatch lights up the "Continuity preserved" footer. */
+  async function runLinkPriorTo(targetBookId: string, targetCharacterId: string) {
+    if (!onLinkPrior) return;
+    setMergeBusy(true);
+    setMergeError(null);
+    try {
+      await onLinkPrior(character.id, targetBookId, targetCharacterId);
+      setShowMergePicker(false);
+      setMergeTargetId('');
+    } catch (e) {
+      setMergeError((e as Error).message || 'Link failed.');
     } finally {
       setMergeBusy(false);
     }
@@ -468,67 +515,121 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                 </div>
               </div>
             )}
-            {!onMerge || !mergeCandidates || mergeCandidates.length === 0 ? (
-              <p className="text-[11px] text-ink/50">
-                {character.aliases?.length
-                  ? 'These names were merged into this character. The voice matcher will use them when later books in the series detect the same person.'
-                  : 'Once another character is detected as the same person, you can merge them here — their name joins this character\'s aliases and the matcher learns the link for later books.'}
-              </p>
-            ) : !showMergePicker ? (
-              <button
-                onClick={() => { setShowMergePicker(true); setMergeError(null); }}
-                className="w-full px-3 py-2 rounded-xl border border-dashed border-ink/20 hover:border-peach hover:text-peach text-xs font-medium text-ink/65 inline-flex items-center justify-center gap-1.5"
-              >
-                Merge {character.name.split(' ')[0]} into another character…
-              </button>
-            ) : (
-              <div className="rounded-2xl bg-canvas border border-ink/10 p-3">
-                <label className="block text-[11px] text-ink/60 font-medium mb-1.5" htmlFor="profile-merge-target">
-                  Keep which character as the survivor?
-                </label>
-                <select
-                  id="profile-merge-target"
-                  aria-label="Merge target"
-                  value={mergeTargetId}
-                  disabled={mergeBusy}
-                  onChange={(e) => { setMergeTargetId(e.target.value); setMergeError(null); }}
-                  className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
-                >
-                  <option value="">— pick a character —</option>
-                  {mergeCandidates.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-                {mergeTargetId && (
-                  <p className="mt-2 text-[11px] text-ink/65 leading-relaxed">
-                    <span className="font-semibold text-ink">{character.name}</span> will be folded into{' '}
-                    <span className="font-semibold text-ink">{mergeCandidates.find(c => c.id === mergeTargetId)?.name}</span>.
-                    Their name joins the survivor's aliases and every sentence they spoke is reattributed.
+            {(() => {
+              const inBookCount = (onMerge && mergeCandidates?.length) ? mergeCandidates.length : 0;
+              const priorCount  = (onLinkPrior && mergeCandidatesPrior?.length) ? mergeCandidatesPrior.length : 0;
+              const totalCount  = inBookCount + priorCount;
+              if (totalCount === 0) {
+                return (
+                  <p className="text-[11px] text-ink/50">
+                    {character.aliases?.length
+                      ? 'These names were merged into this character. The voice matcher will use them when later books in the series detect the same person.'
+                      : 'Once another character is detected as the same person, you can merge them here — their name joins this character\'s aliases and the matcher learns the link for later books.'}
                   </p>
-                )}
-                {mergeError && (
-                  <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {mergeError}</p>
-                )}
-                <div className="mt-3 flex items-center justify-end gap-2">
+                );
+              }
+              if (!showMergePicker) {
+                return (
                   <button
-                    disabled={mergeBusy}
-                    onClick={() => { setShowMergePicker(false); setMergeTargetId(''); setMergeError(null); }}
-                    className="px-3 py-1.5 text-xs font-medium text-ink/65 hover:text-ink"
-                  >Cancel</button>
-                  <button
-                    disabled={!mergeTargetId || mergeBusy}
-                    onClick={() => { if (mergeTargetId) void runMergeTo(mergeTargetId); }}
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
-                      mergeBusy
-                        ? 'bg-magenta/20 text-magenta cursor-wait'
-                        : 'bg-magenta text-white hover:bg-magenta/90 disabled:bg-ink/20 disabled:text-ink/50 disabled:cursor-not-allowed'
-                    }`}
+                    onClick={() => { setShowMergePicker(true); setMergeError(null); }}
+                    className="w-full px-3 py-2 rounded-xl border border-dashed border-ink/20 hover:border-peach hover:text-peach text-xs font-medium text-ink/65 inline-flex items-center justify-center gap-1.5"
                   >
-                    {mergeBusy ? 'Merging…' : 'Merge'}
+                    Merge {character.name.split(' ')[0]} into another character…
                   </button>
+                );
+              }
+              /* Discriminator: an option for a current-book character
+                 carries the character's id verbatim; an option for a
+                 prior-book character carries `${PRIOR_PREFIX}${index}`
+                 so we can look the entry up without parsing bookIds
+                 (some of which contain `__` separators that would
+                 complicate a flat string scheme). */
+              const inBookCandidates = inBookCount > 0 ? mergeCandidates! : [];
+              const priorCandidates  = priorCount  > 0 ? mergeCandidatesPrior! : [];
+              const priorByKey = new Map<string, PriorMergeCandidate>(
+                priorCandidates.map((p, i) => [`${PRIOR_PREFIX}${i}`, p]),
+              );
+              const selectedPrior = priorByKey.get(mergeTargetId);
+              const selectedInBook = !selectedPrior
+                ? inBookCandidates.find(c => c.id === mergeTargetId)
+                : undefined;
+              const seriesLabel = priorCandidates[0]
+                ? `From prior books in this series`
+                : '';
+              return (
+                <div className="rounded-2xl bg-canvas border border-ink/10 p-3">
+                  <label className="block text-[11px] text-ink/60 font-medium mb-1.5" htmlFor="profile-merge-target">
+                    Keep which character as the survivor?
+                  </label>
+                  <select
+                    id="profile-merge-target"
+                    aria-label="Merge target"
+                    value={mergeTargetId}
+                    disabled={mergeBusy}
+                    onChange={(e) => { setMergeTargetId(e.target.value); setMergeError(null); }}
+                    className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+                  >
+                    <option value="">— pick a character —</option>
+                    {inBookCandidates.length > 0 && (
+                      <optgroup label="From this book">
+                        {inBookCandidates.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {priorCandidates.length > 0 && (
+                      <optgroup label={seriesLabel}>
+                        {priorCandidates.map((p, i) => (
+                          <option key={`${PRIOR_PREFIX}${i}`} value={`${PRIOR_PREFIX}${i}`}>
+                            {p.name} — {p.bookTitle}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                  {selectedInBook && (
+                    <p className="mt-2 text-[11px] text-ink/65 leading-relaxed">
+                      <span className="font-semibold text-ink">{character.name}</span> will be folded into{' '}
+                      <span className="font-semibold text-ink">{selectedInBook.name}</span>.
+                      Their name joins the survivor's aliases and every sentence they spoke is reattributed.
+                    </p>
+                  )}
+                  {selectedPrior && (
+                    <p className="mt-2 text-[11px] text-ink/65 leading-relaxed">
+                      <span className="font-semibold text-ink">{character.name}</span> will be linked as the same person as{' '}
+                      <span className="font-semibold text-ink">{selectedPrior.name}</span> from{' '}
+                      <span className="font-semibold text-ink">{selectedPrior.bookTitle}</span>.
+                      The matcher learns this link for future books in the series; you can then sync profiles from the cast card.
+                    </p>
+                  )}
+                  {mergeError && (
+                    <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {mergeError}</p>
+                  )}
+                  <div className="mt-3 flex items-center justify-end gap-2">
+                    <button
+                      disabled={mergeBusy}
+                      onClick={() => { setShowMergePicker(false); setMergeTargetId(''); setMergeError(null); }}
+                      className="px-3 py-1.5 text-xs font-medium text-ink/65 hover:text-ink"
+                    >Cancel</button>
+                    <button
+                      disabled={!mergeTargetId || mergeBusy}
+                      onClick={() => {
+                        if (!mergeTargetId) return;
+                        if (selectedPrior) void runLinkPriorTo(selectedPrior.bookId, selectedPrior.id);
+                        else void runMergeTo(mergeTargetId);
+                      }}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
+                        mergeBusy
+                          ? 'bg-magenta/20 text-magenta cursor-wait'
+                          : 'bg-magenta text-white hover:bg-magenta/90 disabled:bg-ink/20 disabled:text-ink/50 disabled:cursor-not-allowed'
+                      }`}
+                    >
+                      {mergeBusy ? (selectedPrior ? 'Linking…' : 'Merging…') : (selectedPrior ? 'Link' : 'Merge')}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Downgrade affordance — fold a descriptor-named or otherwise
                 minor character into the standing background bucket so the

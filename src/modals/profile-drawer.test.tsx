@@ -6,7 +6,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice, voicesActions } from '../store/voices-slice';
-import { ProfileDrawer } from './profile-drawer';
+import { ProfileDrawer, type PriorMergeCandidate } from './profile-drawer';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import type { BaseVoice, Character, Voice } from '../lib/types';
 
@@ -49,7 +49,9 @@ function renderDrawer(
   character: Character,
   extra: {
     mergeCandidates?: Character[];
+    mergeCandidatesPrior?: PriorMergeCandidate[];
     onMerge?: (sourceId: string, targetId: string) => Promise<void>;
+    onLinkPrior?: (sourceId: string, targetBookId: string, targetCharacterId: string) => Promise<void>;
     voice?: Voice;
     baseVoices?: BaseVoice[];
     voices?: Voice[];
@@ -67,7 +69,9 @@ function renderDrawer(
           onSave={() => {}}
           onLock={() => {}}
           mergeCandidates={extra.mergeCandidates}
+          mergeCandidatesPrior={extra.mergeCandidatesPrior}
           onMerge={extra.onMerge}
+          onLinkPrior={extra.onLinkPrior}
         />
       </Provider>,
     ),
@@ -188,6 +192,113 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(await screen.findByText(/Server said no\./)).toBeTruthy();
+  });
+});
+
+describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
+  const dexter: Character = {
+    id: 'dexter-alvin-diznee', name: 'Dexter Alvin Diznee', role: 'character', color: 'eliza',
+    lines: 271, scenes: 9,
+  };
+  const inBookSibling: Character = {
+    id: 'sophie-foster', name: 'Sophie Foster', role: 'protagonist', color: 'eliza',
+    lines: 12, scenes: 4,
+  };
+  const priorDex: PriorMergeCandidate = {
+    id: 'dex', name: 'Dex', bookId: 'kotlc_1', bookTitle: 'Keeper of the Lost Cities',
+  };
+  const priorKeefe: PriorMergeCandidate = {
+    id: 'keefe', name: 'Keefe', bookId: 'kotlc_1', bookTitle: 'Keeper of the Lost Cities',
+  };
+
+  it('renders the merge button when only prior candidates are available (no in-book siblings)', () => {
+    /* The user might be on a tiny scene with just one new character —
+       no in-book candidates, but prior series characters exist. The
+       manual-link affordance must still surface. */
+    renderDrawer(dexter, { mergeCandidatesPrior: [priorDex], onLinkPrior: vi.fn() });
+    expect(screen.getByRole('button', { name: /Merge Dexter into another character/i })).toBeTruthy();
+  });
+
+  it('renders both groups as labeled optgroups when both sets are non-empty', () => {
+    renderDrawer(dexter, {
+      mergeCandidates: [inBookSibling],
+      mergeCandidatesPrior: [priorDex],
+      onMerge: vi.fn(),
+      onLinkPrior: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    const select = screen.getByRole('combobox', { name: /Merge target/i });
+    /* Both optgroup labels present. */
+    const groups = within(select).getAllByRole('group');
+    const labels = groups.map(g => (g as HTMLOptGroupElement).label);
+    expect(labels).toContain('From this book');
+    expect(labels).toContain('From prior books in this series');
+    /* Both options reachable. */
+    expect(within(select).getByRole('option', { name: 'Sophie Foster' })).toBeTruthy();
+    expect(within(select).getByRole('option', { name: /Dex.*Keeper of the Lost Cities/i })).toBeTruthy();
+  });
+
+  it('routes a prior-option pick to onLinkPrior with (sourceId, targetBookId, targetCharacterId) and a "Link" button label', async () => {
+    const onLinkPrior = vi.fn().mockResolvedValueOnce(undefined);
+    renderDrawer(dexter, {
+      mergeCandidates: [inBookSibling],
+      mergeCandidatesPrior: [priorDex, priorKeefe],
+      onMerge: vi.fn(),
+      onLinkPrior,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    const select = screen.getByRole('combobox', { name: /Merge target/i }) as HTMLSelectElement;
+    /* Pick the second prior — discriminator value is 'prior:1' (index 1). */
+    fireEvent.change(select, { target: { value: 'prior:1' } });
+    /* Confirmation copy shifts to the link wording when a prior is picked. */
+    expect(screen.getByText(/linked as the same person as/i)).toBeTruthy();
+    /* Button label flips from "Merge" to "Link" when a prior is selected. */
+    fireEvent.click(screen.getByRole('button', { name: /^Link$/i }));
+    await Promise.resolve();
+    expect(onLinkPrior).toHaveBeenCalledWith('dexter-alvin-diznee', 'kotlc_1', 'keefe');
+  });
+
+  it('still routes an in-book pick to onMerge when both groups are present', async () => {
+    const onMerge = vi.fn().mockResolvedValueOnce(undefined);
+    const onLinkPrior = vi.fn();
+    renderDrawer(dexter, {
+      mergeCandidates: [inBookSibling],
+      mergeCandidatesPrior: [priorDex],
+      onMerge,
+      onLinkPrior,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /Merge target/i }), { target: { value: 'sophie-foster' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
+    await Promise.resolve();
+    expect(onMerge).toHaveBeenCalledWith('dexter-alvin-diznee', 'sophie-foster');
+    expect(onLinkPrior).not.toHaveBeenCalled();
+  });
+
+  it('hides the merge button entirely when both groups are empty', () => {
+    renderDrawer(dexter, {
+      mergeCandidates: [],
+      mergeCandidatesPrior: [],
+      onMerge: vi.fn(),
+      onLinkPrior: vi.fn(),
+    });
+    expect(screen.queryByRole('button', { name: /Merge .* into another character/i })).toBeNull();
+  });
+
+  it('surfaces an error when onLinkPrior rejects', async () => {
+    const onLinkPrior = vi.fn().mockRejectedValueOnce(new Error('Cross-series link refused.'));
+    renderDrawer(dexter, {
+      mergeCandidatesPrior: [priorDex],
+      onLinkPrior,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /Merge target/i }), { target: { value: 'prior:0' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Link$/i }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await waitFor(() => {
+      expect(screen.getByText(/Cross-series link refused\./)).toBeTruthy();
+    });
   });
 });
 
