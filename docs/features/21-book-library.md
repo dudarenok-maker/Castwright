@@ -23,7 +23,7 @@ Home view that scans the on-disk workspace (`books/<Author>/<Series>/<Title>/`) 
 - `realReparseBook` issues `POST /api/books/:bookId/reparse`; response is `{ state: { chapters }, chapterCount, chapterTitles }` (`src/lib/api.ts:485-498`). Mock returns empty arrays (`src/lib/api.ts:513-516`).
 - **Edit details** opens `EditBookMetaModal` and on Save calls `api.putBookState(bookId, { slice: 'state', patch })` with any subset of `{ title, author, series, seriesPosition, isStandalone }`. The route handler refetches `getLibrary` and re-hydrates the slice so the card heading updates in place. On error, `showError` surfaces the message with the eyebrow "Edit"; the library is NOT refetched on the failure path.
 - **Server-side rename + folder move** (`server/src/routes/book-state.ts`, `case 'state'`): the `state` slice whitelist accepts `seriesPosition: number | null` and `isStandalone: boolean` in addition to the existing `title / author / series / narratorCredit / genre / publicationDate`. When the patch changes `title`, `author`, `series`, or `isStandalone`, the server computes the new `bookDirByDisplay(author, isStandalone ? 'Standalones' : series, title)` and uses `renameWithRetry` to move the on-disk folder there (creating parent dirs, returning **409** when the target path already exists). The in-memory `ManuscriptRecord.bookDir` is refreshed to the new path. Best-effort `rmdir` cleanup of the now-empty old series + author parents.
-- **`bookId` is stable across renames.** It's computed from the *original* author/series/title slugs at import time and persisted in `state.json#bookId`; subsequent renames do not regenerate it. All routes keyed by bookId (delete, reparse, exclude, state) continue to resolve via `findBookByBookId`, which walks the tree and matches `state.bookId` rather than the folder name.
+- **`bookId` is stable across renames.** It's computed from the _original_ author/series/title slugs at import time and persisted in `state.json#bookId`; subsequent renames do not regenerate it. All routes keyed by bookId (delete, reparse, exclude, state) continue to resolve via `findBookByBookId`, which walks the tree and matches `state.bookId` rather than the folder name.
 - **`isStandalone: true` forces the on-disk series folder to `'Standalones'`** and clears `seriesPosition` to `null`. The user-typed `state.series` string is preserved in state.json so flipping back to non-standalone restores the previous series label without losing it.
 - Coverage gradient is a `[string, string]` tuple per `Voice.gradient` style; the row card renders both stops.
 - **Derived per-book stats are computed at scan time, not hardcoded** (`server/src/workspace/scan.ts`):
@@ -55,11 +55,11 @@ Run with `VITE_USE_MOCKS=false`, server on `:8080` with at least one book per st
 The view renders one of three states based on `library.loaded` and
 `authors.length`, in that order — never collapse this back into a binary check:
 
-| `library.loaded` | `authors.length` | Renders |
-|---|---|---|
-| `false` | (any) | `<LibrarySkeleton/>` — placeholder shelves, no copy |
-| `true` | `0` | `<EmptyLibrary/>` — "Your library is empty" + import CTA |
-| `true` | `>0` | populated author / series / book grid |
+| `library.loaded` | `authors.length` | Renders                                                  |
+| ---------------- | ---------------- | -------------------------------------------------------- |
+| `false`          | (any)            | `<LibrarySkeleton/>` — placeholder shelves, no copy      |
+| `true`           | `0`              | `<EmptyLibrary/>` — "Your library is empty" + import CTA |
+| `true`           | `>0`             | populated author / series / book grid                    |
 
 The skeleton mirrors the populated grid shape (`grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5`, `min-h-[180px]` cards) so the layout doesn't shift when real data swaps in. Reason for the `loaded` check: without it, the first paint flashes `<EmptyLibrary>` for the duration of the `api.getLibrary()` round-trip (mock = 120 ms; real backend = whatever the disk scan takes), reading as "library wiped." `library-slice.ts` always tracks `loaded`; `book-library.tsx` is the only consumer.
 

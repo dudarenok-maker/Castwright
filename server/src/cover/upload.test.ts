@@ -1,7 +1,15 @@
 /* Unit tests for the local-cover upload pipeline (plan 40). */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
@@ -23,13 +31,17 @@ const TITLE = 'Upload Test Book';
 async function makeJpeg(width = 10, height = 10): Promise<Buffer> {
   return await sharp({
     create: { width, height, channels: 3, background: { r: 200, g: 100, b: 50 } },
-  }).jpeg({ quality: 85 }).toBuffer();
+  })
+    .jpeg({ quality: 85 })
+    .toBuffer();
 }
 
 async function makePng(width = 10, height = 10): Promise<Buffer> {
   return await sharp({
     create: { width, height, channels: 4, background: { r: 50, g: 150, b: 200, alpha: 1 } },
-  }).png().toBuffer();
+  })
+    .png()
+    .toBuffer();
 }
 
 beforeEach(() => {
@@ -143,7 +155,7 @@ describe('writeUploadedCover', () => {
     const dest = join(bookDir, '.audiobook', 'cover.jpg');
     await writeUploadedCover(await makeJpeg(), 'image/jpeg', dest);
     const files = readdirSync(join(bookDir, '.audiobook'));
-    expect(files.filter(f => f.includes('.tmp-'))).toEqual([]);
+    expect(files.filter((f) => f.includes('.tmp-'))).toEqual([]);
   });
 });
 
@@ -165,7 +177,7 @@ describe('patchStateLocalCover', () => {
     expect(state.coverImage.originalFilename).toBeNull();
   });
 
-  it("resets framing when replacing the cover (a fresh image deserves a fresh frame)", async () => {
+  it('resets framing when replacing the cover (a fresh image deserves a fresh frame)', async () => {
     // Seed prior framing.
     await patchStateFraming(bookDir, { offsetX: 30, offsetY: -20, zoom: 1.5 });
     await patchStateLocalCover(bookDir, 'new.jpg');
@@ -201,10 +213,18 @@ describe('patchStateFraming', () => {
 
 describe('clampFraming', () => {
   it('passes through valid values', () => {
-    expect(clampFraming({ offsetX: 50, offsetY: -30, zoom: 2 })).toEqual({ offsetX: 50, offsetY: -30, zoom: 2 });
+    expect(clampFraming({ offsetX: 50, offsetY: -30, zoom: 2 })).toEqual({
+      offsetX: 50,
+      offsetY: -30,
+      zoom: 2,
+    });
   });
   it('clamps to range boundaries', () => {
-    expect(clampFraming({ offsetX: 500, offsetY: -500, zoom: 100 })).toEqual({ offsetX: 100, offsetY: -100, zoom: 3 });
+    expect(clampFraming({ offsetX: 500, offsetY: -500, zoom: 100 })).toEqual({
+      offsetX: 100,
+      offsetY: -100,
+      zoom: 3,
+    });
     expect(clampFraming({ offsetX: 0, offsetY: 0, zoom: 0.5 }).zoom).toBe(1);
   });
 });

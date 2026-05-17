@@ -14,18 +14,26 @@ describe('parseFilenameMetadata', () => {
   });
 
   it('strips the extension before matching', () => {
-    expect(parseFilenameMetadata('Jane Doe - Solway Bay 01 - Open Water.epub').seriesPosition).toBe(1);
+    expect(parseFilenameMetadata('Jane Doe - Solway Bay 01 - Open Water.epub').seriesPosition).toBe(
+      1,
+    );
   });
 
   it('returns all-null when the filename does not match the pattern', () => {
     expect(parseFilenameMetadata('just-a-title.txt')).toEqual({
-      author: null, series: null, seriesPosition: null, title: null,
+      author: null,
+      series: null,
+      seriesPosition: null,
+      title: null,
     });
   });
 
   it('returns all-null for an undefined filename', () => {
     expect(parseFilenameMetadata(undefined)).toEqual({
-      author: null, series: null, seriesPosition: null, title: null,
+      author: null,
+      series: null,
+      seriesPosition: null,
+      title: null,
     });
   });
 });
@@ -37,7 +45,10 @@ describe('parseText — title detection', () => {
   });
 
   it('falls back to filename-derived title when no H1 present', () => {
-    const out = parseText('body only', { format: 'plaintext', fileName: 'Jane Doe - Solway Bay 02 - Riptide.txt' });
+    const out = parseText('body only', {
+      format: 'plaintext',
+      fileName: 'Jane Doe - Solway Bay 02 - Riptide.txt',
+    });
     expect(out.title).toBe('Riptide');
   });
 
@@ -53,21 +64,23 @@ describe('parseText — title detection', () => {
 
 describe('parseText — chapter splitting', () => {
   it('splits on markdown H2 headings', () => {
-    const out = parseText('# Book\n\n## One\nfirst chapter body\n\n## Two\nsecond chapter body', { format: 'markdown' });
-    expect(out.chapters.map(c => c.title)).toEqual(['One', 'Two']);
+    const out = parseText('# Book\n\n## One\nfirst chapter body\n\n## Two\nsecond chapter body', {
+      format: 'markdown',
+    });
+    expect(out.chapters.map((c) => c.title)).toEqual(['One', 'Two']);
     expect(out.chapters[0].body).toContain('first chapter body');
     expect(out.chapters[1].body).toContain('second chapter body');
   });
 
   it('splits on Arabic numbered chapter headings', () => {
     const out = parseText('Chapter 1\nalpha body\n\nChapter 2\nbeta body', { format: 'plaintext' });
-    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 1', 'Chapter 2']);
+    expect(out.chapters.map((c) => c.title)).toEqual(['Chapter 1', 'Chapter 2']);
   });
 
   it('splits on Roman-numeral chapter headings', () => {
     const out = parseText('Chapter IV\nfourth\n\nChapter V\nfifth', { format: 'plaintext' });
     expect(out.chapters).toHaveLength(2);
-    expect(out.chapters.map(c => c.title)).toEqual(['Chapter IV', 'Chapter V']);
+    expect(out.chapters.map((c) => c.title)).toEqual(['Chapter IV', 'Chapter V']);
   });
 
   it('splits on English-word numbered chapters including compound 21–99', () => {
@@ -75,22 +88,30 @@ describe('parseText — chapter splitting', () => {
       'Chapter One\nfirst\n\nChapter Twenty-One\ntwenty-first\n\nChapter Forty Two\nforty-second',
       { format: 'plaintext' },
     );
-    expect(out.chapters.map(c => c.title)).toEqual(['Chapter One', 'Chapter Twenty-One', 'Chapter Forty Two']);
+    expect(out.chapters.map((c) => c.title)).toEqual([
+      'Chapter One',
+      'Chapter Twenty-One',
+      'Chapter Forty Two',
+    ]);
   });
 
   it('recognises other section keywords (Day, Part, Book, Act, Section, Scene)', () => {
-    const out = parseText('Day One\nfirst\n\nPart II\nsecond\n\nAct III\nthird', { format: 'plaintext' });
-    expect(out.chapters.map(c => c.title)).toEqual(['Day One', 'Part II', 'Act III']);
+    const out = parseText('Day One\nfirst\n\nPart II\nsecond\n\nAct III\nthird', {
+      format: 'plaintext',
+    });
+    expect(out.chapters.map((c) => c.title)).toEqual(['Day One', 'Part II', 'Act III']);
   });
 
   it('recognises standalone Prologue / Epilogue / Interlude / Preface markers', () => {
-    const out = parseText('Prologue\np-body\n\nChapter 1\nbody\n\nEpilogue\ne-body', { format: 'plaintext' });
-    expect(out.chapters.map(c => c.title)).toEqual(['Prologue', 'Chapter 1', 'Epilogue']);
+    const out = parseText('Prologue\np-body\n\nChapter 1\nbody\n\nEpilogue\ne-body', {
+      format: 'plaintext',
+    });
+    expect(out.chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 1', 'Epilogue']);
   });
 
   it('strips cosmetic decoration around chapter markers', () => {
     const out = parseText('+ DAY ONE +\nbody\n\n=== Chapter 3 ===\nthree', { format: 'plaintext' });
-    expect(out.chapters.map(c => c.title)).toEqual(['DAY ONE', 'Chapter 3']);
+    expect(out.chapters.map((c) => c.title)).toEqual(['DAY ONE', 'Chapter 3']);
   });
 
   it('does NOT treat long heading-like lines (>120 chars) as headings', () => {
@@ -112,16 +133,15 @@ describe('parseText — chapter splitting', () => {
 
   it('uses 1-based ids on chapters', () => {
     const out = parseText('## One\na\n\n## Two\nb', { format: 'markdown' });
-    expect(out.chapters.map(c => c.id)).toEqual([1, 2]);
+    expect(out.chapters.map((c) => c.id)).toEqual([1, 2]);
   });
 });
 
 describe('parseText — subtitle merge', () => {
   it('merges a title-cased next-line subtitle into the bare numbered heading', () => {
-    const out = parseText(
-      'Chapter 3\nThe Beginning\n\nOnce upon a time, the wind blew softly.',
-      { format: 'plaintext' },
-    );
+    const out = parseText('Chapter 3\nThe Beginning\n\nOnce upon a time, the wind blew softly.', {
+      format: 'plaintext',
+    });
     expect(out.chapters).toHaveLength(1);
     expect(out.chapters[0].title).toBe('Chapter 3 — The Beginning');
     expect(out.chapters[0].body).toContain('Once upon a time');
@@ -129,72 +149,57 @@ describe('parseText — subtitle merge', () => {
   });
 
   it('also merges across a blank line between heading and subtitle', () => {
-    const out = parseText(
-      'Chapter 3\n\nThe Beginning\n\nBody text here.',
-      { format: 'plaintext' },
-    );
+    const out = parseText('Chapter 3\n\nThe Beginning\n\nBody text here.', { format: 'plaintext' });
     expect(out.chapters[0].title).toBe('Chapter 3 — The Beginning');
     expect(out.chapters[0].body).not.toContain('The Beginning');
   });
 
   it('merges with standalone Prologue / Epilogue when followed by a title', () => {
-    const out = parseText(
-      'Prologue\nFirst Light\n\nThe sun rose over the bay.',
-      { format: 'plaintext' },
-    );
+    const out = parseText('Prologue\nFirst Light\n\nThe sun rose over the bay.', {
+      format: 'plaintext',
+    });
     expect(out.chapters[0].title).toBe('Prologue — First Light');
   });
 
   it('does NOT merge when heading is already descriptive (`Chapter 3: The Beginning`)', () => {
-    const out = parseText(
-      'Chapter 3: The Beginning\nFirst Light Of Dawn\n\nBody.',
-      { format: 'plaintext' },
-    );
+    const out = parseText('Chapter 3: The Beginning\nFirst Light Of Dawn\n\nBody.', {
+      format: 'plaintext',
+    });
     expect(out.chapters[0].title).toBe('Chapter 3: The Beginning');
     expect(out.chapters[0].body).toContain('First Light Of Dawn');
   });
 
   it('does NOT merge when next line looks like body prose (capital + lowercase non-stopword)', () => {
-    const out = parseText(
-      'Chapter 1\nFirst body line here.\n\nMore body.',
-      { format: 'plaintext' },
-    );
+    const out = parseText('Chapter 1\nFirst body line here.\n\nMore body.', {
+      format: 'plaintext',
+    });
     expect(out.chapters[0].title).toBe('Chapter 1');
     expect(out.chapters[0].body).toContain('First body line here.');
   });
 
   it('does NOT merge when next line is the next chapter heading', () => {
-    const out = parseText(
-      'Chapter 1\n\nChapter 2\nbody.',
-      { format: 'plaintext' },
-    );
-    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 2']);
+    const out = parseText('Chapter 1\n\nChapter 2\nbody.', { format: 'plaintext' });
+    expect(out.chapters.map((c) => c.title)).toEqual(['Chapter 2']);
   });
 
   it('does NOT merge when next line ends with a period', () => {
-    const out = parseText(
-      'Chapter 1\nThe Beginning.\n\nBody.',
-      { format: 'plaintext' },
-    );
+    const out = parseText('Chapter 1\nThe Beginning.\n\nBody.', { format: 'plaintext' });
     expect(out.chapters[0].title).toBe('Chapter 1');
     expect(out.chapters[0].body).toContain('The Beginning.');
   });
 
   it('does NOT merge when next line exceeds the 80-char subtitle cap', () => {
-    const longLine = 'A Beginning That Sprawls Across Many Words And Will Not Stop Anytime Soon Indeed Lengthy';
+    const longLine =
+      'A Beginning That Sprawls Across Many Words And Will Not Stop Anytime Soon Indeed Lengthy';
     expect(longLine.length).toBeGreaterThan(80);
-    const out = parseText(
-      `Chapter 1\n${longLine}\n\nBody.`,
-      { format: 'plaintext' },
-    );
+    const out = parseText(`Chapter 1\n${longLine}\n\nBody.`, { format: 'plaintext' });
     expect(out.chapters[0].title).toBe('Chapter 1');
   });
 
   it('preserves stopwords in subtitle titles ("The Cook\'s Particular Soup")', () => {
-    const out = parseText(
-      "Chapter 4\nThe Cook's Particular Soup\n\nBody.",
-      { format: 'plaintext' },
-    );
+    const out = parseText("Chapter 4\nThe Cook's Particular Soup\n\nBody.", {
+      format: 'plaintext',
+    });
     expect(out.chapters[0].title).toBe("Chapter 4 — The Cook's Particular Soup");
   });
 });
@@ -246,7 +251,7 @@ describe('parseText — audio-tag passthrough', () => {
 describe('parseText — return shape', () => {
   it('returns sourceText as the concatenation of chapter bodies joined by \\n\\n', () => {
     const out = parseText('## One\nfirst\n\n## Two\nsecond', { format: 'markdown' });
-    expect(out.sourceText).toBe(out.chapters.map(c => c.body).join('\n\n'));
+    expect(out.sourceText).toBe(out.chapters.map((c) => c.body).join('\n\n'));
   });
 
   it('echoes the requested format', () => {
@@ -256,6 +261,6 @@ describe('parseText — return shape', () => {
 
   it('normalises CRLF line endings', () => {
     const out = parseText('## One\r\nbody one\r\n\r\n## Two\r\nbody two', { format: 'markdown' });
-    expect(out.chapters.map(c => c.title)).toEqual(['One', 'Two']);
+    expect(out.chapters.map((c) => c.title)).toEqual(['One', 'Two']);
   });
 });

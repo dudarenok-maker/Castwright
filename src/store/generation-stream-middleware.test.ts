@@ -36,13 +36,13 @@ vi.mock('../lib/api', () => ({
 function makeStore() {
   return configureStore({
     reducer: {
-      ui:         uiSlice.reducer,
-      chapters:   chaptersSlice.reducer,
+      ui: uiSlice.reducer,
+      chapters: chaptersSlice.reducer,
       manuscript: manuscriptSlice.reducer,
-      changeLog:  changeLogSlice.reducer,
-      cast:       castSlice.reducer,
-      revisions:  revisionsSlice.reducer,
-      analysis:   analysisSlice.reducer,
+      changeLog: changeLogSlice.reducer,
+      cast: castSlice.reducer,
+      revisions: revisionsSlice.reducer,
+      analysis: analysisSlice.reducer,
     },
     middleware: (gd) => gd().concat(generationStreamMiddleware),
   });
@@ -95,7 +95,10 @@ describe('generationStreamMiddleware', () => {
        handle and opened a fresh one with the spec). */
     expect(cancelMock).toHaveBeenCalled();
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    const args = streamGenerationMock.mock.calls[0][0] as { chapterIds?: number[]; force?: boolean };
+    const args = streamGenerationMock.mock.calls[0][0] as {
+      chapterIds?: number[];
+      force?: boolean;
+    };
     expect(args.chapterIds).toEqual([1]);
     expect(args.force).toBe(true);
   });
@@ -120,7 +123,10 @@ describe('generationStreamMiddleware', () => {
 
     expect(cancelMock).toHaveBeenCalled();
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    const args = streamGenerationMock.mock.calls[0][0] as { chapterIds?: number[]; force?: boolean };
+    const args = streamGenerationMock.mock.calls[0][0] as {
+      chapterIds?: number[];
+      force?: boolean;
+    };
     expect(args.chapterIds).toEqual([1, 2, 4]);
     expect(args.force).toBe(true);
   });
@@ -203,7 +209,7 @@ describe('generationStreamMiddleware', () => {
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     seedBook(store, 'b1', [ch(1, { state: 'in_progress', progress: 0.1 })]);
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    expect(((streamGenerationMock.mock.calls[0][0]) as { bookId?: string }).bookId).toBe('b1');
+    expect((streamGenerationMock.mock.calls[0][0] as { bookId?: string }).bookId).toBe('b1');
 
     /* Opening a different book swaps the URL stage but the middleware's
        handle is pinned to b1. Layout would normally hydrate b2's chapters
@@ -222,7 +228,7 @@ describe('generationStreamMiddleware', () => {
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     seedBook(store, 'b1', [ch(1, { state: 'in_progress', progress: 0.1 })]);
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    const originalKey = ((streamGenerationMock.mock.calls[0][0]) as { modelKey?: string }).modelKey;
+    const originalKey = (streamGenerationMock.mock.calls[0][0] as { modelKey?: string }).modelKey;
 
     store.dispatch(uiSlice.actions.setTtsModelKey('gemini-2.5-flash'));
 
@@ -241,13 +247,20 @@ describe('generationStreamMiddleware', () => {
 
     /* User opens b2; Layout swaps the slice's chapters and currentBookId. */
     store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
-    seedBook(store, 'b2', [ch(7, { state: 'done', progress: 1, characters: { narrator: 'done' } })]);
+    seedBook(store, 'b2', [
+      ch(7, { state: 'done', progress: 1, characters: { narrator: 'done' } }),
+    ]);
 
     /* A tick arrives for the still-running b1 stream. The reducer's
        cross-book guard must refuse to mutate the b2 chapter. */
-    store.dispatch(chaptersSlice.actions.applyGenerationTick(
-      { type: 'progress', chapterId: 7, progress: 0.02, characterId: 'narrator' } as GenerationTick,
-    ));
+    store.dispatch(
+      chaptersSlice.actions.applyGenerationTick({
+        type: 'progress',
+        chapterId: 7,
+        progress: 0.02,
+        characterId: 'narrator',
+      } as GenerationTick),
+    );
     const state = store.getState().chapters;
     expect(state.chapters[0].state).toBe('done');
     expect(state.chapters[0].progress).toBe(1);
@@ -260,9 +273,12 @@ describe('generationStreamMiddleware', () => {
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
 
     /* Complete the chapter, then deliver the idle tick. */
-    store.dispatch(chaptersSlice.actions.applyGenerationTick({
-      type: 'chapter_complete', chapterId: 1,
-    } as GenerationTick));
+    store.dispatch(
+      chaptersSlice.actions.applyGenerationTick({
+        type: 'chapter_complete',
+        chapterId: 1,
+      } as GenerationTick),
+    );
     store.dispatch(chaptersSlice.actions.applyGenerationTick({ type: 'idle' } as GenerationTick));
 
     expect(cancelMock).toHaveBeenCalled();
@@ -288,15 +304,21 @@ describe('generationStreamMiddleware', () => {
     /* generation_started already landed at open time. Count types so the
        assertion is robust to that anchor. */
     const countByType = (t: string) =>
-      store.getState().changeLog.events.filter(e => e.type === t).length;
+      store.getState().changeLog.events.filter((e) => e.type === t).length;
     const startedAtOpen = countByType('generation_started');
 
-    store.dispatch(chaptersSlice.actions.applyGenerationTick({
-      type: 'chapter_complete', chapterId: 1,
-    } as GenerationTick));
-    store.dispatch(chaptersSlice.actions.applyGenerationTick({
-      type: 'chapter_complete', chapterId: 2,
-    } as GenerationTick));
+    store.dispatch(
+      chaptersSlice.actions.applyGenerationTick({
+        type: 'chapter_complete',
+        chapterId: 1,
+      } as GenerationTick),
+    );
+    store.dispatch(
+      chaptersSlice.actions.applyGenerationTick({
+        type: 'chapter_complete',
+        chapterId: 2,
+      } as GenerationTick),
+    );
 
     /* No per-chapter complete events written yet. */
     expect(countByType('chapter_complete')).toBe(0);
@@ -304,9 +326,12 @@ describe('generationStreamMiddleware', () => {
 
     /* Complete chapter 3 too, then drain — the queue going idle closes
        the handle and triggers the rollup flush. */
-    store.dispatch(chaptersSlice.actions.applyGenerationTick({
-      type: 'chapter_complete', chapterId: 3,
-    } as GenerationTick));
+    store.dispatch(
+      chaptersSlice.actions.applyGenerationTick({
+        type: 'chapter_complete',
+        chapterId: 3,
+      } as GenerationTick),
+    );
     store.dispatch(chaptersSlice.actions.applyGenerationTick({ type: 'idle' } as GenerationTick));
 
     const events = store.getState().changeLog.events;
@@ -324,9 +349,13 @@ describe('generationStreamMiddleware', () => {
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     seedBook(store, 'b1', [ch(4, { state: 'in_progress', progress: 0.5 })]);
-    store.dispatch(chaptersSlice.actions.applyGenerationTick({
-      type: 'chapter_failed', chapterId: 4, errorReason: 'Voice not found',
-    } as GenerationTick));
+    store.dispatch(
+      chaptersSlice.actions.applyGenerationTick({
+        type: 'chapter_failed',
+        chapterId: 4,
+        errorReason: 'Voice not found',
+      } as GenerationTick),
+    );
     const events = store.getState().changeLog.events;
     expect(events[0].type).toBe('chapter_failed');
     expect(events[0].chapterId).toBe(4);
@@ -339,15 +368,15 @@ describe('generationStreamMiddleware', () => {
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     seedBook(store, 'b1', [ch(1, { state: 'in_progress', progress: 0.1 })]);
-    const beforeRollup = store.getState().changeLog.events.filter(
-      e => e.type === 'generation_run_complete',
-    ).length;
+    const beforeRollup = store
+      .getState()
+      .changeLog.events.filter((e) => e.type === 'generation_run_complete').length;
 
     store.dispatch(chaptersSlice.actions.setPaused(true));
 
-    const afterRollup = store.getState().changeLog.events.filter(
-      e => e.type === 'generation_run_complete',
-    ).length;
+    const afterRollup = store
+      .getState()
+      .changeLog.events.filter((e) => e.type === 'generation_run_complete').length;
     expect(afterRollup).toBe(beforeRollup);
   });
 
@@ -381,39 +410,52 @@ describe('generationStreamMiddleware', () => {
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     seedBook(store, 'b1', [ch(1), ch(2), ch(3)]);
-    store.dispatch(castSlice.actions.setCharacters([
-      { id: 'halloran', name: 'Halloran', role: 'PoV', color: 'narrator' } as Character,
-    ]));
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        { id: 'halloran', name: 'Halloran', role: 'PoV', color: 'narrator' } as Character,
+      ]),
+    );
 
-    store.dispatch(chaptersSlice.actions.regenerateCharacter({ characterId: 'halloran', chapterIds: [1, 3] }));
+    store.dispatch(
+      chaptersSlice.actions.regenerateCharacter({ characterId: 'halloran', chapterIds: [1, 3] }),
+    );
 
     const pending = store.getState().revisions.pending;
     expect(pending).toHaveLength(2);
-    expect(pending.map(r => ({ chapterId: r.chapterId, characterId: r.characterId, playable: r.playable })))
-      .toEqual([
-        { chapterId: 1, characterId: 'halloran', playable: false },
-        { chapterId: 3, characterId: 'halloran', playable: false },
-      ]);
+    expect(
+      pending.map((r) => ({
+        chapterId: r.chapterId,
+        characterId: r.characterId,
+        playable: r.playable,
+      })),
+    ).toEqual([
+      { chapterId: 1, characterId: 'halloran', playable: false },
+      { chapterId: 3, characterId: 'halloran', playable: false },
+    ]);
   });
 
   it('fans out across (character × chapter) pairs on batchRegenerateCharacters', () => {
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     seedBook(store, 'b1', [ch(1), ch(2)]);
-    store.dispatch(castSlice.actions.setCharacters([
-      { id: 'halloran', name: 'Halloran', role: 'PoV', color: 'narrator' } as Character,
-      { id: 'mary', name: 'Mary', role: 'foil', color: 'magenta' } as Character,
-    ]));
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        { id: 'halloran', name: 'Halloran', role: 'PoV', color: 'narrator' } as Character,
+        { id: 'mary', name: 'Mary', role: 'foil', color: 'magenta' } as Character,
+      ]),
+    );
 
-    store.dispatch(chaptersSlice.actions.batchRegenerateCharacters({
-      characterIds: ['halloran', 'mary'],
-      chapterIds: [1, 2],
-    }));
+    store.dispatch(
+      chaptersSlice.actions.batchRegenerateCharacters({
+        characterIds: ['halloran', 'mary'],
+        chapterIds: [1, 2],
+      }),
+    );
 
     const pending = store.getState().revisions.pending;
     expect(pending).toHaveLength(4);
     /* Verify all four pairs are represented. */
-    const pairs = pending.map(r => `${r.characterId}:${r.chapterId}`).sort();
+    const pairs = pending.map((r) => `${r.characterId}:${r.chapterId}`).sort();
     expect(pairs).toEqual(['halloran:1', 'halloran:2', 'mary:1', 'mary:2']);
   });
 
@@ -421,11 +463,15 @@ describe('generationStreamMiddleware', () => {
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     seedBook(store, 'b1', [ch(1), ch(2)]);
-    store.dispatch(castSlice.actions.setCharacters([
-      { id: 'halloran', name: 'Halloran', role: 'PoV', color: 'narrator' } as Character,
-    ]));
-    store.dispatch(chaptersSlice.actions.regenerateCharacter({ characterId: 'halloran', chapterIds: [1, 2] }));
-    expect(store.getState().revisions.pending.every(r => r.playable === false)).toBe(true);
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        { id: 'halloran', name: 'Halloran', role: 'PoV', color: 'narrator' } as Character,
+      ]),
+    );
+    store.dispatch(
+      chaptersSlice.actions.regenerateCharacter({ characterId: 'halloran', chapterIds: [1, 2] }),
+    );
+    expect(store.getState().revisions.pending.every((r) => r.playable === false)).toBe(true);
 
     /* Simulate the SSE chapter_complete tick for chapter 1. */
     const tick: GenerationTick = {
@@ -439,8 +485,8 @@ describe('generationStreamMiddleware', () => {
     store.dispatch(chaptersSlice.actions.applyGenerationTick(tick));
 
     const pending = store.getState().revisions.pending;
-    expect(pending.find(r => r.chapterId === 1)?.playable).toBe(true);
-    expect(pending.find(r => r.chapterId === 2)?.playable).toBe(false);
+    expect(pending.find((r) => r.chapterId === 1)?.playable).toBe(true);
+    expect(pending.find((r) => r.chapterId === 2)?.playable).toBe(false);
   });
 
   it('counts only non-excluded chapters in the activeStream snapshot (top-bar pill regression)', () => {
@@ -480,7 +526,10 @@ describe('generationStreamMiddleware — reverse-local-analyzer guard (plan 32 D
      Mirrors src/hooks/use-reverse-local-analyzer-guard.tsx's
      engine === 'local' + bookId match rule. */
 
-  const localAnalysisSnap = (bookId: string, state: AnalysisStreamSnapshot['state'] = 'running'): AnalysisStreamSnapshot => ({
+  const localAnalysisSnap = (
+    bookId: string,
+    state: AnalysisStreamSnapshot['state'] = 'running',
+  ): AnalysisStreamSnapshot => ({
     bookId,
     manuscriptId: 'mns_x',
     phaseId: 0,
@@ -519,10 +568,12 @@ describe('generationStreamMiddleware — reverse-local-analyzer guard (plan 32 D
   it('does NOT gate when the analysis engine is gemini (cloud — no GPU contention)', () => {
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
-    store.dispatch(analysisActions.setActiveStream({
-      ...localAnalysisSnap('b1'),
-      engine: 'gemini',
-    }));
+    store.dispatch(
+      analysisActions.setActiveStream({
+        ...localAnalysisSnap('b1'),
+        engine: 'gemini',
+      }),
+    );
     seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
 
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);

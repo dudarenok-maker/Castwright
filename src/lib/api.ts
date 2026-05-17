@@ -5,16 +5,37 @@
    Toggle with VITE_USE_MOCKS=true (.env.development). */
 
 import type {
-  UploadResponse, AnalyseResponse, VoiceMatchResponse,
-  RevisionsResponse, ChapterAudio, GenerationTick, Character,
-  Voice, VoiceSample, TtsModelKey, LibraryResponse, VoiceLibraryResponse,
-  ImportResponse, ConfirmBookRequest, ConfirmBookResponse,
-  BookStateResponse, BookStateJson, ChangeLogEvent,
-  PutStateRequest, WorkspaceChangeLogResponse,
-  UserSettings, UserSettingsPatch, DroppedQuotesResponse,
-  AnalysisStateResponse, ActiveAnalysesResponse, CoverCandidate,
-  BookExportRequest, BookExportJob, ExportLanInfo,
-  BaseVoice, TtsEngine,
+  UploadResponse,
+  AnalyseResponse,
+  VoiceMatchResponse,
+  RevisionsResponse,
+  ChapterAudio,
+  GenerationTick,
+  Character,
+  Voice,
+  VoiceSample,
+  TtsModelKey,
+  LibraryResponse,
+  VoiceLibraryResponse,
+  ImportResponse,
+  ConfirmBookRequest,
+  ConfirmBookResponse,
+  BookStateResponse,
+  BookStateJson,
+  ChangeLogEvent,
+  PutStateRequest,
+  WorkspaceChangeLogResponse,
+  UserSettings,
+  UserSettingsPatch,
+  DroppedQuotesResponse,
+  AnalysisStateResponse,
+  ActiveAnalysesResponse,
+  CoverCandidate,
+  BookExportRequest,
+  BookExportJob,
+  ExportLanInfo,
+  BaseVoice,
+  TtsEngine,
 } from './types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
@@ -38,7 +59,7 @@ const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 /* ── shared helpers ──────────────────────────────────────────────────── */
 
 function wait(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function inferFormat(fileName?: string): 'markdown' | 'plaintext' | 'epub' | 'pdf' | null {
@@ -46,8 +67,12 @@ function inferFormat(fileName?: string): 'markdown' | 'plaintext' | 'epub' | 'pd
   const m = fileName.toLowerCase().match(/\.([a-z0-9]+)$/);
   if (!m) return null;
   const map: Record<string, 'markdown' | 'plaintext' | 'epub' | 'pdf'> = {
-    md: 'markdown', markdown: 'markdown', txt: 'plaintext', text: 'plaintext',
-    epub: 'epub', pdf: 'pdf',
+    md: 'markdown',
+    markdown: 'markdown',
+    txt: 'plaintext',
+    text: 'plaintext',
+    epub: 'epub',
+    pdf: 'pdf',
   };
   return map[m[1]] ?? null;
 }
@@ -141,7 +166,13 @@ export interface AnalyseOpts {
       "Throttling Gemini … · resuming in Ns" pill on the affected
       per-chapter row instead of letting it look like a hang. Only
       emitted when the wait exceeds ~1s. */
-  onThrottle?: (e: { phaseId: number; chapterIndex: number; model: string; waitMs: number; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after' }) => void;
+  onThrottle?: (e: {
+    phaseId: number;
+    chapterIndex: number;
+    model: string;
+    waitMs: number;
+    reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after';
+  }) => void;
   /** One-shot event emitted at Phase 0 entry when the analyzer has
       pre-seeded its per-chapter prompt with characters carried over
       from prior books in the same series (plan 04 + plan 09). The
@@ -164,9 +195,18 @@ export interface AnalyseOpts {
       with this flag set, which bypasses the gate for that attempt. */
   allowStage1Shrink?: boolean;
 }
-export interface MatchArgs { bookId: string; characters: Character[]; }
-export interface MergeCharactersArgs { bookId: string; sourceId: string; targetId: string; }
-export interface MergeCharactersResponse { characters: Character[]; }
+export interface MatchArgs {
+  bookId: string;
+  characters: Character[];
+}
+export interface MergeCharactersArgs {
+  bookId: string;
+  sourceId: string;
+  targetId: string;
+}
+export interface MergeCharactersResponse {
+  characters: Character[];
+}
 /* Symmetric "best-of-both" profile merge across the current book and a
    matched library book: both end up with the same merged identity (longest
    description wins, attributes / aliases unioned, source wins on identity
@@ -244,8 +284,14 @@ export interface StreamArgs {
   }>;
   onTick: (ev: GenerationTick & { type: GenerationTick['type'] }) => void;
 }
-export interface AudioArgs { bookId: string; chapterId: number; duration?: string; }
-export interface PollArgs  { bookId: string; }
+export interface AudioArgs {
+  bookId: string;
+  chapterId: number;
+  duration?: string;
+}
+export interface PollArgs {
+  bookId: string;
+}
 export interface VoiceSampleArgs {
   voiceId: string;
   voice: Voice;
@@ -293,10 +339,7 @@ async function mockGetBaseVoices(): Promise<{ voices: BaseVoice[] }> {
   return { voices: MOCK_BASE_VOICES };
 }
 
-async function mockSetVoiceOverride(
-  _voiceId: string,
-  _override: BaseVoice | null,
-): Promise<void> {
+async function mockSetVoiceOverride(_voiceId: string, _override: BaseVoice | null): Promise<void> {
   await wait(20);
 }
 
@@ -340,24 +383,24 @@ const MOCK_BOOK_STATES = new Map<string, BookStateResponse>();
    library card's `runtime`. Slugs follow the `NN-kebab-title` convention
    the server uses (see scan.ts `slug()` helper). */
 const SB_CHAPTERS: BookStateJson['chapters'] = [
-  { id: 1,  title: 'Arrival',                slug: '01-arrival',                duration: '38:24' },
-  { id: 2,  title: 'The Pier',               slug: '02-the-pier',               duration: '42:17' },
-  { id: 3,  title: 'Lights in the Window',   slug: '03-lights-in-the-window',   duration: '31:08' },
-  { id: 4,  title: 'A Letter from London',   slug: '04-a-letter-from-london',   duration: '36:55' },
-  { id: 5,  title: 'The Storm',              slug: '05-the-storm',              duration: '44:02' },
-  { id: 6,  title: 'Morning Tide',           slug: '06-morning-tide',           duration: '33:19' },
-  { id: 7,  title: 'The Keeper at Dusk',     slug: '07-the-keeper-at-dusk',     duration: '40:11' },
-  { id: 8,  title: 'A Boat in the Reeds',    slug: '08-a-boat-in-the-reeds',    duration: '37:45' },
-  { id: 9,  title: 'The Memorial',           slug: '09-the-memorial',           duration: '29:33' },
-  { id: 10, title: 'Inheritance',            slug: '10-inheritance',            duration: '41:50' },
-  { id: 11, title: "The Whaler's Wife",      slug: '11-the-whalers-wife',       duration: '35:22' },
-  { id: 12, title: 'A Bell at Midnight',     slug: '12-a-bell-at-midnight',     duration: '32:48' },
-  { id: 13, title: 'Crossing',               slug: '13-crossing',               duration: '38:17' },
-  { id: 14, title: 'The Diary',              slug: '14-the-diary',              duration: '43:01' },
-  { id: 15, title: 'Salt and Glass',         slug: '15-salt-and-glass',         duration: '36:09' },
-  { id: 16, title: 'The Search',             slug: '16-the-search',             duration: '39:54' },
-  { id: 17, title: 'Solway Bay',             slug: '17-solway-bay',             duration: '40:33' },
-  { id: 18, title: 'Light Returning',        slug: '18-light-returning',        duration: '28:42' },
+  { id: 1, title: 'Arrival', slug: '01-arrival', duration: '38:24' },
+  { id: 2, title: 'The Pier', slug: '02-the-pier', duration: '42:17' },
+  { id: 3, title: 'Lights in the Window', slug: '03-lights-in-the-window', duration: '31:08' },
+  { id: 4, title: 'A Letter from London', slug: '04-a-letter-from-london', duration: '36:55' },
+  { id: 5, title: 'The Storm', slug: '05-the-storm', duration: '44:02' },
+  { id: 6, title: 'Morning Tide', slug: '06-morning-tide', duration: '33:19' },
+  { id: 7, title: 'The Keeper at Dusk', slug: '07-the-keeper-at-dusk', duration: '40:11' },
+  { id: 8, title: 'A Boat in the Reeds', slug: '08-a-boat-in-the-reeds', duration: '37:45' },
+  { id: 9, title: 'The Memorial', slug: '09-the-memorial', duration: '29:33' },
+  { id: 10, title: 'Inheritance', slug: '10-inheritance', duration: '41:50' },
+  { id: 11, title: "The Whaler's Wife", slug: '11-the-whalers-wife', duration: '35:22' },
+  { id: 12, title: 'A Bell at Midnight', slug: '12-a-bell-at-midnight', duration: '32:48' },
+  { id: 13, title: 'Crossing', slug: '13-crossing', duration: '38:17' },
+  { id: 14, title: 'The Diary', slug: '14-the-diary', duration: '43:01' },
+  { id: 15, title: 'Salt and Glass', slug: '15-salt-and-glass', duration: '36:09' },
+  { id: 16, title: 'The Search', slug: '16-the-search', duration: '39:54' },
+  { id: 17, title: 'Solway Bay', slug: '17-solway-bay', duration: '40:33' },
+  { id: 18, title: 'Light Returning', slug: '18-light-returning', duration: '28:42' },
 ];
 
 function buildSolwayBayMockState(): BookStateResponse {
@@ -393,7 +436,7 @@ function buildSolwayBayMockState(): BookStateResponse {
        completedChapters: 18). hydrateFromBookState then flips each
        chapter row to state: 'done', which makes them appear as
        playable in the Listen view's playlist. */
-    completedSlugs: SB_CHAPTERS.map(c => c.slug),
+    completedSlugs: SB_CHAPTERS.map((c) => c.slug),
     chapterCharacters: undefined,
     changeLog: null,
     analysis: undefined,
@@ -453,23 +496,27 @@ function applyMockSliceWrite(prev: BookStateResponse, req: PutStateRequest): Boo
     case 'revisions':
       return { ...prev, revisions: req.patch as BookStateResponse['revisions'] };
     case 'changeLog': {
-      const events = (req.patch as { events?: ChangeLogEvent[] } | null | undefined)?.events ?? null;
+      const events =
+        (req.patch as { events?: ChangeLogEvent[] } | null | undefined)?.events ?? null;
       return { ...prev, changeLog: events };
     }
     case 'state': {
       const patch = (req.patch ?? {}) as Partial<BookStateJson>;
       const next: BookStateJson = {
         ...prev.state,
-        castConfirmed:  patch.castConfirmed  ?? prev.state.castConfirmed,
-        chapters:       patch.chapters       ?? prev.state.chapters,
-        title:          patch.title          ?? prev.state.title,
-        author:         patch.author         ?? prev.state.author,
-        series:         patch.series         ?? prev.state.series,
-        seriesPosition: patch.seriesPosition !== undefined ? patch.seriesPosition : prev.state.seriesPosition,
-        isStandalone:   patch.isStandalone   ?? prev.state.isStandalone,
-        narratorCredit:  patch.narratorCredit  !== undefined ? patch.narratorCredit  : prev.state.narratorCredit,
-        genre:           patch.genre           !== undefined ? patch.genre           : prev.state.genre,
-        publicationDate: patch.publicationDate !== undefined ? patch.publicationDate : prev.state.publicationDate,
+        castConfirmed: patch.castConfirmed ?? prev.state.castConfirmed,
+        chapters: patch.chapters ?? prev.state.chapters,
+        title: patch.title ?? prev.state.title,
+        author: patch.author ?? prev.state.author,
+        series: patch.series ?? prev.state.series,
+        seriesPosition:
+          patch.seriesPosition !== undefined ? patch.seriesPosition : prev.state.seriesPosition,
+        isStandalone: patch.isStandalone ?? prev.state.isStandalone,
+        narratorCredit:
+          patch.narratorCredit !== undefined ? patch.narratorCredit : prev.state.narratorCredit,
+        genre: patch.genre !== undefined ? patch.genre : prev.state.genre,
+        publicationDate:
+          patch.publicationDate !== undefined ? patch.publicationDate : prev.state.publicationDate,
         updatedAt: new Date().toISOString(),
       };
       return { ...prev, state: next };
@@ -522,13 +569,19 @@ async function mockConfirmBook(body: ConfirmBookRequest): Promise<ConfirmBookRes
   };
 }
 
-async function mockUploadManuscript({ text, file, fileName, format }: UploadArgs): Promise<UploadResponse> {
+async function mockUploadManuscript({
+  text,
+  file,
+  fileName,
+  format,
+}: UploadArgs): Promise<UploadResponse> {
   await wait(350);
   const effectiveName = fileName ?? file?.name;
   const effectiveText = text ?? '';
   const h1 = effectiveText.match(/^#\s+(.+)$/m);
-  const title = (h1 && h1[1].trim())
-              || (effectiveName ? effectiveName.replace(/\.[^.]+$/, '') : 'Untitled manuscript');
+  const title =
+    (h1 && h1[1].trim()) ||
+    (effectiveName ? effectiveName.replace(/\.[^.]+$/, '') : 'Untitled manuscript');
   return {
     manuscriptId: 'mns_' + Math.random().toString(36).slice(2, 10),
     format: format || inferFormat(effectiveName) || 'markdown',
@@ -540,15 +593,21 @@ async function mockUploadManuscript({ text, file, fileName, format }: UploadArgs
   };
 }
 
-async function mockAnalyseManuscript(manuscriptId: string, { onPhase }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+async function mockAnalyseManuscript(
+  manuscriptId: string,
+  { onPhase }: AnalyseOpts = {},
+): Promise<AnalyseResponse> {
   const res = ANALYSIS_NORTHERN_STAR;
   for (const ph of res.phaseTimings) {
     const start = Date.now();
-    await new Promise<void>(resolve => {
+    await new Promise<void>((resolve) => {
       const t = setInterval(() => {
         const progress = Math.min(1, (Date.now() - start) / ph.durationMs);
         onPhase?.({ phaseId: ph.id, progress });
-        if (progress >= 1) { clearInterval(t); resolve(); }
+        if (progress >= 1) {
+          clearInterval(t);
+          resolve();
+        }
       }, 60);
     });
   }
@@ -556,7 +615,11 @@ async function mockAnalyseManuscript(manuscriptId: string, { onPhase }: AnalyseO
     bookId: res.bookId,
     manuscriptId,
     title: res.title,
-    phaseTimings: res.phaseTimings.map(p => ({ id: p.id, label: p.label, duration: p.durationMs })),
+    phaseTimings: res.phaseTimings.map((p) => ({
+      id: p.id,
+      label: p.label,
+      duration: p.durationMs,
+    })),
     characters: res.characters,
     chapters: res.chapters,
     sentences: res.sentences,
@@ -566,21 +629,28 @@ async function mockAnalyseManuscript(manuscriptId: string, { onPhase }: AnalyseO
 
 async function mockMatchVoices({ bookId, characters }: MatchArgs): Promise<VoiceMatchResponse> {
   await wait(450);
-  const matches: VoiceMatchResponse['matches'] = (characters || []).map(c => {
+  const matches: VoiceMatchResponse['matches'] = (characters || []).map((c) => {
     const factors = MATCH_FACTORS[c.id] || [];
     if (!c.matchedFrom || !factors.length || !c.voiceId) {
       return { characterId: c.id, candidates: [] };
     }
     return {
       characterId: c.id,
-      candidates: [{
-        voiceId: c.voiceId,
-        fromBookId: c.matchedFrom.bookId ?? '',
-        fromBookTitle: c.matchedFrom.bookTitle ?? '',
-        fromCharacterId: c.matchedFrom.characterId ?? c.id,
-        score: c.matchedFrom.confidence ?? 0,
-        factors: factors.map(f => ({ id: f.id, label: f.label, score: f.score, detail: f.detail })),
-      }],
+      candidates: [
+        {
+          voiceId: c.voiceId,
+          fromBookId: c.matchedFrom.bookId ?? '',
+          fromBookTitle: c.matchedFrom.bookTitle ?? '',
+          fromCharacterId: c.matchedFrom.characterId ?? c.id,
+          score: c.matchedFrom.confidence ?? 0,
+          factors: factors.map((f) => ({
+            id: f.id,
+            label: f.label,
+            score: f.score,
+            detail: f.detail,
+          })),
+        },
+      ],
     };
   });
   return { bookId, matches };
@@ -620,10 +690,13 @@ function mockStreamGeneration({ getChapters, onTick: rawOnTick }: StreamArgs): (
         ticks visibly. */
   const tick = () => {
     const chapters = getChapters?.() ?? [];
-    let active = chapters.find(c => c.state === 'in_progress');
+    const active = chapters.find((c) => c.state === 'in_progress');
     if (!active) {
-      const nextUp = chapters.find(c => c.state === 'queued');
-      if (!nextUp) { onTick({ type: 'idle' }); return; }
+      const nextUp = chapters.find((c) => c.state === 'queued');
+      if (!nextUp) {
+        onTick({ type: 'idle' });
+        return;
+      }
       /* Bootstrap the next chapter with a tiny non-zero progress so the
          live `chapter.state` flips to in_progress on the slice and our
          next tick finds it. */
@@ -643,10 +716,11 @@ function mockStreamGeneration({ getChapters, onTick: rawOnTick }: StreamArgs): (
     /* Pick a non-skipped character to surface as the live speaker, cycling
        proportionally with progress so the per-character pill walks through
        the cast in roughly the order they appear. */
-    const cast = Object.keys(active.characters).filter(k => active.characters[k] !== 'skipped');
-    const characterId = cast.length > 0
-      ? cast[Math.min(cast.length - 1, Math.floor(nextProgress * cast.length))]
-      : null;
+    const cast = Object.keys(active.characters).filter((k) => active.characters[k] !== 'skipped');
+    const characterId =
+      cast.length > 0
+        ? cast[Math.min(cast.length - 1, Math.floor(nextProgress * cast.length))]
+        : null;
     onTick({
       type: nextProgress >= 1 ? 'chapter_complete' : 'progress',
       chapterId: active.id,
@@ -704,11 +778,17 @@ async function mockGetBaseVoiceSample({ modelKey }: BaseVoiceSampleArgs): Promis
 /* Mock accept (DELETE /audio/previous) and reject (POST /audio/previous/restore)
    for the revision-diff a/b player. Both no-op in mock mode — the slice is
    the source of truth, the disk state is fictional. */
-async function mockAcceptChapterRevision(_args: { bookId: string; chapterId: number }): Promise<void> {
+async function mockAcceptChapterRevision(_args: {
+  bookId: string;
+  chapterId: number;
+}): Promise<void> {
   await wait(100);
 }
 
-async function mockRejectChapterRevision(_args: { bookId: string; chapterId: number }): Promise<void> {
+async function mockRejectChapterRevision(_args: {
+  bookId: string;
+  chapterId: number;
+}): Promise<void> {
   await wait(100);
 }
 
@@ -716,7 +796,7 @@ async function mockPollRevisions(_args: PollArgs): Promise<RevisionsResponse> {
   await wait(200);
   return {
     pending: PENDING_REVISIONS,
-    drift:   VOICE_DRIFT_EVENTS,
+    drift: VOICE_DRIFT_EVENTS,
   };
 }
 
@@ -724,17 +804,24 @@ async function mockPollRevisions(_args: PollArgs): Promise<RevisionsResponse> {
 
 async function realGetLibrary(): Promise<LibraryResponse> {
   const res = await fetch('/api/library');
-  if (!res.ok) throw new Error(`Library scan failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(`Library scan failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
 
-async function realGetVoices(args?: { currentBookId?: string; engine?: string }): Promise<VoiceLibraryResponse> {
+async function realGetVoices(args?: {
+  currentBookId?: string;
+  engine?: string;
+}): Promise<VoiceLibraryResponse> {
   const params = new URLSearchParams();
   if (args?.currentBookId) params.set('currentBookId', args.currentBookId);
   if (args?.engine) params.set('engine', args.engine);
   const qs = params.toString() ? `?${params.toString()}` : '';
   const res = await fetch(`/api/voices${qs}`);
-  if (!res.ok) throw new Error(`Voice library fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Voice library fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
@@ -744,12 +831,18 @@ async function realSetVoicePin(voiceId: string, pinned: boolean): Promise<void> 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pinned }),
   });
-  if (!res.ok) throw new Error(`Voice pin update failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Voice pin update failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
 }
 
 async function realGetBaseVoices(): Promise<{ voices: BaseVoice[] }> {
   const res = await fetch('/api/voices/base');
-  if (!res.ok) throw new Error(`Base-voice catalog fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Base-voice catalog fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
@@ -759,7 +852,10 @@ async function realSetVoiceOverride(voiceId: string, override: BaseVoice | null)
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ override }),
   });
-  if (!res.ok) throw new Error(`Voice override update failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Voice override update failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
 }
 
 async function realImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {
@@ -767,7 +863,8 @@ async function realImportManuscript({ text, file, fileName }: UploadArgs): Promi
     const form = new FormData();
     form.append('file', file, fileName ?? file.name);
     const res = await fetch('/api/import', { method: 'POST', body: form });
-    if (!res.ok) throw new Error(`Import failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    if (!res.ok)
+      throw new Error(`Import failed (${res.status}): ${(await res.text()) || res.statusText}`);
     return res.json();
   }
   if (text !== undefined) {
@@ -776,7 +873,8 @@ async function realImportManuscript({ text, file, fileName }: UploadArgs): Promi
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, fileName }),
     });
-    if (!res.ok) throw new Error(`Import failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    if (!res.ok)
+      throw new Error(`Import failed (${res.status}): ${(await res.text()) || res.statusText}`);
     return res.json();
   }
   throw new Error('importManuscript requires either `text` or `file`.');
@@ -785,7 +883,10 @@ async function realImportManuscript({ text, file, fileName }: UploadArgs): Promi
 async function realGetBookState(bookId: string): Promise<BookStateResponse | null> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/state`);
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Book state fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Book state fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
@@ -797,7 +898,10 @@ async function realGetBookState(bookId: string): Promise<BookStateResponse | nul
 async function realGetAnalysisState(bookId: string): Promise<AnalysisStateResponse | null> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/analysis/state`);
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Analysis state fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Analysis state fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
@@ -841,7 +945,10 @@ async function mockGetActiveAnalyses(): Promise<ActiveAnalysesResponse> {
    produced drops). */
 async function realGetDroppedQuotes(bookId: string): Promise<DroppedQuotesResponse> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/dropped-quotes`);
-  if (!res.ok) throw new Error(`Dropped-quotes fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Dropped-quotes fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
@@ -856,7 +963,10 @@ async function realPutBookState(bookId: string, req: PutStateRequest): Promise<v
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
   });
-  if (!res.ok) throw new Error(`Book state PUT failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Book state PUT failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
 }
 
 /* OpenLibrary cover endpoints. The picker modal calls findCoverCandidates
@@ -865,23 +975,31 @@ async function realPutBookState(bookId: string, req: PutStateRequest): Promise<v
    server/src/cover/openlibrary.ts for the upstream behaviour. */
 async function realFindCoverCandidates(bookId: string): Promise<{ candidates: CoverCandidate[] }> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover/candidates`);
-  if (!res.ok) throw new Error(`Cover candidates fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Cover candidates fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
-async function realSetCover(bookId: string, openLibraryId: string): Promise<{ coverImageUrl: string }> {
+async function realSetCover(
+  bookId: string,
+  openLibraryId: string,
+): Promise<{ coverImageUrl: string }> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ openLibraryId }),
   });
-  if (!res.ok) throw new Error(`Cover save failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(`Cover save failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
 
 async function realRemoveCover(bookId: string): Promise<void> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`Cover remove failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(`Cover remove failed (${res.status}): ${(await res.text()) || res.statusText}`);
 }
 
 /* Plan 40 — local-disk cover upload + render-time framing. Server route
@@ -890,35 +1008,53 @@ async function realRemoveCover(bookId: string): Promise<void> {
 export type UploadCoverErrorKind = 'invalid_mime' | 'oversize' | 'transcode_failed' | 'unknown';
 
 export class UploadCoverError extends Error {
-  constructor(public kind: UploadCoverErrorKind, message: string) {
+  constructor(
+    public kind: UploadCoverErrorKind,
+    message: string,
+  ) {
     super(message);
     this.name = 'UploadCoverError';
   }
 }
 
-async function realUploadCover(bookId: string, file: File): Promise<{ coverImageUrl: string; originalFilename: string | null }> {
+async function realUploadCover(
+  bookId: string,
+  file: File,
+): Promise<{ coverImageUrl: string; originalFilename: string | null }> {
   const form = new FormData();
   form.append('image', file, file.name);
-  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover/upload`, { method: 'POST', body: form });
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover/upload`, {
+    method: 'POST',
+    body: form,
+  });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({})) as { error?: string; kind?: string };
+    const body = (await res.json().catch(() => ({}))) as { error?: string; kind?: string };
     const kind: UploadCoverErrorKind =
-      res.status === 415 ? 'invalid_mime'
-      : res.status === 413 ? 'oversize'
-      : res.status === 502 ? 'transcode_failed'
-      : 'unknown';
+      res.status === 415
+        ? 'invalid_mime'
+        : res.status === 413
+          ? 'oversize'
+          : res.status === 502
+            ? 'transcode_failed'
+            : 'unknown';
     throw new UploadCoverError(kind, body.error ?? `Cover upload failed (${res.status})`);
   }
   return res.json();
 }
 
-async function realPatchCoverFraming(bookId: string, framing: { offsetX: number; offsetY: number; zoom: number }): Promise<void> {
+async function realPatchCoverFraming(
+  bookId: string,
+  framing: { offsetX: number; offsetY: number; zoom: number },
+): Promise<void> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover/framing`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(framing),
   });
-  if (!res.ok) throw new Error(`Cover framing save failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Cover framing save failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
 }
 
 /* Mock counterparts. The fake candidates point at real OpenLibrary
@@ -953,9 +1089,12 @@ async function mockFindCoverCandidates(_bookId: string): Promise<{ candidates: C
   return { candidates: MOCK_COVER_CANDIDATES };
 }
 
-async function mockSetCover(_bookId: string, openLibraryId: string): Promise<{ coverImageUrl: string }> {
+async function mockSetCover(
+  _bookId: string,
+  openLibraryId: string,
+): Promise<{ coverImageUrl: string }> {
   await wait(80);
-  const hit = MOCK_COVER_CANDIDATES.find(c => c.openLibraryId === openLibraryId);
+  const hit = MOCK_COVER_CANDIDATES.find((c) => c.openLibraryId === openLibraryId);
   return { coverImageUrl: hit?.coverUrl ?? MOCK_COVER_CANDIDATES[0].coverUrl };
 }
 
@@ -963,17 +1102,24 @@ async function mockRemoveCover(_bookId: string): Promise<void> {
   await wait(40);
 }
 
-async function mockUploadCover(_bookId: string, file: File): Promise<{ coverImageUrl: string; originalFilename: string | null }> {
+async function mockUploadCover(
+  _bookId: string,
+  file: File,
+): Promise<{ coverImageUrl: string; originalFilename: string | null }> {
   await wait(120);
   // Mock returns a transient blob URL so the picker repaints immediately.
   // No server round-trip — the blob lives for the session only.
-  const url = typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
-    ? URL.createObjectURL(file)
-    : MOCK_COVER_CANDIDATES[0].coverUrl;
+  const url =
+    typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
+      ? URL.createObjectURL(file)
+      : MOCK_COVER_CANDIDATES[0].coverUrl;
   return { coverImageUrl: url, originalFilename: file.name };
 }
 
-async function mockPatchCoverFraming(_bookId: string, _framing: { offsetX: number; offsetY: number; zoom: number }): Promise<void> {
+async function mockPatchCoverFraming(
+  _bookId: string,
+  _framing: { offsetX: number; offsetY: number; zoom: number },
+): Promise<void> {
   await wait(40);
 }
 
@@ -985,9 +1131,12 @@ async function realConfirmBook(body: ConfirmBookRequest): Promise<ConfirmBookRes
   });
   if (res.status === 409) {
     const err = await res.json().catch(() => ({}));
-    throw new SlugCollisionError((err as { suggestedTitle?: string }).suggestedTitle ?? `${body.title} (2)`);
+    throw new SlugCollisionError(
+      (err as { suggestedTitle?: string }).suggestedTitle ?? `${body.title} (2)`,
+    );
   }
-  if (!res.ok) throw new Error(`Confirm failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(`Confirm failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
 
@@ -1000,13 +1149,19 @@ export class SlugCollisionError extends Error {
   }
 }
 
-async function realUploadManuscript({ text, file, fileName, format }: UploadArgs): Promise<UploadResponse> {
+async function realUploadManuscript({
+  text,
+  file,
+  fileName,
+  format,
+}: UploadArgs): Promise<UploadResponse> {
   if (file) {
     const form = new FormData();
     form.append('file', file, fileName ?? file.name);
     if (format) form.append('format', format);
     const res = await fetch('/api/manuscripts', { method: 'POST', body: form });
-    if (!res.ok) throw new Error(`Upload failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    if (!res.ok)
+      throw new Error(`Upload failed (${res.status}): ${(await res.text()) || res.statusText}`);
     return res.json();
   }
   if (text !== undefined) {
@@ -1015,14 +1170,26 @@ async function realUploadManuscript({ text, file, fileName, format }: UploadArgs
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, title: undefined, fileName }),
     });
-    if (!res.ok) throw new Error(`Upload failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    if (!res.ok)
+      throw new Error(`Upload failed (${res.status}): ${(await res.text()) || res.statusText}`);
     return res.json();
   }
   throw new Error('uploadManuscript requires either `text` or `file`.');
 }
 
 interface AnalysisStreamEvent {
-  kind: 'phase' | 'result' | 'error' | 'log' | 'heartbeat' | 'cast-update' | 'eta' | 'chapter-failed' | 'chapter-resolved' | 'throttle' | 'series-prior';
+  kind:
+    | 'phase'
+    | 'result'
+    | 'error'
+    | 'log'
+    | 'heartbeat'
+    | 'cast-update'
+    | 'eta'
+    | 'chapter-failed'
+    | 'chapter-resolved'
+    | 'throttle'
+    | 'series-prior';
   phaseId?: number;
   progress?: number;
   label?: string;
@@ -1074,7 +1241,13 @@ export class AnalysisError extends Error {
       "Accept smaller roster" button without parsing the message. */
   prevCharCount?: number;
   nextCharCount?: number;
-  constructor(message: string, code: string, detail?: string, prevCharCount?: number, nextCharCount?: number) {
+  constructor(
+    message: string,
+    code: string,
+    detail?: string,
+    prevCharCount?: number,
+    nextCharCount?: number,
+  ) {
     super(message);
     this.name = 'AnalysisError';
     this.code = code;
@@ -1084,7 +1257,24 @@ export class AnalysisError extends Error {
   }
 }
 
-async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, onSeriesPrior, model, fresh, allowStage1Shrink }: AnalyseOpts = {}): Promise<AnalyseResponse> {
+async function realAnalyseManuscript(
+  manuscriptId: string,
+  {
+    signal,
+    onPhase,
+    onLog,
+    onHeartbeat,
+    onEta,
+    onCastUpdate,
+    onChapterFailed,
+    onChapterResolved,
+    onThrottle,
+    onSeriesPrior,
+    model,
+    fresh,
+    allowStage1Shrink,
+  }: AnalyseOpts = {},
+): Promise<AnalyseResponse> {
   const hasBody = model !== undefined || fresh !== undefined || allowStage1Shrink !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
@@ -1147,7 +1337,10 @@ async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, on
         typeof payload.chapterIndex === 'number' &&
         typeof payload.model === 'string' &&
         typeof payload.waitMs === 'number' &&
-        (payload.reason === 'rpm' || payload.reason === 'tpm' || payload.reason === 'rpd' || payload.reason === 'retry-after')
+        (payload.reason === 'rpm' ||
+          payload.reason === 'tpm' ||
+          payload.reason === 'rpd' ||
+          payload.reason === 'retry-after')
       ) {
         onThrottle?.({
           phaseId: payload.phaseId,
@@ -1187,8 +1380,8 @@ async function realAnalyseManuscript(manuscriptId: string, { signal, onPhase, on
       buffer = buffer.slice(sep + 2);
       const dataLines = raw
         .split('\n')
-        .filter(l => l.startsWith('data: '))
-        .map(l => l.slice(6));
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => l.slice(6));
       if (!dataLines.length) continue;
       const payload = JSON.parse(dataLines.join('\n')) as AnalysisStreamEvent;
       handle(payload);
@@ -1209,7 +1402,11 @@ async function realMatchVoices({ bookId, characters }: MatchArgs): Promise<Voice
   return res.json();
 }
 
-async function realMergeCharacters({ bookId, sourceId, targetId }: MergeCharactersArgs): Promise<MergeCharactersResponse> {
+async function realMergeCharacters({
+  bookId,
+  sourceId,
+  targetId,
+}: MergeCharactersArgs): Promise<MergeCharactersResponse> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/merge`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1217,22 +1414,32 @@ async function realMergeCharacters({ bookId, sourceId, targetId }: MergeCharacte
   });
   if (!res.ok) {
     let detail = '';
-    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
     throw new Error(detail || `Character merge failed (${res.status}).`);
   }
   return res.json();
 }
 
-async function mockMergeCharacters({ sourceId, targetId }: MergeCharactersArgs): Promise<MergeCharactersResponse> {
+async function mockMergeCharacters({
+  sourceId,
+  targetId,
+}: MergeCharactersArgs): Promise<MergeCharactersResponse> {
   /* Mock mode has no persisted cast — return an empty list so callers in a
      mocked environment can wire the call without crashing. Real merging is
      only meaningful against the workspace backend. */
   await wait(60);
-  void sourceId; void targetId;
+  void sourceId;
+  void targetId;
   return { characters: [] };
 }
 
-async function realOverrideLibraryCast(args: OverrideLibraryCastArgs): Promise<OverrideLibraryCastResponse> {
+async function realOverrideLibraryCast(
+  args: OverrideLibraryCastArgs,
+): Promise<OverrideLibraryCastResponse> {
   const res = await fetch('/api/library-cast/override', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1240,19 +1447,25 @@ async function realOverrideLibraryCast(args: OverrideLibraryCastArgs): Promise<O
   });
   if (!res.ok) {
     let detail = '';
-    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
     throw new Error(detail || `Library override failed (${res.status}).`);
   }
   return res.json();
 }
 
-async function mockOverrideLibraryCast(args: OverrideLibraryCastArgs): Promise<OverrideLibraryCastResponse> {
+async function mockOverrideLibraryCast(
+  args: OverrideLibraryCastArgs,
+): Promise<OverrideLibraryCastResponse> {
   /* Mock mode has no workspace to write back to; the override is only
      meaningful against the real backend. Mirror mockMergeCharacters and
      return synthetic records on both sides so the UI can fire the call
      without crashing in the design-system environment. */
   await wait(60);
-  const stub = (id: string): Character => ({ id, name: id, role: '', color: 'eliza' } as Character);
+  const stub = (id: string): Character => ({ id, name: id, role: '', color: 'eliza' }) as Character;
   return {
     source: stub(args.sourceCharacterId),
     target: stub(args.targetCharacterId),
@@ -1263,7 +1476,11 @@ async function realGetSeriesRoster(bookId: string): Promise<SeriesRosterResponse
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/series-roster`);
   if (!res.ok) {
     let detail = '';
-    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
     throw new Error(detail || `Series roster fetch failed (${res.status}).`);
   }
   return res.json();
@@ -1275,7 +1492,9 @@ async function mockGetSeriesRoster(bookId: string): Promise<SeriesRosterResponse
   return { characters: MOCK_SERIES_ROSTER };
 }
 
-async function realLinkPriorCharacter(args: LinkPriorCharacterArgs): Promise<LinkPriorCharacterResponse> {
+async function realLinkPriorCharacter(
+  args: LinkPriorCharacterArgs,
+): Promise<LinkPriorCharacterResponse> {
   const { bookId, ...body } = args;
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/link-prior`, {
     method: 'POST',
@@ -1284,19 +1503,25 @@ async function realLinkPriorCharacter(args: LinkPriorCharacterArgs): Promise<Lin
   });
   if (!res.ok) {
     let detail = '';
-    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
     throw new Error(detail || `Manual continuity link failed (${res.status}).`);
   }
   return res.json();
 }
 
-async function mockLinkPriorCharacter(args: LinkPriorCharacterArgs): Promise<LinkPriorCharacterResponse> {
+async function mockLinkPriorCharacter(
+  args: LinkPriorCharacterArgs,
+): Promise<LinkPriorCharacterResponse> {
   /* Echo the canonical prior-roster entry so the drawer can dispatch a
      valid applyManualMatch and the "Continuity preserved" footer surfaces
      in the design environment. */
   await wait(120);
   const prior = MOCK_SERIES_ROSTER.find(
-    e => e.bookId === args.targetBookId && e.id === args.targetCharacterId,
+    (e) => e.bookId === args.targetBookId && e.id === args.targetCharacterId,
   );
   return {
     matchedFrom: {
@@ -1357,7 +1582,11 @@ async function realReparseBook(bookId: string): Promise<ReparseBookResponse> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/reparse`, { method: 'POST' });
   if (!res.ok) {
     let detail = '';
-    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
     throw new Error(detail || `Re-parse failed (${res.status}).`);
   }
   return res.json();
@@ -1367,7 +1596,11 @@ async function realDeleteBook(bookId: string): Promise<void> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}`, { method: 'DELETE' });
   if (!res.ok) {
     let detail = '';
-    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
     throw new Error(detail || `Delete failed (${res.status}).`);
   }
 }
@@ -1406,7 +1639,11 @@ async function realSetChapterExcluded(
   );
   if (!res.ok) {
     let detail = '';
-    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
     throw new Error(detail || `Exclude toggle failed (${res.status}).`);
   }
   return res.json();
@@ -1418,7 +1655,12 @@ async function mockSetChapterExcluded(
   excluded: boolean,
 ): Promise<SetChapterExcludedResponse> {
   await wait(60);
-  return { id: chapterId, title: `Chapter ${chapterId}`, slug: `${String(chapterId).padStart(2, '0')}-mock`, excluded };
+  return {
+    id: chapterId,
+    title: `Chapter ${chapterId}`,
+    slug: `${String(chapterId).padStart(2, '0')}-mock`,
+    excluded,
+  };
 }
 
 /* Subset re-analysis. Re-runs Phase 0a + Phase 1 for just the requested
@@ -1430,7 +1672,20 @@ async function mockSetChapterExcluded(
 async function realRunAnalysisForChapters(
   manuscriptId: string,
   chapterIds: number[],
-  { signal, onPhase, onLog, onHeartbeat, onEta, onCastUpdate, onChapterFailed, onChapterResolved, onThrottle, onSeriesPrior, model, allowStage1Shrink }: AnalyseOpts = {},
+  {
+    signal,
+    onPhase,
+    onLog,
+    onHeartbeat,
+    onEta,
+    onCastUpdate,
+    onChapterFailed,
+    onChapterResolved,
+    onThrottle,
+    onSeriesPrior,
+    model,
+    allowStage1Shrink,
+  }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
   const res = await fetch(
     `/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis/chapters`,
@@ -1498,7 +1753,10 @@ async function realRunAnalysisForChapters(
         typeof payload.chapterIndex === 'number' &&
         typeof payload.model === 'string' &&
         typeof payload.waitMs === 'number' &&
-        (payload.reason === 'rpm' || payload.reason === 'tpm' || payload.reason === 'rpd' || payload.reason === 'retry-after')
+        (payload.reason === 'rpm' ||
+          payload.reason === 'tpm' ||
+          payload.reason === 'rpd' ||
+          payload.reason === 'retry-after')
       ) {
         onThrottle?.({
           phaseId: payload.phaseId,
@@ -1538,8 +1796,8 @@ async function realRunAnalysisForChapters(
       buffer = buffer.slice(sep + 2);
       const dataLines = raw
         .split('\n')
-        .filter(l => l.startsWith('data: '))
-        .map(l => l.slice(6));
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => l.slice(6));
       if (!dataLines.length) continue;
       const payload = JSON.parse(dataLines.join('\n')) as AnalysisStreamEvent;
       handle(payload);
@@ -1561,7 +1819,13 @@ async function mockRunAnalysisForChapters(
   return ANALYSIS_NORTHERN_STAR;
 }
 
-async function realGetVoiceSample({ voiceId, voice, modelKey, text, characterHint }: VoiceSampleArgs): Promise<VoiceSample> {
+async function realGetVoiceSample({
+  voiceId,
+  voice,
+  modelKey,
+  text,
+  characterHint,
+}: VoiceSampleArgs): Promise<VoiceSample> {
   const res = await fetch(`/api/voices/${encodeURIComponent(voiceId)}/sample`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1569,7 +1833,11 @@ async function realGetVoiceSample({ voiceId, voice, modelKey, text, characterHin
   });
   if (!res.ok) {
     let detail = '';
-    try { detail = ((await res.json()) as { message?: string }).message ?? ''; } catch { /* not json */ }
+    try {
+      detail = ((await res.json()) as { message?: string }).message ?? '';
+    } catch {
+      /* not json */
+    }
     throw new Error(detail || `Sample synthesis failed (${res.status}).`);
   }
   return res.json();
@@ -1579,7 +1847,11 @@ async function realGetVoiceSample({ voiceId, voice, modelKey, text, characterHin
    preview an unmodified model voice (Base voices tab + family-header Play).
    The synthetic voiceId in the URL is just a routing carrier; the server
    caches by (engine, speakerName) regardless. */
-async function realGetBaseVoiceSample({ engine, speakerName, modelKey }: BaseVoiceSampleArgs): Promise<VoiceSample> {
+async function realGetBaseVoiceSample({
+  engine,
+  speakerName,
+  modelKey,
+}: BaseVoiceSampleArgs): Promise<VoiceSample> {
   const carrier = `raw-${engine}-${speakerName}`;
   const res = await fetch(`/api/voices/${encodeURIComponent(carrier)}/sample`, {
     method: 'POST',
@@ -1588,7 +1860,11 @@ async function realGetBaseVoiceSample({ engine, speakerName, modelKey }: BaseVoi
   });
   if (!res.ok) {
     let detail = '';
-    try { detail = ((await res.json()) as { message?: string }).message ?? ''; } catch { /* not json */ }
+    try {
+      detail = ((await res.json()) as { message?: string }).message ?? '';
+    } catch {
+      /* not json */
+    }
     throw new Error(detail || `Base voice sample failed (${res.status}).`);
   }
   return res.json();
@@ -1597,7 +1873,13 @@ async function realGetBaseVoiceSample({ engine, speakerName, modelKey }: BaseVoi
 /* Real SSE reader for chapter generation. Mirrors the analysis-stream pattern
    above: open a long-running POST, parse `data: <json>` frames, dispatch each
    payload to onTick. Returns a canceller that aborts the fetch. */
-function realStreamGeneration({ bookId, modelKey, chapterIds, force, onTick: rawOnTick }: StreamArgs): () => void {
+function realStreamGeneration({
+  bookId,
+  modelKey,
+  chapterIds,
+  force,
+  onTick: rawOnTick,
+}: StreamArgs): () => void {
   const onTick = safeOnTick(rawOnTick);
   const controller = new AbortController();
 
@@ -1632,8 +1914,8 @@ function realStreamGeneration({ bookId, modelKey, chapterIds, force, onTick: raw
           buffer = buffer.slice(sep + 2);
           const dataLines = raw
             .split('\n')
-            .filter(l => l.startsWith('data: '))
-            .map(l => l.slice(6));
+            .filter((l) => l.startsWith('data: '))
+            .map((l) => l.slice(6));
           if (!dataLines.length) continue;
           try {
             const payload = JSON.parse(dataLines.join('\n')) as GenerationTick;
@@ -1676,7 +1958,7 @@ async function realPauseGeneration({ bookId }: { bookId: string }): Promise<void
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: '{}',
-  }).catch(err => {
+  }).catch((err) => {
     console.warn('[api] pauseGeneration failed:', err);
   });
 }
@@ -1702,7 +1984,7 @@ async function realPauseAnalysis({ manuscriptId }: { manuscriptId: string }): Pr
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: '{}',
-  }).catch(err => {
+  }).catch((err) => {
     console.warn('[api] pauseAnalysis failed:', err);
   });
 }
@@ -1788,17 +2070,24 @@ export interface GetWorkspaceChangelogArgs {
   before?: string | null;
 }
 
-async function realGetWorkspaceChangelog(args: GetWorkspaceChangelogArgs = {}): Promise<WorkspaceChangeLogResponse> {
+async function realGetWorkspaceChangelog(
+  args: GetWorkspaceChangelogArgs = {},
+): Promise<WorkspaceChangeLogResponse> {
   const qs = new URLSearchParams();
   if (args.limit != null) qs.set('limit', String(args.limit));
-  if (args.before)        qs.set('before', args.before);
+  if (args.before) qs.set('before', args.before);
   const url = qs.toString() ? `/api/workspace/changelog?${qs}` : '/api/workspace/changelog';
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Workspace changelog fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Workspace changelog fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
-async function mockGetWorkspaceChangelog(_args: GetWorkspaceChangelogArgs = {}): Promise<WorkspaceChangeLogResponse> {
+async function mockGetWorkspaceChangelog(
+  _args: GetWorkspaceChangelogArgs = {},
+): Promise<WorkspaceChangeLogResponse> {
   /* CHANGE_LOG_EVENTS is intentionally empty (see src/data/change-log.ts).
      The mock stays contract-correct so VITE_USE_MOCKS=true exercises the
      same shape the real server returns; under mocks the Activity view sees
@@ -1806,7 +2095,7 @@ async function mockGetWorkspaceChangelog(_args: GetWorkspaceChangelogArgs = {}):
      fresh workspace. */
   await wait(60);
   return {
-    events: CHANGE_LOG_EVENTS.map(e => ({
+    events: CHANGE_LOG_EVENTS.map((e) => ({
       ...e,
       bookId: 'ns',
       bookTitle: 'Northern Star',
@@ -1866,14 +2155,17 @@ async function realGetSidecarHealth(): Promise<SidecarHealth> {
    stays consistent under VITE_USE_MOCKS=true. */
 const MOCK_USER_SETTINGS: UserSettings = {
   ...FRONTEND_ACCOUNT_DEFAULTS,
-  apiKeyStatus:         'unset',
-  workspaceRoot:        '(mock)/audiobook-workspace',
-  workspaceSource:      'default',
+  apiKeyStatus: 'unset',
+  workspaceRoot: '(mock)/audiobook-workspace',
+  workspaceSource: 'default',
 };
 
 async function realGetUserSettings(): Promise<UserSettings> {
   const res = await fetch('/api/user/settings');
-  if (!res.ok) throw new Error(`User settings fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `User settings fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
@@ -1883,7 +2175,10 @@ async function realPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`User settings save failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `User settings save failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
@@ -1896,13 +2191,29 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
   await wait(50);
   /* Strip read-only fields a misbehaving caller might submit so the mock
      path enforces the same invariant as the server. */
-  const { displayName, defaultAnalysisModel, defaultTtsEngine, defaultTtsModelKey,
-          sidecarUrl, workspaceDirOverride, exportSyncFolder } = patch;
-  Object.assign(MOCK_USER_SETTINGS, Object.fromEntries(
-    Object.entries({ displayName, defaultAnalysisModel, defaultTtsEngine,
-                     defaultTtsModelKey, sidecarUrl, workspaceDirOverride, exportSyncFolder })
-      .filter(([, v]) => v !== undefined),
-  ));
+  const {
+    displayName,
+    defaultAnalysisModel,
+    defaultTtsEngine,
+    defaultTtsModelKey,
+    sidecarUrl,
+    workspaceDirOverride,
+    exportSyncFolder,
+  } = patch;
+  Object.assign(
+    MOCK_USER_SETTINGS,
+    Object.fromEntries(
+      Object.entries({
+        displayName,
+        defaultAnalysisModel,
+        defaultTtsEngine,
+        defaultTtsModelKey,
+        sidecarUrl,
+        workspaceDirOverride,
+        exportSyncFolder,
+      }).filter(([, v]) => v !== undefined),
+    ),
+  );
   return { ...MOCK_USER_SETTINGS };
 }
 
@@ -1921,7 +2232,10 @@ export class ExportIncompleteError extends Error {
   }
 }
 
-async function realCreateBookExport(bookId: string, body: BookExportRequest): Promise<BookExportJob> {
+async function realCreateBookExport(
+  bookId: string,
+  body: BookExportRequest,
+): Promise<BookExportJob> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/exports`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1931,13 +2245,19 @@ async function realCreateBookExport(bookId: string, body: BookExportRequest): Pr
     const err = (await res.json().catch(() => ({}))) as { missing?: string[] };
     throw new ExportIncompleteError(err.missing ?? []);
   }
-  if (!res.ok) throw new Error(`Export request failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Export request failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
 async function realGetBookExport(bookId: string, exportId: string): Promise<BookExportJob> {
-  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/exports/${encodeURIComponent(exportId)}`);
-  if (!res.ok) throw new Error(`Export poll failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/exports/${encodeURIComponent(exportId)}`,
+  );
+  if (!res.ok)
+    throw new Error(`Export poll failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
 
@@ -1950,12 +2270,18 @@ async function realCancelBookExport(bookId: string, exportId: string): Promise<v
     { method: 'DELETE' },
   );
   if (res.status === 404 || res.status === 204) return;
-  if (!res.ok) throw new Error(`Export cancel failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `Export cancel failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
 }
 
 async function realGetExportLanUrls(): Promise<ExportLanInfo> {
   const res = await fetch(`/api/export/lan`);
-  if (!res.ok) throw new Error(`LAN URL probe failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok)
+    throw new Error(
+      `LAN URL probe failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
@@ -1966,7 +2292,10 @@ async function realGetExportLanUrls(): Promise<ExportLanInfo> {
 const MOCK_EXPORT_JOBS = new Map<string, BookExportJob>();
 const MOCK_EXPORT_TIMERS = new Map<string, ReturnType<typeof setTimeout>[]>();
 
-async function mockCreateBookExport(bookId: string, body: BookExportRequest): Promise<BookExportJob> {
+async function mockCreateBookExport(
+  bookId: string,
+  body: BookExportRequest,
+): Promise<BookExportJob> {
   await wait(120);
   const id = `exp_${Math.random().toString(36).slice(2, 12)}`;
   const job: BookExportJob = {
@@ -1988,28 +2317,39 @@ async function mockCreateBookExport(bookId: string, body: BookExportRequest): Pr
 
   /* Tick progress so a real poller observes the same lifecycle as live. */
   const timers: ReturnType<typeof setTimeout>[] = [];
-  timers.push(setTimeout(() => {
-    const j = MOCK_EXPORT_JOBS.get(id);
-    if (j) MOCK_EXPORT_JOBS.set(id, { ...j, progress: 0.25 });
-  }, 700));
-  timers.push(setTimeout(() => {
-    const j = MOCK_EXPORT_JOBS.get(id);
-    if (j) MOCK_EXPORT_JOBS.set(id, { ...j, progress: 0.6 });
-  }, 1500));
-  timers.push(setTimeout(() => {
-    const j = MOCK_EXPORT_JOBS.get(id);
-    if (!j) return;
-    const blob = new Blob([new Uint8Array([0x50, 0x4b, 0x05, 0x06].concat(Array(18).fill(0)))], { type: 'application/zip' });
-    MOCK_EXPORT_JOBS.set(id, {
-      ...j,
-      status: 'done',
-      progress: 1,
-      sizeBytes: 22,
-      downloadUrl: URL.createObjectURL(blob),
-      syncPath: body.destination === 'sync-folder' ? 'C:\\Users\\dudar\\OneDrive\\Audiobooks\\Mock.zip' : null,
-      completedAt: new Date().toISOString(),
-    });
-  }, 2400));
+  timers.push(
+    setTimeout(() => {
+      const j = MOCK_EXPORT_JOBS.get(id);
+      if (j) MOCK_EXPORT_JOBS.set(id, { ...j, progress: 0.25 });
+    }, 700),
+  );
+  timers.push(
+    setTimeout(() => {
+      const j = MOCK_EXPORT_JOBS.get(id);
+      if (j) MOCK_EXPORT_JOBS.set(id, { ...j, progress: 0.6 });
+    }, 1500),
+  );
+  timers.push(
+    setTimeout(() => {
+      const j = MOCK_EXPORT_JOBS.get(id);
+      if (!j) return;
+      const blob = new Blob([new Uint8Array([0x50, 0x4b, 0x05, 0x06].concat(Array(18).fill(0)))], {
+        type: 'application/zip',
+      });
+      MOCK_EXPORT_JOBS.set(id, {
+        ...j,
+        status: 'done',
+        progress: 1,
+        sizeBytes: 22,
+        downloadUrl: URL.createObjectURL(blob),
+        syncPath:
+          body.destination === 'sync-folder'
+            ? 'C:\\Users\\dudar\\OneDrive\\Audiobooks\\Mock.zip'
+            : null,
+        completedAt: new Date().toISOString(),
+      });
+    }, 2400),
+  );
   MOCK_EXPORT_TIMERS.set(id, timers);
   return job;
 }
@@ -2065,23 +2405,35 @@ let MOCK_SIDECAR_MODEL_LOADED = false;
 let MOCK_OLLAMA_MODEL_LOADED = false;
 
 async function realLoadSidecar(): Promise<ModelControlResult> {
-  const res = await fetch('/api/sidecar/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-  return (await res.json().catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
+  const res = await fetch('/api/sidecar/load', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  return (await res
+    .json()
+    .catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
 }
 
 async function realUnloadSidecar(): Promise<ModelControlResult> {
   const res = await fetch('/api/sidecar/unload', { method: 'POST' });
-  return (await res.json().catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
+  return (await res
+    .json()
+    .catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
 }
 
 async function realLoadAnalyzer(): Promise<ModelControlResult> {
   const res = await fetch('/api/ollama/load', { method: 'POST' });
-  return (await res.json().catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
+  return (await res
+    .json()
+    .catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
 }
 
 async function realUnloadAnalyzer(): Promise<ModelControlResult> {
   const res = await fetch('/api/ollama/unload', { method: 'POST' });
-  return (await res.json().catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
+  return (await res
+    .json()
+    .catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
 }
 
 async function realGetOllamaHealth(): Promise<OllamaHealth> {
@@ -2132,54 +2484,54 @@ async function mockGetOllamaHealth(): Promise<OllamaHealth> {
 /* Chapter audio + revisions polling stay mocked for now — both belong to the
    playback slice that comes after this one. */
 const real = {
-  getUserSettings:   realGetUserSettings,
-  putUserSettings:   realPutUserSettings,
-  getLibrary:        realGetLibrary,
-  getVoices:         realGetVoices,
-  setVoicePin:       realSetVoicePin,
-  getBaseVoices:     realGetBaseVoices,
-  setVoiceOverride:  realSetVoiceOverride,
-  getBookState:      realGetBookState,
-  putBookState:      realPutBookState,
+  getUserSettings: realGetUserSettings,
+  putUserSettings: realPutUserSettings,
+  getLibrary: realGetLibrary,
+  getVoices: realGetVoices,
+  setVoicePin: realSetVoicePin,
+  getBaseVoices: realGetBaseVoices,
+  setVoiceOverride: realSetVoiceOverride,
+  getBookState: realGetBookState,
+  putBookState: realPutBookState,
   findCoverCandidates: realFindCoverCandidates,
-  setCover:          realSetCover,
-  removeCover:       realRemoveCover,
-  uploadCover:       realUploadCover,
+  setCover: realSetCover,
+  removeCover: realRemoveCover,
+  uploadCover: realUploadCover,
   patchCoverFraming: realPatchCoverFraming,
-  getAnalysisState:  realGetAnalysisState,
+  getAnalysisState: realGetAnalysisState,
   getActiveAnalyses: realGetActiveAnalyses,
-  getDroppedQuotes:  realGetDroppedQuotes,
-  importManuscript:  realImportManuscript,
-  confirmBook:       realConfirmBook,
-  uploadManuscript:  realUploadManuscript,
+  getDroppedQuotes: realGetDroppedQuotes,
+  importManuscript: realImportManuscript,
+  confirmBook: realConfirmBook,
+  uploadManuscript: realUploadManuscript,
   analyseManuscript: realAnalyseManuscript,
-  matchVoices:       realMatchVoices,
-  mergeCharacters:   realMergeCharacters,
+  matchVoices: realMatchVoices,
+  mergeCharacters: realMergeCharacters,
   overrideLibraryCast: realOverrideLibraryCast,
-  getSeriesRoster:   realGetSeriesRoster,
+  getSeriesRoster: realGetSeriesRoster,
   linkPriorCharacter: realLinkPriorCharacter,
-  deleteBook:        realDeleteBook,
-  reparseBook:       realReparseBook,
-  setChapterExcluded:      realSetChapterExcluded,
-  runAnalysisForChapters:  realRunAnalysisForChapters,
-  getVoiceSample:    realGetVoiceSample,
+  deleteBook: realDeleteBook,
+  reparseBook: realReparseBook,
+  setChapterExcluded: realSetChapterExcluded,
+  runAnalysisForChapters: realRunAnalysisForChapters,
+  getVoiceSample: realGetVoiceSample,
   getBaseVoiceSample: realGetBaseVoiceSample,
-  streamGeneration:  realStreamGeneration,
-  pauseGeneration:   realPauseGeneration,
-  pauseAnalysis:     realPauseAnalysis,
-  getSidecarHealth:  realGetSidecarHealth,
-  getOllamaHealth:   realGetOllamaHealth,
-  loadSidecar:       realLoadSidecar,
-  unloadSidecar:     realUnloadSidecar,
-  loadAnalyzer:      realLoadAnalyzer,
-  unloadAnalyzer:    realUnloadAnalyzer,
-  getWorkspaceInfo:  realGetWorkspaceInfo,
+  streamGeneration: realStreamGeneration,
+  pauseGeneration: realPauseGeneration,
+  pauseAnalysis: realPauseAnalysis,
+  getSidecarHealth: realGetSidecarHealth,
+  getOllamaHealth: realGetOllamaHealth,
+  loadSidecar: realLoadSidecar,
+  unloadSidecar: realUnloadSidecar,
+  loadAnalyzer: realLoadAnalyzer,
+  unloadAnalyzer: realUnloadAnalyzer,
+  getWorkspaceInfo: realGetWorkspaceInfo,
   getWorkspaceChangelog: realGetWorkspaceChangelog,
-  createBookExport:  realCreateBookExport,
-  getBookExport:     realGetBookExport,
-  cancelBookExport:  realCancelBookExport,
-  getExportLanUrls:  realGetExportLanUrls,
-  getChapterAudio:   async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
+  createBookExport: realCreateBookExport,
+  getBookExport: realGetBookExport,
+  cancelBookExport: realCancelBookExport,
+  getExportLanUrls: realGetExportLanUrls,
+  getChapterAudio: async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
@@ -2190,8 +2542,13 @@ const real = {
   /* Preserved (A) audio for revision-diff a/b audition. 404 when no
      `.previous.*` pair exists — caller (revision-diff player) handles
      by rendering the "Original audio not preserved" copy. */
-  getChapterAudioPrevious: async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio | null> => {
-    const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous`);
+  getChapterAudioPrevious: async ({
+    bookId,
+    chapterId,
+  }: AudioArgs): Promise<ChapterAudio | null> => {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous`,
+    );
     if (res.status === 404) return null;
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
@@ -2199,15 +2556,33 @@ const real = {
     }
     return res.json();
   },
-  acceptChapterRevision: async ({ bookId, chapterId }: { bookId: string; chapterId: number }): Promise<void> => {
-    const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous`, { method: 'DELETE' });
+  acceptChapterRevision: async ({
+    bookId,
+    chapterId,
+  }: {
+    bookId: string;
+    chapterId: number;
+  }): Promise<void> => {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous`,
+      { method: 'DELETE' },
+    );
     if (!res.ok && res.status !== 404) {
       const detail = await res.text().catch(() => '');
       throw new Error(`Accept revision failed (${res.status}): ${detail || res.statusText}`);
     }
   },
-  rejectChapterRevision: async ({ bookId, chapterId }: { bookId: string; chapterId: number }): Promise<void> => {
-    const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous/restore`, { method: 'POST' });
+  rejectChapterRevision: async ({
+    bookId,
+    chapterId,
+  }: {
+    bookId: string;
+    chapterId: number;
+  }): Promise<void> => {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous/restore`,
+      { method: 'POST' },
+    );
     if (res.status === 409) {
       throw new Error('Generation is in flight. Wait for the render to finish before rejecting.');
     }
@@ -2216,7 +2591,7 @@ const real = {
       throw new Error(`Reject revision failed (${res.status}): ${detail || res.statusText}`);
     }
   },
-  pollRevisions:     async ({ bookId }: PollArgs): Promise<RevisionsResponse> => {
+  pollRevisions: async ({ bookId }: PollArgs): Promise<RevisionsResponse> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/revisions`);
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
@@ -2227,58 +2602,58 @@ const real = {
 };
 
 const mock = {
-  getUserSettings:   mockGetUserSettings,
-  putUserSettings:   mockPutUserSettings,
-  getLibrary:        mockGetLibrary,
-  getVoices:         mockGetVoices,
-  setVoicePin:       mockSetVoicePin,
-  getBaseVoices:     mockGetBaseVoices,
-  setVoiceOverride:  mockSetVoiceOverride,
-  getBookState:      mockGetBookState,
-  putBookState:      mockPutBookState,
+  getUserSettings: mockGetUserSettings,
+  putUserSettings: mockPutUserSettings,
+  getLibrary: mockGetLibrary,
+  getVoices: mockGetVoices,
+  setVoicePin: mockSetVoicePin,
+  getBaseVoices: mockGetBaseVoices,
+  setVoiceOverride: mockSetVoiceOverride,
+  getBookState: mockGetBookState,
+  putBookState: mockPutBookState,
   findCoverCandidates: mockFindCoverCandidates,
-  setCover:          mockSetCover,
-  removeCover:       mockRemoveCover,
-  uploadCover:       mockUploadCover,
+  setCover: mockSetCover,
+  removeCover: mockRemoveCover,
+  uploadCover: mockUploadCover,
   patchCoverFraming: mockPatchCoverFraming,
-  getAnalysisState:  mockGetAnalysisState,
+  getAnalysisState: mockGetAnalysisState,
   getActiveAnalyses: mockGetActiveAnalyses,
-  getDroppedQuotes:  mockGetDroppedQuotes,
-  importManuscript:  mockImportManuscript,
-  confirmBook:       mockConfirmBook,
-  uploadManuscript:  mockUploadManuscript,
+  getDroppedQuotes: mockGetDroppedQuotes,
+  importManuscript: mockImportManuscript,
+  confirmBook: mockConfirmBook,
+  uploadManuscript: mockUploadManuscript,
   analyseManuscript: mockAnalyseManuscript,
-  matchVoices:       mockMatchVoices,
-  mergeCharacters:   mockMergeCharacters,
+  matchVoices: mockMatchVoices,
+  mergeCharacters: mockMergeCharacters,
   overrideLibraryCast: mockOverrideLibraryCast,
-  getSeriesRoster:   mockGetSeriesRoster,
+  getSeriesRoster: mockGetSeriesRoster,
   linkPriorCharacter: mockLinkPriorCharacter,
-  deleteBook:        mockDeleteBook,
-  reparseBook:       mockReparseBook,
-  setChapterExcluded:      mockSetChapterExcluded,
-  runAnalysisForChapters:  mockRunAnalysisForChapters,
-  getVoiceSample:    mockGetVoiceSample,
+  deleteBook: mockDeleteBook,
+  reparseBook: mockReparseBook,
+  setChapterExcluded: mockSetChapterExcluded,
+  runAnalysisForChapters: mockRunAnalysisForChapters,
+  getVoiceSample: mockGetVoiceSample,
   getBaseVoiceSample: mockGetBaseVoiceSample,
-  streamGeneration:  mockStreamGeneration,
-  pauseGeneration:   mockPauseGeneration,
-  pauseAnalysis:     mockPauseAnalysis,
-  getSidecarHealth:  mockGetSidecarHealth,
-  getOllamaHealth:   mockGetOllamaHealth,
-  loadSidecar:       mockLoadSidecar,
-  unloadSidecar:     mockUnloadSidecar,
-  loadAnalyzer:      mockLoadAnalyzer,
-  unloadAnalyzer:    mockUnloadAnalyzer,
-  getWorkspaceInfo:  mockGetWorkspaceInfo,
+  streamGeneration: mockStreamGeneration,
+  pauseGeneration: mockPauseGeneration,
+  pauseAnalysis: mockPauseAnalysis,
+  getSidecarHealth: mockGetSidecarHealth,
+  getOllamaHealth: mockGetOllamaHealth,
+  loadSidecar: mockLoadSidecar,
+  unloadSidecar: mockUnloadSidecar,
+  loadAnalyzer: mockLoadAnalyzer,
+  unloadAnalyzer: mockUnloadAnalyzer,
+  getWorkspaceInfo: mockGetWorkspaceInfo,
   getWorkspaceChangelog: mockGetWorkspaceChangelog,
-  createBookExport:  mockCreateBookExport,
-  getBookExport:     mockGetBookExport,
-  cancelBookExport:  mockCancelBookExport,
-  getExportLanUrls:  mockGetExportLanUrls,
-  getChapterAudio:   mockGetChapterAudio,
+  createBookExport: mockCreateBookExport,
+  getBookExport: mockGetBookExport,
+  cancelBookExport: mockCancelBookExport,
+  getExportLanUrls: mockGetExportLanUrls,
+  getChapterAudio: mockGetChapterAudio,
   getChapterAudioPrevious: mockGetChapterAudioPrevious,
-  acceptChapterRevision:   mockAcceptChapterRevision,
-  rejectChapterRevision:   mockRejectChapterRevision,
-  pollRevisions:     mockPollRevisions,
+  acceptChapterRevision: mockAcceptChapterRevision,
+  rejectChapterRevision: mockRejectChapterRevision,
+  pollRevisions: mockPollRevisions,
 };
 
 export const api = USE_MOCKS ? mock : real;

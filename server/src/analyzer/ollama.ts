@@ -38,7 +38,10 @@ import {
     fallback. Any other error type propagates unchanged and hard-fails. */
 export class LocalUnreachableError extends Error {
   readonly code = 'LOCAL_UNREACHABLE';
-  constructor(message: string, public readonly cause?: unknown) {
+  constructor(
+    message: string,
+    public readonly cause?: unknown,
+  ) {
     super(message);
     this.name = 'LocalUnreachableError';
   }
@@ -68,7 +71,13 @@ interface OllamaOptions {
    `err.cause.code`. These are the "couldn't connect" cases that warrant
    fallback to Gemini. Anything else (HTTP 5xx, malformed body, validation
    failure) means the daemon is reachable but misbehaving — hard-fail. */
-const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'UND_ERR_SOCKET']);
+const UNREACHABLE_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ECONNRESET',
+  'UND_ERR_SOCKET',
+]);
 
 /* Default sampling temperature for /api/chat. Low enough that the model
    sticks close to the schema and the system prompt's structural rules, but
@@ -95,10 +104,7 @@ export const INVALID_JSON_RETRY_TEMPERATURE = 0.6;
    has to fit alongside the other; the auto-evict pill mediates the
    swap. Tune the allowlist in lockstep with src/lib/models.ts
    MODEL_OPTIONS. */
-const RESIDENT_MODELS = new Set([
-  'qwen3.5:4b',
-  'llama3.1:8b',
-]);
+const RESIDENT_MODELS = new Set(['qwen3.5:4b', 'llama3.1:8b']);
 
 /** Picks the `keep_alive` value for an Ollama /api/chat call:
     - models in RESIDENT_MODELS → '5m' (stay loaded for the analysis loop)
@@ -159,7 +165,14 @@ export class OllamaAnalyzer implements Analyzer {
     call: StageCall,
   ): Promise<Stage1ChapterOutput> {
     const key = `1-ch${chapterId}` as const;
-    return this.runStage(manuscriptId, key, 'per_chapter_stage1', promptMd, stage1ChapterSchema, call);
+    return this.runStage(
+      manuscriptId,
+      key,
+      'per_chapter_stage1',
+      promptMd,
+      stage1ChapterSchema,
+      call,
+    );
   }
 
   async runStage2Chapter(
@@ -169,7 +182,14 @@ export class OllamaAnalyzer implements Analyzer {
     call: StageCall,
   ): Promise<Stage2ChapterOutput> {
     const key = `2-ch${chapterId}` as const;
-    return this.runStage(manuscriptId, key, 'per_chapter_stage2', promptMd, stage2ChapterSchema, call);
+    return this.runStage(
+      manuscriptId,
+      key,
+      'per_chapter_stage2',
+      promptMd,
+      stage2ChapterSchema,
+      call,
+    );
   }
 
   private async runStage<T>(
@@ -202,7 +222,7 @@ export class OllamaAnalyzer implements Analyzer {
       const firstText = await this.chat(
         [
           { role: 'system', content: systemInstruction },
-          { role: 'user',   content: promptMd },
+          { role: 'user', content: promptMd },
         ],
         responseFormat,
         DEFAULT_TEMPERATURE,
@@ -213,7 +233,9 @@ export class OllamaAnalyzer implements Analyzer {
       const firstAttempt = parseAndValidate(firstText, schema);
       if (firstAttempt.ok) {
         if (firstAttempt.repaired) {
-          console.warn(`[ollama] ${this.model} ${key} required JSON cleanup before parse (markdown fence and/or unescaped quotes)`);
+          console.warn(
+            `[ollama] ${this.model} ${key} required JSON cleanup before parse (markdown fence and/or unescaped quotes)`,
+          );
         }
         await persistResponse(manuscriptId, key, firstText);
         return firstAttempt.value;
@@ -226,7 +248,11 @@ export class OllamaAnalyzer implements Analyzer {
       await writeFile(rawAttemptPath(manuscriptId, key, 1), firstText, 'utf8');
       await writeFile(
         errorPath(manuscriptId, key),
-        JSON.stringify({ kind: firstAttempt.kind, detail: firstAttempt.detail, attempt: 1 }, null, 2),
+        JSON.stringify(
+          { kind: firstAttempt.kind, detail: firstAttempt.detail, attempt: 1 },
+          null,
+          2,
+        ),
         'utf8',
       );
 
@@ -243,17 +269,15 @@ export class OllamaAnalyzer implements Analyzer {
       const retryMessages = isInvalidJson
         ? [
             { role: 'system' as const, content: systemInstruction },
-            { role: 'user'   as const, content: promptMd },
+            { role: 'user' as const, content: promptMd },
           ]
         : [
-            { role: 'system'    as const, content: systemInstruction },
-            { role: 'user'      as const, content: promptMd },
+            { role: 'system' as const, content: systemInstruction },
+            { role: 'user' as const, content: promptMd },
             { role: 'assistant' as const, content: firstText },
-            { role: 'user'      as const, content: buildRetryMessage(firstAttempt) },
+            { role: 'user' as const, content: buildRetryMessage(firstAttempt) },
           ];
-      const retryTemperature = isInvalidJson
-        ? INVALID_JSON_RETRY_TEMPERATURE
-        : DEFAULT_TEMPERATURE;
+      const retryTemperature = isInvalidJson ? INVALID_JSON_RETRY_TEMPERATURE : DEFAULT_TEMPERATURE;
 
       const secondText = await this.chat(
         retryMessages,
@@ -266,7 +290,9 @@ export class OllamaAnalyzer implements Analyzer {
       const secondAttempt = parseAndValidate(secondText, schema);
       if (secondAttempt.ok) {
         if (secondAttempt.repaired) {
-          console.warn(`[ollama] ${this.model} ${key} required JSON cleanup on retry (markdown fence and/or unescaped quotes)`);
+          console.warn(
+            `[ollama] ${this.model} ${key} required JSON cleanup on retry (markdown fence and/or unescaped quotes)`,
+          );
         }
         await persistResponse(manuscriptId, key, secondText);
         return secondAttempt.value;
@@ -355,7 +381,9 @@ export class OllamaAnalyzer implements Analyzer {
        disconnected while a previous chapter was still running). Saves a
        wasted Ollama round-trip and lets the route loop bail immediately. */
     if (signal?.aborted) {
-      throw new AnalysisAbortedError(`Ollama ${this.model} call aborted before fetch (client disconnected).`);
+      throw new AnalysisAbortedError(
+        `Ollama ${this.model} call aborted before fetch (client disconnected).`,
+      );
     }
 
     let response: Response;
@@ -377,7 +405,9 @@ export class OllamaAnalyzer implements Analyzer {
       /* Reachable but errored — hard-fail. Surface the body verbatim so
          operator can diagnose ("model not found", "invalid format", …). */
       const text = await response.text().catch(() => '');
-      throw new Error(`Ollama ${this.url} returned ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+      throw new Error(
+        `Ollama ${this.url} returned ${response.status} ${response.statusText}: ${text.slice(0, 500)}`,
+      );
     }
 
     if (!response.body) {
@@ -386,8 +416,8 @@ export class OllamaAnalyzer implements Analyzer {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
-    let buf = '';          // assembled assistant content
-    let lineBuf = '';      // partial NDJSON line carried across reads
+    let buf = ''; // assembled assistant content
+    let lineBuf = ''; // partial NDJSON line carried across reads
     let firstByteSeen = false;
     const start = Date.now();
     let lastChunkAt = start;
@@ -398,14 +428,18 @@ export class OllamaAnalyzer implements Analyzer {
           /* Caller (the route's req.on('close') handler) aborted while we
              were mid-stream. Tear down cleanly rather than burning more
              tokens on output the client will never see. */
-          throw new AnalysisAbortedError(`Ollama ${this.model} stream aborted (client disconnected).`);
+          throw new AnalysisAbortedError(
+            `Ollama ${this.model} stream aborted (client disconnected).`,
+          );
         }
         let result: { done: boolean; value?: Uint8Array };
         try {
           result = await reader.read();
         } catch (err) {
           if (signal?.aborted) {
-            throw new AnalysisAbortedError(`Ollama ${this.model} stream aborted (client disconnected).`);
+            throw new AnalysisAbortedError(
+              `Ollama ${this.model} stream aborted (client disconnected).`,
+            );
           }
           /* A connection drop mid-stream — daemon was up, then went away.
              If we've already seen bytes, this is a partial-stream failure
@@ -453,7 +487,11 @@ export class OllamaAnalyzer implements Analyzer {
         }
       }
     } finally {
-      try { reader.releaseLock(); } catch { /* already released */ }
+      try {
+        reader.releaseLock();
+      } catch {
+        /* already released */
+      }
     }
 
     if (!buf) {

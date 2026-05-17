@@ -9,8 +9,10 @@ import { parseEpub } from './epub.js';
 export type { ParsedManuscript };
 
 const EXT_TO_FORMAT: Record<string, 'markdown' | 'plaintext' | 'pdf' | 'epub'> = {
-  md: 'markdown', markdown: 'markdown',
-  txt: 'plaintext', text: 'plaintext',
+  md: 'markdown',
+  markdown: 'markdown',
+  txt: 'plaintext',
+  text: 'plaintext',
   pdf: 'pdf',
   epub: 'epub',
 };
@@ -55,7 +57,9 @@ export async function parseManuscript(input: {
     return parseText(input.buffer.toString('utf8'), { fileName: input.fileName, format });
   }
 
-  throw new UnsupportedFormatError(`Unsupported manuscript format: ${ext ?? input.mimeType ?? 'unknown'}.`);
+  throw new UnsupportedFormatError(
+    `Unsupported manuscript format: ${ext ?? input.mimeType ?? 'unknown'}.`,
+  );
 }
 
 export class UnsupportedFormatError extends Error {

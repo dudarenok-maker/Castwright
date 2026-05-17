@@ -21,38 +21,42 @@ vi.mock('../lib/api', () => ({
 import { api } from '../lib/api';
 
 const SERVER_FIXTURE: UserSettings = {
-  displayName:          'Mike Dudarenok',
+  displayName: 'Mike Dudarenok',
   defaultAnalysisModel: 'gemma-4-31b-it',
-  defaultTtsEngine:     'local',
-  defaultTtsModelKey:   'coqui-xtts-v2',
-  sidecarUrl:           'http://localhost:9000',
-  analysisEngine:       'local',
-  ollamaUrl:            'http://localhost:11434',
+  defaultTtsEngine: 'local',
+  defaultTtsModelKey: 'coqui-xtts-v2',
+  sidecarUrl: 'http://localhost:9000',
+  analysisEngine: 'local',
+  ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
-  minorCastMinLines:    3,
-  apiKeyStatus:         'unset',
-  workspaceRoot:        '/users/mike/workspace',
-  workspaceSource:      'env',
+  minorCastMinLines: 3,
+  apiKeyStatus: 'unset',
+  workspaceRoot: '/users/mike/workspace',
+  workspaceSource: 'env',
 };
 
 function renderView(initial: Partial<UserSettings> = {}) {
   const preloaded: AccountState = {
     ...SERVER_FIXTURE,
     ...initial,
-    status:   'idle',
-    error:    null,
+    status: 'idle',
+    error: null,
     hydrated: true,
   };
   const store = configureStore({
     reducer: {
       account: accountSlice.reducer,
-      ui:      uiSlice.reducer,
+      ui: uiSlice.reducer,
     },
     preloadedState: { account: preloaded },
   });
   return {
     store,
-    ...render(<Provider store={store}><AccountView/></Provider>),
+    ...render(
+      <Provider store={store}>
+        <AccountView />
+      </Provider>,
+    ),
   };
 }
 
@@ -134,7 +138,9 @@ describe('AccountView — save flow', () => {
   });
 
   it('surfaces an error text when the save rejects', async () => {
-    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('disk full'));
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('disk full'),
+    );
     const user = userEvent.setup();
     renderView();
     await user.click(screen.getByRole('button', { name: /save changes/i }));
@@ -205,15 +211,21 @@ describe('AccountView — hydration sync', () => {
     const store = configureStore({
       reducer: {
         account: accountSlice.reducer,
-        ui:      uiSlice.reducer,
+        ui: uiSlice.reducer,
       },
     });
-    render(<Provider store={store}><AccountView/></Provider>);
+    render(
+      <Provider store={store}>
+        <AccountView />
+      </Provider>,
+    );
     /* The store starts on built-in defaults; fetch dispatches and the form
        follows once the slice updates. */
     await store.dispatch(fetchAccountSettings());
     await waitFor(() => {
-      expect((screen.getByLabelText('Display name') as HTMLInputElement).value).toBe('Hydrated Name');
+      expect((screen.getByLabelText('Display name') as HTMLInputElement).value).toBe(
+        'Hydrated Name',
+      );
     });
   });
 
@@ -229,10 +241,14 @@ describe('AccountView — hydration sync', () => {
     const store = configureStore({
       reducer: {
         account: accountSlice.reducer,
-        ui:      uiSlice.reducer,
+        ui: uiSlice.reducer,
       },
     });
-    render(<Provider store={store}><AccountView/></Provider>);
+    render(
+      <Provider store={store}>
+        <AccountView />
+      </Provider>,
+    );
     await store.dispatch(fetchAccountSettings());
 
     /* The form's controls must NOT be rendered — otherwise the picker
@@ -304,7 +320,9 @@ describe('AccountView — Appearance (plan 41)', () => {
       store.dispatch({ type: 'ui/setThemeOverride', payload: 'dark' });
     });
     expect(screen.getByTestId('theme-override-pill')).toBeInTheDocument();
-    expect(screen.getByTestId('theme-override-pill').textContent).toMatch(/this device is overridden/i);
+    expect(screen.getByTestId('theme-override-pill').textContent).toMatch(
+      /this device is overridden/i,
+    );
   });
 
   it('"Use account default" button clears the override', async () => {
@@ -335,7 +353,7 @@ describe('AccountView — TTS sidecar auto-start (plan 43)', () => {
     expect(screen.getByText(/you manage the sidecar process yourself/i)).toBeInTheDocument();
   });
 
-  it("defaults to true when the field is absent (legacy settings file)", () => {
+  it('defaults to true when the field is absent (legacy settings file)', () => {
     renderView({ autoStartSidecar: undefined });
     const checkbox = screen.getByTestId('account-auto-start-sidecar') as HTMLInputElement;
     expect(checkbox.checked).toBe(true);

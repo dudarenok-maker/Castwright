@@ -19,25 +19,26 @@ Opt-in analyzer mode that hits the Gemini free-tier API directly instead of the 
 - **Retry policy**: max 3 attempts per call, 90 s total wall-clock budget, exponential backoff with jitter `[1.5s, 6s]`. Retries on 5xx (500/503/504) and per-minute 429. Per-minute 429s honor Google's `retry-delay` from `details[].RetryInfo` — the limiter is notified via `recordRejection()` so the next acquire waits at least that long. **Daily-quota 429s are NOT retried** — they throw `DailyQuotaExhaustedError` and surface as `code: 'daily_quota'` with the next-UTC-midnight reset time in the detail blob.
 - **Built-in per-model limits** (pulled from `aistudio.google.com/app/rate-limit` 2026-05-16; override via `GEMINI_RPM_<slug>`, `GEMINI_TPM_<slug>`, `GEMINI_RPD_<slug>` env vars; see `server/.env.example`):
 
-  | Model | RPM | TPM | RPD |
-  |---|---|---|---|
-  | `gemini-3.1-flash-lite` | 15 | 250,000 | 500 |
-  | `gemini-3-flash-preview` | 5 | 250,000 | 20 |
-  | `gemini-2.5-flash` | 5 | 250,000 | 20 |
-  | `gemma-4-31b-it` | 15 | Unlimited | 1,500 |
-  | `gemma-4-26b-a4b-it` | 15 | Unlimited | 1,500 |
-  | unknown (fallback) | 5 | 100,000 | 50 |
+  | Model                    | RPM | TPM       | RPD   |
+  | ------------------------ | --- | --------- | ----- |
+  | `gemini-3.1-flash-lite`  | 15  | 250,000   | 500   |
+  | `gemini-3-flash-preview` | 5   | 250,000   | 20    |
+  | `gemini-2.5-flash`       | 5   | 250,000   | 20    |
+  | `gemma-4-31b-it`         | 15  | Unlimited | 1,500 |
+  | `gemma-4-26b-a4b-it`     | 15  | Unlimited | 1,500 |
+  | unknown (fallback)       | 5   | 100,000   | 50    |
 
 - TPM is **input** tokens per minute (output doesn't count). Estimate is `Math.ceil(promptChars / 4) + 1_000`; reconciled against `usageMetadata.promptTokenCount` once the SDK returns it so persistent estimation drift doesn't accumulate.
 - When the limiter has to delay a call (>1 s wait), the analyzer's `onThrottle(waitMs, reason)` fires. The route layer maps that to an SSE `{ kind: 'throttle', model, waitMs, reason }` event; the analysing view renders a "Throttling Gemini … · resuming in Ns" pill on the affected per-chapter row (replaces the heartbeat row while active). Reasons: `'rpm' | 'tpm' | 'rpd' | 'retry-after'`.
 - Rate-limit / quota / auth errors are mapped to `AnalysisError` with a structured `detail` field carrying Google's `status` + `details[]` envelope (`src/lib/api.ts:407-410` consumes this and renders the collapsible detail block).
 - **`parseAndValidate` rescues four classes of malformed model output** (shared with the Ollama analyzer via `repairUnescapedQuotes` / `trimTrailingProse` / `repairStructuralPunctuation` exports from `gemini.ts`):
-  1. ```` ```json ... ``` ```` markdown fences (`stripCodeFences`) — model wrapped its JSON despite the system-prompt prohibition.
+  1. ` ```json ... ``` ` markdown fences (`stripCodeFences`) — model wrapped its JSON despite the system-prompt prohibition.
   2. Unescaped inner double-quotes inside string values (`repairUnescapedQuotes`) — model emitted dialogue with raw `"` characters instead of `\"`. Verified against real failing raws ch8 byte 2363 / ch10 byte 1432.
   3. Trailing prose after the outer closing brace (`trimTrailingProse`) — model finished its JSON and then continued writing free-form commentary. Ch44 pos 37588 shape in the Bonus Keefe Story regression.
   4. Single-token structural punctuation gaps (`repairStructuralPunctuation`, bounded at 2 inserts by default) — one missing comma between adjacent properties OR up to two missing close braces / brackets at EOF. Ch49 pos 32464 shape. Deeper truncation (3+ unclosed) stays unparseable so the retry policy in `ollama.ts:352` correctly drops the broken assistant turn instead of replaying a half-rescued skeleton.
-  
+
   All four passes are no-ops on byte-clean JSON, so they layer without false positives. Coverage: `server/src/analyzer/parse-and-repair.test.ts` (47 cases).
+
 - The Gemini analyzer must override `model` from the request body when present (used by the UI re-parse dialog to A/B between models without restarting the server).
 
 ## Acceptance walkthrough

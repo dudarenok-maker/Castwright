@@ -89,8 +89,7 @@ function toSummary(state: BookStateJson, snap: AnalysisStateFile): ActiveAnalysi
      book-state.ts). At this layer there's no in-memory job map to
      consult — the live-job check is the per-book endpoint's job. The
      library scan never returns `'running'` on the wire. */
-  const coercedState: 'paused' | 'halted' =
-    snap.state === 'halted' ? 'halted' : 'paused';
+  const coercedState: 'paused' | 'halted' = snap.state === 'halted' ? 'halted' : 'paused';
   return {
     bookId: state.bookId,
     bookTitle: state.title,
@@ -114,9 +113,12 @@ function toSummary(state: BookStateJson, snap: AnalysisStateFile): ActiveAnalysi
    tiny and isolated. */
 function listDirs(parent: string): string[] {
   try {
-    return readdirSync(parent).filter(name => {
-      try { return statSync(join(parent, name)).isDirectory(); }
-      catch { return false; }
+    return readdirSync(parent).filter((name) => {
+      try {
+        return statSync(join(parent, name)).isDirectory();
+      } catch {
+        return false;
+      }
     });
   } catch {
     return [];

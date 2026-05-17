@@ -50,14 +50,12 @@ export interface BuildMp3FolderResult {
 export async function buildMp3Folder(opts: BuildMp3FolderOptions): Promise<BuildMp3FolderResult> {
   const { bookDir, state, outDir, onProgress, signal } = opts;
 
-  const chapters = [...state.chapters]
-    .filter(c => !c.excluded)
-    .sort((a, b) => a.id - b.id);
+  const chapters = [...state.chapters].filter((c) => !c.excluded).sort((a, b) => a.id - b.id);
 
   /* Same precheck as buildMp3Zip — surface ALL missing slugs at once. */
   const root = audioDir(bookDir);
   const missing: string[] = [];
-  const resolved: Array<{ chapter: typeof chapters[number]; mp3Path: string }> = [];
+  const resolved: Array<{ chapter: (typeof chapters)[number]; mp3Path: string }> = [];
   for (const chapter of chapters) {
     const audio = findChapterAudio(root, chapter.slug);
     if (!audio) {
@@ -95,14 +93,14 @@ export async function buildMp3Folder(opts: BuildMp3FolderOptions): Promise<Build
     const taggedPath = join(outDir, fileName);
 
     const tags: Id3Tags = {
-      title:       chapter.title,
+      title: chapter.title,
       album,
       artist,
       albumArtist,
-      track:       i + 1,
-      trackTotal:  total,
-      genre:       state.genre ?? null,
-      date:        state.publicationDate ?? null,
+      track: i + 1,
+      trackTotal: total,
+      genre: state.genre ?? null,
+      date: state.publicationDate ?? null,
     };
     await applyId3v24Tags(mp3Path, taggedPath, tags, { coverJpegPath });
     const taggedStat = await stat(taggedPath);

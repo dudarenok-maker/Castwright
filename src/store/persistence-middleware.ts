@@ -38,48 +38,119 @@ const DEBOUNCE_MS = 500;
    (hydrateFromAnalysis, hydrateFromBookState, applyPoll for initial load,
    setImportCandidate) are intentionally absent — those are server-driven
    and would create a write-loop if echoed back. */
-const PERSIST_RULES: Record<string, { slice: StateSlice; build: (s: PersistableRootState) => unknown }> = {
-  'cast/setCharacters':       { slice: 'cast',       build: (s) => ({ characters: s.cast.characters }) },
-  'cast/declineMatch':        { slice: 'cast',       build: (s) => ({ characters: s.cast.characters }) },
-  'cast/updateCharacter':     { slice: 'cast',       build: (s) => ({ characters: s.cast.characters }) },
-  'cast/applyVoiceMatches':   { slice: 'cast',       build: (s) => ({ characters: s.cast.characters }) },
-  'cast/lockVoice':           { slice: 'cast',       build: (s) => ({ characters: s.cast.characters }) },
+const PERSIST_RULES: Record<
+  string,
+  { slice: StateSlice; build: (s: PersistableRootState) => unknown }
+> = {
+  'cast/setCharacters': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
+  'cast/declineMatch': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
+  'cast/updateCharacter': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
+  'cast/applyVoiceMatches': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
+  'cast/lockVoice': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
 
-  'manuscript/setSentenceCharacter':  { slice: 'manuscript', build: (s) => ({ sentences: s.manuscript.sentences }) },
-  'manuscript/setSentencesCharacter': { slice: 'manuscript', build: (s) => ({ sentences: s.manuscript.sentences }) },
-  'manuscript/splitSentence':         { slice: 'manuscript', build: (s) => ({ sentences: s.manuscript.sentences }) },
+  'manuscript/setSentenceCharacter': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences }),
+  },
+  'manuscript/setSentencesCharacter': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences }),
+  },
+  'manuscript/splitSentence': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences }),
+  },
 
   /* dismissed ids ride with every revisions persist so the backend drift
      detector can filter ids the user has waved off (read in
      server/src/routes/revisions.ts). Without it, the slice's in-memory
      dismissals would be lost on reload and previously-dismissed events
      would resurface on the next poll. */
-  'revisions/acceptAllPending': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
-  'revisions/rejectAllPending': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
-  'revisions/dismissDrift':     { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
+  'revisions/acceptAllPending': {
+    slice: 'revisions',
+    build: (s) => ({
+      pending: s.revisions.pending,
+      drift: s.revisions.drift,
+      dismissed: s.revisions.dismissed,
+    }),
+  },
+  'revisions/rejectAllPending': {
+    slice: 'revisions',
+    build: (s) => ({
+      pending: s.revisions.pending,
+      drift: s.revisions.drift,
+      dismissed: s.revisions.dismissed,
+    }),
+  },
+  'revisions/dismissDrift': {
+    slice: 'revisions',
+    build: (s) => ({
+      pending: s.revisions.pending,
+      drift: s.revisions.drift,
+      dismissed: s.revisions.dismissed,
+    }),
+  },
   /* Per-item accept also persists acceptedSelections — the slice records
      the user's per-segment A/B choices at accept time and this patch is
      the only way they survive a reload. Reject doesn't capture selection
      (see revisions-slice.rejectRevision), so its patch is the same as the
      bulk variants. */
-  'revisions/acceptRevision':   { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed, acceptedSelections: s.revisions.acceptedSelections }) },
-  'revisions/rejectRevision':   { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
+  'revisions/acceptRevision': {
+    slice: 'revisions',
+    build: (s) => ({
+      pending: s.revisions.pending,
+      drift: s.revisions.drift,
+      dismissed: s.revisions.dismissed,
+      acceptedSelections: s.revisions.acceptedSelections,
+    }),
+  },
+  'revisions/rejectRevision': {
+    slice: 'revisions',
+    build: (s) => ({
+      pending: s.revisions.pending,
+      drift: s.revisions.drift,
+      dismissed: s.revisions.dismissed,
+    }),
+  },
   /* enqueuePending is fired by the generation-stream middleware on every
      regenerateCharacter dispatch. Persist `pending` so a mid-regen reload
      rehydrates the in-flight revision stub. markRevisionPlayable
      similarly persists so the playable flip survives a reload after the
      chapter completed but before the user opened the diff. */
-  'revisions/enqueuePending':     { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
-  'revisions/markRevisionPlayable': { slice: 'revisions', build: (s) => ({ pending: s.revisions.pending, drift: s.revisions.drift, dismissed: s.revisions.dismissed }) },
+  'revisions/enqueuePending': {
+    slice: 'revisions',
+    build: (s) => ({
+      pending: s.revisions.pending,
+      drift: s.revisions.drift,
+      dismissed: s.revisions.dismissed,
+    }),
+  },
+  'revisions/markRevisionPlayable': {
+    slice: 'revisions',
+    build: (s) => ({
+      pending: s.revisions.pending,
+      drift: s.revisions.drift,
+      dismissed: s.revisions.dismissed,
+    }),
+  },
 
   /* Editorial audit trail. Persists the whole `events` array on every
      append — the log is small (one entry per user action) and the server
      route writes the file atomically, so a full rewrite stays cheap. The
      boundary-move aggregator and the reparse wipe both mutate the same
      array, so they share the persistence rule. */
-  'changeLog/appendLogEvent':       { slice: 'changeLog', build: (s) => ({ events: s.changeLog.events }) },
-  'changeLog/bumpBoundaryMove':     { slice: 'changeLog', build: (s) => ({ events: s.changeLog.events }) },
-  'changeLog/wipeBookShapeEvents':  { slice: 'changeLog', build: (s) => ({ events: s.changeLog.events }) },
+  'changeLog/appendLogEvent': {
+    slice: 'changeLog',
+    build: (s) => ({ events: s.changeLog.events }),
+  },
+  'changeLog/bumpBoundaryMove': {
+    slice: 'changeLog',
+    build: (s) => ({ events: s.changeLog.events }),
+  },
+  'changeLog/wipeBookShapeEvents': {
+    slice: 'changeLog',
+    build: (s) => ({ events: s.changeLog.events }),
+  },
 
   'ui/confirmCast': { slice: 'state', build: () => ({ castConfirmed: true }) },
 
@@ -96,11 +167,11 @@ const PERSIST_RULES: Record<string, { slice: StateSlice; build: (s: PersistableR
       const saved = bookId ? s.bookMeta.saved[bookId] : null;
       if (!saved) return {};
       return {
-        title:           saved.title,
-        author:          saved.author,
-        series:          saved.series,
-        narratorCredit:  saved.narratorCredit,
-        genre:           saved.genre,
+        title: saved.title,
+        author: saved.author,
+        series: saved.series,
+        narratorCredit: saved.narratorCredit,
+        genre: saved.genre,
         publicationDate: saved.publicationDate,
       };
     },
@@ -121,7 +192,7 @@ export const persistenceMiddleware: Middleware = (store) => {
     pending.delete(slice);
     timers.delete(slice);
     if (patch === undefined) return;
-    api.putBookState(bookId, { slice, patch }).catch(err => {
+    api.putBookState(bookId, { slice, patch }).catch((err) => {
       console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
     });
   };
@@ -141,7 +212,10 @@ export const persistenceMiddleware: Middleware = (store) => {
     pending.set(rule.slice, rule.build(after));
     const prev = timers.get(rule.slice);
     if (prev) clearTimeout(prev);
-    timers.set(rule.slice, setTimeout(() => flush(bookId, rule.slice), DEBOUNCE_MS));
+    timers.set(
+      rule.slice,
+      setTimeout(() => flush(bookId, rule.slice), DEBOUNCE_MS),
+    );
     return result;
   };
 };

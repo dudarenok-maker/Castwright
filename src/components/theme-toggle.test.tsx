@@ -19,7 +19,10 @@ import { FRONTEND_ACCOUNT_DEFAULTS } from '../lib/account-defaults';
 function makeStore({
   themeOverride = null as UiState['themeOverride'],
   accountDefault = 'system' as 'light' | 'dark' | 'system',
-}: { themeOverride?: UiState['themeOverride']; accountDefault?: 'light' | 'dark' | 'system' } = {}) {
+}: {
+  themeOverride?: UiState['themeOverride'];
+  accountDefault?: 'light' | 'dark' | 'system';
+} = {}) {
   const uiPreloaded: UiState = {
     stage: { kind: 'books' },
     currentTrack: null,
@@ -41,12 +44,12 @@ function makeStore({
   };
   const accountPreloaded: AccountState = {
     ...FRONTEND_ACCOUNT_DEFAULTS,
-    apiKeyStatus:           'unset',
-    workspaceRoot:          '',
-    workspaceSource:        'default',
-    status:                 'idle',
-    error:                  null,
-    hydrated:               true,
+    apiKeyStatus: 'unset',
+    workspaceRoot: '',
+    workspaceSource: 'default',
+    status: 'idle',
+    error: null,
+    hydrated: true,
     defaultThemePreference: accountDefault,
   };
   return configureStore({
@@ -57,7 +60,11 @@ function makeStore({
 
 function renderToggle(opts: Parameters<typeof makeStore>[0] = {}) {
   const store = makeStore(opts);
-  const view = render(<Provider store={store}><ThemeToggleButton/></Provider>);
+  const view = render(
+    <Provider store={store}>
+      <ThemeToggleButton />
+    </Provider>,
+  );
   return { store, ...view };
 }
 
@@ -110,16 +117,25 @@ describe('ThemeToggleButton — click cycles system → light → dark → syste
 describe('ThemeToggleButton — aria-label rotates per mode', () => {
   it('system label calls out the next step is Light', () => {
     renderToggle();
-    expect(screen.getByTestId('theme-toggle')).toHaveAttribute('aria-label', expect.stringMatching(/system.*switch to light/i));
+    expect(screen.getByTestId('theme-toggle')).toHaveAttribute(
+      'aria-label',
+      expect.stringMatching(/system.*switch to light/i),
+    );
   });
 
   it('light label calls out the next step is Dark', () => {
     renderToggle({ themeOverride: 'light' });
-    expect(screen.getByTestId('theme-toggle')).toHaveAttribute('aria-label', expect.stringMatching(/light.*switch to dark/i));
+    expect(screen.getByTestId('theme-toggle')).toHaveAttribute(
+      'aria-label',
+      expect.stringMatching(/light.*switch to dark/i),
+    );
   });
 
   it('dark label calls out the next step is System', () => {
     renderToggle({ themeOverride: 'dark' });
-    expect(screen.getByTestId('theme-toggle')).toHaveAttribute('aria-label', expect.stringMatching(/dark.*switch to system/i));
+    expect(screen.getByTestId('theme-toggle')).toHaveAttribute(
+      'aria-label',
+      expect.stringMatching(/dark.*switch to system/i),
+    );
   });
 });

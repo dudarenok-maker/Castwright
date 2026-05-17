@@ -46,7 +46,11 @@ import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, ensureWorkspace } from './workspace/paths.js';
 import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
-import { readUserSettings, getResolvedSidecarUrl, getResolvedAutoStartSidecar } from './workspace/user-settings.js';
+import {
+  readUserSettings,
+  getResolvedSidecarUrl,
+  getResolvedAutoStartSidecar,
+} from './workspace/user-settings.js';
 import { spawnSidecar, type SidecarHandle } from './tts/spawn-sidecar.js';
 
 const app = express();
@@ -74,15 +78,15 @@ void readUserSettings();
    with `[]`. Fire-and-forget: never blocks listen, never crashes on a
    malformed file. */
 void migrateLegacyChangeLogs()
-  .then(r => {
+  .then((r) => {
     if (r.migrated.length > 0) {
       console.log(
         `[changelog] migrated ${r.migrated.length} book(s) to a fresh log ` +
-        `(originals saved alongside as change-log.legacy.json).`,
+          `(originals saved alongside as change-log.legacy.json).`,
       );
     }
   })
-  .catch(err => console.warn('[changelog] migration skipped:', err));
+  .catch((err) => console.warn('[changelog] migration skipped:', err));
 app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, maxAge: '1h' }));
 
 app.get('/api/health', (_req, res) => {
@@ -95,22 +99,22 @@ app.use('/api/library', libraryRouter);
 app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);
 app.use('/api/manuscripts', analysisRouter); // analysisRouter mounts /:id/analysis
-app.use('/api/books', bookStateRouter);      // mounts /:bookId/state (GET/PUT)
-app.use('/api/books', coverRouter);          // mounts /:bookId/cover{,/candidates} (OpenLibrary covers)
-app.use('/api/books', voiceMatchRouter);     // mounts /:bookId/voice-match
-app.use('/api/books', castMergeRouter);      // mounts /:bookId/cast/merge
-app.use('/api/books', castLinkPriorRouter);  // mounts /:bookId/cast/link-prior (manual continuity link to a prior series book)
-app.use('/api/books', seriesRosterRouter);   // mounts /:bookId/series-roster (prior-book characters in the same series)
-app.use('/api', libraryCastOverrideRouter);  // mounts /library-cast/override (cross-book; not under /:bookId)
-app.use('/api/books', generationRouter);     // mounts /:bookId/generation (SSE)
-app.use('/api/books', chapterAudioRouter);   // mounts /:bookId/chapters/:chapterId/audio(.mp3)
-app.use('/api/books', exportRouter);         // mounts /:bookId/exports (POST + GET status + GET download)
-app.use('/api/export', exportLanRouter);     // mounts /lan (LAN URL enumeration for the export modal)
-app.use('/api/books', revisionsRouter);      // mounts /:bookId/revisions (drift diff over segments snapshots)
-app.use('/api/voices', voicesRouter);        // mounts GET / + PUT /:voiceId/pin
-app.use('/api/voices', voiceSampleRouter);   // mounts POST /:voiceId/sample
+app.use('/api/books', bookStateRouter); // mounts /:bookId/state (GET/PUT)
+app.use('/api/books', coverRouter); // mounts /:bookId/cover{,/candidates} (OpenLibrary covers)
+app.use('/api/books', voiceMatchRouter); // mounts /:bookId/voice-match
+app.use('/api/books', castMergeRouter); // mounts /:bookId/cast/merge
+app.use('/api/books', castLinkPriorRouter); // mounts /:bookId/cast/link-prior (manual continuity link to a prior series book)
+app.use('/api/books', seriesRosterRouter); // mounts /:bookId/series-roster (prior-book characters in the same series)
+app.use('/api', libraryCastOverrideRouter); // mounts /library-cast/override (cross-book; not under /:bookId)
+app.use('/api/books', generationRouter); // mounts /:bookId/generation (SSE)
+app.use('/api/books', chapterAudioRouter); // mounts /:bookId/chapters/:chapterId/audio(.mp3)
+app.use('/api/books', exportRouter); // mounts /:bookId/exports (POST + GET status + GET download)
+app.use('/api/export', exportLanRouter); // mounts /lan (LAN URL enumeration for the export modal)
+app.use('/api/books', revisionsRouter); // mounts /:bookId/revisions (drift diff over segments snapshots)
+app.use('/api/voices', voicesRouter); // mounts GET / + PUT /:voiceId/pin
+app.use('/api/voices', voiceSampleRouter); // mounts POST /:voiceId/sample
 app.use('/api/sidecar', sidecarHealthRouter); // mounts GET /health
-app.use('/api/ollama', ollamaHealthRouter);  // mounts GET /health (local LLM analyzer)
+app.use('/api/ollama', ollamaHealthRouter); // mounts GET /health (local LLM analyzer)
 
 const PORT = Number(process.env.PORT ?? 8080);
 
@@ -146,14 +150,14 @@ app.listen(PORT, () => {
     if (audit.missingDescriptions.length > 0) {
       console.warn(
         `[tts:catalog] ${engine}: ${audit.missingDescriptions.length} picker voice(s) ` +
-        `have no description — cast view will show "Prebuilt voice" placeholder for: ` +
-        audit.missingDescriptions.join(', '),
+          `have no description — cast view will show "Prebuilt voice" placeholder for: ` +
+          audit.missingDescriptions.join(', '),
       );
     }
     if (audit.unrouted.length > 0) {
       console.info(
         `[tts:catalog] ${engine}: ${audit.unrouted.length} described voice(s) are ` +
-        `never chosen by the picker (orphan entries): ${audit.unrouted.join(', ')}`,
+          `never chosen by the picker (orphan entries): ${audit.unrouted.join(', ')}`,
       );
     }
     if (audit.missingDescriptions.length === 0 && audit.unrouted.length === 0) {

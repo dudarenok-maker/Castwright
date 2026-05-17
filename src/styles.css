@@ -13,38 +13,55 @@
 
 :root {
   /* Core palette ---------------------------------------------------------- */
-  --canvas:       #FFFDFB;
-  --canvas-warm:  #FCDED7;
-  --ink:          #0F0E0D;
-  --ink-soft:     #1A1A1A;
-  --peach:        #F79A83;        /* peach = action accent */
-  --peach-soft:   #FCDED7;
-  --magenta:      #A43C6C;        /* magenta = secondary / brand */
-  --purple-deep:  #3C194F;        /* deep purple = series context */
+  --canvas: #fffdfb;
+  --canvas-warm: #fcded7;
+  --ink: #0f0e0d;
+  --ink-soft: #1a1a1a;
+  --peach: #f79a83; /* peach = action accent */
+  --peach-soft: #fcded7;
+  --magenta: #a43c6c; /* magenta = secondary / brand */
+  --purple-deep: #3c194f; /* deep purple = series context */
 
   /* Channel forms — for rgba() composition without re-typing the hex. */
-  --peach-rgb:        247, 154, 131;
-  --ink-rgb:          15, 14, 13;
-  --magenta-rgb:      164, 60, 108;
-  --purple-deep-rgb:  60, 25, 79;
+  --peach-rgb: 247, 154, 131;
+  --ink-rgb: 15, 14, 13;
+  --magenta-rgb: 164, 60, 108;
+  --purple-deep-rgb: 60, 25, 79;
 
   /* Shadows --------------------------------------------------------------- */
-  --shadow-card:       0 1px 2px rgba(var(--ink-rgb), 0.04), 0 8px 24px rgba(var(--ink-rgb), 0.06);
-  --shadow-card-hover: 0 2px 4px rgba(var(--ink-rgb), 0.06), 0 16px 40px rgba(var(--ink-rgb), 0.10);
-  --shadow-float:      0 24px 60px rgba(var(--ink-rgb), 0.12);
-  --shadow-drawer:     -24px 0 60px rgba(var(--ink-rgb), 0.12);
+  --shadow-card: 0 1px 2px rgba(var(--ink-rgb), 0.04), 0 8px 24px rgba(var(--ink-rgb), 0.06);
+  --shadow-card-hover: 0 2px 4px rgba(var(--ink-rgb), 0.06), 0 16px 40px rgba(var(--ink-rgb), 0.1);
+  --shadow-float: 0 24px 60px rgba(var(--ink-rgb), 0.12);
+  --shadow-drawer: -24px 0 60px rgba(var(--ink-rgb), 0.12);
 
   /* Gradients ------------------------------------------------------------- */
-  --gradient-cta:            linear-gradient(180deg, var(--ink) 0%, var(--purple-deep) 45%, var(--magenta) 75%, var(--peach) 100%);
+  --gradient-cta: linear-gradient(
+    180deg,
+    var(--ink) 0%,
+    var(--purple-deep) 45%,
+    var(--magenta) 75%,
+    var(--peach) 100%
+  );
   --gradient-cta-horizontal: linear-gradient(90deg, var(--magenta), var(--purple-deep));
-  --gradient-progress:       linear-gradient(90deg, var(--purple-deep) 0%, var(--magenta) 60%, var(--peach) 100%);
-  --gradient-hero-wash:      linear-gradient(to right, rgba(var(--peach-rgb), 0.30), rgba(252,222,215,0.20) 35%, rgba(252,222,215,0.20) 67%, rgba(var(--peach-rgb), 0.30));
-  --gradient-image-wash:     linear-gradient(90deg, #FFFFFF, var(--peach) 80%);
+  --gradient-progress: linear-gradient(
+    90deg,
+    var(--purple-deep) 0%,
+    var(--magenta) 60%,
+    var(--peach) 100%
+  );
+  --gradient-hero-wash: linear-gradient(
+    to right,
+    rgba(var(--peach-rgb), 0.3),
+    rgba(252, 222, 215, 0.2) 35%,
+    rgba(252, 222, 215, 0.2) 67%,
+    rgba(var(--peach-rgb), 0.3)
+  );
+  --gradient-image-wash: linear-gradient(90deg, #ffffff, var(--peach) 80%);
 
   /* Type ------------------------------------------------------------------ */
-  --font-sans:  'General Sans', 'Neue Montreal', system-ui, sans-serif;
+  --font-sans: 'General Sans', 'Neue Montreal', system-ui, sans-serif;
   --font-serif: 'Lora', Georgia, serif;
-  --font-mono:  'JetBrains Mono', ui-monospace, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
 /* Dark mode ----------------------------------------------------------------
@@ -55,18 +72,18 @@
    (#F79A83 already gives ~8:1 on dark canvas); magenta and purple-
    deep are lifted because their light values (#A43C6C / #3C194F) give
    2.27:1 and 1.18:1 — both fail WCAG when used as text colours. */
-[data-theme="dark"] {
+[data-theme='dark'] {
   /* Inverted canvas. A near-black neutral with a hint of warmth so the
      peach accent doesn't glow blue against a cold grey. */
-  --canvas:       #14110F;
-  --canvas-warm:  #2A1A20;
+  --canvas: #14110f;
+  --canvas-warm: #2a1a20;
   /* Ink becomes near-white so existing `text-ink` classes invert with
      zero per-component changes. Ink-soft mirrors that contrast step. */
-  --ink:          #F4EFEC;
-  --ink-soft:     #DCD4CF;
+  --ink: #f4efec;
+  --ink-soft: #dcd4cf;
   /* Peach-soft was a near-pink fill; on dark it needs to drop into a
      muted plum so peach badges stay legible without screaming. */
-  --peach-soft:   #3C2128;
+  --peach-soft: #3c2128;
 
   /* Brand-as-text contrast lifts. The light values #A43C6C / #3C194F
      give 2.27:1 and 1.18:1 against #14110F — fail WCAG AA at every
@@ -75,8 +92,8 @@
      tailwind.config.ts:11-12 → every text-magenta / bg-magenta /
      border-magenta / ring-magenta utility flips automatically (same
      for purple-deep). --peach stays unchanged. */
-  --magenta:      #E58FB8;
-  --purple-deep:  #B89AD6;
+  --magenta: #e58fb8;
+  --purple-deep: #b89ad6;
 
   /* Channel forms — Recompute against the inverted core tokens so
      every rgba(var(--ink-rgb), …) elevation darkens to a near-white
@@ -85,17 +102,17 @@
      purple-deep-rgb shift in lockstep with the new --magenta /
      --purple-deep values so rgba(var(--magenta-rgb), …) overlays
      stay tonally aligned with the text-colour utilities. */
-  --peach-rgb:        247, 154, 131;
-  --ink-rgb:          244, 239, 236;
-  --magenta-rgb:      229, 143, 184;
-  --purple-deep-rgb:  184, 154, 214;
+  --peach-rgb: 247, 154, 131;
+  --ink-rgb: 244, 239, 236;
+  --magenta-rgb: 229, 143, 184;
+  --purple-deep-rgb: 184, 154, 214;
 
   /* Shadows — darker base + higher alpha for the deeper canvas. Inverts
      to a subtle light glow once --ink-rgb flips to near-white above. */
-  --shadow-card:       0 1px 2px rgba(0, 0, 0, 0.55), 0 8px 24px rgba(0, 0, 0, 0.45);
-  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.60), 0 16px 40px rgba(0, 0, 0, 0.55);
-  --shadow-float:      0 24px 60px rgba(0, 0, 0, 0.70);
-  --shadow-drawer:     -24px 0 60px rgba(0, 0, 0, 0.70);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.55), 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.6), 0 16px 40px rgba(0, 0, 0, 0.55);
+  --shadow-float: 0 24px 60px rgba(0, 0, 0, 0.7);
+  --shadow-drawer: -24px 0 60px rgba(0, 0, 0, 0.7);
 
   /* Gradients — the only one that needs flipping is the white→peach
      image wash; on dark canvas the white stop breaks the surface.
@@ -111,7 +128,9 @@
    shade (slightly lighter than --canvas to read as elevation).
    Same idea for the few other fixed Tailwind colour utilities that
    appear in component code as backgrounds. */
-[data-theme="dark"] .bg-white { background-color: #1F1B19; }
+[data-theme='dark'] .bg-white {
+  background-color: #1f1b19;
+}
 
 /* Hover variants of bg-white. Tailwind generates these as
    `.hover\:bg-white:hover` etc., a different selector than the bare
@@ -121,9 +140,15 @@
    read as a one-step elevation OVER the base bg-white redirect, so
    the values trend slightly lighter than #1F1B19 rather than back
    toward white. */
-[data-theme="dark"] .hover\:bg-white:hover      { background-color: #2A2520; }
-[data-theme="dark"] .hover\:bg-white\/60:hover  { background-color: rgba(244, 239, 236, 0.06); }
-[data-theme="dark"] .hover\:bg-white\/70:hover  { background-color: rgba(244, 239, 236, 0.07); }
+[data-theme='dark'] .hover\:bg-white:hover {
+  background-color: #2a2520;
+}
+[data-theme='dark'] .hover\:bg-white\/60:hover {
+  background-color: rgba(244, 239, 236, 0.06);
+}
+[data-theme='dark'] .hover\:bg-white\/70:hover {
+  background-color: rgba(244, 239, 236, 0.07);
+}
 
 /* Status pills use coloured backgrounds (rose / emerald / amber);
    their contrast against light text is fine on dark surfaces, but
@@ -131,52 +156,118 @@
    hue stays recognisable without blowing out luminance. -50 / -200
    / -900 / -950 variants follow the same pattern at varying alpha
    so the elevation step over canvas is preserved. */
-[data-theme="dark"] .bg-rose-50    { background-color: rgba(244, 63, 94, 0.12); }
-[data-theme="dark"] .bg-rose-100   { background-color: rgba(244, 63, 94, 0.18); }
-[data-theme="dark"] .bg-rose-200   { background-color: rgba(244, 63, 94, 0.22); }
-[data-theme="dark"] .bg-red-50     { background-color: rgba(239, 68, 68, 0.10); }
-[data-theme="dark"] .bg-emerald-50 { background-color: rgba(16, 185, 129, 0.10); }
-[data-theme="dark"] .bg-emerald-100{ background-color: rgba(16, 185, 129, 0.18); }
-[data-theme="dark"] .bg-amber-50   { background-color: rgba(245, 158, 11, 0.10); }
-[data-theme="dark"] .bg-amber-100  { background-color: rgba(245, 158, 11, 0.18); }
-[data-theme="dark"] .bg-amber-200  { background-color: rgba(245, 158, 11, 0.22); }
-[data-theme="dark"] .bg-amber-900  { background-color: rgba(245, 158, 11, 0.28); }
-[data-theme="dark"] .bg-amber-950  { background-color: rgba(245, 158, 11, 0.32); }
+[data-theme='dark'] .bg-rose-50 {
+  background-color: rgba(244, 63, 94, 0.12);
+}
+[data-theme='dark'] .bg-rose-100 {
+  background-color: rgba(244, 63, 94, 0.18);
+}
+[data-theme='dark'] .bg-rose-200 {
+  background-color: rgba(244, 63, 94, 0.22);
+}
+[data-theme='dark'] .bg-red-50 {
+  background-color: rgba(239, 68, 68, 0.1);
+}
+[data-theme='dark'] .bg-emerald-50 {
+  background-color: rgba(16, 185, 129, 0.1);
+}
+[data-theme='dark'] .bg-emerald-100 {
+  background-color: rgba(16, 185, 129, 0.18);
+}
+[data-theme='dark'] .bg-amber-50 {
+  background-color: rgba(245, 158, 11, 0.1);
+}
+[data-theme='dark'] .bg-amber-100 {
+  background-color: rgba(245, 158, 11, 0.18);
+}
+[data-theme='dark'] .bg-amber-200 {
+  background-color: rgba(245, 158, 11, 0.22);
+}
+[data-theme='dark'] .bg-amber-900 {
+  background-color: rgba(245, 158, 11, 0.28);
+}
+[data-theme='dark'] .bg-amber-950 {
+  background-color: rgba(245, 158, 11, 0.32);
+}
 
 /* Status text colours. Light-mode palette uses the darker shades
    (-700/-800/-900) on pale fills; on dark we want lighter shades
    (-300 / -400) so the text reads against the dark canvas. */
-[data-theme="dark"] .text-rose-900,
-[data-theme="dark"] .text-rose-900\/85,
-[data-theme="dark"] .text-rose-900\/70 { color: #FCA5A5; }
-[data-theme="dark"] .text-rose-700    { color: #FCA5A5; }
-[data-theme="dark"] .text-rose-300    { color: #FCA5A5; }
-[data-theme="dark"] .text-red-700     { color: #FCA5A5; }
-[data-theme="dark"] .text-emerald-800 { color: #6EE7B7; }
-[data-theme="dark"] .text-emerald-700 { color: #6EE7B7; }
-[data-theme="dark"] .text-emerald-600 { color: #34D399; }
-[data-theme="dark"] .text-amber-800   { color: #FBBF24; }
-[data-theme="dark"] .text-amber-700   { color: #FBBF24; }
-[data-theme="dark"] .text-amber-900   { color: #FCD34D; }
+[data-theme='dark'] .text-rose-900,
+[data-theme='dark'] .text-rose-900\/85,
+[data-theme='dark'] .text-rose-900\/70 {
+  color: #fca5a5;
+}
+[data-theme='dark'] .text-rose-700 {
+  color: #fca5a5;
+}
+[data-theme='dark'] .text-rose-300 {
+  color: #fca5a5;
+}
+[data-theme='dark'] .text-red-700 {
+  color: #fca5a5;
+}
+[data-theme='dark'] .text-emerald-800 {
+  color: #6ee7b7;
+}
+[data-theme='dark'] .text-emerald-700 {
+  color: #6ee7b7;
+}
+[data-theme='dark'] .text-emerald-600 {
+  color: #34d399;
+}
+[data-theme='dark'] .text-amber-800 {
+  color: #fbbf24;
+}
+[data-theme='dark'] .text-amber-700 {
+  color: #fbbf24;
+}
+[data-theme='dark'] .text-amber-900 {
+  color: #fcd34d;
+}
 
 /* Borders. The Books library uses border-rose-200 / border-ink/15 as
    the card outline; under dark mode those pale outlines disappear
    into the canvas. Lift the ink-tinted ones to a higher alpha;
    coloured ones get tinted at ~30% so they stay recognisable but
    never disappear. */
-[data-theme="dark"] .border-ink\/5    { border-color: rgba(var(--ink-rgb), 0.12); }
-[data-theme="dark"] .border-ink\/10,
-[data-theme="dark"] .border-ink\/15   { border-color: rgba(var(--ink-rgb), 0.18); }
-[data-theme="dark"] .border-amber-200,
-[data-theme="dark"] .border-amber-300 { border-color: rgba(245, 158, 11, 0.30); }
-[data-theme="dark"] .border-emerald-200 { border-color: rgba(16, 185, 129, 0.30); }
-[data-theme="dark"] .border-rose-200  { border-color: rgba(244, 63, 94, 0.30); }
+[data-theme='dark'] .border-ink\/5 {
+  border-color: rgba(var(--ink-rgb), 0.12);
+}
+[data-theme='dark'] .border-ink\/10,
+[data-theme='dark'] .border-ink\/15 {
+  border-color: rgba(var(--ink-rgb), 0.18);
+}
+[data-theme='dark'] .border-amber-200,
+[data-theme='dark'] .border-amber-300 {
+  border-color: rgba(245, 158, 11, 0.3);
+}
+[data-theme='dark'] .border-emerald-200 {
+  border-color: rgba(16, 185, 129, 0.3);
+}
+[data-theme='dark'] .border-rose-200 {
+  border-color: rgba(244, 63, 94, 0.3);
+}
 
 /* Page chrome -------------------------------------------------------------- */
-html, body { background: var(--canvas); }
-body       { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
-::selection      { background: var(--peach); color: var(--ink); }
-.font-mono, code, kbd, samp { font-family: var(--font-mono); }
+html,
+body {
+  background: var(--canvas);
+}
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+::selection {
+  background: var(--peach);
+  color: var(--ink);
+}
+.font-mono,
+code,
+kbd,
+samp {
+  font-family: var(--font-mono);
+}
 
 /* Patterns ----------------------------------------------------------------- */
 .dot-grid {
@@ -186,31 +277,104 @@ body       { font-family: var(--font-sans); -webkit-font-smoothing: antialiased;
 
 /* Drop / drag indicators --------------------------------------------------- */
 .dragging-boundary,
-.dragging-boundary * { cursor: ns-resize !important; user-select: none !important; }
-.dragging-voice      { cursor: grabbing !important; }
-.drop-active         { box-shadow: inset 0 0 0 2px var(--peach); background: rgba(var(--peach-rgb), 0.06); }
-.sentence-candidate  { background: rgba(var(--peach-rgb), 0.18); box-shadow: 0 -2px 0 0 var(--peach); }
+.dragging-boundary * {
+  cursor: ns-resize !important;
+  user-select: none !important;
+}
+.dragging-voice {
+  cursor: grabbing !important;
+}
+.drop-active {
+  box-shadow: inset 0 0 0 2px var(--peach);
+  background: rgba(var(--peach-rgb), 0.06);
+}
+.sentence-candidate {
+  background: rgba(var(--peach-rgb), 0.18);
+  box-shadow: 0 -2px 0 0 var(--peach);
+}
 
 /* Animations --------------------------------------------------------------- */
-@keyframes pulse-bar     { 0%,100% {opacity:1} 50% {opacity:0.55} }
-@keyframes stripe-travel { 0% {background-position:0 0} 100% {background-position:28px 0} }
-@keyframes slide-in-right{ from {transform:translateX(100%)} to {transform:translateX(0)} }
-@keyframes fade-in       { from {opacity:0} to {opacity:1} }
-@keyframes pulse-ring    {
-  0%,100% { box-shadow: 0 0 0 0 rgba(var(--peach-rgb), 0.6); }
-  50%     { box-shadow: 0 0 0 6px rgba(var(--peach-rgb), 0); }
+@keyframes pulse-bar {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
-@keyframes tick-up       { from {opacity:0; transform:translateY(4px)} to {opacity:1; transform:translateY(0)} }
+@keyframes stripe-travel {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 28px 0;
+  }
+}
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pulse-ring {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--peach-rgb), 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(var(--peach-rgb), 0);
+  }
+}
+@keyframes tick-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 
-.pulse-bar      { animation: pulse-bar 1.6s ease-in-out infinite; }
-.stripe-travel  { background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.18) 0 6px, transparent 6px 14px); animation: stripe-travel 0.9s linear infinite; }
-.slide-in-right { animation: slide-in-right 0.28s cubic-bezier(0.16,1,0.3,1); }
-.fade-in        { animation: fade-in 0.22s ease-out; }
-.pulse-ring     { animation: pulse-ring 1.4s ease-out infinite; }
-.tick-up        { animation: tick-up 0.3s ease-out; }
+.pulse-bar {
+  animation: pulse-bar 1.6s ease-in-out infinite;
+}
+.stripe-travel {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.18) 0 6px,
+    transparent 6px 14px
+  );
+  animation: stripe-travel 0.9s linear infinite;
+}
+.slide-in-right {
+  animation: slide-in-right 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.fade-in {
+  animation: fade-in 0.22s ease-out;
+}
+.pulse-ring {
+  animation: pulse-ring 1.4s ease-out infinite;
+}
+.tick-up {
+  animation: tick-up 0.3s ease-out;
+}
 
 /* Reusable component classes ---------------------------------------------- */
-.ring-peach-2 { box-shadow: 0 0 0 2px var(--peach); }
+.ring-peach-2 {
+  box-shadow: 0 0 0 2px var(--peach);
+}
 
 /* Thin inset scrollbar for in-card scroll regions. The thumb is a 4px
    pill body painted on a transparent background with a 5px transparent

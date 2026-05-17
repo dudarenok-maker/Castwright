@@ -3,7 +3,15 @@
    directly instead of unzipping. */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
@@ -13,14 +21,18 @@ import { ExportIncompleteError } from './build-mp3-zip.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 const ffmpegPresent = (() => {
-  try { return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0; }
-  catch { return false; }
+  try {
+    return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+  } catch {
+    return false;
+  }
 })();
 const describeIfFfmpeg = ffmpegPresent ? describe : describe.skip;
 
 function readId3Frame(mp3: Buffer, wantedId: 'TIT2' | 'TRCK' | 'TALB'): string | null {
   if (mp3[0] !== 0x49 || mp3[1] !== 0x44 || mp3[2] !== 0x33) return null;
-  const tagSize = ((mp3[6] & 0x7f) << 21) | ((mp3[7] & 0x7f) << 14) | ((mp3[8] & 0x7f) << 7) | (mp3[9] & 0x7f);
+  const tagSize =
+    ((mp3[6] & 0x7f) << 21) | ((mp3[7] & 0x7f) << 14) | ((mp3[8] & 0x7f) << 7) | (mp3[9] & 0x7f);
   let p = 10;
   while (p < 10 + tagSize - 10) {
     const frameId = mp3.subarray(p, p + 4).toString('latin1');
@@ -51,8 +63,8 @@ function makeState(over: Partial<BookStateJson> = {}): BookStateJson {
     castConfirmed: true,
     chapters: [
       { id: 1, title: 'Chapter 1 — Opening', slug: '01-chapter-1', duration: '0:00' },
-      { id: 2, title: 'Chapter 2',            slug: '02-chapter-2', duration: '0:00' },
-      { id: 3, title: 'Front matter',         slug: '00-front-matter', excluded: true },
+      { id: 2, title: 'Chapter 2', slug: '02-chapter-2', duration: '0:00' },
+      { id: 3, title: 'Front matter', slug: '00-front-matter', excluded: true },
     ],
     coverGradient: ['#abc', '#def'],
     createdAt: '2026-01-01T00:00:00Z',
@@ -80,7 +92,9 @@ describeIfFfmpeg('buildMp3Folder', () => {
     }
   });
 
-  afterAll(() => { rmSync(tmpRoot, { recursive: true, force: true }); });
+  afterAll(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
 
   it('writes one tagged MP3 per non-excluded chapter, ordered by id, with NN- filenames', async () => {
     const outDir = join(tmpRoot, 'export-1', 'Bonus Keefe Story');
@@ -90,10 +104,7 @@ describeIfFfmpeg('buildMp3Folder', () => {
     expect(result.totalBytes).toBeGreaterThan(0);
 
     const names = readdirSync(outDir).sort();
-    expect(names).toEqual([
-      '01 - Chapter 1 - Opening.mp3',
-      '02 - Chapter 2.mp3',
-    ]);
+    expect(names).toEqual(['01 - Chapter 1 - Opening.mp3', '02 - Chapter 2.mp3']);
 
     const ch1 = readFileSync(join(outDir, names[0]));
     expect(readId3Frame(ch1, 'TIT2')).toBe('Chapter 1 — Opening');
@@ -132,10 +143,7 @@ describeIfFfmpeg('buildMp3Folder', () => {
     await buildMp3Folder({ bookDir, state: makeState(), outDir });
 
     const names = readdirSync(outDir).sort();
-    expect(names).toEqual([
-      '01 - Chapter 1 - Opening.mp3',
-      '02 - Chapter 2.mp3',
-    ]);
+    expect(names).toEqual(['01 - Chapter 1 - Opening.mp3', '02 - Chapter 2.mp3']);
     expect(existsSync(join(outDir, '99 - Stale Chapter.mp3'))).toBe(false);
   }, 30_000);
 
@@ -146,7 +154,7 @@ describeIfFfmpeg('buildMp3Folder', () => {
       bookDir,
       state: makeState(),
       outDir,
-      onProgress: r => ratios.push(r),
+      onProgress: (r) => ratios.push(r),
     });
     expect(ratios.length).toBeGreaterThan(0);
     expect(ratios[ratios.length - 1]).toBe(1);

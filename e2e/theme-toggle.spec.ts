@@ -19,8 +19,9 @@ import { test, expect } from '@playwright/test';
 test.describe('plan 41 — theme toggle', () => {
   test('cycles system → light → dark and persists across a reload', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('button', { name: /Start a new book/i }).first())
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     const html = page.locator('html');
     await expect(html).toHaveAttribute('data-theme', 'light');
@@ -45,7 +46,9 @@ test.describe('plan 41 — theme toggle', () => {
     await expect(page.getByTestId('theme-toggle')).toHaveAttribute('data-theme-mode', 'dark');
   });
 
-  test('account "Use account default" clears the override and reverts the theme', async ({ page }) => {
+  test('account "Use account default" clears the override and reverts the theme', async ({
+    page,
+  }) => {
     /* Pre-seed an override so the Account view renders the pill. */
     await page.addInitScript(() => {
       const wrapper = { themeOverride: JSON.stringify('dark') };

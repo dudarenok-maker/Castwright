@@ -23,10 +23,13 @@ const keefe: Character = {
   voiceState: 'reused',
   gender: 'male',
   ageRange: 'teen',
-  matchedFrom: { bookTitle: 'Book One', bookId: 'book_one', characterId: 'keefe_lib', confidence: 0.95 },
-  matchFactors: [
-    { id: 'name_exact', label: 'Name match', score: 1, detail: 'Keefe ≡ Keefe' },
-  ],
+  matchedFrom: {
+    bookTitle: 'Book One',
+    bookId: 'book_one',
+    characterId: 'keefe_lib',
+    confidence: 0.95,
+  },
+  matchFactors: [{ id: 'name_exact', label: 'Name match', score: 1, detail: 'Keefe ≡ Keefe' }],
 };
 
 const sophie: Character = {
@@ -44,27 +47,33 @@ const sophie: Character = {
 
 const library: Voice[] = [
   {
-    id:         'v_keefe',
-    character:  'Keefe',
-    bookTitle:  'Book One',
-    bookId:     'book_one',
+    id: 'v_keefe',
+    character: 'Keefe',
+    bookTitle: 'Book One',
+    bookId: 'book_one',
     attributes: ['playful', 'sarcastic'],
-    gradient:   ['#3C194F', '#0F0E0D'],
-    usedIn:     1,
-    source:     'library',
-    ttsVoice:   {
-      provider:    'coqui',
-      name:        'male-teen-playful',
+    gradient: ['#3C194F', '#0F0E0D'],
+    usedIn: 1,
+    source: 'library',
+    ttsVoice: {
+      provider: 'coqui',
+      name: 'male-teen-playful',
       description: 'Light male teen voice with a sardonic edge',
     },
   },
 ];
 
-function renderView(overrides: {
-  onOpenProfile?: (id: string) => void;
-  onConfirm?: () => void;
-  onOverrideLibrary?: (args: { sourceCharacterId: string; targetBookId: string; targetCharacterId: string }) => Promise<void>;
-} = {}) {
+function renderView(
+  overrides: {
+    onOpenProfile?: (id: string) => void;
+    onConfirm?: () => void;
+    onOverrideLibrary?: (args: {
+      sourceCharacterId: string;
+      targetBookId: string;
+      targetCharacterId: string;
+    }) => Promise<void>;
+  } = {},
+) {
   const store = configureStore({
     reducer: { ui: uiSlice.reducer },
   });
@@ -90,7 +99,7 @@ describe('ConfirmCastView — voice-match wiring', () => {
     expect(screen.getByText('Matched · 95%')).toBeInTheDocument();
   });
 
-  it('shows the source book title in the matched character\'s Reuse tile', () => {
+  it("shows the source book title in the matched character's Reuse tile", () => {
     renderView();
     expect(screen.getByText('From Book One')).toBeInTheDocument();
   });
@@ -109,7 +118,7 @@ describe('ConfirmCastView — voice-match wiring', () => {
     expect(within(sophieCard).queryByText(/Matched · /)).toBeNull();
   });
 
-  it('defaults the matched character\'s decision to Reuse (continuity message visible)', () => {
+  it("defaults the matched character's decision to Reuse (continuity message visible)", () => {
     renderView();
     /* The continuity footer renders only when decision === 'match' (the
        initial state for any character with matchedFrom — see view init). */
@@ -121,8 +130,9 @@ describe('ConfirmCastView — library override toggle', () => {
   it('renders the override checkbox only when matchedFrom carries bookId+characterId AND onOverrideLibrary is provided', () => {
     /* Both conditions satisfied — checkbox visible. */
     const { rerender } = renderView({ onOverrideLibrary: vi.fn(async () => {}) });
-    expect(screen.getByRole('checkbox', { name: /Sync profile with Book One/i }))
-      .toBeInTheDocument();
+    expect(
+      screen.getByRole('checkbox', { name: /Sync profile with Book One/i }),
+    ).toBeInTheDocument();
 
     /* Without the handler, no checkbox even when the data is rich enough. */
     rerender(
@@ -144,7 +154,10 @@ describe('ConfirmCastView — library override toggle', () => {
     /* Older voice-match cache that predates fromBookId / fromCharacterId
        lands here. The checkbox should not render because we have no way
        to address the library record. */
-    const oldShape: Character = { ...keefe, matchedFrom: { bookTitle: 'Book One', confidence: 0.95 } };
+    const oldShape: Character = {
+      ...keefe,
+      matchedFrom: { bookTitle: 'Book One', confidence: 0.95 },
+    };
     const store = configureStore({ reducer: { ui: uiSlice.reducer } });
     render(
       <Provider store={store}>
@@ -167,7 +180,9 @@ describe('ConfirmCastView — library override toggle', () => {
     const onConfirm = vi.fn();
     renderView({ onOverrideLibrary, onConfirm });
 
-    const checkbox = screen.getByRole('checkbox', { name: /Sync profile with Book One/i }) as HTMLInputElement;
+    const checkbox = screen.getByRole('checkbox', {
+      name: /Sync profile with Book One/i,
+    }) as HTMLInputElement;
     expect(checkbox.checked).toBe(false);
 
     fireEvent.click(checkbox);

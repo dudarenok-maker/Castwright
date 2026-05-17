@@ -109,7 +109,9 @@ describe('persistenceMiddleware — debounce', () => {
 
     await advance(500);
 
-    const slices = putBookState.mock.calls.map(([, body]) => (body as { slice: string }).slice).sort();
+    const slices = putBookState.mock.calls
+      .map(([, body]) => (body as { slice: string }).slice)
+      .sort();
     expect(slices).toEqual(['cast', 'changeLog', 'manuscript', 'revisions', 'state']);
   });
 });

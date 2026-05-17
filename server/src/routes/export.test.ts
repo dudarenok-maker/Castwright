@@ -4,7 +4,15 @@
    the download endpoint streams the zip with the expected Content-Type. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, statSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  statSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,8 +21,11 @@ import request from 'supertest';
 import { encodePcmToMp3 } from '../tts/mp3.js';
 
 const ffmpegPresent = (() => {
-  try { return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0; }
-  catch { return false; }
+  try {
+    return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+  } catch {
+    return false;
+  }
 })();
 const describeIfFfmpeg = ffmpegPresent ? describe : describe.skip;
 
@@ -103,14 +114,16 @@ afterAll(() => {
   delete process.env.WORKSPACE_DIR;
 });
 
-async function waitForDone(exportId: string): Promise<{ status: number; body: Record<string, unknown> }> {
+async function waitForDone(
+  exportId: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   for (let i = 0; i < 50; i++) {
     const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
     const body = res.body as { status?: string };
     if (body.status === 'done' || body.status === 'failed') {
       return { status: res.status, body: res.body as Record<string, unknown> };
     }
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error(`Export ${exportId} did not finish within timeout.`);
 }
@@ -242,7 +255,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
         final = res.body;
         break;
       }
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
     }
     expect(final).not.toBeNull();
     expect(final!.status).toBe('cancelled');

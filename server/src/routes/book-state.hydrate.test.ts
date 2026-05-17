@@ -99,7 +99,7 @@ describe('PUT /:bookId/state slice=manuscript → GET round-trip', () => {
        manuscriptActions.hydrateFromBookState. This test pins that the
        server side of that loop is honest. */
     const sentences = [
-      { id: 1, chapterId: 1, characterId: 'eliza',    text: 'First sentence.' },
+      { id: 1, chapterId: 1, characterId: 'eliza', text: 'First sentence.' },
       { id: 2, chapterId: 1, characterId: 'narrator', text: 'Second sentence.' },
     ];
 
@@ -127,7 +127,7 @@ describe('PUT /:bookId/state slice=manuscript → GET round-trip', () => {
        for this slice. Two sequential PUTs must collapse to whatever the
        second one sent. */
     const first = [
-      { id: 1, chapterId: 1, characterId: 'eliza',    text: 'First sentence.' },
+      { id: 1, chapterId: 1, characterId: 'eliza', text: 'First sentence.' },
       { id: 2, chapterId: 1, characterId: 'narrator', text: 'Second sentence.' },
     ];
     const second = [
@@ -135,11 +135,13 @@ describe('PUT /:bookId/state slice=manuscript → GET round-trip', () => {
       { id: 2, chapterId: 1, characterId: 'halloran', text: 'Second sentence.' },
     ];
 
-    let res = await request(app).put(`/api/books/${bookId}/state`)
+    let res = await request(app)
+      .put(`/api/books/${bookId}/state`)
       .send({ slice: 'manuscript', patch: { sentences: first } });
     expect(res.status).toBe(204);
 
-    res = await request(app).put(`/api/books/${bookId}/state`)
+    res = await request(app)
+      .put(`/api/books/${bookId}/state`)
       .send({ slice: 'manuscript', patch: { sentences: second } });
     expect(res.status).toBe(204);
 
@@ -154,34 +156,40 @@ describe('PUT /:bookId/state slice=manuscript → GET round-trip', () => {
        payload that includes such an offspring; cache only knows the
        original ids; GET must round-trip the offspring through. */
     mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(cachePath, JSON.stringify({
-      chapters: {
-        1: [
-          { id: 1, chapterId: 1, characterId: 'narrator', text: 'First sentence.' },
-          { id: 2, chapterId: 1, characterId: 'narrator', text: 'Second sentence.' },
-        ],
-      },
-    }));
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        chapters: {
+          1: [
+            { id: 1, chapterId: 1, characterId: 'narrator', text: 'First sentence.' },
+            { id: 2, chapterId: 1, characterId: 'narrator', text: 'Second sentence.' },
+          ],
+        },
+      }),
+    );
 
     const sentences = [
-      { id: 1,   chapterId: 1, characterId: 'narrator', text: 'First sentence.' },
-      { id: 2,   chapterId: 1, characterId: 'eliza',    text: 'Second part 1.' },
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'First sentence.' },
+      { id: 2, chapterId: 1, characterId: 'eliza', text: 'Second part 1.' },
       { id: 999, chapterId: 1, characterId: 'halloran', text: 'Second part 2 (split offspring).' },
     ];
 
-    const put = await request(app).put(`/api/books/${bookId}/state`)
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
       .send({ slice: 'manuscript', patch: { sentences } });
     expect(put.status).toBe(204);
 
     const get = await request(app).get(`/api/books/${bookId}/state`);
     expect(get.status).toBe(200);
     const ids = (get.body.manuscriptEdits.sentences as Array<{ id: number }>)
-      .map(s => s.id)
+      .map((s) => s.id)
       .sort((a, b) => a - b);
     expect(ids).toEqual([1, 2, 999]);
     /* The user's characterId reassignments survive intact. */
     const byId = new Map<number, { characterId: string }>(
-      (get.body.manuscriptEdits.sentences as Array<{ id: number; characterId: string }>).map(s => [s.id, s]),
+      (get.body.manuscriptEdits.sentences as Array<{ id: number; characterId: string }>).map(
+        (s) => [s.id, s],
+      ),
     );
     expect(byId.get(1)!.characterId).toBe('narrator');
     expect(byId.get(2)!.characterId).toBe('eliza');

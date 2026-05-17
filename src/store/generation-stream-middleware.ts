@@ -74,7 +74,7 @@ function bookIdFromState(s: StreamableRootState): string | null {
 }
 
 function hasWork(chapters: Chapter[]): boolean {
-  return chapters.some(c => c.state === 'in_progress' || c.state === 'queued');
+  return chapters.some((c) => c.state === 'in_progress' || c.state === 'queued');
 }
 
 function snapshotFromChapters(
@@ -86,13 +86,13 @@ function snapshotFromChapters(
      (`activeChapters` in src/views/generation.tsx): excluded chapters
      never queue or synthesise, so they must not inflate `total` or
      stall the cross-book top-bar pill's done/total readout. */
-  const active = state.chapters.filter(c => !c.excluded);
+  const active = state.chapters.filter((c) => !c.excluded);
   return {
     bookId,
     modelKey,
-    done: active.filter(c => c.state === 'done').length,
+    done: active.filter((c) => c.state === 'done').length,
     total: active.length,
-    inProgress: active.filter(c => c.state === 'in_progress').length,
+    inProgress: active.filter((c) => c.state === 'in_progress').length,
     lastTickAt: state.lastTickAt,
     halted: state.lastError != null,
   };
@@ -151,26 +151,33 @@ export const generationStreamMiddleware: Middleware = (store) => {
        any chapter finished, queue drained immediately) write nothing — there
        was already a generation_started anchor for those. */
     if (handle.completedChapterIds.length > 0) {
-      dispatch(changeLogActions.appendLogEvent(
-        buildGenerationRunCompleteEvent({ chapterIds: handle.completedChapterIds }),
-      ));
+      dispatch(
+        changeLogActions.appendLogEvent(
+          buildGenerationRunCompleteEvent({ chapterIds: handle.completedChapterIds }),
+        ),
+      );
     }
     handle.cancel();
     handle = null;
     dispatch(chaptersActions.clearActiveStream());
   };
 
-  const openHandle = (bookId: string, modelKey: TtsModelKey, spec: ChaptersState['pendingRegen']) => {
+  const openHandle = (
+    bookId: string,
+    modelKey: TtsModelKey,
+    spec: ChaptersState['pendingRegen'],
+  ) => {
     /* Emit a system-level "generation started" event so the activity feed has
        a beat for the user's Regenerate click (or Resume). The chapterIds
        reflect either the regen spec or the broader queued/in-progress set
        the server will resume against. */
     const after = store.getState() as StreamableRootState;
-    const ids = spec?.chapterIds && spec.chapterIds.length > 0
-      ? spec.chapterIds
-      : after.chapters.chapters
-          .filter(c => c.state === 'in_progress' || c.state === 'queued')
-          .map(c => c.id);
+    const ids =
+      spec?.chapterIds && spec.chapterIds.length > 0
+        ? spec.chapterIds
+        : after.chapters.chapters
+            .filter((c) => c.state === 'in_progress' || c.state === 'queued')
+            .map((c) => c.id);
     dispatch(changeLogActions.appendLogEvent(buildGenerationStartedEvent({ chapterIds: ids })));
 
     /* Seed the cross-book snapshot from the slice's current rows — at open
@@ -178,9 +185,9 @@ export const generationStreamMiddleware: Middleware = (store) => {
        refresh it; once the user navigates into a different book the slice
        drifts but the snapshot freezes at whatever it was just before, so
        the pill keeps showing the last-known progress. */
-    dispatch(chaptersActions.setActiveStream(
-      snapshotFromChapters(bookId, modelKey, after.chapters),
-    ));
+    dispatch(
+      chaptersActions.setActiveStream(snapshotFromChapters(bookId, modelKey, after.chapters)),
+    );
 
     const cancel = api.streamGeneration({
       bookId,
@@ -289,14 +296,15 @@ export const generationStreamMiddleware: Middleware = (store) => {
     /* Defensive read: a handful of legacy test harnesses build a
        store without the analysis slice. Production always has it
        (configured in src/store/index.ts). */
-    const analysisSnap = (after as { analysis?: { activeStream?: typeof after.analysis.activeStream } })
-      .analysis?.activeStream ?? null;
+    const analysisSnap =
+      (after as { analysis?: { activeStream?: typeof after.analysis.activeStream } }).analysis
+        ?.activeStream ?? null;
     if (
-      analysisSnap != null
-      && analysisSnap.engine === 'local'
-      && analysisSnap.bookId === stageBookId
-      && analysisSnap.state !== 'paused'
-      && analysisSnap.state !== 'halted'
+      analysisSnap != null &&
+      analysisSnap.engine === 'local' &&
+      analysisSnap.bookId === stageBookId &&
+      analysisSnap.state !== 'paused' &&
+      analysisSnap.state !== 'halted'
     ) {
       dispatch(chaptersActions.setPaused(true));
       return;
@@ -339,12 +347,14 @@ export const generationStreamMiddleware: Middleware = (store) => {
       const payload = (a as { payload?: { characterId: string; chapterIds: number[] } }).payload;
       if (payload) {
         const after = store.getState() as StreamableRootState;
-        const character = after.cast.characters.find(c => c.id === payload.characterId);
+        const character = after.cast.characters.find((c) => c.id === payload.characterId);
         if (character) {
           for (const chapterId of payload.chapterIds) {
-            const chapter = after.chapters.chapters.find(c => c.id === chapterId);
+            const chapter = after.chapters.chapters.find((c) => c.id === chapterId);
             if (!chapter) continue;
-            dispatch(revisionsActions.enqueuePending(buildPendingRevisionStub({ chapter, character })));
+            dispatch(
+              revisionsActions.enqueuePending(buildPendingRevisionStub({ chapter, character })),
+            );
           }
         }
       }
@@ -353,12 +363,14 @@ export const generationStreamMiddleware: Middleware = (store) => {
       if (payload) {
         const after = store.getState() as StreamableRootState;
         for (const characterId of payload.characterIds) {
-          const character = after.cast.characters.find(c => c.id === characterId);
+          const character = after.cast.characters.find((c) => c.id === characterId);
           if (!character) continue;
           for (const chapterId of payload.chapterIds) {
-            const chapter = after.chapters.chapters.find(c => c.id === chapterId);
+            const chapter = after.chapters.chapters.find((c) => c.id === chapterId);
             if (!chapter) continue;
-            dispatch(revisionsActions.enqueuePending(buildPendingRevisionStub({ chapter, character })));
+            dispatch(
+              revisionsActions.enqueuePending(buildPendingRevisionStub({ chapter, character })),
+            );
           }
         }
       }
@@ -374,9 +386,11 @@ export const generationStreamMiddleware: Middleware = (store) => {
       const after = store.getState() as StreamableRootState;
       const sliceMatchesHandle = after.chapters.currentBookId === handle.bookId;
       if (sliceMatchesHandle) {
-        dispatch(chaptersActions.setActiveStream(
-          snapshotFromChapters(handle.bookId, handle.modelKey, after.chapters),
-        ));
+        dispatch(
+          chaptersActions.setActiveStream(
+            snapshotFromChapters(handle.bookId, handle.modelKey, after.chapters),
+          ),
+        );
       }
       if (ev && ev.type === 'chapter_complete' && ev.chapterId != null && sliceMatchesHandle) {
         /* Accumulate — do NOT dispatch a per-chapter event. The rollup goes
@@ -391,12 +405,16 @@ export const generationStreamMiddleware: Middleware = (store) => {
            plain regenerateChapter without a character). */
         dispatch(revisionsActions.markRevisionPlayable({ chapterId: ev.chapterId }));
       } else if (ev && ev.type === 'chapter_failed' && ev.chapterId != null && sliceMatchesHandle) {
-        const ch = after.chapters.chapters.find(c => c.id === ev.chapterId);
+        const ch = after.chapters.chapters.find((c) => c.id === ev.chapterId);
         if (ch) {
-          dispatch(changeLogActions.appendLogEvent(buildChapterFailedEvent({
-            chapter: ch,
-            errorReason: ev.errorReason ?? ch.errorReason ?? 'Synthesis failed.',
-          })));
+          dispatch(
+            changeLogActions.appendLogEvent(
+              buildChapterFailedEvent({
+                chapter: ch,
+                errorReason: ev.errorReason ?? ch.errorReason ?? 'Synthesis failed.',
+              }),
+            ),
+          );
         }
       }
     }

@@ -35,7 +35,15 @@ interface Props {
 
 type Decision = 'match' | 'generate';
 
-export function ConfirmCastView({ characters, library, title, onOpenProfile, onConfirm, onReanalyse, onOverrideLibrary }: Props) {
+export function ConfirmCastView({
+  characters,
+  library,
+  title,
+  onOpenProfile,
+  onConfirm,
+  onReanalyse,
+  onOverrideLibrary,
+}: Props) {
   const [decisions, setDecisions] = useState<Record<string, Decision>>(() => {
     const d: Record<string, Decision> = {};
     for (const c of characters) if (c.matchedFrom) d[c.id] = 'match';
@@ -49,9 +57,9 @@ export function ConfirmCastView({ characters, library, title, onOpenProfile, onC
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   /* Same engine the cast view + profile drawer use — keeps the previewed
      prebuilt-voice label here matching what the user will actually hear. */
-  const ttsEngine = useAppSelector(s => engineForModelKey(s.ui.ttsModelKey));
-  const findVoice = (id?: string) => library.find(v => v.id === id);
-  const matchedCount = characters.filter(c => c.matchedFrom).length;
+  const ttsEngine = useAppSelector((s) => engineForModelKey(s.ui.ttsModelKey));
+  const findVoice = (id?: string) => library.find((v) => v.id === id);
+  const matchedCount = characters.filter((c) => c.matchedFrom).length;
   const generatedCount = characters.length - matchedCount;
 
   /* Fire any opted-in library-cast overrides before navigating off the
@@ -75,7 +83,7 @@ export function ConfirmCastView({ characters, library, title, onOpenProfile, onC
               sourceCharacterId: c.id,
               targetBookId: target.bookId,
               targetCharacterId: target.characterId,
-            }).catch(err => {
+            }).catch((err) => {
               console.error('[confirm-cast] library override failed', c.id, err);
             }),
           );
@@ -90,22 +98,28 @@ export function ConfirmCastView({ characters, library, title, onOpenProfile, onC
 
   return (
     <div className="relative min-h-[calc(100vh-64px)] py-12 px-6">
-      <div className="absolute inset-0 bg-gradient-hero-wash opacity-40 pointer-events-none"/>
+      <div className="absolute inset-0 bg-gradient-hero-wash opacity-40 pointer-events-none" />
       <div className="relative max-w-3xl mx-auto">
         <div className="text-center mb-10">
           <SectionLabel>Cast confirmation</SectionLabel>
           <div className="mt-5">
-            <MixedHeading level="h1" regular="Meet the cast of" bold={title || 'The Northern Star'}/>
+            <MixedHeading
+              level="h1"
+              regular="Meet the cast of"
+              bold={title || 'The Northern Star'}
+            />
           </div>
           <p className="mt-4 text-ink/70 text-lg">
-            <span className="font-semibold text-ink">{characters.length} speaking characters</span> detected ·{' '}
-            <span className="font-semibold text-purple-deep">{matchedCount} matched</span> from your library ·{' '}
-            <span className="font-semibold text-ink">{generatedCount} new</span> to generate
+            <span className="font-semibold text-ink">{characters.length} speaking characters</span>{' '}
+            detected ·{' '}
+            <span className="font-semibold text-purple-deep">{matchedCount} matched</span> from your
+            library · <span className="font-semibold text-ink">{generatedCount} new</span> to
+            generate
           </p>
         </div>
 
         <div className="space-y-3">
-          {characters.map(c => (
+          {characters.map((c) => (
             <ConfirmCharacterCard
               key={c.id}
               character={c}
@@ -126,12 +140,22 @@ export function ConfirmCastView({ characters, library, title, onOpenProfile, onC
         </div>
 
         <div className="mt-10 flex items-center justify-between gap-3">
-          <button onClick={onReanalyse} className="text-sm font-medium text-ink/60 hover:text-ink">Re-analyse manuscript</button>
-          <PrimaryButton variant="dark" onClick={() => { void handleConfirm(); }}>Confirm cast and review manuscript</PrimaryButton>
+          <button onClick={onReanalyse} className="text-sm font-medium text-ink/60 hover:text-ink">
+            Re-analyse manuscript
+          </button>
+          <PrimaryButton
+            variant="dark"
+            onClick={() => {
+              void handleConfirm();
+            }}
+          >
+            Confirm cast and review manuscript
+          </PrimaryButton>
         </div>
 
         <p className="text-center text-xs text-ink/40 mt-6 max-w-lg mx-auto">
-          We'll start generating chapter audio with these voices. You can refine the cast or regenerate any chapter later from inside the app.
+          We'll start generating chapter audio with these voices. You can refine the cast or
+          regenerate any chapter later from inside the app.
         </p>
       </div>
     </div>
@@ -160,7 +184,17 @@ interface CardProps {
   onOpenProfile: () => void;
 }
 
-function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecision, overrideLibrary, canOverrideLibrary, onToggleOverride, onOpenProfile }: CardProps) {
+function ConfirmCharacterCard({
+  character,
+  voice,
+  ttsEngine,
+  decision,
+  onDecision,
+  overrideLibrary,
+  canOverrideLibrary,
+  onToggleOverride,
+  onOpenProfile,
+}: CardProps) {
   const matched = !!character.matchedFrom;
   /* Engine-aware prebuilt-voice pick — shown alongside identity so the user
      can sanity-check before confirming the cast. If the analyzer's gender /
@@ -173,23 +207,33 @@ function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecisio
       aria-label={`Open profile for ${character.name}`}
       onClick={onOpenProfile}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenProfile(); }
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpenProfile();
+        }
       }}
-      className={`bg-white rounded-3xl border shadow-card overflow-hidden transition-colors cursor-pointer hover:border-ink/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-peach/60 ${matched ? 'border-purple-deep/15' : 'border-ink/10'}`}>
+      className={`bg-white rounded-3xl border shadow-card overflow-hidden transition-colors cursor-pointer hover:border-ink/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-peach/60 ${matched ? 'border-purple-deep/15' : 'border-ink/10'}`}
+    >
       <div className="p-5 grid grid-cols-[auto_1fr_auto] items-start gap-5">
-        <Avatar name={character.name} color={character.color as CharColor} size={48}/>
+        <Avatar name={character.name} color={character.color as CharColor} size={48} />
         <div className="min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <h3 className="text-lg font-bold text-ink truncate">{character.name}</h3>
             {matched && character.matchedFrom?.confidence != null && (
-              <Pill color="library">Matched · {Math.round(character.matchedFrom.confidence * 100)}%</Pill>
+              <Pill color="library">
+                Matched · {Math.round(character.matchedFrom.confidence * 100)}%
+              </Pill>
             )}
           </div>
           <p className="text-sm text-ink/60 truncate">{character.role}</p>
           <div className="flex items-center gap-3 mt-2 text-xs text-ink/50">
-            <span className="tabular-nums"><span className="font-semibold text-ink/70">{character.lines}</span> lines</span>
+            <span className="tabular-nums">
+              <span className="font-semibold text-ink/70">{character.lines}</span> lines
+            </span>
             <span>·</span>
-            <span className="tabular-nums"><span className="font-semibold text-ink/70">{character.scenes}</span> scenes</span>
+            <span className="tabular-nums">
+              <span className="font-semibold text-ink/70">{character.scenes}</span> scenes
+            </span>
           </div>
           {/* Identity chips — gender + age range. Only show when present, so
               older cached analyses don't get empty pills. */}
@@ -200,7 +244,9 @@ function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecisio
             </div>
           )}
           <div className="mt-2 flex flex-wrap gap-1">
-            {character.attributes?.slice(0, 3).map(a => <Pill key={a}>{a}</Pill>)}
+            {character.attributes?.slice(0, 3).map((a) => (
+              <Pill key={a}>{a}</Pill>
+            ))}
           </div>
           {/* TTS voice assignment — what the engine will pick for this
               character given current identity. Mirrors the cast table's
@@ -252,10 +298,20 @@ function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecisio
       </div>
 
       {matched && decision === 'match' && (
-        <div className="border-t border-ink/5 px-5 py-3 bg-canvas/60 fade-in space-y-2" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="border-t border-ink/5 px-5 py-3 bg-canvas/60 fade-in space-y-2"
+          onClick={(e) => e.stopPropagation()}
+        >
           <div className="flex items-center gap-3 text-xs text-ink/60">
-            <span className="grid place-items-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-700"><IconCheck className="w-3 h-3"/></span>
-            <span>Continuity preserved — <span className="font-semibold text-ink">{voice?.character}</span> from <span className="font-semibold text-ink">{character.matchedFrom?.bookTitle}</span> will be used.</span>
+            <span className="grid place-items-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-700">
+              <IconCheck className="w-3 h-3" />
+            </span>
+            <span>
+              Continuity preserved —{' '}
+              <span className="font-semibold text-ink">{voice?.character}</span> from{' '}
+              <span className="font-semibold text-ink">{character.matchedFrom?.bookTitle}</span>{' '}
+              will be used.
+            </span>
           </div>
           {canOverrideLibrary && (
             /* Symmetric "best-of-both" merge: this book's character and
@@ -266,7 +322,9 @@ function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecisio
                Default off so the existing reuse-as-is flow is unchanged. */
             <label
               className="flex items-start gap-3 text-xs text-ink/60 pl-9 cursor-pointer select-none"
-              onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') e.stopPropagation(); }}
+              onKeyDown={(e) => {
+                if (e.key === ' ' || e.key === 'Enter') e.stopPropagation();
+              }}
             >
               <input
                 type="checkbox"
@@ -276,8 +334,16 @@ function ConfirmCharacterCard({ character, voice, ttsEngine, decision, onDecisio
                 aria-label={`Sync profile with ${character.matchedFrom?.bookTitle}`}
               />
               <span>
-                Sync profile with <span className="font-semibold text-ink/60">{character.matchedFrom?.bookTitle}</span>.
-                <span className="text-ink/40"> Description, attributes, and aliases get merged — both books inherit the richer profile. Voices and already-generated chapter audio don't change.</span>
+                Sync profile with{' '}
+                <span className="font-semibold text-ink/60">
+                  {character.matchedFrom?.bookTitle}
+                </span>
+                .
+                <span className="text-ink/40">
+                  {' '}
+                  Description, attributes, and aliases get merged — both books inherit the richer
+                  profile. Voices and already-generated chapter audio don't change.
+                </span>
               </span>
             </label>
           )}
@@ -301,20 +367,44 @@ function capitalise(s: string): string {
   return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
 }
 
-function DecisionTile({ active, onClick, swatch, title, subtitle, badge, readonly }: DecisionTileProps) {
+function DecisionTile({
+  active,
+  onClick,
+  swatch,
+  title,
+  subtitle,
+  badge,
+  readonly,
+}: DecisionTileProps) {
   return (
-    <button onClick={onClick} disabled={readonly}
-            className={`text-left p-3 rounded-2xl border transition-all ${active ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'} ${readonly ? 'cursor-default' : 'cursor-pointer'}`}>
+    <button
+      onClick={onClick}
+      disabled={readonly}
+      className={`text-left p-3 rounded-2xl border transition-all ${active ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'} ${readonly ? 'cursor-default' : 'cursor-pointer'}`}
+    >
       <div className="flex items-start gap-3">
         {swatch ? (
-          <span className="rounded-full shrink-0 shadow-sm" style={{ width: 32, height: 32, background: `radial-gradient(circle at 30% 30%, ${swatch.gradient[0]}, ${swatch.gradient[1]})` }}/>
+          <span
+            className="rounded-full shrink-0 shadow-sm"
+            style={{
+              width: 32,
+              height: 32,
+              background: `radial-gradient(circle at 30% 30%, ${swatch.gradient[0]}, ${swatch.gradient[1]})`,
+            }}
+          />
         ) : (
-          <span className="w-8 h-8 rounded-full border-2 border-dashed border-ink/20 grid place-items-center shrink-0"><IconRefresh className="w-3.5 h-3.5 text-ink/40"/></span>
+          <span className="w-8 h-8 rounded-full border-2 border-dashed border-ink/20 grid place-items-center shrink-0">
+            <IconRefresh className="w-3.5 h-3.5 text-ink/40" />
+          </span>
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2 mb-0.5">
             <p className="text-sm font-semibold text-ink truncate">{title}</p>
-            {active && !readonly && <span className="w-4 h-4 rounded-full bg-peach grid place-items-center shrink-0"><IconCheck className="w-2.5 h-2.5 text-white"/></span>}
+            {active && !readonly && (
+              <span className="w-4 h-4 rounded-full bg-peach grid place-items-center shrink-0">
+                <IconCheck className="w-2.5 h-2.5 text-white" />
+              </span>
+            )}
           </div>
           <p className="text-[11px] text-ink/55 truncate">{subtitle}</p>
           <div className="mt-1.5">{badge}</div>

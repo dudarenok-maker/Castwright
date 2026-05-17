@@ -57,22 +57,27 @@ export interface CharacterHint {
 type Gender = 'male' | 'female' | 'unknown';
 type Register = 'deep' | 'mid' | 'light';
 type VoiceProfile =
-  | 'male-deep' | 'male-mid' | 'male-light'
-  | 'female-deep' | 'female-mid' | 'female-light'
-  | 'narrator-warm' | 'narrator-cool';
+  | 'male-deep'
+  | 'male-mid'
+  | 'male-light'
+  | 'female-deep'
+  | 'female-mid'
+  | 'female-light'
+  | 'narrator-warm'
+  | 'narrator-cool';
 
 /* Hand-picked from Gemini's published prebuilt voice list. Each profile gets
    two options so close-together voices in the cast don't collide; we pick
    via a stable hash of the voice id. */
 export const GEMINI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
-  'male-deep':      ['Charon', 'Algieba'],
-  'male-mid':       ['Puck', 'Orus'],
-  'male-light':     ['Iapetus', 'Sadachbia'],
-  'female-deep':    ['Despina', 'Vindemiatrix'],
-  'female-mid':     ['Kore', 'Leda'],
-  'female-light':   ['Aoede', 'Callirrhoe'],
-  'narrator-warm':  ['Zephyr', 'Sulafat'],
-  'narrator-cool':  ['Algenib', 'Achernar'],
+  'male-deep': ['Charon', 'Algieba'],
+  'male-mid': ['Puck', 'Orus'],
+  'male-light': ['Iapetus', 'Sadachbia'],
+  'female-deep': ['Despina', 'Vindemiatrix'],
+  'female-mid': ['Kore', 'Leda'],
+  'female-light': ['Aoede', 'Callirrhoe'],
+  'narrator-warm': ['Zephyr', 'Sulafat'],
+  'narrator-cool': ['Algenib', 'Achernar'],
 };
 
 /* XTTS v2 baked speaker names — best-effort gender/register fits from the
@@ -86,14 +91,14 @@ export const GEMINI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
    model's manifest manifests as mid-chapter "index out of range in self"
    embedding-lookup errors. The auditor surfaces the drift at boot. */
 export const COQUI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
-  'male-deep':      ['Damien Black', 'Wulf Carlevaro'],
-  'male-mid':       ['Aaron Dreschner', 'Viktor Menelaos'],
-  'male-light':     ['Andrew Chipper', 'Royston Min'],
-  'female-deep':    ['Brenda Stern', 'Tammie Ema'],
-  'female-mid':     ['Daisy Studious', 'Sofia Hellen'],
-  'female-light':   ['Claribel Dervla', 'Alison Dietlinde'],
-  'narrator-warm':  ['Ana Florence', 'Henriette Usha'],
-  'narrator-cool':  ['Asya Anara', 'Gracie Wise'],
+  'male-deep': ['Damien Black', 'Wulf Carlevaro'],
+  'male-mid': ['Aaron Dreschner', 'Viktor Menelaos'],
+  'male-light': ['Andrew Chipper', 'Royston Min'],
+  'female-deep': ['Brenda Stern', 'Tammie Ema'],
+  'female-mid': ['Daisy Studious', 'Sofia Hellen'],
+  'female-light': ['Claribel Dervla', 'Alison Dietlinde'],
+  'narrator-warm': ['Ana Florence', 'Henriette Usha'],
+  'narrator-cool': ['Asya Anara', 'Gracie Wise'],
 };
 
 /* Kokoro v1 baked voice names — English subset only. Voice IDs are
@@ -106,14 +111,14 @@ export const COQUI_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
    with what /speakers actually returns; auditEngineCatalog flags any
    drift between the two. */
 export const KOKORO_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
-  'male-deep':      ['am_onyx', 'bm_george'],
-  'male-mid':       ['am_michael', 'am_adam'],
-  'male-light':     ['am_eric', 'am_liam'],
-  'female-deep':    ['af_sarah', 'bf_emma'],
-  'female-mid':     ['af_bella', 'af_jessica'],
-  'female-light':   ['af_nicole', 'af_aoede'],
-  'narrator-warm':  ['af_heart', 'af_kore'],
-  'narrator-cool':  ['af_alloy', 'af_river'],
+  'male-deep': ['am_onyx', 'bm_george'],
+  'male-mid': ['am_michael', 'am_adam'],
+  'male-light': ['am_eric', 'am_liam'],
+  'female-deep': ['af_sarah', 'bf_emma'],
+  'female-mid': ['af_bella', 'af_jessica'],
+  'female-light': ['af_nicole', 'af_aoede'],
+  'narrator-warm': ['af_heart', 'af_kore'],
+  'narrator-cool': ['af_alloy', 'af_river'],
 };
 
 /* Profile-coded labels for the Kokoro catalog — same shape as
@@ -122,28 +127,56 @@ export const KOKORO_PROFILE_VOICES: Record<VoiceProfile, string[]> = {
    of information beyond gender/register that's actually visible in the
    voice ID, so we surface it. */
 export const KOKORO_VOICE_DESCRIPTIONS: Record<string, string> = {
-  'am_onyx': 'Deep · Male · US', 'bm_george': 'Deep · Male · UK',
-  'am_michael': 'Mid · Male · US', 'am_adam': 'Mid · Male · US',
-  'am_eric': 'Light · Male · US', 'am_liam': 'Light · Male · US',
-  'af_sarah': 'Deep · Female · US', 'bf_emma': 'Deep · Female · UK',
-  'af_bella': 'Mid · Female · US', 'af_jessica': 'Mid · Female · US',
-  'af_nicole': 'Light · Female · US', 'af_aoede': 'Light · Female · US',
-  'af_heart': 'Warm narrator · US', 'af_kore': 'Warm narrator · US',
-  'af_alloy': 'Cool narrator · US', 'af_river': 'Cool narrator · US',
+  am_onyx: 'Deep · Male · US',
+  bm_george: 'Deep · Male · UK',
+  am_michael: 'Mid · Male · US',
+  am_adam: 'Mid · Male · US',
+  am_eric: 'Light · Male · US',
+  am_liam: 'Light · Male · US',
+  af_sarah: 'Deep · Female · US',
+  bf_emma: 'Deep · Female · UK',
+  af_bella: 'Mid · Female · US',
+  af_jessica: 'Mid · Female · US',
+  af_nicole: 'Light · Female · US',
+  af_aoede: 'Light · Female · US',
+  af_heart: 'Warm narrator · US',
+  af_kore: 'Warm narrator · US',
+  af_alloy: 'Cool narrator · US',
+  af_river: 'Cool narrator · US',
 };
 
 /* Public personality labels for Gemini's 30 prebuilt voices, as published in
    https://ai.google.dev/gemini-api/docs/speech-generation#voices. */
 export const GEMINI_VOICE_DESCRIPTIONS: Record<string, string> = {
-  Zephyr: 'Bright', Puck: 'Upbeat', Charon: 'Informative', Kore: 'Firm',
-  Fenrir: 'Excitable', Leda: 'Youthful', Orus: 'Firm', Aoede: 'Breezy',
-  Callirrhoe: 'Easy-going', Autonoe: 'Bright', Enceladus: 'Breathy',
-  Iapetus: 'Clear', Umbriel: 'Easy-going', Algieba: 'Smooth',
-  Despina: 'Smooth', Erinome: 'Clear', Algenib: 'Gravelly',
-  Rasalgethi: 'Informative', Laomedeia: 'Upbeat', Achernar: 'Soft',
-  Alnilam: 'Firm', Schedar: 'Even', Gacrux: 'Mature',
-  Pulcherrima: 'Forward', Achird: 'Friendly', Zubenelgenubi: 'Casual',
-  Vindemiatrix: 'Gentle', Sadachbia: 'Lively', Sadaltager: 'Knowledgeable',
+  Zephyr: 'Bright',
+  Puck: 'Upbeat',
+  Charon: 'Informative',
+  Kore: 'Firm',
+  Fenrir: 'Excitable',
+  Leda: 'Youthful',
+  Orus: 'Firm',
+  Aoede: 'Breezy',
+  Callirrhoe: 'Easy-going',
+  Autonoe: 'Bright',
+  Enceladus: 'Breathy',
+  Iapetus: 'Clear',
+  Umbriel: 'Easy-going',
+  Algieba: 'Smooth',
+  Despina: 'Smooth',
+  Erinome: 'Clear',
+  Algenib: 'Gravelly',
+  Rasalgethi: 'Informative',
+  Laomedeia: 'Upbeat',
+  Achernar: 'Soft',
+  Alnilam: 'Firm',
+  Schedar: 'Even',
+  Gacrux: 'Mature',
+  Pulcherrima: 'Forward',
+  Achird: 'Friendly',
+  Zubenelgenubi: 'Casual',
+  Vindemiatrix: 'Gentle',
+  Sadachbia: 'Lively',
+  Sadaltager: 'Knowledgeable',
   Sulafat: 'Warm',
 };
 
@@ -151,14 +184,22 @@ export const GEMINI_VOICE_DESCRIPTIONS: Record<string, string> = {
    personality descriptors so we synthesise one from the profile (engine-aware
    labels keep the cast view honest about what the user will actually hear). */
 export const COQUI_VOICE_DESCRIPTIONS: Record<string, string> = {
-  'Damien Black': 'Deep · Male', 'Wulf Carlevaro': 'Deep · Male',
-  'Aaron Dreschner': 'Mid · Male', 'Viktor Menelaos': 'Mid · Male',
-  'Andrew Chipper': 'Light · Male', 'Royston Min': 'Light · Male',
-  'Brenda Stern': 'Deep · Female', 'Tammie Ema': 'Deep · Female',
-  'Daisy Studious': 'Mid · Female', 'Sofia Hellen': 'Mid · Female',
-  'Claribel Dervla': 'Light · Female', 'Alison Dietlinde': 'Light · Female',
-  'Ana Florence': 'Warm narrator', 'Henriette Usha': 'Warm narrator',
-  'Asya Anara': 'Cool narrator', 'Gracie Wise': 'Cool narrator',
+  'Damien Black': 'Deep · Male',
+  'Wulf Carlevaro': 'Deep · Male',
+  'Aaron Dreschner': 'Mid · Male',
+  'Viktor Menelaos': 'Mid · Male',
+  'Andrew Chipper': 'Light · Male',
+  'Royston Min': 'Light · Male',
+  'Brenda Stern': 'Deep · Female',
+  'Tammie Ema': 'Deep · Female',
+  'Daisy Studious': 'Mid · Female',
+  'Sofia Hellen': 'Mid · Female',
+  'Claribel Dervla': 'Light · Female',
+  'Alison Dietlinde': 'Light · Female',
+  'Ana Florence': 'Warm narrator',
+  'Henriette Usha': 'Warm narrator',
+  'Asya Anara': 'Cool narrator',
+  'Gracie Wise': 'Cool narrator',
 };
 
 export interface TtsVoiceAssignment {
@@ -186,7 +227,11 @@ export function pickVoiceForEngine(
 ): string {
   const slotName = voice.overrideTtsVoices?.[engine]?.name;
   if (slotName) return slotName;
-  if (voice.overrideTtsVoice && voice.overrideTtsVoice.engine === engine && voice.overrideTtsVoice.name) {
+  if (
+    voice.overrideTtsVoice &&
+    voice.overrideTtsVoice.engine === engine &&
+    voice.overrideTtsVoice.name
+  ) {
     return voice.overrideTtsVoice.name;
   }
   const profile = inferProfile(voice, hint);
@@ -213,7 +258,7 @@ export function resolveVoiceAssignment(
 }
 
 function catalogForEngine(engine: TtsEngine): Record<VoiceProfile, string[]> {
-  if (engine === 'coqui')  return COQUI_PROFILE_VOICES;
+  if (engine === 'coqui') return COQUI_PROFILE_VOICES;
   if (engine === 'kokoro') return KOKORO_PROFILE_VOICES;
   if (engine === 'gemini') return GEMINI_PROFILE_VOICES;
   /* Piper falls back to Coqui until/unless its own table lands — keeps
@@ -224,7 +269,7 @@ function catalogForEngine(engine: TtsEngine): Record<VoiceProfile, string[]> {
 
 function describeVoice(engine: TtsEngine, name: string): string {
   if (engine === 'gemini') return GEMINI_VOICE_DESCRIPTIONS[name] ?? 'Prebuilt voice';
-  if (engine === 'coqui')  return COQUI_VOICE_DESCRIPTIONS[name]  ?? 'Local voice';
+  if (engine === 'coqui') return COQUI_VOICE_DESCRIPTIONS[name] ?? 'Local voice';
   if (engine === 'kokoro') return KOKORO_VOICE_DESCRIPTIONS[name] ?? 'Local voice';
   return 'Local voice';
 }
@@ -252,8 +297,14 @@ function inferProfile(voice: VoiceLike, hint?: CharacterHint): VoiceProfile {
   const gender = inferGender(voice, hint);
   const register = inferRegister(voice, hint);
 
-  if (gender === 'male')   return register === 'deep'  ? 'male-deep'   : register === 'light' ? 'male-light'   : 'male-mid';
-  if (gender === 'female') return register === 'deep'  ? 'female-deep' : register === 'light' ? 'female-light' : 'female-mid';
+  if (gender === 'male')
+    return register === 'deep' ? 'male-deep' : register === 'light' ? 'male-light' : 'male-mid';
+  if (gender === 'female')
+    return register === 'deep'
+      ? 'female-deep'
+      : register === 'light'
+        ? 'female-light'
+        : 'female-mid';
 
   /* Unknown gender — use tone as a soft signal, otherwise fall back to a
      narrator voice (which is safer than always picking the same neutral). */
@@ -264,26 +315,26 @@ function inferProfile(voice: VoiceLike, hint?: CharacterHint): VoiceProfile {
 
 function inferGender(voice: VoiceLike, hint?: CharacterHint): Gender {
   /* 0) Explicit override from the analyzer — bypass everything else. */
-  if (hint?.gender === 'male')   return 'male';
+  if (hint?.gender === 'male') return 'male';
   if (hint?.gender === 'female') return 'female';
   if (hint?.gender === 'neutral') return 'unknown';
 
   /* 1) Explicit attribute tags — but use word boundaries so "Female"
      doesn't accidentally match "male". */
-  const attrs = (voice.attributes ?? []).map(a => a.toLowerCase());
-  if (attrs.some(a => MATCH_FEMALE_WORD.test(a))) return 'female';
-  if (attrs.some(a => MATCH_MALE_WORD.test(a)))   return 'male';
+  const attrs = (voice.attributes ?? []).map((a) => a.toLowerCase());
+  if (attrs.some((a) => MATCH_FEMALE_WORD.test(a))) return 'female';
+  if (attrs.some((a) => MATCH_MALE_WORD.test(a))) return 'male';
 
   /* 2) Prose description — count gendered pronoun hits. Strong signal
      because the analyzer's description always refers to the character
      by their pronouns. */
   const text = `${hint?.description ?? ''} ${hint?.role ?? ''}`;
   if (!text.trim()) return 'unknown';
-  const maleHits   = countWordHits(text, MALE_TOKENS);
+  const maleHits = countWordHits(text, MALE_TOKENS);
   const femaleHits = countWordHits(text, FEMALE_TOKENS);
   if (maleHits === 0 && femaleHits === 0) return 'unknown';
-  if (maleHits   >= femaleHits + 2) return 'male';
-  if (femaleHits >= maleHits   + 2) return 'female';
+  if (maleHits >= femaleHits + 2) return 'male';
+  if (femaleHits >= maleHits + 2) return 'female';
   /* Close call — go with whichever has more hits, else unknown. */
   if (maleHits > femaleHits) return 'male';
   if (femaleHits > maleHits) return 'female';
@@ -296,34 +347,68 @@ function inferRegister(voice: VoiceLike, hint?: CharacterHint): Register {
   if (hint?.ageRange === 'child' || hint?.ageRange === 'teen') return 'light';
   if (hint?.ageRange === 'elderly') return 'deep';
 
-  const attrs = (voice.attributes ?? []).map(a => a.toLowerCase());
-  if (attrs.some(a => /\b(bass|baritone|deep|gravelly|growl)\b/.test(a))) return 'deep';
-  if (attrs.some(a => /\b(soprano|treble|tenor|light|high|squeak)\b/.test(a))) return 'light';
+  const attrs = (voice.attributes ?? []).map((a) => a.toLowerCase());
+  if (attrs.some((a) => /\b(bass|baritone|deep|gravelly|growl)\b/.test(a))) return 'deep';
+  if (attrs.some((a) => /\b(soprano|treble|tenor|light|high|squeak)\b/.test(a))) return 'light';
 
   /* Tone fallback: high authority + low pace ≈ deep register; high emotion
      + high pace ≈ light register. */
   const t = hint?.tone;
   if (t) {
     if ((t.authority ?? 50) >= 75 && (t.pace ?? 50) <= 50) return 'deep';
-    if ((t.emotion ?? 50)   >= 70 && (t.pace ?? 50) >= 60) return 'light';
+    if ((t.emotion ?? 50) >= 70 && (t.pace ?? 50) >= 60) return 'light';
   }
   return 'mid';
 }
 
 /* Use \b word boundaries so "female" doesn't match the substring inside
    "male" and vice versa. Lowercased input. */
-const MATCH_MALE_WORD   = /\b(male|man|boy|gentleman|sir|mr|mister)\b/;
+const MATCH_MALE_WORD = /\b(male|man|boy|gentleman|sir|mr|mister)\b/;
 const MATCH_FEMALE_WORD = /\b(female|woman|girl|lady|miss|mrs|ms|madam)\b/;
 
 const MALE_TOKENS = [
-  'he', 'him', 'his', 'himself',
-  'mr', 'mister', 'sir', 'father', 'son', 'brother', 'uncle', 'nephew',
-  'man', 'boy', 'guy', 'gentleman', 'king', 'prince', 'lord', 'duke',
+  'he',
+  'him',
+  'his',
+  'himself',
+  'mr',
+  'mister',
+  'sir',
+  'father',
+  'son',
+  'brother',
+  'uncle',
+  'nephew',
+  'man',
+  'boy',
+  'guy',
+  'gentleman',
+  'king',
+  'prince',
+  'lord',
+  'duke',
 ];
 const FEMALE_TOKENS = [
-  'she', 'her', 'hers', 'herself',
-  'mrs', 'ms', 'miss', 'madam', 'mother', 'daughter', 'sister', 'aunt', 'niece',
-  'woman', 'girl', 'gal', 'lady', 'queen', 'princess', 'duchess',
+  'she',
+  'her',
+  'hers',
+  'herself',
+  'mrs',
+  'ms',
+  'miss',
+  'madam',
+  'mother',
+  'daughter',
+  'sister',
+  'aunt',
+  'niece',
+  'woman',
+  'girl',
+  'gal',
+  'lady',
+  'queen',
+  'princess',
+  'duchess',
 ];
 
 function countWordHits(text: string, tokens: string[]): number {
@@ -371,15 +456,21 @@ export interface CatalogConsistency {
 
 export function auditEngineCatalog(engine: TtsEngine): CatalogConsistency {
   const profiles =
-    engine === 'gemini' ? GEMINI_PROFILE_VOICES :
-    engine === 'coqui'  ? COQUI_PROFILE_VOICES  :
-    engine === 'kokoro' ? KOKORO_PROFILE_VOICES :
-    COQUI_PROFILE_VOICES; // piper still shares Coqui's table (see catalogForEngine)
+    engine === 'gemini'
+      ? GEMINI_PROFILE_VOICES
+      : engine === 'coqui'
+        ? COQUI_PROFILE_VOICES
+        : engine === 'kokoro'
+          ? KOKORO_PROFILE_VOICES
+          : COQUI_PROFILE_VOICES; // piper still shares Coqui's table (see catalogForEngine)
   const descriptions =
-    engine === 'gemini' ? GEMINI_VOICE_DESCRIPTIONS :
-    engine === 'coqui'  ? COQUI_VOICE_DESCRIPTIONS  :
-    engine === 'kokoro' ? KOKORO_VOICE_DESCRIPTIONS :
-    COQUI_VOICE_DESCRIPTIONS;
+    engine === 'gemini'
+      ? GEMINI_VOICE_DESCRIPTIONS
+      : engine === 'coqui'
+        ? COQUI_VOICE_DESCRIPTIONS
+        : engine === 'kokoro'
+          ? KOKORO_VOICE_DESCRIPTIONS
+          : COQUI_VOICE_DESCRIPTIONS;
 
   const routed = new Set<string>();
   for (const opts of Object.values(profiles)) {
@@ -387,8 +478,8 @@ export function auditEngineCatalog(engine: TtsEngine): CatalogConsistency {
   }
   const described = new Set(Object.keys(descriptions));
 
-  const missingDescriptions = [...routed].filter(n => !described.has(n)).sort();
-  const unrouted = [...described].filter(n => !routed.has(n)).sort();
+  const missingDescriptions = [...routed].filter((n) => !described.has(n)).sort();
+  const unrouted = [...described].filter((n) => !routed.has(n)).sort();
   return {
     engine,
     missingDescriptions,

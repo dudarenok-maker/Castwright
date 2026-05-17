@@ -26,7 +26,7 @@ vi.mock('../lib/api', async () => {
       getBookExport: vi.fn(),
       cancelBookExport: vi.fn(async () => undefined),
       getExportLanUrls: vi.fn(async () => ({ urls: ['http://192.168.1.42:8080'], port: 8080 })),
-      getUserSettings: vi.fn(async () => ({} as unknown)),
+      getUserSettings: vi.fn(async () => ({}) as unknown),
       putUserSettings: vi.fn(),
     },
   };
@@ -47,7 +47,7 @@ function makeStore() {
     reducer: {
       exports: exportsSlice.reducer,
       account: accountSlice.reducer,
-      ui:      uiSlice.reducer,
+      ui: uiSlice.reducer,
     },
   });
 }
@@ -59,7 +59,7 @@ function makeStoreWithSyncFolder(folder: string) {
     reducer: {
       exports: exportsSlice.reducer,
       account: accountSlice.reducer,
-      ui:      uiSlice.reducer,
+      ui: uiSlice.reducer,
     },
     preloadedState: {
       exports: exportsSlice.getInitialState(),
@@ -67,7 +67,7 @@ function makeStoreWithSyncFolder(folder: string) {
         ...accountSlice.getInitialState(),
         exportSyncFolder: folder,
       },
-      ui:      uiSlice.getInitialState(),
+      ui: uiSlice.getInitialState(),
     },
   });
 }
@@ -81,7 +81,7 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof ExportAudiob
   };
   return render(
     <Provider store={makeStore()}>
-      <ExportAudiobookModal {...props}/>
+      <ExportAudiobookModal {...props} />
     </Provider>,
   );
 }
@@ -133,9 +133,12 @@ describe('ExportAudiobookModal', () => {
       expect(screen.getByTestId('export-active-job')).toBeInTheDocument();
     });
     /* Spin the poller until the final state surfaces. */
-    await waitFor(() => {
-      expect(screen.getByText(/done/i)).toBeInTheDocument();
-    }, { timeout: 5000 });
+    await waitFor(
+      () => {
+        expect(screen.getByText(/done/i)).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
     expect(mockedApi.createBookExport).toHaveBeenCalledWith(
       'demo__sa__test',
       expect.objectContaining({ format: 'm4b', destination: 'download' }),
@@ -144,7 +147,9 @@ describe('ExportAudiobookModal', () => {
 
   it('switches the export format to MP3.ZIP and submits with that format', async () => {
     mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
-    mockedApi.getBookExport.mockResolvedValue(makeJob({ status: 'done', progress: 1, sizeBytes: 1024, downloadUrl: 'blob:demo' }));
+    mockedApi.getBookExport.mockResolvedValue(
+      makeJob({ status: 'done', progress: 1, sizeBytes: 1024, downloadUrl: 'blob:demo' }),
+    );
 
     renderModal();
     /* Default should be M4B — verify the toggle reflects that before clicking. */
@@ -167,7 +172,9 @@ describe('ExportAudiobookModal', () => {
   });
 
   it('shows the missing-chapter banner on 409 export_incomplete', async () => {
-    mockedApi.createBookExport.mockRejectedValue(new ExportIncompleteError(['02-chapter-two', '07-epilogue']));
+    mockedApi.createBookExport.mockRejectedValue(
+      new ExportIncompleteError(['02-chapter-two', '07-epilogue']),
+    );
     renderModal();
     const submit = await waitFor(() => {
       const btn = screen.getByTestId('export-submit');
@@ -183,9 +190,13 @@ describe('ExportAudiobookModal', () => {
   });
 
   it('cancels a running export and returns the modal to the picker', async () => {
-    mockedApi.createBookExport.mockResolvedValue(makeJob({ id: 'exp_run', status: 'in_progress', progress: 0 }));
+    mockedApi.createBookExport.mockResolvedValue(
+      makeJob({ id: 'exp_run', status: 'in_progress', progress: 0 }),
+    );
     /* Poll keeps returning in_progress so Cancel is the only way out. */
-    mockedApi.getBookExport.mockResolvedValue(makeJob({ id: 'exp_run', status: 'in_progress', progress: 0.3 }));
+    mockedApi.getBookExport.mockResolvedValue(
+      makeJob({ id: 'exp_run', status: 'in_progress', progress: 0.3 }),
+    );
 
     renderModal();
     const submit = await waitFor(() => {
@@ -216,7 +227,9 @@ describe('ExportAudiobookModal', () => {
       .mockResolvedValueOnce(makeJob({ id: 'exp_fail', status: 'in_progress', progress: 0 }))
       .mockResolvedValueOnce(makeJob({ id: 'exp_retry', status: 'in_progress', progress: 0 }));
     mockedApi.getBookExport
-      .mockResolvedValueOnce(makeJob({ id: 'exp_fail', status: 'failed', errorReason: 'ffmpeg crashed', progress: 0.4 }))
+      .mockResolvedValueOnce(
+        makeJob({ id: 'exp_fail', status: 'failed', errorReason: 'ffmpeg crashed', progress: 0.4 }),
+      )
       .mockResolvedValue(makeJob({ id: 'exp_retry', status: 'in_progress', progress: 0.2 }));
 
     renderModal();
@@ -292,7 +305,9 @@ describe('ExportAudiobookModal — Voice mode (prefill.appHint === "voice")', ()
 
   it('submits with { format: "m4b", destination: "sync-folder" } regardless of any prior state', async () => {
     mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
-    mockedApi.getBookExport.mockResolvedValue(makeJob({ status: 'done', progress: 1, sizeBytes: 4096, downloadUrl: 'blob:demo' }));
+    mockedApi.getBookExport.mockResolvedValue(
+      makeJob({ status: 'done', progress: 1, sizeBytes: 4096, downloadUrl: 'blob:demo' }),
+    );
 
     render(
       <Provider store={makeStoreWithSyncFolder('C:\\Users\\me\\OneDrive\\Audiobooks')}>

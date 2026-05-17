@@ -57,16 +57,14 @@ export class ExportIncompleteError extends Error {
 export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3ZipResult> {
   const { bookDir, state, outPath, onProgress, signal } = opts;
 
-  const chapters = [...state.chapters]
-    .filter(c => !c.excluded)
-    .sort((a, b) => a.id - b.id);
+  const chapters = [...state.chapters].filter((c) => !c.excluded).sort((a, b) => a.id - b.id);
 
   /* Pre-flight: every non-excluded chapter must have an MP3 on disk.
      Surface ALL missing slugs in one go so the user gets a full punch
      list, not one-at-a-time errors. */
   const root = audioDir(bookDir);
   const missing: string[] = [];
-  const resolved: Array<{ idx: number; chapter: typeof chapters[number]; mp3Path: string }> = [];
+  const resolved: Array<{ idx: number; chapter: (typeof chapters)[number]; mp3Path: string }> = [];
   for (let i = 0; i < chapters.length; i++) {
     const chapter = chapters[i];
     const audio = findChapterAudio(root, chapter.slug);
@@ -106,7 +104,9 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
       const ws = createWriteStream(outPath);
       ws.on('error', reject);
       let bytes = 0;
-      zip.outputStream.on('data', (chunk: Buffer) => { bytes += chunk.length; });
+      zip.outputStream.on('data', (chunk: Buffer) => {
+        bytes += chunk.length;
+      });
       zip.outputStream.on('error', reject);
       zip.outputStream.pipe(ws).on('finish', () => resolve(bytes));
     });
@@ -118,14 +118,14 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
       const taggedPath = join(stagingDir, entryName);
 
       const tags: Id3Tags = {
-        title:       chapter.title,
+        title: chapter.title,
         album,
         artist,
         albumArtist,
-        track:       i + 1,
-        trackTotal:  total,
-        genre:       state.genre ?? null,
-        date:        state.publicationDate ?? null,
+        track: i + 1,
+        trackTotal: total,
+        genre: state.genre ?? null,
+        date: state.publicationDate ?? null,
       };
       await applyId3v24Tags(mp3Path, taggedPath, tags, { coverJpegPath });
       const taggedStat = await stat(taggedPath);

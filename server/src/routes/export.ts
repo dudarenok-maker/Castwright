@@ -46,8 +46,11 @@ export interface BookExportJob {
   completedAt: string | null;
 }
 
-
-const ALLOWED_FORMATS: ReadonlySet<BookExportJob['format']> = new Set(['mp3-zip', 'm4b', 'mp3-folder']);
+const ALLOWED_FORMATS: ReadonlySet<BookExportJob['format']> = new Set([
+  'mp3-zip',
+  'm4b',
+  'mp3-folder',
+]);
 
 export const exportRouter = Router();
 
@@ -74,7 +77,11 @@ async function rehydrateBook(bookDir: string, bookId: string): Promise<void> {
   const dir = exportsDir(bookDir);
   if (!existsSync(dir)) return;
   let entries: string[] = [];
-  try { entries = await readdir(dir); } catch { return; }
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return;
+  }
   for (const name of entries) {
     const manifest = manifestPath(bookDir, name);
     if (!existsSync(manifest)) continue;
@@ -93,7 +100,7 @@ async function rehydrateBook(bookDir: string, bookId: string): Promise<void> {
 function bookFilename(state: BookStateJson, format: BookExportJob['format']): string {
   const base = slugify(state.title);
   if (format === 'mp3-zip') return `${base}.zip`;
-  if (format === 'm4b')     return `${base}.m4b`;
+  if (format === 'm4b') return `${base}.m4b`;
   /* mp3-folder: the "filename" is actually the folder name the per-chapter
      MP3s land in (under both the staging dir and the sync target). The
      download endpoint refuses this format so the lack of a single-file
@@ -103,12 +110,25 @@ function bookFilename(state: BookStateJson, format: BookExportJob['format']): st
 
 exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { format?: string; destination?: string };
-  if (typeof body.format !== 'string' || !ALLOWED_FORMATS.has(body.format as BookExportJob['format'])) {
-    return res.status(400).json({ error: 'unsupported_format', message: `format must be 'mp3-zip', 'm4b', or 'mp3-folder'; got ${body.format ?? '(missing)'}.` });
+  if (
+    typeof body.format !== 'string' ||
+    !ALLOWED_FORMATS.has(body.format as BookExportJob['format'])
+  ) {
+    return res
+      .status(400)
+      .json({
+        error: 'unsupported_format',
+        message: `format must be 'mp3-zip', 'm4b', or 'mp3-folder'; got ${body.format ?? '(missing)'}.`,
+      });
   }
   const format = body.format as BookExportJob['format'];
   if (body.destination !== 'download' && body.destination !== 'sync-folder') {
-    return res.status(400).json({ error: 'invalid_destination', message: `destination must be 'download' or 'sync-folder'.` });
+    return res
+      .status(400)
+      .json({
+        error: 'invalid_destination',
+        message: `destination must be 'download' or 'sync-folder'.`,
+      });
   }
   /* Folder export only makes sense for an app that scans a folder on the
      device — the download endpoint serves a single file, so a folder +
@@ -117,7 +137,12 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
      combo at the route layer so the frontend surfaces a clear error
      rather than a confusing 404 on the download endpoint later. */
   if (format === 'mp3-folder' && body.destination !== 'sync-folder') {
-    return res.status(400).json({ error: 'invalid_destination', message: `mp3-folder exports require destination='sync-folder'; the folder is mirrored into the configured sync folder, not served via the download endpoint.` });
+    return res
+      .status(400)
+      .json({
+        error: 'invalid_destination',
+        message: `mp3-folder exports require destination='sync-folder'; the folder is mirrored into the configured sync folder, not served via the download endpoint.`,
+      });
   }
 
   const located = await findBookByBookId(req.params.bookId);
@@ -125,7 +150,13 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
 
   const settings = await readUserSettings();
   if (body.destination === 'sync-folder' && !settings.exportSyncFolder) {
-    return res.status(400).json({ error: 'sync_folder_unset', message: 'exportSyncFolder is not configured. Set it under Account before using the sync-folder destination.' });
+    return res
+      .status(400)
+      .json({
+        error: 'sync_folder_unset',
+        message:
+          'exportSyncFolder is not configured. Set it under Account before using the sync-folder destination.',
+      });
   }
 
   /* Pre-flight on missing audio so we 409 before allocating an exportId.
@@ -163,7 +194,14 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
 
   /* Fire-and-forget the actual build. The client polls getBookExport for
      progress + completion. */
-  void runExportJob(job, located.bookDir, located.state, outPath, settings.exportSyncFolder, controller.signal);
+  void runExportJob(
+    job,
+    located.bookDir,
+    located.state,
+    outPath,
+    settings.exportSyncFolder,
+    controller.signal,
+  );
 
   return res.status(201).json(job);
 });
@@ -173,7 +211,8 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
   if (!located) return res.status(404).json({ error: 'book_not_found' });
   await rehydrateBook(located.bookDir, located.state.bookId);
   const job = jobs.get(req.params.exportId);
-  if (!job || job.bookId !== located.state.bookId) return res.status(404).json({ error: 'export_not_found' });
+  if (!job || job.bookId !== located.state.bookId)
+    return res.status(404).json({ error: 'export_not_found' });
 
   /* Idempotent: already-terminal jobs (done / failed / cancelled) reply
      204 without touching state. Lets the frontend retry a cancel click
@@ -208,7 +247,9 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
      parent (which holds the final-output path that was about to be
      written). */
   const stagingDir = join(exportsDir(located.bookDir), job.id);
-  await rm(stagingDir, { recursive: true, force: true }).catch(() => { /* leave it for next rehydrate */ });
+  await rm(stagingDir, { recursive: true, force: true }).catch(() => {
+    /* leave it for next rehydrate */
+  });
 
   return res.status(204).end();
 });
@@ -218,7 +259,8 @@ exportRouter.get('/:bookId/exports/:exportId', async (req: Request, res: Respons
   if (!located) return res.status(404).json({ error: 'book_not_found' });
   await rehydrateBook(located.bookDir, located.state.bookId);
   const job = jobs.get(req.params.exportId);
-  if (!job || job.bookId !== located.state.bookId) return res.status(404).json({ error: 'export_not_found' });
+  if (!job || job.bookId !== located.state.bookId)
+    return res.status(404).json({ error: 'export_not_found' });
   return res.json(job);
 });
 
@@ -227,8 +269,10 @@ exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res
   if (!located) return res.status(404).json({ error: 'book_not_found' });
   await rehydrateBook(located.bookDir, located.state.bookId);
   const job = jobs.get(req.params.exportId);
-  if (!job || job.bookId !== located.state.bookId) return res.status(404).json({ error: 'export_not_found' });
-  if (job.status !== 'done') return res.status(409).json({ error: 'export_not_ready', status: job.status });
+  if (!job || job.bookId !== located.state.bookId)
+    return res.status(404).json({ error: 'export_not_found' });
+  if (job.status !== 'done')
+    return res.status(409).json({ error: 'export_not_ready', status: job.status });
   if (job.format === 'mp3-folder') {
     /* mp3-folder artifacts live as a directory tree; the download
        endpoint serves single files. The route refuses the
@@ -236,20 +280,30 @@ exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res
        this endpoint (e.g. somebody curling a manifest URL from an
        earlier release) gets a clear 409 instead of a 500 from sendFile
        trying to stream a directory. */
-    return res.status(409).json({ error: 'format_not_downloadable', message: 'mp3-folder exports are mirrored into the sync folder, not served via the download endpoint.' });
+    return res
+      .status(409)
+      .json({
+        error: 'format_not_downloadable',
+        message:
+          'mp3-folder exports are mirrored into the sync folder, not served via the download endpoint.',
+      });
   }
 
   const path = join(exportsDir(located.bookDir), job.id, job.filename);
   if (!existsSync(path)) return res.status(404).json({ error: 'export_artifact_missing' });
-  res.sendFile(path, {
-    headers: {
-      'Content-Type': mimeForFormat(job.format),
-      'Content-Disposition': `attachment; filename="${encodeURIComponent(job.filename)}"`,
-      'Cache-Control': 'no-cache',
+  res.sendFile(
+    path,
+    {
+      headers: {
+        'Content-Type': mimeForFormat(job.format),
+        'Content-Disposition': `attachment; filename="${encodeURIComponent(job.filename)}"`,
+        'Cache-Control': 'no-cache',
+      },
     },
-  }, err => {
-    if (err && !res.headersSent) res.status(500).end();
-  });
+    (err) => {
+      if (err && !res.headersSent) res.status(500).end();
+    },
+  );
 });
 
 function mimeForFormat(format: BookExportJob['format']): string {
@@ -285,7 +339,13 @@ async function runExportJob(
          sub-directory per book under the export id). The builder writes
          per-chapter MP3s into it; the sync-folder branch then mirrors
          each file into the user's target via writeFolderToSyncFolder. */
-      const folderResult = await buildMp3Folder({ bookDir, state, outDir: outPath, onProgress, signal });
+      const folderResult = await buildMp3Folder({
+        bookDir,
+        state,
+        outDir: outPath,
+        onProgress,
+        signal,
+      });
       job.sizeBytes = folderResult.totalBytes;
       job.progress = 1;
 
@@ -300,9 +360,10 @@ async function runExportJob(
          the sync folder, not behind a single-file download. */
       job.downloadUrl = null;
     } else {
-      const result = job.format === 'mp3-zip'
-        ? await buildMp3Zip({ bookDir, state, outPath, onProgress, signal })
-        : await buildM4b({ bookDir, state, outPath, onProgress, signal });
+      const result =
+        job.format === 'mp3-zip'
+          ? await buildMp3Zip({ bookDir, state, outPath, onProgress, signal })
+          : await buildM4b({ bookDir, state, outPath, onProgress, signal });
       job.sizeBytes = result.sizeBytes;
       job.progress = 1;
 
@@ -327,9 +388,10 @@ async function runExportJob(
       }
     } else {
       job.status = 'failed';
-      job.errorReason = e instanceof ExportIncompleteError
-        ? `Export incomplete: ${e.missing.length} chapter(s) missing MP3 audio.`
-        : (e as Error).message;
+      job.errorReason =
+        e instanceof ExportIncompleteError
+          ? `Export incomplete: ${e.missing.length} chapter(s) missing MP3 audio.`
+          : (e as Error).message;
       job.completedAt = new Date().toISOString();
     }
   } finally {

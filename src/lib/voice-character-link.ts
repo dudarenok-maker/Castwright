@@ -17,14 +17,14 @@ import type { Character, Voice } from './types';
 
 export function findVoiceForCharacter(c: Character, library: Voice[]): Voice | undefined {
   if (c.voiceId) {
-    const explicit = library.find(v => v.id === c.voiceId);
+    const explicit = library.find((v) => v.id === c.voiceId);
     if (explicit) return explicit;
   }
-  return library.find(v => v.id === c.id);
+  return library.find((v) => v.id === c.id);
 }
 
 export function findCharacterForVoice(v: Voice, characters: Character[]): Character | undefined {
-  const explicit = characters.find(c => c.voiceId === v.id);
+  const explicit = characters.find((c) => c.voiceId === v.id);
   if (explicit) return explicit;
-  return characters.find(c => c.id === v.id);
+  return characters.find((c) => c.id === v.id);
 }

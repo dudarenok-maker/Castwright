@@ -16,11 +16,7 @@ const base: Character = {
   gender: 'male',
   ageRange: 'adult',
   tone: { warmth: 30, pace: 40, authority: 70, emotion: 35 },
-  evidence: [
-    { quote: 'A real spoken line.' },
-    { quote: '' },
-    { quote: 'Another line.' },
-  ],
+  evidence: [{ quote: 'A real spoken line.' }, { quote: '' }, { quote: 'Another line.' }],
 };
 
 describe('buildCharacterHint', () => {

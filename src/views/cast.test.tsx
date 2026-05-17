@@ -29,8 +29,8 @@ vi.mock('../lib/use-sample-playback', () => ({
   useSamplePlayback: () => ({
     isPlaying: false,
     currentUrl: null,
-    play:  vi.fn(),
-    stop:  vi.fn(),
+    play: vi.fn(),
+    stop: vi.fn(),
     pause: vi.fn(),
   }),
 }));
@@ -47,7 +47,12 @@ const narrator: Character = {
   voiceState: 'reused',
   gender: 'male',
   ageRange: 'adult',
-  matchedFrom: { bookTitle: 'Bonus Keefe Story', bookId: 'b_prev', characterId: 'narrator_prev', confidence: 0.92 },
+  matchedFrom: {
+    bookTitle: 'Bonus Keefe Story',
+    bookId: 'b_prev',
+    characterId: 'narrator_prev',
+    confidence: 0.92,
+  },
 };
 
 const sweeney: Character = {
@@ -236,7 +241,10 @@ describe('CastView VoiceSwatch sample playback', () => {
     let resolveCall: ((v: { analyzerEvicted: boolean }) => void) | undefined;
     vi.mocked(playSampleWithAutoLoad).mockClear();
     vi.mocked(playSampleWithAutoLoad).mockImplementationOnce(
-      () => new Promise<{ analyzerEvicted: boolean }>((resolve) => { resolveCall = resolve; }),
+      () =>
+        new Promise<{ analyzerEvicted: boolean }>((resolve) => {
+          resolveCall = resolve;
+        }),
     );
     renderView();
     const row = rowFor('Mr. Sweeney');
@@ -252,7 +260,9 @@ describe('CastView VoiceSwatch sample playback', () => {
     /* Wait for the row's loading state to clear so the post-resolution
        setState lands inside act. */
     await waitFor(() => {
-      const idle = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement | null;
+      const idle = row.querySelector(
+        'button[aria-label^="Play sample"]',
+      ) as HTMLButtonElement | null;
       expect(idle).toBeTruthy();
     });
   });

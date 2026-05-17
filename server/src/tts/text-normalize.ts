@@ -46,10 +46,7 @@ const DASH_RUN = /\s*[–—]\s*/g;
    - U+202A–U+202E bidi embedding/override controls
    - U+2060 WORD JOINER
    - U+FEFF ZERO WIDTH NO-BREAK SPACE / BOM */
-const ZERO_WIDTH_AND_BIDI = new RegExp(
-  '[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]',
-  'g',
-);
+const ZERO_WIDTH_AND_BIDI = new RegExp('[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]', 'g');
 
 /* C0 control chars (U+0000–U+001F) MINUS the two readable ones we want to
    preserve (U+0009 TAB, U+000A LF) plus C1 (U+007F–U+009F). XTTS treats
@@ -63,7 +60,8 @@ const CONTROL_CHARS = /[\x00-\x08\x0B-\x1F\x7F-\x9F]/g;
    high surrogate and accepting only when the next code unit is a valid low
    surrogate (and vice versa). Anything that matches is junk from a busted
    UTF-16 round-trip. */
-const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+const UNPAIRED_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 /** Title-case runs of >=3 consecutive capital letters (apostrophes allowed
     inside the run). Single capitals and 2-letter caps (initials, "OK", "MR")

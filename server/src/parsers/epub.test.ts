@@ -45,7 +45,7 @@ describe('parseEpub', () => {
   it('strips HTML tags from chapter bodies but preserves visible text', async () => {
     const buf = await readFile(fixturePath);
     const out = await parseEpub(buf, { fileName: 'sample.epub' });
-    const allBody = out.chapters.map(c => c.body).join('\n');
+    const allBody = out.chapters.map((c) => c.body).join('\n');
     expect(allBody).toContain('The tower stood at the edge of the world.');
     expect(allBody).not.toContain('<p>');
     expect(allBody).not.toContain('<em>');
@@ -54,7 +54,7 @@ describe('parseEpub', () => {
   it('applies tagHtmlEmphasis to inline emphasis tags', async () => {
     const buf = await readFile(fixturePath);
     const out = await parseEpub(buf, { fileName: 'sample.epub' });
-    const allBody = out.chapters.map(c => c.body).join('\n');
+    const allBody = out.chapters.map((c) => c.body).join('\n');
     // chapter1 contains <em>across</em> — should land as [emphatic] across.
     expect(allBody).toContain('[emphatic] across');
   });
@@ -62,7 +62,7 @@ describe('parseEpub', () => {
   it('applies tagShoutingDialog to HTML-stripped content', async () => {
     const buf = await readFile(fixturePath);
     const out = await parseEpub(buf, { fileName: 'sample.epub' });
-    const allBody = out.chapters.map(c => c.body).join('\n');
+    const allBody = out.chapters.map((c) => c.body).join('\n');
     // chapter2 contains "GET OUT NOW," — should be tagged + title-cased.
     expect(allBody).toContain('[shouting] Get Out Now');
   });
@@ -120,9 +120,9 @@ describe('parseEpub', () => {
     it('does not create a temp directory under %TEMP%/epub-* when sourcePath is provided', async () => {
       const { readdirSync } = await import('node:fs');
       const { tmpdir } = await import('node:os');
-      const before = readdirSync(tmpdir()).filter(n => n.startsWith('epub-')).length;
+      const before = readdirSync(tmpdir()).filter((n) => n.startsWith('epub-')).length;
       await parseEpub(Buffer.alloc(0), { fileName: 'sample.epub', sourcePath: fixturePath });
-      const after = readdirSync(tmpdir()).filter(n => n.startsWith('epub-')).length;
+      const after = readdirSync(tmpdir()).filter((n) => n.startsWith('epub-')).length;
       /* Some other test or process may have created an epub-* dir
          concurrently, so we only assert this call didn't add one. */
       expect(after).toBe(before);

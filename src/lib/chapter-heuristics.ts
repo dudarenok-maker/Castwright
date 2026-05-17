@@ -5,7 +5,8 @@
    those for exclusion so the user only has to override the false
    positives. */
 
-const FRONT_MATTER_RX = /^(dedication|copyright|preface|foreword|acknowledg|about the author|about the publisher|table of contents|contents|epigraph|introduction(?!\s*\(|\s+to\b)|by the same author|also by|praise for|colophon|afterword|appendix|notes\b|bibliograph|index\b|glossary|halftitle|half[- ]title|frontispiece|imprint|publisher's note|publisher’s note|author's note|author’s note|translator's note|translator’s note)/i;
+const FRONT_MATTER_RX =
+  /^(dedication|copyright|preface|foreword|acknowledg|about the author|about the publisher|table of contents|contents|epigraph|introduction(?!\s*\(|\s+to\b)|by the same author|also by|praise for|colophon|afterword|appendix|notes\b|bibliograph|index\b|glossary|halftitle|half[- ]title|frontispiece|imprint|publisher's note|publisher’s note|author's note|author’s note|translator's note|translator’s note)/i;
 
 /* Word-count cutoff below which we treat a chapter as likely front- or
    back-matter regardless of title. Real narrative chapters in published
@@ -28,13 +29,15 @@ export function isLikelyFrontMatter(title: string, wordCount: number | undefined
    confirm-stage exclusion lists reach `/api/books` with slugs the server
    recognises. The combined form is `${id-pad}-${slug(title)}`. */
 function slugify(title: string): string {
-  return title
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80) || 'untitled';
+  return (
+    title
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'untitled'
+  );
 }
 
 export function chapterSlug(id: number, title: string): string {

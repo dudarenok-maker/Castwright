@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import {
-  IconPlay, IconPause, IconCheck, IconSpinner, IconWarning,
-  IconArrowDn, IconRefresh, IconClose, IconHistory, IconClock,
+  IconPlay,
+  IconPause,
+  IconCheck,
+  IconSpinner,
+  IconWarning,
+  IconArrowDn,
+  IconRefresh,
+  IconClose,
+  IconHistory,
+  IconClock,
 } from '../lib/icons';
-import {
-  SectionLabel, MixedHeading, Pill, ColorDot,
-} from '../components/primitives';
+import { SectionLabel, MixedHeading, Pill, ColorDot } from '../components/primitives';
 import { ModelControlPill } from '../components/ModelControlPill';
 import type { LayoutContext } from '../components/layout';
 import type { TtsLifecycle } from '../lib/use-tts-lifecycle';
@@ -39,17 +45,28 @@ import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import {
-  characterLinePositionsByChapter, characterStatsByChapter, linesDoneAt,
-  overallProgress, sentencesPerChapter,
+  characterLinePositionsByChapter,
+  characterStatsByChapter,
+  linesDoneAt,
+  overallProgress,
+  sentencesPerChapter,
 } from '../lib/generation-progress';
 import { withRecomputedDisplay } from '../lib/change-log';
 import { LOG_TYPES } from '../data/log-types';
 import type {
-  Chapter, Character, CharColor, ChapterAudio, ChangeLogEvent, TtsModelKey,
+  Chapter,
+  Character,
+  CharColor,
+  ChapterAudio,
+  ChangeLogEvent,
+  TtsModelKey,
 } from '../lib/types';
 
 const ACTIVITY_FEED_TYPES: ChangeLogEvent['type'][] = [
-  'regenerate', 'chapter_complete', 'chapter_failed', 'generation_started',
+  'regenerate',
+  'chapter_complete',
+  'chapter_failed',
+  'generation_started',
 ];
 
 /* Transient per-chapter state for an in-flight "Include in book" subset
@@ -86,20 +103,29 @@ interface Props {
 }
 
 export function GenerationView({
-  chapters, characters, paused, title, bookId, modelKey,
-  setPaused, onRegenerate, onRegenerateBook, onRegenerateCharacterInChapter, onPreview,
+  chapters,
+  characters,
+  paused,
+  title,
+  bookId,
+  modelKey,
+  setPaused,
+  onRegenerate,
+  onRegenerateBook,
+  onRegenerateCharacterInChapter,
+  onPreview,
 }: Props) {
   const dispatch = useAppDispatch();
-  const lastError           = useAppSelector(s => s.chapters.lastError);
-  const generationStartedAt = useAppSelector(s => s.chapters.generationStartedAt);
-  const lastTickAt          = useAppSelector(s => s.chapters.lastTickAt);
-  const sentences           = useAppSelector(s => s.manuscript.sentences);
-  const manuscriptId        = useAppSelector(s => s.manuscript.manuscriptId);
-  const activityEvents      = useAppSelector(s => s.changeLog.events);
+  const lastError = useAppSelector((s) => s.chapters.lastError);
+  const generationStartedAt = useAppSelector((s) => s.chapters.generationStartedAt);
+  const lastTickAt = useAppSelector((s) => s.chapters.lastTickAt);
+  const sentences = useAppSelector((s) => s.manuscript.sentences);
+  const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
+  const activityEvents = useAppSelector((s) => s.changeLog.events);
   /* Default analyzer engine used by the subset retry below (un-exclude
      path). Read at click time, not memoised, so a model switch between
      un-excludes is reflected on the next retry. */
-  const selectedAnalyzerModelId = useAppSelector(s => s.ui.selectedModel);
+  const selectedAnalyzerModelId = useAppSelector((s) => s.ui.selectedModel);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   /* Per-chapter subset-analysis state for the un-exclude flow. Lives only
      for the duration of the inline run — once the chapter transitions
@@ -114,7 +140,9 @@ export function GenerationView({
      would silently load Ollama and evict the TTS sidecar. The hook
      short-circuits to a straight call-through for remote engines
      (Gemini), so this is a no-op unless both conditions hold. */
-  const { guard, modal: analyzerGuardModal } = useLocalAnalyzerGuard({ generatingBookTitle: title });
+  const { guard, modal: analyzerGuardModal } = useLocalAnalyzerGuard({
+    generatingBookTitle: title,
+  });
 
   /* Reverse guard (plan 32, D2): when the user explicitly resumes TTS
      generation here AND a local analysis is running somewhere in the
@@ -124,7 +152,7 @@ export function GenerationView({
   const { guard: reverseGuard, modal: reverseGuardModal } = useReverseLocalAnalyzerGuard();
 
   const patchSubset = (chapterId: number, patch: Partial<SubsetProgress>) => {
-    setSubsetByChapter(prev => {
+    setSubsetByChapter((prev) => {
       const existing = prev[chapterId];
       if (!existing) return prev;
       return { ...prev, [chapterId]: { ...existing, ...patch } };
@@ -163,7 +191,7 @@ export function GenerationView({
     if (subsetByChapter[chapterId] && subsetByChapter[chapterId].error == null) return;
 
     const controller = new AbortController();
-    setSubsetByChapter(prev => ({
+    setSubsetByChapter((prev) => ({
       ...prev,
       [chapterId]: {
         chapterId,
@@ -182,21 +210,23 @@ export function GenerationView({
        server job (it tries the main route's map, which is empty).
        Captured engine: ui.selectedModel — the analyzer that will
        handle this subset retry. */
-    const engine = MODEL_OPTIONS.find(m => m.id === selectedAnalyzerModelId)?.engine;
-    dispatch(analysisActions.setActiveStream({
-      bookId,
-      manuscriptId,
-      bookTitle: title ?? undefined,
-      engine,
-      phaseId: 0,
-      phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
-      phaseProgress: 0,
-      remainingMs: null,
-      lastTickAt: Date.now(),
-      state: 'running',
-      kind: 'subset',
-      subsetChapterIds: [chapterId],
-    }));
+    const engine = MODEL_OPTIONS.find((m) => m.id === selectedAnalyzerModelId)?.engine;
+    dispatch(
+      analysisActions.setActiveStream({
+        bookId,
+        manuscriptId,
+        bookTitle: title ?? undefined,
+        engine,
+        phaseId: 0,
+        phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
+        phaseProgress: 0,
+        remainingMs: null,
+        lastTickAt: Date.now(),
+        state: 'running',
+        kind: 'subset',
+        subsetChapterIds: [chapterId],
+      }),
+    );
 
     try {
       await api.setChapterExcluded(bookId, chapterId, false);
@@ -212,13 +242,15 @@ export function GenerationView({
           });
           /* Snapshot tick — middleware uses this to attach a sticky
              subscriber against the subset route's in-flight map. */
-          dispatch(analysisActions.applyAnalysisSnapshotTick({
-            manuscriptId,
-            phaseId,
-            phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
-            phaseProgress: progress,
-            lastTickAt: Date.now(),
-          }));
+          dispatch(
+            analysisActions.applyAnalysisSnapshotTick({
+              manuscriptId,
+              phaseId,
+              phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
+              phaseProgress: progress,
+              lastTickAt: Date.now(),
+            }),
+          );
         },
         onCastUpdate: ({ characters }) => {
           dispatch(castActions.mergeCharacters(characters));
@@ -243,7 +275,7 @@ export function GenerationView({
       dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
       dispatch(manuscriptActions.hydrateFromAnalysis(res));
 
-      setSubsetByChapter(prev => {
+      setSubsetByChapter((prev) => {
         const { [chapterId]: _, ...rest } = prev;
         return rest;
       });
@@ -260,9 +292,9 @@ export function GenerationView({
          The rollback is best-effort — if it fails the worst case is
          the chapter sticks around as queued-with-no-content until the
          user re-excludes it manually. */
-      const isAbort = (e as Error)?.name === 'AbortError'
-        || (e instanceof AnalysisError && e.code === 'aborted');
-      await rollbackInclude(chapterId).catch(rollbackErr => {
+      const isAbort =
+        (e as Error)?.name === 'AbortError' || (e instanceof AnalysisError && e.code === 'aborted');
+      await rollbackInclude(chapterId).catch((rollbackErr) => {
         console.warn('[generation] include rollback failed', rollbackErr);
       });
       /* Drop the snapshot on either abort or terminal failure — the
@@ -271,7 +303,7 @@ export function GenerationView({
          the message for the user. */
       dispatch(analysisActions.clearActiveStream());
       if (isAbort) {
-        setSubsetByChapter(prev => {
+        setSubsetByChapter((prev) => {
           const { [chapterId]: _, ...rest } = prev;
           return rest;
         });
@@ -301,15 +333,17 @@ export function GenerationView({
   }
 
   function handleIncludeClick(chapterId: number): void {
-    guard(() => { void handleToggleExcluded(chapterId, false); });
+    guard(() => {
+      void handleToggleExcluded(chapterId, false);
+    });
   }
 
   /* Manuscript-derived shape used both for accurate overall-progress
      weighting (so 3 hydrated-Done chapters don't collapse the bar to the
      in-flight chapter's progress) and for the per-character lines/words
      readout in the expanded chapter rows. */
-  const manuscriptCounts   = useMemo(() => sentencesPerChapter(sentences), [sentences]);
-  const characterStats     = useMemo(() => characterStatsByChapter(sentences), [sentences]);
+  const manuscriptCounts = useMemo(() => sentencesPerChapter(sentences), [sentences]);
+  const characterStats = useMemo(() => characterStatsByChapter(sentences), [sentences]);
   /* Per-character line positions inside each chapter — drives the truthful
      fractional bar in the expanded row instead of the slice's "active
      speaker only" status field. See generation-progress.ts. */
@@ -323,27 +357,32 @@ export function GenerationView({
      excluded chapters don't queue, don't generate, and shouldn't count
      against (or for) completion. Without this an 8-of-10-completed book
      with 2 excluded would never reach allComplete. */
-  const activeChapters = useMemo(() => chapters.filter(c => !c.excluded), [chapters]);
-  const completed     = activeChapters.filter(c => c.state === 'done').length;
-  const failed        = activeChapters.filter(c => c.state === 'failed').length;
-  const inProgressCnt = activeChapters.filter(c => c.state === 'in_progress').length;
-  const queued        = activeChapters.filter(c => c.state === 'queued').length;
+  const activeChapters = useMemo(() => chapters.filter((c) => !c.excluded), [chapters]);
+  const completed = activeChapters.filter((c) => c.state === 'done').length;
+  const failed = activeChapters.filter((c) => c.state === 'failed').length;
+  const inProgressCnt = activeChapters.filter((c) => c.state === 'in_progress').length;
+  const queued = activeChapters.filter((c) => c.state === 'queued').length;
   /* Engine drift (plan 35). A drifted chapter has audio recorded with a
      different TTS engine than the project's current selection — usually
      because the user changed the model picker after generation. The list
      drives the top-of-view banner (count + bulk-regen affordance), the
      per-row caption, and the bulk-regen confirm dialog's body copy. */
-  const driftedChapters = useMemo(() => activeChapters.filter(c =>
-    c.state === 'done' && c.audioModelKey != null && c.audioModelKey !== modelKey,
-  ), [activeChapters, modelKey]);
+  const driftedChapters = useMemo(
+    () =>
+      activeChapters.filter(
+        (c) => c.state === 'done' && c.audioModelKey != null && c.audioModelKey !== modelKey,
+      ),
+    [activeChapters, modelKey],
+  );
   const driftedCount = driftedChapters.length;
   /* Distinct source engines seen across the drifted set. The common case
      is a single engine (user flipped one switch), but accumulated drift
      across multiple swaps can leave a mixed set — render both shapes
      gracefully in the confirm dialog. */
-  const driftedSourceEngines = useMemo(() => Array.from(new Set(
-    driftedChapters.map(c => ttsModelLabel(c.audioModelKey!))
-  )), [driftedChapters]);
+  const driftedSourceEngines = useMemo(
+    () => Array.from(new Set(driftedChapters.map((c) => ttsModelLabel(c.audioModelKey!)))),
+    [driftedChapters],
+  );
   const [bulkRegenOpen, setBulkRegenOpen] = useState(false);
   /* Used by the header action: Resume/Pause is meaningless once every chapter
      has finished synthesising, so the button flips to Regenerate. Failed
@@ -367,21 +406,22 @@ export function GenerationView({
      mutation, so the user would never see "Stalled" appear. We trigger
      while either an in-progress chapter exists OR ETA is live. */
   const [, forceTick] = useState(0);
-  const needsClock = (generationStartedAt != null) || inProgressCnt > 0;
+  const needsClock = generationStartedAt != null || inProgressCnt > 0;
   useEffect(() => {
     if (!needsClock || paused) return;
-    const id = setInterval(() => forceTick(n => n + 1), 1000);
+    const id = setInterval(() => forceTick((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, [needsClock, paused]);
   const elapsedMs = generationStartedAt ? Date.now() - generationStartedAt : 0;
-  const etaSec = (generationStartedAt && totalProgress > 0.05 && totalProgress < 1)
-    ? (elapsedMs / totalProgress) * (1 - totalProgress) / 1000
-    : null;
+  const etaSec =
+    generationStartedAt && totalProgress > 0.05 && totalProgress < 1
+      ? ((elapsedMs / totalProgress) * (1 - totalProgress)) / 1000
+      : null;
 
   /* Honest "runtime so far" — sum of completed chapter durations. Replaces
      the hardcoded "4h 38m". */
   const runtimeSec = chapters
-    .filter(c => c.state === 'done')
+    .filter((c) => c.state === 'done')
     .reduce((s, c) => s + parseDuration(c.duration), 0);
 
   const blocked = lastError != null;
@@ -392,9 +432,7 @@ export function GenerationView({
      because the ETA `forceTick` interval re-renders this view every second
      while a run is active, so the derived value updates without an extra
      timer. Cleared by every non-idle tick and by the slice on idle. */
-  const stalledMs = lastTickAt && inProgressCnt > 0 && !paused
-    ? Date.now() - lastTickAt
-    : 0;
+  const stalledMs = lastTickAt && inProgressCnt > 0 && !paused ? Date.now() - lastTickAt : 0;
   const stalled = stalledMs > STALL_THRESHOLD_MS;
   const stalledSec = stalled ? Math.floor(stalledMs / 1000) : 0;
 
@@ -404,7 +442,7 @@ export function GenerationView({
      — only real, this-session/this-book activity shows up; the demo seed
      stays out. */
   const recentActivity = useMemo(() => {
-    const filtered = activityEvents.filter(e => e.at && ACTIVITY_FEED_TYPES.includes(e.type));
+    const filtered = activityEvents.filter((e) => e.at && ACTIVITY_FEED_TYPES.includes(e.type));
     return withRecomputedDisplay(filtered).slice(0, 6);
   }, [activityEvents]);
 
@@ -448,7 +486,7 @@ export function GenerationView({
         <div>
           <SectionLabel>Audiobook generation</SectionLabel>
           <div className="mt-4">
-            <MixedHeading regular="Generating" bold={title || 'your audiobook'} level="h1"/>
+            <MixedHeading regular="Generating" bold={title || 'your audiobook'} level="h1" />
           </div>
           <p className="mt-3 text-ink/60">
             {completed} of {activeChapters.length} chapters complete
@@ -456,30 +494,40 @@ export function GenerationView({
           </p>
           {linesCounter.total > 0 && (
             <p className="mt-1 text-xs text-ink/55 tabular-nums">
-              <span className="font-semibold text-ink/75">{linesCounter.done.toLocaleString()}</span>
-              {' '}of {linesCounter.total.toLocaleString()} lines synthesised
+              <span className="font-semibold text-ink/75">
+                {linesCounter.done.toLocaleString()}
+              </span>{' '}
+              of {linesCounter.total.toLocaleString()} lines synthesised
             </p>
           )}
           <p className="mt-1 text-xs text-ink/50 inline-flex items-center gap-2 flex-wrap">
-            <span>Engine: <span className="font-medium text-ink/70">{engineLabel}</span></span>
+            <span>
+              Engine: <span className="font-medium text-ink/70">{engineLabel}</span>
+            </span>
             <ModelControlPill
               kind="tts"
               state={ttsLifecycle.state}
               unreachableLabel="Sidecar process not running"
-              onLoad={() => { void ttsLifecycle.onLoad(); }}
-              onStop={() => { void ttsLifecycle.onStop(); }}
+              onLoad={() => {
+                void ttsLifecycle.onLoad();
+              }}
+              onStop={() => {
+                void ttsLifecycle.onStop();
+              }}
             />
           </p>
           {ttsLifecycle.evictionNotice && (
             <p className="mt-2 inline-flex items-center gap-2 text-[11px] text-emerald-700">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               {ttsLifecycle.evictionNotice}
             </p>
           )}
           {ttsLifecycle.loadErrorNotice && (
-            <p className="mt-2 inline-flex items-start gap-2 text-[11px] text-rose-700 max-w-prose"
-               role="alert">
-              <span className="w-1.5 h-1.5 mt-1 rounded-full bg-rose-500 shrink-0"/>
+            <p
+              className="mt-2 inline-flex items-start gap-2 text-[11px] text-rose-700 max-w-prose"
+              role="alert"
+            >
+              <span className="w-1.5 h-1.5 mt-1 rounded-full bg-rose-500 shrink-0" />
               <span>{ttsLifecycle.loadErrorNotice}</span>
               <button
                 type="button"
@@ -487,7 +535,7 @@ export function GenerationView({
                 aria-label="Dismiss error"
                 className="ml-1 text-rose-600/70 hover:text-rose-800"
               >
-                <IconClose className="w-3 h-3"/>
+                <IconClose className="w-3 h-3" />
               </button>
             </p>
           )}
@@ -499,8 +547,11 @@ export function GenerationView({
               picks scope="This and all subsequent" there to redo the whole
               book, or sticks to a single chapter. */}
           {allComplete ? (
-            <button onClick={onRegenerateBook} className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2">
-              <IconRefresh className="w-4 h-4"/> Regenerate
+            <button
+              onClick={onRegenerateBook}
+              className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+            >
+              <IconRefresh className="w-4 h-4" /> Regenerate
             </button>
           ) : (
             <button
@@ -513,7 +564,15 @@ export function GenerationView({
               }}
               className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
             >
-              {paused ? <><IconPlay className="w-4 h-4"/> Resume</> : <><IconPause className="w-4 h-4"/> Pause</>}
+              {paused ? (
+                <>
+                  <IconPlay className="w-4 h-4" /> Resume
+                </>
+              ) : (
+                <>
+                  <IconPause className="w-4 h-4" /> Pause
+                </>
+              )}
             </button>
           )}
         </div>
@@ -521,25 +580,28 @@ export function GenerationView({
 
       {lastError && (
         <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50/70 px-5 py-4 flex items-start gap-3 fade-in">
-          <IconWarning className="w-5 h-5 text-rose-600 shrink-0 mt-0.5"/>
+          <IconWarning className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-rose-900">Generation halted</p>
             <p className="text-sm text-rose-800/90 mt-0.5">{lastError}</p>
           </div>
-          <button onClick={() => dispatch(chaptersActions.clearLastError())}
-                  className="p-1.5 rounded-full text-rose-600/70 hover:text-rose-700 hover:bg-rose-100">
-            <IconClose className="w-4 h-4"/>
+          <button
+            onClick={() => dispatch(chaptersActions.clearLastError())}
+            className="p-1.5 rounded-full text-rose-600/70 hover:text-rose-700 hover:bg-rose-100"
+          >
+            <IconClose className="w-4 h-4" />
           </button>
         </div>
       )}
 
       {stalled && !lastError && (
         <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/70 px-5 py-4 flex items-start gap-3 fade-in">
-          <IconClock className="w-5 h-5 text-amber-700 shrink-0 mt-0.5"/>
+          <IconClock className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-amber-900">Worker has gone quiet</p>
             <p className="text-sm text-amber-800/90 mt-0.5">
-              No progress for {stalledSec}s. The TTS engine may be retrying — give it a moment, or pause and resume to reset the stream.
+              No progress for {stalledSec}s. The TTS engine may be retrying — give it a moment, or
+              pause and resume to reset the stream.
             </p>
           </div>
         </div>
@@ -554,13 +616,15 @@ export function GenerationView({
            chapterIds + force=true. Per-row Regenerate still works for
            the surgical case. */
         <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/70 px-5 py-4 flex items-start gap-3 fade-in">
-          <IconWarning className="w-5 h-5 text-amber-700 shrink-0 mt-0.5"/>
+          <IconWarning className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-amber-900">
-              {driftedCount} chapter{driftedCount === 1 ? '' : 's'} generated with a different engine
+              {driftedCount} chapter{driftedCount === 1 ? '' : 's'} generated with a different
+              engine
             </p>
             <p className="text-sm text-amber-800/90 mt-0.5">
-              Current engine is <span className="font-medium">{ttsModelLabel(modelKey)}</span>. Drifted chapters keep their original voices until you regenerate them.
+              Current engine is <span className="font-medium">{ttsModelLabel(modelKey)}</span>.
+              Drifted chapters keep their original voices until you regenerate them.
             </p>
           </div>
           <button
@@ -568,7 +632,7 @@ export function GenerationView({
             onClick={() => setBulkRegenOpen(true)}
             className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-900/90 text-white text-xs font-semibold hover:bg-amber-900 transition-colors"
           >
-            <IconRefresh className="w-3.5 h-3.5"/> Regenerate all
+            <IconRefresh className="w-3.5 h-3.5" /> Regenerate all
           </button>
         </div>
       )}
@@ -577,32 +641,40 @@ export function GenerationView({
         open={bulkRegenOpen}
         variant="danger"
         eyebrow="Regenerate"
-        icon={<IconRefresh className="w-4 h-4"/>}
+        icon={<IconRefresh className="w-4 h-4" />}
         title={`Regenerate ${driftedCount} chapter${driftedCount === 1 ? '' : 's'} with ${ttsModelLabel(modelKey)}?`}
         body={
           <div className="space-y-3">
             <p>
-              {driftedSourceEngines.length === 1
-                ? <>These chapters were rendered with <span className="font-medium text-ink">{driftedSourceEngines[0]}</span>.</>
-                : <>These chapters were rendered across <span className="font-medium text-ink">{driftedSourceEngines.join(', ')}</span>.</>}
-              {' '}They will be re-synthesised on the current engine.
+              {driftedSourceEngines.length === 1 ? (
+                <>
+                  These chapters were rendered with{' '}
+                  <span className="font-medium text-ink">{driftedSourceEngines[0]}</span>.
+                </>
+              ) : (
+                <>
+                  These chapters were rendered across{' '}
+                  <span className="font-medium text-ink">{driftedSourceEngines.join(', ')}</span>.
+                </>
+              )}{' '}
+              They will be re-synthesised on the current engine.
             </p>
             <p className="text-ink/60">
               Existing audio remains available until each new chapter completes.
             </p>
             {inProgressCnt > 0 && (
-              <p className="text-amber-800">
-                This will interrupt the current run.
-              </p>
+              <p className="text-amber-800">This will interrupt the current run.</p>
             )}
           </div>
         }
         confirmLabel={`Regenerate ${driftedCount === 1 ? '1 chapter' : `all ${driftedCount}`}`}
         cancelLabel="Cancel"
         onConfirm={() => {
-          dispatch(chaptersActions.regenerateChapterIds({
-            chapterIds: driftedChapters.map(c => c.id),
-          }));
+          dispatch(
+            chaptersActions.regenerateChapterIds({
+              chapterIds: driftedChapters.map((c) => c.id),
+            }),
+          );
           setBulkRegenOpen(false);
         }}
         onClose={() => setBulkRegenOpen(false)}
@@ -611,47 +683,62 @@ export function GenerationView({
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 mb-8">
         <div className="flex items-center justify-between mb-3">
           <p className="text-sm font-semibold text-ink">Overall progress</p>
-          <span className="text-sm font-bold text-ink tabular-nums">{Math.round(totalProgress * 100)}%</span>
+          <span className="text-sm font-bold text-ink tabular-nums">
+            {Math.round(totalProgress * 100)}%
+          </span>
         </div>
         <div className="relative h-3 rounded-full bg-ink/[0.06] overflow-hidden">
-          <div className="absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all" style={{ width: `${totalProgress * 100}%` }}>
-            {!paused && <div className="absolute inset-0 stripe-travel"/>}
+          <div
+            className="absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all"
+            style={{ width: `${totalProgress * 100}%` }}
+          >
+            {!paused && <div className="absolute inset-0 stripe-travel" />}
           </div>
         </div>
         <div className="mt-4 grid grid-cols-4 gap-4 pt-4 border-t border-ink/10">
-          <Stat label="Completed"   value={completed}/>
-          <Stat label="In progress" value={inProgressCnt}/>
-          <Stat label="Queued"      value={queued}/>
-          <Stat label="Failed"      value={failed} danger/>
+          <Stat label="Completed" value={completed} />
+          <Stat label="In progress" value={inProgressCnt} />
+          <Stat label="Queued" value={queued} />
+          <Stat label="Failed" value={failed} danger />
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
         <div className="space-y-3 min-w-0">
-          {chapters.map(ch => (
-            <ChapterRow key={ch.id} chapter={ch} characters={characters} bookId={bookId}
-                        expanded={!!expanded[ch.id]} onToggle={() => setExpanded({ ...expanded, [ch.id]: !expanded[ch.id] })}
-                        paused={paused} blocked={blocked} stalled={stalled}
-                        charStats={characterStats[ch.id]}
-                        charPositions={characterPositions[ch.id]}
-                        onRegenerate={onRegenerate}
-                        onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
-                        onPreview={onPreview}
-                        onToggleExcluded={handleToggleExcluded}
-                        onIncludeClick={handleIncludeClick}
-                        onCancelSubset={handleCancelSubset}
-                        onRetrySubset={handleRetrySubset}
-                        subsetProgress={subsetByChapter[ch.id] ?? null}
-                        activeModelKey={modelKey}/>
+          {chapters.map((ch) => (
+            <ChapterRow
+              key={ch.id}
+              chapter={ch}
+              characters={characters}
+              bookId={bookId}
+              expanded={!!expanded[ch.id]}
+              onToggle={() => setExpanded({ ...expanded, [ch.id]: !expanded[ch.id] })}
+              paused={paused}
+              blocked={blocked}
+              stalled={stalled}
+              charStats={characterStats[ch.id]}
+              charPositions={characterPositions[ch.id]}
+              onRegenerate={onRegenerate}
+              onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
+              onPreview={onPreview}
+              onToggleExcluded={handleToggleExcluded}
+              onIncludeClick={handleIncludeClick}
+              onCancelSubset={handleCancelSubset}
+              onRetrySubset={handleRetrySubset}
+              subsetProgress={subsetByChapter[ch.id] ?? null}
+              activeModelKey={modelKey}
+            />
           ))}
         </div>
         <aside className="lg:sticky lg:top-20 self-start bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
           <header className="flex items-center justify-between px-5 py-4 border-b border-ink/10">
             <span className="text-sm font-semibold text-ink inline-flex items-center gap-2">
-              <IconHistory className="w-4 h-4 text-ink/60"/> Activity
+              <IconHistory className="w-4 h-4 text-ink/60" /> Activity
             </span>
-            <a href={`#/books/${bookId}/log`}
-               className="text-xs font-medium text-ink/55 hover:text-ink transition-colors">
+            <a
+              href={`#/books/${bookId}/log`}
+              className="text-xs font-medium text-ink/55 hover:text-ink transition-colors"
+            >
               View all →
             </a>
           </header>
@@ -661,7 +748,9 @@ export function GenerationView({
             </p>
           ) : (
             <ul className="divide-y divide-ink/5">
-              {recentActivity.map(e => <ActivityRow key={e.id} event={e}/>)}
+              {recentActivity.map((e) => (
+                <ActivityRow key={e.id} event={e} />
+              ))}
             </ul>
           )}
         </aside>
@@ -671,7 +760,12 @@ export function GenerationView({
         <div className="flex items-center gap-6 flex-wrap">
           <span>Output: MP3 (VBR V2)</span>
           <span>·</span>
-          <span>Runtime so far: <span className="tabular-nums text-ink/70">{runtimeSec > 0 ? formatTime(runtimeSec) : '0:00'}</span></span>
+          <span>
+            Runtime so far:{' '}
+            <span className="tabular-nums text-ink/70">
+              {runtimeSec > 0 ? formatTime(runtimeSec) : '0:00'}
+            </span>
+          </span>
         </div>
       </div>
       {analyzerGuardModal}
@@ -681,29 +775,49 @@ export function GenerationView({
 }
 
 function ActivityRow({ event }: { event: ChangeLogEvent }) {
-  const t = LOG_TYPES[event.type] || { icon: <IconHistory className="w-3.5 h-3.5"/>, color: '#6B6663', label: event.type };
+  const t = LOG_TYPES[event.type] || {
+    icon: <IconHistory className="w-3.5 h-3.5" />,
+    color: '#6B6663',
+    label: event.type,
+  };
   return (
     <li className="grid grid-cols-[auto_1fr] gap-3 px-5 py-3">
-      <span className="w-7 h-7 rounded-full grid place-items-center text-white shrink-0 mt-0.5"
-            style={{ background: t.color }}>
+      <span
+        className="w-7 h-7 rounded-full grid place-items-center text-white shrink-0 mt-0.5"
+        style={{ background: t.color }}
+      >
         {t.icon}
       </span>
       <div className="min-w-0">
         <p className="text-xs font-semibold text-ink truncate">{event.title}</p>
         <p className="text-[11px] text-ink/60 leading-snug line-clamp-2">{event.note}</p>
         <p className="mt-1 text-[10px] text-ink/45 tabular-nums inline-flex items-center gap-1">
-          <IconClock className="w-2.5 h-2.5"/> {event.ts}
+          <IconClock className="w-2.5 h-2.5" /> {event.ts}
         </p>
       </div>
     </li>
   );
 }
 
-export function Stat({ label, value, danger, small }: { label: string; value: number | string; danger?: boolean; small?: boolean }) {
+export function Stat({
+  label,
+  value,
+  danger,
+  small,
+}: {
+  label: string;
+  value: number | string;
+  danger?: boolean;
+  small?: boolean;
+}) {
   return (
     <div>
       <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-1">{label}</p>
-      <p className={`${small ? 'text-base' : 'text-2xl'} font-bold tabular-nums ${danger && typeof value === 'number' && value > 0 ? 'text-magenta' : 'text-ink'}`}>{value}</p>
+      <p
+        className={`${small ? 'text-base' : 'text-2xl'} font-bold tabular-nums ${danger && typeof value === 'number' && value > 0 ? 'text-magenta' : 'text-ink'}`}
+      >
+        {value}
+      </p>
     </div>
   );
 }
@@ -741,9 +855,24 @@ interface ChapterRowProps {
 }
 
 function ChapterRow({
-  chapter, characters, bookId, expanded, onToggle, paused, blocked, stalled, charStats, charPositions,
-  onRegenerate, onRegenerateCharacterInChapter, onPreview, onToggleExcluded,
-  onIncludeClick, onCancelSubset, onRetrySubset, subsetProgress,
+  chapter,
+  characters,
+  bookId,
+  expanded,
+  onToggle,
+  paused,
+  blocked,
+  stalled,
+  charStats,
+  charPositions,
+  onRegenerate,
+  onRegenerateCharacterInChapter,
+  onPreview,
+  onToggleExcluded,
+  onIncludeClick,
+  onCancelSubset,
+  onRetrySubset,
+  subsetProgress,
   activeModelKey,
 }: ChapterRowProps) {
   /* Render the greyed-out variant when the chapter is excluded OR a
@@ -771,26 +900,47 @@ function ChapterRow({
     ? 'Stalled'
     : assembling
       ? 'Assembling…'
-      : paused ? 'Paused' : 'Generating';
-  const inProgressPill = rowStalled
-    ? <Pill color="warning">Stalled</Pill>
-    : <Pill color="peach">{inProgressLabel}</Pill>;
-  const queuedPill = blocked
-    ? <Pill color="danger">Blocked</Pill>
-    : <Pill>Queued</Pill>;
-  const inProgressIcon = rowStalled
-    ? <IconClock   className="w-4 h-4 text-amber-700"/>
-    : paused
-      ? <IconPause className="w-4 h-4 text-magenta"/>
-      : <IconSpinner className="w-4 h-4 text-magenta"/>;
+      : paused
+        ? 'Paused'
+        : 'Generating';
+  const inProgressPill = rowStalled ? (
+    <Pill color="warning">Stalled</Pill>
+  ) : (
+    <Pill color="peach">{inProgressLabel}</Pill>
+  );
+  const queuedPill = blocked ? <Pill color="danger">Blocked</Pill> : <Pill>Queued</Pill>;
+  const inProgressIcon = rowStalled ? (
+    <IconClock className="w-4 h-4 text-amber-700" />
+  ) : paused ? (
+    <IconPause className="w-4 h-4 text-magenta" />
+  ) : (
+    <IconSpinner className="w-4 h-4 text-magenta" />
+  );
   const stateConfig = {
-    done:        { tint: 'bg-emerald-50/50', badge: <Pill color="success">Done</Pill>,                                                       icon: <IconCheck   className="w-4 h-4 text-emerald-600"/> },
-    in_progress: { tint: rowStalled ? 'bg-amber-50/60' : 'bg-peach/[0.06]', badge: inProgressPill, icon: inProgressIcon },
-    queued:      { tint: blocked ? 'bg-rose-50/30' : 'bg-white', badge: queuedPill,                                                          icon: <span className="w-4 h-4 rounded-full border border-ink/20"/> },
-    failed:      { tint: 'bg-rose-50/50',    badge: <Pill color="danger">Failed</Pill>,                                                     icon: <IconWarning className="w-4 h-4 text-rose-600"/> },
+    done: {
+      tint: 'bg-emerald-50/50',
+      badge: <Pill color="success">Done</Pill>,
+      icon: <IconCheck className="w-4 h-4 text-emerald-600" />,
+    },
+    in_progress: {
+      tint: rowStalled ? 'bg-amber-50/60' : 'bg-peach/[0.06]',
+      badge: inProgressPill,
+      icon: inProgressIcon,
+    },
+    queued: {
+      tint: blocked ? 'bg-rose-50/30' : 'bg-white',
+      badge: queuedPill,
+      icon: <span className="w-4 h-4 rounded-full border border-ink/20" />,
+    },
+    failed: {
+      tint: 'bg-rose-50/50',
+      badge: <Pill color="danger">Failed</Pill>,
+      icon: <IconWarning className="w-4 h-4 text-rose-600" />,
+    },
   }[chapter.state];
 
-  const findChar = (id: string): Character => characters.find(c => c.id === id) || { id, name: id, role: '', color: 'narrator' };
+  const findChar = (id: string): Character =>
+    characters.find((c) => c.id === id) || { id, name: id, role: '', color: 'narrator' };
 
   /* Chapter totals derived from the manuscript so the header can show
      "X words · Y lines · Z speakers" without waiting on the SSE. */
@@ -799,8 +949,8 @@ function ChapterRow({
     const entries = Object.values(charStats);
     if (entries.length === 0) return null;
     return {
-      lines:    entries.reduce((s, e) => s + e.lines, 0),
-      words:    entries.reduce((s, e) => s + e.words, 0),
+      lines: entries.reduce((s, e) => s + e.lines, 0),
+      words: entries.reduce((s, e) => s + e.words, 0),
       speakers: entries.length,
     };
   })();
@@ -810,20 +960,30 @@ function ChapterRow({
      confirmation each tick that lines are moving. Falls back to the
      manuscript-derived total when the SSE hasn't shipped a totalLines
      yet (e.g. the first sub-second after Resume). */
-  const liveSpeakerId = chapter.state === 'in_progress'
-    ? Object.entries(chapter.characters).find(([, s]) => s === 'in_progress')?.[0]
-    : undefined;
+  const liveSpeakerId =
+    chapter.state === 'in_progress'
+      ? Object.entries(chapter.characters).find(([, s]) => s === 'in_progress')?.[0]
+      : undefined;
   const liveSpeaker = liveSpeakerId ? findChar(liveSpeakerId) : null;
   const liveTotal = chapter.totalLines ?? chapterTotals?.lines ?? 0;
   const liveCurrent = chapter.currentLine ?? 0;
 
   return (
-    <div className={`rounded-3xl border border-ink/10 shadow-card overflow-hidden ${stateConfig.tint}`}>
-      <button onClick={onToggle} className="w-full grid grid-cols-[32px_52px_minmax(0,1fr)_120px_64px_92px_20px] items-center gap-3 px-5 py-4 text-left">
+    <div
+      className={`rounded-3xl border border-ink/10 shadow-card overflow-hidden ${stateConfig.tint}`}
+    >
+      <button
+        onClick={onToggle}
+        className="w-full grid grid-cols-[32px_52px_minmax(0,1fr)_120px_64px_92px_20px] items-center gap-3 px-5 py-4 text-left"
+      >
         <span className="grid place-items-center">{stateConfig.icon}</span>
-        <span className="text-sm font-bold text-ink/50 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
+        <span className="text-sm font-bold text-ink/50 tabular-nums">
+          CH {String(chapter.id).padStart(2, '0')}
+        </span>
         <span className="min-w-0">
-          <span className="block font-semibold text-ink truncate">{stripChapterPrefix(chapter.title)}</span>
+          <span className="block font-semibold text-ink truncate">
+            {stripChapterPrefix(chapter.title)}
+          </span>
           {chapter.state === 'in_progress' && liveTotal > 0 ? (
             /* Live caption — swaps in once a tick has shipped totalLines so
                the user has a per-tick "moving" signal at eye level.
@@ -832,7 +992,9 @@ function ChapterRow({
               {liveSpeaker ? `Synthesising ${liveSpeaker.name} · ` : ''}
               line {liveCurrent.toLocaleString()} of {liveTotal.toLocaleString()}
             </span>
-          ) : chapter.state === 'done' && chapter.audioModelKey && chapter.audioModelKey !== activeModelKey ? (
+          ) : chapter.state === 'done' &&
+            chapter.audioModelKey &&
+            chapter.audioModelKey !== activeModelKey ? (
             /* Engine drift caption (plan 35). When a Done chapter's
                recorded engine differs from the project's current TTS
                model, surface it in place of the words/lines static meta
@@ -843,57 +1005,93 @@ function ChapterRow({
               className="block text-[11px] text-amber-700 tabular-nums mt-0.5 truncate"
               title={`Generated with ${ttsModelLabel(chapter.audioModelKey)}. Current engine is ${ttsModelLabel(activeModelKey)}. Regenerate to refresh.`}
             >
-              ⚠ Generated with {ttsModelLabel(chapter.audioModelKey)} · current engine is {ttsModelLabel(activeModelKey)}
+              ⚠ Generated with {ttsModelLabel(chapter.audioModelKey)} · current engine is{' '}
+              {ttsModelLabel(activeModelKey)}
             </span>
-          ) : chapterTotals && (
-            <span className="block text-[11px] text-ink/50 tabular-nums mt-0.5 truncate">
-              {chapterTotals.words.toLocaleString()} {chapterTotals.words === 1 ? 'word' : 'words'}
-              {' · '}
-              {chapterTotals.lines.toLocaleString()} {chapterTotals.lines === 1 ? 'line' : 'lines'}
-              {' · '}
-              {chapterTotals.speakers} {chapterTotals.speakers === 1 ? 'speaker' : 'speakers'}
-            </span>
+          ) : (
+            chapterTotals && (
+              <span className="block text-[11px] text-ink/50 tabular-nums mt-0.5 truncate">
+                {chapterTotals.words.toLocaleString()}{' '}
+                {chapterTotals.words === 1 ? 'word' : 'words'}
+                {' · '}
+                {chapterTotals.lines.toLocaleString()}{' '}
+                {chapterTotals.lines === 1 ? 'line' : 'lines'}
+                {' · '}
+                {chapterTotals.speakers} {chapterTotals.speakers === 1 ? 'speaker' : 'speakers'}
+              </span>
+            )
           )}
         </span>
-        <ChapterProgressBar progress={chapter.progress} state={chapter.state} paused={paused} assembling={assembling}/>
+        <ChapterProgressBar
+          progress={chapter.progress}
+          state={chapter.state}
+          paused={paused}
+          assembling={assembling}
+        />
         <span className="text-sm tabular-nums text-ink/60 text-right">
-          {chapter.state === 'in_progress' && liveTotal > 0
-            ? <span className="text-magenta">{liveCurrent}/{liveTotal}</span>
-            : chapter.duration}
+          {chapter.state === 'in_progress' && liveTotal > 0 ? (
+            <span className="text-magenta">
+              {liveCurrent}/{liveTotal}
+            </span>
+          ) : (
+            chapter.duration
+          )}
         </span>
         <span>{stateConfig.badge}</span>
-        <span className={`text-ink/40 transition-transform ${expanded ? 'rotate-180' : ''}`}><IconArrowDn className="w-4 h-4"/></span>
+        <span className={`text-ink/40 transition-transform ${expanded ? 'rotate-180' : ''}`}>
+          <IconArrowDn className="w-4 h-4" />
+        </span>
       </button>
       {chapter.state === 'failed' && chapter.errorReason && (
         <div className="mx-5 mb-4 -mt-1 rounded-2xl border border-rose-200 bg-rose-50/80 px-4 py-3 flex items-start gap-3">
-          <IconWarning className="w-4 h-4 text-rose-600 shrink-0 mt-0.5"/>
+          <IconWarning className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="text-xs font-semibold text-rose-900">Synthesis failed</p>
             <p className="text-xs text-rose-800/90 mt-0.5 leading-relaxed">{chapter.errorReason}</p>
           </div>
-          <button onClick={(e) => { e.stopPropagation(); onRegenerate(chapter); }}
-                  className="shrink-0 inline-flex items-center gap-1.5 text-xs font-semibold text-rose-700 hover:text-rose-900 transition-colors">
-            <IconRefresh className="w-3.5 h-3.5"/> Retry
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRegenerate(chapter);
+            }}
+            className="shrink-0 inline-flex items-center gap-1.5 text-xs font-semibold text-rose-700 hover:text-rose-900 transition-colors"
+          >
+            <IconRefresh className="w-3.5 h-3.5" /> Retry
           </button>
         </div>
       )}
       {(chapter.state === 'done' || (chapter.state === 'failed' && !chapter.errorReason)) && (
         <div className="px-6 pb-4 -mt-2 flex justify-end items-center gap-3">
           {chapter.state === 'done' && (
-            <button onClick={(e) => { e.stopPropagation(); onPreview(chapter.id); }}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/70 hover:text-ink transition-colors">
-              <IconPlay className="w-3.5 h-3.5"/> Preview
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onPreview(chapter.id);
+              }}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/70 hover:text-ink transition-colors"
+            >
+              <IconPlay className="w-3.5 h-3.5" /> Preview
             </button>
           )}
-          <button onClick={(e) => { e.stopPropagation(); onRegenerate(chapter); }} className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors">
-            <IconRefresh className="w-3.5 h-3.5"/> {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRegenerate(chapter);
+            }}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+          >
+            <IconRefresh className="w-3.5 h-3.5" />{' '}
+            {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); onToggleExcluded(chapter.id, true); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExcluded(chapter.id, true);
+            }}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/45 hover:text-ink/70 transition-colors"
             title="Skip this chapter — no audio will be generated for it."
           >
-            <IconClose className="w-3.5 h-3.5"/> Exclude
+            <IconClose className="w-3.5 h-3.5" /> Exclude
           </button>
         </div>
       )}
@@ -904,14 +1102,19 @@ function ChapterRow({
       {expanded && (chapter.state === 'queued' || chapter.state === 'in_progress') && (
         <div className="px-6 -mt-3 flex justify-end">
           <button
-            onClick={(e) => { e.stopPropagation(); onToggleExcluded(chapter.id, true); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExcluded(chapter.id, true);
+            }}
             disabled={chapter.state === 'in_progress'}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/45 hover:text-ink/70 disabled:opacity-40 transition-colors"
-            title={chapter.state === 'in_progress'
-              ? 'Pause first, then you can exclude this chapter.'
-              : 'Skip this chapter — no audio will be generated for it.'}
+            title={
+              chapter.state === 'in_progress'
+                ? 'Pause first, then you can exclude this chapter.'
+                : 'Skip this chapter — no audio will be generated for it.'
+            }
           >
-            <IconClose className="w-3.5 h-3.5"/> Exclude
+            <IconClose className="w-3.5 h-3.5" /> Exclude
           </button>
         </div>
       )}
@@ -932,27 +1135,39 @@ function ChapterRow({
                  otherwise reflects how many of this character's lines are
                  already behind us. */
               const linesTotal = stat?.lines ?? 0;
-              const positions  = charPositions?.[cid];
-              const derivedDone = chapter.state === 'done' || status === 'done'
-                ? linesTotal
-                : status === 'skipped'
-                  ? 0
-                  : linesDoneAt(positions, chapter.currentLine ?? 0);
+              const positions = charPositions?.[cid];
+              const derivedDone =
+                chapter.state === 'done' || status === 'done'
+                  ? linesTotal
+                  : status === 'skipped'
+                    ? 0
+                    : linesDoneAt(positions, chapter.currentLine ?? 0);
               const fraction = linesTotal > 0 ? Math.min(1, derivedDone / linesTotal) : 0;
-              const fullyDone = status === 'done' || chapter.state === 'done'
-                || (linesTotal > 0 && derivedDone >= linesTotal);
+              const fullyDone =
+                status === 'done' ||
+                chapter.state === 'done' ||
+                (linesTotal > 0 && derivedDone >= linesTotal);
               return (
-                <div key={cid} className="grid grid-cols-[20px_1fr_140px_128px_28px] items-center gap-4 py-1.5 text-sm group">
-                  <ColorDot color={c.color as CharColor} size={8}/>
+                <div
+                  key={cid}
+                  className="grid grid-cols-[20px_1fr_140px_128px_28px] items-center gap-4 py-1.5 text-sm group"
+                >
+                  <ColorDot color={c.color as CharColor} size={8} />
                   <span className="min-w-0 flex items-baseline gap-2">
                     <span className="font-medium text-ink/90 truncate">{c.name}</span>
                     {stat && (
                       <span className="text-[11px] text-ink/40 tabular-nums shrink-0">
-                        {stat.lines.toLocaleString()} {stat.lines === 1 ? 'line' : 'lines'} · {stat.words.toLocaleString()} {stat.words === 1 ? 'word' : 'words'}
+                        {stat.lines.toLocaleString()} {stat.lines === 1 ? 'line' : 'lines'} ·{' '}
+                        {stat.words.toLocaleString()} {stat.words === 1 ? 'word' : 'words'}
                       </span>
                     )}
                   </span>
-                  <CharStatusBar status={status} fraction={fraction} fullyDone={fullyDone} paused={paused}/>
+                  <CharStatusBar
+                    status={status}
+                    fraction={fraction}
+                    fullyDone={fullyDone}
+                    paused={paused}
+                  />
                   <span className="text-xs text-ink/50 capitalize text-right tabular-nums">
                     {status === 'failed' ? (
                       <span className="text-rose-600 font-medium">Failed</span>
@@ -963,22 +1178,34 @@ function ChapterRow({
                     ) : status === 'in_progress' ? (
                       <span className="text-magenta font-medium">
                         {paused ? 'Paused' : 'Generating…'}
-                        {linesTotal > 0 && <span className="text-magenta/60 font-normal"> {derivedDone}/{linesTotal}</span>}
+                        {linesTotal > 0 && (
+                          <span className="text-magenta/60 font-normal">
+                            {' '}
+                            {derivedDone}/{linesTotal}
+                          </span>
+                        )}
                       </span>
                     ) : derivedDone > 0 && linesTotal > 0 ? (
                       /* Has spoken some lines but the active speaker is now
                          someone else — show real progress instead of the
                          old "Done" lie. */
-                      <span className="text-ink/60">{derivedDone}/{linesTotal} done</span>
+                      <span className="text-ink/60">
+                        {derivedDone}/{linesTotal} done
+                      </span>
                     ) : (
                       'Queued'
                     )}
                   </span>
                   {status !== 'skipped' && (
-                    <button onClick={(e) => { e.stopPropagation(); onRegenerateCharacterInChapter(cid, chapter.id); }}
-                            title={`Regenerate ${c.name} in this chapter`}
-                            className="opacity-0 group-hover:opacity-100 text-ink/40 hover:text-magenta grid place-items-center w-7 h-7 rounded-full hover:bg-ink/[0.06] transition-all">
-                      <IconRefresh className="w-3.5 h-3.5"/>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRegenerateCharacterInChapter(cid, chapter.id);
+                      }}
+                      title={`Regenerate ${c.name} in this chapter`}
+                      className="opacity-0 group-hover:opacity-100 text-ink/40 hover:text-magenta grid place-items-center w-7 h-7 rounded-full hover:bg-ink/[0.06] transition-all"
+                    >
+                      <IconRefresh className="w-3.5 h-3.5" />
                     </button>
                   )}
                 </div>
@@ -987,16 +1214,33 @@ function ChapterRow({
           </div>
           {chapter.state === 'in_progress' && assembling && (
             <div className="mt-4 ml-[60px] text-xs text-ink/60">
-              Writing chapter file… {chapter.totalLines ? `${chapter.totalLines} lines synthesised` : 'finalising audio'}.
+              Writing chapter file…{' '}
+              {chapter.totalLines ? `${chapter.totalLines} lines synthesised` : 'finalising audio'}.
             </div>
           )}
-          {chapter.state === 'in_progress' && !assembling && chapter.currentLine != null && chapter.currentLine > 0 && (
-            <div className="mt-4 ml-[60px] flex items-center gap-3 text-xs text-ink/60">
-              <span>Active: <span className="font-semibold text-ink">{findChar(Object.entries(chapter.characters).find(([, s]) => s === 'in_progress')?.[0] || '').name}</span> · line {chapter.currentLine.toLocaleString()} of {chapter.totalLines?.toLocaleString()}</span>
-            </div>
-          )}
+          {chapter.state === 'in_progress' &&
+            !assembling &&
+            chapter.currentLine != null &&
+            chapter.currentLine > 0 && (
+              <div className="mt-4 ml-[60px] flex items-center gap-3 text-xs text-ink/60">
+                <span>
+                  Active:{' '}
+                  <span className="font-semibold text-ink">
+                    {
+                      findChar(
+                        Object.entries(chapter.characters).find(
+                          ([, s]) => s === 'in_progress',
+                        )?.[0] || '',
+                      ).name
+                    }
+                  </span>{' '}
+                  · line {chapter.currentLine.toLocaleString()} of{' '}
+                  {chapter.totalLines?.toLocaleString()}
+                </span>
+              </div>
+            )}
           {chapter.state === 'done' && (
-            <ChapterSegmentStrip chapter={chapter} bookId={bookId} characters={characters}/>
+            <ChapterSegmentStrip chapter={chapter} bookId={bookId} characters={characters} />
           )}
         </div>
       )}
@@ -1010,7 +1254,11 @@ function ChapterRow({
    excluded path has its own three-state UI now (idle → inline progress
    → optional error/retry). */
 function ExcludedChapterRow({
-  chapter, subsetProgress, onIncludeClick, onCancelSubset, onRetrySubset,
+  chapter,
+  subsetProgress,
+  onIncludeClick,
+  onCancelSubset,
+  onRetrySubset,
 }: {
   chapter: Chapter;
   subsetProgress: SubsetProgress | null;
@@ -1030,9 +1278,11 @@ function ExcludedChapterRow({
     <div className="rounded-3xl border border-ink/10 bg-ink/[0.03] overflow-hidden">
       <div className="grid grid-cols-[32px_52px_minmax(0,1fr)_auto] items-center gap-3 px-5 py-3">
         <span className="grid place-items-center text-ink/30">
-          <span className="w-4 h-4 rounded-full border border-ink/15"/>
+          <span className="w-4 h-4 rounded-full border border-ink/15" />
         </span>
-        <span className="text-sm font-bold text-ink/35 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
+        <span className="text-sm font-bold text-ink/35 tabular-nums">
+          CH {String(chapter.id).padStart(2, '0')}
+        </span>
         <span className="min-w-0">
           <span className="block font-medium text-ink/40 truncate line-through decoration-1">
             {stripChapterPrefix(chapter.title)}
@@ -1065,7 +1315,7 @@ function ExcludedChapterRow({
             onClick={() => onRetrySubset(chapter.id)}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
           >
-            <IconRefresh className="w-3.5 h-3.5"/> Retry
+            <IconRefresh className="w-3.5 h-3.5" /> Retry
           </button>
         ) : (
           <button
@@ -1088,14 +1338,14 @@ function ExcludedChapterRow({
               className="absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all duration-700"
               style={{ width: `${Math.max(0, Math.min(1, running.progress)) * 100}%` }}
             >
-              <div className="absolute inset-0 stripe-travel"/>
+              <div className="absolute inset-0 stripe-travel" />
             </div>
           </div>
           <div className="mt-1 flex items-center justify-between text-[10px] text-ink/50 tabular-nums">
             <span>{Math.round(running.progress * 100)}%</span>
             {throttleActive && running.throttle && (
               <span className="inline-flex items-center gap-1 text-amber-700">
-                <IconClock className="w-2.5 h-2.5"/>
+                <IconClock className="w-2.5 h-2.5" />
                 Waiting on {running.throttle.model} ({running.throttle.reason})
               </span>
             )}
@@ -1106,29 +1356,61 @@ function ExcludedChapterRow({
   );
 }
 
-function ChapterProgressBar({ progress, state, paused, assembling }: { progress: number; state: Chapter['state']; paused: boolean; assembling: boolean }) {
-  if (state === 'queued') return <div className="h-1.5 rounded-full bg-ink/[0.06]"/>;
-  if (state === 'done')   return <div className="h-1.5 rounded-full bg-emerald-200"><div className="h-full w-full rounded-full bg-emerald-500"/></div>;
-  if (state === 'failed') return <div className="h-1.5 rounded-full bg-rose-100"><div className="h-full rounded-full bg-rose-500" style={{ width: `${progress * 100}%` }}/></div>;
-  if (assembling) return (
-    /* Disk-write phase — neutral ink-tone bar with stripe motion to read as
-       "near done, busy" rather than the magenta synthesis gradient. */
-    <div className="relative h-1.5 rounded-full bg-ink/[0.06] overflow-hidden">
-      <div className="absolute inset-y-0 left-0 rounded-full bg-ink/40" style={{ width: `${progress * 100}%` }}>
-        {!paused && <div className="absolute inset-0 stripe-travel"/>}
+function ChapterProgressBar({
+  progress,
+  state,
+  paused,
+  assembling,
+}: {
+  progress: number;
+  state: Chapter['state'];
+  paused: boolean;
+  assembling: boolean;
+}) {
+  if (state === 'queued') return <div className="h-1.5 rounded-full bg-ink/[0.06]" />;
+  if (state === 'done')
+    return (
+      <div className="h-1.5 rounded-full bg-emerald-200">
+        <div className="h-full w-full rounded-full bg-emerald-500" />
       </div>
-    </div>
-  );
+    );
+  if (state === 'failed')
+    return (
+      <div className="h-1.5 rounded-full bg-rose-100">
+        <div className="h-full rounded-full bg-rose-500" style={{ width: `${progress * 100}%` }} />
+      </div>
+    );
+  if (assembling)
+    return (
+      /* Disk-write phase — neutral ink-tone bar with stripe motion to read as
+       "near done, busy" rather than the magenta synthesis gradient. */
+      <div className="relative h-1.5 rounded-full bg-ink/[0.06] overflow-hidden">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-ink/40"
+          style={{ width: `${progress * 100}%` }}
+        >
+          {!paused && <div className="absolute inset-0 stripe-travel" />}
+        </div>
+      </div>
+    );
   return (
     <div className="relative h-1.5 rounded-full bg-ink/[0.06] overflow-hidden">
-      <div className={`absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all duration-700 ${paused ? '' : 'pulse-bar'}`} style={{ width: `${progress * 100}%` }}>
-        {!paused && <div className="absolute inset-0 stripe-travel"/>}
+      <div
+        className={`absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all duration-700 ${paused ? '' : 'pulse-bar'}`}
+        style={{ width: `${progress * 100}%` }}
+      >
+        {!paused && <div className="absolute inset-0 stripe-travel" />}
       </div>
     </div>
   );
 }
 
-function CharStatusBar({ status, fraction, fullyDone, paused }: {
+function CharStatusBar({
+  status,
+  fraction,
+  fullyDone,
+  paused,
+}: {
   status: string;
   /** Lines synthesised for this character ÷ this character's total lines.
       Clamped to [0,1] by the caller. */
@@ -1139,59 +1421,83 @@ function CharStatusBar({ status, fraction, fullyDone, paused }: {
   fullyDone: boolean;
   paused: boolean;
 }) {
-  if (status === 'failed')  return <div className="h-1 rounded-full bg-rose-400"/>;
-  if (status === 'skipped') return <div className="h-1 rounded-full bg-ink/[0.04]"/>;
-  if (fullyDone)            return <div className="h-1 rounded-full bg-emerald-400"/>;
+  if (status === 'failed') return <div className="h-1 rounded-full bg-rose-400" />;
+  if (status === 'skipped') return <div className="h-1 rounded-full bg-ink/[0.04]" />;
+  if (fullyDone) return <div className="h-1 rounded-full bg-emerald-400" />;
 
   const pct = Math.max(0, Math.min(100, fraction * 100));
 
-  if (status === 'in_progress') return (
-    /* Currently-speaking character. Bar fills to the real fraction of this
+  if (status === 'in_progress')
+    return (
+      /* Currently-speaking character. Bar fills to the real fraction of this
        character's lines that are behind us, with the peach gradient + stripe
        animation overlaying so it reads as "still working". Previously the
        bar was a fixed 60 %-width sliver regardless of how many lines were
        actually done. */
-    <div className="relative h-1 rounded-full bg-ink/[0.06] overflow-hidden">
-      <div className={`absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all duration-500 ${paused ? '' : 'pulse-bar'}`}
-           style={{ width: `${Math.max(pct, 8)}%` }}>
-        {!paused && <div className="absolute inset-0 stripe-travel"/>}
+      <div className="relative h-1 rounded-full bg-ink/[0.06] overflow-hidden">
+        <div
+          className={`absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all duration-500 ${paused ? '' : 'pulse-bar'}`}
+          style={{ width: `${Math.max(pct, 8)}%` }}
+        >
+          {!paused && <div className="absolute inset-0 stripe-travel" />}
+        </div>
       </div>
-    </div>
-  );
+    );
 
-  if (pct > 0) return (
-    /* Has spoken some lines but isn't the active speaker right now — show
+  if (pct > 0)
+    return (
+      /* Has spoken some lines but isn't the active speaker right now — show
        the real synthesised fraction in emerald so the user sees "1 of 13
        done" instead of the previous "Done" lie. */
-    <div className="relative h-1 rounded-full bg-ink/[0.06] overflow-hidden">
-      <div className="absolute inset-y-0 left-0 rounded-full bg-emerald-300" style={{ width: `${pct}%` }}/>
-    </div>
-  );
+      <div className="relative h-1 rounded-full bg-ink/[0.06] overflow-hidden">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-emerald-300"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    );
 
-  return <div className="h-1 rounded-full bg-ink/[0.08]"/>;
+  return <div className="h-1 rounded-full bg-ink/[0.08]" />;
 }
 
 /* Visual confirmation that this chapter's audio was assembled in narrative
    order. Lazy-fetches the same segments JSON we already use for preview
    playback; renders coloured bands keyed to character palette colours. */
-function ChapterSegmentStrip({ chapter, bookId, characters }: { chapter: Chapter; bookId: string; characters: Character[] }) {
+function ChapterSegmentStrip({
+  chapter,
+  bookId,
+  characters,
+}: {
+  chapter: Chapter;
+  bookId: string;
+  characters: Character[];
+}) {
   const [audio, setAudio] = useState<ChapterAudio | null>(null);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    api.getChapterAudio({ bookId, chapterId: chapter.id })
-      .then(m => { if (!cancelled) setAudio(m); })
-      .catch(() => { if (!cancelled) setError(true); });
-    return () => { cancelled = true; };
+    api
+      .getChapterAudio({ bookId, chapterId: chapter.id })
+      .then((m) => {
+        if (!cancelled) setAudio(m);
+      })
+      .catch(() => {
+        if (!cancelled) setError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [bookId, chapter.id]);
 
   if (error || !audio || !audio.segments?.length || !audio.durationSec) return null;
-  const findChar = (id: string) => characters.find(c => c.id === id);
+  const findChar = (id: string) => characters.find((c) => c.id === id);
 
   return (
     <div className="mt-4 ml-[60px]">
-      <p className="text-[10px] uppercase tracking-wider text-ink/50 font-semibold mb-1.5">Narrative order</p>
+      <p className="text-[10px] uppercase tracking-wider text-ink/50 font-semibold mb-1.5">
+        Narrative order
+      </p>
       <div className="flex h-2 rounded-full overflow-hidden bg-ink/[0.04]">
         {audio.segments.map((seg, i) => {
           const start = seg.start ?? 0;
@@ -1201,9 +1507,11 @@ function ChapterSegmentStrip({ chapter, bookId, characters }: { chapter: Chapter
           const charColor = findChar(charId)?.color ?? 'narrator';
           const hex = CHAR_COLORS[charColor]?.hex ?? CHAR_COLORS.narrator.hex;
           return (
-            <div key={i}
-                 title={`${findChar(charId)?.name ?? (charId || 'unknown')} · ${formatTime(start)}–${formatTime(end)}`}
-                 style={{ width: `${width}%`, background: hex }}/>
+            <div
+              key={i}
+              title={`${findChar(charId)?.name ?? (charId || 'unknown')} · ${formatTime(start)}–${formatTime(end)}`}
+              style={{ width: `${width}%`, background: hex }}
+            />
           );
         })}
       </div>

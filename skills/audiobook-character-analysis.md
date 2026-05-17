@@ -19,41 +19,51 @@ A JSON object with exactly these two top-level fields:
 {
   "characters": [
     {
-      "id": "narrator",            // kebab-case, unique within the book
+      "id": "narrator", // kebab-case, unique within the book
       "name": "Narrator",
       "role": "Third-person observer",
-      "color": "narrator",          // one of: narrator, halloran, eliza, marcus,
-                                    // OR a fresh kebab token tied to this character.
-                                    // The frontend maps unknown colors to a fallback.
+      "color": "narrator", // one of: narrator, halloran, eliza, marcus,
+      // OR a fresh kebab token tied to this character.
+      // The frontend maps unknown colors to a fallback.
       "attributes": ["restrained", "long subordinate clauses", "wry"],
-      "gender": "male",             // "male" | "female" | "neutral". Required for non-narrator
-                                    // characters when the manuscript gives any signal (pronouns,
-                                    // honorifics, gendered relationships). Use "neutral" only when
-                                    // the manuscript is genuinely ambiguous. Drives the TTS voice
-                                    // picker — getting this right is critical for the audiobook.
-      "ageRange": "adult",          // "child" | "teen" | "adult" | "elderly". A boy of ~15 is "teen",
-                                    // an elder ship captain is "elderly", etc. Optional but
-                                    // strongly recommended — coarse age controls vocal register.
-      "tone": {                     // each on 0–100, leave any field out if uncertain
+      "gender": "male", // "male" | "female" | "neutral". Required for non-narrator
+      // characters when the manuscript gives any signal (pronouns,
+      // honorifics, gendered relationships). Use "neutral" only when
+      // the manuscript is genuinely ambiguous. Drives the TTS voice
+      // picker — getting this right is critical for the audiobook.
+      "ageRange": "adult", // "child" | "teen" | "adult" | "elderly". A boy of ~15 is "teen",
+      // an elder ship captain is "elderly", etc. Optional but
+      // strongly recommended — coarse age controls vocal register.
+      "tone": {
+        // each on 0–100, leave any field out if uncertain
         "warmth": 55,
         "pace": 40,
         "authority": 70,
-        "emotion": 35
+        "emotion": 35,
       },
       "description": "A measured, period-appropriate narrator. Uses sea-trade vocabulary; rarely interjects opinion.",
       "evidence": [
-        { "quote": "He could feel it before he saw it — a pressure shift behind his right ear that thirty winters at sea had taught him to trust more than any instrument the Admiralty could nail to a wall.", "note": "Long-form: drives the voice-cloning sample. Sentence rhythm, restrained register, period vocabulary." },
-        { "quote": "thirty winters at sea had taught him to trust", "note": "Anchors register + age." },
-        { "quote": "She said it under her breath, which is how she said most of the things she meant.", "note": "Dry, observational; understated humour." }
-      ]
-    }
+        {
+          "quote": "He could feel it before he saw it — a pressure shift behind his right ear that thirty winters at sea had taught him to trust more than any instrument the Admiralty could nail to a wall.",
+          "note": "Long-form: drives the voice-cloning sample. Sentence rhythm, restrained register, period vocabulary.",
+        },
+        {
+          "quote": "thirty winters at sea had taught him to trust",
+          "note": "Anchors register + age.",
+        },
+        {
+          "quote": "She said it under her breath, which is how she said most of the things she meant.",
+          "note": "Dry, observational; understated humour.",
+        },
+      ],
+    },
     // ... one per speaking character. Always include "narrator".
   ],
   "chapters": [
     { "id": 1, "title": "The Berth at Liverpool" },
-    { "id": 2, "title": "A Manifest Two Names Short" }
+    { "id": 2, "title": "A Manifest Two Names Short" },
     // chapter ids are 1-based and contiguous; match the order from the inbox file
-  ]
+  ],
 }
 ```
 
@@ -85,7 +95,7 @@ A JSON object with exactly these two top-level fields:
   - The remaining quotes are tonal evidence shown beneath the sample
     quote in the UI. Same verbatim rule.
   - Add a `note` when the link to the character's voice/identity isn't
-    obvious. Always note *why* the first quote is representative.
+    obvious. Always note _why_ the first quote is representative.
   - The server re-sorts longest-first on ingest, so ordering errors won't
     break the UI — but emit them sorted so the JSON is human-readable.
 - `chapters[]` — **use the pre-detected list from the inbox verbatim.**

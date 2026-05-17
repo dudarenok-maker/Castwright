@@ -47,7 +47,7 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
   try {
     const [tagsResp, psResp] = await Promise.all([
       fetch(`${url}/api/tags`, { method: 'GET', signal: controller.signal }),
-      fetch(`${url}/api/ps`,   { method: 'GET', signal: controller.signal }),
+      fetch(`${url}/api/ps`, { method: 'GET', signal: controller.signal }),
     ]);
     clearTimeout(timer);
     if (!tagsResp.ok) {
@@ -59,7 +59,7 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
     }
     const tagsBody = (await tagsResp.json().catch(() => ({}))) as OllamaTagsResponse;
     const models = Array.isArray(tagsBody.models)
-      ? tagsBody.models.map(m => m.name ?? m.model ?? '').filter(Boolean)
+      ? tagsBody.models.map((m) => m.name ?? m.model ?? '').filter(Boolean)
       : [];
     /* Tag matching tolerates Ollama's habit of canonicalising tags (a model
        pulled as `qwen3.5:9b` may appear in /api/tags as `qwen3.5:9b` with no
@@ -67,18 +67,24 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
        on the prefix so the "model present" check stays useful. */
     const expectedRoot = expectedModel.split(':')[0];
     const expectedFull = expectedModel;
-    const hasExpected = models.some(m =>
-      m === expectedFull || m.startsWith(`${expectedFull}-`) || m.split(':')[0] === expectedRoot && m.startsWith(`${expectedRoot}:`)
+    const hasExpected = models.some(
+      (m) =>
+        m === expectedFull ||
+        m.startsWith(`${expectedFull}-`) ||
+        (m.split(':')[0] === expectedRoot && m.startsWith(`${expectedRoot}:`)),
     );
     let resident: string[] = [];
     let expectedResident = false;
     if (psResp.ok) {
       const psBody = (await psResp.json().catch(() => ({}))) as OllamaPsResponse;
       resident = Array.isArray(psBody.models)
-        ? psBody.models.map(m => m.name ?? m.model ?? '').filter(Boolean)
+        ? psBody.models.map((m) => m.name ?? m.model ?? '').filter(Boolean)
         : [];
-      expectedResident = resident.some(m =>
-        m === expectedFull || m.startsWith(`${expectedFull}-`) || m.split(':')[0] === expectedRoot && m.startsWith(`${expectedRoot}:`)
+      expectedResident = resident.some(
+        (m) =>
+          m === expectedFull ||
+          m.startsWith(`${expectedFull}-`) ||
+          (m.split(':')[0] === expectedRoot && m.startsWith(`${expectedRoot}:`)),
       );
     }
     return res.json({
@@ -133,7 +139,11 @@ async function callOllamaGenerate(
     clearTimeout(timer);
     if (!upstream.ok) {
       const text = await upstream.text().catch(() => '');
-      return { ok: false, status: upstream.status, error: `Ollama returned ${upstream.status} ${upstream.statusText}: ${text}`.trim() };
+      return {
+        ok: false,
+        status: upstream.status,
+        error: `Ollama returned ${upstream.status} ${upstream.statusText}: ${text}`.trim(),
+      };
     }
     /* Drain the body — Ollama streams an NDJSON tail even for empty-prompt
        requests, and leaving it unread keeps the socket half-open. */

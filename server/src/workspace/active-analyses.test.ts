@@ -92,10 +92,7 @@ function bookSkeleton(
       lastTickAt: opts.snapshot.lastTickAt ?? opts.snapshot.writtenAt,
       writtenAt: opts.snapshot.writtenAt,
     };
-    writeFileSync(
-      join(bookDir, '.audiobook', 'analysis-state.json'),
-      JSON.stringify(snap),
-    );
+    writeFileSync(join(bookDir, '.audiobook', 'analysis-state.json'), JSON.stringify(snap));
   }
   return { bookId, bookDir };
 }
@@ -175,7 +172,7 @@ describe('scanActiveAnalyses', () => {
     bookSkeleton('Newest', { snapshot: { state: 'paused', writtenAt: 300 } });
     bookSkeleton('Middle', { snapshot: { state: 'paused', writtenAt: 200 } });
     const snaps = await scanActiveAnalyses();
-    expect(snaps.map(s => s.bookTitle)).toEqual(['Newest', 'Middle', 'Oldest']);
+    expect(snaps.map((s) => s.bookTitle)).toEqual(['Newest', 'Middle', 'Oldest']);
   });
 
   it('silently skips a book whose snapshot exists but state.json is missing', async () => {
@@ -198,7 +195,10 @@ describe('scanActiveAnalyses', () => {
     });
     bookSkeleton('Corrupt Book');
     /* Hand-write a corrupt snapshot — must NOT crash the whole scan. */
-    writeFileSync(join(bookDir, '..', 'Corrupt Book', '.audiobook', 'analysis-state.json'), '{ not valid json');
+    writeFileSync(
+      join(bookDir, '..', 'Corrupt Book', '.audiobook', 'analysis-state.json'),
+      '{ not valid json',
+    );
     const snaps = await scanActiveAnalyses();
     expect(snaps).toHaveLength(1);
     expect(snaps[0].bookTitle).toBe('Real Book');

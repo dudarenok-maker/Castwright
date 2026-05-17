@@ -110,10 +110,10 @@ beforeAll(async () => {
     import('../workspace/paths.js'),
   ]);
   novellaBookId = makeBookId(AUTHOR, SERIES, NOVELLA);
-  novelBookId   = makeBookId(AUTHOR, SERIES, FULL_NOVEL);
+  novelBookId = makeBookId(AUTHOR, SERIES, FULL_NOVEL);
 
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NOVELLA,   novellaBookId, [leanElwin]);
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, FULL_NOVEL, novelBookId,   [richElwin]);
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NOVELLA, novellaBookId, [leanElwin]);
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, FULL_NOVEL, novelBookId, [richElwin]);
 
   app = express();
   app.use(express.json());
@@ -146,8 +146,10 @@ describe('library-cast override router', () => {
 
   it('rejects when source === target', async () => {
     const res = await callOverride({
-      sourceBookId: novelBookId, sourceCharacterId: 'elwin',
-      targetBookId: novelBookId, targetCharacterId: 'elwin',
+      sourceBookId: novelBookId,
+      sourceCharacterId: 'elwin',
+      targetBookId: novelBookId,
+      targetCharacterId: 'elwin',
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/differ/i);
@@ -155,8 +157,10 @@ describe('library-cast override router', () => {
 
   it('returns 404 when the source book id is unknown', async () => {
     const res = await callOverride({
-      sourceBookId: 'nope', sourceCharacterId: 'elwin',
-      targetBookId: novellaBookId, targetCharacterId: 'elwin',
+      sourceBookId: 'nope',
+      sourceCharacterId: 'elwin',
+      targetBookId: novellaBookId,
+      targetCharacterId: 'elwin',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/source book/i);
@@ -164,8 +168,10 @@ describe('library-cast override router', () => {
 
   it('returns 404 when the source character id is unknown', async () => {
     const res = await callOverride({
-      sourceBookId: novelBookId, sourceCharacterId: 'missing',
-      targetBookId: novellaBookId, targetCharacterId: 'elwin',
+      sourceBookId: novelBookId,
+      sourceCharacterId: 'missing',
+      targetBookId: novellaBookId,
+      targetCharacterId: 'elwin',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/source character/i);
@@ -173,17 +179,21 @@ describe('library-cast override router', () => {
 
   it('returns 404 when the target character id is unknown', async () => {
     const res = await callOverride({
-      sourceBookId: novelBookId, sourceCharacterId: 'elwin',
-      targetBookId: novellaBookId, targetCharacterId: 'missing',
+      sourceBookId: novelBookId,
+      sourceCharacterId: 'elwin',
+      targetBookId: novellaBookId,
+      targetCharacterId: 'missing',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/target character/i);
   });
 
-  it('writes the merged profile to BOTH books while preserving each side\'s audio identity', async () => {
+  it("writes the merged profile to BOTH books while preserving each side's audio identity", async () => {
     const res = await callOverride({
-      sourceBookId: novelBookId, sourceCharacterId: 'elwin',
-      targetBookId: novellaBookId, targetCharacterId: 'elwin',
+      sourceBookId: novelBookId,
+      sourceCharacterId: 'elwin',
+      targetBookId: novellaBookId,
+      targetCharacterId: 'elwin',
     });
     expect(res.status).toBe(200);
 
@@ -206,7 +216,9 @@ describe('library-cast override router', () => {
     expect(targetOnDisk.evidence).toEqual([{ quote: 'Easy now.', note: 'novella moment' }]);
     expect(sourceOnDisk.lines).toBe(208);
     expect(sourceOnDisk.scenes).toBe(7);
-    expect(sourceOnDisk.evidence).toEqual([{ quote: "I'll have you patched up in no time.", note: 'novel moment' }]);
+    expect(sourceOnDisk.evidence).toEqual([
+      { quote: "I'll have you patched up in no time.", note: 'novel moment' },
+    ]);
 
     /* Profile fields — both sides end up identical on the merged
        fields. Longest description wins (source's); attributes unioned;
@@ -238,17 +250,25 @@ describe('library-cast override router', () => {
 
   it('returns both merged records in the response body', async () => {
     const res = await callOverride({
-      sourceBookId: novelBookId, sourceCharacterId: 'elwin',
-      targetBookId: novellaBookId, targetCharacterId: 'elwin',
+      sourceBookId: novelBookId,
+      sourceCharacterId: 'elwin',
+      targetBookId: novellaBookId,
+      targetCharacterId: 'elwin',
     });
     expect(res.status).toBe(200);
     expect(res.body.source).toMatchObject({
-      id: 'elwin', voiceId: 'v_elwin_novel', name: 'Elwin Heks',
-      description: richElwin.description, role: 'Physician',
+      id: 'elwin',
+      voiceId: 'v_elwin_novel',
+      name: 'Elwin Heks',
+      description: richElwin.description,
+      role: 'Physician',
     });
     expect(res.body.target).toMatchObject({
-      id: 'elwin', voiceId: 'v_elwin_novella', name: 'Elwin',
-      description: richElwin.description, role: 'Physician',
+      id: 'elwin',
+      voiceId: 'v_elwin_novella',
+      name: 'Elwin',
+      description: richElwin.description,
+      role: 'Physician',
     });
   });
 
@@ -271,7 +291,8 @@ describe('library-cast override router', () => {
       voiceId: 'v_kenric_target',
       gender: 'male',
       ageRange: 'adult',
-      description: 'A red-haired councillor with a warm laugh, known for treating Sophie like a daughter and for breaking ranks with the Council when conscience demanded it.',
+      description:
+        'A red-haired councillor with a warm laugh, known for treating Sophie like a daughter and for breaking ranks with the Council when conscience demanded it.',
       attributes: ['warm', 'principled'],
       lines: 90,
       scenes: 3,
@@ -287,12 +308,18 @@ describe('library-cast override router', () => {
       lines: 12,
       scenes: 1,
     };
-    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, RICHER_TARGET_TITLE, richerTargetId, [richerTarget]);
-    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, LEANER_SOURCE_TITLE, leanerSourceId, [leanerSource]);
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, RICHER_TARGET_TITLE, richerTargetId, [
+      richerTarget,
+    ]);
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, LEANER_SOURCE_TITLE, leanerSourceId, [
+      leanerSource,
+    ]);
 
     const res = await callOverride({
-      sourceBookId: leanerSourceId, sourceCharacterId: 'kenric',
-      targetBookId: richerTargetId, targetCharacterId: 'kenric',
+      sourceBookId: leanerSourceId,
+      sourceCharacterId: 'kenric',
+      targetBookId: richerTargetId,
+      targetCharacterId: 'kenric',
     });
     expect(res.status).toBe(200);
     /* Target's longer description survived on BOTH sides — the source's

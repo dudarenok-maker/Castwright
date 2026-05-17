@@ -112,7 +112,7 @@ the cast UI ever surfaces "upload a reference clip per character").
    The `kokoro` list must be exactly 28 entries, all prefixed
    `af_`/`am_`/`bf_`/`bm_`.
 2. **`POST /synthesize`** with `engine=kokoro, model=v1, voice=af_heart,
-   text="Hello, world."`:
+text="Hello, world."`:
    - 200 OK
    - `X-Sample-Rate: 24000`
    - `Content-Type: audio/L16;codec=pcm;rate=24000`

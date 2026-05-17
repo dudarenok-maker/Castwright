@@ -40,7 +40,10 @@ module.exports = {
        escapes them at render). Escaping them produces noisier source; most
        React projects disable this rule outright. */
     'react/no-unescaped-entities': 'off',
-    '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    '@typescript-eslint/no-unused-vars': [
+      'warn',
+      { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+    ],
     '@typescript-eslint/no-explicit-any': 'warn',
     /* These two jsx-a11y rules flag real a11y debt (click-handlers on
        static elements without keyboard support). We have pre-existing

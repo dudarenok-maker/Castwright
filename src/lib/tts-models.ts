@@ -30,7 +30,11 @@ export const TTS_ENGINES: TtsEngineGroup[] = [
     hint: 'Runs on your machine via the TTS sidecar — no rate limits',
     models: [
       { id: 'kokoro-v1', label: 'Kokoro v1', hint: 'Default · 28 English voices · quality-tuned' },
-      { id: 'coqui-xtts-v2', label: 'Coqui XTTS v2', hint: 'Alternate · 30 baked voices · zero-shot cloning' },
+      {
+        id: 'coqui-xtts-v2',
+        label: 'Coqui XTTS v2',
+        hint: 'Alternate · 30 baked voices · zero-shot cloning',
+      },
     ],
   },
   {
@@ -47,14 +51,14 @@ export const TTS_ENGINES: TtsEngineGroup[] = [
 /* Flat list for legacy call sites (cast view's ttsLabel lookup etc.). New
    code should prefer iterating TTS_ENGINES so the engine grouping is
    visible. */
-export const TTS_MODEL_OPTIONS: TtsModelOption[] = TTS_ENGINES.flatMap(g => g.models);
+export const TTS_MODEL_OPTIONS: TtsModelOption[] = TTS_ENGINES.flatMap((g) => g.models);
 
 /** Human-readable label for a model key. Falls back to the raw key when an
     unknown id appears (e.g. an older saved state pointing at a model we've
     since removed) so the UI shows *something* identifiable rather than
     blanking. */
 export function ttsModelLabel(key: TtsModelKey): string {
-  return TTS_MODEL_OPTIONS.find(m => m.id === key)?.label ?? key;
+  return TTS_MODEL_OPTIONS.find((m) => m.id === key)?.label ?? key;
 }
 
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
@@ -67,8 +71,8 @@ export const DEFAULT_TTS_MODEL: TtsModelKey = FRONTEND_ACCOUNT_DEFAULTS.defaultT
    which sidecar/cloud it will hit when a sample is requested. Add new
    prefixes here in lockstep with server/src/tts/index.ts. */
 export function engineForModelKey(key: TtsModelKey): 'coqui' | 'piper' | 'kokoro' | 'gemini' {
-  if (key.startsWith('coqui-'))  return 'coqui';
-  if (key.startsWith('piper-'))  return 'piper';
+  if (key.startsWith('coqui-')) return 'coqui';
+  if (key.startsWith('piper-')) return 'piper';
   if (key.startsWith('kokoro-')) return 'kokoro';
   return 'gemini';
 }

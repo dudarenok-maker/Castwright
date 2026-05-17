@@ -50,7 +50,7 @@ function renderView(currentChapterId: number) {
   const store = configureStore({
     reducer: {
       manuscript: manuscriptSlice.reducer,
-      changeLog:  changeLogSlice.reducer,
+      changeLog: changeLogSlice.reducer,
     },
   });
   return render(
@@ -126,7 +126,7 @@ describe('ManuscriptView — chapter filter', () => {
     const store = configureStore({
       reducer: {
         manuscript: manuscriptSlice.reducer,
-        changeLog:  changeLogSlice.reducer,
+        changeLog: changeLogSlice.reducer,
       },
     });
     return render(
@@ -212,7 +212,7 @@ describe('ManuscriptView — large book sidebar structure', () => {
     const store = configureStore({
       reducer: {
         manuscript: manuscriptSlice.reducer,
-        changeLog:  changeLogSlice.reducer,
+        changeLog: changeLogSlice.reducer,
       },
     });
     render(
@@ -275,7 +275,7 @@ describe('ManuscriptView — inspector with large cast', () => {
     const store = configureStore({
       reducer: {
         manuscript: manuscriptSlice.reducer,
-        changeLog:  changeLogSlice.reducer,
+        changeLog: changeLogSlice.reducer,
       },
     });
     render(
@@ -322,15 +322,29 @@ describe('ManuscriptView — inspector with large cast', () => {
    redux: SegmentInspector must forward `s.chapterId` to onReassignSentence
    so the dispatch carries the right chapter scope. */
 describe('ManuscriptView — cross-chapter reassign isolation', () => {
-  it('reassigning a chapter-2 sentence via the inspector leaves chapter 1\'s same-id sentence untouched', async () => {
+  it("reassigning a chapter-2 sentence via the inspector leaves chapter 1's same-id sentence untouched", async () => {
     const user = userEvent.setup();
     const reassignCharacters: Character[] = [
       { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
-      { id: 'eliza',    name: 'Eliza',    role: 'Cast',     color: 'narrator' },
+      { id: 'eliza', name: 'Eliza', role: 'Cast', color: 'narrator' },
     ];
     const twoChapters: Chapter[] = [
-      { id: 1, title: 'Chapter One', duration: '10:00', state: 'done', progress: 1, characters: {} },
-      { id: 2, title: 'Chapter Two', duration: '10:00', state: 'done', progress: 1, characters: {} },
+      {
+        id: 1,
+        title: 'Chapter One',
+        duration: '10:00',
+        state: 'done',
+        progress: 1,
+        characters: {},
+      },
+      {
+        id: 2,
+        title: 'Chapter Two',
+        duration: '10:00',
+        state: 'done',
+        progress: 1,
+        characters: {},
+      },
     ];
     /* Both chapters carry id=1 — the collision the bug used to glob onto. */
     const twoChapterSentences: Sentence[] = [
@@ -340,12 +354,16 @@ describe('ManuscriptView — cross-chapter reassign isolation', () => {
     const store = configureStore({
       reducer: {
         manuscript: manuscriptSlice.reducer,
-        changeLog:  changeLogSlice.reducer,
+        changeLog: changeLogSlice.reducer,
       },
       preloadedState: {
         manuscript: {
-          bookId: null, manuscriptId: null, title: null, format: null,
-          wordCount: 0, sourceText: null,
+          bookId: null,
+          manuscriptId: null,
+          title: null,
+          format: null,
+          wordCount: 0,
+          sourceText: null,
           sentences: twoChapterSentences,
           importCandidate: null,
         },
@@ -383,7 +401,7 @@ describe('ManuscriptView — cross-chapter reassign isolation', () => {
     const after = store.getState().manuscript.sentences;
     expect(after).toEqual([
       { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one opening line.' },
-      { id: 1, chapterId: 2, characterId: 'eliza',    text: 'Chapter two opening line.' },
+      { id: 1, chapterId: 2, characterId: 'eliza', text: 'Chapter two opening line.' },
     ]);
   });
 });

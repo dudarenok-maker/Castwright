@@ -12,7 +12,12 @@ import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import { readUserSettings } from '../workspace/user-settings.js';
-import { clearAnalysisCache, loadAnalysisCache, saveAnalysisCache, type AnalysisCache } from '../store/analysis-cache.js';
+import {
+  clearAnalysisCache,
+  loadAnalysisCache,
+  saveAnalysisCache,
+  type AnalysisCache,
+} from '../store/analysis-cache.js';
 import {
   deleteAnalysisState,
   writeAnalysisState,
@@ -24,7 +29,10 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
-import { normaliseForMatch as normaliseForMatchShared, matchQuoteInSource } from '../util/text-match.js';
+import {
+  normaliseForMatch as normaliseForMatchShared,
+  matchQuoteInSource,
+} from '../util/text-match.js';
 import {
   appendBatch,
   loadDroppedQuotes,
@@ -39,11 +47,11 @@ import {
    src/lib/models.ts MODEL_OPTIONS — the frontend sends the id, we render
    the friendly name in logs and the SSE event stream. */
 const MODEL_LABELS: Record<string, string> = {
-  'gemini-2.5-flash':         'Gemini 2.5 Flash',
-  'gemini-3-flash-preview':   'Gemini 3 Flash',
-  'gemini-3.1-flash-lite':    'Gemini 3.1 Flash Lite',
-  'gemma-4-31b-it':           'Gemma 4 31B',
-  'gemma-4-26b-a4b-it':       'Gemma 4 26B',
+  'gemini-2.5-flash': 'Gemini 2.5 Flash',
+  'gemini-3-flash-preview': 'Gemini 3 Flash',
+  'gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
+  'gemma-4-31b-it': 'Gemma 4 31B',
+  'gemma-4-26b-a4b-it': 'Gemma 4 26B',
 };
 
 function humanModel(modelId: string | undefined): string {
@@ -66,12 +74,14 @@ function engineLabel(engine: 'local' | 'gemini', modelId: string): string {
    slot; everyone else gets a slot in roster order, cycling after 30.
    Order must match src/lib/colors.ts CHARACTER_SLOTS. */
 const PALETTE_SLOTS = [
-  'halloran', 'eliza', 'marcus',
+  'halloran',
+  'eliza',
+  'marcus',
   ...Array.from({ length: 27 }, (_, i) => `slot-${i + 4}`),
 ];
 function assignPaletteColors(characters: CharacterOutput[]): CharacterOutput[] {
   let i = 0;
-  return characters.map(c => {
+  return characters.map((c) => {
     if (c.id === 'narrator' || c.color === 'narrator') return { ...c, color: 'narrator' };
     const slot = PALETTE_SLOTS[i % PALETTE_SLOTS.length];
     i += 1;
@@ -92,7 +102,9 @@ export function sortEvidence(characters: CharacterOutput[]): void {
       c.evidence.sort((a, b) => b.quote.length - a.quote.length);
     }
     if (!c.evidence || c.evidence.length < 3) {
-      console.warn(`[analysis] ${c.id} has ${c.evidence?.length ?? 0} evidence quote(s); analyzer prompt asks for ≥3.`);
+      console.warn(
+        `[analysis] ${c.id} has ${c.evidence?.length ?? 0} evidence quote(s); analyzer prompt asks for ≥3.`,
+      );
     }
   }
 }
@@ -162,7 +174,9 @@ export function verifyEvidenceAgainstSource(
       totalDropped += dropped.length;
       affectedCharacters += 1;
       const head = dropped[0].quote.slice(0, 60).replace(/\s+/g, ' ');
-      log(`Dropped ${dropped.length} fabricated quote${dropped.length === 1 ? '' : 's'} on ${c.id} (e.g. "${head}${dropped[0].quote.length > 60 ? '…' : ''}").`);
+      log(
+        `Dropped ${dropped.length} fabricated quote${dropped.length === 1 ? '' : 's'} on ${c.id} (e.g. "${head}${dropped[0].quote.length > 60 ? '…' : ''}").`,
+      );
       console.warn(`[analysis] dropped ${dropped.length} unverified quote(s) on ${c.id}`);
       for (let i = 0; i < dropped.length; i++) {
         const d = dropped[i];
@@ -180,7 +194,9 @@ export function verifyEvidenceAgainstSource(
     c.evidence = kept;
   }
   if (keptTerminalPunct > 0 || keptSegments > 0) {
-    log(`Quote-match tiers: verbatim=${keptVerbatim}, terminal-punct=${keptTerminalPunct}, segments=${keptSegments}.`);
+    log(
+      `Quote-match tiers: verbatim=${keptVerbatim}, terminal-punct=${keptTerminalPunct}, segments=${keptSegments}.`,
+    );
   }
   return { totalDropped, affectedCharacters, entries };
 }
@@ -207,14 +223,22 @@ export function dropEvidencelessCast(
   const kept: CharacterOutput[] = [];
   const droppedNames: string[] = [];
   for (const c of characters) {
-    if (c.id === 'narrator') { kept.push(c); continue; }
-    if ((c.evidence?.length ?? 0) === 0) { droppedNames.push(c.name); continue; }
+    if (c.id === 'narrator') {
+      kept.push(c);
+      continue;
+    }
+    if ((c.evidence?.length ?? 0) === 0) {
+      droppedNames.push(c.name);
+      continue;
+    }
     kept.push(c);
   }
   if (droppedNames.length > 0) {
     const sample = droppedNames.slice(0, 4).join(', ');
     const more = droppedNames.length > 4 ? `, +${droppedNames.length - 4} more` : '';
-    log(`Dropped ${droppedNames.length} character${droppedNames.length === 1 ? '' : 's'} with no surviving evidence (${sample}${more}) — verifier killed every attributed quote.`);
+    log(
+      `Dropped ${droppedNames.length} character${droppedNames.length === 1 ? '' : 's'} with no surviving evidence (${sample}${more}) — verifier killed every attributed quote.`,
+    );
   }
   return kept;
 }
@@ -274,13 +298,16 @@ export function mergeRosterChapter(
       roster.set(incoming.id, {
         ...incoming,
         attributes: incoming.attributes ? [...incoming.attributes] : undefined,
-        evidence: incoming.evidence ? incoming.evidence.map(e => ({ ...e })) : undefined,
+        evidence: incoming.evidence ? incoming.evidence.map((e) => ({ ...e })) : undefined,
         tone: incoming.tone ? { ...incoming.tone } : undefined,
       });
       continue;
     }
     /* Description: keep whichever is longer. */
-    if (incoming.description && (!existing.description || incoming.description.length > existing.description.length)) {
+    if (
+      incoming.description &&
+      (!existing.description || incoming.description.length > existing.description.length)
+    ) {
       existing.description = incoming.description;
     }
     /* Tone: latest-wins per field, but only when the incoming entry
@@ -304,7 +331,7 @@ export function mergeRosterChapter(
        so smart-vs-straight typography drift between chapters doesn't
        inflate the array. */
     if (incoming.evidence?.length) {
-      const seen = new Set((existing.evidence ?? []).map(e => normaliseForMatch(e.quote)));
+      const seen = new Set((existing.evidence ?? []).map((e) => normaliseForMatch(e.quote)));
       const next = [...(existing.evidence ?? [])];
       for (const e of incoming.evidence) {
         const norm = normaliseForMatch(e.quote);
@@ -319,7 +346,7 @@ export function mergeRosterChapter(
        existing doesn't have a value. First detection wins for identity
        fields — switching pronouns mid-book is almost always a model
        error, not a character development. */
-    if (!existing.gender   && incoming.gender)   existing.gender   = incoming.gender;
+    if (!existing.gender && incoming.gender) existing.gender = incoming.gender;
     if (!existing.ageRange && incoming.ageRange) existing.ageRange = incoming.ageRange;
   }
 }
@@ -377,10 +404,13 @@ function attachLinesAndScenes(
   for (const s of sentences) {
     lines.set(s.characterId, (lines.get(s.characterId) ?? 0) + 1);
     let set = scenes.get(s.characterId);
-    if (!set) { set = new Set(); scenes.set(s.characterId, set); }
+    if (!set) {
+      set = new Set();
+      scenes.set(s.characterId, set);
+    }
     set.add(s.chapterId);
   }
-  return characters.map(c => ({
+  return characters.map((c) => ({
     ...c,
     lines: lines.get(c.id) ?? 0,
     scenes: scenes.get(c.id)?.size ?? 0,
@@ -391,13 +421,19 @@ export const analysisRouter = Router();
 
 /* Keep aligned with src/data/analysis-phases.ts ANALYSIS_PHASES. */
 const PHASES = [
-  { id: 0, label: 'Detecting characters',    durationMs: 0    }, // handoff stage 1
-  { id: 1, label: 'Parsing and attribution', durationMs: 0    }, // handoff stage 2
-  { id: 2, label: 'Matching library',        durationMs: 250  },
+  { id: 0, label: 'Detecting characters', durationMs: 0 }, // handoff stage 1
+  { id: 1, label: 'Parsing and attribution', durationMs: 0 }, // handoff stage 2
+  { id: 2, label: 'Matching library', durationMs: 250 },
 ];
 
 function bookIdFromTitle(title: string): string {
-  return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'book';
+  return (
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 32) || 'book'
+  );
 }
 
 function durationPlaceholder(): string {
@@ -409,14 +445,14 @@ function durationPlaceholder(): string {
    char. STAGE1_BASELINE_RATE is the only static baseline — stage 2 is
    computed from stage 1's *observed* rate × STAGE2_STRETCH, so big books
    on slow models still get a sensible bar after the first phase. */
-const STAGE1_BASELINE_RATE = 1.0;  // input chars / ms; tuned for gemini-2.5-flash
+const STAGE1_BASELINE_RATE = 1.0; // input chars / ms; tuned for gemini-2.5-flash
 /* Stage 2 emits one JSON entry per sentence — output is much heavier than
    stage 1's small roster. Earlier 3× was optimistic; observed runs on
    gemini-3-flash land closer to 5–7× the stage 1 time per char. Erring on
    the side of "we promised more time than it took" beats pegging at 95%. */
 const STAGE2_STRETCH = 5.0;
 const MIN_EST_MS = 3000;
-const MAX_EST_MS = 10 * 60 * 1000;  // 10 minutes — past this the bar caps
+const MAX_EST_MS = 10 * 60 * 1000; // 10 minutes — past this the bar caps
 /* When elapsed exceeds the per-chapter estimate, the bar asymptotes toward
    the cap instead of pegging — overage frac is mapped through 1 - 1/(1+x)
    so a 2× overage adds half the remaining headroom, a 4× overage adds 80%.
@@ -428,7 +464,9 @@ const OVERAGE_LOG_THRESHOLDS = [1.5, 2.0, 3.0] as const;
    even when the estimate is small (a 22s estimate's 1.5×/2×/3× thresholds
    are only 33s/44s/66s, so without these the log would stall on a 5-minute
    chapter). Each threshold fires once per chapter. */
-const HEARTBEAT_MS_THRESHOLDS = [30_000, 60_000, 120_000, 180_000, 300_000, 420_000, 600_000, 900_000] as const;
+const HEARTBEAT_MS_THRESHOLDS = [
+  30_000, 60_000, 120_000, 180_000, 300_000, 420_000, 600_000, 900_000,
+] as const;
 
 /* Streaming-chunk feedback. Throttle SSE heartbeat emission so a fast model
    pumping 200 chunks/s doesn't drown the client. 2 s is high-signal:
@@ -458,7 +496,7 @@ const PHASE0_PER_CHAPTER_BASELINE_MS = 30_000;
    trackers), this is ignored. */
 const ENGINE_FALLBACK_MS_PER_CHAR: Record<'gemini' | 'local', number> = {
   gemini: 0.5,
-  local:  5.0,
+  local: 5.0,
 };
 /* Stage 2 chapter concurrency. Default 2 keeps us well under Gemini's
    free-tier RPM limits while roughly halving wall-clock time vs sequential.
@@ -490,7 +528,7 @@ export function clearFailedChapterId(
 ): boolean {
   const wasFailed = cache.failedChapterIds?.includes(chapterId) === true;
   if (wasFailed) {
-    cache.failedChapterIds = cache.failedChapterIds!.filter(id => id !== chapterId);
+    cache.failedChapterIds = cache.failedChapterIds!.filter((id) => id !== chapterId);
   }
   return wasFailed;
 }
@@ -582,7 +620,7 @@ export function attributionDriftExceeded(
   minSentencesForCheck = 100,
 ): boolean {
   if (totalSentences < minSentencesForCheck) return false;
-  return (demotedCount / totalSentences) > thresholdRatio;
+  return demotedCount / totalSentences > thresholdRatio;
 }
 
 /* Stage 1 shrink guard. When a stage1 write would replace a non-trivial
@@ -720,13 +758,14 @@ export function buildStage1ChapterInbox(
      reuse ids verbatim. Skipping evidence/tone/description keeps each
      per-chapter call's prompt small even on book #15 of a series. */
   const rosterJson = JSON.stringify(
-    runningRoster.map(c => ({ id: c.id, name: c.name, role: c.role })),
+    runningRoster.map((c) => ({ id: c.id, name: c.name, role: c.role })),
     null,
     2,
   );
-  const rosterBlock = runningRoster.length === 0
-    ? '_No characters detected yet — this is the first chapter being processed. Use kebab-case ids that will be stable across the rest of the book._'
-    : `\`\`\`json\n${rosterJson}\n\`\`\``;
+  const rosterBlock =
+    runningRoster.length === 0
+      ? '_No characters detected yet — this is the first chapter being processed. Use kebab-case ids that will be stable across the rest of the book._'
+      : `\`\`\`json\n${rosterJson}\n\`\`\``;
 
   /* Series-cast prior (C2). Rendered only when sibling books exist so
      standalones / first-in-series books don't carry a useless empty
@@ -735,22 +774,24 @@ export function buildStage1ChapterInbox(
      alias — without this guidance Unlocked's per-chapter detector
      would invent fresh ids like `keefe-2` instead of recognising the
      `keefe` already confirmed in Bonus Keefe Story / KOTLC. */
-  const priorJson = seriesPrior.length > 0
-    ? JSON.stringify(
-        seriesPrior.map(p => ({
-          id: p.id,
-          name: p.name,
-          aliases: p.aliases?.length ? p.aliases : undefined,
-          description: p.description,
-          fromBookTitle: p.fromBookTitle,
-        })),
-        null,
-        2,
-      )
-    : null;
-  const priorBlock = priorJson === null
-    ? ''
-    : `
+  const priorJson =
+    seriesPrior.length > 0
+      ? JSON.stringify(
+          seriesPrior.map((p) => ({
+            id: p.id,
+            name: p.name,
+            aliases: p.aliases?.length ? p.aliases : undefined,
+            description: p.description,
+            fromBookTitle: p.fromBookTitle,
+          })),
+          null,
+          2,
+        )
+      : null;
+  const priorBlock =
+    priorJson === null
+      ? ''
+      : `
 ## Known characters from prior books in this series
 
 The user has already confirmed these characters in earlier books in this series. If a speaker in this chapter matches one of them by **name** or **alias** (case-insensitive, ignoring punctuation), reuse their \`id\` **verbatim** — do not invent a new id. Mis-attributing a series-regular as a fresh character creates duplicate voice profiles and breaks downstream voice-match scoring. New characters introduced in this book that are NOT in the list should still get fresh kebab-case ids.
@@ -868,7 +909,7 @@ fast — refer back to them only if you genuinely can't disambiguate.
 
 \`\`\`json
 ${JSON.stringify(
-  stage1.characters.map(c => ({ id: c.id, name: c.name, role: c.role })),
+  stage1.characters.map((c) => ({ id: c.id, name: c.name, role: c.role })),
   null,
   2,
 )}
@@ -907,7 +948,13 @@ interface AnalysisJobReplayState {
   logs: Array<{ kind: 'log'; phaseId: number; message: string }>;
   /** Latest phase event (kind:'phase'). Only the most recent is replayed
       since phase events are cumulative. */
-  lastPhase: { kind: 'phase'; phaseId: number; progress: number; label: string; live?: unknown } | null;
+  lastPhase: {
+    kind: 'phase';
+    phaseId: number;
+    progress: number;
+    label: string;
+    live?: unknown;
+  } | null;
   /** Latest ETA event (kind:'eta'). */
   lastEta: { kind: 'eta'; remainingMs: number } | null;
   /** Latest full cast-update snapshot. cast-update events are cumulative
@@ -1002,9 +1049,12 @@ export function isAnalysisJobRunning(manuscriptId: string): boolean {
 export function snapshotInFlightAnalysis(manuscriptId: string): AnalysisStateFile | null {
   const subset = inFlightSubsetByManuscript.get(manuscriptId);
   const main = inFlightAnalysisByManuscript.get(manuscriptId);
-  const job = (subset && !subset.controller.signal.aborted) ? subset
-            : (main && !main.controller.signal.aborted)     ? main
-            : null;
+  const job =
+    subset && !subset.controller.signal.aborted
+      ? subset
+      : main && !main.controller.signal.aborted
+        ? main
+        : null;
   if (!job) return null;
   const phase = job.replay.lastPhase;
   return {
@@ -1082,7 +1132,11 @@ async function persistTerminalSnapshot(
 
 function broadcastToJob(job: AnalysisJob, payload: unknown): void {
   for (const sub of job.subscribers) {
-    try { sub.send(payload); } catch { /* dead socket — req.on('close') will clean up */ }
+    try {
+      sub.send(payload);
+    } catch {
+      /* dead socket — req.on('close') will clean up */
+    }
   }
 }
 
@@ -1109,7 +1163,11 @@ function trackForReplay(job: AnalysisJob, payload: unknown): void {
     case 'chapter-failed': {
       const e = ev as { chapterId?: number; message?: string };
       if (typeof e.chapterId === 'number' && typeof e.message === 'string') {
-        job.replay.failedByChapterId.set(e.chapterId, { kind: 'chapter-failed', chapterId: e.chapterId, message: e.message });
+        job.replay.failedByChapterId.set(e.chapterId, {
+          kind: 'chapter-failed',
+          chapterId: e.chapterId,
+          message: e.message,
+        });
       }
       break;
     }
@@ -1184,7 +1242,11 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
   }
   for (const sub of job.subscribers) {
     clearInterval(sub.keepAlive);
-    try { sub.res.end(); } catch { /* socket already gone */ }
+    try {
+      sub.res.end();
+    } catch {
+      /* socket already gone */
+    }
   }
   job.subscribers.clear();
   const targetMap = jobMapFor(job.kind);
@@ -1215,7 +1277,11 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      subsequent silent stretches (e.g. a slow first-chapter Ollama call). */
   res.write(':ok\n\n');
   const keepAlive = setInterval(() => {
-    try { res.write(':ka\n\n'); } catch { /* socket gone */ }
+    try {
+      res.write(':ka\n\n');
+    } catch {
+      /* socket gone */
+    }
   }, 15_000);
 
   /* Per-request send used for early validation errors (before the job
@@ -1223,7 +1289,11 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      join / create a job. broadcastToJob() iterates the job's
      subscribers and invokes each subscriber's send. */
   const send = (payload: unknown) => {
-    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { /* dead socket */ }
+    try {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    } catch {
+      /* dead socket */
+    }
   };
 
   /* In-memory lookup with a workspace-disk fallback. Lets the analysis
@@ -1257,7 +1327,9 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     return res.end();
   }
   if (requestedModel) {
-    console.log(`[analysis] manuscript=${manuscriptId} engine=${selection.engine} model=${selection.model}`);
+    console.log(
+      `[analysis] manuscript=${manuscriptId} engine=${selection.engine} model=${selection.model}`,
+    );
   }
 
   /* ── Dispatch: subscribe-vs-start.
@@ -1365,7 +1437,9 @@ async function runMainAnalyzerJob(
   const startedAt = Date.now();
   const phaseStarts: Record<number, number> = {};
 
-  const markPhase = (id: number) => { phaseStarts[id] = Date.now(); };
+  const markPhase = (id: number) => {
+    phaseStarts[id] = Date.now();
+  };
   const endPhase = (id: number) => Date.now() - (phaseStarts[id] ?? Date.now());
 
   try {
@@ -1374,7 +1448,7 @@ async function runMainAnalyzerJob(
     /* Pre-flight estimate uses the static baseline for both stages. After
        stage 1 completes we replace stage2EstMs with one derived from the
        *observed* rate, so the second bar reflects actual model speed. */
-    let stage1EstMs = clampEst(sourceChars / STAGE1_BASELINE_RATE);
+    const stage1EstMs = clampEst(sourceChars / STAGE1_BASELINE_RATE);
     let stage2EstMs = clampEst((sourceChars / STAGE1_BASELINE_RATE) * STAGE2_STRETCH);
 
     /* Load any partial progress from a previous attempt. Cached stage 1 is
@@ -1412,8 +1486,14 @@ async function runMainAnalyzerJob(
        a 60-chapter book that used to hang for 10+ minutes now scrolls
        characters into view as each chapter completes. */
     markPhase(0);
-    log(0, `Manuscript: ${wordCount.toLocaleString()} words, ${sourceChars.toLocaleString()} characters, ${record.chapterHints.length} chapter${record.chapterHints.length === 1 ? '' : 's'}`);
-    log(0, `Estimated total time: ~${humanSeconds(stage1EstMs + stage2EstMs)} (refined after stage 1)`);
+    log(
+      0,
+      `Manuscript: ${wordCount.toLocaleString()} words, ${sourceChars.toLocaleString()} characters, ${record.chapterHints.length} chapter${record.chapterHints.length === 1 ? '' : 's'}`,
+    );
+    log(
+      0,
+      `Estimated total time: ~${humanSeconds(stage1EstMs + stage2EstMs)} (refined after stage 1)`,
+    );
 
     /* Series-cast prior (C2). Resolves the source book's series-mates'
        confirmed characters via scanSeriesCharactersForBookId so the
@@ -1426,7 +1506,7 @@ async function runMainAnalyzerJob(
     if (recordRef.bookId) {
       try {
         const siblingRecords = await scanSeriesCharactersForBookId(recordRef.bookId);
-        seriesPrior = siblingRecords.map(r => ({
+        seriesPrior = siblingRecords.map((r) => ({
           id: r.character.id,
           name: r.character.name,
           aliases: r.character.aliases,
@@ -1439,13 +1519,23 @@ async function runMainAnalyzerJob(
           /* Distinct book sources, first three names, surfaced for the
              analysing view's "Carried from <series>" pill (C3) and for
              a one-line log entry the user can see on phase 0 entry. */
-          const firstNames = seriesPrior.slice(0, 3).map(p => p.name).filter(Boolean).join(', ');
+          const firstNames = seriesPrior
+            .slice(0, 3)
+            .map((p) => p.name)
+            .filter(Boolean)
+            .join(', ');
           const more = seriesPrior.length > 3 ? ` +${seriesPrior.length - 3}` : '';
-          log(0, `Carrying in ${seriesPrior.length} character${seriesPrior.length === 1 ? '' : 's'} from prior books in this series (${firstNames}${more}).`);
+          log(
+            0,
+            `Carrying in ${seriesPrior.length} character${seriesPrior.length === 1 ? '' : 's'} from prior books in this series (${firstNames}${more}).`,
+          );
           send({
             kind: 'series-prior',
             count: seriesPrior.length,
-            names: seriesPrior.slice(0, 3).map(p => p.name).filter((n): n is string => typeof n === 'string'),
+            names: seriesPrior
+              .slice(0, 3)
+              .map((p) => p.name)
+              .filter((n): n is string => typeof n === 'string'),
           });
         }
       } catch (priorErr) {
@@ -1475,7 +1565,7 @@ async function runMainAnalyzerJob(
     const castDurations: Record<number, number> = cache.castDurations ?? {};
     for (const idStr of Object.keys(castDurations)) {
       const id = Number(idStr);
-      const ch = record.chapterHints.find(c => c.id === id);
+      const ch = record.chapterHints.find((c) => c.id === id);
       if (!ch) continue;
       castActualMsTotal += castDurations[id];
       castActualCharsTotal += ch.body.length;
@@ -1484,7 +1574,7 @@ async function runMainAnalyzerJob(
        non-excluded chapters (Phase 0a iterates these). totalStage2CharsAll:
        same set since stage 2 runs the same non-excluded chapters. */
     const totalCastCharsAll = record.chapterHints
-      .filter(c => !c.excluded)
+      .filter((c) => !c.excluded)
       .reduce((sum, c) => sum + c.body.length, 0);
     /* Emit an initial ETA up front so the heading swaps from the static
        Gemini-calibrated describeSize string (22ms/word) to an
@@ -1501,8 +1591,8 @@ async function runMainAnalyzerJob(
         phase1WallClockMs: 0,
         phase1CharsDone: 0,
         phase1CharsRemaining: totalCastCharsAll,
-        fallbackPhase0Ms: fallbackMsPerChar * phase0CharsRemainingInitial
-          + PHASE0_PER_CHAPTER_BASELINE_MS,
+        fallbackPhase0Ms:
+          fallbackMsPerChar * phase0CharsRemainingInitial + PHASE0_PER_CHAPTER_BASELINE_MS,
         fallbackPhase1Ms: fallbackMsPerChar * STAGE2_STRETCH * totalCastCharsAll,
       });
       send({ kind: 'eta', remainingMs: initialRemainingMs });
@@ -1512,13 +1602,18 @@ async function runMainAnalyzerJob(
          to the finalised roster. Still re-sort + re-verify in case the
          cache predates the current verifier pass. */
       const charCount = cache.stage1.characters.length;
-      log(0, `Resuming — Phase 0 already complete (${charCount} character${charCount === 1 ? '' : 's'} cached).`);
+      log(
+        0,
+        `Resuming — Phase 0 already complete (${charCount} character${charCount === 1 ? '' : 's'} cached).`,
+      );
       send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
       stage1 = cache.stage1;
       sortEvidence(stage1.characters);
-      const verified = verifyEvidenceAgainstSource(stage1.characters, record.sourceText, msg => log(0, msg));
+      const verified = verifyEvidenceAgainstSource(stage1.characters, record.sourceText, (msg) =>
+        log(0, msg),
+      );
       const before = stage1.characters.length;
-      stage1.characters = dropEvidencelessCast(stage1.characters, msg => log(0, msg));
+      stage1.characters = dropEvidencelessCast(stage1.characters, (msg) => log(0, msg));
       if (verified.totalDropped > 0 || stage1.characters.length !== before) {
         /* Shrink guard — when the re-verify on the resume short-circuit
            would drop more than half of a non-trivial cached roster,
@@ -1528,7 +1623,10 @@ async function runMainAnalyzerJob(
            no longer matches — better to surface the loss than write
            over a known-good roster. */
         if (stage1ShrinkRefused(before, stage1.characters.length) && !allowStage1Shrink) {
-          log(0, `Stage 1 shrink refused — verifier would drop from ${before} to ${stage1.characters.length} characters. Re-run with allowStage1Shrink:true to confirm.`);
+          log(
+            0,
+            `Stage 1 shrink refused — verifier would drop from ${before} to ${stage1.characters.length} characters. Re-run with allowStage1Shrink:true to confirm.`,
+          );
           endJob(job, {
             kind: 'error',
             code: 'stage1_shrink_refused',
@@ -1550,9 +1648,15 @@ async function runMainAnalyzerJob(
       const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
       const cachedCastCount = Object.keys(chapterCast).length;
       const stage0Start = Date.now();
-      log(0, `Detecting cast chapter-by-chapter across ${totalCastChapters} chapter${totalCastChapters === 1 ? '' : 's'} via ${analyzerLabel}…`);
+      log(
+        0,
+        `Detecting cast chapter-by-chapter across ${totalCastChapters} chapter${totalCastChapters === 1 ? '' : 's'} via ${analyzerLabel}…`,
+      );
       if (cachedCastCount > 0) {
-        log(0, `Resuming — ${cachedCastCount} of ${totalCastChapters} chapter${cachedCastCount === 1 ? '' : 's'} already cached.`);
+        log(
+          0,
+          `Resuming — ${cachedCastCount} of ${totalCastChapters} chapter${cachedCastCount === 1 ? '' : 's'} already cached.`,
+        );
       }
 
       /* Replay the merge in chapter-id order whenever a new chapter lands,
@@ -1578,7 +1682,7 @@ async function runMainAnalyzerJob(
         send({ kind: 'cast-update', characters: folded });
       };
 
-      const completedCast = new Set<number>(Object.keys(chapterCast).map(k => Number(k)));
+      const completedCast = new Set<number>(Object.keys(chapterCast).map((k) => Number(k)));
       /* Chapters that hit a non-recoverable per-chapter failure (e.g.
          qwen3.5:4b truncated JSON output that survived the validation
          retry). Tracked separately from completedCast so the route can
@@ -1591,14 +1695,19 @@ async function runMainAnalyzerJob(
          100%. The full `totalCastChapters` is still used for log/log-message
          framing ("Chapter 3/12 — Title") so the user sees their book's
          original chapter numbering. */
-      const activeCastChapters = recordRef.chapterHints.filter(c => !c.excluded).length;
+      const activeCastChapters = recordRef.chapterHints.filter((c) => !c.excluded).length;
       const excludedCastChapters = totalCastChapters - activeCastChapters;
       if (excludedCastChapters > 0) {
-        log(0, `Skipping ${excludedCastChapters} excluded chapter${excludedCastChapters === 1 ? '' : 's'} (front/back-matter you opted out of narrating).`);
+        log(
+          0,
+          `Skipping ${excludedCastChapters} excluded chapter${excludedCastChapters === 1 ? '' : 's'} (front/back-matter you opted out of narrating).`,
+        );
       }
       const phase0Progress = (): number => {
         const done = completedCast.size;
-        return activeCastChapters > 0 ? Math.min(0.02 + 0.93 * (done / activeCastChapters), 0.95) : 1;
+        return activeCastChapters > 0
+          ? Math.min(0.02 + 0.93 * (done / activeCastChapters), 0.95)
+          : 1;
       };
 
       /* Initial cast-update + progress reflecting any cached cast. */
@@ -1623,11 +1732,15 @@ async function runMainAnalyzerJob(
       }
       const castConcurrency = readStage2Concurrency();
       if (castTaskIndices.length > 0) {
-        const requeuedFailedCount = castTaskIndices.filter(i => failedSet.has(recordRef.chapterHints[i].id)).length;
-        const requeueSuffix = requeuedFailedCount > 0
-          ? ` (including ${requeuedFailedCount} previously-failed)`
-          : '';
-        log(0, `Running ${castTaskIndices.length} chapter cast-detection${castTaskIndices.length === 1 ? '' : 's'}${requeueSuffix} with up to ${castConcurrency} in parallel.`);
+        const requeuedFailedCount = castTaskIndices.filter((i) =>
+          failedSet.has(recordRef.chapterHints[i].id),
+        ).length;
+        const requeueSuffix =
+          requeuedFailedCount > 0 ? ` (including ${requeuedFailedCount} previously-failed)` : '';
+        log(
+          0,
+          `Running ${castTaskIndices.length} chapter cast-detection${castTaskIndices.length === 1 ? '' : 's'}${requeueSuffix} with up to ${castConcurrency} in parallel.`,
+        );
       }
 
       /* Per-chapter live ticker, mirroring Phase 1's structure so the
@@ -1642,21 +1755,26 @@ async function runMainAnalyzerJob(
       }
       const castInFlight = new Map<number, CastInFlight>();
       const sendCastLiveTick = (): void => {
-        const running = Array.from(castInFlight.values()).sort((a, b) => a.chapterIndex - b.chapterIndex);
+        const running = Array.from(castInFlight.values()).sort(
+          (a, b) => a.chapterIndex - b.chapterIndex,
+        );
         send({
           kind: 'phase',
           phaseId: 0,
           progress: phase0Progress(),
           label: PHASES[0].label,
-          live: running.length > 0 ? {
-            totalChapters: totalCastChapters,
-            chapters: running.map(r => ({
-              chapterIndex: r.chapterIndex + 1,
-              chapterTitle: r.chapterTitle,
-              elapsedMs: r.elapsedMs,
-              estMs: r.chapterEstMs,
-            })),
-          } : undefined,
+          live:
+            running.length > 0
+              ? {
+                  totalChapters: totalCastChapters,
+                  chapters: running.map((r) => ({
+                    chapterIndex: r.chapterIndex + 1,
+                    chapterTitle: r.chapterTitle,
+                    elapsedMs: r.elapsedMs,
+                    estMs: r.chapterEstMs,
+                  })),
+                }
+              : undefined,
         });
       };
 
@@ -1672,21 +1790,39 @@ async function runMainAnalyzerJob(
         const msPerCharFallback = ENGINE_FALLBACK_MS_PER_CHAR[selection.engine] ?? 0.5;
         const fallback = PHASE0_PER_CHAPTER_BASELINE_MS + msPerCharFallback * ch.body.length;
         const chapterEstMs = chapterEstFromObserved(
-          ch.body.length, castActualMsTotal, castActualCharsTotal, fallback,
+          ch.body.length,
+          castActualMsTotal,
+          castActualCharsTotal,
+          fallback,
         );
         const startedChAt = Date.now();
-        castInFlight.set(i, { chapterIndex: i, chapterTitle: ch.title, chapterEstMs, startedAt: startedChAt, elapsedMs: 0 });
+        castInFlight.set(i, {
+          chapterIndex: i,
+          chapterTitle: ch.title,
+          chapterEstMs,
+          startedAt: startedChAt,
+          elapsedMs: 0,
+        });
 
         let lastChunkAt = Date.now();
         let lastHeartbeatAt = 0;
         let warnedSilenceAt: number | null = null;
-        log(0, `Chapter ${i + 1}/${totalCastChapters} cast — ${ch.title} (${ch.body.length.toLocaleString()} chars) via ${analyzerLabel}…`);
+        log(
+          0,
+          `Chapter ${i + 1}/${totalCastChapters} cast — ${ch.title} (${ch.body.length.toLocaleString()} chars) via ${analyzerLabel}…`,
+        );
         let result;
         try {
           result = await analyzer.runStage1Chapter(
             manuscriptId,
             ch.id,
-            buildStage1ChapterInbox(manuscriptId, recordRef.title, ch, Array.from(rebuildRoster().values()), seriesPrior),
+            buildStage1ChapterInbox(
+              manuscriptId,
+              recordRef.title,
+              ch,
+              Array.from(rebuildRoster().values()),
+              seriesPrior,
+            ),
             {
               signal: abortController.signal,
               onWaiting: (elapsed) => {
@@ -1699,9 +1835,15 @@ async function runMainAnalyzerJob(
                    stretch, re-arm on the next chunk. */
                 const sinceLastChunk = Date.now() - lastChunkAt;
                 if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
-                  if (warnedSilenceAt === null || Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS) {
+                  if (
+                    warnedSilenceAt === null ||
+                    Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS
+                  ) {
                     warnedSilenceAt = Date.now();
-                    log(0, `Chapter ${i + 1}/${totalCastChapters} — no response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)}, still waiting.`);
+                    log(
+                      0,
+                      `Chapter ${i + 1}/${totalCastChapters} — no response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)}, still waiting.`,
+                    );
                   }
                 } else {
                   warnedSilenceAt = null;
@@ -1712,7 +1854,8 @@ async function runMainAnalyzerJob(
                 const now = lastChunkAt;
                 if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
                 lastHeartbeatAt = now;
-                const charsPerSec = info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
+                const charsPerSec =
+                  info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
                 send({
                   kind: 'heartbeat',
                   phaseId: 0,
@@ -1747,15 +1890,21 @@ async function runMainAnalyzerJob(
              — historically one bad chapter aborted the entire pool with
              a generic toast and no way to diagnose. */
           castInFlight.delete(i);
-          completedCast.add(i);                       // count toward progress denominator
+          completedCast.add(i); // count toward progress denominator
           failedCastChapters.add(ch.id);
           const chDurationFail = Date.now() - startedChAt;
           /* The duration cache feeds the observed-pace ETA. Recording a
              failure's duration would skew the pace estimate (probably
              upward — the model burned all its budget then errored), so
              skip the duration save on failure. */
-          log(0, `❌ Chapter ${i + 1}/${totalCastChapters} cast FAILED — ${ch.title}: ${(chErr as Error).message}`);
-          log(0, `Continuing without chapter ${i + 1} in the cast roster (${humanSeconds(chDurationFail)} spent). Re-run analysis to retry.`);
+          log(
+            0,
+            `❌ Chapter ${i + 1}/${totalCastChapters} cast FAILED — ${ch.title}: ${(chErr as Error).message}`,
+          );
+          log(
+            0,
+            `Continuing without chapter ${i + 1} in the cast roster (${humanSeconds(chDurationFail)} spent). Re-run analysis to retry.`,
+          );
           /* Persist the failure marker into the cache so a resumed run
              knows we tried this chapter and gave up — without this, a
              follow-up open would queue it again and probably fail the
@@ -1810,7 +1959,10 @@ async function runMainAnalyzerJob(
            authoritative side effects of progress regardless of
            subscriber count. */
         if (recordRef.bookDir) {
-          const interim = buildInterimCast(chapterCast, recordRef.chapterHints.map(h => h.id));
+          const interim = buildInterimCast(
+            chapterCast,
+            recordRef.chapterHints.map((h) => h.id),
+          );
           if (interim.length > 0) {
             try {
               await writeJsonAtomic(castJsonPath(recordRef.bookDir), { characters: interim });
@@ -1820,7 +1972,10 @@ async function runMainAnalyzerJob(
           }
         }
         castInFlight.delete(i);
-        log(0, `Chapter ${i + 1}/${totalCastChapters} cast done — ${result.characters.length} character${result.characters.length === 1 ? '' : 's'} in ${humanSeconds(chDuration)}`);
+        log(
+          0,
+          `Chapter ${i + 1}/${totalCastChapters} cast done — ${result.characters.length} character${result.characters.length === 1 ? '' : 's'} in ${humanSeconds(chDuration)}`,
+        );
         /* Accumulate observed pace so subsequent Phase 0a chapter estimates
            (and the cross-phase ETA projection below) reflect the real model
            speed instead of the static TTFT baseline. */
@@ -1886,7 +2041,10 @@ async function runMainAnalyzerJob(
          write at the catch site above. */
       if (failedCastChapters.size > 0) {
         const failedCount = failedCastChapters.size;
-        log(0, `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? '' : 's'} still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.`);
+        log(
+          0,
+          `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? '' : 's'} still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.`,
+        );
         send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
         endJob(job, {
           kind: 'error',
@@ -1903,14 +2061,16 @@ async function runMainAnalyzerJob(
       const finalRoster = rebuildRoster();
       const rawCharacters = Array.from(finalRoster.values());
       sortEvidence(rawCharacters);
-      const verified = verifyEvidenceAgainstSource(rawCharacters, record.sourceText, msg => log(0, msg));
-      const characters = dropEvidencelessCast(rawCharacters, msg => log(0, msg));
+      const verified = verifyEvidenceAgainstSource(rawCharacters, record.sourceText, (msg) =>
+        log(0, msg),
+      );
+      const characters = dropEvidencelessCast(rawCharacters, (msg) => log(0, msg));
       stage1 = {
         characters,
         /* Carry the parser's chapter list verbatim — Phase 0a deliberately
            doesn't return a chapters[] field, and stage 2's prompt /
            merging downstream both work off the same list. */
-        chapters: recordRef.chapterHints.map(c => ({ id: c.id, title: c.title })),
+        chapters: recordRef.chapterHints.map((c) => ({ id: c.id, title: c.title })),
       };
       cache.stage1 = stage1;
       await saveAnalysisCache(manuscriptId, cache);
@@ -1948,13 +2108,19 @@ async function runMainAnalyzerJob(
        stretch factor. */
     if (stage1ActualMs > 0) {
       stage2EstMs = clampEst(stage1ActualMs * STAGE2_STRETCH);
-      log(0, `Detected ${stage1.characters.length} character${stage1.characters.length === 1 ? '' : 's'}: ${stage1.characters.map(c => c.name).join(', ')}`);
+      log(
+        0,
+        `Detected ${stage1.characters.length} character${stage1.characters.length === 1 ? '' : 's'}: ${stage1.characters.map((c) => c.name).join(', ')}`,
+      );
       /* Report the *parser*'s chapter count — that's what stage 2 actually
          iterates. The analyzer's own count can occasionally collapse on
          flaky models even though the chapter list was provided verbatim in
          the inbox; the parser is the operational source of truth. */
       const parserChapterCount = record.chapterHints.length;
-      log(0, `${parserChapterCount} chapter${parserChapterCount === 1 ? '' : 's'} identified in ${humanSeconds(stage1ActualMs)}`);
+      log(
+        0,
+        `${parserChapterCount} chapter${parserChapterCount === 1 ? '' : 's'} identified in ${humanSeconds(stage1ActualMs)}`,
+      );
     }
     send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
 
@@ -1966,10 +2132,16 @@ async function runMainAnalyzerJob(
     markPhase(1);
     send({ kind: 'phase', phaseId: 1, progress: 0.02, label: PHASES[1].label });
     const totalChapters = record.chapterHints.length;
-    log(1, `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${analyzerLabel}, one at a time…`);
+    log(
+      1,
+      `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${analyzerLabel}, one at a time…`,
+    );
     log(1, `Estimated stage time: ~${humanSeconds(stage2EstMs)} (based on stage 1 rate)`);
     if (cachedChapterCount > 0) {
-      log(1, `Resuming — ${cachedChapterCount} of ${totalChapters} chapter${cachedChapterCount === 1 ? '' : 's'} already cached.`);
+      log(
+        1,
+        `Resuming — ${cachedChapterCount} of ${totalChapters} chapter${cachedChapterCount === 1 ? '' : 's'} already cached.`,
+      );
     }
     /* Per-chapter budget weighted by char count so a fat chapter doesn't get
        the same budget as a thin one. After each chapter completes we
@@ -1987,7 +2159,7 @@ async function runMainAnalyzerJob(
     const stage2Durations: Record<number, number> = cache.stage2Durations ?? {};
     for (const idStr of Object.keys(stage2Durations)) {
       const id = Number(idStr);
-      const ch = record.chapterHints.find(c => c.id === id);
+      const ch = record.chapterHints.find((c) => c.id === id);
       if (!ch) continue;
       actualMsTotal += stage2Durations[id];
       actualCharsTotal += ch.body.length;
@@ -2033,7 +2205,10 @@ async function runMainAnalyzerJob(
       if (ch.excluded) continue;
       const cached = cachedChapters[ch.id];
       if (cached && cached.length > 0) {
-        log(1, `Chapter ${i + 1}/${totalChapters} — ${ch.title}: cached (${cached.length.toLocaleString()} sentences), skipping.`);
+        log(
+          1,
+          `Chapter ${i + 1}/${totalChapters} — ${ch.title}: cached (${cached.length.toLocaleString()} sentences), skipping.`,
+        );
         sentencesByChapter.set(ch.id, cached);
         completedSet.add(i);
       }
@@ -2041,10 +2216,13 @@ async function runMainAnalyzerJob(
     /* Active = chapters that will actually run Phase 1. Excluded chapters
        are subtracted from the denominator so a book with 5 excluded
        chapters doesn't stall the bar below 100%. */
-    const activeChapterCount = recordRef.chapterHints.filter(c => !c.excluded).length;
+    const activeChapterCount = recordRef.chapterHints.filter((c) => !c.excluded).length;
     const excludedChapterCount = totalChapters - activeChapterCount;
     if (excludedChapterCount > 0) {
-      log(1, `Skipping ${excludedChapterCount} excluded chapter${excludedChapterCount === 1 ? '' : 's'} (no audio will be generated).`);
+      log(
+        1,
+        `Skipping ${excludedChapterCount} excluded chapter${excludedChapterCount === 1 ? '' : 's'} (no audio will be generated).`,
+      );
     }
     /* Reflect cached progress in the bar before any work starts. */
     {
@@ -2067,7 +2245,10 @@ async function runMainAnalyzerJob(
     }
 
     const concurrency = readStage2Concurrency();
-    log(1, `Running ${taskIndices.length} chapter${taskIndices.length === 1 ? '' : 's'} with up to ${concurrency} in parallel.`);
+    log(
+      1,
+      `Running ${taskIndices.length} chapter${taskIndices.length === 1 ? '' : 's'} with up to ${concurrency} in parallel.`,
+    );
 
     /* Track which chapters are currently in-flight + their elapsed times so
        the `live` payload can surface every running chapter — concurrency
@@ -2084,25 +2265,28 @@ async function runMainAnalyzerJob(
     const inFlight = new Map<number, InFlight>();
 
     const sendLiveTick = () => {
-      const running = Array.from(inFlight.values())
-        .sort((a, b) => a.chapterIndex - b.chapterIndex);
-      const p = activeChapterCount > 0
-        ? Math.min(0.02 + 0.93 * (completedSet.size / activeChapterCount), 0.95)
-        : 1;
+      const running = Array.from(inFlight.values()).sort((a, b) => a.chapterIndex - b.chapterIndex);
+      const p =
+        activeChapterCount > 0
+          ? Math.min(0.02 + 0.93 * (completedSet.size / activeChapterCount), 0.95)
+          : 1;
       send({
         kind: 'phase',
         phaseId: 1,
         progress: p,
         label: PHASES[1].label,
-        live: running.length > 0 ? {
-          totalChapters,
-          chapters: running.map(r => ({
-            chapterIndex: r.chapterIndex + 1,
-            chapterTitle: r.chapterTitle,
-            elapsedMs: r.elapsedMs,
-            estMs: r.chapterEstMs,
-          })),
-        } : undefined,
+        live:
+          running.length > 0
+            ? {
+                totalChapters,
+                chapters: running.map((r) => ({
+                  chapterIndex: r.chapterIndex + 1,
+                  chapterTitle: r.chapterTitle,
+                  elapsedMs: r.elapsedMs,
+                  estMs: r.chapterEstMs,
+                })),
+              }
+            : undefined,
       });
     };
 
@@ -2129,7 +2313,10 @@ async function runMainAnalyzerJob(
           if (loggedOverages.has(t)) continue;
           if (elapsed >= chapterEstMs * t) {
             loggedOverages.add(t);
-            log(1, `Chapter ${i + 1}/${totalChapters} still running — ${humanSeconds(elapsed)} elapsed (est was ${humanSeconds(chapterEstMs)}, ${t}× exceeded). Continuing.`);
+            log(
+              1,
+              `Chapter ${i + 1}/${totalChapters} still running — ${humanSeconds(elapsed)} elapsed (est was ${humanSeconds(chapterEstMs)}, ${t}× exceeded). Continuing.`,
+            );
           }
         }
         /* Wall-clock heartbeats. */
@@ -2137,17 +2324,23 @@ async function runMainAnalyzerJob(
           if (loggedHeartbeats.has(ms)) continue;
           if (elapsed >= ms) {
             loggedHeartbeats.add(ms);
-            const overageRecent = Array.from(loggedOverages).some(t =>
-              Math.abs(chapterEstMs * t - ms) < 5000,
+            const overageRecent = Array.from(loggedOverages).some(
+              (t) => Math.abs(chapterEstMs * t - ms) < 5000,
             );
             if (!overageRecent) {
-              log(1, `Chapter ${i + 1}/${totalChapters} — ${humanSeconds(elapsed)} elapsed, still waiting on the model.`);
+              log(
+                1,
+                `Chapter ${i + 1}/${totalChapters} — ${humanSeconds(elapsed)} elapsed, still waiting on the model.`,
+              );
             }
           }
         }
       };
 
-      log(1, `Chapter ${i + 1}/${totalChapters} — ${ch.title} (${ch.body.length.toLocaleString()} chars, ~${humanSeconds(chapterEstMs)}) via ${analyzerLabel}…`);
+      log(
+        1,
+        `Chapter ${i + 1}/${totalChapters} — ${ch.title} (${ch.body.length.toLocaleString()} chars, ~${humanSeconds(chapterEstMs)}) via ${analyzerLabel}…`,
+      );
       let chapterLastHeartbeatAt = 0;
       const result = await analyzer.runStage2Chapter(
         manuscriptId,
@@ -2163,9 +2356,8 @@ async function runMainAnalyzerJob(
             const now = Date.now();
             if (now - chapterLastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
             chapterLastHeartbeatAt = now;
-            const charsPerSec = info.elapsedMs > 0
-              ? Math.round((info.receivedBytes * 1000) / info.elapsedMs)
-              : 0;
+            const charsPerSec =
+              info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
             send({
               kind: 'heartbeat',
               phaseId: 1,
@@ -2220,7 +2412,10 @@ async function runMainAnalyzerJob(
       const chDuration = Date.now() - startedAt;
       completedSet.add(i);
       inFlight.delete(i);
-      log(1, `Chapter ${i + 1}/${totalChapters} done — ${result.sentences.length.toLocaleString()} sentences in ${humanSeconds(chDuration)}`);
+      log(
+        1,
+        `Chapter ${i + 1}/${totalChapters} done — ${result.sentences.length.toLocaleString()} sentences in ${humanSeconds(chDuration)}`,
+      );
 
       /* Update observed-pace tracker. Race-safe because JS is single-threaded
          — increments interleave but sums are associative. */
@@ -2231,7 +2426,10 @@ async function runMainAnalyzerJob(
       if (remaining.count > 0) {
         const remainingEstMs = Math.round(observedRate * remaining.chars);
         const secsPer1k = observedRate;
-        log(1, `Refined pace — ${secsPer1k.toFixed(1)}s per 1,000 chars · ~${humanSeconds(remainingEstMs)} remaining over ${remaining.count} chapter${remaining.count === 1 ? '' : 's'}.`);
+        log(
+          1,
+          `Refined pace — ${secsPer1k.toFixed(1)}s per 1,000 chars · ~${humanSeconds(remainingEstMs)} remaining over ${remaining.count} chapter${remaining.count === 1 ? '' : 's'}.`,
+        );
       }
       /* Refined total ETA so the heading updates to reflect Phase 1's
          actual observed pace, not just Phase 0a extrapolation. */
@@ -2288,7 +2486,10 @@ async function runMainAnalyzerJob(
        instead of unknown-jogger / one-line bystanders). The per-iteration
        writes inside runChapter still stream unfolded sentences during
        analysis for live UI visibility. */
-    log(1, `Attributed ${allSentences.length.toLocaleString()} sentences across ${totalChapters} chapter${totalChapters === 1 ? '' : 's'}`);
+    log(
+      1,
+      `Attributed ${allSentences.length.toLocaleString()} sentences across ${totalChapters} chapter${totalChapters === 1 ? '' : 's'}`,
+    );
     /* Per-character line counts, sorted by lines descending — most prominent first. */
     {
       const lineCounts = new Map<string, number>();
@@ -2296,7 +2497,7 @@ async function runMainAnalyzerJob(
         lineCounts.set(s.characterId, (lineCounts.get(s.characterId) ?? 0) + 1);
       }
       const top = stage1.characters
-        .map(c => ({ name: c.name, lines: lineCounts.get(c.id) ?? 0 }))
+        .map((c) => ({ name: c.name, lines: lineCounts.get(c.id) ?? 0 }))
         .sort((a, b) => b.lines - a.lines)
         .slice(0, 4);
       for (const t of top) log(1, `${t.name}: ${t.lines.toLocaleString()} lines`);
@@ -2308,12 +2509,12 @@ async function runMainAnalyzerJob(
     log(2, 'No library matches yet (voice library matching is not wired up for this slice).');
     for (let i = 1; i <= 3; i++) {
       send({ kind: 'phase', phaseId: 2, progress: i / 3, label: PHASES[2].label });
-      await new Promise(r => setTimeout(r, PHASES[2].durationMs / 3));
+      await new Promise((r) => setTimeout(r, PHASES[2].durationMs / 3));
     }
 
     /* ── Compose the AnalyseResponse. */
-    const chapterTitleById = new Map(stage1.chapters.map(c => [c.id, c.title]));
-    const chapters = record.chapterHints.map(h => ({
+    const chapterTitleById = new Map(stage1.chapters.map((c) => [c.id, c.title]));
+    const chapters = record.chapterHints.map((h) => ({
       id: h.id,
       title: chapterTitleById.get(h.id) ?? h.title,
       duration: durationPlaceholder(),
@@ -2341,14 +2542,20 @@ async function runMainAnalyzerJob(
     });
     if (folded.summary.foldedCount > 0) {
       const parts: string[] = [];
-      if (folded.summary.intoMale)   parts.push(`${folded.summary.intoMale} → Unknown male`);
+      if (folded.summary.intoMale) parts.push(`${folded.summary.intoMale} → Unknown male`);
       if (folded.summary.intoFemale) parts.push(`${folded.summary.intoFemale} → Unknown female`);
-      log(1, `Folded ${folded.summary.foldedCount} background character${folded.summary.foldedCount === 1 ? '' : 's'} (${parts.join(', ')}) — names rolled into aliases.`);
+      log(
+        1,
+        `Folded ${folded.summary.foldedCount} background character${folded.summary.foldedCount === 1 ? '' : 's'} (${parts.join(', ')}) — names rolled into aliases.`,
+      );
     }
     if (folded.summary.droppedSilent > 0) {
       const sample = folded.dropped.slice(0, 4).join(', ');
       const more = folded.dropped.length > 4 ? `, +${folded.dropped.length - 4} more` : '';
-      log(1, `Dropped ${folded.summary.droppedSilent} non-speaking character${folded.summary.droppedSilent === 1 ? '' : 's'} from the cast (${sample}${more}) — no attributed dialogue, narrator covers them.`);
+      log(
+        1,
+        `Dropped ${folded.summary.droppedSilent} non-speaking character${folded.summary.droppedSilent === 1 ? '' : 's'} from the cast (${sample}${more}) — no attributed dialogue, narrator covers them.`,
+      );
     }
 
     const characters = attachLinesAndScenes(
@@ -2361,19 +2568,28 @@ async function runMainAnalyzerJob(
        manuscript-edits write; abort with `attribution_drift` if the
        demotion rate exceeds the threshold on a non-trivial sample so the
        confirm screen never advances against a corrupted run. */
-    const phase1ValidIds = new Set(characters.map(c => c.id));
+    const phase1ValidIds = new Set(characters.map((c) => c.id));
     const reconciled = reconcileSentenceCharacterIds(folded.sentences, phase1ValidIds, {
       onDemote: ({ sentence, originalId }) => {
-        log(1, `Sentence in ch${sentence.chapterId} attributed to unknown character "${originalId}" — demoted to narrator.`);
+        log(
+          1,
+          `Sentence in ch${sentence.chapterId} attributed to unknown character "${originalId}" — demoted to narrator.`,
+        );
       },
     });
     if (reconciled.demotedCount > 0) {
       const summary = Array.from(reconciled.demotedByOriginalId.entries())
         .map(([id, count]) => `${id}=${count}`)
         .join(', ');
-      log(1, `Demoted ${reconciled.demotedCount} of ${folded.sentences.length} sentences to narrator (orphan ids: ${summary}).`);
+      log(
+        1,
+        `Demoted ${reconciled.demotedCount} of ${folded.sentences.length} sentences to narrator (orphan ids: ${summary}).`,
+      );
     }
-    const phase1DriftExceeded = attributionDriftExceeded(reconciled.demotedCount, folded.sentences.length);
+    const phase1DriftExceeded = attributionDriftExceeded(
+      reconciled.demotedCount,
+      folded.sentences.length,
+    );
 
     const totalElapsed = Date.now() - startedAt;
     const bookId = record.bookId ?? bookIdFromTitle(record.title);
@@ -2381,7 +2597,11 @@ async function runMainAnalyzerJob(
       bookId,
       manuscriptId,
       title: record.title,
-      phaseTimings: PHASES.map(p => ({ id: p.id, label: p.label, duration: endPhase(p.id) || Math.round(totalElapsed / PHASES.length) })),
+      phaseTimings: PHASES.map((p) => ({
+        id: p.id,
+        label: p.label,
+        duration: endPhase(p.id) || Math.round(totalElapsed / PHASES.length),
+      })),
       characters,
       chapters,
       sentences: reconciled.sentences,
@@ -2407,9 +2627,14 @@ async function runMainAnalyzerJob(
     // error in the analysing view and can retry.
     if (record.bookDir) {
       try {
-        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: reconciled.sentences });
+        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
+          sentences: reconciled.sentences,
+        });
         if (phase1DriftExceeded) {
-          log(1, `Attribution drift exceeded threshold (${reconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round(100 * reconciled.demotedCount / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`);
+          log(
+            1,
+            `Attribution drift exceeded threshold (${reconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round((100 * reconciled.demotedCount) / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`,
+          );
         } else {
           await writeJsonAtomic(castJsonPath(record.bookDir), { characters });
           const statePath = stateJsonPath(record.bookDir);
@@ -2424,7 +2649,7 @@ async function runMainAnalyzerJob(
             }
             const next: BookStateJson = {
               ...prev,
-              chapters: chapters.map(c => ({
+              chapters: chapters.map((c) => ({
                 id: c.id,
                 title: c.title,
                 slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
@@ -2453,7 +2678,7 @@ async function runMainAnalyzerJob(
       endJob(job, {
         kind: 'error',
         code: 'attribution_drift',
-        message: `Phase 1 demoted ${reconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round(100 * reconciled.demotedCount / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute.`,
+        message: `Phase 1 demoted ${reconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round((100 * reconciled.demotedCount) / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute.`,
       });
       return;
     }
@@ -2469,7 +2694,11 @@ async function runMainAnalyzerJob(
        'aborted' to short-circuit its error-banner path. */
     if (e instanceof AnalysisAbortedError) {
       console.log(`[analysis] aborted ${manuscriptId} (paused or displaced)`);
-      endJob(job, { kind: 'error', code: 'aborted', message: 'Analysis aborted (paused or displaced by a new run).' });
+      endJob(job, {
+        kind: 'error',
+        code: 'aborted',
+        message: 'Analysis aborted (paused or displaced by a new run).',
+      });
       return;
     }
     /* Structured dump — SDK errors don't stringify cleanly with bare
@@ -2550,16 +2779,28 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      applies on a cold subset retry. */
   res.write(':ok\n\n');
   const keepAlive = setInterval(() => {
-    try { res.write(':ka\n\n'); } catch { /* socket gone */ }
+    try {
+      res.write(':ka\n\n');
+    } catch {
+      /* socket gone */
+    }
   }, 15_000);
 
   const send = (payload: unknown) => {
-    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { /* dead socket */ }
+    try {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    } catch {
+      /* dead socket */
+    }
   };
 
   const record = await getOrHydrateManuscript(manuscriptId);
   if (!record) {
-    send({ kind: 'error', code: 'unknown_manuscript', message: `No manuscript found for id "${manuscriptId}".` });
+    send({
+      kind: 'error',
+      code: 'unknown_manuscript',
+      message: `No manuscript found for id "${manuscriptId}".`,
+    });
     clearInterval(keepAlive);
     return res.end();
   }
@@ -2569,27 +2810,35 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   /* See main route comment on allowStage1Shrink — same opt-in flag for
      the subset-retry path's stage1 finalisation. */
   const allowStage1ShrinkSubset = body?.allowStage1Shrink === true;
-  const requestedIds = Array.from(new Set(
-    rawIds.filter((n): n is number => typeof n === 'number' && Number.isInteger(n)),
-  ));
+  const requestedIds = Array.from(
+    new Set(rawIds.filter((n): n is number => typeof n === 'number' && Number.isInteger(n))),
+  );
   if (requestedIds.length === 0) {
-    send({ kind: 'error', code: 'bad_request', message: 'chapterIds is required and must be a non-empty array of integers.' });
+    send({
+      kind: 'error',
+      code: 'bad_request',
+      message: 'chapterIds is required and must be a non-empty array of integers.',
+    });
     clearInterval(keepAlive);
     return res.end();
   }
 
   /* Validate against the manuscript record so a stale frontend id doesn't
      produce a confusing "chapter not found mid-stream" log line. */
-  const hintsById = new Map(record.chapterHints.map(h => [h.id, h]));
+  const hintsById = new Map(record.chapterHints.map((h) => [h.id, h]));
   const targets = requestedIds
-    .map(id => hintsById.get(id))
+    .map((id) => hintsById.get(id))
     .filter((h): h is NonNullable<typeof h> => !!h);
   if (targets.length === 0) {
-    send({ kind: 'error', code: 'bad_request', message: 'None of the requested chapter ids match this manuscript.' });
+    send({
+      kind: 'error',
+      code: 'bad_request',
+      message: 'None of the requested chapter ids match this manuscript.',
+    });
     clearInterval(keepAlive);
     return res.end();
   }
-  const skippedExcluded = targets.filter(h => h.excluded);
+  const skippedExcluded = targets.filter((h) => h.excluded);
   if (skippedExcluded.length > 0) {
     /* Hard-stop rather than silently re-analyzing — the typical reason a
        caller hits this with excluded=true is a frontend bug where the
@@ -2598,12 +2847,12 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     send({
       kind: 'error',
       code: 'chapter_excluded',
-      message: `Cannot run analysis on excluded chapter${skippedExcluded.length === 1 ? '' : 's'}: ${skippedExcluded.map(c => c.title).join(', ')}. Flip the exclude flag first via POST /api/books/.../chapters/:chapterId/exclude.`,
+      message: `Cannot run analysis on excluded chapter${skippedExcluded.length === 1 ? '' : 's'}: ${skippedExcluded.map((c) => c.title).join(', ')}. Flip the exclude flag first via POST /api/books/.../chapters/:chapterId/exclude.`,
     });
     clearInterval(keepAlive);
     return res.end();
   }
-  const toRun = targets.filter(h => !h.excluded);
+  const toRun = targets.filter((h) => !h.excluded);
 
   /* ── Plan 32 D1 subscribe-vs-start dispatch.
      Mirrors the main /:id/analysis route's pattern. If a non-aborted
@@ -2652,7 +2901,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     subscribers: new Set(),
     manuscriptId,
     kind: 'subset',
-    subsetChapterIds: toRun.map(t => t.id),
+    subsetChapterIds: toRun.map((t) => t.id),
     bookDir: record.bookDir ?? null,
     engine: selection.engine,
     replay: {
@@ -2743,7 +2992,10 @@ async function runSubsetAnalyzerJob(
        from cache.chapterCast each iteration so the model sees every
        character we've already found — same merge contract as the full
        route. */
-    log(0, `Re-analyzing ${toRun.length} chapter${toRun.length === 1 ? '' : 's'} via ${analyzerLabel}.`);
+    log(
+      0,
+      `Re-analyzing ${toRun.length} chapter${toRun.length === 1 ? '' : 's'} via ${analyzerLabel}.`,
+    );
     send({ kind: 'phase', phaseId: 0, progress: 0.02, label: PHASES[0].label });
 
     /* Same series-cast prior the main route uses (C2). Resolved once
@@ -2753,7 +3005,7 @@ async function runSubsetAnalyzerJob(
     if (record.bookId) {
       try {
         const siblings = await scanSeriesCharactersForBookId(record.bookId);
-        subsetSeriesPrior = siblings.map(r => ({
+        subsetSeriesPrior = siblings.map((r) => ({
           id: r.character.id,
           name: r.character.name,
           aliases: r.character.aliases,
@@ -2790,11 +3042,24 @@ async function runSubsetAnalyzerJob(
         const result = await analyzer.runStage1Chapter(
           manuscriptId,
           ch.id,
-          buildStage1ChapterInbox(manuscriptId, record.title, ch, Array.from(rebuildRoster().values()), subsetSeriesPrior),
+          buildStage1ChapterInbox(
+            manuscriptId,
+            record.title,
+            ch,
+            Array.from(rebuildRoster().values()),
+            subsetSeriesPrior,
+          ),
           {
             signal: abortController.signal,
             onThrottle: (waitMs, reason) => {
-              send({ kind: 'throttle', phaseId: 0, chapterIndex: ch.id, model: subsetModelId, waitMs, reason });
+              send({
+                kind: 'throttle',
+                phaseId: 0,
+                chapterIndex: ch.id,
+                model: subsetModelId,
+                waitMs,
+                reason,
+              });
             },
           },
         );
@@ -2813,7 +3078,10 @@ async function runSubsetAnalyzerJob(
            interim write contract. Skipped on abort: a paused retry
            shouldn't keep writing cast.json out from under the user. */
         if (record.bookDir && !isAborted()) {
-          const interim = buildInterimCast(chapterCast, record.chapterHints.map(h => h.id));
+          const interim = buildInterimCast(
+            chapterCast,
+            record.chapterHints.map((h) => h.id),
+          );
           if (interim.length > 0) {
             try {
               await writeJsonAtomic(castJsonPath(record.bookDir), { characters: interim });
@@ -2822,7 +3090,10 @@ async function runSubsetAnalyzerJob(
             }
           }
         }
-        log(0, `Chapter ${ch.id} cast — ${result.characters.length} character${result.characters.length === 1 ? '' : 's'} detected.`);
+        log(
+          0,
+          `Chapter ${ch.id} cast — ${result.characters.length} character${result.characters.length === 1 ? '' : 's'} detected.`,
+        );
         emitCastUpdate();
       } catch (chErr) {
         if (chErr instanceof AnalysisAbortedError) throw chErr;
@@ -2836,7 +3107,12 @@ async function runSubsetAnalyzerJob(
         send({ kind: 'chapter-failed', chapterId: ch.id, message: (chErr as Error).message });
         emitCastUpdate();
       }
-      send({ kind: 'phase', phaseId: 0, progress: 0.02 + 0.93 * ((idx + 1) / toRun.length), label: PHASES[0].label });
+      send({
+        kind: 'phase',
+        phaseId: 0,
+        progress: 0.02 + 0.93 * ((idx + 1) / toRun.length),
+        label: PHASES[0].label,
+      });
     }
 
     /* Finalise stage1: rebuild the roster, sort + verify, and refresh the
@@ -2853,11 +3129,13 @@ async function runSubsetAnalyzerJob(
     const finalRoster = rebuildRoster();
     const rawCharacters = Array.from(finalRoster.values());
     sortEvidence(rawCharacters);
-    const verified = verifyEvidenceAgainstSource(rawCharacters, record.sourceText, msg => log(0, msg));
-    const characters = dropEvidencelessCast(rawCharacters, msg => log(0, msg));
+    const verified = verifyEvidenceAgainstSource(rawCharacters, record.sourceText, (msg) =>
+      log(0, msg),
+    );
+    const characters = dropEvidencelessCast(rawCharacters, (msg) => log(0, msg));
     const stage1: Stage1Output = {
       characters,
-      chapters: record.chapterHints.map(c => ({ id: c.id, title: c.title })),
+      chapters: record.chapterHints.map((c) => ({ id: c.id, title: c.title })),
     };
     const remainingFailedCastIds = cache.failedChapterIds ?? [];
     /* Coverage gate (in addition to the no-failed-chapters check) — stage1
@@ -2873,8 +3151,16 @@ async function runSubsetAnalyzerJob(
        (same count) doesn't trip the gate; only meaningful shrinks do. */
     const subsetPrevStage1Count = cache.stage1?.characters.length ?? 0;
     const subsetNextStage1Count = stage1.characters.length;
-    if (remainingFailedCastIds.length === 0 && coverage.complete && stage1ShrinkRefused(subsetPrevStage1Count, subsetNextStage1Count) && !allowStage1ShrinkSubset) {
-      log(0, `Stage 1 shrink refused — rebuild would drop from ${subsetPrevStage1Count} to ${subsetNextStage1Count} characters. Re-run with allowStage1Shrink:true to confirm.`);
+    if (
+      remainingFailedCastIds.length === 0 &&
+      coverage.complete &&
+      stage1ShrinkRefused(subsetPrevStage1Count, subsetNextStage1Count) &&
+      !allowStage1ShrinkSubset
+    ) {
+      log(
+        0,
+        `Stage 1 shrink refused — rebuild would drop from ${subsetPrevStage1Count} to ${subsetNextStage1Count} characters. Re-run with allowStage1Shrink:true to confirm.`,
+      );
       await saveAnalysisCache(manuscriptId, cache);
       endJob(job, {
         kind: 'error',
@@ -2889,7 +3175,10 @@ async function runSubsetAnalyzerJob(
       cache.stage1 = stage1;
     } else if (remainingFailedCastIds.length === 0 && !coverage.complete) {
       const covered = coverage.totalRequired - coverage.missingChapterIds.length;
-      log(0, `Cast finalisation deferred — ${coverage.missingChapterIds.length} non-excluded chapter${coverage.missingChapterIds.length === 1 ? '' : 's'} still need Phase 0a detection (${covered}/${coverage.totalRequired} covered). Existing stage1 left intact; run the main analysis to fill the gaps.`);
+      log(
+        0,
+        `Cast finalisation deferred — ${coverage.missingChapterIds.length} non-excluded chapter${coverage.missingChapterIds.length === 1 ? '' : 's'} still need Phase 0a detection (${covered}/${coverage.totalRequired} covered). Existing stage1 left intact; run the main analysis to fill the gaps.`,
+      );
       send({
         kind: 'error',
         code: 'cast_incomplete',
@@ -2912,7 +3201,10 @@ async function runSubsetAnalyzerJob(
        chapters once the user resolves the remaining failures (or fills
        the coverage gap via a full /analysis/stream). */
     if (remainingFailedCastIds.length > 0) {
-      log(0, `Cast retry done. ${remainingFailedCastIds.length} chapter${remainingFailedCastIds.length === 1 ? '' : 's'} still need retry before Phase 1 can run.`);
+      log(
+        0,
+        `Cast retry done. ${remainingFailedCastIds.length} chapter${remainingFailedCastIds.length === 1 ? '' : 's'} still need retry before Phase 1 can run.`,
+      );
       /* No final event — clean end without a kind:'error' branch.
          endJob skips the on-disk paused/halted write in this path,
          which matches the "soft" semantics this exit had pre-D1. */
@@ -2931,7 +3223,10 @@ async function runSubsetAnalyzerJob(
        will fire /analysis/stream which discovers cache.stage1 is set
        and runs Phase 1 across every chapter. */
     if (!stage1Existed) {
-      log(0, 'All cast detection retries succeeded — resuming full analysis to run Phase 1 globally.');
+      log(
+        0,
+        'All cast detection retries succeeded — resuming full analysis to run Phase 1 globally.',
+      );
       endJob(job);
       return;
     }
@@ -2946,7 +3241,14 @@ async function runSubsetAnalyzerJob(
         {
           signal: abortController.signal,
           onThrottle: (waitMs, reason) => {
-            send({ kind: 'throttle', phaseId: 1, chapterIndex: ch.id, model: subsetModelId, waitMs, reason });
+            send({
+              kind: 'throttle',
+              phaseId: 1,
+              chapterIndex: ch.id,
+              model: subsetModelId,
+              waitMs,
+              reason,
+            });
           },
         },
       );
@@ -2955,7 +3257,12 @@ async function runSubsetAnalyzerJob(
       cache.chapters = cachedChapters;
       await saveAnalysisCache(manuscriptId, cache);
       log(1, `Chapter ${ch.id} done — ${result.sentences.length.toLocaleString()} sentences.`);
-      send({ kind: 'phase', phaseId: 1, progress: 0.02 + 0.93 * ((idx + 1) / toRun.length), label: PHASES[1].label });
+      send({
+        kind: 'phase',
+        phaseId: 1,
+        progress: 0.02 + 0.93 * ((idx + 1) / toRun.length),
+        label: PHASES[1].label,
+      });
     }
 
     /* Stitch the full sentence list across all cached chapters (old + new),
@@ -2973,7 +3280,10 @@ async function runSubsetAnalyzerJob(
     if (folded.summary.droppedSilent > 0) {
       const sample = folded.dropped.slice(0, 4).join(', ');
       const more = folded.dropped.length > 4 ? `, +${folded.dropped.length - 4} more` : '';
-      log(1, `Dropped ${folded.summary.droppedSilent} non-speaking character${folded.summary.droppedSilent === 1 ? '' : 's'} from the cast (${sample}${more}) — no attributed dialogue, narrator covers them.`);
+      log(
+        1,
+        `Dropped ${folded.summary.droppedSilent} non-speaking character${folded.summary.droppedSilent === 1 ? '' : 's'} from the cast (${sample}${more}) — no attributed dialogue, narrator covers them.`,
+      );
     }
     const enriched = attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences);
 
@@ -2983,22 +3293,31 @@ async function runSubsetAnalyzerJob(
        attributing to a fabricated id, or a previously-good roster that
        shrunk between attribution and persist), so the same guard
        applies here. */
-    const subsetValidIds = new Set(enriched.map(c => c.id));
+    const subsetValidIds = new Set(enriched.map((c) => c.id));
     const subsetReconciled = reconcileSentenceCharacterIds(folded.sentences, subsetValidIds, {
       onDemote: ({ sentence, originalId }) => {
-        log(1, `Sentence in ch${sentence.chapterId} attributed to unknown character "${originalId}" — demoted to narrator.`);
+        log(
+          1,
+          `Sentence in ch${sentence.chapterId} attributed to unknown character "${originalId}" — demoted to narrator.`,
+        );
       },
     });
     if (subsetReconciled.demotedCount > 0) {
       const summary = Array.from(subsetReconciled.demotedByOriginalId.entries())
         .map(([id, count]) => `${id}=${count}`)
         .join(', ');
-      log(1, `Demoted ${subsetReconciled.demotedCount} of ${folded.sentences.length} sentences to narrator (orphan ids: ${summary}).`);
+      log(
+        1,
+        `Demoted ${subsetReconciled.demotedCount} of ${folded.sentences.length} sentences to narrator (orphan ids: ${summary}).`,
+      );
     }
-    const subsetDriftExceeded = attributionDriftExceeded(subsetReconciled.demotedCount, folded.sentences.length);
+    const subsetDriftExceeded = attributionDriftExceeded(
+      subsetReconciled.demotedCount,
+      folded.sentences.length,
+    );
 
-    const chapterTitleById = new Map(stage1.chapters.map(c => [c.id, c.title]));
-    const chaptersOut = record.chapterHints.map(h => ({
+    const chapterTitleById = new Map(stage1.chapters.map((c) => [c.id, c.title]));
+    const chaptersOut = record.chapterHints.map((h) => ({
       id: h.id,
       title: chapterTitleById.get(h.id) ?? h.title,
       duration: durationPlaceholder(),
@@ -3012,7 +3331,7 @@ async function runSubsetAnalyzerJob(
       bookId: record.bookId ?? bookIdFromTitle(record.title),
       manuscriptId,
       title: record.title,
-      phaseTimings: PHASES.map(p => ({ id: p.id, label: p.label, duration: 0 })),
+      phaseTimings: PHASES.map((p) => ({ id: p.id, label: p.label, duration: 0 })),
       characters: enriched,
       chapters: chaptersOut,
       sentences: subsetReconciled.sentences,
@@ -3028,9 +3347,14 @@ async function runSubsetAnalyzerJob(
        persist block. */
     if (record.bookDir && !isAborted()) {
       try {
-        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: subsetReconciled.sentences });
+        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
+          sentences: subsetReconciled.sentences,
+        });
         if (subsetDriftExceeded) {
-          log(1, `Attribution drift exceeded threshold (${subsetReconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round(100 * subsetReconciled.demotedCount / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`);
+          log(
+            1,
+            `Attribution drift exceeded threshold (${subsetReconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round((100 * subsetReconciled.demotedCount) / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`,
+          );
         } else {
           await writeJsonAtomic(castJsonPath(record.bookDir), { characters: enriched });
           const statePath = stateJsonPath(record.bookDir);
@@ -3042,7 +3366,7 @@ async function runSubsetAnalyzerJob(
             }
             const next: BookStateJson = {
               ...prev,
-              chapters: chaptersOut.map(c => ({
+              chapters: chaptersOut.map((c) => ({
                 id: c.id,
                 title: c.title,
                 slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
@@ -3055,7 +3379,11 @@ async function runSubsetAnalyzerJob(
           }
         }
       } catch (persistErr) {
-        console.error('[analysis-subset] failed to persist .audiobook/* for', record.bookDir, persistErr);
+        console.error(
+          '[analysis-subset] failed to persist .audiobook/* for',
+          record.bookDir,
+          persistErr,
+        );
       }
     }
 
@@ -3063,7 +3391,7 @@ async function runSubsetAnalyzerJob(
       endJob(job, {
         kind: 'error',
         code: 'attribution_drift',
-        message: `Phase 1 demoted ${subsetReconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round(100 * subsetReconciled.demotedCount / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute.`,
+        message: `Phase 1 demoted ${subsetReconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round((100 * subsetReconciled.demotedCount) / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute.`,
       });
       return;
     }
@@ -3121,9 +3449,10 @@ function describeError(
     /* Only trim quota messages — 4xx/5xx bodies are usually short and
        informative (an INVALID_ARGUMENT body names the failed field), so
        trimming them throws away the only useful diagnostic. */
-    const trimmed = code === 'rate_limit' || code === 'daily_quota'
-      ? trimQuotaMessage(parsed.message)
-      : parsed.message;
+    const trimmed =
+      code === 'rate_limit' || code === 'daily_quota'
+        ? trimQuotaMessage(parsed.message)
+        : parsed.message;
     const statusSuffix = parsed.status ? ` (${parsed.status})` : '';
     const detail = formatErrorDetail(parsed, raw);
     return {
@@ -3134,7 +3463,10 @@ function describeError(
   }
 
   if (status) {
-    return { code: classifyStatus(status, raw), message: `${modelLabel} returned ${status}: ${raw}` };
+    return {
+      code: classifyStatus(status, raw),
+      message: `${modelLabel} returned ${status}: ${raw}`,
+    };
   }
   return { code: 'unknown', message: raw || 'Analysis failed.' };
 }

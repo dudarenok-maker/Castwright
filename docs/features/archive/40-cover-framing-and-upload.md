@@ -20,11 +20,13 @@ owner: dudarenok-maker
 ## Architectural impact
 
 **New seams / extension points:**
+
 - `computeCoverStyle(framing?)` helper in `src/lib/cover-framing.ts` — pure function from framing record to `{ objectPosition?, transform? }`. Surfaces in `BookCard` and `CoverArt` via a single `framing?` prop. Tested in isolation.
 - Multipart upload handler in `server/src/cover/upload.ts`. Server middleware (`multer` vs. `formidable`) is selected based on what the import route already uses — audit before adding a dep.
 - `state.json.coverImage.source: 'openlibrary' | 'local'` discriminator. Future "cover history" or "share this cover" features attach to this field.
 
 **Invariants preserved (must not violate):**
+
 - Plan 36 — fallback gradient is always intact; cache-bust by `?t=${Date.now()}` on `onPicked`; empty-string-on-remove; OpenAPI is the type source of truth.
 - Plan 24 — `LibraryBook.coverFraming` and the new endpoints are defined in `openapi.yaml`, types regenerated via `npm run openapi:types`. No hand-written API types.
 - Plan 25 — no hex literals in component code; the framing tab uses the existing tokens (`--peach`, `--ink`).
@@ -32,11 +34,13 @@ owner: dudarenok-maker
 - Plan 27 — `state.json` writes go through the existing atomic temp-file-rename writer; the new fields ride on the existing write path.
 
 **Migration story:**
+
 - New optional fields on `state.json.coverImage`: `source`, `originalFilename`, `uploadedAt`, `framing`. All optional — pre-existing files (which omit `source`) read as `source = 'openlibrary'` by inference (any record with `openLibraryId` is openlibrary; absent both → treat as openlibrary for back-compat).
 - Pre-existing books have no `framing` block → renderers default to current behaviour (bare `object-cover`).
 - Cross-link to plan [27](27-book-state-persistence.md) — this lands before plan 27's schema versioning (Should #8), so when versioning lands we'll bump to `schema: 2` retroactively to capture this shape.
 
 **Reversibility:**
+
 - Framing: deleting the `framing` block in `state.json` (or PATCH with `{ offsetX: 0, offsetY: 0, zoom: 1 }`) restores the original render.
 - Uploaded cover: DELETE `/cover` (plan 36) wipes the file + metadata. Falls back to gradient.
 - Endpoints: new endpoints are additive — removing them doesn't break the existing OpenLibrary flow.

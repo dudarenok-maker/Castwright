@@ -20,7 +20,10 @@ import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 function makeStore({
   themeOverride = null as UiState['themeOverride'],
   accountDefault = 'system' as 'light' | 'dark' | 'system',
-}: { themeOverride?: UiState['themeOverride']; accountDefault?: 'light' | 'dark' | 'system' } = {}) {
+}: {
+  themeOverride?: UiState['themeOverride'];
+  accountDefault?: 'light' | 'dark' | 'system';
+} = {}) {
   const uiPreloaded: UiState = {
     stage: { kind: 'books' },
     currentTrack: null,
@@ -42,12 +45,12 @@ function makeStore({
   };
   const accountPreloaded: AccountState = {
     ...FRONTEND_ACCOUNT_DEFAULTS,
-    apiKeyStatus:           'unset',
-    workspaceRoot:          '',
-    workspaceSource:        'default',
-    status:                 'idle',
-    error:                  null,
-    hydrated:               true,
+    apiKeyStatus: 'unset',
+    workspaceRoot: '',
+    workspaceSource: 'default',
+    status: 'idle',
+    error: null,
+    hydrated: true,
     defaultThemePreference: accountDefault,
   };
   return configureStore({
@@ -139,9 +142,13 @@ describe('useTheme — DOM side-effect + store reactivity', () => {
     expect(document.documentElement.dataset.theme).toBe('light');
     /* Wrap each dispatch in act() so React's effect (which writes
        dataset.theme) flushes synchronously before the assertion. */
-    act(() => { store.dispatch(uiActions.setThemeOverride('dark')); });
+    act(() => {
+      store.dispatch(uiActions.setThemeOverride('dark'));
+    });
     expect(document.documentElement.dataset.theme).toBe('dark');
-    act(() => { store.dispatch(uiActions.clearThemeOverride()); });
+    act(() => {
+      store.dispatch(uiActions.clearThemeOverride());
+    });
     expect(document.documentElement.dataset.theme).toBe('light');
   });
 

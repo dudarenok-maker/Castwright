@@ -103,28 +103,38 @@ export const analysisSlice = createSlice({
        Cross-book guard: if the snapshot is for a different
        manuscriptId, the tick is ignored (another tab's analysis can't
        clobber this tab's snapshot). */
-    applyAnalysisSnapshotTick(state, action: PayloadAction<{
-      manuscriptId: string;
-      phaseId?: number;
-      phaseLabel?: string;
-      phaseProgress?: number;
-      remainingMs?: number;
-      lastTickAt?: number;
-    }>) {
+    applyAnalysisSnapshotTick(
+      state,
+      action: PayloadAction<{
+        manuscriptId: string;
+        phaseId?: number;
+        phaseLabel?: string;
+        phaseProgress?: number;
+        remainingMs?: number;
+        lastTickAt?: number;
+      }>,
+    ) {
       const snap = state.activeStream;
       if (!snap) return;
       if (snap.manuscriptId !== action.payload.manuscriptId) return;
-      if (typeof action.payload.phaseId === 'number')      snap.phaseId      = action.payload.phaseId;
-      if (typeof action.payload.phaseLabel === 'string')   snap.phaseLabel   = action.payload.phaseLabel;
-      if (typeof action.payload.phaseProgress === 'number')snap.phaseProgress = action.payload.phaseProgress;
-      if (typeof action.payload.remainingMs === 'number')  snap.remainingMs  = action.payload.remainingMs;
-      if (typeof action.payload.lastTickAt === 'number')   snap.lastTickAt   = action.payload.lastTickAt;
+      if (typeof action.payload.phaseId === 'number') snap.phaseId = action.payload.phaseId;
+      if (typeof action.payload.phaseLabel === 'string')
+        snap.phaseLabel = action.payload.phaseLabel;
+      if (typeof action.payload.phaseProgress === 'number')
+        snap.phaseProgress = action.payload.phaseProgress;
+      if (typeof action.payload.remainingMs === 'number')
+        snap.remainingMs = action.payload.remainingMs;
+      if (typeof action.payload.lastTickAt === 'number')
+        snap.lastTickAt = action.payload.lastTickAt;
     },
 
     /* Flip to halted state with an error code + message. Used for
        attribution_drift / stage1_shrink_refused / cast_incomplete /
        aborted / unknown error events. */
-    setHalted(state, action: PayloadAction<{ manuscriptId: string; code: string; message: string }>) {
+    setHalted(
+      state,
+      action: PayloadAction<{ manuscriptId: string; code: string; message: string }>,
+    ) {
       const snap = state.activeStream;
       if (!snap) return;
       if (snap.manuscriptId !== action.payload.manuscriptId) return;
@@ -165,7 +175,10 @@ export const analysisSlice = createSlice({
     /* Apply the one-shot `series-prior` SSE event the server emits at
        Phase 0 entry. Cross-book guarded so a stale event from another
        tab can't poison this tab's snapshot. */
-    setSeriesPrior(state, action: PayloadAction<{ manuscriptId: string; count: number; names: string[] }>) {
+    setSeriesPrior(
+      state,
+      action: PayloadAction<{ manuscriptId: string; count: number; names: string[] }>,
+    ) {
       const snap = state.activeStream;
       if (!snap) return;
       if (snap.manuscriptId !== action.payload.manuscriptId) return;

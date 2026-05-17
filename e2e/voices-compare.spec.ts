@@ -22,14 +22,18 @@ import { test, expect } from '@playwright/test';
 test.describe('voice library compare entry point', () => {
   test('per-book Voices tab surfaces checkboxes + selection pill + badge', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('button', { name: /Start a new book/i })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: /Start a new book/i })).toBeVisible({
+      timeout: 10_000,
+    });
 
     /* Solway Bay is the mock 'complete' book; its bookId is `sb`. */
     await page.goto('/#/books/sb/library');
 
     /* The voice cards render — Narrator and The Lighthouse Keeper are both
        in `sb` per src/mocks/voices.ts. The card text is the character name. */
-    await expect(page.getByText('Narrator', { exact: true }).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Narrator', { exact: true }).first()).toBeVisible({
+      timeout: 10_000,
+    });
     await expect(page.getByText('The Lighthouse Keeper').first()).toBeVisible();
 
     /* No pill yet at 0 selections. */
@@ -67,7 +71,9 @@ test.describe('voice library compare entry point', () => {
   test('global #/voices tab disables Compare with the documented tooltip', async ({ page }) => {
     await page.goto('/');
     /* Two buttons match: the top-bar CTA and the empty-state dropzone card. .first() picks the deterministic one. */
-    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     await page.goto('/#/voices');
     /* Voice cards from across the workspace render under the global tab. */

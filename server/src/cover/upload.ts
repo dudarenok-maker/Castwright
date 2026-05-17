@@ -29,7 +29,10 @@ export type UploadMimeType = (typeof ACCEPTED_MIME_TYPES)[number];
 export type UploadErrorKind = 'oversize' | 'invalid_mime' | 'empty' | 'transcode_failed';
 
 export class UploadError extends Error {
-  constructor(public kind: UploadErrorKind, message: string) {
+  constructor(
+    public kind: UploadErrorKind,
+    message: string,
+  ) {
     super(message);
     this.name = 'UploadError';
   }
@@ -41,12 +44,18 @@ export interface CoverFraming {
   zoom: number;
 }
 
-export function validateUpload(buffer: Buffer | undefined, mimeType: string | undefined): asserts buffer is Buffer {
+export function validateUpload(
+  buffer: Buffer | undefined,
+  mimeType: string | undefined,
+): asserts buffer is Buffer {
   if (!buffer || buffer.length === 0) {
     throw new UploadError('empty', 'Upload body is empty.');
   }
   if (buffer.length > MAX_UPLOAD_BYTES) {
-    throw new UploadError('oversize', `Upload exceeds ${MAX_UPLOAD_BYTES} bytes (got ${buffer.length}).`);
+    throw new UploadError(
+      'oversize',
+      `Upload exceeds ${MAX_UPLOAD_BYTES} bytes (got ${buffer.length}).`,
+    );
   }
   if (!mimeType || !(ACCEPTED_MIME_TYPES as readonly string[]).includes(mimeType)) {
     throw new UploadError('invalid_mime', `Unsupported MIME type: ${mimeType ?? 'unknown'}`);
@@ -63,7 +72,10 @@ export async function writeUploadedCover(
     try {
       jpegBytes = await sharp(buffer).jpeg({ quality: JPEG_QUALITY }).toBuffer();
     } catch (e) {
-      throw new UploadError('transcode_failed', `PNG → JPEG transcode failed: ${(e as Error).message}`);
+      throw new UploadError(
+        'transcode_failed',
+        `PNG → JPEG transcode failed: ${(e as Error).message}`,
+      );
     }
   } else {
     jpegBytes = buffer;
@@ -75,7 +87,9 @@ export async function writeUploadedCover(
   try {
     await renameWithRetry(tmp, destPath);
   } catch (e) {
-    await unlink(tmp).catch(() => { /* best-effort */ });
+    await unlink(tmp).catch(() => {
+      /* best-effort */
+    });
     throw e;
   }
   return { bytes: jpegBytes.length };
@@ -105,10 +119,7 @@ export function clampFraming(framing: CoverFraming): CoverFraming {
   };
 }
 
-export async function patchStateFraming(
-  bookDir: string,
-  framing: CoverFraming,
-): Promise<boolean> {
+export async function patchStateFraming(bookDir: string, framing: CoverFraming): Promise<boolean> {
   const path = stateJsonPath(bookDir);
   const state = await readJson<BookStateJson>(path);
   if (!state) return false;

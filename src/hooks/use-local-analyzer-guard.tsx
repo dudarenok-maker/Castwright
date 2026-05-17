@@ -60,9 +60,9 @@ interface GuardResult {
 
 export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}): GuardResult {
   const dispatch = useAppDispatch();
-  const selectedModel = useAppSelector(s => s.ui.selectedModel);
-  const activeStream = useAppSelector(s => s.chapters.activeStream);
-  const libraryBooks = useAppSelector(s => s.library.books);
+  const selectedModel = useAppSelector((s) => s.ui.selectedModel);
+  const activeStream = useAppSelector((s) => s.chapters.activeStream);
+  const libraryBooks = useAppSelector((s) => s.library.books);
 
   /* Stash the proceed callback in state — the modal needs to call it on
      confirm, after dispatching setPaused. Null while closed. */
@@ -71,7 +71,7 @@ export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}
   /* Engine lookup — `local` engines are the only ones that compete for
      GPU. Anything else (gemini, gemma-via-Gemini) is a remote API and
      safe to fire alongside an in-flight TTS run. */
-  const engine = MODEL_OPTIONS.find(m => m.id === selectedModel)?.engine ?? 'gemini';
+  const engine = MODEL_OPTIONS.find((m) => m.id === selectedModel)?.engine ?? 'gemini';
 
   const guard: GuardResult['guard'] = (proceed) => {
     if (engine !== 'local' || !activeStream) {
@@ -84,26 +84,26 @@ export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}
   const close = () => setPending(null);
 
   const titleFromLibrary = activeStream
-    ? libraryBooks.find(b => b.bookId === activeStream.bookId)?.title ?? null
+    ? (libraryBooks.find((b) => b.bookId === activeStream.bookId)?.title ?? null)
     : null;
-  const resolvedTitle = generatingBookTitle ?? titleFromLibrary ?? activeStream?.bookId ?? 'the other book';
+  const resolvedTitle =
+    generatingBookTitle ?? titleFromLibrary ?? activeStream?.bookId ?? 'the other book';
 
   const modal = (
     <ConfirmDialog
       open={pending != null}
       eyebrow="Generation in progress"
       title="Pause audio generation to analyse?"
-      icon={<IconWarning className="w-4 h-4"/>}
+      icon={<IconWarning className="w-4 h-4" />}
       body={
         <>
           <p>
-            Local analysis needs the same GPU as the TTS sidecar, so
-            audio generation for <b>{resolvedTitle}</b> will pause while
-            this manuscript is analysed.
+            Local analysis needs the same GPU as the TTS sidecar, so audio generation for{' '}
+            <b>{resolvedTitle}</b> will pause while this manuscript is analysed.
           </p>
           <p className="mt-3 text-ink/60">
-            You can resume generation from the Generate screen afterwards
-            — it picks up where it left off.
+            You can resume generation from the Generate screen afterwards — it picks up where it
+            left off.
           </p>
         </>
       }

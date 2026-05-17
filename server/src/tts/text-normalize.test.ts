@@ -9,33 +9,38 @@
    half regressed. */
 
 import { describe, it, expect } from 'vitest';
-import { denormaliseAllCaps, softenDashes, stripUnsafeForTts, normaliseForTts } from './text-normalize.js';
+import {
+  denormaliseAllCaps,
+  softenDashes,
+  stripUnsafeForTts,
+  normaliseForTts,
+} from './text-normalize.js';
 
 describe('denormaliseAllCaps', () => {
   it('title-cases a multi-word all-caps chapter opener', () => {
-    expect(denormaliseAllCaps('THE NEXT SECOND WAS A BLUR.'))
-      .toBe('The Next Second Was A Blur.');
+    expect(denormaliseAllCaps('THE NEXT SECOND WAS A BLUR.')).toBe('The Next Second Was A Blur.');
   });
 
   it('title-cases an all-caps run with an apostrophe (e.g. SWEENEY’S), leaving the 2-letter MR. abbreviation intact', () => {
     /* `MR` is a 2-letter caps run — the regex requires >=3 so it stays.
        That's deliberate: XTTS pronounces "MR." fine as "mister"; only the
        multi-word ALL-CAPS run is the hazard. */
-    expect(denormaliseAllCaps("MR. SWEENEY'S NASAL voice cut through."))
-      .toBe("MR. Sweeney's Nasal voice cut through.");
+    expect(denormaliseAllCaps("MR. SWEENEY'S NASAL voice cut through.")).toBe(
+      "MR. Sweeney's Nasal voice cut through.",
+    );
   });
 
   it('leaves 2-letter caps (initials, abbreviations) untouched so MR/DR stay intact', () => {
     /* `MR` on its own (no following caps) is a 2-letter run — XTTS pronounces
        it as "mister" already. The regex requires >=3 caps in a row, so this
        must round-trip unchanged. */
-    expect(denormaliseAllCaps('Mr. Smith met OK at AC.'))
-      .toBe('Mr. Smith met OK at AC.');
+    expect(denormaliseAllCaps('Mr. Smith met OK at AC.')).toBe('Mr. Smith met OK at AC.');
   });
 
   it('leaves single capitals (sentence starts, "A", "I") untouched', () => {
-    expect(denormaliseAllCaps('A car. I drive. The lantern fell.'))
-      .toBe('A car. I drive. The lantern fell.');
+    expect(denormaliseAllCaps('A car. I drive. The lantern fell.')).toBe(
+      'A car. I drive. The lantern fell.',
+    );
   });
 
   it('is idempotent — running twice produces the same output as once', () => {
@@ -44,25 +49,23 @@ describe('denormaliseAllCaps', () => {
   });
 
   it('leaves lowercase audio tags like [shouting] intact', () => {
-    expect(denormaliseAllCaps('[shouting] Help me!'))
-      .toBe('[shouting] Help me!');
+    expect(denormaliseAllCaps('[shouting] Help me!')).toBe('[shouting] Help me!');
   });
 });
 
 describe('softenDashes', () => {
   it('replaces a flanked em-dash (the `right—missing` pattern) with a comma', () => {
-    expect(softenDashes('right—missing Sophie by inches—then jumped the curb'))
-      .toBe('right, missing Sophie by inches, then jumped the curb');
+    expect(softenDashes('right—missing Sophie by inches—then jumped the curb')).toBe(
+      'right, missing Sophie by inches, then jumped the curb',
+    );
   });
 
   it('replaces a spaced em-dash with a single comma (no double spaces)', () => {
-    expect(softenDashes('he paused — then ran'))
-      .toBe('he paused, then ran');
+    expect(softenDashes('he paused — then ran')).toBe('he paused, then ran');
   });
 
   it('replaces an en-dash the same way', () => {
-    expect(softenDashes('pages 12–15'))
-      .toBe('pages 12, 15');
+    expect(softenDashes('pages 12–15')).toBe('pages 12, 15');
   });
 
   it('is idempotent', () => {
@@ -71,8 +74,7 @@ describe('softenDashes', () => {
   });
 
   it('leaves regular hyphens alone', () => {
-    expect(softenDashes('well-known cold-eyed boy'))
-      .toBe('well-known cold-eyed boy');
+    expect(softenDashes('well-known cold-eyed boy')).toBe('well-known cold-eyed boy');
   });
 });
 
@@ -144,8 +146,8 @@ describe('normaliseForTts (composed)', () => {
     expect(output).not.toMatch(/[—–]/);
     expect(output).toBe(
       'The Next Second Was A Blur. ' +
-      'The car swerved right, missing Sophie by inches, then jumped the curb and sideswiped a streetlight. ' +
-      'The heavy steel lantern cracked from its base and plummeted toward Sophie.'
+        'The car swerved right, missing Sophie by inches, then jumped the curb and sideswiped a streetlight. ' +
+        'The heavy steel lantern cracked from its base and plummeted toward Sophie.',
     );
   });
 

@@ -57,29 +57,43 @@ beforeAll(async () => {
     );
     writeFileSync(join(dir, 'manuscript.txt'), 'placeholder');
     if (events) {
-      writeFileSync(
-        join(dir, '.audiobook', 'change-log.json'),
-        JSON.stringify({ events }),
-      );
+      writeFileSync(join(dir, '.audiobook', 'change-log.json'), JSON.stringify({ events }));
     }
   };
 
   seedBook('Book Alpha', [
     {
-      id: 1, at: '2026-05-13T10:00:00.000Z', ts: 'earlier', date: 'today',
-      type: 'regenerate', title: 'Regenerated Chapter 3', note: 'note',
-      actor: 'you', chapterId: 3, revertible: true,
+      id: 1,
+      at: '2026-05-13T10:00:00.000Z',
+      ts: 'earlier',
+      date: 'today',
+      type: 'regenerate',
+      title: 'Regenerated Chapter 3',
+      note: 'note',
+      actor: 'you',
+      chapterId: 3,
+      revertible: true,
     },
     {
-      id: 2, at: '2026-05-13T15:00:00.000Z', ts: 'Just now', date: 'today',
-      type: 'voice_tune', title: "Tuned Alice's voice", note: 'tone updated',
+      id: 2,
+      at: '2026-05-13T15:00:00.000Z',
+      ts: 'Just now',
+      date: 'today',
+      type: 'voice_tune',
+      title: "Tuned Alice's voice",
+      note: 'tone updated',
       actor: 'you',
     },
   ]);
   seedBook('Book Beta', [
     {
-      id: 3, at: '2026-05-13T12:00:00.000Z', ts: 'earlier', date: 'today',
-      type: 'cast_confirm', title: 'Confirmed the cast', note: '6 characters.',
+      id: 3,
+      at: '2026-05-13T12:00:00.000Z',
+      ts: 'earlier',
+      date: 'today',
+      type: 'cast_confirm',
+      title: 'Confirmed the cast',
+      note: '6 characters.',
       actor: 'you',
     },
   ]);
@@ -139,10 +153,10 @@ describe('workspace router', () => {
     const res = await request(app).get('/api/workspace/changelog');
     expect(res.body.totalCount).toBe(3);
     expect(res.body.categoryCounts).toEqual({
-      voice:      1, /* Alpha voice_tune */
-      generation: 1, /* Alpha regenerate */
+      voice: 1 /* Alpha voice_tune */,
+      generation: 1 /* Alpha regenerate */,
       manuscript: 0,
-      cast:       1, /* Beta cast_confirm */
+      cast: 1 /* Beta cast_confirm */,
     });
   });
 
@@ -159,8 +173,9 @@ describe('workspace router', () => {
   });
 
   it('serves the next page when `before` is passed, with nextCursor=null once the tail is reached', async () => {
-    const res = await request(app)
-      .get('/api/workspace/changelog?limit=2&before=2026-05-13T12:00:00.000Z');
+    const res = await request(app).get(
+      '/api/workspace/changelog?limit=2&before=2026-05-13T12:00:00.000Z',
+    );
     expect(res.body.events).toHaveLength(1);
     expect(res.body.events[0].at).toBe('2026-05-13T10:00:00.000Z');
     /* No more events after this — cursor is null so the client stops

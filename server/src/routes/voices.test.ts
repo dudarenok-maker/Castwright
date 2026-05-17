@@ -82,16 +82,30 @@ beforeAll(async () => {
      family; the override-write should touch both cast.json files. */
   writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE, bookOneId, [
     {
-      id: 'char-fitz', name: 'Fitz', role: 'protagonist', color: 'magenta',
-      voiceId: 'v_fitz', gender: 'male', ageRange: 'teen',
-      attributes: ['Male', 'Teen'], lines: 50, scenes: 5,
+      id: 'char-fitz',
+      name: 'Fitz',
+      role: 'protagonist',
+      color: 'magenta',
+      voiceId: 'v_fitz',
+      gender: 'male',
+      ageRange: 'teen',
+      attributes: ['Male', 'Teen'],
+      lines: 50,
+      scenes: 5,
     },
   ]);
   writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO, bookTwoId, [
     {
-      id: 'char-fitz', name: 'Fitz', role: 'protagonist', color: 'magenta',
-      voiceId: 'v_fitz', gender: 'male', ageRange: 'teen',
-      attributes: ['Male', 'Teen'], lines: 80, scenes: 7,
+      id: 'char-fitz',
+      name: 'Fitz',
+      role: 'protagonist',
+      color: 'magenta',
+      voiceId: 'v_fitz',
+      gender: 'male',
+      ageRange: 'teen',
+      attributes: ['Male', 'Teen'],
+      lines: 80,
+      scenes: 7,
     },
   ]);
 
@@ -127,8 +141,18 @@ describe('GET /api/voices — aggregation', () => {
 
   it('exposes overrideTtsVoices map when cast.json carries one', async () => {
     /* Quick targeted write — bypass the PUT endpoint to isolate the read side. */
-    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_ONE, '.audiobook', 'cast.json');
-    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as { characters: Array<Record<string, unknown>> };
+    const castPath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      SERIES,
+      BOOK_ONE,
+      '.audiobook',
+      'cast.json',
+    );
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
     cast.characters[0].overrideTtsVoices = { coqui: { name: 'Asya Anara' } };
     writeFileSync(castPath, JSON.stringify(cast));
 
@@ -151,8 +175,18 @@ describe('GET /api/voices — aggregation', () => {
     /* Regression for the read-time normaliser. cast.json files written
        by older clients carry the singular field; the aggregator must
        transparently treat that as if the map slot were populated. */
-    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_ONE, '.audiobook', 'cast.json');
-    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as { characters: Array<Record<string, unknown>> };
+    const castPath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      SERIES,
+      BOOK_ONE,
+      '.audiobook',
+      'cast.json',
+    );
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
     cast.characters[0].overrideTtsVoice = { engine: 'coqui', name: 'Damien Black' };
     delete cast.characters[0].overrideTtsVoices;
     writeFileSync(castPath, JSON.stringify(cast));
@@ -171,10 +205,20 @@ describe('GET /api/voices — aggregation', () => {
     /* Per-engine pluralization: a cast carrying both a Coqui and a
        Kokoro slot must expose both on the response, so the UI tabs
        render correctly. ttsVoice resolves to the engine in the query. */
-    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_ONE, '.audiobook', 'cast.json');
-    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as { characters: Array<Record<string, unknown>> };
+    const castPath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      SERIES,
+      BOOK_ONE,
+      '.audiobook',
+      'cast.json',
+    );
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
     cast.characters[0].overrideTtsVoices = {
-      coqui:  { name: 'Asya Anara' },
+      coqui: { name: 'Asya Anara' },
       kokoro: { name: 'am_onyx' },
     };
     writeFileSync(castPath, JSON.stringify(cast));
@@ -183,7 +227,7 @@ describe('GET /api/voices — aggregation', () => {
     const fromCoqui = coquiRes.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
     expect(fromCoqui.ttsVoice.name).toBe('Asya Anara');
     expect(fromCoqui.overrideTtsVoices).toEqual({
-      coqui:  { name: 'Asya Anara' },
+      coqui: { name: 'Asya Anara' },
       kokoro: { name: 'am_onyx' },
     });
 
@@ -191,7 +235,7 @@ describe('GET /api/voices — aggregation', () => {
     const fromKokoro = kokoroRes.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
     expect(fromKokoro.ttsVoice.name).toBe('am_onyx');
     expect(fromKokoro.overrideTtsVoices).toEqual({
-      coqui:  { name: 'Asya Anara' },
+      coqui: { name: 'Asya Anara' },
       kokoro: { name: 'am_onyx' },
     });
 
@@ -230,7 +274,7 @@ describe('PUT /api/voices/:voiceId/override', () => {
 
     const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
     expect(one.characters[0].overrideTtsVoices).toEqual({
-      coqui:  { name: 'Asya Anara' },
+      coqui: { name: 'Asya Anara' },
       kokoro: { name: 'am_onyx' },
     });
 
@@ -242,8 +286,18 @@ describe('PUT /api/voices/:voiceId/override', () => {
     /* User flow: cast.json was written by an older client (legacy field),
        user opens the profile drawer and pins a Coqui voice → the write
        path normalises the legacy field into the map and removes it. */
-    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_ONE, '.audiobook', 'cast.json');
-    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as { characters: Array<Record<string, unknown>> };
+    const castPath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      SERIES,
+      BOOK_ONE,
+      '.audiobook',
+      'cast.json',
+    );
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
     cast.characters[0].overrideTtsVoice = { engine: 'kokoro', name: 'am_michael' };
     delete cast.characters[0].overrideTtsVoices;
     writeFileSync(castPath, JSON.stringify(cast));
@@ -255,7 +309,7 @@ describe('PUT /api/voices/:voiceId/override', () => {
     const after = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
     /* Both engines now in the map, legacy field gone. */
     expect(after.characters[0].overrideTtsVoices).toEqual({
-      coqui:  { name: 'Asya Anara' },
+      coqui: { name: 'Asya Anara' },
       kokoro: { name: 'am_michael' },
     });
     expect(after.characters[0].overrideTtsVoice).toBeUndefined();
@@ -271,9 +325,7 @@ describe('PUT /api/voices/:voiceId/override', () => {
     await request(app)
       .put('/api/voices/v_fitz/override')
       .send({ override: { engine: 'kokoro', name: 'am_onyx' } });
-    const clear = await request(app)
-      .put('/api/voices/v_fitz/override')
-      .send({ override: null });
+    const clear = await request(app).put('/api/voices/v_fitz/override').send({ override: null });
     expect(clear.status).toBe(204);
 
     const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
@@ -302,9 +354,12 @@ describe('PUT /api/voices/:voiceId/override', () => {
 describe('GET /api/voices/base', () => {
   function mockSpeakersResponse(speakers: string[]) {
     globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
-      const target = typeof input === 'string'
-        ? input
-        : input instanceof URL ? input.toString() : (input as Request).url;
+      const target =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : (input as Request).url;
       if (target.endsWith('/speakers')) {
         return new Response(JSON.stringify({ coqui: speakers }), {
           status: 200,
@@ -319,9 +374,9 @@ describe('GET /api/voices/base', () => {
     mockSpeakersResponse(['Asya Anara', 'Damien Black']);
     const res = await request(app).get('/api/voices/base');
     expect(res.status).toBe(200);
-    const names = (res.body.voices as Array<{ engine: string; name: string }>);
-    const coqui = names.filter(v => v.engine === 'coqui').map(v => v.name);
-    const gemini = names.filter(v => v.engine === 'gemini').map(v => v.name);
+    const names = res.body.voices as Array<{ engine: string; name: string }>;
+    const coqui = names.filter((v) => v.engine === 'coqui').map((v) => v.name);
+    const gemini = names.filter((v) => v.engine === 'gemini').map((v) => v.name);
     expect(coqui).toContain('Asya Anara');
     expect(coqui).toContain('Damien Black');
     expect(gemini).toContain('Charon');

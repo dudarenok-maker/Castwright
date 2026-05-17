@@ -20,9 +20,11 @@ describe('api.getAnalysisState — cold-boot rehydration wire contract', () => {
        book not found, no manuscriptId in state.json, or no in-flight
        job AND no disk file. Callers (layout.tsx) treat all three as
        "no pill, leave the slice alone". */
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ error: 'No analysis state.' }), { status: 404 }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ error: 'No analysis state.' }), { status: 404 }),
+      );
     vi.stubGlobal('fetch', fetchMock);
 
     const got = await api.getAnalysisState('book-id-1');
@@ -87,10 +89,7 @@ describe('api.getAnalysisState — cold-boot rehydration wire contract', () => {
     /* 5xx is a server bug — the layout's catch logs and leaves the
        slice alone. We don't silently swallow because that masks the
        bug; the catch only suppresses the user-visible flash. */
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response('boom', { status: 500 })),
-    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('boom', { status: 500 })));
 
     await expect(api.getAnalysisState('book-id-4')).rejects.toThrow(/500/);
   });

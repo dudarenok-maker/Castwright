@@ -6,12 +6,7 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  BOOKS_ROOT,
-  castJsonPath,
-  ensureWorkspace,
-  stateJsonPath,
-} from './paths.js';
+import { BOOKS_ROOT, castJsonPath, ensureWorkspace, stateJsonPath } from './paths.js';
 import { readJson } from './state-io.js';
 import type { BookStateJson } from './scan.js';
 
@@ -40,9 +35,11 @@ function listDirs(path: string): string[] {
   if (!existsSync(path)) return [];
   try {
     return readdirSync(path, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => d.name);
-  } catch { return []; }
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
 }
 
 export async function scanLibraryCharacters(): Promise<LibraryCharacterRecord[]> {

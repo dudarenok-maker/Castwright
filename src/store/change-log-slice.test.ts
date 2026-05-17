@@ -49,13 +49,14 @@ describe('changeLogSlice', () => {
   it('appendLogEvent unshifts (newest first)', () => {
     const start = makeState({ events: [makeEvent(2)] });
     const next = changeLogSlice.reducer(start, changeLogActions.appendLogEvent(makeEvent(3)));
-    expect(next.events.map(e => e.id)).toEqual([3, 2]);
+    expect(next.events.map((e) => e.id)).toEqual([3, 2]);
   });
 
   it('hydrateFromBookState replaces the seed with disk events', () => {
-    const next = changeLogSlice.reducer(seed, changeLogActions.hydrateFromBookState([
-      makeEvent(100, { title: 'On-disk entry' }),
-    ]));
+    const next = changeLogSlice.reducer(
+      seed,
+      changeLogActions.hydrateFromBookState([makeEvent(100, { title: 'On-disk entry' })]),
+    );
     expect(next.events).toHaveLength(1);
     expect(next.events[0].title).toBe('On-disk entry');
   });
@@ -87,7 +88,10 @@ describe('changeLogSlice', () => {
   describe('bumpBoundaryMove', () => {
     it('appends a fresh boundary_move when the head is not one', () => {
       const start = makeState({ events: [makeEvent(1, { type: 'regenerate', chapterId: 1 })] });
-      const next = changeLogSlice.reducer(start, changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 2 }));
+      const next = changeLogSlice.reducer(
+        start,
+        changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 2 }),
+      );
       expect(next.events).toHaveLength(2);
       expect(next.events[0].type).toBe('boundary_move');
       expect(next.events[0].chapterId).toBe(3);
@@ -96,16 +100,28 @@ describe('changeLogSlice', () => {
 
     it('rewrites the head in place when consecutive edits hit the same chapter', () => {
       const start = makeState();
-      const after1 = changeLogSlice.reducer(start, changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 1 }));
-      const after2 = changeLogSlice.reducer(after1, changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 4 }));
+      const after1 = changeLogSlice.reducer(
+        start,
+        changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 1 }),
+      );
+      const after2 = changeLogSlice.reducer(
+        after1,
+        changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 4 }),
+      );
       expect(after2.events).toHaveLength(1);
       expect(after2.events[0].note).toContain('5 sentences reassigned');
     });
 
     it('starts a new entry when the chapter switches', () => {
       const start = makeState();
-      const after1 = changeLogSlice.reducer(start, changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 1 }));
-      const after2 = changeLogSlice.reducer(after1, changeLogActions.bumpBoundaryMove({ chapterId: 4, count: 1 }));
+      const after1 = changeLogSlice.reducer(
+        start,
+        changeLogActions.bumpBoundaryMove({ chapterId: 3, count: 1 }),
+      );
+      const after2 = changeLogSlice.reducer(
+        after1,
+        changeLogActions.bumpBoundaryMove({ chapterId: 4, count: 1 }),
+      );
       expect(after2.events).toHaveLength(2);
       expect(after2.events[0].chapterId).toBe(4);
       expect(after2.events[1].chapterId).toBe(3);
@@ -124,16 +140,19 @@ describe('changeLogSlice', () => {
         ],
       });
       const next = changeLogSlice.reducer(start, changeLogActions.wipeBookShapeEvents());
-      expect(next.events.map(e => e.type)).toEqual(['voice_tune', 'cast_confirm']);
+      expect(next.events.map((e) => e.type)).toEqual(['voice_tune', 'cast_confirm']);
     });
   });
 
   describe('hydrateWorkspaceEvents', () => {
     it('replaces the workspace cache without touching per-book events', () => {
       const start = makeState({ events: [makeEvent(1)] });
-      const next = changeLogSlice.reducer(start, changeLogActions.hydrateWorkspaceEvents([
-        makeEvent(10, { bookId: 'sb', bookTitle: 'Solway Bay' }),
-      ]));
+      const next = changeLogSlice.reducer(
+        start,
+        changeLogActions.hydrateWorkspaceEvents([
+          makeEvent(10, { bookId: 'sb', bookTitle: 'Solway Bay' }),
+        ]),
+      );
       expect(next.events).toHaveLength(1);
       expect(next.workspaceEvents).toHaveLength(1);
       expect(next.workspaceEvents[0].bookTitle).toBe('Solway Bay');
@@ -148,12 +167,15 @@ describe('changeLogSlice', () => {
         workspaceTotalCount: 5,
         workspaceCategoryCounts: { voice: 1, generation: 1, manuscript: 1, cast: 2 },
       });
-      const next = changeLogSlice.reducer(start, changeLogActions.hydrateWorkspaceFirstPage({
-        events: [makeEvent(10, { bookId: 'sb' })],
-        nextCursor: '2026-05-10T00:00:00.000Z',
-        totalCount: 200,
-        categoryCounts: { voice: 3, generation: 195, manuscript: 1, cast: 1 },
-      }));
+      const next = changeLogSlice.reducer(
+        start,
+        changeLogActions.hydrateWorkspaceFirstPage({
+          events: [makeEvent(10, { bookId: 'sb' })],
+          nextCursor: '2026-05-10T00:00:00.000Z',
+          totalCount: 200,
+          categoryCounts: { voice: 3, generation: 195, manuscript: 1, cast: 1 },
+        }),
+      );
       expect(next.workspaceEvents).toHaveLength(1);
       expect(next.workspaceEvents[0].bookId).toBe('sb');
       expect(next.workspaceNextCursor).toBe('2026-05-10T00:00:00.000Z');
@@ -170,13 +192,16 @@ describe('changeLogSlice', () => {
         workspaceTotalCount: 4,
         workspaceCategoryCounts: { voice: 0, generation: 4, manuscript: 0, cast: 0 },
       });
-      const next = changeLogSlice.reducer(start, changeLogActions.appendWorkspacePage({
-        events: [makeEvent(8), makeEvent(7)],
-        nextCursor: null,
-        totalCount: 4,
-        categoryCounts: { voice: 0, generation: 4, manuscript: 0, cast: 0 },
-      }));
-      expect(next.workspaceEvents.map(e => e.id)).toEqual([10, 9, 8, 7]);
+      const next = changeLogSlice.reducer(
+        start,
+        changeLogActions.appendWorkspacePage({
+          events: [makeEvent(8), makeEvent(7)],
+          nextCursor: null,
+          totalCount: 4,
+          categoryCounts: { voice: 0, generation: 4, manuscript: 0, cast: 0 },
+        }),
+      );
+      expect(next.workspaceEvents.map((e) => e.id)).toEqual([10, 9, 8, 7]);
       expect(next.workspaceNextCursor).toBeNull();
       expect(next.workspaceTotalCount).toBe(4);
     });
@@ -191,12 +216,15 @@ describe('changeLogSlice', () => {
         workspaceTotalCount: 50,
         workspaceCategoryCounts: { voice: 1, generation: 48, manuscript: 1, cast: 0 },
       });
-      const next = changeLogSlice.reducer(start, changeLogActions.appendWorkspacePage({
-        events: [makeEvent(9)],
-        nextCursor: null,
-        totalCount: 51,
-        categoryCounts: { voice: 1, generation: 49, manuscript: 1, cast: 0 },
-      }));
+      const next = changeLogSlice.reducer(
+        start,
+        changeLogActions.appendWorkspacePage({
+          events: [makeEvent(9)],
+          nextCursor: null,
+          totalCount: 51,
+          categoryCounts: { voice: 1, generation: 49, manuscript: 1, cast: 0 },
+        }),
+      );
       expect(next.workspaceTotalCount).toBe(51);
       expect(next.workspaceCategoryCounts.generation).toBe(49);
     });

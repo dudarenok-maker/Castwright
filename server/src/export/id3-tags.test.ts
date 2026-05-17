@@ -15,12 +15,18 @@ import { encodePcmToMp3 } from '../tts/mp3.js';
 import { applyId3v24Tags } from './id3-tags.js';
 
 const ffmpegPresent = (() => {
-  try { return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0; }
-  catch { return false; }
+  try {
+    return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+  } catch {
+    return false;
+  }
 })();
 const ffprobePresent = (() => {
-  try { return spawnSync('ffprobe', ['-version'], { stdio: 'ignore' }).status === 0; }
-  catch { return false; }
+  try {
+    return spawnSync('ffprobe', ['-version'], { stdio: 'ignore' }).status === 0;
+  } catch {
+    return false;
+  }
 })();
 
 const describeIf = ffmpegPresent && ffprobePresent ? describe : describe.skip;
@@ -35,7 +41,8 @@ function silencePcm(sampleRate: number, seconds: number): Buffer {
    regardless of how big the v2 tag at the front is. */
 function audioBytesOnly(mp3: Buffer): Buffer {
   if (mp3[0] === 0x49 && mp3[1] === 0x44 && mp3[2] === 0x33) {
-    const size = ((mp3[6] & 0x7f) << 21) | ((mp3[7] & 0x7f) << 14) | ((mp3[8] & 0x7f) << 7) | (mp3[9] & 0x7f);
+    const size =
+      ((mp3[6] & 0x7f) << 21) | ((mp3[7] & 0x7f) << 14) | ((mp3[8] & 0x7f) << 7) | (mp3[9] & 0x7f);
     return mp3.subarray(10 + size);
   }
   return mp3;
@@ -47,34 +54,52 @@ interface ProbeResult {
   durationSec: number;
   /** All streams (audio + any attached_pic). The APIC tests inspect this
       to confirm the cover stream landed with the right disposition. */
-  streams: Array<{ codec_type?: string; codec_name?: string; disposition?: Record<string, number> }>;
+  streams: Array<{
+    codec_type?: string;
+    codec_name?: string;
+    disposition?: Record<string, number>;
+  }>;
 }
 
 function probe(path: string): Promise<ProbeResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn('ffprobe', [
-      '-loglevel', 'error',
-      '-show_entries', 'format=duration:format_tags:stream=codec_name,codec_type,disposition',
-      '-of', 'json',
-      path,
-    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(
+      'ffprobe',
+      [
+        '-loglevel',
+        'error',
+        '-show_entries',
+        'format=duration:format_tags:stream=codec_name,codec_type,disposition',
+        '-of',
+        'json',
+        path,
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
-    child.stdout.on('data', c => stdoutChunks.push(c));
-    child.stderr.on('data', c => stderrChunks.push(c));
+    child.stdout.on('data', (c) => stdoutChunks.push(c));
+    child.stderr.on('data', (c) => stderrChunks.push(c));
     child.on('error', reject);
-    child.on('close', code => {
+    child.on('close', (code) => {
       if (code !== 0) {
-        return reject(new Error(`ffprobe exited ${code}: ${Buffer.concat(stderrChunks).toString('utf8')}`));
+        return reject(
+          new Error(`ffprobe exited ${code}: ${Buffer.concat(stderrChunks).toString('utf8')}`),
+        );
       }
       const parsed = JSON.parse(Buffer.concat(stdoutChunks).toString('utf8')) as {
         format?: { tags?: Record<string, string>; duration?: string };
-        streams?: Array<{ codec_type?: string; codec_name?: string; disposition?: Record<string, number> }>;
+        streams?: Array<{
+          codec_type?: string;
+          codec_name?: string;
+          disposition?: Record<string, number>;
+        }>;
       };
       const streams = parsed.streams ?? [];
       resolve({
         tags: parsed.format?.tags ?? {},
-        codec: streams.find(s => s.codec_type === 'audio')?.codec_name ?? streams[0]?.codec_name ?? '',
+        codec:
+          streams.find((s) => s.codec_type === 'audio')?.codec_name ?? streams[0]?.codec_name ?? '',
         durationSec: Number.parseFloat(parsed.format?.duration ?? '0'),
         streams,
       });
@@ -95,19 +120,21 @@ describeIf('applyId3v24Tags', () => {
     srcBytes = mp3;
   });
 
-  afterAll(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+  afterAll(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
 
   it('writes the expected ID3v2 frames without re-encoding audio', async () => {
     const destPath = join(tmpDir, 'tagged.mp3');
     await applyId3v24Tags(srcPath, destPath, {
-      title:       'Chapter 1 — The Arrival',
-      album:       'The Northern Star',
-      artist:      'Jane Narrator',
+      title: 'Chapter 1 — The Arrival',
+      album: 'The Northern Star',
+      artist: 'Jane Narrator',
       albumArtist: 'Some Author',
-      track:       1,
-      trackTotal:  12,
-      genre:       'Audiobook',
-      date:        '2025',
+      track: 1,
+      trackTotal: 12,
+      genre: 'Audiobook',
+      date: '2025',
     });
 
     const { tags, codec, durationSec } = await probe(destPath);
@@ -136,8 +163,12 @@ describeIf('applyId3v24Tags', () => {
   it('omits optional genre + date when not provided', async () => {
     const destPath = join(tmpDir, 'sparse.mp3');
     await applyId3v24Tags(srcPath, destPath, {
-      title: 'X', album: 'Y', artist: 'Z', albumArtist: 'A',
-      track: 2, trackTotal: 9,
+      title: 'X',
+      album: 'Y',
+      artist: 'Z',
+      albumArtist: 'A',
+      track: 2,
+      trackTotal: 9,
     });
     const { tags } = await probe(destPath);
     expect(tags.genre).toBeUndefined();
@@ -160,10 +191,10 @@ describeIf('applyId3v24Tags', () => {
   describe('cover embedding (coverJpegPath)', () => {
     const jpegBytes = Buffer.from(
       '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
-      'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB/9sAQwEBAQEBAQEBAQEBAQEB' +
-      'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
-      '/8AAEQgAAQABAwERAAIRAQMRAf/EABQAAQAAAAAAAAAAAAAAAAAAAAj/xAAUAQEAAAAAAAAA' +
-      'AAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Aov8A/9k=',
+        'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB/9sAQwEBAQEBAQEBAQEBAQEB' +
+        'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
+        '/8AAEQgAAQABAwERAAIRAQMRAf/EABQAAQAAAAAAAAAAAAAAAAAAAAj/xAAUAQEAAAAAAAAA' +
+        'AAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Aov8A/9k=',
       'base64',
     );
 
@@ -171,10 +202,19 @@ describeIf('applyId3v24Tags', () => {
       const coverPath = join(tmpDir, 'cover.jpg');
       writeFileSync(coverPath, jpegBytes);
       const destPath = join(tmpDir, 'tagged-with-cover.mp3');
-      await applyId3v24Tags(srcPath, destPath, {
-        title: 'Chapter 1', album: 'Album', artist: 'Narrator', albumArtist: 'Author',
-        track: 1, trackTotal: 1,
-      }, { coverJpegPath: coverPath });
+      await applyId3v24Tags(
+        srcPath,
+        destPath,
+        {
+          title: 'Chapter 1',
+          album: 'Album',
+          artist: 'Narrator',
+          albumArtist: 'Author',
+          track: 1,
+          trackTotal: 1,
+        },
+        { coverJpegPath: coverPath },
+      );
 
       const { codec, streams } = await probe(destPath);
       expect(codec).toBe('mp3');
@@ -183,29 +223,42 @@ describeIf('applyId3v24Tags', () => {
          doesn't reliably surface disposition.attached_pic on the
          resulting ID3v2 picture frame, so the stream-presence + codec
          check is the canonical assertion for MP3 APIC. */
-      const video = streams.find(s => s.codec_type === 'video');
+      const video = streams.find((s) => s.codec_type === 'video');
       expect(video).toBeDefined();
       expect(video?.codec_name).toMatch(/mjpeg|png/);
       /* Audio stream still present and unchanged. */
-      expect(streams.find(s => s.codec_type === 'audio')?.codec_name).toBe('mp3');
+      expect(streams.find((s) => s.codec_type === 'audio')?.codec_name).toBe('mp3');
     });
 
     it('omits the APIC stream when coverJpegPath is absent (default + null)', async () => {
       const destDefault = join(tmpDir, 'tagged-no-cover-default.mp3');
       await applyId3v24Tags(srcPath, destDefault, {
-        title: 'X', album: 'Y', artist: 'Z', albumArtist: 'A',
-        track: 1, trackTotal: 1,
+        title: 'X',
+        album: 'Y',
+        artist: 'Z',
+        albumArtist: 'A',
+        track: 1,
+        trackTotal: 1,
       });
       const defaultProbe = await probe(destDefault);
-      expect(defaultProbe.streams.find(s => s.codec_type === 'video')).toBeUndefined();
+      expect(defaultProbe.streams.find((s) => s.codec_type === 'video')).toBeUndefined();
 
       const destNull = join(tmpDir, 'tagged-no-cover-null.mp3');
-      await applyId3v24Tags(srcPath, destNull, {
-        title: 'X', album: 'Y', artist: 'Z', albumArtist: 'A',
-        track: 1, trackTotal: 1,
-      }, { coverJpegPath: null });
+      await applyId3v24Tags(
+        srcPath,
+        destNull,
+        {
+          title: 'X',
+          album: 'Y',
+          artist: 'Z',
+          albumArtist: 'A',
+          track: 1,
+          trackTotal: 1,
+        },
+        { coverJpegPath: null },
+      );
       const nullProbe = await probe(destNull);
-      expect(nullProbe.streams.find(s => s.codec_type === 'video')).toBeUndefined();
+      expect(nullProbe.streams.find((s) => s.codec_type === 'video')).toBeUndefined();
     });
   });
 });
@@ -214,6 +267,6 @@ if (!ffmpegPresent || !ffprobePresent) {
   // eslint-disable-next-line no-console
   console.warn(
     '[id3-tags.test.ts] ffmpeg/ffprobe missing — skipping ID3 round-trip tests. ' +
-    'Install: winget install Gyan.FFmpeg',
+      'Install: winget install Gyan.FFmpeg',
   );
 }

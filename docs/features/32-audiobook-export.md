@@ -29,7 +29,7 @@ PocketBook publishes no off-device API, no SDK, and no partner programme. The in
    - TPE2 = author
    - TRCK = `N/total`
    - TCON / TDRC = genre / publicationDate when set
-4. The tagged file is added to the zip (yazl, **stored** mode — no deflate; MP3 is already compressed) under the entry name `${pad2(idx)} - ${sanitiseForZip(chapter.title)}.mp3`. `sanitiseForZip` downgrades em-dash to ` - ` and strips FAT32-illegal characters so the file survives MTP-only and SD-card copies on older e-readers.
+4. The tagged file is added to the zip (yazl, **stored** mode — no deflate; MP3 is already compressed) under the entry name `${pad2(idx)} - ${sanitiseForZip(chapter.title)}.mp3`. `sanitiseForZip` downgrades em-dash to `-` and strips FAT32-illegal characters so the file survives MTP-only and SD-card copies on older e-readers.
 
 ## How the M4B is built
 
@@ -77,7 +77,7 @@ Use the canonical end-to-end manuscript at `C:\Users\dudar\Downloads\Bonus Keefe
 
 ## Out of scope (follow-ups)
 
-- **Cover art** — *shipped under plan 36 + A2/A3.* The OpenLibrary picker
+- **Cover art** — _shipped under plan 36 + A2/A3._ The OpenLibrary picker
   caches the chosen JPEG at `<bookDir>/.audiobook/cover.jpg`. Both
   `buildM4b` and `applyId3v24Tags` now read that file when present and
   embed it as the iTunes `covr` atom (M4B) or ID3v2 APIC frame

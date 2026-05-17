@@ -4,7 +4,12 @@
    holding everything. */
 
 import type { ChapterHint, ManuscriptFormat } from '../store/manuscripts.js';
-import { tagExcitedDialog, tagHesitantDialog, tagMarkdownEmphasis, tagShoutingDialog } from './audio-tags.js';
+import {
+  tagExcitedDialog,
+  tagHesitantDialog,
+  tagMarkdownEmphasis,
+  tagShoutingDialog,
+} from './audio-tags.js';
 
 /* Heading detection — built from three alternatives:
    1) Markdown H1/H2 (`# Foo` or `## Foo`).
@@ -19,14 +24,40 @@ import { tagExcitedDialog, tagHesitantDialog, tagMarkdownEmphasis, tagShoutingDi
    that happen to start with one of these tokens from misfiring. */
 const HEADING_KEYWORDS = '(?:chapter|day|part|book|act|section|scene)';
 const NUMBER_WORDS = [
-  'one','two','three','four','five','six','seven','eight','nine','ten',
-  'eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen',
-  'twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety','hundred',
+  'one',
+  'two',
+  'three',
+  'four',
+  'five',
+  'six',
+  'seven',
+  'eight',
+  'nine',
+  'ten',
+  'eleven',
+  'twelve',
+  'thirteen',
+  'fourteen',
+  'fifteen',
+  'sixteen',
+  'seventeen',
+  'eighteen',
+  'nineteen',
+  'twenty',
+  'thirty',
+  'forty',
+  'fifty',
+  'sixty',
+  'seventy',
+  'eighty',
+  'ninety',
+  'hundred',
 ].join('|');
 /* Numbered-section number: Arabic digit, Roman numeral, or English word
    form (with optional compound for 21–99: "twenty-one", "thirty two", …). */
 const NUMBER_PART = `(?:[ivxlcdm\\d]+|(?:${NUMBER_WORDS})(?:[-\\s](?:${NUMBER_WORDS}))?)`;
-const STANDALONE_HEADINGS = '(?:prologue|epilogue|interlude|preface|introduction|afterword|foreword)';
+const STANDALONE_HEADINGS =
+  '(?:prologue|epilogue|interlude|preface|introduction|afterword|foreword)';
 const CHAPTER_HEADING_RE = new RegExp(
   `^(?:#{1,2}\\s+\\S|${HEADING_KEYWORDS}\\s+${NUMBER_PART}\\b|${STANDALONE_HEADINGS}\\b)`,
   'i',
@@ -37,14 +68,8 @@ const CHAPTER_HEADING_RE = new RegExp(
    `Day Two`, or `Prologue` with no descriptive text; books commonly put
    the chapter name on a separate line below. A heading like
    `Chapter 3: The Beginning` is already self-descriptive — no merge. */
-const BARE_NUMBERED_HEADING_RE = new RegExp(
-  `^${HEADING_KEYWORDS}\\s+${NUMBER_PART}\\s*$`,
-  'i',
-);
-const BARE_STANDALONE_HEADING_RE = new RegExp(
-  `^${STANDALONE_HEADINGS}\\s*$`,
-  'i',
-);
+const BARE_NUMBERED_HEADING_RE = new RegExp(`^${HEADING_KEYWORDS}\\s+${NUMBER_PART}\\s*$`, 'i');
+const BARE_STANDALONE_HEADING_RE = new RegExp(`^${STANDALONE_HEADINGS}\\s*$`, 'i');
 
 /* Cap on subtitle line length. Real chapter names rarely exceed 80 chars;
    anything longer is almost certainly a body sentence. */
@@ -53,8 +78,27 @@ const MAX_SUBTITLE_LEN = 80;
 /* Words that are conventionally lowercased mid-title. A title-cased
    candidate is allowed to drop these without disqualifying. */
 const TITLE_STOPWORDS = new Set([
-  'a','an','the','and','or','of','at','in','on','by','to','for','but',
-  'with','from','into','over','under','as','vs','via',
+  'a',
+  'an',
+  'the',
+  'and',
+  'or',
+  'of',
+  'at',
+  'in',
+  'on',
+  'by',
+  'to',
+  'for',
+  'but',
+  'with',
+  'from',
+  'into',
+  'over',
+  'under',
+  'as',
+  'vs',
+  'via',
 ]);
 
 /* A subtitle must "look like a title" — first word capitalised, every
@@ -87,9 +131,7 @@ const MAX_HEADING_LEN = 120;
    `~~ Part I ~~`. Preserves `#` so markdown H1/H2 still match the regex's
    markdown branch. Symmetric strip on both ends. */
 function normaliseHeading(line: string): string {
-  return line
-    .replace(/^[^A-Za-z0-9#]+/, '')
-    .replace(/[^A-Za-z0-9]+$/, '');
+  return line.replace(/^[^A-Za-z0-9#]+/, '').replace(/[^A-Za-z0-9]+$/, '');
 }
 
 /* Filename pattern used to auto-detect Author / Series / Position / Title.
@@ -144,7 +186,10 @@ export function parseFilenameMetadata(fileName?: string): {
    - Looks like a title (title-case-with-stopwords rule — see
      `looksLikeTitle`). This is the key filter that distinguishes a
      real subtitle from a sentence that happens to be short. */
-function findSubtitle(lines: string[], startIdx: number): { text: string; consumedIndex: number } | null {
+function findSubtitle(
+  lines: string[],
+  startIdx: number,
+): { text: string; consumedIndex: number } | null {
   let i = startIdx;
   while (i < lines.length && lines[i].trim() === '') i++;
   if (i >= lines.length) return null;
@@ -157,7 +202,10 @@ function findSubtitle(lines: string[], startIdx: number): { text: string; consum
   return { text: candidate, consumedIndex: i };
 }
 
-export function parseText(text: string, opts: { fileName?: string; format: 'markdown' | 'plaintext' }): ParsedManuscript {
+export function parseText(
+  text: string,
+  opts: { fileName?: string; format: 'markdown' | 'plaintext' },
+): ParsedManuscript {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   let title = '';
   const chapters: ChapterHint[] = [];
@@ -167,8 +215,14 @@ export function parseText(text: string, opts: { fileName?: string; format: 'mark
   function flush() {
     const rawBody = buf.join('\n').trim();
     if (rawBody.length > 0) {
-      const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(tagMarkdownEmphasis(rawBody))));
-      chapters.push({ id: chapters.length + 1, title: currentTitle || `Chapter ${chapters.length + 1}`, body });
+      const body = tagHesitantDialog(
+        tagExcitedDialog(tagShoutingDialog(tagMarkdownEmphasis(rawBody))),
+      );
+      chapters.push({
+        id: chapters.length + 1,
+        title: currentTitle || `Chapter ${chapters.length + 1}`,
+        body,
+      });
     }
     buf = [];
   }
@@ -203,7 +257,10 @@ export function parseText(text: string, opts: { fileName?: string; format: 'mark
          Headings that already carry descriptive text
          (`Chapter 3: The Beginning`, markdown `## Day One`) are left
          alone. */
-      if (BARE_NUMBERED_HEADING_RE.test(headingText) || BARE_STANDALONE_HEADING_RE.test(headingText)) {
+      if (
+        BARE_NUMBERED_HEADING_RE.test(headingText) ||
+        BARE_STANDALONE_HEADING_RE.test(headingText)
+      ) {
         const subtitle = findSubtitle(lines, i + 1);
         if (subtitle) {
           currentTitle = `${headingText} — ${subtitle.text}`;
@@ -221,7 +278,9 @@ export function parseText(text: string, opts: { fileName?: string; format: 'mark
 
   if (chapters.length === 0) {
     // No headings at all — treat the whole thing as one chapter.
-    const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(tagMarkdownEmphasis(text.trim()))));
+    const body = tagHesitantDialog(
+      tagExcitedDialog(tagShoutingDialog(tagMarkdownEmphasis(text.trim()))),
+    );
     chapters.push({ id: 1, title: title || (opts.fileName ?? 'Chapter 1'), body });
   }
 
@@ -231,7 +290,7 @@ export function parseText(text: string, opts: { fileName?: string; format: 'mark
     title = fileMeta.title || opts.fileName?.replace(/\.[^.]+$/, '') || 'Untitled manuscript';
   }
 
-  const sourceText = chapters.map(c => c.body).join('\n\n');
+  const sourceText = chapters.map((c) => c.body).join('\n\n');
   return {
     format: opts.format,
     title,

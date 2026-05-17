@@ -49,6 +49,8 @@ describe('stripChapterPrefix', () => {
   });
 
   it('does not strip "Chapter X" appearing mid-title', () => {
-    expect(stripChapterPrefix('Prologue: Chapter 3 in retrospect')).toBe('Prologue: Chapter 3 in retrospect');
+    expect(stripChapterPrefix('Prologue: Chapter 3 in retrospect')).toBe(
+      'Prologue: Chapter 3 in retrospect',
+    );
   });
 });

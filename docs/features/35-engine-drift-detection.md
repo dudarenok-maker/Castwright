@@ -70,10 +70,10 @@ read, and surface the mismatch in the Generation view.
     `chaptersActions.regenerateChapterIds` with the full set of drifted
     chapter ids. The middleware (`generation-stream-middleware.ts`)
     closes any live handle and opens a fresh stream with `chapterIds`
-    + `force=true`, queueing the bulk run as one SSE rather than 27
-    sequential clicks. Excluded chapters are filtered out by the slice
-    reducer defensively even though the banner-derived list already
-    excludes them — see invariant 6.
+    - `force=true`, queueing the bulk run as one SSE rather than 27
+      sequential clicks. Excluded chapters are filtered out by the slice
+      reducer defensively even though the banner-derived list already
+      excludes them — see invariant 6.
 
 ## Critical files
 
@@ -83,7 +83,7 @@ read, and surface the mismatch in the Generation view.
 - `server/src/routes/generation.ts` — render write path stamps the
   fields; `chapter_complete` SSE tick carries `audioModelKey`
 - `openapi.yaml` — Chapter schema (`audioModelKey`, `audioRenderedAt`)
-  + GenerationTick schema (`audioModelKey` on `chapter_complete`)
+  - GenerationTick schema (`audioModelKey` on `chapter_complete`)
 - `src/lib/types.ts` — frontend `BookStateJson.chapters[]` mirror
 - `src/store/chapters-slice.ts` — `hydrateFromBookState` propagates
   the field; `applyGenerationTick` captures it on `chapter_complete`

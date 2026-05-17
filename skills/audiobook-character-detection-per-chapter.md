@@ -31,7 +31,7 @@ A JSON object with exactly this shape:
 {
   "characters": [
     {
-      "id": "narrator",                // see "Reusing existing ids" below
+      "id": "narrator", // see "Reusing existing ids" below
       "name": "Narrator",
       "role": "Third-person observer",
       "color": "narrator",
@@ -41,16 +41,17 @@ A JSON object with exactly this shape:
       "tone": { "warmth": 55, "pace": 40, "authority": 70, "emotion": 35 },
       "description": "A measured narrator …",
       "evidence": [
-        { "quote": "He could feel it before he saw it — a pressure shift behind his right ear …",
-          "note": "Long-form: anchors register + period vocabulary." },
-        { "quote": "She said it under her breath, …",
-          "note": "Dry, observational." }
-      ]
-    }
+        {
+          "quote": "He could feel it before he saw it — a pressure shift behind his right ear …",
+          "note": "Long-form: anchors register + period vocabulary.",
+        },
+        { "quote": "She said it under her breath, …", "note": "Dry, observational." },
+      ],
+    },
     // ... one entry per speaking character that appears IN THIS CHAPTER,
     //     new or recurring. Always include "narrator" if narrative prose
     //     is present.
-  ]
+  ],
 }
 ```
 
@@ -71,7 +72,7 @@ one **verbatim utterance** that is theirs — either:
    medical log, registry filing, letter, diary, transcript, or bio
    page **whose author is named or strongly implied** (header
    `FILED BY: ELWIN`, signature `—Keefe`, chapter title `Sophie's
-   Registry File`, the surrounding bio block, etc.). The author of
+Registry File`, the surrounding bio block, etc.). The author of
    such text is a character whose `id` is their name, NOT `narrator`.
 
 Do **NOT** include:
@@ -94,7 +95,7 @@ that is **spoken or written by** the entity? If no, they do not go on
 the roster. The narrator covers them.
 
 If a character previously had dialogue in an earlier chapter (already on
-the roster) but only appears in narration in *this* chapter, omit them
+the roster) but only appears in narration in _this_ chapter, omit them
 from this chapter's output — see "Returning characters NOT in this
 chapter" below.
 
@@ -103,7 +104,7 @@ chapter" below.
 Companion books, prequels, and supplementary volumes often present
 chapters as **documents** rather than narrated scenes: a journal entry,
 a medical log, a Registry classified file, a letter, a transcript. The
-prose is first-person but the speaker is *not* an omniscient narrator
+prose is first-person but the speaker is _not_ an omniscient narrator
 — they are a specific named character in the story world.
 
 When a chapter is one of these formats:
@@ -121,7 +122,7 @@ When a chapter is one of these formats:
 - The evidence quotes for that character should be excerpts of the
   document's prose — they don't need to be dialogue. Pick a long,
   representative sentence and a short, characterising one.
-- If a journal entry contains *quoted dialogue* (the diarist quoting
+- If a journal entry contains _quoted dialogue_ (the diarist quoting
   someone else's speech inside their entry), the quoted speaker also
   gets their own roster entry (provided they have a real, attributed
   quote).
@@ -133,16 +134,16 @@ When a chapter is one of these formats:
 Worked examples:
 
 - **Chapter "Elwin's Medical Log"** opens with `FILED BY: ELWIN ·
-  PATIENT: SOPHIE FOSTER` and the body is `I'd just settled into bed
-  when Sophie hailed me. I figured she wouldn't want to know that her
-  hands were covered in yeti pee.` → roster entry
+PATIENT: SOPHIE FOSTER` and the body is `I'd just settled into bed
+when Sophie hailed me. I figured she wouldn't want to know that her
+hands were covered in yeti pee.` → roster entry
   `{ id: "elwin", name: "Elwin", role: "Healer / journal author",
-  evidence: [{ quote: "I'd just settled into bed when Sophie hailed
-  me." }, { quote: "I figured she wouldn't want to know that her hands
-  were covered in yeti pee." }] }`. **Not** narrator.
+evidence: [{ quote: "I'd just settled into bed when Sophie hailed
+me." }, { quote: "I figured she wouldn't want to know that her hands
+were covered in yeti pee." }] }`. **Not** narrator.
 - **Chapter "Keefe's Diary — Day Three"** signs off with `—Keefe`. The
   body is `Foster's still mad at me. I've been working on the perfect
-  apology. It hasn't been going well.` → roster entry
+apology. It hasn't been going well.` → roster entry
   `{ id: "keefe", name: "Keefe Sencen", evidence: [...] }`. **Not**
   narrator.
 
