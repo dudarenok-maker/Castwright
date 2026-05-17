@@ -5,9 +5,25 @@
  * analysing stream takes ~7.6 s on its own per ANALYSIS_NORTHERN_STAR
  * in src/mocks/canned-data.ts).
  *
+ * Adds per-stage Redux assertions on top of the URL+visibility checks
+ * already in place. The store is exposed on `window.__store__` in DEV
+ * + e2e builds (see src/main.tsx) so the spec can read `ui.stage.kind`
+ * after each transition and a final refresh-restores-stage check that
+ * pins the redux-persist wiring shipped 2026-05-17.
+ *
  * Pairs with docs/features/37-e2e-playwright.md. */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+
+/* Read `ui.stage.kind` from the live Redux store. The store is exposed
+   on `window.__store__` only in DEV + e2e Vite modes (see src/main.tsx). */
+async function getStageKind(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const s = (window as unknown as { __store__?: { getState: () => { ui: { stage: { kind: string } } } } }).__store__;
+    if (!s) throw new Error('window.__store__ is not exposed — main.tsx DEV/e2e gate may have regressed');
+    return s.getState().ui.stage.kind;
+  });
+}
 
 test.describe('new book flow', () => {
   test('cold boot → upload → analysing → confirm → ready', async ({ page }) => {
@@ -19,6 +35,7 @@ test.describe('new book flow', () => {
     /* Step 2: click "Start a new book" to enter the upload route. */
     await page.getByRole('button', { name: /Start a new book/i }).first().click();
     await expect(page).toHaveURL(/#\/new$/);
+    expect(await getStageKind(page)).toBe('upload');
 
     /* Step 3: open the paste affordance and drop a tiny manuscript.
        The H1 is what mockImportManuscript reads to derive the title;
@@ -47,6 +64,7 @@ test.describe('new book flow', () => {
        explicit Start click — the previous auto-fire path was hard to
        reason about (see views/analysing.tsx:443). */
     await expect(page).toHaveURL(/#\/books\/.+\/analysing$/, { timeout: 5_000 });
+    expect(await getStageKind(page)).toBe('analysing');
     await expect(page.getByRole('button', { name: /Start analysis/i }))
       .toBeVisible({ timeout: 5_000 });
     await page.getByRole('button', { name: /Start analysis/i }).click();
@@ -56,6 +74,7 @@ test.describe('new book flow', () => {
        which advances the stage to confirm. Give it 15 s to absorb mock
        jitter on slower CI workers. */
     await expect(page).toHaveURL(/#\/books\/.+\/confirm$/, { timeout: 15_000 });
+    expect(await getStageKind(page)).toBe('confirm');
 
     /* Step 7: confirm-cast view — click the primary CTA to advance to
        the ready stage. confirmCast dispatches set the stage to
@@ -66,5 +85,23 @@ test.describe('new book flow', () => {
     await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
 
     await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
+    expect(await getStageKind(page)).toBe('ready');
+
+    /* Step 8: refresh-restores-stage. The redux-persist wiring shipped
+       2026-05-17 should restore the ready stage + the same hash after
+       reload — without it, refresh kicks the user back to the library
+       and the URL drops the bookId. Deleting `ui` from the persist
+       whitelist in src/store/index.ts would now fail this assertion. */
+    const hashBefore = await page.evaluate(() => location.hash);
+    await page.reload();
+    /* Wait for hydration before re-reading the store — `reload` does not
+       wait for React to mount, and reading `__store__` too early returns
+       the freshly-constructed initial state before redux-persist
+       finishes its async rehydrate pass. The hash itself stabilises
+       within the load event, but the stage kind needs a beat. */
+    await page.waitForLoadState('domcontentloaded');
+    await expect.poll(async () => getStageKind(page), { timeout: 5_000 }).toBe('ready');
+    const hashAfter = await page.evaluate(() => location.hash);
+    expect(hashAfter).toBe(hashBefore);
   });
 });
