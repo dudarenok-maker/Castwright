@@ -327,8 +327,15 @@ function ChapterListenRow({ chapter, charactersIn, isPlaying, onPlay, onRegenera
   const totalSec = parseDuration(chapter.duration);
   const elapsedSec = Math.floor(totalSec * progress);
   return (
-    <div className={`grid grid-cols-[40px_60px_1fr_220px_100px_60px] items-center gap-4 px-5 py-4 transition-colors ${isPlaying ? 'bg-peach/[0.06]' : 'hover:bg-ink/[0.02]'}`}>
-      <button onClick={onPlay} className={`w-9 h-9 rounded-full grid place-items-center transition-all ${isPlaying ? 'bg-ink text-canvas' : 'bg-canvas border border-ink/15 text-ink hover:bg-ink hover:text-canvas'}`}>
+    <div
+      data-testid={`chapter-row-${chapter.id}`}
+      className={`grid grid-cols-[40px_60px_1fr_220px_100px_60px] items-center gap-4 px-5 py-4 transition-colors ${isPlaying ? 'bg-peach/[0.06]' : 'hover:bg-ink/[0.02]'}`}
+    >
+      <button
+        onClick={onPlay}
+        aria-label={isPlaying ? `Pause chapter ${chapter.id}` : `Play chapter ${chapter.id}`}
+        className={`w-9 h-9 rounded-full grid place-items-center transition-all ${isPlaying ? 'bg-ink text-canvas' : 'bg-canvas border border-ink/15 text-ink hover:bg-ink hover:text-canvas'}`}
+      >
         {isPlaying ? <IconPause className="w-3.5 h-3.5"/> : <IconPlay className="w-3.5 h-3.5 ml-0.5"/>}
       </button>
       <span className="text-sm font-bold text-ink/50 tabular-nums">CH {String(chapter.id).padStart(2, '0')}</span>
