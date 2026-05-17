@@ -12,6 +12,7 @@ import { uiSlice } from './ui-slice';
 import { changeLogSlice } from './change-log-slice';
 import { castSlice } from './cast-slice';
 import { revisionsSlice } from './revisions-slice';
+import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import type { Chapter, GenerationTick, Character } from '../lib/types';
 
@@ -41,6 +42,7 @@ function makeStore() {
       changeLog:  changeLogSlice.reducer,
       cast:       castSlice.reducer,
       revisions:  revisionsSlice.reducer,
+      analysis:   analysisSlice.reducer,
     },
     middleware: (gd) => gd().concat(generationStreamMiddleware),
   });
@@ -462,5 +464,105 @@ describe('generationStreamMiddleware', () => {
     expect(snap!.total).toBe(2);
     expect(snap!.done).toBe(1);
     expect(snap!.inProgress).toBe(1);
+  });
+});
+
+describe('generationStreamMiddleware — reverse-local-analyzer guard (plan 32 D2 follow-up)', () => {
+  /* The D2 reverse-guard hook only intercepts EXPLICIT TTS-start
+     callsites (Resume button + the three regenerate modals). The
+     implicit reconcile-driven open in this middleware bypassed it —
+     so a cold-boot rehydration of a book with both `engine: 'local'`
+     analysis AND queued chapters would auto-fire generation behind
+     the user's back, fighting the analyzer for GPU. These specs pin
+     the new middleware-level rule: refuse to open the handle on
+     reconcile when a live local analysis sits on the same book; flip
+     to paused instead so the user can choose when to resume.
+     Mirrors src/hooks/use-reverse-local-analyzer-guard.tsx's
+     engine === 'local' + bookId match rule. */
+
+  const localAnalysisSnap = (bookId: string, state: AnalysisStreamSnapshot['state'] = 'running'): AnalysisStreamSnapshot => ({
+    bookId,
+    manuscriptId: 'mns_x',
+    phaseId: 0,
+    phaseLabel: 'Detecting characters',
+    phaseProgress: 0.1,
+    remainingMs: null,
+    lastTickAt: 1000,
+    state,
+    engine: 'local',
+  });
+
+  beforeEach(() => {
+    streamGenerationMock.mockClear();
+    cancelMock.mockClear();
+    pauseGenerationMock.mockClear();
+  });
+
+  it('refuses to auto-open generation when a live local analysis is alive on the same book', () => {
+    /* Cold-boot shape: open the book on the Generate route, seed an
+       active local analysis on that book, then seed the chapter
+       queue (the order Layout's hydration effect produces — book
+       opens first, then per-book hydrate runs analysis-state +
+       chapters in parallel). The middleware's reconcile fires
+       after every TRIGGER_TYPES action; the analysis snapshot
+       seeded before the chapter rows means the guard sees the
+       live local run when the queue lands. */
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(analysisActions.setActiveStream(localAnalysisSnap('b1')));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' }), ch(2, { state: 'queued' })]);
+
+    expect(streamGenerationMock).not.toHaveBeenCalled();
+    expect(store.getState().chapters.paused).toBe(true);
+  });
+
+  it('does NOT gate when the analysis engine is gemini (cloud — no GPU contention)', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(analysisActions.setActiveStream({
+      ...localAnalysisSnap('b1'),
+      engine: 'gemini',
+    }));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
+
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    expect(store.getState().chapters.paused).toBe(false);
+  });
+
+  it('does NOT gate when the local analysis is already paused (user explicitly stopped it)', () => {
+    /* A paused local analysis isn't competing for the GPU — respect
+       the user's explicit stop and let generation open as usual. */
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(analysisActions.setActiveStream(localAnalysisSnap('b1', 'paused')));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
+
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    expect(store.getState().chapters.paused).toBe(false);
+  });
+
+  it('does NOT gate when the local analysis is halted (terminal error state — no longer competing)', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(analysisActions.setActiveStream(localAnalysisSnap('b1', 'halted')));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
+
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    expect(store.getState().chapters.paused).toBe(false);
+  });
+
+  it('does NOT gate when the local analysis is on a DIFFERENT book (no GPU contention on this book)', () => {
+    /* The reverse-guard rule is per-book: a local analysis running
+       on book A shouldn't refuse generation on book B even though
+       they technically share GPU. The hook scopes this way too —
+       it reads the active stream's bookId and compares against the
+       TTS-target bookId. */
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(analysisActions.setActiveStream(localAnalysisSnap('b_other')));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
+
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    expect(store.getState().chapters.paused).toBe(false);
   });
 });

@@ -78,9 +78,13 @@ D2 added an `engine?: 'local' | 'gemini'` field to `AnalysisStreamSnapshot` (`sr
 - `src/views/generation.tsx` Pause/Resume toggle, but only on the `paused → !paused` transition. Pausing TTS doesn't compete for GPU; only resuming does. The toggle's onClick branches: `if (paused) reverseGuard(() => setPaused(false)); else setPaused(true);`.
 - `src/components/layout.tsx` regenerate-modal onConfirm callbacks: `RegenerateModal`, `CharacterRegenerateModal`, `BatchCharacterRegenerateModal`. The onConfirm closes its own modal first (so the reverse-guard dialog doesn't stack on top), then wraps the regen dispatch + view change in `reverseAnalyzerGuard(...)`.
 
-**Explicitly NOT gated:**
+**Implicit reconcile path (middleware-level rule, 2026-05-17 follow-up):**
 
-- `generation-stream-middleware.ts`'s implicit reconcile-driven `openHandle`. The user already consented when they originally started generation; nagging them with a prompt every time the slice rehydrates after a navigation would violate the sticky-generation contract (plan 31). If a user wants to stop generation while a local analysis runs, they pause TTS explicitly — the forward guard never fires (already running) and the reverse guard never fires (user-initiated stop).
+`generation-stream-middleware.ts`'s reconcile-driven `openHandle` enforces the same `engine === 'local'` + bookId-match rule as the D2 hook, but at the middleware level (not via a modal). The scenario the original D2 deliberately left open — cold-boot rehydration of a book with both an alive local analysis AND queued chapters — would auto-fire generation behind the user's back, competing for the GPU. The middleware now refuses by dispatching `chaptersActions.setPaused(true)` instead of opening the handle; the user reads the live AnalysisPill, knows what's running, and clicks Resume on Generate when ready. No new modal is added — the explicit-start sites still use the D2 hook (so the user gets the consent prompt on Resume / Regenerate), and the implicit-start site silently refuses (the user's intent on a cold-boot reload is ambiguous; defaulting to "don't act" matches the principle of least surprise). Pinned by `src/store/generation-stream-middleware.test.ts` ("reverse-local-analyzer guard (plan 32 D2 follow-up)") — five cases covering: local-engine gates, gemini-engine doesn't, paused doesn't, halted doesn't, cross-book doesn't.
+
+**Explicitly NOT gated (still the case):**
+
+- The forward guard never fires on an already-running TTS generation (the user-initiated stop path is just `setPaused(true)`).
 
 **Modal confirm action:** `dispatch(analysisActions.setPaused({ manuscriptId }))`. The pause-bridge + D1 close-handler in `analysis-stream-middleware.ts` together (a) fire `POST /pause` to the server, (b) close the middleware's own SSE, and (c) flip the snapshot's state to `paused` so the pill renders the paused variant. The user can resume from the analysing route afterwards.
 
