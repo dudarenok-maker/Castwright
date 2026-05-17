@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 0 · Should 14 · Could 17 · Won't 12
+**Counts as of 2026-05-17:** Must 0 · Should 13 · Could 17 · Won't 12
 
 ---
 
@@ -102,20 +102,10 @@ Source: net-new (2026-05-17). Validated absent in `server/src/workspace/state-io
 - *What:* Extend the atomic-rename writer in `server/src/workspace/state-io.ts` to rotate prior versions: `state.json` → `state.json.bak.1`, shift `bak.1 → bak.2`, keep last N=3. Add a `recoverFromBackup()` helper that the API uses on JSON-parse failure with a one-shot warning log.
 - *Acceptance:* Server Vitest writes 5 times and asserts `bak.1`/`bak.2`/`bak.3` exist with correct content; separate spec corrupts `state.json` and asserts reader falls back to `bak.1`. No-op on first write (no prior file to rotate).
 - *Key files:* `server/src/workspace/state-io.ts`; `server/src/routes/book-state.ts`; new section in `docs/features/27-book-state-persistence.md` (or new `27a-state-snapshot-rotation.md`).
-- *Depends on:* none; sequence before Should #8 (schema versioning) so the migration story has a rollback target.
+- *Depends on:* none. The schema-versioning seam (plan 27, shipped 2026-05-17) is now in place — rotation provides the rollback target a future v1→v2 migration can fall back to if the transform corrupts data.
 - *Benefit (architectural):* `state.json` holds cast, chapters, voices, revision graph — the entire book. One corrupted write = lost work. Cheap insurance, especially before schema-shape mutations begin.
 
-### 8. `state.json` schema versioning + migration story
-
-Source: [`27-book-state-persistence.md`](features/27-book-state-persistence.md) (TBD note).
-
-- *What:* Add a top-level `schema: 1` field to `.audiobook/state.json` writers, a reader that asserts `schema === 1`, and a `migrate()` skeleton that handles `1 → 2` (no-op today, but the seam exists). Document the rename-vs-add policy in plan 27.
-- *Acceptance:* New writes include `"schema": 1`; reads of a missing `schema` field still succeed (treated as v1 for back-compat); a deliberately-bumped fixture (`schema: 2`) routes through `migrate()`. Server test covers both directions.
-- *Key files:* `server/src/workspace/state.ts` (or wherever state.json read/write lives); `server/src/routes/book-state.ts`; `docs/features/27-book-state-persistence.md`.
-- *Depends on:* Should #7 (rotation provides the rollback target if a migration corrupts).
-- *Benefit (architectural):* every persisted-state system that skipped versioning regrets it on the first non-additive change. Write the version now while there are zero on-disk v1 files in the wild that resist upgrade.
-
-### 9. E2E coverage: upload → analysing → confirm → ready
+### 8. E2E coverage: upload → analysing → confirm → ready
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
@@ -124,7 +114,7 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - *Key files:* `e2e/smoke.spec.ts` (pattern to mirror); `playwright.config.ts`; mock fixtures in `src/mocks/canned-data.ts` are already wired for this flow.
 - *Benefit (technical):* the full new-book flow is the highest-blast-radius user journey and currently has zero browser-level regression coverage.
 
-### 10. E2E coverage: listen view + mini-player
+### 9. E2E coverage: listen view + mini-player
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
@@ -134,7 +124,7 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - *Depends on:* mock-mode chapter seeding — `mockGetBookState` (Must #3) needs to populate the chapters slice so the listen view can render a track list. Mock audio URLs are now live (former Must #5 shipped 2026-05-17 with plan 20 a/b audio), so the URL plumbing is unblocked; the remaining blocker is the chapters not appearing in `state.chapters.chapters` when a complete book is opened under mocks.
 - *Benefit (technical):* listen + playback is the second-highest-blast-radius surface.
 
-### 11. Slice unit tests: `applyGenerationTick`, `applyVoiceMatches`
+### 10. Slice unit tests: `applyGenerationTick`, `applyVoiceMatches`
 
 Source: CLAUDE.md "Suggested follow-ups".
 
@@ -143,17 +133,17 @@ Source: CLAUDE.md "Suggested follow-ups".
 - *Key files:* `src/store/chapters-slice.ts` (likely owns `applyGenerationTick`); `src/store/cast-slice.ts` (likely owns `applyVoiceMatches`); existing `*-slice.test.ts` files for the pattern.
 - *Benefit (technical):* the two slice reducers with the most regression history, currently exercised only via integration. Unit coverage shrinks the blast radius of any future refactor of either.
 
-### 12. Visual-regression baselines via Playwright `toHaveScreenshot()`
+### 11. Visual-regression baselines via Playwright `toHaveScreenshot()`
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups + open question.
 
 - *What:* Capture screenshot baselines for the five core stages (library, upload, analysing, confirm, ready) plus the listen view, using Playwright's native `toHaveScreenshot()`. Decide and document: per-platform baselines (`e2e/__screenshots__/{platform}/`) vs. single committed artwork. CI implications differ per choice.
 - *Acceptance:* `npm run test:e2e` includes a `visual.spec.ts` that captures and diffs the six baselines; first run blesses, subsequent runs diff. `docs/features/37-e2e-playwright.md` gets a new "Visual baselines" section documenting the storage decision.
 - *Key files:* new `e2e/visual.spec.ts`; `playwright.config.ts` (may need a project for `--update-snapshots` toggling); `docs/features/37-e2e-playwright.md`.
-- *Depends on:* Should #9 (need the new-book flow spec landing first so the analysing/confirm/ready stages can be captured under the same mock-data shape).
+- *Depends on:* Should #8 (need the new-book flow spec landing first so the analysing/confirm/ready stages can be captured under the same mock-data shape).
 - *Benefit (technical):* first defence against the silent CSS-token / Tailwind / icon-set drift that unit tests can't catch.
 
-### 13. Automatic retry of transient TTS sidecar failures
+### 12. Automatic retry of transient TTS sidecar failures
 
 Source: [`14-tts-sidecar-coqui.md`](features/14-tts-sidecar-coqui.md) (KNOWN: scaffolded behaviour).
 
@@ -162,7 +152,7 @@ Source: [`14-tts-sidecar-coqui.md`](features/14-tts-sidecar-coqui.md) (KNOWN: sc
 - *Key files:* `server/src/tts/synthesise-chapter.ts`; `server/src/tts/sidecar.ts` (the HTTP client to the sidecar); existing retry pattern in `server/src/analyzer/gemini.ts` for reference (see `generateWithLimiter`).
 - *Benefit (user):* a long generation run with one flaky sentence today wedges the queue until the user notices and clicks Retry. A single auto-retry restores hands-off operation.
 
-### 14. Top-bar TTS pill — third-surface consolidation trigger
+### 13. Top-bar TTS pill — third-surface consolidation trigger
 
 Source: [`30-global-model-control.md`](features/30-global-model-control.md).
 
@@ -189,7 +179,7 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 
 Source: net-new (2026-05-17). Validated absent in `src/views/listen.tsx` + `src/components/mini-player.tsx` (in-memory `currentSec` only).
 
-- *What:* Persist `{ chapterId, currentSec, updatedAt }` per book to a sibling `listen-progress.json` (NOT extending `state.json`, to keep that file's shape stable for Should #8 schema work). Mini-player resumes from the saved point when a chapter reopens. Show a "Resume at MM:SS" pill next to the chapter title on the Listen view.
+- *What:* Persist `{ chapterId, currentSec, updatedAt }` per book to a sibling `listen-progress.json` (NOT extending `state.json`, to keep that file's shape stable now that the schema-versioning seam — plan 27 — is in place). Mini-player resumes from the saved point when a chapter reopens. Show a "Resume at MM:SS" pill next to the chapter title on the Listen view.
 - *Acceptance:* Play chapter 3 to 1:23, navigate away, refresh, reopen → resume point is 1:23 ±1s. Server Vitest covers the read/write; frontend Vitest covers the mini-player resume effect.
 - *Key files:* `src/views/listen.tsx`; `src/components/mini-player.tsx`; new `src/store/listen-progress-slice.ts`; new server endpoint under `server/src/routes/`.
 - *Depends on:* persistence-model decision (recommendation: sibling file).
