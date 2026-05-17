@@ -150,6 +150,18 @@ export const analysisSlice = createSlice({
       state.activeStream = null;
     },
 
+    /* Cold-boot rehydration entry point. Like `setActiveStream` but
+       only writes when the slot is currently null — protects against
+       clobbering an already-running SSE-driven snapshot if the cold-
+       boot fetch (Layout's library /active-analyses scan) resolves
+       AFTER the analysing view has mounted and dispatched its own
+       setActiveStream. Use `setActiveStream` directly for live
+       streams; use this for disk-discovered paused/halted snapshots. */
+    hydrateColdBoot(state, action: PayloadAction<AnalysisStreamSnapshot>) {
+      if (state.activeStream !== null) return;
+      state.activeStream = action.payload;
+    },
+
     /* Apply the one-shot `series-prior` SSE event the server emits at
        Phase 0 entry. Cross-book guarded so a stale event from another
        tab can't poison this tab's snapshot. */
