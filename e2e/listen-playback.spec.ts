@@ -48,16 +48,20 @@ test.describe('listen view + mini-player', () => {
 
     /* Duration-tick assertion: with a real bundled MP3 driving the
        element (stub-b.mp3, ~88 KB, 880 Hz tone) the browser will
-       advance `currentTime` once playback starts. Two `onTimeUpdate`
-       cycles (~500 ms each in chromium) is the unit of observable
-       progress; the 1000 ms wait covers two cycles with margin.
-       Deleting `setCurrentSec(e.currentTarget.currentTime)` in
+       advance `currentTime` once playback starts. Chromium needs
+       time to fetch the bundled MP3, parse headers, decode, and emit
+       the first onTimeUpdate — empirically ~500 ms warm but up to
+       several seconds when the pre-push verify shares a busy box
+       with concurrent specs and stale chrome instances. 8 s budget
+       keeps the spec well under its overall wall-clock without
+       false-failing under load. Deleting
+       `setCurrentSec(e.currentTarget.currentTime)` in
        src/components/mini-player.tsx would not break this assertion
        (we read `currentTime` directly on the <audio>), but deleting
        the imperative `el.src = audio.url` or the play() call would —
        this case pins the play seam, not the React state update. */
     await expect.poll(async () => audio.evaluate((el: HTMLAudioElement) => el.currentTime), {
-      timeout: 3_000,
+      timeout: 8_000,
       message: 'audio currentTime should advance past zero after play()',
     }).toBeGreaterThan(0);
 
