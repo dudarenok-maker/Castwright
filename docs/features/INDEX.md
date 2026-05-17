@@ -87,7 +87,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [21 — Book library](21-book-library.md) — Workspace scan + status derivation.
 - [22 — Voice library](22-voice-library.md) — Cross-book voices view + pinning.
 - [36 — Book covers (OpenLibrary)](36-book-covers.md) — Real cover artwork on cards + Listen header; auto-fetch on import, manual picker on demand; gradient skeleton fallback.
-- [40 — Cover framing + local-disk upload](40-cover-framing-and-upload.md) — Drag-to-pan + zoom on the cover render, plus upload-from-device path when OpenLibrary has no match. Extends plan 36 without breaking its on-disk JPEG / export invariants. **Status: draft.**
 
 ### K. Cross-cutting invariants
 - [23 — Mock toggle](23-mock-toggle.md) — `VITE_USE_MOCKS` flips real ↔ mock; components stay neutral.
@@ -122,3 +121,4 @@ breadcrumb so cross-references still resolve.
 
 - [22a — Voice library compare](archive/22a-voice-library-compare.md) — Two-cast-member compare entry point on the Voices tab; reuses `CompareCastModal`; same-/different-base-voice badge on the selection pill. Shipped 2026-05-17.
 - [39 — Purge WAV (MP3 is the only format)](archive/39-purge-wav.md) — Dropped the legacy-WAV fallback once documented in plan 28; locator + routes + types now MP3-only. Shipped 2026-05-17.
+- [40 — Cover framing + local-disk upload](archive/40-cover-framing-and-upload.md) — Three-tab CoverPicker (Search / Upload / Frame), PNG → JPEG transcode server-side, render-time pan + zoom via `object-position` + `transform`, account-level default for the initial tab. Shipped 2026-05-17.
