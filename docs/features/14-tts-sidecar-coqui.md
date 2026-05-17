@@ -7,13 +7,13 @@
 
 ## What this covers
 
-Default local TTS provider. A separate process (Python-based Coqui XTTS v2 server) listens at `LOCAL_TTS_URL` and accepts text + voice id, returning raw 16-bit PCM. The Node analysis backend wraps the PCM in a WAV header, caches the result under `server/audio/voices/{voiceId}-{modelKey}.wav`, and serves it back to the client. This keeps inference free and offline.
+Default local TTS provider. A separate process (Python-based Coqui XTTS v2 server) listens at `LOCAL_TTS_URL` and accepts text + voice id, returning raw 16-bit PCM. The Node analysis backend encodes the PCM to MP3 (LAME VBR V2 via system ffmpeg), caches the result under `server/audio/voices/{voiceId}-{modelKey}-<paramHash>.mp3`, and serves it back to the client. This keeps inference free and offline.
 
 ## Invariants to preserve
 
 - `LOCAL_TTS_URL` env var; default `http://localhost:6006` when unset. Configurable in `server/.env`.
 - Sidecar request shape: `{ model: 'xtts_v2', voice, text, lang }` (see `server/src/tts/sidecar.ts`). Response is raw PCM bytes; sample rate and bit depth fixed.
-- WAV wrapping is server-side; the client receives a `.wav` URL it can play through a stock `<audio>` element.
+- MP3 encoding is server-side; the client receives a `.mp3` URL it can play through a stock `<audio>` element.
 - Cache key: `voiceId + modelKey`. Re-requesting the same combination returns the cached file with `cached: true` in the `VoiceSample` response (`src/lib/api.ts:276-281, 518-530`).
 - `VoiceSample` shape: `{ url, durationSec, cached, modelKey }` — `durationSec` is computed from PCM byte count, not from the upstream response.
 - Sidecar abstraction lives in `server/src/tts/sidecar.ts`. Adding a Piper or Kokoro sidecar means adding a new provider class in `server/src/tts/index.ts` that targets a different endpoint; the client interface (`POST /api/voices/.../sample` with `modelKey`) does not change.
@@ -26,11 +26,11 @@ Default local TTS provider. A separate process (Python-based Coqui XTTS v2 serve
 
 Run server with `VITE_USE_MOCKS=false`. Start the sidecar separately (`npm run tts:sidecar` per `CLAUDE.md`).
 
-1. **Sidecar up, first preview** — open profile drawer, click Preview. Within ~2–5 s, audio plays. WAV appears under `server/audio/voices/`. Response: `cached: false`.
+1. **Sidecar up, first preview** — open profile drawer, click Preview. Within ~2–5 s, audio plays. MP3 appears under `server/audio/voices/`. Response: `cached: false`.
 2. **Sidecar up, second identical preview** — `cached: true` instantly; no sidecar round-trip.
 3. **Switch `modelKey` to `gemini-3.1-flash` and back** — first request for each model key is uncached; switching back to `coqui-xtts-v2` returns cached again.
 4. **Sidecar down** — kill the sidecar process. Click Preview. Request fails with a useful error ("Sample synthesis failed: …" surfaced from `src/lib/api.ts:524-529`). UI shows the error; user can restart the sidecar and retry.
-5. **Sidecar mid-flight crash during chapter generation** — kill the sidecar mid-stream. The generation SSE stream surfaces `chapter_failed` ticks with `errorReason` carrying the upstream message. Already-completed chapters keep their WAVs.
+5. **Sidecar mid-flight crash during chapter generation** — kill the sidecar mid-stream. The generation SSE stream surfaces `chapter_failed` ticks with `errorReason` carrying the upstream message. Already-completed chapters keep their MP3s.
 6. **Disk full** — fill the audio cache disk. Request fails at the cache-write step; the SSE stream surfaces the I/O error.
 7. **Health stays green during synth** — start a long chapter (the Coalfall Commission Ch 1, 10+ lines on the narrator). The Generate-screen sidecar pill stays green throughout the synth call. If it flips to red the moment generation starts, `/synthesize` is blocking the event loop — check it still uses `asyncio.to_thread`. Pytest pin: `cd server/tts-sidecar && .\.venv\Scripts\python.exe -m pytest`.
 8. **First synth is fast** — after a clean `npm run tts:sidecar`, the first chapter's first group lands a synth response within seconds, not minutes. The preload at startup is what makes this true.

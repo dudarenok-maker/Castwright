@@ -1,11 +1,11 @@
 # Audio output format (MP3 VBR V2)
 
 > Status: stable
-> Key files: `server/src/tts/mp3.ts`, `server/src/tts/wav.ts`, `server/src/workspace/chapter-audio-file.ts`, `server/src/routes/generation.ts`, `server/src/routes/chapter-audio.ts`, `server/src/routes/voice-sample.ts`, `scripts/start-app.ps1`
-> URL surface: `GET /api/books/:bookId/chapters/:chapterId/audio`, `GET …/audio.mp3`, `GET …/audio.wav`, `POST /api/voices/:voiceId/sample`
-> OpenAPI ops: `ChapterAudio` (`openapi.yaml`) — `url` is the format-specific suffix the locator resolved to; `getVoiceSample` returns a URL under `/audio/voices/`.
-> Paired tests: `server/src/tts/mp3.test.ts`, `server/src/tts/wav.test.ts`, `server/src/routes/chapter-audio.test.ts`, `server/src/routes/voice-sample.test.ts`
-> Cross-links: [16 — Generation stream](16-generation-stream.md), [10 — Profile drawer](10-profile-drawer.md)
+> Key files: `server/src/tts/mp3.ts`, `server/src/workspace/chapter-audio-file.ts`, `server/src/routes/generation.ts`, `server/src/routes/chapter-audio.ts`, `server/src/routes/voice-sample.ts`, `scripts/start-app.ps1`
+> URL surface: `GET /api/books/:bookId/chapters/:chapterId/audio`, `GET …/audio.mp3`, `POST /api/voices/:voiceId/sample`
+> OpenAPI ops: `ChapterAudio` (`openapi.yaml`) — `url` is `…/audio.mp3`; `getVoiceSample` returns a URL under `/audio/voices/`.
+> Paired tests: `server/src/tts/mp3.test.ts`, `server/src/tts/pcm.test.ts`, `server/src/workspace/chapter-audio-file.test.ts`, `server/src/routes/chapter-audio.test.ts`, `server/src/routes/voice-sample.test.ts`
+> Cross-links: [16 — Generation stream](16-generation-stream.md), [10 — Profile drawer](10-profile-drawer.md), [archive/39 — Purge WAV](archive/39-purge-wav.md)
 
 ## What this covers
 
@@ -16,11 +16,10 @@ synthesis returns from the sidecar; the concatenated buffer is then piped
 through system `ffmpeg` once per file to avoid MP3 frame-alignment issues
 that per-segment encoding would cause.
 
-Legacy chapters generated as `.wav` before this switch keep playing without
-re-render — the locator probes `.mp3` first, falls back to `.wav`. Voice
-sample previews moved to MP3 in the same encoder boundary; orphan `.wav`
-sample files left on disk from before the switch are unreferenced by the
-new cache key (extension changes), so they age out naturally.
+MP3 is the only audio format the codebase recognises. The locator probes
+only `.mp3`; legacy `.wav` files left on disk from before the format
+switch (or from before plan 39) are invisible — the user re-renders the
+chapter through the UI if they need playback.
 
 ## Why MP3
 
@@ -41,17 +40,18 @@ new cache key (extension changes), so they age out naturally.
 - `<slug>.mp3.tmp-<pid>-<ts>` is the atomic-write temp path; `rename(2)`
   promotes it to the final name. A crash mid-write must never leave a
   half-MP3 that the scan code mistakes for a complete chapter.
-- Legacy `<slug>.wav` files keep playing. `chapterAudioExists` returns true
-  for either extension; `findChapterAudio` prefers `.mp3` when both exist.
-- The `<chapterId>/audio` JSON endpoint returns a `url` whose suffix matches
-  the file that actually exists on disk (`audio.mp3` or `audio.wav`).
-- `<chapterId>/audio.mp3` and `<chapterId>/audio.wav` are independent: each
-  serves only its file and 404s otherwise (so a stale `.wav` left next to a
-  regenerated `.mp3` does not shadow the new file).
-- `Content-Type` matches the served extension (`audio/mpeg` ↔ `.mp3`,
-  `audio/wav` ↔ `.wav`).
-- Range requests (`Range: bytes=…`) return 206 partial content from both
-  endpoints — `<audio>` seeking depends on this.
+- `findChapterAudio` returns `{ path, ext: 'mp3', mime: 'audio/mpeg',
+  urlSuffix: 'audio.mp3' }` when `<slug>.mp3` exists, or null. No probe
+  loop; `.wav` on disk is ignored.
+- `chapterAudioExists` checks only `<slug>.mp3`.
+- The `<chapterId>/audio` JSON endpoint returns `url` ending in
+  `audio.mp3`, or 404 when no `.mp3` exists.
+- `<chapterId>/audio.mp3` is the only file-serving route. There is no
+  `audio.wav` route; a `GET …/audio.wav` returns 404 because nothing
+  matches.
+- `Content-Type` is always `audio/mpeg`.
+- Range requests (`Range: bytes=…`) return 206 partial content —
+  `<audio>` seeking depends on this.
 - The wire protocol between Node and the Python sidecar stays **raw PCM**.
   Encoding is a Node-side concern; do not push it into `tts-sidecar/main.py`.
 - `ffmpeg` is a hard runtime dep. `scripts/start-app.ps1` fails fast with a
@@ -98,10 +98,7 @@ Run with `VITE_USE_MOCKS=false`, sidecar up, ffmpeg on PATH.
 7. MiniPlayer plays the chapter, seeks past the midpoint without glitches.
    Network panel: `GET …/audio` returns 200 JSON; `GET …/audio.mp3` with a
    `Range` header returns 206.
-8. (Backwards-compat) drop a hand-made `<slug>.wav` for an *old* chapter
-   back into the audio dir; the JSON endpoint returns its `/audio.wav` URL
-   and the file plays.
-9. (Optional) change a voice assignment for one character and re-generate
+8. (Optional) change a voice assignment for one character and re-generate
    chapter 1. The new MP3 replaces the old one atomically — no half-file
    ever observable on disk, the file size and `state.json` duration update,
    playback in MiniPlayer reflects the new voice.
@@ -116,17 +113,9 @@ rather than inventing new fixtures.
 
 ## Out of scope (follow-ups)
 
-- **(Follow-up filed)** [Plan 39 — Purge WAV](39-purge-wav.md) will
-  remove the legacy-WAV fallback documented above. Tracked as Must #1
-  in [`../BACKLOG.md`](../BACKLOG.md).
 - AAC/M4A or Opus output. The encoder boundary in `encodePcmToMp3` is
   small enough that swapping `libmp3lame` for `aac`/`libopus` is the only
   change needed; left for a future PR with a deliberate codec choice.
-- Batch transcode of historical `.wav` chapters into `.mp3`. Users can
-  re-generate the chapter through the UI; no migration script in v1.
-- Cleanup of orphan `.wav` sample files left in `server/audio/voices/`
-  from before voice-sample moved to MP3. They're tiny, unreferenced by
-  the new cache key, and harmless; they age out with the workspace.
 - Gapless concatenation across chapters. Each chapter is independent;
   inter-chapter playback is the player's concern.
 - Sidecar-side encoding. The PCM wire protocol is intentionally lossless

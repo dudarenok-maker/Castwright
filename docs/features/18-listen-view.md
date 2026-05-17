@@ -3,7 +3,7 @@
 > Status: PARTIAL: header, metadata editor, and chapter playback wired end-to-end; listener-app handoffs, download tiles, export-queue actions, and cover Replace/Regenerate intentionally mocked with "Coming soon" affordances
 > Key files: `src/views/listen.tsx`, `src/views/listen.test.tsx`, `src/store/book-meta-slice.ts`, `src/store/book-meta-slice.test.ts`, `src/components/waveform.tsx`, `src/components/mini-player.tsx`, `src/lib/api.ts` (`getChapterAudio`), `src/data/export-queue.ts`, `src/data/listener-apps.ts`, `server/src/routes/chapter-audio.ts`
 > URL surface: `#/books/:bookId/listen`
-> OpenAPI ops: `GET /api/books/:bookId/chapters/:chapterId/audio` (JSON meta) + `audio.mp3` / `audio.wav` (file with range support, served via `server/src/routes/chapter-audio.ts`); `PUT /api/books/:bookId/state` slice='state' carries editable metadata
+> OpenAPI ops: `GET /api/books/:bookId/chapters/:chapterId/audio` (JSON meta) + `audio.mp3` (file with range support, served via `server/src/routes/chapter-audio.ts`); `PUT /api/books/:bookId/state` slice='state' carries editable metadata
 
 ## What this covers
 
@@ -12,7 +12,7 @@ The "ready to listen" view shows the cover, audiobook metadata, chapter list wit
 **Wired (real backend or store-driven):**
 - The header (cover, title, author, narrator, runtime/chapter/voice stats, action strip).
 - The metadata editor: edits flow through `book-meta-slice` and persist via `PUT /api/books/:bookId/state` slice='state'.
-- Chapter playback: `api.getChapterAudio` calls `GET /api/books/:bookId/chapters/:chapterId/audio` for the JSON meta (url + durationSec + segments), and the `<audio>` element in `MiniPlayer` streams the returned `audio.mp3` (or legacy `audio.wav`) URL with range-request support for `<audio>` seeking.
+- Chapter playback: `api.getChapterAudio` calls `GET /api/books/:bookId/chapters/:chapterId/audio` for the JSON meta (url + durationSec + segments), and the `<audio>` element in `MiniPlayer` streams the returned `audio.mp3` URL with range-request support for `<audio>` seeking.
 
 **Intentionally mocked (with "Coming soon" affordances on every interactive surface):**
 - All six listener-app cards (Audiobookshelf, BookPlayer, Smart AudioBook Player, Apple Books, Plex, PocketBook).
@@ -39,12 +39,12 @@ The "ready to listen" view shows the cover, audiobook metadata, chapter list wit
 
 ### Chapter playback / mini-player
 - `mockGetChapterAudio` returns `{ url: null, durationSec, peaks: float[240], sampleRate: 44100, segments: [] }`. Null `url` is the documented signal for "no live audio" and the UI must handle it without crashing.
-- `realGetChapterAudio` does a real `GET /api/books/:bookId/chapters/:chapterId/audio` fetch (`src/lib/api.ts:1577-1584`); the server route at `server/src/routes/chapter-audio.ts` resolves the chapter's on-disk MP3 (or legacy WAV) and returns the JSON meta `{ url, durationSec, peaks: [], sampleRate, segments }`. Non-2xx throws an `Error("Chapter audio fetch failed (status): detail")` that the mini-player surfaces via `setError`.
-- The meta endpoint's `url` is itself a route on the same server (`audio.mp3` or `audio.wav`); the server `sendFile`s with `Accept-Ranges: bytes` so the `<audio>` element can seek via 206 partial-content responses. Prefer-MP3-over-WAV ordering lives in `findChapterAudio` (`server/src/workspace/chapter-audio-file.ts`); both endpoints are also exposed independently so a legacy WAV chapter still plays.
+- `realGetChapterAudio` does a real `GET /api/books/:bookId/chapters/:chapterId/audio` fetch (`src/lib/api.ts:1577-1584`); the server route at `server/src/routes/chapter-audio.ts` resolves the chapter's on-disk MP3 and returns the JSON meta `{ url, durationSec, peaks: [], sampleRate, segments }`. Non-2xx throws an `Error("Chapter audio fetch failed (status): detail")` that the mini-player surfaces via `setError`.
+- The meta endpoint's `url` is itself a route on the same server (`audio.mp3`); the server `sendFile`s with `Accept-Ranges: bytes` so the `<audio>` element can seek via 206 partial-content responses. `findChapterAudio` (`server/src/workspace/chapter-audio-file.ts`) is the single-format probe.
 - `MiniPlayer` reads `ui.currentTrack` (a chapter id) and renders prev/next/close controls. `setCurrentTrack(null)` closes the player. On chapter swap it resets the `<audio>` src synchronously so the prior chapter stops immediately even if the next meta fetch is slow.
 - Waveform peaks array length is fixed at 240 floats in mock mode for consistent rendering across chapters of different durations. The real meta endpoint returns `peaks: []` deliberately (the MiniPlayer doesn't draw them; the Listen-view waveform card is still mock-driven and is the next thread of work if you want a fully live waveform).
 - `ChapterAudio` shape: `{ url, durationSec, peaks, sampleRate, segments }`. `url` is `string | null`; UI must handle null without crashing.
-- Server-side regression coverage: `server/src/routes/chapter-audio.test.ts` pins the meta endpoint, the MP3 + WAV file endpoints, range requests, prefer-MP3 ordering when both files exist, and 404s.
+- Server-side regression coverage: `server/src/routes/chapter-audio.test.ts` pins the meta endpoint, the MP3 file endpoint, range requests, and 404s (including `audio.wav` → 404 since the route isn't registered).
 
 ### Coming-soon affordances
 - Every still-mocked interactive surface (six listener-app cards + their "Send to …" buttons; three download tiles + their Download buttons; export-queue per-row actions; header "Download" + "Share"; cover Replace + Regenerate) is rendered `disabled` with muted styling and a `<ComingSoonBadge/>` (`src/components/primitives.tsx`).
