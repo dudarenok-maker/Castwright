@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 2 · Should 12 · Could 11 · Won't 13
+**Counts as of 2026-05-17:** Must 1 · Should 12 · Could 13 · Won't 13
 
 ---
 
@@ -42,16 +42,6 @@ Source: [`39-purge-wav.md`](features/39-purge-wav.md) (draft).
 - *Key files:* see the plan's "Key files" header — `chapter-audio-file.ts`, `chapter-audio.ts`, `preserve-previous-audio.ts`, `scan.ts`, `book-state.ts`, `tts/wav.ts`, `voice-sample.ts`, `synthesise-chapter.ts`, `generation.ts`, `build-mp3-zip.ts`, `index.ts`, sidecar `main.py`, `src/views/generation.tsx`, `src/lib/api.ts`, `use-sample-playback.test.ts`, `src/mocks/audio/stub-{a,b}.wav`, `openapi.yaml`, and the eight doc files enumerated in the plan.
 - *Depends on:* none — pure subtraction on existing surfaces.
 - *Benefit (architectural):* locks "chapter audio is MP3" as a one-format invariant; deletes ~150 lines of dead branches; removes the misleading "Output: WAV (16-bit PCM)" UI label that contradicts actual output.
-
-### 2. Voice-tab compare-two-cast-members affordance
-
-Source: [`22a-voice-library-compare.md`](features/22a-voice-library-compare.md) (draft).
-
-- *What:* Add multi-select checkboxes to `VoiceCard`s in the Voices tab and a floating "Selected · N [Compare]" pill that opens the existing `CompareCastModal` for any 2-voice pair. Pill carries a "same base voice ✓" / "different base voices" badge so the family-grouped tab visually privileges the same-voice tuning case without restricting cross-family selection. Per-book tab (`#/books/<id>/library`) resolves characters from the cast slice; global tab (`#/voices`) supports same-book pairs only (cross-book is a documented follow-up).
-- *Acceptance:* Vitest covers (a) checkbox renders only when `selected`+`onToggleSelect` are both passed; (b) selecting 2 same-family cards shows the green badge; (c) selecting cross-family shows the amber badge; (d) Compare is disabled at 0/1/3+ selected and enabled at exactly 2 within-book; (e) cross-book pair in the global view disables Compare with the documented tooltip. Playwright `e2e/voices-compare.spec.ts` walks open Voices tab → check 2 cards → assert badge → click Compare → assert dialog appears with both names. Existing Cast-tab compare flow continues to pass without modification.
-- *Key files:* `src/views/voices.tsx` (selection + pill); `src/components/voice-library-panel.tsx` (`VoiceCard` props extension); `src/modals/compare-cast-modal.tsx` (consumed unchanged); `src/lib/voice-character-link.ts` (add inverse `findCharacterForVoice` helper); pattern source-of-truth at `src/views/cast.tsx:284-310`.
-- *Depends on:* none — pure additive on existing surface.
-- *Benefit (user):* the highest-signal compare today — two characters routed to the same base voice but sounding subtly different — requires bouncing Voices → Cast → select → Compare. Putting the entry point next to the family grouping collapses that into a single tab, where the user is already looking at the "same voice" cohort.
 
 ---
 
@@ -272,6 +262,26 @@ Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 - *Acceptance:* A working prototype for one of the two paths; new tile on the export modal; documented size limits + caveats.
 - *Key files:* new tile config in `src/data/listener-apps.ts`; `src/modals/export-audiobook.tsx`; `server/src/export/` for any new transport.
 - *Benefit (user):* true sideload-free path. Low priority because LAN download + sync folder already work.
+
+### 12. Voice compare from the global `#/voices` tab for same-book pairs
+
+Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
+
+- *What:* When both selected voices in the global `#/voices` tab share a `bookId` (≠ `currentBookId`), fetch that book's cast on demand via `api.getBookState(bookId)` and pass the resolved characters into `CompareCastModal`. Cache the fetched cast for the modal session so re-opens are instant.
+- *Acceptance:* The Compare button enables in the global tab for a same-`bookId` 2-voice pair; the modal opens with the correct two characters. Vitest covers the on-demand fetch path + the disabled state when the fetch fails. The e2e `voices-compare.spec.ts` gains a global-tab same-book pair assertion.
+- *Key files:* `src/views/voices.tsx` (gating logic + on-demand fetch); `src/lib/api.ts` (`getBookState`); `e2e/voices-compare.spec.ts`.
+- *Depends on:* none structural; orthogonal to Must #2 (`mockGetBookState`) but the latter unblocks proper e2e coverage under mocks.
+- *Benefit (user):* closes the gap in the Voice library global view — today the global tab's Compare is fully disabled, even for pairs that would resolve cleanly with one fetch.
+
+### 13. Cross-book voice compare
+
+Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
+
+- *What:* Lift the cross-book guard. When the two selected voices belong to different `bookId`s, fetch each book's cast (one of them may be the open book — short-circuit) and pass both characters into `CompareCastModal`. Decide and document: do we route saves back to each character's source book's cast slice, or refuse the save and surface a "viewing only" banner?
+- *Acceptance:* The Compare button enables for cross-book pairs; the modal opens with both characters; the Save behaviour is documented and tested. The e2e gains a cross-book pair assertion.
+- *Key files:* `src/views/voices.tsx`; `src/store/cast-slice.ts` (Save routing); `src/modals/compare-cast-modal.tsx` (if the viewing-only banner is needed).
+- *Depends on:* Could #12 (the same on-demand fetch machinery).
+- *Benefit (user):* enables A/B for users who reuse the same TTS voice across books — e.g. comparing the same narrator across two books in a series to spot drift.
 
 ---
 

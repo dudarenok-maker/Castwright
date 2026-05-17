@@ -174,6 +174,159 @@ describe('LibraryView character-card click', () => {
   });
 });
 
+describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
+  /* All compare tests need a `ready` stage with a known bookId so the
+     gating logic (currentBookId, cross-book guard, character resolution)
+     has real values to read. The library used here has two voices in
+     bookId='b1' sharing the Charon family + one in 'b1' on Kore + one in
+     'b2' on Charon — covers same-family, different-family, and cross-book
+     pairs. */
+  const charactersB1: Character[] = [
+    { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator', lines: 120, voiceId: 'narrator' },
+    { id: 'elwin',    name: 'Elwin',    role: 'Healer',   color: 'magenta',  lines: 10,  voiceId: 'elwin' },
+    { id: 'sandor',   name: 'Sandor',   role: 'Guard',    color: 'peach',    lines: 30,  voiceId: 'sandor' },
+  ];
+
+  const libraryB1: Voice[] = [
+    makeVoice({ id: 'narrator', character: 'Narrator', bookId: 'b1', bookTitle: 'Book One', source: 'current' }),
+    makeVoice({ id: 'sandor',   character: 'Sandor',   bookId: 'b1', bookTitle: 'Book One', source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' } }),
+    makeVoice({ id: 'elwin',    character: 'Elwin',    bookId: 'b1', bookTitle: 'Book One', source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' } }),
+    makeVoice({ id: 'keefe',    character: 'Keefe',    bookId: 'b2', bookTitle: 'Book Two', source: 'library',
+      ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' } }),
+  ];
+
+  function makeReadyStore(stageBookId: string | null = 'b1') {
+    const store = configureStore({
+      reducer: {
+        ui:         uiSlice.reducer,
+        cast:       castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices:     voicesSlice.reducer,
+      },
+    });
+    store.dispatch(castSlice.actions.setCharacters(charactersB1));
+    if (stageBookId !== null) {
+      store.dispatch(uiSlice.actions.openBook({ id: stageBookId, status: 'cast_pending' }));
+      store.dispatch(uiSlice.actions.confirmCast());
+    } else {
+      store.dispatch(uiSlice.actions.openVoices());
+    }
+    return store;
+  }
+
+  function renderCompare(lib: Voice[] = libraryB1, stageBookId: string | null = 'b1') {
+    return render(
+      <Provider store={makeReadyStore(stageBookId)}>
+        <LibraryView library={lib}/>
+      </Provider>
+    );
+  }
+
+  it('shows no pill at 0 selections', () => {
+    renderCompare();
+    expect(screen.queryByText(/^Selected$/)).toBeNull();
+  });
+
+  it('shows the floating pill at exactly 1 selection (Compare disabled)', () => {
+    renderCompare();
+    const checkboxes = screen.getAllByLabelText('Select voice for compare');
+    fireEvent.click(checkboxes[0]);
+    expect(screen.getByText('Selected')).toBeInTheDocument();
+    const compareBtn = screen.getByRole('button', { name: 'Compare' });
+    expect(compareBtn).toBeDisabled();
+    expect(compareBtn.getAttribute('title')).toBe('Select exactly 2 voices');
+  });
+
+  it('shows the green "same base voice ✓" badge when 2 same-family voices are selected (plan 22a)', () => {
+    renderCompare();
+    /* Click Narrator + Sandor — both b1 + both Charon. */
+    fireEvent.click(screen.getByText('Narrator').closest('div.group')!
+      .querySelector('[aria-label="Select voice for compare"]')!);
+    fireEvent.click(screen.getByText('Sandor').closest('div.group')!
+      .querySelector('[aria-label="Select voice for compare"]')!);
+    expect(screen.getByText('same base voice ✓')).toBeInTheDocument();
+    expect(screen.queryByText('different base voices')).toBeNull();
+  });
+
+  it('shows the amber "different base voices" badge when 2 cross-family voices are selected (plan 22a)', () => {
+    renderCompare();
+    /* Click Narrator (Charon) + Elwin (Kore) — both b1, different families. */
+    fireEvent.click(screen.getByText('Narrator').closest('div.group')!
+      .querySelector('[aria-label="Select voice for compare"]')!);
+    fireEvent.click(screen.getByText('Elwin').closest('div.group')!
+      .querySelector('[aria-label="Select voice for compare"]')!);
+    expect(screen.getByText('different base voices')).toBeInTheDocument();
+    expect(screen.queryByText('same base voice ✓')).toBeNull();
+  });
+
+  it('enables Compare at exactly 2 within-current-book selections (plan 22a)', () => {
+    renderCompare();
+    fireEvent.click(screen.getByText('Narrator').closest('div.group')!
+      .querySelector('[aria-label="Select voice for compare"]')!);
+    fireEvent.click(screen.getByText('Sandor').closest('div.group')!
+      .querySelector('[aria-label="Select voice for compare"]')!);
+    const compareBtn = screen.getByRole('button', { name: 'Compare' });
+    expect(compareBtn).not.toBeDisabled();
+  });
+
+  it('disables Compare at 3+ selections with "Select exactly 2 voices" (plan 22a)', () => {
+    renderCompare();
+    const checkboxes = screen.getAllByLabelText('Select voice for compare');
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(checkboxes[2]);
+    const compareBtn = screen.getByRole('button', { name: 'Compare' });
+    expect(compareBtn).toBeDisabled();
+    expect(compareBtn.getAttribute('title')).toBe('Select exactly 2 voices');
+  });
+
+  it('disables Compare on the global tab (no open book) with the documented tooltip (plan 22a)', () => {
+    /* `stageBookId=null` puts ui.stage on `{kind:'voices'}` — the global
+       tab. Even with a valid 2-voice pair the gate stays closed because
+       the cast slice of the foreign book is not hydrated here. */
+    renderCompare(libraryB1, null);
+    const checkboxes = screen.getAllByLabelText('Select voice for compare');
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    const compareBtn = screen.getByRole('button', { name: 'Compare' });
+    expect(compareBtn).toBeDisabled();
+    expect(compareBtn.getAttribute('title')).toBe('Open a book to compare its voices');
+  });
+
+  it('disables Compare on a cross-book pair with the documented tooltip (plan 22a)', () => {
+    renderCompare();
+    /* Narrator (b1) + Keefe (b2) — even though both resolve to Charon,
+       the cross-book guard fires first. */
+    fireEvent.click(screen.getByText('Narrator').closest('div.group')!
+      .querySelector('[aria-label="Select voice for compare"]')!);
+    fireEvent.click(screen.getByText('Keefe').closest('div.group')!
+      .querySelector('[aria-label="Select voice for compare"]')!);
+    const compareBtn = screen.getByRole('button', { name: 'Compare' });
+    expect(compareBtn).toBeDisabled();
+    expect(compareBtn.getAttribute('title')).toBe('Cross-book compare not supported yet');
+  });
+
+  it('opens the CompareCastModal with both linked characters when Compare is clicked (plan 22a)', () => {
+    renderCompare();
+    fireEvent.click(screen.getByText('Narrator').closest('div.group')!
+      .querySelector('[aria-label="Select voice for compare"]')!);
+    fireEvent.click(screen.getByText('Sandor').closest('div.group')!
+      .querySelector('[aria-label="Select voice for compare"]')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('clears selection when Clear is clicked (plan 22a)', () => {
+    renderCompare();
+    fireEvent.click(screen.getAllByLabelText('Select voice for compare')[0]);
+    expect(screen.getByText('Selected')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.queryByText(/^Selected$/)).toBeNull();
+  });
+});
+
 describe('LibraryView Base voices tab', () => {
   it('shows the catalog from getBaseVoices when the user clicks the tab', async () => {
     getBaseVoices.mockResolvedValue({

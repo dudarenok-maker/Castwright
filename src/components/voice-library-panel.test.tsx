@@ -174,6 +174,63 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     expect(onSelect).toHaveBeenCalledTimes(3);
   });
 
+  it('renders the multi-select checkbox only when both `selected` and `onToggleSelect` are passed (plan 22a)', () => {
+    /* With only the legacy props the card MUST stay drag-only with no
+       checkbox surface — otherwise the Cast-view drawer would show a stray
+       selection control. The "selectable" mode requires both `selected` AND
+       `onToggleSelect`; either alone keeps the legacy DOM. */
+    const voice = makeVoice('v_keefe', 'Keefe');
+    const { rerender } = render(
+      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()}/>
+    );
+    expect(screen.queryByLabelText(/Select voice for compare|Deselect voice/)).toBeNull();
+
+    /* Only `selected` set — still no checkbox. */
+    rerender(<VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} selected={false}/>);
+    expect(screen.queryByLabelText(/Select voice for compare|Deselect voice/)).toBeNull();
+
+    /* Both set — checkbox appears. */
+    rerender(
+      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()}
+                 selected={false} onToggleSelect={vi.fn()}/>
+    );
+    expect(screen.getByLabelText('Select voice for compare')).toBeInTheDocument();
+  });
+
+  it('fires onToggleSelect — not onSelect — when the checkbox is clicked (plan 22a)', () => {
+    /* The checkbox sits on a parallel hit zone to the card body. Clicking
+       it must toggle selection AND `e.stopPropagation()` so the card-body
+       `onSelect` (the profile/navigation handler) never fires. */
+    const onToggleSelect = vi.fn();
+    const onSelect = vi.fn();
+    const voice = makeVoice('v_keefe', 'Keefe');
+    render(
+      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()}
+                 selected={false} onToggleSelect={onToggleSelect} onSelect={onSelect}/>
+    );
+    fireEvent.click(screen.getByLabelText('Select voice for compare'));
+    expect(onToggleSelect).toHaveBeenCalledTimes(1);
+    expect(onToggleSelect.mock.calls[0][0].id).toBe('v_keefe');
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('paints the card with bg-peach tint when selected (plan 22a — mirrors cast.tsx:~199)', () => {
+    const voice = makeVoice('v_keefe', 'Keefe');
+    const { rerender } = render(
+      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()}
+                 selected={false} onToggleSelect={vi.fn()}/>
+    );
+    const card = screen.getByText('Keefe').closest('div.group')!;
+    expect(card.className).not.toMatch(/bg-peach/);
+    rerender(
+      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()}
+                 selected={true} onToggleSelect={vi.fn()}/>
+    );
+    /* The peach tint variant is `bg-peach/[0.04]` — same DOM rule as
+       cast.tsx for the selected-row highlight. */
+    expect(card.className).toMatch(/bg-peach/);
+  });
+
   it('wraps the voice list in the inset-scrollbar utility so the thumb clears the card corners', () => {
     /* The panel's outer is `rounded-3xl overflow-hidden`. The scrollable
        inner sits flush with the card's bottom rounded corner, so without
