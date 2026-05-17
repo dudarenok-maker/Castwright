@@ -7,9 +7,7 @@
      `.previous.*` siblings. The new render then writes to the freshly-empty
      live names.
    - Stale `.previous.*` from a prior accept/reject that the user has moved
-     on from: MUST be overwritten (it's dead state).
-   - Legacy .wav chapters: MUST be preserved to `.previous.wav` (we don't
-     auto-transcode old chapters). */
+     on from: MUST be overwritten (it's dead state). */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, readFile, readdir } from 'node:fs/promises';
@@ -30,7 +28,7 @@ afterEach(async () => {
 describe('preserveExistingAsPrevious', () => {
   it('no-ops on first render (no existing audio)', async () => {
     const result = await preserveExistingAsPrevious(workdir, 'ch01');
-    expect(result).toEqual({ preserved: false, ext: null });
+    expect(result).toEqual({ preserved: false });
 
     const remaining = await readdir(workdir);
     expect(remaining).toEqual([]);
@@ -41,7 +39,7 @@ describe('preserveExistingAsPrevious', () => {
     await writeFile(join(workdir, 'ch01.segments.json'), JSON.stringify({ v: 1 }));
 
     const result = await preserveExistingAsPrevious(workdir, 'ch01');
-    expect(result).toEqual({ preserved: true, ext: 'mp3' });
+    expect(result).toEqual({ preserved: true });
 
     const remaining = (await readdir(workdir)).sort();
     expect(remaining).toEqual(['ch01.previous.mp3', 'ch01.previous.segments.json']);
@@ -49,17 +47,6 @@ describe('preserveExistingAsPrevious', () => {
     /* Content survives the rename — we move atomically, not copy-then-zero. */
     expect(await readFile(join(workdir, 'ch01.previous.mp3'), 'utf8')).toBe('fake-mp3-bytes');
     expect(JSON.parse(await readFile(join(workdir, 'ch01.previous.segments.json'), 'utf8'))).toEqual({ v: 1 });
-  });
-
-  it('preserves legacy .wav chapters to .previous.wav', async () => {
-    await writeFile(join(workdir, 'ch01.wav'), 'fake-wav-bytes');
-    await writeFile(join(workdir, 'ch01.segments.json'), JSON.stringify({ v: 1 }));
-
-    const result = await preserveExistingAsPrevious(workdir, 'ch01');
-    expect(result).toEqual({ preserved: true, ext: 'wav' });
-
-    const remaining = (await readdir(workdir)).sort();
-    expect(remaining).toEqual(['ch01.previous.segments.json', 'ch01.previous.wav']);
   });
 
   it('overwrites stale .previous.* from an earlier preserve', async () => {
@@ -86,25 +73,10 @@ describe('preserveExistingAsPrevious', () => {
     await writeFile(join(workdir, 'ch01.mp3'), 'fake-mp3-bytes');
 
     const result = await preserveExistingAsPrevious(workdir, 'ch01');
-    expect(result).toEqual({ preserved: true, ext: 'mp3' });
+    expect(result).toEqual({ preserved: true });
 
     const remaining = (await readdir(workdir)).sort();
     expect(remaining).toEqual(['ch01.previous.mp3']);
-  });
-
-  it('prefers mp3 over wav when both exist', async () => {
-    /* Mirrors findChapterAudio's PROBE_ORDER. */
-    await writeFile(join(workdir, 'ch01.mp3'), 'mp3');
-    await writeFile(join(workdir, 'ch01.wav'), 'wav');
-    await writeFile(join(workdir, 'ch01.segments.json'), 'segs');
-
-    const result = await preserveExistingAsPrevious(workdir, 'ch01');
-    expect(result.ext).toBe('mp3');
-
-    const remaining = (await readdir(workdir)).sort();
-    /* mp3 was preserved; the legacy .wav is left untouched (regen will
-       deal with it however the existing pipeline already does). */
-    expect(remaining).toEqual(['ch01.previous.mp3', 'ch01.previous.segments.json', 'ch01.wav']);
   });
 });
 
@@ -115,11 +87,6 @@ describe('hasPreviousAudio', () => {
 
   it('returns true for .previous.mp3', async () => {
     await writeFile(join(workdir, 'ch01.previous.mp3'), '');
-    expect(hasPreviousAudio(workdir, 'ch01')).toBe(true);
-  });
-
-  it('returns true for .previous.wav', async () => {
-    await writeFile(join(workdir, 'ch01.previous.wav'), '');
     expect(hasPreviousAudio(workdir, 'ch01')).toBe(true);
   });
 });

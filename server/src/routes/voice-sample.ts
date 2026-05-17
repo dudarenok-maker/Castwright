@@ -19,7 +19,7 @@ import {
   type TtsModelKey,
 } from '../tts/index.js';
 import { encodePcmToMp3 } from '../tts/mp3.js';
-import { pcmDurationSec } from '../tts/wav.js';
+import { pcmDurationSec } from '../tts/pcm.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from '../tts/voice-mapping.js';
 
 export const voiceSampleRouter = Router();

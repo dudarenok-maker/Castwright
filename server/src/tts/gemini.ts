@@ -1,7 +1,8 @@
 /* Gemini TTS — single-speaker prebuilt-voice synthesis via @google/genai.
-   Returns raw PCM bytes (24 kHz, 16-bit signed LE mono per the Gemini docs);
-   the caller wraps in WAV before persisting. Model id is resolved per-call
-   so the same provider instance can serve both selector options.
+   Returns raw PCM bytes (24 kHz, 16-bit signed LE mono per the Gemini docs)
+   to the caller; the Node-side encoder turns the PCM into MP3 before
+   persisting. Model id is resolved per-call so the same provider instance
+   can serve both selector options.
 
    Audio tags: inline bracketed cues (`[whispers]`, `[shouting]`, …) ride
    along inside `text` verbatim. Gemini's respect for them is informal —
