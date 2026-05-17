@@ -188,3 +188,57 @@ The compact version:
 3. Update `docs/features/INDEX.md` and `docs/BACKLOG.md` if relevant.
 4. Run `npm run verify` locally.
 5. Surface the user-visible delta in the end-of-turn summary.
+
+## Release notes
+
+Release notes live in the annotated git tag message (`git tag -a vX.Y.Z`).
+The tag message is the source of truth; the regression plans under
+`docs/features/` are the long-form companion (reference plan numbers in
+parens, e.g. `(32, 33)`).
+
+A release describes what shipped from a **user's** perspective, diffed
+against the **previous public release**. It is not a development diary
+and not an inventory of parked work.
+
+### Sections, in order
+
+1. **Features.** User-visible additions or expansions since the previous
+   release. One bullet per shipped capability.
+2. **Fixes.** Bugs that escaped the previous release and that users
+   actually hit. Omit this section entirely on an initial release.
+3. **Retirements.** Behavior that **shipped in a previous release** and
+   is now removed or downgraded. Tell users what to do instead.
+4. **Engineering.** Changes to the test harness, build, install
+   prerequisites, deploy steps, repo layout — anything that changes how
+   a contributor runs the project or how an operator deploys it.
+
+### What stays out
+
+- **Parked or deferred work.** That belongs in `docs/BACKLOG.md`. A
+  release describes what shipped, not what was considered. No "What is
+  NOT in vX.Y.Z" sections.
+- **Removals of never-shipped scaffolding.** If users never had it,
+  they didn't lose it. Internal cleanup is not a retirement.
+- **Same-cycle regression fixes.** A bug introduced and fixed within
+  this release cycle is internal churn — invisible to anyone who only
+  ever runs tagged versions.
+- **Refactors, renames, internal restructuring** with no behavior,
+  build, or test-command change.
+- **Comparative phrasing on an initial release** ("now also on…",
+  "improved…"). With no previous public release to diff against, just
+  state what the feature is.
+
+### Recipe
+
+1. `git log vPREV..HEAD --oneline` and bucket each commit into
+   Features / Fixes / Retirements / Engineering using the rules above.
+   Drop anything that falls into "What stays out".
+2. For each candidate Fix, verify the bug actually predates `vPREV`
+   (`git log vPREV -- <file>` or check the bug report's date). If it
+   was born and died inside this cycle, drop it.
+3. For each candidate Retirement, verify the feature shipped in a
+   prior tag. If it was only ever in dev, it's internal cleanup —
+   leave it out.
+4. Write the tag message with the four sections (omit any that are
+   empty). Reference plan numbers in parens.
+5. `git tag -a vX.Y.Z` and `git push --tags` once the user approves.
