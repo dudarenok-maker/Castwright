@@ -27,23 +27,13 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 4 · Should 12 · Could 11 · Won't 13
+**Counts as of 2026-05-17:** Must 3 · Should 12 · Could 11 · Won't 13
 
 ---
 
 ## Must — blocks v1 ship or hurts existing users
 
-### 1. Purge WAV from the codebase (MP3 is the only format)
-
-Source: [`39-purge-wav.md`](features/39-purge-wav.md) (draft).
-
-- *What:* Delete every WAV branch, route, type literal, comment, UI label, mock fixture, and doc reference. Locator probes `.mp3` only; `audio.wav` + `audio/previous.wav` routes deleted; `ChapterAudioExt` narrows to `'mp3'`; `preserve-previous-audio` returns `{ preserved }` (no `ext`); audio-file regexes drop `wav`; `server/src/tts/wav.ts` deleted, `pcmDurationSec` moved to `server/src/tts/pcm.ts`; Generation view footer reads "Output: MP3 (VBR V2)"; mock `stub-a.wav` / `stub-b.wav` transcoded to MP3; sidecar `import wave` + `_wav_bytes` removed; `openapi.yaml` + 8 feature docs reworded; legacy on-disk `.wav` files become invisible (no migration).
-- *Acceptance:* `grep -rin 'wav\|WAV' src/ server/src/ openapi.yaml docs/features/` returns only `Waveform` component imports and the `peaks` "waveform envelope" description (visualization terms — not the format). `npm run verify` green. New tests pin `GET …/audio.wav` → 404 and `findChapterAudio` ignores `.wav` files on disk.
-- *Key files:* see the plan's "Key files" header — `chapter-audio-file.ts`, `chapter-audio.ts`, `preserve-previous-audio.ts`, `scan.ts`, `book-state.ts`, `tts/wav.ts`, `voice-sample.ts`, `synthesise-chapter.ts`, `generation.ts`, `build-mp3-zip.ts`, `index.ts`, sidecar `main.py`, `src/views/generation.tsx`, `src/lib/api.ts`, `use-sample-playback.test.ts`, `src/mocks/audio/stub-{a,b}.wav`, `openapi.yaml`, and the eight doc files enumerated in the plan.
-- *Depends on:* none — pure subtraction on existing surfaces.
-- *Benefit (architectural):* locks "chapter audio is MP3" as a one-format invariant; deletes ~150 lines of dead branches; removes the misleading "Output: WAV (16-bit PCM)" UI label that contradicts actual output.
-
-### 2. Voice-tab compare-two-cast-members affordance
+### 1. Voice-tab compare-two-cast-members affordance
 
 Source: [`22a-voice-library-compare.md`](features/22a-voice-library-compare.md) (draft).
 
@@ -53,7 +43,7 @@ Source: [`22a-voice-library-compare.md`](features/22a-voice-library-compare.md) 
 - *Depends on:* none — pure additive on existing surface.
 - *Benefit (user):* the highest-signal compare today — two characters routed to the same base voice but sounding subtly different — requires bouncing Voices → Cast → select → Compare. Putting the entry point next to the family grouping collapses that into a single tab, where the user is already looking at the "same voice" cohort.
 
-### 3. `mockGetBookState` mock implementation
+### 2. `mockGetBookState` mock implementation
 
 Source: [`12-manuscript-view.md`](features/12-manuscript-view.md) (KNOWN: scaffolded).
 
@@ -62,7 +52,7 @@ Source: [`12-manuscript-view.md`](features/12-manuscript-view.md) (KNOWN: scaffo
 - *Key files:* `src/lib/api.ts:276-285` (mockGetBookState + mockPutBookState); `src/store/persistence-middleware.ts`; `docs/features/27-book-state-persistence.md` for the round-trip contract.
 - *Benefit (technical):* mock mode is the only environment that boots without a Node backend + sidecar. A throwing mock breaks design fixtures, demo recordings, and any Vitest+jsdom test that hits the persistence path.
 
-### 4. Cancel / dismiss / retry on running export jobs
+### 3. Cancel / dismiss / retry on running export jobs
 
 Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 

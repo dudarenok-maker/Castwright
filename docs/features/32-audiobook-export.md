@@ -21,7 +21,7 @@ PocketBook publishes no off-device API, no SDK, and no partner programme. The in
 ## How the MP3.ZIP is built
 
 1. `state.chapters` is walked in id order; excluded chapters are skipped before any work happens.
-2. `findChapterAudio(audioDir, chapter.slug)` (reused from plan 28) probes each chapter's mp3 path. If any non-excluded chapter has no `.mp3` (or has only a legacy `.wav`), the build refuses with `ExportIncompleteError` carrying the full missing-slug list.
+2. `findChapterAudio(audioDir, chapter.slug)` (reused from plan 28) probes each chapter's mp3 path. If any non-excluded chapter has no `.mp3`, the build refuses with `ExportIncompleteError` carrying the full missing-slug list.
 3. Each chapter MP3 is run through `applyId3v24Tags` (`server/src/export/id3-tags.ts`): ffmpeg with `-c:a copy` copies the LAME VBR V2 frames byte-for-byte and writes a fresh ID3v2.4 header:
    - TIT2 = chapter title
    - TALB = book title
@@ -54,7 +54,7 @@ LAN URL enumeration (`GET /api/export/lan`) filters out 127.x and 169.254.x — 
 - **M4B re-encodes; MP3.ZIP does not.** Crossing the streams (re-encoding MP3.ZIP entries, or stream-copying MP3 frames into the M4B container) breaks both formats — MP3.ZIP drifts away from plan 28's audio invariants, and stream-copying MP3 inside MP4 produces a file no PocketBook firmware accepts.
 - **M4B chapter timestamps come from per-source `ffprobe`.** Post-encode probes are off by AAC priming + concat padding (a few ms per chapter); summing them across a long book yields visible drift. Always probe the source MP3s.
 - **Excluded chapters are never in the zip.** State.chapters' `excluded` flag is the single source of truth.
-- **Mixed-format archives are refused.** A chapter with only `.wav` triggers `ExportIncompleteError`. PocketBook reads MP3.ZIP, not "MP3-or-WAV.ZIP."
+- **A chapter with no MP3 on disk is refused.** Missing `.mp3` triggers `ExportIncompleteError`. PocketBook reads MP3.ZIP; the precheck surfaces the full punch list so the user can regenerate before retrying.
 - **Atomic writes.** Both the staging artifact and the sync-folder copy use `tmp + renameWithRetry`. The retry covers OneDrive's change-detection scan window — same hazard that crashed the library-cast-override path on 2026-05-15.
 - **In-memory jobs are not the source of truth for downloads.** A `manifest.json` lands next to the artifact on completion; the route's `rehydrateBook` re-populates the in-memory table on first lookup so download URLs survive server restarts.
 - **The export modal is the only entry point.** The Listen view's three "Or download a file" tiles (now two) stay marked as future affordances; the live flow goes through the modal.
