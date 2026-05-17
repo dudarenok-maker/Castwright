@@ -58,6 +58,34 @@ describe('accountSlice — granular setters', () => {
     const b = accountSlice.reducer(a, accountActions.setWorkspaceDirOverride(null));
     expect(b.workspaceDirOverride).toBeNull();
   });
+
+  it("setCoverPickerDefaultTab flips between 'search' and 'upload' (plan 40)", () => {
+    const a = accountSlice.reducer(undefined, accountActions.setCoverPickerDefaultTab('upload'));
+    expect(a.coverPickerDefaultTab).toBe('upload');
+    const b = accountSlice.reducer(a, accountActions.setCoverPickerDefaultTab('search'));
+    expect(b.coverPickerDefaultTab).toBe('search');
+  });
+});
+
+describe('accountSlice — coverPickerDefaultTab (plan 40)', () => {
+  it('hydrates from the server fetch response', async () => {
+    (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      coverPickerDefaultTab: 'upload',
+    });
+    const store = makeStore();
+    await store.dispatch(fetchAccountSettings());
+    expect(store.getState().account.coverPickerDefaultTab).toBe('upload');
+  });
+
+  it('round-trips through saveAccountSettings', async () => {
+    const putSpy = api.putUserSettings as unknown as ReturnType<typeof vi.fn>;
+    putSpy.mockResolvedValue({ ...SERVER_FIXTURE, coverPickerDefaultTab: 'upload' });
+    const store = makeStore();
+    await store.dispatch(saveAccountSettings({ coverPickerDefaultTab: 'upload' }));
+    expect(putSpy).toHaveBeenCalledWith({ coverPickerDefaultTab: 'upload' });
+    expect(store.getState().account.coverPickerDefaultTab).toBe('upload');
+  });
 });
 
 describe('accountSlice — fetch lifecycle', () => {
