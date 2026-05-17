@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 0 · Should 6 · Could 14 · Won't 12
+**Counts as of 2026-05-17:** Must 0 · Should 5 · Could 14 · Won't 12
 
 ---
 
@@ -49,16 +49,7 @@ Source: [`32-sticky-analysis.md`](features/32-sticky-analysis.md) follow-ups.
 - *Depends on:* none structural — the endpoint already returns the full snapshot list so the card-badge consumer just picks per-book entries.
 - *Benefit (user):* prevents the "started yesterday, forgot where" failure mode.
 
-### 2. E2E coverage: upload → analysing → confirm → ready
-
-Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
-
-- *What:* The existing `e2e/new-book-flow.spec.ts` walks the cold-boot → "Start a new book" → confirm → ready flow under mocks. Tracking item to extend it with the deeper coverage the original Should #6 entry called out: per-step Redux assertions, hashchange timing on the analysing→confirm boundary, and a refresh-restores-stage assertion that exercises the redux-persist wiring shipped 2026-05-17.
-- *Acceptance:* `e2e/new-book-flow.spec.ts` adds assertions on intermediate Redux state at each stage transition + a refresh in the `ready` stage that lands back at the same view + selected chapter. Wall-clock under 30 s on a warm cache.
-- *Key files:* `e2e/new-book-flow.spec.ts`; mock fixtures in `src/mocks/canned-data.ts`.
-- *Benefit (technical):* depth on top of the golden-path coverage already in place.
-
-### 3. E2E coverage: listen view + mini-player
+### 2. E2E coverage: listen view + mini-player
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
@@ -68,7 +59,7 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - *Depends on:* Could #3 (resume bookmarks) for the resume-from-position case; the duration-tick case is unblocked today.
 - *Benefit (technical):* listen + playback is the second-highest-blast-radius surface.
 
-### 4. Dark mode
+### 3. Dark mode
 
 Source: [`25-design-tokens.md`](features/25-design-tokens.md) (was Won't #6; promoted 2026-05-17 per user prioritisation).
 
@@ -78,7 +69,7 @@ Source: [`25-design-tokens.md`](features/25-design-tokens.md) (was Won't #6; pro
 - *Depends on:* none structural — the visual-baselines harness (`e2e/visual.spec.ts`) is already in place; dark-mode adds a second-theme baseline pass on top.
 - *Benefit (user):* the single most-requested visual polish missing from v1; 9 PM listening sessions stop blasting white.
 
-### 5. Adjustable cover framing + local-disk upload
+### 4. Adjustable cover framing + local-disk upload
 
 Source: [`40-cover-framing-and-upload.md`](features/40-cover-framing-and-upload.md) (draft).
 
@@ -88,7 +79,7 @@ Source: [`40-cover-framing-and-upload.md`](features/40-cover-framing-and-upload.
 - *Depends on:* none structural. Plan 36's data model and endpoints are extended, not replaced; the plan 27 schema-versioning seam (already shipped) accommodates the additive `coverImage.framing` field.
 - *Benefit (user):* OpenLibrary covers crop the title/author away in our square frame today, and books with no OpenLibrary match are stuck on the procedural gradient forever. Both gaps close in one round.
 
-### 6. Bulk-apply library sync on confirm-cast
+### 5. Bulk-apply library sync on confirm-cast
 
 Source: [`41-bulk-library-sync.md`](features/41-bulk-library-sync.md) (draft) — supersedes plan 09 §"Bulk-accept-all UI".
 
