@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-17:** Must 0 · Should 12 · Could 17 · Won't 12
+**Counts as of 2026-05-17:** Must 0 · Should 13 · Could 17 · Won't 12
 
 ---
 
@@ -153,6 +153,16 @@ Source: [`40-cover-framing-and-upload.md`](features/40-cover-framing-and-upload.
 - *Key files:* `src/modals/cover-picker.tsx`; `src/views/book-library.tsx`; `src/views/listen.tsx`; new `src/lib/cover-framing.ts`; new `server/src/cover/upload.ts`; `server/src/routes/cover.ts`; `server/src/workspace/scan.ts`; `openapi.yaml`.
 - *Depends on:* none structural. Plan 36's data model and endpoints are extended, not replaced; the plan 27 schema-versioning seam (already shipped) accommodates the additive `coverImage.framing` field.
 - *Benefit (user):* OpenLibrary covers crop the title/author away in our square frame today, and books with no OpenLibrary match are stuck on the procedural gradient forever. Both gaps close in one round.
+
+### 13. Bulk-apply library sync on confirm-cast
+
+Source: [`41-bulk-library-sync.md`](features/41-bulk-library-sync.md) (draft) — supersedes plan 09 §"Bulk-accept-all UI".
+
+- *What:* Add a "Sync N profiles from library" pill at the top of the confirm-cast view that ticks every eligible character's "Sync profile" checkbox in one click. Inverse "Clear all syncs" when all are already ticked. No server changes — existing `handleConfirm` batch (`src/views/confirm-cast.tsx:62-86`) handles the per-character library-cast-override calls already.
+- *Acceptance:* Pill appears when at least one character has `matchedFrom.bookId + characterId` set; click ticks every such character's checkbox; click again clears; per-character untick still works as the exception path. New Vitest covers pill render + bulk-toggle logic; new Playwright spec walks cold-boot → confirm → click pill → click Confirm cast.
+- *Key files:* `src/views/confirm-cast.tsx`; new `src/views/confirm-cast.test.tsx`; new `e2e/bulk-sync-library.spec.ts`; new `docs/features/41-bulk-library-sync.md`.
+- *Depends on:* none. Plan 09's per-character override (shipped) is the API path; this is purely a UI compression.
+- *Benefit (user):* large manuscripts in long-running series (12+ carryovers) currently demand a click per character before "Confirm cast". One-click bulk + exception ticking matches how the user actually thinks ("reuse all, except these"). The user can rank this higher than #13 in a separate reprioritisation pass — placement at the bottom of Should is a churn-avoidance default, not a priority signal.
 
 ---
 
