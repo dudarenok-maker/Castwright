@@ -27,7 +27,7 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
-import { stampStateSchema } from '../workspace/state-migrate.js';
+import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { putManuscript, getManuscript, getOrHydrateManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { clearAnalysisCache, loadAnalysisCache } from '../store/analysis-cache.js';
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
@@ -92,7 +92,7 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
       chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
       updatedAt: titlesChanged ? new Date().toISOString() : state.updatedAt,
     };
-    await writeJsonAtomic(stateJsonPath(bookDir), stampStateSchema(nextState));
+    await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
     return nextState;
   } catch (err) {
     console.warn(`[book-state] title-refresh failed for ${state.bookId}:`, (err as Error).message);
@@ -422,13 +422,13 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
              empty directories so it naturally leaves siblings alone, and
              errors are swallowed (orphan empty dirs are cosmetic, not a
              correctness problem). */
-          await writeJsonAtomic(stateJsonPath(newDir), stampStateSchema(next));
+          await writeStateJsonAtomic(stateJsonPath(newDir), next);
           const oldSeriesDir = dirname(bookDir);
           const oldAuthorDir = dirname(oldSeriesDir);
           await rmdir(oldSeriesDir).catch(() => { /* not empty or locked → leave it */ });
           await rmdir(oldAuthorDir).catch(() => { /* not empty or locked → leave it */ });
         } else {
-          await writeJsonAtomic(stateJsonPath(bookDir), stampStateSchema(next));
+          await writeStateJsonAtomic(stateJsonPath(bookDir), next);
         }
         break;
       }
@@ -547,7 +547,7 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
       castConfirmed: false,    // cast keys to chapters; force re-confirm.
       updatedAt: new Date().toISOString(),
     };
-    await writeJsonAtomic(stateJsonPath(bookDir), stampStateSchema(nextState));
+    await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
 
     /* Wipe the analysis cache and any per-book state that's now stale.
        Audio dir is removed wholesale; cast.json + revisions.json are deleted
@@ -697,7 +697,7 @@ bookStateRouter.post('/:bookId/chapters/:chapterId/exclude', async (req: Request
       chapters: nextChapters,
       updatedAt: new Date().toISOString(),
     };
-    await writeJsonAtomic(stateJsonPath(bookDir), stampStateSchema(nextState));
+    await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
 
     /* Propagate to the live ManuscriptRecord if it's loaded. The
        analysis route reads chapterHints directly from this; without

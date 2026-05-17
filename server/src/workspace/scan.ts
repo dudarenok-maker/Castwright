@@ -16,8 +16,8 @@ import {
   makeBookId,
   stateJsonPath,
 } from './paths.js';
-import { readJson, writeJsonAtomic } from './state-io.js';
-import { stampStateSchema } from './state-migrate.js';
+import { readJson } from './state-io.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 
 export type LibraryBookStatus =
@@ -474,7 +474,13 @@ async function findBookBy(predicate: (state: BookStateJson) => boolean): Promise
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const raw = await readJson<BookStateJson>(join(dir, '.audiobook', 'state.json')).catch(() => null);
+        /* readStateJsonWithRecovery walks .bak.N on a corrupt main file
+           so a torn write or schema-migration bug doesn't hide the book
+           from per-book routes; `.catch(() => null)` still absorbs the
+           total-loss case (no backups parsed either) — the lookup
+           silently returns null and the route layer responds 404 as
+           it would on a genuinely missing book. */
+        const raw = await readStateJsonWithRecovery(join(dir, '.audiobook', 'state.json')).catch(() => null);
         if (raw && predicate(raw)) {
           /* Apply the same lazy backfill we run during library scan — so
              a user opening a specific book's detail page (without going
@@ -536,7 +542,7 @@ export async function backfillAudioModelKeysFromSegments(
   if (backfillNeeded) {
     const upgraded: BookStateJson = { ...state, chapters: next };
     try {
-      await writeJsonAtomic(stateJsonPath(bookDir), stampStateSchema(upgraded));
+      await writeStateJsonAtomic(stateJsonPath(bookDir), upgraded);
       return { state: upgraded, totalSec };
     } catch {
       /* Best-effort upgrade — a failed write just means the next call
