@@ -12,6 +12,7 @@ import { Stat } from './generation';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { EditBookMetaModal, type EditBookMetaPatch } from '../modals/edit-book-meta';
 import { CoverPicker } from '../modals/cover-picker';
+import { type CoverFraming, computeCoverStyle } from '../lib/cover-framing';
 import { api, type WorkspaceInfo } from '../lib/api';
 import { useAppSelector } from '../store';
 import { selectPausedSnapshotForBook } from '../store/library-slice';
@@ -235,6 +236,11 @@ function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit, onCoverCh
      string means "the user just removed the cover; ignore book.coverImageUrl
      until the slice catches up". */
   const [coverOverride, setCoverOverride] = useState<string | null>(null);
+  /* Plan 40 — local framing override mirrors coverOverride pattern so
+     the BookCard repaints framing immediately after a Frame-tab gesture,
+     ahead of the library slice rehydrate. */
+  const [framingOverride, setFramingOverride] = useState<CoverFraming | null>(null);
+  const effectiveFraming = framingOverride ?? book.coverFraming;
   /* Tracks <img> load failures so we can fall back to the gradient
      skeleton without leaving a stale broken image rendered on top. */
   const [coverLoadFailed, setCoverLoadFailed] = useState(false);
@@ -265,6 +271,7 @@ function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit, onCoverCh
             src={effectiveCoverUrl}
             alt=""
             className="absolute inset-0 w-full h-full object-cover"
+            style={computeCoverStyle(effectiveFraming)}
             onError={() => setCoverLoadFailed(true)}
           />
         )}
@@ -415,6 +422,7 @@ function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit, onCoverCh
           bookTitle={book.title}
           bookAuthor={book.author}
           currentCoverUrl={effectiveCoverUrl ?? undefined}
+          currentFraming={effectiveFraming}
           onClose={() => setCoverPickerOpen(false)}
           onPicked={(newUrl) => {
             /* Empty string = the user picked "Remove cover". Bust the
@@ -422,8 +430,11 @@ function BookCard({ book, active, onOpen, onDelete, onReparse, onEdit, onCoverCh
                new bytes from the same `/api/books/:bookId/cover` path. */
             setCoverLoadFailed(false);
             setCoverOverride(newUrl ? `${newUrl}?t=${Date.now()}` : '');
+            /* Fresh image → drop framing override so the slice's value wins. */
+            setFramingOverride(null);
             void onCoverChanged?.();
           }}
+          onFramingChanged={(f) => setFramingOverride(f)}
         />
         <ConfirmDialog
           open={confirmReparse}
