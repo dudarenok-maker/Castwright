@@ -15,7 +15,7 @@ import type { AnalyseResponse, BookStateResponse, Character, DroppedQuotesRespon
 let capturedOpts: AnalyseOpts | undefined;
 let capturedSubsetCall: { chapterIds: number[]; opts: AnalyseOpts | undefined } | undefined;
 let resolveSubset: ((value: AnalyseResponse) => void) | undefined;
-let getBookStateImpl: ((bookId: string) => Promise<BookStateResponse>) | undefined;
+let getBookStateImpl: ((bookId: string) => Promise<BookStateResponse | null>) | undefined;
 let getDroppedQuotesImpl: ((bookId: string) => Promise<DroppedQuotesResponse>) | undefined;
 /* Per-test override — when set, the analyseManuscript mock rejects with
    this error instead of returning a never-resolving promise. Lets tests

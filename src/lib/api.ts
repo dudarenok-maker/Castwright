@@ -9,7 +9,8 @@ import type {
   RevisionsResponse, ChapterAudio, GenerationTick, Character,
   Voice, VoiceSample, TtsModelKey, LibraryResponse, VoiceLibraryResponse,
   ImportResponse, ConfirmBookRequest, ConfirmBookResponse,
-  BookStateResponse, PutStateRequest, WorkspaceChangeLogResponse,
+  BookStateResponse, BookStateJson, ChangeLogEvent,
+  PutStateRequest, WorkspaceChangeLogResponse,
   UserSettings, UserSettingsPatch, DroppedQuotesResponse,
   AnalysisStateResponse, CoverCandidate,
   BookExportRequest, BookExportJob, ExportLanInfo,
@@ -280,15 +281,101 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
   return { tempId: 'imp_' + Math.random().toString(36).slice(2, 10), candidate };
 }
 
-async function mockGetBookState(_bookId: string): Promise<BookStateResponse> {
-  // Mocks don't have a disk-backed workspace; return null to signal "no
-  // persistent state yet" so the UI falls back to its in-memory defaults.
-  await wait(60);
-  throw new Error('Book state hydration is not available in mock mode (no disk workspace).');
+/* In-memory mock backing store for book state, keyed by bookId. Patterns
+   match MOCK_EXPORT_JOBS (below) — module-scoped so writes survive across
+   calls within a session. Cleared by a full page reload, since mocks have
+   no disk. */
+const MOCK_BOOK_STATES = new Map<string, BookStateResponse>();
+
+function emptyBookStateResponse(bookId: string): BookStateResponse {
+  const now = new Date().toISOString();
+  return {
+    state: {
+      bookId,
+      manuscriptId: '',
+      title: '',
+      author: '',
+      series: '',
+      seriesPosition: null,
+      isStandalone: false,
+      manuscriptFile: '',
+      castConfirmed: false,
+      chapters: [],
+      coverGradient: ['#ffd6c2', '#f3a8d0'],
+      createdAt: now,
+      updatedAt: now,
+      narratorCredit: null,
+      genre: null,
+      publicationDate: null,
+    },
+    cast: null,
+    manuscript: null,
+    manuscriptEdits: null,
+    revisions: null,
+    completedSlugs: [],
+    chapterCharacters: undefined,
+    changeLog: null,
+    analysis: undefined,
+  };
 }
 
-async function mockPutBookState(_bookId: string, _req: PutStateRequest): Promise<void> {
+/* Apply a slice-write the same way `server/src/routes/book-state.ts:312`
+   does: `state` patch-merges over editorial fields; every other slice
+   full-replaces the matching sub-slice. The mock doesn't need the
+   server's folder-rename / chapter-title-refresh logic — it just owns
+   the response shape the UI sees. */
+function applyMockSliceWrite(prev: BookStateResponse, req: PutStateRequest): BookStateResponse {
+  switch (req.slice) {
+    case 'cast':
+      return { ...prev, cast: req.patch as BookStateResponse['cast'] };
+    case 'manuscript':
+      return { ...prev, manuscriptEdits: req.patch as BookStateResponse['manuscriptEdits'] };
+    case 'revisions':
+      return { ...prev, revisions: req.patch as BookStateResponse['revisions'] };
+    case 'changeLog': {
+      const events = (req.patch as { events?: ChangeLogEvent[] } | null | undefined)?.events ?? null;
+      return { ...prev, changeLog: events };
+    }
+    case 'state': {
+      const patch = (req.patch ?? {}) as Partial<BookStateJson>;
+      const next: BookStateJson = {
+        ...prev.state,
+        castConfirmed:  patch.castConfirmed  ?? prev.state.castConfirmed,
+        chapters:       patch.chapters       ?? prev.state.chapters,
+        title:          patch.title          ?? prev.state.title,
+        author:         patch.author         ?? prev.state.author,
+        series:         patch.series         ?? prev.state.series,
+        seriesPosition: patch.seriesPosition !== undefined ? patch.seriesPosition : prev.state.seriesPosition,
+        isStandalone:   patch.isStandalone   ?? prev.state.isStandalone,
+        narratorCredit:  patch.narratorCredit  !== undefined ? patch.narratorCredit  : prev.state.narratorCredit,
+        genre:           patch.genre           !== undefined ? patch.genre           : prev.state.genre,
+        publicationDate: patch.publicationDate !== undefined ? patch.publicationDate : prev.state.publicationDate,
+        updatedAt: new Date().toISOString(),
+      };
+      return { ...prev, state: next };
+    }
+    default:
+      return prev;
+  }
+}
+
+/* Exported so api.mock-state.test.ts can hit the mock pair directly,
+   bypassing the USE_MOCKS toggle (which the api module locks at import
+   time — flipping the env in a test file is too late). */
+export async function mockGetBookState(bookId: string): Promise<BookStateResponse | null> {
+  await wait(60);
+  return MOCK_BOOK_STATES.get(bookId) ?? null;
+}
+
+export async function mockPutBookState(bookId: string, req: PutStateRequest): Promise<void> {
   await wait(20);
+  const prev = MOCK_BOOK_STATES.get(bookId) ?? emptyBookStateResponse(bookId);
+  MOCK_BOOK_STATES.set(bookId, applyMockSliceWrite(prev, req));
+}
+
+/** Test-only: drop the in-memory mock-state table. */
+export function _resetMockBookStates(): void {
+  MOCK_BOOK_STATES.clear();
 }
 
 async function mockConfirmBook(body: ConfirmBookRequest): Promise<ConfirmBookResponse> {
@@ -571,8 +658,9 @@ async function realImportManuscript({ text, file, fileName }: UploadArgs): Promi
   throw new Error('importManuscript requires either `text` or `file`.');
 }
 
-async function realGetBookState(bookId: string): Promise<BookStateResponse> {
+async function realGetBookState(bookId: string): Promise<BookStateResponse | null> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/state`);
+  if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Book state fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
