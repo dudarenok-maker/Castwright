@@ -359,3 +359,188 @@ describe('synthesiseChapter voice routing', () => {
     expect(GEMINI_MALE_VOICES, `Expected description-based fallback to male, got ${used}`).toContain(used);
   });
 });
+
+/* ── Transient-failure auto-retry (Backlog Should #13) ──────────────────
+   End-to-end coverage of the retry wiring: when the provider throws a
+   transient error, synthesiseChapter must NOT fail the chapter — it must
+   re-call the provider after a short backoff. When the failure persists
+   past the retry budget, the chapter must fail with the last underlying
+   error. The retry helper's own contract is unit-tested in
+   `retry.test.ts`; these tests pin the wiring at the call site. */
+
+describe('synthesiseChapter auto-retry on transient TTS failures', () => {
+  it('absorbs two transient 503s and returns the third attempt\'s audio', async () => {
+    /* The headline plan-13 scenario: sidecar returns 503 twice (e.g. brief
+       CUDA OOM, mid-restart 502 surfaced as 503), then a 200. The retry
+       wrapper inside the per-group loop must replay the call so the
+       chapter completes without the user clicking Retry. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+    ];
+    const events: string[] = [];
+    let attemptIndex = 0;
+    const provider: TtsProvider = {
+      async synthesize(_input: SynthesizeInput): Promise<SynthesizeOutput> {
+        attemptIndex += 1;
+        events.push(`attempt:${attemptIndex}`);
+        if (attemptIndex < 3) {
+          throw Object.assign(
+            new Error(`Local TTS sidecar returned 503: model loading`),
+            { transient: true as const, status: 503 },
+          );
+        }
+        return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+    const retries: number[] = [];
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'Line.')],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      onGroupRetry: ({ attempt }) => retries.push(attempt),
+    });
+
+    /* Three provider invocations total (1 primary + 2 retries). */
+    expect(events).toEqual(['attempt:1', 'attempt:2', 'attempt:3']);
+    /* onGroupRetry fired twice — once before attempt 2, once before attempt 3. */
+    expect(retries).toEqual([2, 3]);
+    /* Chapter completed normally; PCM round-trips through. */
+    expect(result.pcm.length).toBe(2);
+    expect(result.segments).toHaveLength(1);
+  });
+
+  it('throws the last transient error when all retries fail', async () => {
+    /* Retry budget exhausts → the underlying error bubbles out so the
+       route can flip the chapter to chapter_failed with a meaningful
+       message. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+    ];
+    let attemptIndex = 0;
+    const provider: TtsProvider = {
+      async synthesize(_input: SynthesizeInput): Promise<SynthesizeOutput> {
+        attemptIndex += 1;
+        throw Object.assign(
+          new Error(`Local TTS sidecar returned 503: persistent #${attemptIndex}`),
+          { transient: true as const, status: 503 },
+        );
+      },
+    };
+
+    await expect(synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'Line.')],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+    })).rejects.toThrow(/persistent #3/);
+
+    /* 3 attempts = 1 primary + 2 retries. */
+    expect(attemptIndex).toBe(3);
+  });
+
+  it('does NOT retry a non-transient error (4xx fails immediately)', async () => {
+    /* A 400 (bad request — model name unknown) won't get better on
+       retry. Bail on the first throw so the user sees the actionable
+       error fast instead of waiting through two needless backoffs. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+    ];
+    let attemptIndex = 0;
+    const provider: TtsProvider = {
+      async synthesize(_input: SynthesizeInput): Promise<SynthesizeOutput> {
+        attemptIndex += 1;
+        throw Object.assign(
+          new Error(`Local TTS sidecar returned 400: unknown model 'wat'`),
+          { transient: false as const, status: 400 },
+        );
+      },
+    };
+
+    await expect(synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'Line.')],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+    })).rejects.toThrow(/unknown model/);
+
+    expect(attemptIndex).toBe(1);
+  });
+
+  it('does NOT retry a poisoned-CUDA 503 (poisoned bodies need a restart, not a retry)', async () => {
+    /* The sidecar's CUDA-poison fast-fail (`{ "detail": "...", "poisoned":
+       true }` body) won't recover until the sidecar restarts. SidecarTtsProvider
+       annotates these with `transient: false`; even though the status code
+       is 503, the retry wrapper must bail immediately so the UI can
+       surface the "restart the sidecar" banner without delay. This test
+       simulates that annotation. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+    ];
+    let attemptIndex = 0;
+    const provider: TtsProvider = {
+      async synthesize(_input: SynthesizeInput): Promise<SynthesizeOutput> {
+        attemptIndex += 1;
+        throw Object.assign(
+          new Error(`Local TTS sidecar returned 503: TTS sidecar is in a poisoned CUDA state…`),
+          { transient: false as const, status: 503, poisoned: true },
+        );
+      },
+    };
+
+    await expect(synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'Line.')],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+    })).rejects.toThrow(/poisoned/);
+
+    expect(attemptIndex).toBe(1);
+  });
+
+  it('honours an abort signal mid-retry (caller Stop wins over the retry sleep)', async () => {
+    /* The user clicks Stop while the queue is mid-retry. The retry's
+       backoff sleep must reject promptly with AbortError so the route
+       can tear down the handler instead of waiting out the full delay. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+    ];
+    const controller = new AbortController();
+    let attemptIndex = 0;
+    const provider: TtsProvider = {
+      async synthesize(_input: SynthesizeInput): Promise<SynthesizeOutput> {
+        attemptIndex += 1;
+        /* Trigger abort once the first transient has thrown — the retry
+           wrapper's sleep should pick this up immediately. */
+        setTimeout(() => controller.abort(), 5);
+        throw Object.assign(
+          new Error(`Local TTS sidecar returned 503: brief flake`),
+          { transient: true as const, status: 503 },
+        );
+      },
+    };
+
+    const start = Date.now();
+    await expect(synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'Line.')],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      signal: controller.signal,
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    const elapsed = Date.now() - start;
+
+    /* Only the primary attempt ran; the retry sleep was aborted before
+       a second provider invocation could fire. Bound is generous (200 ms)
+       to absorb slow CI but tight enough that a full backoff (500 ms
+       primary + jitter) would fail it. */
+    expect(attemptIndex).toBe(1);
+    expect(elapsed).toBeLessThan(200);
+  });
+});

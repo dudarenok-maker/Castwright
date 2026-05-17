@@ -49,16 +49,42 @@ export class SidecarTtsProvider implements TtsProvider {
       if ((e as { name?: string })?.name === 'AbortError') throw e;
       const msg = (e as Error).message || String(e);
       /* Node's fetch surfaces ECONNREFUSED as `fetch failed` with a cause.
-         Give the user the one piece of info that actually unblocks them. */
-      throw new Error(
-        `Local TTS sidecar not reachable at ${this.url}. Start it with \`npm run tts:sidecar\`. (${msg})`,
+         Give the user the one piece of info that actually unblocks them.
+         Annotated `transient: true` so the auto-retry wrapper in
+         `synthesise-chapter.ts` can absorb a brief network blip (e.g. the
+         sidecar restarting after a CUDA poison) without wedging the queue.
+         Genuine "sidecar isn't running" → all retries also fail with the
+         same message, so the user-facing error text is unchanged. */
+      throw Object.assign(
+        new Error(
+          `Local TTS sidecar not reachable at ${this.url}. Start it with \`npm run tts:sidecar\`. (${msg})`,
+        ),
+        { transient: true as const, cause: 'network' as const },
       );
     }
 
     if (!response.ok) {
       const bodyText = await safeReadText(response);
       const trimmed = bodyText.length > 240 ? `${bodyText.slice(0, 240)}…` : bodyText;
-      throw new Error(`Local TTS sidecar returned ${response.status}: ${trimmed || response.statusText}`);
+      /* Classify for the retry wrapper.
+         - `poisoned: true` body → the sidecar's CUDA context is corrupted
+           for the lifetime of that process; only a restart fixes it. Retry
+           would just replay the fast-fail 503 — surface immediately so the
+           UI can render the "needs restart" banner.
+         - Other 5xx → transient. The most common shape (503 during model
+           load on first call, 502 from a reverse proxy mid-restart, 504
+           from a hung connection) recovers in ≤ 2.5 s of backoff.
+         - 408 Request Timeout → transient.
+         - 4xx other than 408 → client-side; retry won't help. */
+      const poisoned = isPoisonedBody(bodyText);
+      const transient =
+        !poisoned &&
+        (response.status === 408 ||
+          (response.status >= 500 && response.status < 600));
+      throw Object.assign(
+        new Error(`Local TTS sidecar returned ${response.status}: ${trimmed || response.statusText}`),
+        { transient, status: response.status, poisoned },
+      );
     }
 
     const buf = Buffer.from(await response.arrayBuffer());
@@ -97,4 +123,20 @@ function parseRateFromMime(mime: string): number {
 
 async function safeReadText(response: Response): Promise<string> {
   try { return await response.text(); } catch { return ''; }
+}
+
+/* The sidecar returns `{ "detail": "...", "poisoned": true }` on the
+   503 fast-fail fence after a CUDA device-side assert. That state is
+   process-wide and only a sidecar restart clears it (see main.py's
+   `_schedule_poison_exit`), so retrying just replays the fast-fail.
+   Returns false on any parse failure — a malformed body errs on the
+   side of "treat as transient" so the queue keeps trying. */
+function isPoisonedBody(bodyText: string): boolean {
+  if (!bodyText) return false;
+  try {
+    const parsed = JSON.parse(bodyText) as { poisoned?: unknown };
+    return parsed?.poisoned === true;
+  } catch {
+    return false;
+  }
 }
