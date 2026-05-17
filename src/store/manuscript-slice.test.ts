@@ -25,7 +25,7 @@ describe('manuscriptSlice — splitSentence', () => {
     ]));
     const next = manuscriptSlice.reducer(
       start,
-      manuscriptActions.splitSentence({ sentenceId: 1, offsets: [6], characterIds: ['narrator', 'eliza'] }),
+      manuscriptActions.splitSentence({ chapterId: 1, sentenceId: 1, offsets: [6], characterIds: ['narrator', 'eliza'] }),
     );
     expect(next.sentences).toHaveLength(2);
     expect(next.sentences[0]).toMatchObject({ id: 1, text: 'Hello ', characterId: 'narrator' });
@@ -40,7 +40,7 @@ describe('manuscriptSlice — splitSentence', () => {
     const next = manuscriptSlice.reducer(
       start,
       manuscriptActions.splitSentence({
-        sentenceId: 5, offsets: [3, 7],
+        chapterId: 1, sentenceId: 5, offsets: [3, 7],
         characterIds: ['narrator', 'halloran', 'eliza'],
       }),
     );
@@ -60,7 +60,7 @@ describe('manuscriptSlice — splitSentence', () => {
     const next = manuscriptSlice.reducer(
       start,
       manuscriptActions.splitSentence({
-        sentenceId: 1, offsets: [0, 3],
+        chapterId: 1, sentenceId: 1, offsets: [0, 3],
         characterIds: ['skip-a', 'narrator', 'skip-b'],
       }),
     );
@@ -75,7 +75,7 @@ describe('manuscriptSlice — splitSentence', () => {
     const next = manuscriptSlice.reducer(
       start,
       manuscriptActions.splitSentence({
-        sentenceId: 1, offsets: [4, 2],
+        chapterId: 1, sentenceId: 1, offsets: [4, 2],
         characterIds: ['a', 'b', 'c'],
       }),
     );
@@ -89,7 +89,7 @@ describe('manuscriptSlice — splitSentence', () => {
     ]));
     const next = manuscriptSlice.reducer(
       start,
-      manuscriptActions.splitSentence({ sentenceId: 3, offsets: [3], characterIds: ['narrator', 'narrator'] }),
+      manuscriptActions.splitSentence({ chapterId: 1, sentenceId: 3, offsets: [3], characterIds: ['narrator', 'narrator'] }),
     );
     const ids = next.sentences.map(s => s.id);
     expect(ids).toEqual([3, 100, 99]);
@@ -101,7 +101,7 @@ describe('manuscriptSlice — splitSentence', () => {
     ]));
     const next = manuscriptSlice.reducer(
       start,
-      manuscriptActions.splitSentence({ sentenceId: 1, offsets: [2], characterIds: ['eliza'] }),
+      manuscriptActions.splitSentence({ chapterId: 1, sentenceId: 1, offsets: [2], characterIds: ['eliza'] }),
     );
     expect(next.sentences).toEqual([
       expect.objectContaining({ id: 1, text: 'ab', characterId: 'eliza' }),
@@ -115,9 +115,35 @@ describe('manuscriptSlice — splitSentence', () => {
     ]));
     const next = manuscriptSlice.reducer(
       start,
-      manuscriptActions.splitSentence({ sentenceId: 999, offsets: [1], characterIds: ['a', 'b'] }),
+      manuscriptActions.splitSentence({ chapterId: 1, sentenceId: 999, offsets: [1], characterIds: ['a', 'b'] }),
     );
     expect(next.sentences).toEqual(start.sentences);
+  });
+
+  /* Regression: same (chapterId, id) scoping bug as the reassign reducers
+     above — splitSentence used findIndex by id alone, so requesting a split
+     in chapter 2 would have sliced up chapter 1's same-id sentence instead. */
+  it('splitSentence scopes by chapterId — chapter 2 split leaves chapter 1 untouched', () => {
+    const start = baseState([
+      { id: 1, chapterId: 1, text: 'ch1-keep', characterId: 'narrator' },
+      { id: 3, chapterId: 1, text: 'ch1-id3-keep', characterId: 'eliza' },
+      { id: 1, chapterId: 2, text: 'ch2-keep', characterId: 'narrator' },
+      { id: 3, chapterId: 2, text: 'abcdef', characterId: 'narrator' },
+    ]);
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.splitSentence({
+        chapterId: 2, sentenceId: 3, offsets: [3],
+        characterIds: ['narrator', 'halloran'],
+      }),
+    );
+    expect(next.sentences.map(s => ({ chapterId: s.chapterId, id: s.id, text: s.text, characterId: s.characterId }))).toEqual([
+      { chapterId: 1, id: 1, text: 'ch1-keep',      characterId: 'narrator' },
+      { chapterId: 1, id: 3, text: 'ch1-id3-keep', characterId: 'eliza'    }, // untouched
+      { chapterId: 2, id: 1, text: 'ch2-keep',      characterId: 'narrator' },
+      { chapterId: 2, id: 3, text: 'abc',           characterId: 'narrator' }, // first split-piece keeps original id
+      { chapterId: 2, id: 4, text: 'def',           characterId: 'halloran' }, // new id, inserted after
+    ]);
   });
 });
 
@@ -129,7 +155,7 @@ describe('manuscriptSlice — setSentenceCharacter / setSentencesCharacter', () 
     ]));
     const next = manuscriptSlice.reducer(
       start,
-      manuscriptActions.setSentenceCharacter({ sentenceId: 2, characterId: 'eliza' }),
+      manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 2, characterId: 'eliza' }),
     );
     expect(next.sentences[1].characterId).toBe('eliza');
     expect(next.sentences[0].characterId).toBe('narrator');
@@ -143,9 +169,55 @@ describe('manuscriptSlice — setSentenceCharacter / setSentencesCharacter', () 
     ]));
     const next = manuscriptSlice.reducer(
       start,
-      manuscriptActions.setSentencesCharacter({ sentenceIds: [1, 3], characterId: 'halloran' }),
+      manuscriptActions.setSentencesCharacter({ chapterId: 1, sentenceIds: [1, 3], characterId: 'halloran' }),
     );
     expect(next.sentences.map(s => s.characterId)).toEqual(['halloran', 'narrator', 'halloran']);
+  });
+
+  /* Regression: sentence ids restart at 1 in every chapter (the hydrate merge
+     keys by `${chapterId}:${id}` for the same reason — see the
+     "keeps per-chapter sentence ids distinct" test below). The reassign
+     reducers must scope by (chapterId, id), not id alone. Before the fix,
+     clicking a character chip in the SegmentInspector for a chapter-2
+     sentence silently mutated chapter 1's sentence with the same id and
+     left the visible chapter unchanged — surfaced by the user as "clicks
+     don't do anything". */
+  it('setSentenceCharacter scopes by chapterId — chapter 2 reassignment leaves chapter 1 untouched', () => {
+    const start = baseState([
+      { id: 1, chapterId: 1, text: 'ch1-s1', characterId: 'narrator' },
+      { id: 2, chapterId: 1, text: 'ch1-s2', characterId: 'narrator' },
+      { id: 1, chapterId: 2, text: 'ch2-s1', characterId: 'narrator' },
+      { id: 2, chapterId: 2, text: 'ch2-s2', characterId: 'narrator' },
+    ]);
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.setSentenceCharacter({ chapterId: 2, sentenceId: 2, characterId: 'eliza' }),
+    );
+    expect(next.sentences.map(s => ({ chapterId: s.chapterId, id: s.id, characterId: s.characterId }))).toEqual([
+      { chapterId: 1, id: 1, characterId: 'narrator' },
+      { chapterId: 1, id: 2, characterId: 'narrator' }, // untouched — same id, different chapter
+      { chapterId: 2, id: 1, characterId: 'narrator' },
+      { chapterId: 2, id: 2, characterId: 'eliza'    }, // the one we asked for
+    ]);
+  });
+
+  it('setSentencesCharacter scopes by chapterId — chapter 2 batch leaves chapter 1 untouched', () => {
+    const start = baseState([
+      { id: 1, chapterId: 1, text: 'ch1-s1', characterId: 'narrator' },
+      { id: 2, chapterId: 1, text: 'ch1-s2', characterId: 'narrator' },
+      { id: 1, chapterId: 2, text: 'ch2-s1', characterId: 'narrator' },
+      { id: 2, chapterId: 2, text: 'ch2-s2', characterId: 'narrator' },
+    ]);
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.setSentencesCharacter({ chapterId: 2, sentenceIds: [1, 2], characterId: 'halloran' }),
+    );
+    expect(next.sentences.map(s => ({ chapterId: s.chapterId, id: s.id, characterId: s.characterId }))).toEqual([
+      { chapterId: 1, id: 1, characterId: 'narrator' }, // untouched
+      { chapterId: 1, id: 2, characterId: 'narrator' }, // untouched
+      { chapterId: 2, id: 1, characterId: 'halloran' },
+      { chapterId: 2, id: 2, characterId: 'halloran' },
+    ]);
   });
 });
 
