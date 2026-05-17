@@ -42,6 +42,7 @@ owner: null
 ### Automated coverage
 
 - **Playwright e2e** (`e2e/smoke.spec.ts`) — asserts cold boot lands on the library, the "Start a new book" CTA is visible, the hash is one of `''`/`'#'`/`'#/'`, and clicking the CTA navigates to `#/new`. Runs in chromium under `VITE_USE_MOCKS=true`.
+- **Playwright e2e** (`e2e/listen-playback.spec.ts`) — navigates directly to `#/books/sb/listen` for the seeded 'complete' Solway Bay mock book, clicks "Play from the start", asserts the MiniPlayer's `<audio>` element renders with a `stub-b.mp3` src and `paused === false`. Locks the mock-seed → chapter hydrate → MiniPlayer mount → audio playback seam. Wall-clock ~5 s warm. Depends on the `MOCK_BOOK_STATES['sb']` seed in `src/lib/api.ts` (shipped alongside).
 
 ### Manual acceptance walkthrough
 
@@ -62,7 +63,7 @@ Run from a clean checkout:
 ## Out of scope (follow-ups)
 
 - **Visual regression baselines.** Playwright supports `toHaveScreenshot()` natively. Capture baselines for the library, upload, analysing, confirm, and ready stages once they stabilise. Open question: where do baselines live (`e2e/__screenshots__/` per-platform vs. committed-as-art) — capture in a follow-up plan when the first baseline lands.
-- **More golden paths.** Upload → analysing → confirm → ready. Listen-view playback (mock player). Voice library tab. Each gets its own spec, all reuse the mock backend.
+- **More golden paths.** Voice library tab. Each gets its own spec, all reuse the mock backend. (Upload → analysing → confirm → ready *shipped 2026-05-17 as `e2e/new-book-flow.spec.ts`*; Listen-view playback *shipped 2026-05-17 as `e2e/listen-playback.spec.ts` with the `MOCK_BOOK_STATES['sb']` seed*.)
 - **CI integration.** No CI runs anything yet. When CI exists, `test:e2e` is the slowest job; budget accordingly.
 
 ## Ship notes
