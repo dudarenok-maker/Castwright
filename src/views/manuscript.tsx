@@ -131,11 +131,9 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
       newCharacterId = segAbove.characterId;
       for (let i = anchorIdx; i <= candIdx; i++) ids.push(sentences[i].id);
     }
-    if (ids.length) {
-      dispatch(manuscriptActions.setSentencesCharacter({ sentenceIds: ids, characterId: newCharacterId }));
-      if (currentChapterId != null) {
-        dispatch(changeLogActions.bumpBoundaryMove({ chapterId: currentChapterId, count: ids.length }));
-      }
+    if (ids.length && currentChapterId != null) {
+      dispatch(manuscriptActions.setSentencesCharacter({ chapterId: currentChapterId, sentenceIds: ids, characterId: newCharacterId }));
+      dispatch(changeLogActions.bumpBoundaryMove({ chapterId: currentChapterId, count: ids.length }));
     }
   }
 
@@ -163,36 +161,42 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
   }, [drag?.boundaryIdx]);
 
   function reassignSegment(seg: Segment, newCharId: string) {
+    /* Segments are built per current chapter (src/views/manuscript.tsx:80-90),
+       so every sentence inside one segment shares the same chapterId. */
+    const chapterId = seg.sentences[0]?.chapterId;
+    if (chapterId == null) return;
     const ids = seg.sentences.map(s => s.id);
     dispatch(manuscriptActions.setSentencesCharacter({
+      chapterId,
       sentenceIds: ids,
       characterId: newCharId,
     }));
-    if (currentChapterId != null) {
-      dispatch(changeLogActions.bumpBoundaryMove({ chapterId: currentChapterId, count: ids.length }));
-    }
+    dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: ids.length }));
   }
 
   function assignSelectionTo(newCharacterId: string) {
-    if (!selection) return;
-    const sentence = sentences.find(s => s.id === selection.sentenceId);
+    if (!selection || currentChapterId == null) return;
+    /* Scope the lookup to the current chapter — sentence ids restart at 1
+       per chapter, so a `s.id === selection.sentenceId` match alone would
+       silently return chapter 1's same-id sentence when the user is on a
+       later chapter. */
+    const sentence = sentences.find(s => s.chapterId === currentChapterId && s.id === selection.sentenceId);
     if (!sentence) return;
     const len = sentence.text.length;
     /* Whole sentence selected → simple reassign. Otherwise split into
        three pieces with the middle reassigned. The reducer drops empty
        pieces, so leading/trailing zero-length splits are safe. */
     if (selection.start <= 0 && selection.end >= len) {
-      dispatch(manuscriptActions.setSentenceCharacter({ sentenceId: selection.sentenceId, characterId: newCharacterId }));
+      dispatch(manuscriptActions.setSentenceCharacter({ chapterId: currentChapterId, sentenceId: selection.sentenceId, characterId: newCharacterId }));
     } else {
       dispatch(manuscriptActions.splitSentence({
+        chapterId: currentChapterId,
         sentenceId: selection.sentenceId,
         offsets: [selection.start, selection.end],
         characterIds: [sentence.characterId, newCharacterId, sentence.characterId],
       }));
     }
-    if (currentChapterId != null) {
-      dispatch(changeLogActions.bumpBoundaryMove({ chapterId: currentChapterId, count: 1 }));
-    }
+    dispatch(changeLogActions.bumpBoundaryMove({ chapterId: currentChapterId, count: 1 }));
     window.getSelection()?.removeAllRanges();
   }
 
@@ -422,11 +426,9 @@ export function ManuscriptView({ characters, chapters, currentChapterId, setCurr
             reassignSegment(seg, newCharId);
             setSelectedSeg(null);
           }}
-          onReassignSentence={(sentenceId, newCharId) => {
-            dispatch(manuscriptActions.setSentenceCharacter({ sentenceId, characterId: newCharId }));
-            if (currentChapterId != null) {
-              dispatch(changeLogActions.bumpBoundaryMove({ chapterId: currentChapterId, count: 1 }));
-            }
+          onReassignSentence={(chapterId, sentenceId, newCharId) => {
+            dispatch(manuscriptActions.setSentenceCharacter({ chapterId, sentenceId, characterId: newCharId }));
+            dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 }));
           }}
           onOpenProfile={onOpenProfile}
         />
@@ -539,7 +541,7 @@ interface InspectorProps {
   findChar: (id: string) => Character | undefined;
   onClose: () => void;
   onReassignSegment: (seg: Segment, newCharId: string) => void;
-  onReassignSentence: (sentenceId: number, newCharId: string) => void;
+  onReassignSentence: (chapterId: number, sentenceId: number, newCharId: string) => void;
   onOpenProfile?: (id: string) => void;
 }
 
@@ -622,7 +624,7 @@ function SegmentInspector({ seg, characters, findChar, onClose, onReassignSegmen
                     <summary className="text-[11px] text-ink/60 cursor-pointer hover:text-ink">Reassign just this one</summary>
                     <div className="mt-2 flex flex-wrap gap-1">
                       {characters.map(cand => (
-                        <button key={cand.id} onClick={() => onReassignSentence(s.id, cand.id)}
+                        <button key={cand.id} onClick={() => onReassignSentence(s.chapterId, s.id, cand.id)}
                                 className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] ${cand.id === seg.characterId ? 'bg-ink/[0.06] text-ink/60' : 'bg-white border border-ink/10 hover:border-ink/30'}`}>
                           <ColorDot color={cand.color as CharColor} size={8}/>
                           <span>{cand.name}</span>

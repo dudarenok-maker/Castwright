@@ -136,18 +136,24 @@ export const manuscriptSlice = createSlice({
       s.importCandidate = null;
     },
 
-    /* User edit: reassign a single sentence to a different character. */
-    setSentenceCharacter: (s, a: PayloadAction<{ sentenceId: number; characterId: string }>) => {
-      const sent = s.sentences.find(x => x.id === a.payload.sentenceId);
+    /* User edit: reassign a single sentence to a different character.
+       Scopes by (chapterId, sentenceId) — sentence ids restart at 1 in
+       every chapter, so a single-id match would silently mutate the wrong
+       chapter's same-id sentence. Mirrors the hydrate-merge keying above. */
+    setSentenceCharacter: (s, a: PayloadAction<{ chapterId: number; sentenceId: number; characterId: string }>) => {
+      const sent = s.sentences.find(x => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId);
       if (sent) sent.characterId = a.payload.characterId;
     },
 
     /* User edit: reassign a batch of sentences at once. Used by the
-       boundary-drag handle and the segment inspector. */
-    setSentencesCharacter: (s, a: PayloadAction<{ sentenceIds: number[]; characterId: string }>) => {
+       boundary-drag handle and the segment inspector. Scoped to one
+       chapter — the caller batches ids from a single chapter's segments. */
+    setSentencesCharacter: (s, a: PayloadAction<{ chapterId: number; sentenceIds: number[]; characterId: string }>) => {
       const ids = new Set(a.payload.sentenceIds);
       for (const sent of s.sentences) {
-        if (ids.has(sent.id)) sent.characterId = a.payload.characterId;
+        if (sent.chapterId === a.payload.chapterId && ids.has(sent.id)) {
+          sent.characterId = a.payload.characterId;
+        }
       }
     },
 
@@ -156,9 +162,10 @@ export const manuscriptSlice = createSlice({
        0-based character positions within the original sentence text.
        characterIds.length must equal offsets.length + 1. The first piece
        keeps the original sentence's id; subsequent pieces get new ids
-       (max + 1, +2, …) inserted right after it. Empty pieces are skipped. */
-    splitSentence: (s, a: PayloadAction<{ sentenceId: number; offsets: number[]; characterIds: string[] }>) => {
-      const idx = s.sentences.findIndex(x => x.id === a.payload.sentenceId);
+       (max + 1, +2, …) inserted right after it. Empty pieces are skipped.
+       Scoped to one chapter — sentence ids restart per chapter. */
+    splitSentence: (s, a: PayloadAction<{ chapterId: number; sentenceId: number; offsets: number[]; characterIds: string[] }>) => {
+      const idx = s.sentences.findIndex(x => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId);
       if (idx < 0) return;
       const original = s.sentences[idx];
       const text = original.text;

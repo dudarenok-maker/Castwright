@@ -1,9 +1,10 @@
 # Manuscript view
 
 > Status: stable (manuscript-edits hydrate, persist, and survive reparse)
-> Key files: `src/views/manuscript.tsx`, `src/store/manuscript-slice.ts` (`setSentenceCharacter`, `splitSentence`, `hydrateFromAnalysis` merge), `src/lib/types.ts` (`Sentence`), `server/src/routes/book-state.ts` (GET filter + reparse migration)
+> Key files: `src/views/manuscript.tsx`, `src/store/manuscript-slice.ts` (`setSentenceCharacter`, `setSentencesCharacter`, `splitSentence`, `hydrateFromAnalysis` merge), `src/lib/types.ts` (`Sentence`), `server/src/routes/book-state.ts` (GET filter + reparse migration)
 > URL surface: `#/books/:bookId/manuscript?chapter=N`
 > OpenAPI ops: `PUT /api/books/:bookId/state` with `slice: 'manuscript'`
+> Cross-links: [12a — Fix: sentence reassignment scoped by (chapterId, id)](12a-fix-reassign-cross-chapter-id.md) — patches the original single-id keying in the reassign reducers and the inspector prop.
 
 ## What this covers
 
@@ -13,7 +14,7 @@ Renders the manuscript a chapter at a time, sentence-by-sentence, with each sent
 
 - `Sentence` type extends the OpenAPI shape with an optional `confidence?: number` (`src/lib/types.ts:10-12`). Confidence is 0–1; absent means "unknown / not analysed."
 - Low-confidence sentences are visually flagged (e.g. dashed border) but the auto-attributed speaker is never silently replaced — the user has to act.
-- Reassignment dispatches `manuscriptActions.setSentenceCharacter({ sentenceId, characterId })` and triggers `PUT /api/books/:bookId/state` with `{ slice: 'manuscript', patch: { sentences: [...] } }` (`src/lib/types.ts:131-134`).
+- Reassignment dispatches `manuscriptActions.setSentenceCharacter({ chapterId, sentenceId, characterId })` (or `setSentencesCharacter` / `splitSentence` for the batch + split paths — same `chapterId` scoping) and triggers `PUT /api/books/:bookId/state` with `{ slice: 'manuscript', patch: { sentences: [...] } }` (`src/lib/types.ts:131-134`). Sentence ids restart at 1 in every chapter, so all sentence-targeting reducers match by `(chapterId, id)` — mirrors the hydrate-merge keying at `src/store/manuscript-slice.ts:86-88`. See [12a — Fix](12a-fix-reassign-cross-chapter-id.md) for the regression history.
 - `hydrateFromAnalysis` MERGES rather than overwrites once a manuscriptId is set: incoming sentences refresh fields (text, etc.) from analysis where ids match, but the slice's existing `characterId` is preserved. Split-sentence offsprings (ids the analyzer didn't emit) survive in narrative order. First-call hydrate (manuscriptId null) replaces wholesale.
 - Reparse PRESERVES `manuscript-edits.json`. The GET-side merge in `server/src/routes/book-state.ts` filters edits against the analysis cache: edit ids present in cache are kept; edit ids above the cache's max id are kept (likely split offsprings); edits with ids in the cache range but absent from cache are dropped as orphans. A `'reparse'` change-log entry records the count carried forward.
 - Audio tags (see `07-audio-tag-vocabulary.md`) render inline in the sentence text as badges, not stripped.
