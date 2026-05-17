@@ -12,9 +12,9 @@
    accept the same shape.
 
    Refuses with `ExportIncompleteError` listing missing chapter slugs when
-   any non-excluded chapter has no `.mp3` (or only a legacy `.wav`) on
-   disk. Callers turn that into a 409 with a clickable "Regenerate missing
-   chapters" hint in the export modal. */
+   any non-excluded chapter has no `.mp3` on disk. Callers turn that into a
+   409 with a clickable "Regenerate missing chapters" hint in the export
+   modal. */
 
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { mkdir, stat, rm } from 'node:fs/promises';
@@ -57,18 +57,16 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
     .filter(c => !c.excluded)
     .sort((a, b) => a.id - b.id);
 
-  /* Pre-flight: every non-excluded chapter must have a current-format
-     MP3. Legacy WAV chapters need to be re-generated through the UI
-     before export — PocketBook reads MP3.ZIP, not mixed-format
-     archives. Surface ALL missing slugs in one go so the user gets a
-     full punch list, not one-at-a-time errors. */
+  /* Pre-flight: every non-excluded chapter must have an MP3 on disk.
+     Surface ALL missing slugs in one go so the user gets a full punch
+     list, not one-at-a-time errors. */
   const root = audioDir(bookDir);
   const missing: string[] = [];
   const resolved: Array<{ idx: number; chapter: typeof chapters[number]; mp3Path: string }> = [];
   for (let i = 0; i < chapters.length; i++) {
     const chapter = chapters[i];
     const audio = findChapterAudio(root, chapter.slug);
-    if (!audio || audio.ext !== 'mp3') {
+    if (!audio) {
       missing.push(chapter.slug);
       continue;
     }

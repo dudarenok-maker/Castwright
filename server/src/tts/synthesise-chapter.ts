@@ -10,7 +10,7 @@ import type { SentenceOutput } from '../handoff/schemas.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from './voice-mapping.js';
 import type { TtsEngine, TtsModelKey, TtsProvider } from './index.js';
 import { normaliseForTts } from './text-normalize.js';
-import { pcmDurationSec } from './wav.js';
+import { pcmDurationSec } from './pcm.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 
 /** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`

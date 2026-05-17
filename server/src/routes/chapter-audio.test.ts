@@ -2,9 +2,9 @@
    tempdir before importing the modules (paths.ts reads it at load time),
    scaffold a synthetic book layout, then drive the router with supertest.
 
-   Cases cover the format-fallback contract: new chapters live as .mp3,
-   legacy chapters as .wav, and every callsite must work for both without
-   the client knowing or caring. */
+   Post-plan-39: MP3 is the only chapter audio format. The legacy `.wav`
+   fallback narrative has been retired; the `audio.wav` route is no longer
+   registered and a legacy `.wav` on disk is invisible to the locator. */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -107,26 +107,6 @@ function writeMp3(bytes = 4096) {
   writeFileSync(join(audioRoot, `${SLUG}.mp3`), buf);
 }
 
-function writeWav(bytes = 4096) {
-  /* Minimal RIFF/WAVE header so sniffers don't get confused. */
-  const data = Buffer.alloc(bytes - 44, 0);
-  const hdr = Buffer.alloc(44);
-  hdr.write('RIFF', 0, 'ascii');
-  hdr.writeUInt32LE(36 + data.length, 4);
-  hdr.write('WAVE', 8, 'ascii');
-  hdr.write('fmt ', 12, 'ascii');
-  hdr.writeUInt32LE(16, 16);
-  hdr.writeUInt16LE(1, 20);
-  hdr.writeUInt16LE(1, 22);
-  hdr.writeUInt32LE(24_000, 24);
-  hdr.writeUInt32LE(24_000 * 2, 28);
-  hdr.writeUInt16LE(2, 32);
-  hdr.writeUInt16LE(16, 34);
-  hdr.write('data', 36, 'ascii');
-  hdr.writeUInt32LE(data.length, 40);
-  writeFileSync(join(audioRoot, `${SLUG}.wav`), Buffer.concat([hdr, data]));
-}
-
 function rmIfExists(name: string) {
   try { rmSync(join(audioRoot, name)); } catch { /* ignore */ }
 }
@@ -135,7 +115,6 @@ function resetAudio() {
   rmIfExists(`${SLUG}.mp3`);
   rmIfExists(`${SLUG}.wav`);
   rmIfExists(`${SLUG}.previous.mp3`);
-  rmIfExists(`${SLUG}.previous.wav`);
   rmIfExists(`${SLUG}.previous.segments.json`);
 }
 
@@ -170,7 +149,7 @@ function writePreviousSegments() {
 }
 
 describe('chapter-audio router', () => {
-  describe('mp3-only chapter (new generation)', () => {
+  describe('mp3 chapter', () => {
     beforeAll(() => { resetAudio(); writeMp3(); });
 
     it('JSON metadata points at .mp3 URL', async () => {
@@ -189,7 +168,7 @@ describe('chapter-audio router', () => {
       expect(res.headers['accept-ranges']).toBe('bytes');
     });
 
-    it('GET audio.wav returns 404 (no legacy file)', async () => {
+    it('GET audio.wav returns 404 (route not registered post-purge)', async () => {
       const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio.wav`);
       expect(res.status).toBe(404);
     });
@@ -200,47 +179,6 @@ describe('chapter-audio router', () => {
         .set('Range', 'bytes=0-1023');
       expect(res.status).toBe(206);
       expect(res.headers['content-range']).toMatch(/^bytes 0-1023\//);
-    });
-  });
-
-  describe('wav-only chapter (legacy backwards-compat)', () => {
-    beforeAll(() => { resetAudio(); writeWav(); });
-
-    it('JSON metadata points at .wav URL', async () => {
-      const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
-      expect(res.status).toBe(200);
-      expect(res.body.url).toBe(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio.wav`);
-    });
-
-    it('GET audio.wav returns 200 with audio/wav', async () => {
-      const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio.wav`);
-      expect(res.status).toBe(200);
-      expect(res.headers['content-type']).toMatch(/audio\/wav/);
-    });
-
-    it('GET audio.mp3 returns 404 (no new file yet)', async () => {
-      const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio.mp3`);
-      expect(res.status).toBe(404);
-    });
-  });
-
-  describe('both files exist (stale wav from before regenerate)', () => {
-    beforeAll(() => { resetAudio(); writeMp3(); writeWav(); });
-
-    it('JSON metadata prefers the .mp3 URL', async () => {
-      const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
-      expect(res.status).toBe(200);
-      expect(res.body.url).toMatch(/audio\.mp3$/);
-    });
-
-    it('both file endpoints serve their respective MIMEs', async () => {
-      const mp3 = await request(app).get(`/api/books/${bookId}/chapters/1/audio.mp3`);
-      expect(mp3.status).toBe(200);
-      expect(mp3.headers['content-type']).toMatch(/audio\/mpeg/);
-
-      const wav = await request(app).get(`/api/books/${bookId}/chapters/1/audio.wav`);
-      expect(wav.status).toBe(200);
-      expect(wav.headers['content-type']).toMatch(/audio\/wav/);
     });
   });
 
@@ -257,7 +195,32 @@ describe('chapter-audio router', () => {
       expect(res.status).toBe(404);
     });
 
-    it('audio.wav 404s', async () => {
+    it('audio.wav 404s (route not registered)', async () => {
+      const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio.wav`);
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('legacy .wav on disk is invisible', () => {
+    /* Post-plan-39: a stray `.wav` left over from before the format
+       switch must NOT shadow an absent `.mp3`. The locator probes only
+       `.mp3`, so the JSON endpoint should 404. */
+    beforeAll(() => {
+      resetAudio();
+      const data = Buffer.alloc(64, 0);
+      const hdr = Buffer.alloc(44);
+      hdr.write('RIFF', 0, 'ascii');
+      hdr.writeUInt32LE(36 + data.length, 4);
+      hdr.write('WAVE', 8, 'ascii');
+      writeFileSync(join(audioRoot, `${SLUG}.wav`), Buffer.concat([hdr, data]));
+    });
+
+    it('JSON metadata still 404s with only a .wav on disk', async () => {
+      const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+      expect(res.status).toBe(404);
+    });
+
+    it('audio.wav route still 404s (route not registered)', async () => {
       const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio.wav`);
       expect(res.status).toBe(404);
     });

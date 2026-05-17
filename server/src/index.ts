@@ -98,7 +98,7 @@ app.use('/api/books', voiceMatchRouter);     // mounts /:bookId/voice-match
 app.use('/api/books', castMergeRouter);      // mounts /:bookId/cast/merge
 app.use('/api', libraryCastOverrideRouter);  // mounts /library-cast/override (cross-book; not under /:bookId)
 app.use('/api/books', generationRouter);     // mounts /:bookId/generation (SSE)
-app.use('/api/books', chapterAudioRouter);   // mounts /:bookId/chapters/:chapterId/audio(.mp3|.wav)
+app.use('/api/books', chapterAudioRouter);   // mounts /:bookId/chapters/:chapterId/audio(.mp3)
 app.use('/api/books', exportRouter);         // mounts /:bookId/exports (POST + GET status + GET download)
 app.use('/api/export', exportLanRouter);     // mounts /lan (LAN URL enumeration for the export modal)
 app.use('/api/books', revisionsRouter);      // mounts /:bookId/revisions (drift diff over segments snapshots)

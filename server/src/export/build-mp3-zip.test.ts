@@ -3,8 +3,9 @@
    Node's built-in unzip helpers (yauzl) to verify entry order, names,
    and that each entry's ID3 frames carry the expected TRCK / TIT2.
 
-   The legacy-WAV test ensures the precheck refuses to ship a half-built
-   archive — PocketBook reads MP3.ZIP, not mixed-format. */
+   The zero-audio test ensures the precheck refuses to ship a half-built
+   archive — PocketBook reads MP3.ZIP, and every non-excluded chapter
+   needs an MP3 on disk. */
 
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -180,18 +181,16 @@ describeIfFfmpeg('buildMp3Zip', () => {
     expect(readId3Track(entries[2].data)).toBe('3/3');
   });
 
-  it('refuses with ExportIncompleteError when a non-excluded chapter has only a .wav', async () => {
-    const legacyDir = join(tmpRoot, 'legacy', 'audio');
-    mkdirSync(legacyDir, { recursive: true });
+  it('refuses with ExportIncompleteError when a non-excluded chapter has no audio file', async () => {
+    const incompleteDir = join(tmpRoot, 'incomplete', 'audio');
+    mkdirSync(incompleteDir, { recursive: true });
     const mp3 = await encodePcmToMp3(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
-    writeFileSync(join(legacyDir, '01-chapter-1.mp3'), mp3);
-    /* No MP3 for chapter 2 — write a stub .wav file so findChapterAudio
-       returns ext='wav', which the export precheck rejects. */
-    writeFileSync(join(legacyDir, '02-chapter-2.wav'), Buffer.from([0x52, 0x49, 0x46, 0x46]));
+    writeFileSync(join(incompleteDir, '01-chapter-1.mp3'), mp3);
+    /* No MP3 (or anything) for chapter 2 — precheck must reject. */
 
     await expect(
       buildMp3Zip({
-        bookDir: join(tmpRoot, 'legacy'),
+        bookDir: join(tmpRoot, 'incomplete'),
         state: makeState(),
         outPath: join(tmpRoot, 'incomplete.zip'),
       }),

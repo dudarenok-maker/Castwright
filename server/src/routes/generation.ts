@@ -7,16 +7,15 @@
      audio/<slug>.segments.json   — per-group timing metadata
    and updates the chapter's `duration` in .audiobook/state.json.
 
-   Resumability: a chapter is "complete" iff an audio file exists for it on
-   disk — .mp3 (new generations) or .wav (legacy chapters from before the
-   MP3 switch). Partial chapters never land on disk because we hold the PCM
-   in memory until the whole chapter is done.
+   Resumability: a chapter is "complete" iff an `.mp3` exists for it on
+   disk. Partial chapters never land on disk because we hold the PCM in
+   memory until the whole chapter is done.
 
    Pause semantics: when the client closes the SSE (Pause button), we DO NOT
    abort the chapter in flight — it finishes its remaining groups and persists
-   its WAV. The outer loop checks `pauseRequested` between chapters and
+   its MP3. The outer loop checks `pauseRequested` between chapters and
    bails. Resume = new POST, picks up from disk state (the just-finished
-   chapter has a WAV now, so the loop starts on the next one). At connect
+   chapter has an MP3 now, so the loop starts on the next one). At connect
    time we replay `chapter_complete` ticks for every already-done chapter so
    a reconnecting client reconciles state in one round-trip. */
 
@@ -477,7 +476,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         segments: result.segments,
         characterSnapshots,
       };
-      /* Rollback preservation: rename the live `<slug>.{mp3,wav}` +
+      /* Rollback preservation: rename the live `<slug>.mp3` +
          `.segments.json` to `.previous.*` BEFORE the new render lands.
          First renders no-op (nothing to preserve). The revision-diff
          player auditions the preserved pair (A) vs the new render (B);

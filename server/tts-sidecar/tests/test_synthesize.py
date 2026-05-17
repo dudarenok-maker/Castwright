@@ -311,7 +311,7 @@ def test_health_reports_poisoned_flag(monkeypatch) -> None:
 # ── /synthesize wire format ──────────────────────────────────────────────
 
 def test_synthesize_returns_pcm_payload_with_matching_rate_header(client: TestClient) -> None:
-    """The Node side reads x-sample-rate to set up the WAV header for the
+    """The Node side reads x-sample-rate to drive the MP3 encoder for the
     output buffer. If the rate value drifts from the actual PCM, every chapter
     plays at the wrong pitch — a silent class of failure."""
     r = client.post(
