@@ -59,6 +59,23 @@ owner: null
   - Plan 23 — mock layer mirrors the server. `MOCK_USER_SETTINGS`
     in `src/lib/api.ts` spreads `FRONTEND_ACCOUNT_DEFAULTS` so the
     new field is present under `VITE_USE_MOCKS=true` automatically.
+- **Brand-token policy under dark mode** (updated 2026-05-18 after
+  the initial ship hit two contrast bugs):
+  - `--peach` (#F79A83) — kept identical across themes. Already gives
+    ~8:1 on dark canvas.
+  - `--magenta` — lifted from #A43C6C to #E58FB8 in dark mode. The
+    light value gives 2.27:1 on #14110F (fails WCAG); the lifted
+    value gives ~7.5:1.
+  - `--purple-deep` — lifted from #3C194F to #B89AD6 in dark mode.
+    The light value gives 1.18:1 (essentially invisible); the lifted
+    value gives ~8.2:1.
+  - The `*-rgb` channel forms shift in lockstep so
+    `rgba(var(--magenta-rgb), …)` overlays stay tonally aligned with
+    the text-colour utilities.
+  - The cascade route is `tailwind.config.ts:11-12` — every
+    `text-magenta` / `bg-magenta` / `border-magenta` / `ring-magenta`
+    / `text-purple-deep` / etc. utility picks up the new token value
+    automatically, no component-code change required.
 - **Migration story**: persist version bump `UI_PERSIST_VERSION = 1 → 2`
   in `src/store/index.ts`. The change is additive (new optional
   field with `null` default), so redux-persist's version-mismatch
@@ -101,6 +118,28 @@ owner: null
    `uiActions.clearThemeOverride()` only — it does NOT clear the
    account default. Pinned by
    `src/views/account.test.tsx > AccountView — Appearance`.
+
+## Contrast invariants
+
+Added 2026-05-18 after the initial ship's two contrast bugs (hover
+flashing white, purple text invisible on dark canvas). Any future
+dark-mode token / utility edit must preserve these targets:
+
+1. **Body text on canvas** — `--ink` (#F4EFEC) on `--canvas`
+   (#14110F) ≥ 15:1. Floor for AA Normal text is 4.5:1; the
+   inverted-ink choice gives plenty of headroom.
+2. **Brand text on canvas** — `text-magenta` (#E58FB8 in dark) and
+   `text-purple-deep` (#B89AD6) must each hold ≥ 4.5:1 against
+   `--canvas` (AA Normal). Light-mode values fail this; that's
+   why they're overridden.
+3. **Hover-state surfaces** — `hover:bg-white`, `hover:bg-white/60`,
+   `hover:bg-white/70` must paint a *darker* surface than the bare
+   `bg-white` redirect (#1F1B19), one that still keeps the on-top
+   text legible. They MUST NOT paint pure white.
+4. **Status pills** — rose / emerald / amber backgrounds drop to
+   ~10–32% alpha overlays on dark; matching text shifts to the
+   -300/-400 family. Any new status-colour utility must land an
+   override at the same time it's first used in component code.
 
 ## Test plan
 
