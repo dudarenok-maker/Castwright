@@ -284,8 +284,88 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
 /* In-memory mock backing store for book state, keyed by bookId. Patterns
    match MOCK_EXPORT_JOBS (below) — module-scoped so writes survive across
    calls within a session. Cleared by a full page reload, since mocks have
-   no disk. */
+   no disk.
+
+   Pre-seeded with the 'complete' books from `src/data/books.ts` so the
+   Listen view + mini-player has chapters to render when the user clicks
+   straight into a ready book under mocks (e.g. the e2e
+   `listen-playback.spec.ts` walkthrough). Without the seed, mockGetBookState
+   returned null → Layout's hydrate effect short-circuited → chapters slice
+   stayed empty → Listen view rendered a disabled "Play from the start"
+   button against an empty playlist. */
 const MOCK_BOOK_STATES = new Map<string, BookStateResponse>();
+
+/* Solway Bay — the 'complete' fixture book at src/data/books.ts.
+   18 chapters, all rendered. Durations sum to roughly 11h 24m to match the
+   library card's `runtime`. Slugs follow the `NN-kebab-title` convention
+   the server uses (see scan.ts `slug()` helper). */
+const SB_CHAPTERS: BookStateJson['chapters'] = [
+  { id: 1,  title: 'Arrival',                slug: '01-arrival',                duration: '38:24' },
+  { id: 2,  title: 'The Pier',               slug: '02-the-pier',               duration: '42:17' },
+  { id: 3,  title: 'Lights in the Window',   slug: '03-lights-in-the-window',   duration: '31:08' },
+  { id: 4,  title: 'A Letter from London',   slug: '04-a-letter-from-london',   duration: '36:55' },
+  { id: 5,  title: 'The Storm',              slug: '05-the-storm',              duration: '44:02' },
+  { id: 6,  title: 'Morning Tide',           slug: '06-morning-tide',           duration: '33:19' },
+  { id: 7,  title: 'The Keeper at Dusk',     slug: '07-the-keeper-at-dusk',     duration: '40:11' },
+  { id: 8,  title: 'A Boat in the Reeds',    slug: '08-a-boat-in-the-reeds',    duration: '37:45' },
+  { id: 9,  title: 'The Memorial',           slug: '09-the-memorial',           duration: '29:33' },
+  { id: 10, title: 'Inheritance',            slug: '10-inheritance',            duration: '41:50' },
+  { id: 11, title: "The Whaler's Wife",      slug: '11-the-whalers-wife',       duration: '35:22' },
+  { id: 12, title: 'A Bell at Midnight',     slug: '12-a-bell-at-midnight',     duration: '32:48' },
+  { id: 13, title: 'Crossing',               slug: '13-crossing',               duration: '38:17' },
+  { id: 14, title: 'The Diary',              slug: '14-the-diary',              duration: '43:01' },
+  { id: 15, title: 'Salt and Glass',         slug: '15-salt-and-glass',         duration: '36:09' },
+  { id: 16, title: 'The Search',             slug: '16-the-search',             duration: '39:54' },
+  { id: 17, title: 'Solway Bay',             slug: '17-solway-bay',             duration: '40:33' },
+  { id: 18, title: 'Light Returning',        slug: '18-light-returning',        duration: '28:42' },
+];
+
+function buildSolwayBayMockState(): BookStateResponse {
+  const now = new Date().toISOString();
+  return {
+    state: {
+      bookId: 'sb',
+      manuscriptId: 'mns_sb',
+      title: 'Solway Bay',
+      author: 'Mike Dudarenok',
+      series: 'Northern Coast Trilogy',
+      seriesPosition: 1,
+      isStandalone: false,
+      manuscriptFile: 'manuscript.epub',
+      castConfirmed: true,
+      chapters: SB_CHAPTERS,
+      coverGradient: ['#6B6663', '#1A1A1A'],
+      createdAt: now,
+      updatedAt: now,
+      narratorCredit: null,
+      genre: null,
+      publicationDate: null,
+    },
+    /* cast stays null so the existing voices-compare e2e spec's
+       "Compare button disabled under mocks (cast slice empty)"
+       assertion continues to hold. Listen view doesn't need cast to
+       render the chapter playlist. */
+    cast: null,
+    manuscript: { wordCount: 82_400, format: 'epub' },
+    manuscriptEdits: null,
+    revisions: null,
+    /* Every chapter is rendered (matches the library card's
+       completedChapters: 18). hydrateFromBookState then flips each
+       chapter row to state: 'done', which makes them appear as
+       playable in the Listen view's playlist. */
+    completedSlugs: SB_CHAPTERS.map(c => c.slug),
+    chapterCharacters: undefined,
+    changeLog: null,
+    analysis: undefined,
+  };
+}
+
+/* Seed the default fixtures. Called at module init AND from
+   _resetMockBookStates so per-test resets restore the default surface. */
+function seedDefaultMockBookStates(): void {
+  MOCK_BOOK_STATES.set('sb', buildSolwayBayMockState());
+}
+seedDefaultMockBookStates();
 
 function emptyBookStateResponse(bookId: string): BookStateResponse {
   const now = new Date().toISOString();
@@ -373,9 +453,13 @@ export async function mockPutBookState(bookId: string, req: PutStateRequest): Pr
   MOCK_BOOK_STATES.set(bookId, applyMockSliceWrite(prev, req));
 }
 
-/** Test-only: drop the in-memory mock-state table. */
+/** Test-only: drop the in-memory mock-state table and restore the
+ *  default fixtures. Tests that want a truly empty store can call
+ *  MOCK_BOOK_STATES.clear() directly (only the in-file specs in
+ *  api.mock-state.test.ts do this today). */
 export function _resetMockBookStates(): void {
   MOCK_BOOK_STATES.clear();
+  seedDefaultMockBookStates();
 }
 
 async function mockConfirmBook(body: ConfirmBookRequest): Promise<ConfirmBookResponse> {
