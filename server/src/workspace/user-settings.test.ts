@@ -46,7 +46,7 @@ describe('userSettingsSchema — defaultThemePreference (plan 41)', () => {
   });
 
   it('treats the field as optional — legacy settings files without it parse cleanly', () => {
-    const { defaultThemePreference, ...legacy } = DEFAULT_USER_SETTINGS;
+    const { defaultThemePreference: _defaultThemePreference, ...legacy } = DEFAULT_USER_SETTINGS;
     const parsed = userSettingsSchema.parse(legacy);
     expect(parsed.defaultThemePreference).toBeUndefined();
   });
@@ -93,7 +93,7 @@ describe('userSettingsSchema — autoStartSidecar (plan 43)', () => {
   });
 
   it('treats the field as optional — legacy settings files without it parse cleanly', () => {
-    const { autoStartSidecar, ...legacy } = DEFAULT_USER_SETTINGS;
+    const { autoStartSidecar: _autoStartSidecar, ...legacy } = DEFAULT_USER_SETTINGS;
     const parsed = userSettingsSchema.parse(legacy);
     expect(parsed.autoStartSidecar).toBeUndefined();
   });
@@ -149,7 +149,7 @@ describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
   });
 
   it('treats the field as optional — legacy settings files without it parse cleanly', () => {
-    const { coverPickerDefaultTab, ...legacy } = DEFAULT_USER_SETTINGS;
+    const { coverPickerDefaultTab: _coverPickerDefaultTab, ...legacy } = DEFAULT_USER_SETTINGS;
     const parsed = userSettingsSchema.parse(legacy);
     expect(parsed.coverPickerDefaultTab).toBeUndefined();
   });
