@@ -1,7 +1,13 @@
+---
+status: stable
+shipped: 2026-05-18
+owner: null
+---
+
 # Coqui XTTS sidecar
 
 > Status: KNOWN: operational dependency
-> Key files: `server/src/tts/sidecar.ts`, `server/src/tts/index.ts`, `server/src/tts/text-normalize.ts`, `server/src/tts/synthesise-chapter.ts`, `server/tts-sidecar/`
+> Key files: `server/src/tts/sidecar.ts`, `server/src/tts/index.ts`, `server/src/tts/retry.ts`, `server/src/tts/text-normalize.ts`, `server/src/tts/synthesise-chapter.ts`, `server/tts-sidecar/`
 > URL surface: none
 > OpenAPI ops: `POST /api/voices/:voiceId/sample`, `POST /api/books/:bookId/generation`
 
@@ -40,15 +46,52 @@ off in `#/account` and `npm run tts:sidecar` in a second terminal.
 8. **First synth is fast** — after a clean `npm run tts:sidecar`, the first chapter's first group lands a synth response within seconds, not minutes. The preload at startup is what makes this true.
 9. **GPU mode is live (NVIDIA boxes only)** — after the README's "GPU install" + `COQUI_DEVICE=cuda` / `COQUI_HALF=1` / `COQUI_DEEPSPEED=1` in `server/.env`, restart the sidecar. The first startup log line shows `device=cuda half=True deepspeed=True`, followed by `DeepSpeed inference enabled.` and `Model cast to fp16.`. While a chapter synth is in flight, `nvidia-smi` shows the venv's `python.exe` holding ~2–3 GB VRAM with >50% GPU-Util, and `logs/tts.err.log` reports `Real-time factor: 0.1–0.3` per group (down from 2.5–3.7 on CPU). A 30-minute chapter drops from ~90 min wall time to ~5 min.
 
-## KNOWN: scaffolded behavior
+## Failure paths
 
-- No auto-start of the sidecar; user must run it manually before analysis.
-- Health-check endpoint exists at `GET /health` and is proxied as `GET /api/sidecar/health`. The Generate screen polls it for the status pill.
-- No automatic retry; transient failures (e.g. sidecar restart mid-flight) require manual user action (click Retry).
-- Document the failure paths explicitly; do not assert "audio always plays."
+Every sidecar synth call passes through the bounded-retry wrapper
+`withTtsRetry` (`server/src/tts/retry.ts`). Classification happens at the
+sidecar boundary in `SidecarTtsProvider.synthesize` — each thrown error
+carries a `transient: boolean` flag (and supplementary `status` /
+`cause` / `poisoned` fields) that the retry helper reads to decide
+whether to back off and retry, or surface immediately.
+
+Default retry schedule: 1 primary attempt + 2 retries, backoffs at 500 ms
+and 2 s. Caller-driven `AbortSignal` short-circuits both the sleep and
+any pending retry. Persistent failures re-throw the LAST transient error
+so the SSE `chapter_failed` tick carries the actual upstream message,
+not a meta "retries exhausted" wrapper.
+
+| Failure mode                            | Annotated as                              | Retry?  | User-visible behaviour                                                                                                                                                                                                              |
+| --------------------------------------- | ----------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ECONNREFUSED` / `ETIMEDOUT` / DNS fail | `transient: true, cause: 'network'`       | Yes (×2) | "Local TTS sidecar not reachable at \<url\>. Start it with `npm run tts:sidecar`." Brief blips (sidecar restarting, network flapping) absorbed transparently; persistent down → all 3 attempts fail → message surfaces in `chapter_failed`. |
+| HTTP 503 with `{ poisoned: true }` body | `transient: false, status: 503, poisoned: true` | **No** | Surfaces immediately. The CUDA context is corrupted process-wide; only a sidecar restart clears it (see `server/tts-sidecar/main.py` `_schedule_poison_exit`). UI renders "needs restart" framing.                          |
+| HTTP 503 (model loading, transient)     | `transient: true, status: 503`            | Yes (×2) | Most common at the very first synth call after sidecar boot — the model-load takes 30-60 s, the proxy gives up earlier. Backoff usually catches it on attempt 2. |
+| HTTP 502 (reverse proxy mid-restart)    | `transient: true, status: 502`            | Yes (×2) | Same retry shape as 503. |
+| HTTP 504 (gateway timeout)              | `transient: true, status: 504`            | Yes (×2) | Same retry shape as 503. |
+| HTTP 408 (request timeout)              | `transient: true, status: 408`            | Yes (×2) | Treated like 5xx — the request didn't reach the model or the response stalled; safe to retry. |
+| HTTP 4xx (any other 400/401/403/404/…)  | `transient: false, status: 4xx`           | **No** | Client-side; the request shape itself is wrong. Surfaces immediately; the UI shows the upstream status text. |
+| Empty 200 response (no audio bytes)     | Plain `Error`, no `transient` flag        | **No** | "Local TTS sidecar returned an empty audio body." Surfaces immediately — silent retry would just replay the same shape. |
+| AbortError (caller-driven stop)         | `name: 'AbortError'` (no `transient` flag)| **No** | Passed through unchanged so the queue tears down cleanly. The retry helper's signal check also tears down any pending sleep mid-backoff. |
+| Disk full at cache-write step           | I/O error from fs.writeFile (downstream)  | n/a | Not a sidecar-side failure — the synth succeeded but the chapter cache write didn't. SSE stream surfaces the I/O error on `chapter_failed`. |
+
+Classification is pinned by `server/src/tts/sidecar.test.ts`; the
+wrapper itself is pinned by `server/src/tts/retry.test.ts`; the
+end-to-end shape (two 503s then a 200 → one successful chapter group)
+is pinned by `synthesise-chapter.test.ts`'s
+"does NOT retry a poisoned-CUDA 503" / "retries on transient throw"
+cases.
 
 ## Out of scope
 
 - Sidecar-internal model swapping (Coqui vs Piper vs Kokoro) — each gets its own model key prefix and provider.
 - GPU vs CPU performance tuning beyond the documented env knobs — the sidecar's `COQUI_DEVICE` / `COQUI_HALF` / `COQUI_DEEPSPEED` cover the common path; bespoke kernel tuning is out of scope. The Node side reads no device info.
-- Streaming PCM — the sidecar returns a whole utterance per call.
+- Streaming PCM — the sidecar returns a whole utterance per call. Tracked as `[BACKLOG Could #25]`.
+
+## Ship notes
+
+- **Shipped:** 2026-05-18.
+- **What closed the scaffolding:** the three KNOWN-scaffolded items at landing-time are all addressed —
+  - Auto-start of the sidecar shipped earlier as plan [43 — Auto-start TTS sidecar](43-auto-start-sidecar.md); the per-user `autoStartSidecar` preference (default ON) means `start-app.bat` brings up TTS in one shot.
+  - Automatic retry shipped via the provider-agnostic `withTtsRetry` helper in `server/src/tts/retry.ts` wired into `synthesise-chapter.ts:241` — pinned by `retry.test.ts` (10 cases) and end-to-end retry behaviour by `synthesise-chapter.test.ts`.
+  - Failure-path documentation is the **Failure paths** table above; the boundary classification is now pinned by the new `server/src/tts/sidecar.test.ts` (10 cases) so a future refactor that flips a transient↔non-transient mapping fails fast at the boundary instead of in chapter orchestration.
+- **What remains intentionally out of scope:** streaming PCM (the sidecar still returns a whole utterance per call; streaming is `[BACKLOG Could #25]`).
