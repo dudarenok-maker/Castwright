@@ -413,6 +413,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           narratorCredit: pickNullable(patch.narratorCredit, state.narratorCredit),
           genre: pickNullable(patch.genre, state.genre),
           publicationDate: pickNullable(patch.publicationDate, state.publicationDate),
+          description: pickNullable(patch.description, state.description),
           updatedAt: new Date().toISOString(),
         };
 

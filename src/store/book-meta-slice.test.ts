@@ -22,6 +22,7 @@ const fullMeta = (over: Partial<EditableBookMeta> = {}): EditableBookMeta => ({
   narratorCredit: 'Anders Vale',
   genre: 'Literary fiction',
   publicationDate: '2026-05-09',
+  description: null,
   ...over,
 });
 
@@ -52,6 +53,7 @@ describe('bookMetaSlice — hydrateFromBookState', () => {
       narratorCredit: 'Anders Vale',
       genre: 'Literary fiction',
       publicationDate: '2026-05-09',
+      description: null,
     });
   });
 

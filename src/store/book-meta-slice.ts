@@ -27,6 +27,9 @@ export interface EditableBookMeta {
   genre: string | null;
   /** ISO 'YYYY-MM-DD' calendar date (no time). */
   publicationDate: string | null;
+  /** Long-form "about this audiobook" copy. Travels into the M4B
+      `desc` / `ldes` atoms during Voice export (plan 33). */
+  description: string | null;
 }
 
 export type EditableBookMetaField = keyof EditableBookMeta;
@@ -49,6 +52,7 @@ interface HydratePayload {
     narratorCredit?: string | null;
     genre?: string | null;
     publicationDate?: string | null;
+    description?: string | null;
   };
   /** Used as the narratorCredit fallback when state.narratorCredit is missing. */
   narratorFallback?: string | null;
@@ -69,6 +73,7 @@ export const bookMetaSlice = createSlice({
         narratorCredit: state.narratorCredit ?? narratorFallback ?? null,
         genre: state.genre ?? null,
         publicationDate: state.publicationDate ?? null,
+        description: state.description ?? null,
       };
       s.draft = null;
     },

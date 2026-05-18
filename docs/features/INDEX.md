@@ -86,7 +86,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [19 — Listener preview](19-preview-listener.md) — Listener-POV full-screen preview.
 - [47 — Listening progress / resume bookmarks](archive/47-listen-progress.md) — Per-book sibling `listen-progress.json`; mini-player seeks to the saved point on chapter mount; Listen view "Resume at MM:SS" pill. Shipped 2026-05-18.
 - [32 — Audiobook export](32-audiobook-export.md) — Sideload to PocketBook Reader (Phase A: MP3.ZIP) via LAN download or sync folder; per-chapter ID3v2.4 tags, no re-encode, atomic writes.
-- [33 — Voice export](33-voice-export.md) — Live Voice (Android audiobook player) tile on the Listen tab; M4B-standards conformance (`stik = 2`) regression-guarded; defaults to M4B + sync-folder.
 - [34 — MP3-folder export](34-mp3-folder-export.md) — Per-chapter MP3s in a sub-folder for folder-scanning audiobook apps (Smart AudioBook Player, BookPlayer, Audiobookshelf). Sync-folder destination only; APIC cover travels with each chapter.
 
 ### I. Revisions & drift
@@ -148,3 +147,4 @@ breadcrumb so cross-references still resolve.
 - [50 — Verify-cache for cheap retries after flake](archive/50-verify-cache.md) — Per-step input-hash cache on `npm run verify`; skips green steps when inputs (filtered from `git ls-files` + lockfiles + Pester/pytest tool fingerprints) match the last green hash. Cold ~120s → warm ~1s; flake recovery drops from the full pipeline to one re-run. Shipped 2026-05-18.
 - [37 — Playwright e2e harness](archive/37-e2e-playwright.md) — Browser-level smoke + on-ramp for visual regression; 14 specs / 30 tests at ship, covering library, upload, analysing, confirm, ready, listen, voices, cast/drawer, theme, toast, manual continuity, revision diff, bulk sync, cover framing, plus per-surface visual baselines (light + dark). Shipped 2026-05-18.
 - [14 — Coqui XTTS sidecar](archive/14-tts-sidecar-coqui.md) — Local sidecar TTS alternate (zero-shot voice cloning); bounded-retry with provider-side classification of transient (network blip / 5xx / 408) vs non-transient (4xx / CUDA-poisoned 503) failures; full failure-path table. Shipped 2026-05-18.
+- [33 — Voice export](archive/33-voice-export.md) — Live Voice (Android audiobook player) tile on the Listen tab; M4B-standards conformance (`stik = 2` + `desc` / `ldes`) regression-guarded; defaults to M4B + sync-folder. Long-form description field shipped alongside. Shipped 2026-05-18.
