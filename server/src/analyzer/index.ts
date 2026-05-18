@@ -15,6 +15,7 @@ import {
   getResolvedAnalysisEngine,
   getResolvedOllamaUrl,
   getResolvedOllamaModel,
+  getResolvedGeminiApiKey,
 } from '../workspace/user-settings.js';
 
 export interface StageChunkInfo {
@@ -104,7 +105,10 @@ function inferEngineFromModelId(modelId: string): 'local' | 'gemini' {
 
 export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelection {
   const engine = opts.model ? inferEngineFromModelId(opts.model) : getResolvedAnalysisEngine();
-  const apiKey = process.env.GEMINI_API_KEY?.trim() || '';
+  /* Plan 49 — read the Gemini API key via the resolver: env wins for CI /
+     power users, then falls through to the UI-saved user-settings field.
+     The previous `process.env.GEMINI_API_KEY` read missed the latter. */
+  const apiKey = getResolvedGeminiApiKey() ?? '';
 
   if (engine === 'local') {
     const ollamaUrl = getResolvedOllamaUrl();
@@ -132,7 +136,9 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
   // engine === 'gemini'
   if (!apiKey) {
     throw new Error(
-      'GEMINI_API_KEY is required when ANALYZER=gemini (set it in server/.env — see server/.env.example).',
+      'GEMINI_API_KEY is required when analyzer engine is Gemini. ' +
+        'Set it from Account → Server configuration → Gemini API key, ' +
+        'or in server/.env for CI / power users.',
     );
   }
   const model = opts.model ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';

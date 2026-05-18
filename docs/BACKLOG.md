@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18 (post plan 18b ship):** Must 0 · Should 3 · Could 32 · Won't 9
+**Counts as of 2026-05-18 (post plan 49 ship):** Must 0 · Should 2 · Could 33 · Won't 9
 
 ---
 
@@ -49,17 +49,7 @@ Source: net-new (2026-05-18). Promoted from Could to Should in Round 0 re-priori
 - _Depends on:_ plan 47 (listen progress) shipped — relies on the same persistence seam.
 - _Benefit (user):_ standard audiobook player feature; users expect 0.75x–2x as basic controls. Today only 1x is available, forcing browser zoom-and-pinch or per-chapter regeneration workarounds.
 
-### 2. Release packages on git-tag push
-
-Source: net-new (2026-05-18) — user-requested ahead of handing the app to a deployer. Full plan in [`49-release-package.md`](features/49-release-package.md) (status: draft).
-
-- _What:_ Add `scripts/bump-version.ps1 -Level (patch|minor|major)` that rewrites both `package.json` versions + lockfiles, creates the `chore: bump version to X.Y.Z` commit, and creates the annotated `vX.Y.Z` tag locally. Add `.github/workflows/release.yml` that fires on `push: tags: ['v*.*.*']`, runs `npm run verify:quick && npm run build`, assembles `audiobook-generator-vX.Y.Z.zip` via a new `scripts/build-release-zip.mjs` (manifest-driven include / exclude rules), computes SHA-256, and uploads both as a GitHub Release with the tag annotation as the release notes. Ship a top-level `INSTALL.md` walking a deployer through extracting the zip, prerequisites, `install-kokoro.ps1`, and `npm start`. Add a "Releasing" section to CONTRIBUTING.md.
-- _Acceptance:_ (1) `pwsh scripts/bump-version.ps1 -Level patch` on a clean main bumps both `package.json` versions in lockstep, regenerates both lockfiles, commits with the standard subject, and tags `v<new>`. (2) `git push origin main && git push origin v<new>` triggers `release.yml`; the workflow ends green with a `audiobook-generator-v<new>.zip` + `.sha256` asset on the matching GitHub release. (3) Extracting the zip on a clean Windows 11 host and following INSTALL.md yields a runnable app at `http://localhost:5173`. (4) New Pester test `scripts/tests/bump-version.Tests.ps1` locks the bump-script post-state; new Vitest spec `scripts/tests/release-manifest.test.mjs` locks the include / exclude manifest.
-- _Key files:_ new `.github/workflows/release.yml`, `scripts/bump-version.ps1`, `scripts/build-release-zip.mjs`, `scripts/tests/bump-version.Tests.ps1`, `scripts/tests/release-manifest.test.mjs`, `INSTALL.md`, `docs/features/49-release-package.md`; edited `docs/features/INDEX.md`, `README.md` (Releases link), `CONTRIBUTING.md` (Releasing section), `.gitignore`.
-- _Depends on:_ none. Pairs naturally with Could #18 (CI integration for the test suite) — both add GitHub Actions workflows; if shipped together the same caching infrastructure is reusable.
-- _Benefit (user / technical):_ user can hand a downloadable artefact to a deployer instead of walking them through a git-clone + dev-from-source flow. Cutting a release becomes one command instead of a 4-file edit. Establishes the release seam that Could #21 (Windows installer) and Could #22 (Docker image) hang off — both extend `release.yml` rather than spawn parallel pipelines.
-
-### 3. Extend verify-cache to `verify:fast` (pre-commit gate)
+### 2. Extend verify-cache to `verify:fast` (pre-commit gate)
 
 Source: net-new (2026-05-18). Follow-up to plan 50 (Verify-cache for cheap retries after flake).
 
@@ -391,6 +381,16 @@ Source: plan 20 close-out (2026-05-18). The `revisions.acceptedSelections` map i
 - _Key files:_ new `server/src/routes/revisions-commit-segments.ts`; `server/src/tts/synthesise-chapter.ts` (extend for per-segment paths); `src/views/revision-diff.tsx` (dispatch through the new endpoint); `src/store/revisions-slice.ts` (mark the revision as committed once the segment-level synth completes).
 - _Depends on:_ plan 20 shipped (acceptedSelections persistence is already on disk). Pairs with Could #12 (revision history timeline) — the timeline becomes meaningful once per-segment commits land separately from full regens.
 - _Benefit (user):_ true segment-level revision control. Today accept/reject is whole-revision swap — if the user likes 9 of 10 segments in the new take but wants segment 7 from the original, they have to regenerate the whole chapter under different prompts to recover that one segment. This closes the loop the slice has been quietly capturing since plan 20 v1.
+
+### 37. In-app multi-model management UX
+
+Source: net-new (2026-05-18). Plan 49 (release packaging) ships with a Kokoro-only install bundle and an in-app Gemini API key field; the rest of the multi-model story still needs the deployer to drop to a terminal. This item closes that gap.
+
+- _What:_ Add to the Account view (or a sibling Models tab): (a) "Install Ollama" affordance that detects the platform, downloads the vendor installer, and walks the user through setup; (b) "Pull model" UI on the analyzer section — lists models present on disk, exposes a Pull button for the configured-default that doesn't shell to a terminal; (c) "Refresh available models" button that re-hits `/api/ollama/health` and updates the dropdown without a page reload; (d) optional Coqui XTTS pre-install script (POSIX `.sh` + PowerShell `.ps1` parallels to `install-kokoro.*`) that fetches weights ahead of first generation.
+- _Acceptance:_ Fresh deployer install (Kokoro only) → Account → Models → Install Ollama → Pull qwen3.5:4b → analyze a book, all without leaving the app. Coqui XTTS users can pre-fetch weights similarly. New Vitest specs cover the per-step state machine; one Playwright spec covers the install → pull → analyze loop end-to-end (mock the actual download).
+- _Key files:_ `src/views/account.tsx` (extend with Models section), new `src/components/ollama-install.tsx`, new `src/components/model-pull-status.tsx`, `server/src/routes/ollama-health.ts` (extend with `POST /pull`), new `server/src/ollama/install-bootstrap.ts`, new `server/tts-sidecar/scripts/install-coqui.{sh,ps1}`.
+- _Depends on:_ none structural — the Account UX seam exists from plan 49. Unparks the install-and-pull-from-UI subset of Won't #1 ("Auto-install Ollama / auto-pull models"); the headless-CI variant of Won't #1 stays parked.
+- _Benefit (user):_ closes the gap that plan 49's Kokoro-only install leaves. Today a deployer who wants Ollama or Coqui XTTS must drop to a terminal; this UX keeps the install + model-management flow entirely in-app, matching the deployer-first promise of plan 49.
 
 ---
 

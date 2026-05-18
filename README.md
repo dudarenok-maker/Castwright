@@ -153,6 +153,15 @@ suite runs against.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — commit convention, scope
   vocabulary, branching workflow, release-notes rules.
 
+## Releases
+
+Packaged downloads of tagged releases are published to
+[GitHub Releases](https://github.com/dudarenok-maker/Audiobook-Generator/releases).
+Each release is a single platform-independent `audiobook-generator-vX.Y.Z.zip`
+plus a `.sha256` checksum. Follow [`INSTALL.md`](INSTALL.md) for the
+extract-and-run walkthrough (Windows, macOS, Linux). The release pipeline
+is documented in [`docs/features/49-release-package.md`](docs/features/49-release-package.md).
+
 ## Testing
 
 Five harnesses, all wired into `npm run verify`:
