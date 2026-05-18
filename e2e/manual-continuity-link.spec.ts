@@ -117,7 +117,13 @@ test.describe('manual continuity link', () => {
        reliably-observable mock signals are the footer text + the prior
        bookTitle ("Solway Bay"). */
     await expect(page).not.toHaveURL(/profile=halloran/, { timeout: 5_000 });
-    await expect(page.getByText(/Continuity preserved/i)).toBeVisible({ timeout: 5_000 });
+    /* Plan 41 seeded matchedFrom on Narrator / Eliza / Marcus so the
+       bulk-sync pill has multiple eligible cards in mock mode — those
+       cards also render "Continuity preserved" footers. The original
+       single-match assertion would have caught the narrator's footer
+       even before plan 41 (narrator had matchedFrom in the fixture);
+       `.first()` keeps the semantics. */
+    await expect(page.getByText(/Continuity preserved/i).first()).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText('Solway Bay').first()).toBeVisible();
   });
 });
