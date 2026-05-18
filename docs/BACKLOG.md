@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18:** Must 1 · Should 1 · Could 13 · Won't 9
+**Counts as of 2026-05-18:** Must 1 · Should 1 · Could 14 · Won't 9
 
 ---
 
@@ -185,6 +185,16 @@ Source: [`30-global-model-control.md`](features/30-global-model-control.md) "Whe
 - _Key files:_ `src/lib/use-tts-lifecycle.ts` (no changes expected — already exported); `src/components/layout.tsx` (no changes — already exposes the context); the new surface's component file.
 - _Depends on:_ an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
 - _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
+
+### 15. Un-quarantine the two e2e flakes (`listen-playback`, `new-book-flow`) by fixing parallel-worker contention
+
+Source: plan 46 ship (2026-05-18). Two specs `test.fixme`'d when plan 46 landed.
+
+- _What:_ Both specs pass in isolation but fail consistently when Playwright runs workers in parallel on Windows under load. Root cause is unproven — candidates: (a) the mock MP3 fetch + decode racing two workers on the same Vite dev server, (b) SSE phase transitions firing faster than the mock-canned-data tick under contention, (c) a `setTimeout`/`requestAnimationFrame` interaction with the headless tab being throttled. Investigate via Playwright trace (`test-results/*/trace.zip`), narrow to one of (a)/(b)/(c), then either bump the per-test timeout, add a focused `waitFor` predicate, or carve out a `serial` workers config for these two specs.
+- _Acceptance:_ Drop the `.fixme` markers on both specs. `npm run verify` lands green at least 5 times in a row on a Windows host with default parallel workers. Add a regression test that pins the fix (e.g. a deterministic mock-tick or a docs note in `playwright.config.ts:25-26` explaining why the affected specs need `test.describe.serial`).
+- _Key files:_ `e2e/listen-playback.spec.ts:15`, `e2e/new-book-flow.spec.ts:32`, `playwright.config.ts:14-26`, `e2e/helpers.ts`, `src/mocks/canned-data.ts` (if mock-tick determinism turns out to be the fix).
+- _Depends on:_ none.
+- _Benefit (technical):_ restores the two e2e specs that cover the highest-blast-radius surfaces (mini-player play + full new-book cold-boot walk). Until then both code paths only have Vitest+jsdom coverage, which is known to lie about audio playback and SSE timing.
 
 ---
 
