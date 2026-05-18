@@ -5,16 +5,20 @@
 import { parseText, type ParsedManuscript } from './text.js';
 import { parsePdf } from './pdf.js';
 import { parseEpub } from './epub.js';
+import { parseMobi } from './mobi.js';
 
 export type { ParsedManuscript };
+export { DrmProtectedError } from './mobi.js';
 
-const EXT_TO_FORMAT: Record<string, 'markdown' | 'plaintext' | 'pdf' | 'epub'> = {
+const EXT_TO_FORMAT: Record<string, 'markdown' | 'plaintext' | 'pdf' | 'epub' | 'mobi'> = {
   md: 'markdown',
   markdown: 'markdown',
   txt: 'plaintext',
   text: 'plaintext',
   pdf: 'pdf',
   epub: 'epub',
+  mobi: 'mobi',
+  azw3: 'mobi',
 };
 
 function extOf(fileName?: string): string | null {
@@ -52,6 +56,13 @@ export async function parseManuscript(input: {
   }
   if (format === 'epub' || input.mimeType === 'application/epub+zip') {
     return parseEpub(input.buffer, { fileName: input.fileName, sourcePath: input.sourcePath });
+  }
+  if (
+    format === 'mobi' ||
+    input.mimeType === 'application/x-mobipocket-ebook' ||
+    input.mimeType === 'application/vnd.amazon.ebook'
+  ) {
+    return parseMobi(input.buffer, { fileName: input.fileName });
   }
   if (format === 'markdown' || format === 'plaintext') {
     return parseText(input.buffer.toString('utf8'), { fileName: input.fileName, format });

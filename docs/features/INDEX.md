@@ -41,8 +41,9 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 ### B. Upload & import
 
-- [02 — Upload (paste or file)](02-upload-paste-or-file.md) — `.md/.txt/.epub/.pdf` upload + paste flow.
+- [02 — Upload (paste or file)](02-upload-paste-or-file.md) — `.md/.txt/.epub/.pdf/.mobi/.azw3` upload + paste flow.
 - [03 — Import & confirm metadata](03-import-confirm-metadata.md) — Parse-only import then confirm-write to disk.
+- [52 — MOBI / AZW3 parsing](52-mobi-parsing.md) — Kindle / Calibre format parser + DRM detection.
 
 ### C. Analysis pipeline
 
