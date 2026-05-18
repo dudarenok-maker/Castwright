@@ -136,7 +136,14 @@ dark-mode token / utility edit must preserve these targets:
    `hover:bg-white/70` must paint a _darker_ surface than the bare
    `bg-white` redirect (#1F1B19), one that still keeps the on-top
    text legible. They MUST NOT paint pure white.
-4. **Status pills** — rose / emerald / amber backgrounds drop to
+4. **Translucent base surfaces** — `bg-white/60` and `bg-white/70`
+   need their own dark overrides (separate selector from `.bg-white`,
+   so the solid redirect doesn't reach them). Without these the
+   Analysing-view ConnPill paints `text-emerald-700` light-emerald
+   text on a ~70% white wash → light-on-light, unreadable. Alpha
+   sits one step below the matching `hover:` variants so the base→
+   hover elevation ordering is preserved.
+5. **Status pills** — rose / emerald / amber backgrounds drop to
    ~10–32% alpha overlays on dark; matching text shifts to the
    -300/-400 family. Any new status-colour utility must land an
    override at the same time it's first used in component code.
@@ -171,6 +178,12 @@ dark-mode token / utility edit must preserve these targets:
   baselines (`library-dark`, `upload-dark`, `analysing-dark`,
   `confirm-dark`, `ready-dark`, `listen-dark`) blessed alongside
   the existing six light baselines.
+- Vitest unit (`src/test/dark-mode-css.test.ts`) — asserts the
+  surface-utility overrides for `bg-white`, `bg-white/60`,
+  `bg-white/70` and their `hover:` counterparts exist under
+  `[data-theme='dark']`. Locks the regression where a missing
+  base-variant override let the ConnPill paint
+  `text-emerald-700` on a near-white wash in dark mode.
 
 ### Manual acceptance walkthrough
 
