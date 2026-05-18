@@ -5,8 +5,12 @@
    hint from scripts/start-app.ps1 preflight). */
 
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { encodePcmToMp3 } from './mp3.js';
+import { encodePcmToMp3, writeChapterPeaksFile, type ChapterPeaksFile } from './mp3.js';
+import { BIN_COUNT } from '../audio/compute-peaks.js';
 
 const ffmpegPresent = (() => {
   try {
@@ -107,3 +111,70 @@ if (!ffmpegPresent) {
       'Install: winget install Gyan.FFmpeg',
   );
 }
+
+/* writeChapterPeaksFile coverage (plan 56). No ffmpeg dependency — this is
+   pure compute + fs, so it runs unconditionally even on CI without ffmpeg. */
+describe('writeChapterPeaksFile', () => {
+  function workDir(): string {
+    return mkdtempSync(join(tmpdir(), 'audiobook-peaks-test-'));
+  }
+
+  it('writes a {peaks: number[240]} JSON file at the requested path', async () => {
+    const dir = workDir();
+    try {
+      const peaksPath = join(dir, 'audio', 'ch-one.peaks.json');
+      const pcm = sinePcm(24_000, 1.0);
+      await writeChapterPeaksFile(pcm, 24_000, peaksPath);
+
+      expect(existsSync(peaksPath)).toBe(true);
+      const parsed: ChapterPeaksFile = JSON.parse(readFileSync(peaksPath, 'utf8'));
+      expect(Array.isArray(parsed.peaks)).toBe(true);
+      expect(parsed.peaks).toHaveLength(BIN_COUNT);
+      for (const v of parsed.peaks) {
+        expect(Number.isFinite(v)).toBe(true);
+        expect(v).toBeGreaterThanOrEqual(0);
+        expect(v).toBeLessThanOrEqual(1);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates intermediate directories (matches mkdir { recursive: true })', async () => {
+    const dir = workDir();
+    try {
+      const peaksPath = join(dir, 'nested', 'audio', 'ch-x.peaks.json');
+      await writeChapterPeaksFile(sinePcm(24_000, 0.1), 24_000, peaksPath);
+      expect(existsSync(peaksPath)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('atomic rename leaves no .tmp-* droppings in the audio dir on success', async () => {
+    const dir = workDir();
+    try {
+      const audioDir = join(dir, 'audio');
+      const peaksPath = join(audioDir, 'ch-clean.peaks.json');
+      await writeChapterPeaksFile(sinePcm(24_000, 0.1), 24_000, peaksPath);
+      const entries = readdirSync(audioDir);
+      const droppings = entries.filter((e) => e.includes('.tmp-'));
+      expect(droppings).toEqual([]);
+      expect(entries).toContain('ch-clean.peaks.json');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('silent PCM yields an all-zero peaks array (no NaN serialized)', async () => {
+    const dir = workDir();
+    try {
+      const peaksPath = join(dir, 'silent.peaks.json');
+      await writeChapterPeaksFile(Buffer.alloc(24_000 * 2), 24_000, peaksPath);
+      const parsed: ChapterPeaksFile = JSON.parse(readFileSync(peaksPath, 'utf8'));
+      expect(parsed.peaks).toEqual(new Array(BIN_COUNT).fill(0));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
