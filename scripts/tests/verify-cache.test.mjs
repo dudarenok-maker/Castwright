@@ -1,6 +1,6 @@
 // Unit tests for the verify-cache runner's pure logic (hash composition + cache
 // decision + load/save). No `npm run` spawning — runPipeline itself is exercised
-// by the manual walkthrough in docs/features/50-verify-cache.md. Run via
+// by the manual walkthrough in docs/features/archive/50-verify-cache.md. Run via
 // `npm run test:hooks` (node --test, no extra deps).
 
 import { test } from 'node:test';
