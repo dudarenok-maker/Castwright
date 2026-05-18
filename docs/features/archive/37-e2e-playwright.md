@@ -1,14 +1,13 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-18
 owner: null
 ---
 
 # Playwright e2e harness
 
-> Status: KNOWN: scaffolded — one golden-path smoke test in place; broader coverage and visual-regression baselines deferred.
-> Key files: `playwright.config.ts`, `e2e/smoke.spec.ts`, `.env.test`, `package.json` (`test:e2e` script).
-> URL surface: covers `#/` and `#/new`; widens as new specs land.
+> Key files: `playwright.config.ts`, `e2e/*.spec.ts` (14 specs at ship), `.env.test`, `package.json` (`test:e2e` script).
+> URL surface: covers cold boot, `#/new`, `#/books/:id/{analysing,confirm,ready/*,listen,library}`, `#/voices`, `#/account`; widens as new specs land.
 > OpenAPI ops: none — runs against `VITE_USE_MOCKS=true`, so the mock API in `src/lib/api.ts` is the contract under test.
 
 ## Benefit / Rationale
@@ -84,9 +83,11 @@ Run from a clean checkout:
 
 ## Out of scope (follow-ups)
 
-- **More golden paths.** Voice library tab. Each gets its own spec, all reuse the mock backend. (Upload → analysing → confirm → ready _shipped 2026-05-17 as `e2e/new-book-flow.spec.ts`_; Listen-view playback _shipped 2026-05-17 as `e2e/listen-playback.spec.ts` with the `MOCK_BOOK_STATES['sb']` seed_; Visual baselines _shipped 2026-05-17 as `e2e/visual.spec.ts` covering six core surfaces_.)
-- **CI integration.** No CI runs anything yet. When CI exists, `test:e2e` is the slowest job; budget accordingly.
+- **CI integration.** No CI runs anything yet. When CI exists, `test:e2e` is the slowest job; budget accordingly. Tracked as `[BACKLOG Could #18]`.
 
 ## Ship notes
 
-_(Empty — plan is `active`, not `stable`. Filled in when broader coverage lands and the harness leaves "scaffolded" territory.)_
+- **Shipped:** 2026-05-18.
+- **Final coverage:** 14 specs / 30 tests at archive. The harness has grown organically as features shipped (theme toggle, toast surface, listen resume, manual continuity link, revision diff, voices compare, bulk sync, cover framing) — each new feature lands a paired spec under `e2e/`. The two scaffolded follow-ups documented when the harness landed are now closed: (a) **Voice library tab + cast/profile-drawer goldens** — added `e2e/voices.spec.ts` (pin/unpin round-trip on the global `#/voices` tab) and `e2e/cast-drawer.spec.ts` (drive to confirm-stage, click character → drawer opens with evidence "+ Show 1 more" toggle round-trip), both passing in <20 s warm. The earlier-shipped `e2e/voices-compare.spec.ts` (plan 22a) already covered the Compare selection seam, so the new specs target the *other* user actions on the same views.
+- **Quarantined:** two specs carry `test.fixme` markers for parallel-worker contention on Windows — `e2e/listen-playback.spec.ts:15` and `e2e/new-book-flow.spec.ts:32`. Both pass in isolation; tracked as `[BACKLOG Could #20]`.
+- **Visual baselines** continue to live under `e2e/visual.spec.ts-snapshots/{platform}/visual.spec.ts/<name>.png`; the regenerate workflow above stays the canonical contract for intentional visual deltas.
