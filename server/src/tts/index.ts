@@ -9,7 +9,7 @@
 
 import { GeminiTtsProvider } from './gemini.js';
 import { SidecarTtsProvider } from './sidecar.js';
-import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { getResolvedSidecarUrl, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
 
 export interface SynthesizeInput {
   text: string;
@@ -95,15 +95,18 @@ export function sidecarModelId(key: TtsModelKey): string {
 }
 
 /* Picks the right provider for a single synthesise call. Gemini key →
-   GeminiTtsProvider (requires GEMINI_API_KEY at the time of the call, not at
-   server boot); local key → SidecarTtsProvider pointed at LOCAL_TTS_URL. */
+   GeminiTtsProvider (resolves the API key at call-time via the env →
+   user-settings → null chain); local key → SidecarTtsProvider pointed at
+   LOCAL_TTS_URL. */
 export function selectTtsProvider(modelKey: TtsModelKey): TtsProvider {
   const engine = engineForModelKey(modelKey);
   if (engine === 'gemini') {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = getResolvedGeminiApiKey();
     if (!apiKey) {
       throw new Error(
-        'Gemini TTS selected but GEMINI_API_KEY is not set. Add it to server/.env or switch to a local engine.',
+        'Gemini TTS selected but no API key is configured. ' +
+          'Set it from Account → Server configuration → Gemini API key, ' +
+          'or add it to server/.env for CI / power users.',
       );
     }
     return new GeminiTtsProvider({ apiKey });

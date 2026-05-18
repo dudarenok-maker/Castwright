@@ -15,6 +15,7 @@ vi.mock('../lib/api', () => ({
   api: {
     getUserSettings: vi.fn(),
     putUserSettings: vi.fn(),
+    putGeminiKey: vi.fn(),
   },
 }));
 
@@ -71,14 +72,19 @@ describe('AccountView — rendering', () => {
     expect(input.value).toBe('Captain Picard');
   });
 
-  it('shows the amber pill when GEMINI_API_KEY is not set', () => {
+  it('shows the amber "Not set" pill when no Gemini API key is configured', () => {
     renderView({ apiKeyStatus: 'unset' });
-    expect(screen.getByText(/not set/i)).toBeInTheDocument();
+    /* The Gemini-key field's pill copy is just "Not set" (was "Not set —
+       add GEMINI_API_KEY to server/.env"). Plan 49 — the field itself is
+       now writable, so the copy doesn't need to point the user at .env. */
+    const pill = screen.getAllByText(/^not set$/i)[0];
+    expect(pill).toBeInTheDocument();
   });
 
-  it('shows the green pill when GEMINI_API_KEY is set', () => {
+  it('shows the green "Set" pill when a Gemini API key is configured', () => {
     renderView({ apiKeyStatus: 'set' });
-    expect(screen.getByText(/set in server\/\.env/i)).toBeInTheDocument();
+    const pill = screen.getAllByText(/^set$/i)[0];
+    expect(pill).toBeInTheDocument();
   });
 
   it('renders workspaceRoot as read-only text — no input for it', () => {
@@ -87,17 +93,15 @@ describe('AccountView — rendering', () => {
     expect(screen.getByText(/source: override/i)).toBeInTheDocument();
   });
 
-  it('does not expose any input for the Gemini API key (read-only invariant)', () => {
-    renderView();
-    /* No textbox (input/textarea) is associated with an "API key"
-       label. We can't use queryByLabelText alone — the analyzer-engine
-       sublabel mentions "GEMINI_API_KEY" and "API key" as descriptive
-       prose, so any combobox whose accessible name includes the sublabel
-       (e.g. the Analyzer-engine select) would false-positive a naive
-       /api key/i regex. Anchor on the label *start* to target only
-       widgets whose primary label is the API-key field. */
-    expect(screen.queryByRole('textbox', { name: /^gemini api key/i })).toBeNull();
-    expect(screen.queryByRole('combobox', { name: /^gemini api key/i })).toBeNull();
+  /* Plan 49 — the Gemini API key field is now WRITABLE. The
+     read-only invariant has been intentionally inverted; the field
+     accepts a paste-and-save flow. */
+  it('exposes a writable input for the Gemini API key', () => {
+    renderView({ apiKeyStatus: 'unset' });
+    const input = screen.getByLabelText(/^gemini api key$/i) as HTMLInputElement;
+    expect(input).toBeInTheDocument();
+    /* type=password so over-the-shoulder onlookers can't read the key. */
+    expect(input.type).toBe('password');
   });
 });
 
@@ -335,6 +339,91 @@ describe('AccountView — Appearance (plan 41)', () => {
     await user.click(screen.getByRole('button', { name: /use account default/i }));
     expect(store.getState().ui.themeOverride).toBeNull();
     expect(screen.queryByTestId('theme-override-pill')).toBeNull();
+  });
+});
+
+describe('AccountView — Gemini API key field (plan 49)', () => {
+  it('Save button stays ghost-styled until the user types a key', () => {
+    renderView({ apiKeyStatus: 'unset' });
+    /* The field's Save button label is "Save key", distinct from the
+       form-wide "Save changes". */
+    const saveBtn = screen.getByRole('button', { name: /save key/i });
+    expect(saveBtn).toBeInTheDocument();
+  });
+
+  it('typing a key + clicking Save fires putGeminiKey with the trimmed value', async () => {
+    (api.putGeminiKey as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      apiKeyStatus: 'set',
+    });
+    const user = userEvent.setup();
+    renderView({ apiKeyStatus: 'unset' });
+
+    const input = screen.getByLabelText(/^gemini api key$/i);
+    await user.type(input, '  my-real-key-12345  ');
+    await user.click(screen.getByRole('button', { name: /save key/i }));
+
+    await waitFor(() => {
+      expect(api.putGeminiKey).toHaveBeenCalledTimes(1);
+    });
+    const [arg] = (api.putGeminiKey as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(arg).toBe('my-real-key-12345');
+  });
+
+  it('flashes "Saved." after a successful save', async () => {
+    (api.putGeminiKey as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      apiKeyStatus: 'set',
+    });
+    const user = userEvent.setup();
+    renderView({ apiKeyStatus: 'unset' });
+    await user.type(screen.getByLabelText(/^gemini api key$/i), 'k');
+    await user.click(screen.getByRole('button', { name: /save key/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/^saved\.$/i)).toBeInTheDocument();
+    });
+  });
+
+  it('Clear button is hidden when no key is set on the server', () => {
+    renderView({ apiKeyStatus: 'unset' });
+    expect(screen.queryByRole('button', { name: /^clear$/i })).toBeNull();
+  });
+
+  it('Clear button is shown when apiKeyStatus is set and fires putGeminiKey(null)', async () => {
+    (api.putGeminiKey as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      apiKeyStatus: 'unset',
+    });
+    const user = userEvent.setup();
+    renderView({ apiKeyStatus: 'set' });
+    const clearBtn = screen.getByRole('button', { name: /^clear$/i });
+    await user.click(clearBtn);
+
+    await waitFor(() => {
+      expect(api.putGeminiKey).toHaveBeenCalledTimes(1);
+    });
+    const [arg] = (api.putGeminiKey as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(arg).toBeNull();
+  });
+
+  it('does NOT send the key through the general save flow', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(SERVER_FIXTURE);
+    const user = userEvent.setup();
+    renderView({ apiKeyStatus: 'unset' });
+
+    /* Even with text in the API key field, clicking the form-wide Save
+       MUST NOT include the secret in the patch. The dedicated endpoint
+       owns that write — this is the design invariant. */
+    await user.type(screen.getByLabelText(/^gemini api key$/i), 'should-not-leak');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+    const [patch] = (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch.geminiApiKey).toBeUndefined();
+    /* And putGeminiKey was not auto-fired by the form-wide save. */
+    expect(api.putGeminiKey).not.toHaveBeenCalled();
   });
 });
 
