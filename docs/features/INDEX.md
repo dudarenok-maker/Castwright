@@ -67,7 +67,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 ### F. TTS
 
 - [13 — TTS engine picker](13-tts-engine-picker.md) — Two-tier engine + model selector.
-- [14 — Coqui XTTS sidecar](14-tts-sidecar-coqui.md) — Local sidecar alternate (zero-shot voice cloning).
 - [14a — Kokoro v1 TTS engine](14a-tts-sidecar-kokoro.md) — Local sidecar default, English-only, per-engine cast voice profiles.
 - [15 — Gemini cloud TTS](15-tts-gemini-cloud.md) — Cloud opt-in.
 - [43 — Auto-start TTS sidecar](43-auto-start-sidecar.md) — Per-user `autoStartSidecar` preference (default ON); Node owns the sidecar child-process lifecycle so `start-app.bat` brings up TTS in one shot. **Status: active.**
@@ -148,3 +147,4 @@ breadcrumb so cross-references still resolve.
 - [47 — Listening progress / resume bookmarks](archive/47-listen-progress.md) — Per-book sibling `listen-progress.json`; mini-player seeks to the saved position on chapter mount via debounced PUT + onLoadedMetadata; Listen view "Resume at MM:SS" pill. Shipped 2026-05-18.
 - [50 — Verify-cache for cheap retries after flake](archive/50-verify-cache.md) — Per-step input-hash cache on `npm run verify`; skips green steps when inputs (filtered from `git ls-files` + lockfiles + Pester/pytest tool fingerprints) match the last green hash. Cold ~120s → warm ~1s; flake recovery drops from the full pipeline to one re-run. Shipped 2026-05-18.
 - [37 — Playwright e2e harness](archive/37-e2e-playwright.md) — Browser-level smoke + on-ramp for visual regression; 14 specs / 30 tests at ship, covering library, upload, analysing, confirm, ready, listen, voices, cast/drawer, theme, toast, manual continuity, revision diff, bulk sync, cover framing, plus per-surface visual baselines (light + dark). Shipped 2026-05-18.
+- [14 — Coqui XTTS sidecar](archive/14-tts-sidecar-coqui.md) — Local sidecar TTS alternate (zero-shot voice cloning); bounded-retry with provider-side classification of transient (network blip / 5xx / 408) vs non-transient (4xx / CUDA-poisoned 503) failures; full failure-path table. Shipped 2026-05-18.
