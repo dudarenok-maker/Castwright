@@ -58,7 +58,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [09 — Voice match pipeline](09-voice-match-pipeline.md) — Post-analysis library matching.
 - [10 — Profile drawer](10-profile-drawer.md) — Character edit drawer + sample preview + evidence toggle.
 - [11 — Batch character regenerate](11-batch-character-regenerate.md) — Multi-select character → chapter-range regen.
-- [41 — Bulk-apply library sync on confirm-cast](41-bulk-library-sync.md) — Top-of-view pill that ticks every eligible "Sync profile" checkbox in one click; per-card untick still handles exceptions. **Status: draft.**
 
 ### E. Manuscript editing
 
@@ -142,3 +141,4 @@ breadcrumb so cross-references still resolve.
 - [39 — Purge WAV (MP3 is the only format)](archive/39-purge-wav.md) — Dropped the legacy-WAV fallback once documented in plan 28; locator + routes + types now MP3-only. Shipped 2026-05-17.
 - [40 — Cover framing + local-disk upload](archive/40-cover-framing-and-upload.md) — Three-tab CoverPicker (Search / Upload / Frame), PNG → JPEG transcode server-side, render-time pan + zoom via `object-position` + `transform`, account-level default for the initial tab. Shipped 2026-05-17.
 - [46 — Lint, format, a11y baseline](archive/46-lint-format-a11y.md) — ESLint 8 + Prettier 3 + axe-core on the four core views; `npm run lint` (max-warnings 0) prepended to `verify`. Shipped 2026-05-18.
+- [41 — Bulk-apply library sync on confirm-cast](archive/41-bulk-library-sync.md) — Top-of-view pill that ticks every eligible "Sync profile" checkbox in one click; per-card untick still handles exceptions; existing `handleConfirm` batch fans out the per-character library-cast-override POSTs unchanged. Shipped 2026-05-18.

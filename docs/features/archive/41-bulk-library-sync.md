@@ -1,12 +1,12 @@
 ---
-status: draft
-shipped: null
-owner: null
+status: stable
+shipped: 2026-05-18
+owner: dudarenok-maker
 ---
 
 # Bulk-apply library sync on confirm-cast
 
-> Status: draft
+> Status: stable
 > Key files: `src/views/confirm-cast.tsx`, new `src/views/confirm-cast.test.tsx`, new `e2e/bulk-sync-library.spec.ts`
 > URL surface: `#/books/<id>/confirm` (no router grammar change)
 > OpenAPI ops: none (purely a UI compression over existing `POST /api/library-cast/override`)
@@ -71,4 +71,47 @@ Run in mock mode (`npm run dev` + `VITE_USE_MOCKS=true`).
 
 ## Ship notes
 
-(Filled when status flips to `stable`.)
+Shipped 2026-05-18 via PR landing on `feat/frontend-plan-41-bulk-sync`.
+Final shape:
+
+- `src/views/confirm-cast.tsx` — bulk-sync pill renders between the centred
+  header block and the cast-card grid via `<PrimaryButton variant="dark"
+size="sm" icon={false}>`. Pill visibility predicate mirrors the per-card
+  `canOverrideLibrary` predicate exactly (`!!onOverrideLibrary &&
+!!c.matchedFrom?.bookId && !!c.matchedFrom?.characterId`) — pill hidden
+  in mock environments where the per-card checkbox is itself hidden, and
+  hidden when no character carries the full library handle. Label is
+  dynamic: when not all eligible are ticked, it reads `Sync N profiles
+from library` where N is the count of currently-unticked eligible
+  characters; when all are ticked, it flips to `Clear all syncs`. The
+  `setOverrides` call uses the functional-update form so a near-simultaneous
+  per-card click (still spread from a stale closure) can't clobber the
+  bulk set. The existing `handleConfirm` batch (`confirm-cast.tsx:96-123`)
+  remains the only POST path — pill mutates local state only.
+- Vitest cases under `src/views/confirm-cast.test.tsx` — new
+  `ConfirmCastView — bulk sync pill` describe covers: 3 matched + 2
+  unmatched renders `Sync 3 profiles from library`; 1 matched singularises
+  to `Sync 1 profile from library`; clicking ticks every matched checkbox
+  - unmatched cards unaffected; clicking again clears + label inverts to
+    `Clear all syncs`; bulk-tick + per-card untick of one flips the label
+    to `Sync 1 profile from library` (per the worked example in invariant
+    4); pill absent when zero eligible OR when `onOverrideLibrary` isn't
+    provided (mock environments).
+- Playwright e2e at `e2e/bulk-sync-library.spec.ts` — walks cold-boot
+  → paste → analysing → confirm; asserts `Sync 3 profiles from library`
+  pill renders; clicks it; asserts all three matched checkboxes tick +
+  label flips to `Clear all syncs`; clicks `Confirm cast` and lands on
+  the manuscript route.
+- Fixture seed in `src/data/characters.ts` + `src/data/match-factors.ts`
+  — Narrator's existing `matchedFrom` rounded out with `bookId: 'sb'` +
+  `characterId: 'narrator_sb'`, plus new full-handle `matchedFrom` on
+  Eliza + Marcus (and matching `MATCH_FACTORS` entries). Halloran is
+  intentionally left without `matchedFrom` so the
+  `manual-continuity-link.spec.ts` test still uses him as the unlinked
+  target. Visual baselines for `confirm.png` and `confirm-dark.png`
+  re-blessed for the new pill + the two extra "Continuity preserved"
+  footers; the manual-continuity-link assertion was scoped to `.first()`
+  for the same reason.
+
+Final commit on the branch: `c7c87e6` (pre-doc-flip; the doc-flip commit
+references this SHA back).
