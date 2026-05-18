@@ -124,6 +124,15 @@ export function changeLogJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'change-log.json');
 }
 
+/* Per-book listening bookmark — `{ chapterId, currentSec, updatedAt }`.
+   Sibling JSON to state.json so the schema-versioning shape from plan
+   27 stays stable (state.json's rotating-backup contract is the
+   load-bearing piece; this file is cheap to re-derive on loss so it
+   stays on bare writeJsonAtomic). Plan 47. */
+export function listenProgressJsonPath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'listen-progress.json');
+}
+
 /* Per-book snapshot of the in-flight analyzer's state — written at phase
    boundaries / on pause / on terminal events. Lets the top-bar
    AnalysisPill rehydrate across browser reload AND server restart
