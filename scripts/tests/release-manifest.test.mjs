@@ -86,7 +86,7 @@ const EXCLUDED = [
   // Maintainer-only doc + test surfaces
   'e2e/listen-playback.spec.ts',
   'docs/BACKLOG.md',
-  'docs/features/49-release-package.md',
+  'docs/features/archive/49-release-package.md',
   'scripts/tests/bump-version.test.mjs',
   'server/tts-sidecar/tests/test_smoke.py',
   'CLAUDE.md',
