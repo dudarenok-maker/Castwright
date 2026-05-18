@@ -20,7 +20,57 @@ import {
   type Stage2ChapterOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
+import { AnalysisAbortedError } from './ollama.js';
 import { geminiRateLimiter, DailyQuotaExhaustedError } from './rate-limit.js';
+
+/* Idle-chunk watchdog: if the SDK stream goes more than this long between
+   chunks (or before the first chunk), assume the upstream is wedged and
+   throw a retryable error so generateWithLimiter's retry loop kicks in.
+   Calibrated against the observed worst case for healthy free-tier Flash
+   Lite (~3–10 s per chunk under load) with comfortable headroom; raise if
+   a slower model is added that legitimately blocks longer between tokens.
+
+   Resolved at use-time from `GEMINI_STREAM_IDLE_MS` so tests can shrink
+   the window (driving the 3-attempt retry exhaustion in ~1 s instead of
+   ~2 min) and prod can tune without a rebuild. */
+export const STREAM_IDLE_TIMEOUT_MS = 45_000;
+export function resolveStreamIdleTimeoutMs(): number {
+  const raw = process.env.GEMINI_STREAM_IDLE_MS;
+  if (!raw) return STREAM_IDLE_TIMEOUT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : STREAM_IDLE_TIMEOUT_MS;
+}
+
+/* Inter-attempt backoffs for the retry loop in generateWithLimiter.
+   Exported so tests can shrink them via `GEMINI_RETRY_BACKOFFS_MS` — the
+   1.5 s / 6 s production values plus 25% jitter would push a 3-attempt
+   retry-exhaustion spec past the default 5 s test budget. */
+export const BACKOFFS_MS: readonly number[] = parseBackoffsEnv() ?? [1500, 6000];
+function parseBackoffsEnv(): number[] | null {
+  const raw = process.env.GEMINI_RETRY_BACKOFFS_MS;
+  if (!raw) return null;
+  const parts = raw
+    .split(',')
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n >= 0);
+  return parts.length > 0 ? parts : null;
+}
+
+/** Stream went silent for the watchdog window with no chunk. The
+    `generateWithLimiter` retry loop catches this and treats it like a
+    retryable 5xx so a wedged Gemini stream doesn't stall the entire
+    per-chapter pipeline indefinitely (which is what happened pre-fix —
+    the SDK iterator just sat in `for await` forever). */
+export class GeminiStreamIdleError extends Error {
+  readonly code = 'GEMINI_STREAM_IDLE';
+  constructor(
+    public readonly model: string,
+    public readonly idleMs: number,
+  ) {
+    super(`Gemini ${model} stream went idle for ${idleMs}ms with no chunk.`);
+    this.name = 'GeminiStreamIdleError';
+  }
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_DIR = resolve(__dirname, '..', '..', '..', 'skills');
@@ -212,7 +262,7 @@ export class GeminiAnalyzer implements Analyzer {
   ): Promise<string> {
     const MAX_ATTEMPTS = 3;
     const MAX_TOTAL_MS = 90_000;
-    const BACKOFFS = [1500, 6000];
+    const BACKOFFS = BACKOFFS_MS;
     const estTokens = estimateInputTokens(systemInstruction, contents);
     const start = Date.now();
     let lastErr: unknown = null;
@@ -230,7 +280,7 @@ export class GeminiAnalyzer implements Analyzer {
       });
 
       try {
-        const out = await this.generate(contents, systemInstruction, call.onChunk);
+        const out = await this.generate(contents, systemInstruction, call.signal, call.onChunk);
         if (out.promptTokenCount && Number.isFinite(out.promptTokenCount)) {
           geminiRateLimiter.recordActualTokens(this.model, out.promptTokenCount);
         }
@@ -239,6 +289,27 @@ export class GeminiAnalyzer implements Analyzer {
         lastErr = err;
         const status = (err as { status?: number })?.status;
         const message = (err as Error)?.message ?? String(err);
+
+        /* Caller pause: tear down immediately, do NOT retry. Matches the
+           Ollama analyzer's contract so the route layer's
+           `err instanceof AnalysisAbortedError` branch fires for both
+           engines. */
+        if (err instanceof AnalysisAbortedError) throw err;
+
+        /* Idle-stream watchdog tripped — the SDK stream never emitted a
+           chunk for the watchdog window. Retry with the same backoff shape
+           as a 5xx; if we exhaust attempts, the error propagates and the
+           route classifies it as a chapter failure. */
+        if (err instanceof GeminiStreamIdleError) {
+          if (attempt >= MAX_ATTEMPTS - 1) break;
+          const backoff = jitterMs(BACKOFFS[attempt] ?? 6000);
+          console.warn(
+            `[gemini] stream idle ${err.idleMs}ms — retrying in ${backoff}ms (attempt ${attempt + 2}/${MAX_ATTEMPTS})`,
+          );
+          if (backoff > 1000) call.onThrottle?.(backoff, 'retry-after');
+          await sleep(backoff, call.signal);
+          continue;
+        }
 
         if (status === 429) {
           /* Daily-quota markers: same regex as routes/analysis.ts so
@@ -292,30 +363,95 @@ export class GeminiAnalyzer implements Analyzer {
      as a live "Receiving response · N KB · last chunk Ms ago" indicator and
      a watchdog that warns when chunks stop arriving.
 
+     Two abort surfaces feed in:
+     - `callerSignal` (`call.signal`) — the per-job AbortController fired
+       by `/analysis/pause` or an SSE-client disconnect.
+     - An internal `watchdog` AbortController fired by the idle-chunk timer
+       below if the stream goes the watchdog window without a chunk.
+       Pre-fix, the SDK's async-iterator could sit in `for await`
+       indefinitely when Google's stream stalled mid-response; the watchdog
+       converts that into a retryable `GeminiStreamIdleError`.
+
+     The two are composed with `AbortSignal.any` (Node ≥ 20.3) and passed
+     as `config.abortSignal` so the SDK tears the underlying HTTP request
+     down at the network layer. Belt-and-braces: the iterator pull also
+     races against an `abort`-listener promise, so we tear down even if
+     the SDK ignores its signal.
+
      Returns the assembled text plus the prompt token count if the SDK
      exposed it on any chunk's usageMetadata — the limiter reconciles its
      TPM estimate against this. */
   private async generate(
     contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
     systemInstruction: string,
+    callerSignal: AbortSignal | undefined,
     onChunk?: (info: StageChunkInfo) => void,
   ): Promise<{ text: string; promptTokenCount?: number }> {
+    const watchdog = new AbortController();
+    let idleFired = false;
+
+    const signals: AbortSignal[] = [watchdog.signal];
+    if (callerSignal) signals.push(callerSignal);
+    const combined = AbortSignal.any(signals);
+
+    const idleTimeoutMs = resolveStreamIdleTimeoutMs();
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const armIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idleFired = true;
+        watchdog.abort();
+      }, idleTimeoutMs);
+    };
+    const disarmIdleTimer = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+
+    /* Promise that rejects when the combined signal fires. The
+       Promise.race below uses this to break out of an iterator pull
+       *independently* of whether the SDK honors `config.abortSignal` at
+       the network layer — so the watchdog reliably tears down a wedged
+       stream even against a non-cooperative iterator (the historical
+       failure mode this whole patch exists to fix). */
+    let onAbort: (() => void) | null = null;
+    const abortPromise = new Promise<never>((_, reject) => {
+      onAbort = () => reject(new Error('__gemini_abort_race__'));
+      if (combined.aborted) onAbort();
+      else combined.addEventListener('abort', onAbort, { once: true });
+    });
+    const releaseAbortListener = () => {
+      if (onAbort) combined.removeEventListener('abort', onAbort);
+    };
+
     try {
+      armIdleTimer();
       const stream = await this.client.models.generateContentStream({
         model: this.model,
         contents,
         config: {
           responseMimeType: 'application/json',
           systemInstruction,
+          abortSignal: combined,
         },
       });
       const start = Date.now();
       let lastChunkAt = start;
       let buf = '';
       let promptTokenCount: number | undefined;
-      for await (const chunk of stream) {
+      const iterator = (stream as AsyncIterable<{ text?: string }>)[Symbol.asyncIterator]();
+      while (true) {
+        const next = (await Promise.race([iterator.next(), abortPromise])) as IteratorResult<{
+          text?: string;
+          usageMetadata?: { promptTokenCount?: number };
+        }>;
+        if (next.done) break;
+        armIdleTimer();
+        const chunk = next.value;
         const text = chunk.text;
-        const usage = (chunk as { usageMetadata?: { promptTokenCount?: number } }).usageMetadata;
+        const usage = chunk.usageMetadata;
         if (usage?.promptTokenCount && Number.isFinite(usage.promptTokenCount)) {
           promptTokenCount = usage.promptTokenCount;
         }
@@ -335,6 +471,18 @@ export class GeminiAnalyzer implements Analyzer {
       }
       return { text: buf, promptTokenCount };
     } catch (err) {
+      /* Classify aborts before logging so a clean pause / idle-timeout
+         doesn't get smeared into the 5xx-style "[gemini] generate failed"
+         line that the route layer surfaces to the UI. */
+      if (idleFired) {
+        throw new GeminiStreamIdleError(this.model, idleTimeoutMs);
+      }
+      if (callerSignal?.aborted) {
+        throw new AnalysisAbortedError(
+          `Gemini ${this.model} stream aborted (paused or client disconnected).`,
+        );
+      }
+
       /* The SDK's ApiError keeps the upstream body inside `.message` as a
          JSON envelope, so a bare console.error(err) only shows the stack +
          the start of the message. Force a structured dump so the server log
@@ -353,6 +501,9 @@ export class GeminiAnalyzer implements Analyzer {
         userTurnHead: userTurn.slice(0, 200),
       });
       throw err;
+    } finally {
+      disarmIdleTimer();
+      releaseAbortListener();
     }
   }
 }
@@ -373,7 +524,11 @@ function describeStatus(err: unknown): string {
 
 /* Sleep `ms`, rejecting promptly if `signal` fires. Used between retry
    attempts in `generateWithLimiter` so an aborted analysis tears down
-   the backoff immediately instead of waiting out the full delay. */
+   the backoff immediately instead of waiting out the full delay. Throws
+   `AnalysisAbortedError` (not a plain Error) so the route layer's
+   `err instanceof AnalysisAbortedError` branch fires and emits the
+   structured `error: aborted` event the UI uses to distinguish pause
+   from a real failure. */
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -382,7 +537,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new Error('Aborted during gemini retry backoff.'));
+      reject(new AnalysisAbortedError('Aborted during gemini retry backoff.'));
     };
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
   });
