@@ -9,6 +9,11 @@
 
 import { test, expect } from '@playwright/test';
 
+/* Plan 58 — file-level serial mode. The CoverPicker upload flow
+   flaked under parallel-worker contention (file-upload + auto-tab-
+   switch race other workers' Vite asset traffic on Windows). */
+test.describe.configure({ mode: 'serial' });
+
 const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
