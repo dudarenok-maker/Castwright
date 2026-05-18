@@ -41,7 +41,7 @@ chapter through the UI if they need playback.
   promotes it to the final name. A crash mid-write must never leave a
   half-MP3 that the scan code mistakes for a complete chapter.
 - `findChapterAudio` returns `{ path, ext: 'mp3', mime: 'audio/mpeg',
-  urlSuffix: 'audio.mp3' }` when `<slug>.mp3` exists, or null. No probe
+urlSuffix: 'audio.mp3' }` when `<slug>.mp3` exists, or null. No probe
   loop; `.wav` on disk is ignored.
 - `chapterAudioExists` checks only `<slug>.mp3`.
 - The `<chapterId>/audio` JSON endpoint returns `url` ending in

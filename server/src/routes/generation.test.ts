@@ -47,15 +47,21 @@ let bookDir: string;
 let app: Express;
 let bookId: string;
 
-interface ParsedTick { type: string; [k: string]: unknown }
+interface ParsedTick {
+  type: string;
+  [k: string]: unknown;
+}
 
 function parseTicks(body: string): ParsedTick[] {
   return body
     .split('\n\n')
-    .map(s => s.trim())
+    .map((s) => s.trim())
     .filter(Boolean)
-    .map(frame => {
-      const lines = frame.split('\n').filter(l => l.startsWith('data: ')).map(l => l.slice(6));
+    .map((frame) => {
+      const lines = frame
+        .split('\n')
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => l.slice(6));
       return JSON.parse(lines.join('\n')) as ParsedTick;
     });
 }
@@ -98,9 +104,7 @@ beforeAll(async () => {
   writeFileSync(
     join(bookDir, '.audiobook', 'cast.json'),
     JSON.stringify({
-      characters: [
-        { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
-      ],
+      characters: [{ id: 'narrator', name: 'Narrator', attributes: ['observational'] }],
     }),
   );
 
@@ -132,7 +136,15 @@ beforeEach(() => {
     pcm: Buffer.alloc(2),
     sampleRate: 24000,
     durationSec: 1,
-    segments: [{ characterId: 'narrator', voiceName: 'Zephyr', sampleStart: 0, sampleEnd: 1, sentenceIds: [1] }],
+    segments: [
+      {
+        characterId: 'narrator',
+        voiceName: 'Zephyr',
+        sampleStart: 0,
+        sampleEnd: 1,
+        sentenceIds: [1],
+      },
+    ],
   });
 });
 
@@ -145,8 +157,8 @@ describe('POST /api/books/:bookId/generation', () => {
     const ticks = parseTicks(res.text);
     /* At least: progress for ch1, chapter_assembling ch1, chapter_complete ch1,
        progress for ch2, chapter_assembling ch2, chapter_complete ch2, idle. */
-    expect(ticks.some(t => t.type === 'chapter_complete' && t.chapterId === 1)).toBe(true);
-    expect(ticks.some(t => t.type === 'chapter_complete' && t.chapterId === 2)).toBe(true);
+    expect(ticks.some((t) => t.type === 'chapter_complete' && t.chapterId === 1)).toBe(true);
+    expect(ticks.some((t) => t.type === 'chapter_complete' && t.chapterId === 2)).toBe(true);
     expect(ticks[ticks.length - 1].type).toBe('idle');
   });
 
@@ -173,7 +185,9 @@ describe('POST /api/books/:bookId/generation', () => {
        abort delivery is exercised independently (controller.abort + the
        loop's AbortError catch are tiny mechanical pieces). */
     let resolveSynthStarted: () => void;
-    const synthStarted = new Promise<void>(r => { resolveSynthStarted = r; });
+    const synthStarted = new Promise<void>((r) => {
+      resolveSynthStarted = r;
+    });
     /* synth blocks until either signal aborts or the test timeout fires.
        Honouring abort is essential — without it the route's loop never
        breaks, inFlightByBook stays populated, and the next test sees a
@@ -183,7 +197,10 @@ describe('POST /api/books/:bookId/generation', () => {
       const signal = (args as { signal?: AbortSignal }).signal;
       return new Promise((_resolve, reject) => {
         const abortErr = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
-        if (signal?.aborted) { reject(abortErr()); return; }
+        if (signal?.aborted) {
+          reject(abortErr());
+          return;
+        }
         signal?.addEventListener('abort', () => reject(abortErr()), { once: true });
         resolveSynthStarted();
       });
@@ -195,7 +212,10 @@ describe('POST /api/books/:bookId/generation', () => {
       .send({ modelKey: 'gemini-2.5-flash', force: true });
     /* swallow the (eventually-aborted) promise to avoid an unhandled
        rejection on the worker. */
-    genReq.then(() => {}, () => {});
+    genReq.then(
+      () => {},
+      () => {},
+    );
 
     await synthStarted;
     const pauseRes = await request(app).post(`/api/books/${bookId}/generation/pause`).send({});
@@ -220,19 +240,21 @@ describe('POST /api/books/:bookId/generation', () => {
        second repeat. Use a generic message here so we can prove the
        cascade itself works without relying on the XTTS-specific pattern
        (that's covered in generation-error.test.ts). */
-    synthesiseImpl = async () => { throw new Error('Sidecar returned 500: weird thing'); };
+    synthesiseImpl = async () => {
+      throw new Error('Sidecar returned 500: weird thing');
+    };
     const res = await request(app)
       .post(`/api/books/${bookId}/generation`)
       .send({ modelKey: 'gemini-2.5-flash', force: true });
     expect(res.status).toBe(200);
     const ticks = parseTicks(res.text);
-    const failed = ticks.filter(t => t.type === 'chapter_failed');
+    const failed = ticks.filter((t) => t.type === 'chapter_failed');
     /* Chapter 1 fails non-fatally (first hit), chapter 2 escalates to fatal
        (second hit, same reason). Run must stop there — no third failure
        even though there are no more chapters; the loop break + idle is
        what matters. */
     expect(failed).toHaveLength(2);
-    expect((failed[1].errorReason as string)).toMatch(/same failure repeated|stopping run/i);
+    expect(failed[1].errorReason as string).toMatch(/same failure repeated|stopping run/i);
     expect(ticks[ticks.length - 1].type).toBe('idle');
   });
 
@@ -252,9 +274,7 @@ describe('POST /api/books/:bookId/generation', () => {
     const stateJson = JSON.parse(original) as {
       chapters: Array<{ id: number; excluded?: boolean }>;
     };
-    stateJson.chapters = stateJson.chapters.map(c =>
-      c.id === 1 ? { ...c, excluded: true } : c,
-    );
+    stateJson.chapters = stateJson.chapters.map((c) => (c.id === 1 ? { ...c, excluded: true } : c));
     writeFileSync(statePath, JSON.stringify(stateJson));
 
     /* Clear any stale audio left by earlier tests so the assertions are
@@ -269,7 +289,15 @@ describe('POST /api/books/:bookId/generation', () => {
         pcm: Buffer.alloc(2),
         sampleRate: 24000,
         durationSec: 1,
-        segments: [{ characterId: 'narrator', voiceName: 'Zephyr', sampleStart: 0, sampleEnd: 1, sentenceIds: [1] }],
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Zephyr',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: [1],
+          },
+        ],
       };
     };
 
@@ -279,9 +307,9 @@ describe('POST /api/books/:bookId/generation', () => {
         .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1, 2] });
       expect(res.status).toBe(200);
       const ticks = parseTicks(res.text);
-      const completes = ticks.filter(t => t.type === 'chapter_complete');
+      const completes = ticks.filter((t) => t.type === 'chapter_complete');
       /* Exactly one chapter_complete — for the non-excluded ch2. */
-      expect(completes.map(t => t.chapterId)).toEqual([2]);
+      expect(completes.map((t) => t.chapterId)).toEqual([2]);
       /* And synthesiseChapter must have been invoked exactly once. */
       expect(synthCalls).toBe(1);
     } finally {
@@ -305,7 +333,10 @@ describe('POST /api/books/:bookId/generation', () => {
     if (fs.existsSync(audioRoot)) fs.rmSync(audioRoot, { recursive: true, force: true });
     fs.mkdirSync(audioRoot, { recursive: true });
     fs.writeFileSync(join(audioRoot, '01-chapter-one.mp3'), 'PRIOR-mp3-bytes');
-    fs.writeFileSync(join(audioRoot, '01-chapter-one.segments.json'), JSON.stringify({ prior: true }));
+    fs.writeFileSync(
+      join(audioRoot, '01-chapter-one.segments.json'),
+      JSON.stringify({ prior: true }),
+    );
 
     const res = await request(app)
       .post(`/api/books/${bookId}/generation`)
@@ -318,9 +349,13 @@ describe('POST /api/books/:bookId/generation', () => {
     /* Prior pair was preserved with the OLD content (not the freshly
        rendered new pair). */
     expect(fs.existsSync(join(audioRoot, '01-chapter-one.previous.mp3'))).toBe(true);
-    expect(fs.readFileSync(join(audioRoot, '01-chapter-one.previous.mp3'), 'utf8')).toBe('PRIOR-mp3-bytes');
+    expect(fs.readFileSync(join(audioRoot, '01-chapter-one.previous.mp3'), 'utf8')).toBe(
+      'PRIOR-mp3-bytes',
+    );
     expect(fs.existsSync(join(audioRoot, '01-chapter-one.previous.segments.json'))).toBe(true);
-    expect(JSON.parse(fs.readFileSync(join(audioRoot, '01-chapter-one.previous.segments.json'), 'utf8'))).toEqual({ prior: true });
+    expect(
+      JSON.parse(fs.readFileSync(join(audioRoot, '01-chapter-one.previous.segments.json'), 'utf8')),
+    ).toEqual({ prior: true });
   });
 
   it('classifies XTTS "index out of range in self" as fatal on first hit', async () => {
@@ -331,11 +366,11 @@ describe('POST /api/books/:bookId/generation', () => {
       .post(`/api/books/${bookId}/generation`)
       .send({ modelKey: 'gemini-2.5-flash', force: true });
     const ticks = parseTicks(res.text);
-    const failed = ticks.filter(t => t.type === 'chapter_failed');
+    const failed = ticks.filter((t) => t.type === 'chapter_failed');
     /* The error classifier maps "index out of range" directly to fatal, so
        chapter 1 fails and the run stops — chapter 2 is never attempted. */
     expect(failed).toHaveLength(1);
-    expect((failed[0].errorReason as string)).toMatch(/voice catalog is out of sync/i);
+    expect(failed[0].errorReason as string).toMatch(/voice catalog is out of sync/i);
     expect(ticks[ticks.length - 1].type).toBe('idle');
   });
 });

@@ -14,8 +14,14 @@ import { auditEngineCatalog, pickVoiceForEngine, KOKORO_PROFILE_VOICES } from '.
 describe('voice-mapping catalogs are self-consistent', () => {
   it('coqui: every picker voice has a description and every described voice is routable', () => {
     const audit = auditEngineCatalog('coqui');
-    expect(audit.missingDescriptions, `voices in COQUI_PROFILE_VOICES with no entry in COQUI_VOICE_DESCRIPTIONS — picker will choose them, cast view will say "Local voice"`).toEqual([]);
-    expect(audit.unrouted, `voices in COQUI_VOICE_DESCRIPTIONS that PROFILE_VOICES never picks — orphan rows`).toEqual([]);
+    expect(
+      audit.missingDescriptions,
+      `voices in COQUI_PROFILE_VOICES with no entry in COQUI_VOICE_DESCRIPTIONS — picker will choose them, cast view will say "Local voice"`,
+    ).toEqual([]);
+    expect(
+      audit.unrouted,
+      `voices in COQUI_VOICE_DESCRIPTIONS that PROFILE_VOICES never picks — orphan rows`,
+    ).toEqual([]);
     expect(audit.routedCount).toBeGreaterThan(0);
   });
 
@@ -25,8 +31,14 @@ describe('voice-mapping catalogs are self-consistent', () => {
        the same af_/am_/bf_/bm_ shape — anything else would route a voice
        the sidecar will substitute, masking a real catalog drift. */
     const audit = auditEngineCatalog('kokoro');
-    expect(audit.missingDescriptions, `voices in KOKORO_PROFILE_VOICES with no entry in KOKORO_VOICE_DESCRIPTIONS — picker will choose them, cast view will say "Local voice"`).toEqual([]);
-    expect(audit.unrouted, `voices in KOKORO_VOICE_DESCRIPTIONS that PROFILE_VOICES never picks — orphan rows`).toEqual([]);
+    expect(
+      audit.missingDescriptions,
+      `voices in KOKORO_PROFILE_VOICES with no entry in KOKORO_VOICE_DESCRIPTIONS — picker will choose them, cast view will say "Local voice"`,
+    ).toEqual([]);
+    expect(
+      audit.unrouted,
+      `voices in KOKORO_VOICE_DESCRIPTIONS that PROFILE_VOICES never picks — orphan rows`,
+    ).toEqual([]);
     expect(audit.routedCount).toBeGreaterThan(0);
   });
 
@@ -43,7 +55,7 @@ describe('voice-mapping catalogs are self-consistent', () => {
     }
     for (const name of names) {
       expect(
-        englishPrefixes.some(p => name.startsWith(p)),
+        englishPrefixes.some((p) => name.startsWith(p)),
         `KOKORO_PROFILE_VOICES contains non-English voice '${name}' — must be af_/am_/bf_/bm_`,
       ).toBe(true);
     }
@@ -60,7 +72,10 @@ describe('voice-mapping catalogs are self-consistent', () => {
        missingDescriptions MUST be empty so the picker never chooses a
        voice the cast view has no label for. */
     const audit = auditEngineCatalog('gemini');
-    expect(audit.missingDescriptions, `voices in GEMINI_PROFILE_VOICES with no entry in GEMINI_VOICE_DESCRIPTIONS — picker will choose them, cast view will say "Prebuilt voice"`).toEqual([]);
+    expect(
+      audit.missingDescriptions,
+      `voices in GEMINI_PROFILE_VOICES with no entry in GEMINI_VOICE_DESCRIPTIONS — picker will choose them, cast view will say "Prebuilt voice"`,
+    ).toEqual([]);
     expect(audit.routedCount).toBeGreaterThan(0);
     /* Unrouted is allowed; we just sanity-check it's a sensible number
        (< total documented) so a future refactor doesn't accidentally

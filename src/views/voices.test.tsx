@@ -12,7 +12,9 @@ import { LibraryView } from './voices';
 import type { BaseVoice, Character, Sentence, Voice } from '../lib/types';
 
 const setVoicePin = vi.fn((_voiceId: string, _pinned: boolean) => Promise.resolve());
-const getBaseVoices = vi.fn<() => Promise<{ voices: BaseVoice[] }>>(() => Promise.resolve({ voices: [] }));
+const getBaseVoices = vi.fn<() => Promise<{ voices: BaseVoice[] }>>(() =>
+  Promise.resolve({ voices: [] }),
+);
 const setVoiceOverride = vi.fn();
 
 vi.mock('../lib/api', () => ({
@@ -25,13 +27,15 @@ vi.mock('../lib/api', () => ({
 
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator', lines: 120 },
-  { id: 'Marlow',    name: 'Marlow',    role: 'Empath',   color: 'peach',    lines: 60  },
-  { id: 'Oduvan',    name: 'Oduvan',    role: 'Healer',   color: 'magenta',  lines: 10  },
+  { id: 'Marlow', name: 'Marlow', role: 'Empath', color: 'peach', lines: 60 },
+  { id: 'Oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', lines: 10 },
 ];
 
 const sentences: Sentence[] = [];
 
-function makeVoice(over: Partial<Voice> & Pick<Voice, 'id' | 'character' | 'bookId' | 'bookTitle' | 'source'>): Voice {
+function makeVoice(
+  over: Partial<Voice> & Pick<Voice, 'id' | 'character' | 'bookId' | 'bookTitle' | 'source'>,
+): Voice {
   return {
     attributes: ['warm'],
     gradient: ['#3C194F', '#0F0E0D'],
@@ -47,34 +51,56 @@ function makeVoice(over: Partial<Voice> & Pick<Voice, 'id' | 'character' | 'book
    Two families, with the Charon family carrying cast across multiple
    books — that's the cross-book voice-family invariant the user described. */
 const library: Voice[] = [
-  makeVoice({ id: 'narrator', character: 'Narrator', bookId: 'b1', bookTitle: 'Book One',  source: 'current' }),
-  makeVoice({ id: 'Marlow',    character: 'Marlow',    bookId: 'b2', bookTitle: 'Book Two',  source: 'library',
-    ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' } }),
-  makeVoice({ id: 'Oduvan',    character: 'Oduvan',    bookId: 'b1', bookTitle: 'Book One',  source: 'current',
-    ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' } }),
+  makeVoice({
+    id: 'narrator',
+    character: 'Narrator',
+    bookId: 'b1',
+    bookTitle: 'Book One',
+    source: 'current',
+  }),
+  makeVoice({
+    id: 'Marlow',
+    character: 'Marlow',
+    bookId: 'b2',
+    bookTitle: 'Book Two',
+    source: 'library',
+    ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
+  }),
+  makeVoice({
+    id: 'Oduvan',
+    character: 'Oduvan',
+    bookId: 'b1',
+    bookTitle: 'Book One',
+    source: 'current',
+    ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' },
+  }),
 ];
 
 function makeStore() {
   const store = configureStore({
     reducer: {
-      ui:         uiSlice.reducer,
-      cast:       castSlice.reducer,
+      ui: uiSlice.reducer,
+      cast: castSlice.reducer,
       manuscript: manuscriptSlice.reducer,
-      voices:     voicesSlice.reducer,
+      voices: voicesSlice.reducer,
     },
   });
   store.dispatch(castSlice.actions.setCharacters(characters));
-  store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-    chapters: [], characters, sentences,
-  } as never));
+  store.dispatch(
+    manuscriptSlice.actions.hydrateFromAnalysis({
+      chapters: [],
+      characters,
+      sentences,
+    } as never),
+  );
   return store;
 }
 
 function renderView(lib: Voice[] = library, onOpenCharacter?: (v: Voice) => void) {
   return render(
     <Provider store={makeStore()}>
-      <LibraryView library={lib} onOpenCharacter={onOpenCharacter}/>
-    </Provider>
+      <LibraryView library={lib} onOpenCharacter={onOpenCharacter} />
+    </Provider>,
   );
 }
 
@@ -90,7 +116,7 @@ describe('LibraryView voice-family grouping', () => {
     renderView();
     const sections = screen.getAllByRole('region');
     expect(sections.length).toBe(2);
-    const labels = sections.map(s => s.getAttribute('aria-label'));
+    const labels = sections.map((s) => s.getAttribute('aria-label'));
     expect(labels).toContain('Gemini · Charon');
     expect(labels).toContain('Gemini · Kore');
   });
@@ -182,28 +208,59 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
      'b2' on Charon — covers same-family, different-family, and cross-book
      pairs. */
   const charactersB1: Character[] = [
-    { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator', lines: 120, voiceId: 'narrator' },
-    { id: 'Oduvan',    name: 'Oduvan',    role: 'Healer',   color: 'magenta',  lines: 10,  voiceId: 'Oduvan' },
-    { id: 'Garrow',   name: 'Garrow',   role: 'Guard',    color: 'peach',    lines: 30,  voiceId: 'Garrow' },
+    {
+      id: 'narrator',
+      name: 'Narrator',
+      role: 'Narrator',
+      color: 'narrator',
+      lines: 120,
+      voiceId: 'narrator',
+    },
+    { id: 'Oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', lines: 10, voiceId: 'Oduvan' },
+    { id: 'Garrow', name: 'Garrow', role: 'Guard', color: 'peach', lines: 30, voiceId: 'Garrow' },
   ];
 
   const libraryB1: Voice[] = [
-    makeVoice({ id: 'narrator', character: 'Narrator', bookId: 'b1', bookTitle: 'Book One', source: 'current' }),
-    makeVoice({ id: 'Garrow',   character: 'Garrow',   bookId: 'b1', bookTitle: 'Book One', source: 'current',
-      ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' } }),
-    makeVoice({ id: 'Oduvan',    character: 'Oduvan',    bookId: 'b1', bookTitle: 'Book One', source: 'current',
-      ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' } }),
-    makeVoice({ id: 'Marlow',    character: 'Marlow',    bookId: 'b2', bookTitle: 'Book Two', source: 'library',
-      ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' } }),
+    makeVoice({
+      id: 'narrator',
+      character: 'Narrator',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+    }),
+    makeVoice({
+      id: 'Garrow',
+      character: 'Garrow',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
+    }),
+    makeVoice({
+      id: 'Oduvan',
+      character: 'Oduvan',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' },
+    }),
+    makeVoice({
+      id: 'Marlow',
+      character: 'Marlow',
+      bookId: 'b2',
+      bookTitle: 'Book Two',
+      source: 'library',
+      ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
+    }),
   ];
 
   function makeReadyStore(stageBookId: string | null = 'b1') {
     const store = configureStore({
       reducer: {
-        ui:         uiSlice.reducer,
-        cast:       castSlice.reducer,
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
-        voices:     voicesSlice.reducer,
+        voices: voicesSlice.reducer,
       },
     });
     store.dispatch(castSlice.actions.setCharacters(charactersB1));
@@ -219,8 +276,8 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
   function renderCompare(lib: Voice[] = libraryB1, stageBookId: string | null = 'b1') {
     return render(
       <Provider store={makeReadyStore(stageBookId)}>
-        <LibraryView library={lib}/>
-      </Provider>
+        <LibraryView library={lib} />
+      </Provider>,
     );
   }
 
@@ -242,10 +299,18 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
   it('shows the green "same base voice ✓" badge when 2 same-family voices are selected (plan 22a)', () => {
     renderCompare();
     /* Click Narrator + Garrow — both b1 + both Charon. */
-    fireEvent.click(screen.getByText('Narrator').closest('div.group')!
-      .querySelector('[aria-label="Select voice for compare"]')!);
-    fireEvent.click(screen.getByText('Garrow').closest('div.group')!
-      .querySelector('[aria-label="Select voice for compare"]')!);
+    fireEvent.click(
+      screen
+        .getByText('Narrator')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+    fireEvent.click(
+      screen
+        .getByText('Garrow')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
     expect(screen.getByText('same base voice ✓')).toBeInTheDocument();
     expect(screen.queryByText('different base voices')).toBeNull();
   });
@@ -253,20 +318,36 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
   it('shows the amber "different base voices" badge when 2 cross-family voices are selected (plan 22a)', () => {
     renderCompare();
     /* Click Narrator (Charon) + Oduvan (Kore) — both b1, different families. */
-    fireEvent.click(screen.getByText('Narrator').closest('div.group')!
-      .querySelector('[aria-label="Select voice for compare"]')!);
-    fireEvent.click(screen.getByText('Oduvan').closest('div.group')!
-      .querySelector('[aria-label="Select voice for compare"]')!);
+    fireEvent.click(
+      screen
+        .getByText('Narrator')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+    fireEvent.click(
+      screen
+        .getByText('Oduvan')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
     expect(screen.getByText('different base voices')).toBeInTheDocument();
     expect(screen.queryByText('same base voice ✓')).toBeNull();
   });
 
   it('enables Compare at exactly 2 within-current-book selections (plan 22a)', () => {
     renderCompare();
-    fireEvent.click(screen.getByText('Narrator').closest('div.group')!
-      .querySelector('[aria-label="Select voice for compare"]')!);
-    fireEvent.click(screen.getByText('Garrow').closest('div.group')!
-      .querySelector('[aria-label="Select voice for compare"]')!);
+    fireEvent.click(
+      screen
+        .getByText('Narrator')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+    fireEvent.click(
+      screen
+        .getByText('Garrow')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
     const compareBtn = screen.getByRole('button', { name: 'Compare' });
     expect(compareBtn).not.toBeDisabled();
   });
@@ -299,10 +380,18 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
     renderCompare();
     /* Narrator (b1) + Marlow (b2) — even though both resolve to Charon,
        the cross-book guard fires first. */
-    fireEvent.click(screen.getByText('Narrator').closest('div.group')!
-      .querySelector('[aria-label="Select voice for compare"]')!);
-    fireEvent.click(screen.getByText('Marlow').closest('div.group')!
-      .querySelector('[aria-label="Select voice for compare"]')!);
+    fireEvent.click(
+      screen
+        .getByText('Narrator')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+    fireEvent.click(
+      screen
+        .getByText('Marlow')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
     const compareBtn = screen.getByRole('button', { name: 'Compare' });
     expect(compareBtn).toBeDisabled();
     expect(compareBtn.getAttribute('title')).toBe('Cross-book compare not supported yet');
@@ -310,10 +399,18 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
 
   it('opens the CompareCastModal with both linked characters when Compare is clicked (plan 22a)', () => {
     renderCompare();
-    fireEvent.click(screen.getByText('Narrator').closest('div.group')!
-      .querySelector('[aria-label="Select voice for compare"]')!);
-    fireEvent.click(screen.getByText('Garrow').closest('div.group')!
-      .querySelector('[aria-label="Select voice for compare"]')!);
+    fireEvent.click(
+      screen
+        .getByText('Narrator')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+    fireEvent.click(
+      screen
+        .getByText('Garrow')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
@@ -338,7 +435,7 @@ describe('LibraryView Base voices tab', () => {
     renderView();
     /* Catalog is fetched on mount; await the promise resolution before
        clicking through to the tab. */
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     fireEvent.click(screen.getByRole('button', { name: /Base voices/i }));
     expect(screen.getByText('Asya Anara')).toBeInTheDocument();
     /* Charon appears in BOTH the family section and the base catalog; the

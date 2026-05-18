@@ -41,20 +41,24 @@ function imageResponse(bytes: Uint8Array, contentType = 'image/jpeg'): Response 
 
 describe('searchCovers', () => {
   it('builds OpenLibrary URLs from cover_i and dedupes repeats', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({
-      docs: [
-        { cover_i: 11, title: 'A', first_publish_year: 2020, publisher: ['Alpha'] },
-        { cover_i: 22, title: 'B', publish_date: ['March 1999'] },
-        { cover_i: 11, title: 'A dup' },             // dupe should be filtered
-        { title: 'no-cover' },                       // missing cover_i
-        { cover_i: 33, title: 'C', publisher: ['Beta'] },
-      ],
-    }));
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        docs: [
+          { cover_i: 11, title: 'A', first_publish_year: 2020, publisher: ['Alpha'] },
+          { cover_i: 22, title: 'B', publish_date: ['March 1999'] },
+          { cover_i: 11, title: 'A dup' }, // dupe should be filtered
+          { title: 'no-cover' }, // missing cover_i
+          { cover_i: 33, title: 'C', publisher: ['Beta'] },
+        ],
+      }),
+    );
 
     const candidates = await searchCovers('Foo', 'Bar');
     expect(candidates).toHaveLength(3);
-    expect(candidates.map(c => c.openLibraryId)).toEqual([
-      'cover-i:11', 'cover-i:22', 'cover-i:33',
+    expect(candidates.map((c) => c.openLibraryId)).toEqual([
+      'cover-i:11',
+      'cover-i:22',
+      'cover-i:33',
     ]);
     expect(candidates[0].coverUrl).toBe('https://covers.openlibrary.org/b/id/11-L.jpg');
     expect(candidates[0].edition).toBe('Alpha · 2020');
@@ -101,10 +105,12 @@ describe('searchCovers', () => {
   });
 
   it('throws OpenLibraryError(invalid) when the JSON is malformed', async () => {
-    fetchMock.mockResolvedValue(new Response('not json', {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }));
+    fetchMock.mockResolvedValue(
+      new Response('not json', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
     await expect(searchCovers('Title', 'Author')).rejects.toMatchObject({
       name: 'OpenLibraryError',
       kind: 'invalid',
@@ -112,7 +118,9 @@ describe('searchCovers', () => {
   });
 
   it('throws OpenLibraryError(timeout) when fetch aborts', async () => {
-    fetchMock.mockImplementation(() => Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    fetchMock.mockImplementation(() =>
+      Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+    );
     await expect(searchCovers('Title', 'Author')).rejects.toMatchObject({
       name: 'OpenLibraryError',
       kind: 'timeout',
@@ -144,10 +152,12 @@ describe('downloadCover', () => {
   });
 
   it('rejects non-image content types', async () => {
-    fetchMock.mockResolvedValue(new Response('<html/>', {
-      status: 200,
-      headers: { 'Content-Type': 'text/html' },
-    }));
+    fetchMock.mockResolvedValue(
+      new Response('<html/>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      }),
+    );
     await expect(downloadCover('https://x/1.jpg', destPath)).rejects.toMatchObject({
       name: 'OpenLibraryError',
       kind: 'invalid',
@@ -174,7 +184,9 @@ describe('downloadCover', () => {
   });
 
   it('throws OpenLibraryError(timeout) when the download aborts', async () => {
-    fetchMock.mockImplementation(() => Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    fetchMock.mockImplementation(() =>
+      Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+    );
     await expect(downloadCover('https://x/1.jpg', destPath)).rejects.toMatchObject({
       name: 'OpenLibraryError',
       kind: 'timeout',
@@ -183,6 +195,8 @@ describe('downloadCover', () => {
 
   it('throws OpenLibraryError on non-2xx', async () => {
     fetchMock.mockResolvedValue(new Response('nope', { status: 404 }));
-    await expect(downloadCover('https://x/1.jpg', destPath)).rejects.toBeInstanceOf(OpenLibraryError);
+    await expect(downloadCover('https://x/1.jpg', destPath)).rejects.toBeInstanceOf(
+      OpenLibraryError,
+    );
   });
 });

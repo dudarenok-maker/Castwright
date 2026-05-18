@@ -1,6 +1,6 @@
 # The Northern Star
 
-*Northern Coast Trilogy · Book 2*
+_Northern Coast Trilogy · Book 2_
 By Mike Dudarenok
 
 ---

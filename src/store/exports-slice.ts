@@ -47,7 +47,7 @@ export const exportsSlice = createSlice({
         s.byBookId[job.bookId] = [job];
         return;
       }
-      const idx = list.findIndex(j => j.id === job.id);
+      const idx = list.findIndex((j) => j.id === job.id);
       if (idx < 0) list.unshift(job);
       else list[idx] = job;
     },
@@ -57,7 +57,7 @@ export const exportsSlice = createSlice({
     exportDismissed: (s, a: PayloadAction<{ bookId: string; exportId: string }>) => {
       const list = s.byBookId[a.payload.bookId];
       if (!list) return;
-      s.byBookId[a.payload.bookId] = list.filter(j => j.id !== a.payload.exportId);
+      s.byBookId[a.payload.bookId] = list.filter((j) => j.id !== a.payload.exportId);
     },
 
     lanUrlsHydrated: (s, a: PayloadAction<{ urls: string[]; port: number }>) => {

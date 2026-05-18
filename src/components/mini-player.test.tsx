@@ -47,12 +47,20 @@ afterEach(() => {
 });
 
 const chapter1: Chapter = {
-  id: 1, title: 'Chapter One', duration: '11:32', state: 'done',
-  progress: 1, characters: { narrator: 'done' },
+  id: 1,
+  title: 'Chapter One',
+  duration: '11:32',
+  state: 'done',
+  progress: 1,
+  characters: { narrator: 'done' },
 };
 const chapter2: Chapter = {
-  id: 2, title: 'Chapter Two', duration: '08:14', state: 'done',
-  progress: 1, characters: { narrator: 'done' },
+  id: 2,
+  title: 'Chapter Two',
+  duration: '08:14',
+  state: 'done',
+  progress: 1,
+  characters: { narrator: 'done' },
 };
 
 const noop = () => {};
@@ -71,9 +79,15 @@ async function resolveChapter(id: number, url: string) {
 describe('MiniPlayer — chapter switch', () => {
   it('clears the audio element src when the chapter prop changes, then loads the new URL once metadata arrives', async () => {
     const { container, rerender } = render(
-      <MiniPlayer chapter={chapter1} bookId="book-1"
-        onClose={noop} onPrev={noop} onNext={noop}
-        prevAvailable={false} nextAvailable={true}/>
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
     );
 
     const audioEl = container.querySelector('audio');
@@ -81,17 +95,21 @@ describe('MiniPlayer — chapter switch', () => {
 
     /* Chapter 1's metadata lands → element points at chapter 1's MP3. */
     await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
-    await waitFor(() =>
-      expect(audioEl!.getAttribute('src')).toMatch(/\/chapters\/1\/audio\.mp3$/)
-    );
+    await waitFor(() => expect(audioEl!.getAttribute('src')).toMatch(/\/chapters\/1\/audio\.mp3$/));
 
     /* User clicks Preview on chapter 2 BEFORE the fetch resolves. The
        regression: src used to stay pinned to chapter 1 here, so chapter 1
        kept playing under the chapter 2 UI. */
     rerender(
-      <MiniPlayer chapter={chapter2} bookId="book-1"
-        onClose={noop} onPrev={noop} onNext={noop}
-        prevAvailable={true} nextAvailable={false}/>
+      <MiniPlayer
+        chapter={chapter2}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={true}
+        nextAvailable={false}
+      />,
     );
 
     await waitFor(() => expect(audioEl!.getAttribute('src')).toBeNull());
@@ -99,8 +117,6 @@ describe('MiniPlayer — chapter switch', () => {
 
     /* Chapter 2's metadata lands → element now points at chapter 2's MP3. */
     await resolveChapter(2, '/api/books/book-1/chapters/2/audio.mp3');
-    await waitFor(() =>
-      expect(audioEl!.getAttribute('src')).toMatch(/\/chapters\/2\/audio\.mp3$/)
-    );
+    await waitFor(() => expect(audioEl!.getAttribute('src')).toMatch(/\/chapters\/2\/audio\.mp3$/));
   });
 });

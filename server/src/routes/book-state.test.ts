@@ -12,7 +12,15 @@
    the real router. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  copyFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,9 +87,18 @@ describe('book-state router — changeLog slice', () => {
 
   it('PUT slice=changeLog writes .audiobook/change-log.json', async () => {
     const events = [
-      { id: 1, at: '2026-05-13T15:00:00.000Z', ts: 'Just now', date: 'today',
-        type: 'regenerate', title: 'Regenerated Chapter 1', note: 'Reason: voice tuning updated.',
-        actor: 'you', chapterId: 1, revertible: true },
+      {
+        id: 1,
+        at: '2026-05-13T15:00:00.000Z',
+        ts: 'Just now',
+        date: 'today',
+        type: 'regenerate',
+        title: 'Regenerated Chapter 1',
+        note: 'Reason: voice tuning updated.',
+        actor: 'you',
+        chapterId: 1,
+        revertible: true,
+      },
     ];
     const res = await request(app)
       .put(`/api/books/${bookId}/state`)
@@ -138,12 +155,18 @@ describe('book-state router — dropped-quotes endpoint', () => {
           affectedCharacters: 1,
           entries: [
             {
-              characterId: 'Wren', characterName: 'Wren',
-              quote: 'fabricated dialogue', truncated: false, reason: 'not_in_source',
+              characterId: 'Wren',
+              characterName: 'Wren',
+              quote: 'fabricated dialogue',
+              truncated: false,
+              reason: 'not_in_source',
             },
             {
-              characterId: 'Wren', characterName: 'Wren',
-              quote: '   ', truncated: false, reason: 'empty_after_normalisation',
+              characterId: 'Wren',
+              characterName: 'Wren',
+              quote: '   ',
+              truncated: false,
+              reason: 'empty_after_normalisation',
               note: 'punct-only',
             },
           ],
@@ -257,7 +280,7 @@ describe('book-state router — POST /chapters/:chapterId/exclude', () => {
     const statePath = join(bookDir, '.audiobook', 'state.json');
     const cur = JSON.parse(readFileSync(statePath, 'utf8'));
     cur.chapters = [
-      { id: 1, title: 'Dedication',  slug: '01-dedication' },
+      { id: 1, title: 'Dedication', slug: '01-dedication' },
       { id: 2, title: 'Chapter One', slug: '02-chapter-one' },
     ];
     writeFileSync(statePath, JSON.stringify(cur));
@@ -498,7 +521,7 @@ describe('book-state router — rehydrate on GET populates real chapter bodies',
        under any plausible byte count of the file. */
     const rec = getManuscript(epubManuscriptId);
     expect(rec).toBeDefined();
-    expect(rec!.chapterHints.every(c => c.body.length > 0)).toBe(true);
+    expect(rec!.chapterHints.every((c) => c.body.length > 0)).toBe(true);
     expect(res.body.manuscript.wordCount).toBeGreaterThan(0);
     expect(res.body.manuscript.wordCount).toBeLessThan(rec!.byteSize / 4);
   });
@@ -561,7 +584,7 @@ describe('book-state router — chapterCharacters reflects the post-fold roster'
           { id: 1, chapterId: 8, characterId: 'the-jogger', text: 'Watch out!' },
           { id: 2, chapterId: 8, characterId: 'the-jogger', text: 'Coming through!' },
           { id: 3, chapterId: 8, characterId: 'the-jogger', text: 'Move!' },
-          { id: 4, chapterId: 8, characterId: 'Wren',     text: 'Sorry!' },
+          { id: 4, chapterId: 8, characterId: 'Wren', text: 'Sorry!' },
         ],
       },
     });
@@ -577,7 +600,7 @@ describe('book-state router — chapterCharacters reflects the post-fold roster'
           { id: 1, chapterId: 8, characterId: 'unknown-male', text: 'Watch out!' },
           { id: 2, chapterId: 8, characterId: 'unknown-male', text: 'Coming through!' },
           { id: 3, chapterId: 8, characterId: 'unknown-male', text: 'Move!' },
-          { id: 4, chapterId: 8, characterId: 'Wren',       text: 'Sorry!' },
+          { id: 4, chapterId: 8, characterId: 'Wren', text: 'Sorry!' },
         ],
       }),
     );
@@ -621,13 +644,15 @@ describe('book-state router — state slice series-membership + on-disk rename',
   let renameBookDir: string;
   const RENAME_MANUSCRIPT_ID = 'm_rename_test';
 
-  async function seedBook(opts: {
-    author?: string;
-    series?: string;
-    title?: string;
-    seriesPosition?: number | null;
-    isStandalone?: boolean;
-  } = {}): Promise<void> {
+  async function seedBook(
+    opts: {
+      author?: string;
+      series?: string;
+      title?: string;
+      seriesPosition?: number | null;
+      isStandalone?: boolean;
+    } = {},
+  ): Promise<void> {
     const { makeBookId } = await import('../workspace/paths.js');
     const author = opts.author ?? RENAME_AUTHOR;
     const series = opts.series ?? RENAME_INITIAL_SERIES;
@@ -679,7 +704,9 @@ describe('book-state router — state slice series-membership + on-disk rename',
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { seriesPosition: 4 } });
     expect(res.status).toBe(204);
-    const onDisk = JSON.parse(readFileSync(join(renameBookDir, '.audiobook', 'state.json'), 'utf8'));
+    const onDisk = JSON.parse(
+      readFileSync(join(renameBookDir, '.audiobook', 'state.json'), 'utf8'),
+    );
     expect(onDisk.seriesPosition).toBe(4);
     expect(onDisk.isStandalone).toBe(false);
   });
@@ -709,7 +736,13 @@ describe('book-state router — state slice series-membership + on-disk rename',
       .send({ slice: 'state', patch: { title: 'Renamed Properly' } });
     expect(res.status).toBe(204);
 
-    const newDir = join(workspaceRoot, 'books', RENAME_AUTHOR, RENAME_INITIAL_SERIES, 'Renamed Properly');
+    const newDir = join(
+      workspaceRoot,
+      'books',
+      RENAME_AUTHOR,
+      RENAME_INITIAL_SERIES,
+      'Renamed Properly',
+    );
     expect(existsSync(newDir)).toBe(true);
     expect(existsSync(renameBookDir)).toBe(false);
 
@@ -729,7 +762,13 @@ describe('book-state router — state slice series-membership + on-disk rename',
       .send({ slice: 'state', patch: { author: 'Different Author', series: 'Different Series' } });
     expect(res.status).toBe(204);
 
-    const newDir = join(workspaceRoot, 'books', 'Different Author', 'Different Series', RENAME_INITIAL_TITLE);
+    const newDir = join(
+      workspaceRoot,
+      'books',
+      'Different Author',
+      'Different Series',
+      RENAME_INITIAL_TITLE,
+    );
     expect(existsSync(newDir)).toBe(true);
     /* Original author tree was emptied by the rename — cleanup should
        have removed both the empty series dir and the empty author dir. */
@@ -739,7 +778,13 @@ describe('book-state router — state slice series-membership + on-disk rename',
   it('rename to an existing folder returns 409 and leaves state.json at the old path', async () => {
     await seedBook();
     /* Pre-create a colliding target so the rename refuses. */
-    const collidingDir = join(workspaceRoot, 'books', RENAME_AUTHOR, RENAME_INITIAL_SERIES, 'Existing Other');
+    const collidingDir = join(
+      workspaceRoot,
+      'books',
+      RENAME_AUTHOR,
+      RENAME_INITIAL_SERIES,
+      'Existing Other',
+    );
     mkdirSync(collidingDir, { recursive: true });
 
     const res = await request(app)
@@ -749,7 +794,9 @@ describe('book-state router — state slice series-membership + on-disk rename',
     expect(res.status).toBe(409);
 
     /* The original folder still holds the unchanged state.json. */
-    const stillThere = JSON.parse(readFileSync(join(renameBookDir, '.audiobook', 'state.json'), 'utf8'));
+    const stillThere = JSON.parse(
+      readFileSync(join(renameBookDir, '.audiobook', 'state.json'), 'utf8'),
+    );
     expect(stillThere.title).toBe(RENAME_INITIAL_TITLE);
   });
 
@@ -777,7 +824,13 @@ describe('book-state router — state slice series-membership + on-disk rename',
       .send({ slice: 'state', patch: { title: 'Refreshed Record Title' } });
     expect(res.status).toBe(204);
 
-    const newDir = join(workspaceRoot, 'books', RENAME_AUTHOR, RENAME_INITIAL_SERIES, 'Refreshed Record Title');
+    const newDir = join(
+      workspaceRoot,
+      'books',
+      RENAME_AUTHOR,
+      RENAME_INITIAL_SERIES,
+      'Refreshed Record Title',
+    );
     const rec = getManuscript(RENAME_MANUSCRIPT_ID);
     expect(rec?.bookDir).toBe(newDir);
   });
@@ -798,7 +851,13 @@ describe('book-state router — GET /:bookId/analysis/state', () => {
   async function seedColdBootBook(): Promise<void> {
     const { makeBookId } = await import('../workspace/paths.js');
     coldBootBookId = makeBookId(COLD_BOOT_AUTHOR, COLD_BOOT_SERIES, COLD_BOOT_TITLE);
-    coldBootBookDir = join(workspaceRoot, 'books', COLD_BOOT_AUTHOR, COLD_BOOT_SERIES, COLD_BOOT_TITLE);
+    coldBootBookDir = join(
+      workspaceRoot,
+      'books',
+      COLD_BOOT_AUTHOR,
+      COLD_BOOT_SERIES,
+      COLD_BOOT_TITLE,
+    );
     mkdirSync(join(coldBootBookDir, '.audiobook'), { recursive: true });
     writeFileSync(join(coldBootBookDir, 'manuscript.txt'), 'placeholder');
     writeFileSync(

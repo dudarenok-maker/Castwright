@@ -33,8 +33,9 @@ import { goToAnalysing, goToConfirm } from './helpers';
 test.describe('visual baselines', () => {
   test('library', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('button', { name: /Start a new book/i }).first())
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+      timeout: 10_000,
+    });
     /* Wait one rAF for the staggered card-mount transitions to settle.
        Without this, cards animate in over ~200 ms after first paint and
        the screenshot lands mid-transition. animations:'disabled' freezes
@@ -47,8 +48,7 @@ test.describe('visual baselines', () => {
   test('upload', async ({ page }) => {
     await page.goto('/#/new');
     /* Wait for the upload view's primary CTA to confirm hydration. */
-    await expect(page.getByRole('button', { name: /Paste text/i }))
-      .toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /Paste text/i })).toBeVisible({ timeout: 5_000 });
     await page.waitForTimeout(200);
     await expect(page).toHaveScreenshot('upload.png');
   });
@@ -71,20 +71,23 @@ test.describe('visual baselines', () => {
        — …"), not the book title. Wait for the Chapters sidebar to
        hydrate as the readiness signal — it's only rendered once the
        chapters slice has the book's chapters loaded. */
-    await expect(page.getByRole('heading', { name: /^Chapters$/, level: 2 }))
-      .toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('heading', { name: /^Chapters$/, level: 2 })).toBeVisible({
+      timeout: 5_000,
+    });
     await page.waitForTimeout(300);
     await expect(page).toHaveScreenshot('ready.png');
   });
 
   test('listen', async ({ page }) => {
     await page.goto('/#/books/sb/listen');
-    await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 }))
-      .toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 })).toBeVisible({
+      timeout: 5_000,
+    });
     /* "Play from the start" enabling is the hydration signal for the
        chapter list — once it flips enabled the chapter rows are present. */
-    await expect(page.getByRole('button', { name: /Play from the start/i }))
-      .toBeEnabled({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /Play from the start/i })).toBeEnabled({
+      timeout: 5_000,
+    });
     await page.waitForTimeout(300);
     await expect(page).toHaveScreenshot('listen.png');
   });
@@ -115,16 +118,16 @@ test.describe('visual baselines (dark theme)', () => {
 
   test('library (dark)', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('button', { name: /Start a new book/i }).first())
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+      timeout: 10_000,
+    });
     await page.waitForTimeout(300);
     await expect(page).toHaveScreenshot('library-dark.png');
   });
 
   test('upload (dark)', async ({ page }) => {
     await page.goto('/#/new');
-    await expect(page.getByRole('button', { name: /Paste text/i }))
-      .toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /Paste text/i })).toBeVisible({ timeout: 5_000 });
     await page.waitForTimeout(200);
     await expect(page).toHaveScreenshot('upload-dark.png');
   });
@@ -143,18 +146,21 @@ test.describe('visual baselines (dark theme)', () => {
 
   test('ready (manuscript, dark)', async ({ page }) => {
     await page.goto('/#/books/sb/manuscript');
-    await expect(page.getByRole('heading', { name: /^Chapters$/, level: 2 }))
-      .toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('heading', { name: /^Chapters$/, level: 2 })).toBeVisible({
+      timeout: 5_000,
+    });
     await page.waitForTimeout(300);
     await expect(page).toHaveScreenshot('ready-dark.png');
   });
 
   test('listen (dark)', async ({ page }) => {
     await page.goto('/#/books/sb/listen');
-    await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 }))
-      .toBeVisible({ timeout: 5_000 });
-    await expect(page.getByRole('button', { name: /Play from the start/i }))
-      .toBeEnabled({ timeout: 5_000 });
+    await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 })).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.getByRole('button', { name: /Play from the start/i })).toBeEnabled({
+      timeout: 5_000,
+    });
     await page.waitForTimeout(300);
     await expect(page).toHaveScreenshot('listen-dark.png');
   });

@@ -56,7 +56,8 @@ describe('withTtsRetry', () => {
   });
 
   it('retries on transient throw and returns the eventual success', async () => {
-    const fn = vi.fn()
+    const fn = vi
+      .fn()
       .mockRejectedValueOnce(transientError('503 first'))
       .mockRejectedValueOnce(transientError('503 second'))
       .mockResolvedValueOnce('eventual-ok');
@@ -77,9 +78,9 @@ describe('withTtsRetry', () => {
     const fn = vi.fn().mockRejectedValueOnce(fatalError('400 bad request'));
     const onRetry = vi.fn();
 
-    await expect(
-      withTtsRetry(fn, { onRetry, backoffsMs: [5, 5] }),
-    ).rejects.toThrow('400 bad request');
+    await expect(withTtsRetry(fn, { onRetry, backoffsMs: [5, 5] })).rejects.toThrow(
+      '400 bad request',
+    );
 
     expect(fn).toHaveBeenCalledTimes(1);
     expect(onRetry).not.toHaveBeenCalled();
@@ -97,14 +98,15 @@ describe('withTtsRetry', () => {
   });
 
   it('re-throws the LAST transient error after budget exhaustion', async () => {
-    const fn = vi.fn()
+    const fn = vi
+      .fn()
       .mockRejectedValueOnce(transientError('first-503'))
       .mockRejectedValueOnce(transientError('second-503'))
       .mockRejectedValueOnce(transientError('third-503'));
 
-    await expect(
-      withTtsRetry(fn, { backoffsMs: [5, 5], maxAttempts: 3 }),
-    ).rejects.toThrow('third-503');
+    await expect(withTtsRetry(fn, { backoffsMs: [5, 5], maxAttempts: 3 })).rejects.toThrow(
+      'third-503',
+    );
 
     expect(fn).toHaveBeenCalledTimes(3);
   });
@@ -112,16 +114,15 @@ describe('withTtsRetry', () => {
   it('honours maxAttempts when set to 1 (no retries at all)', async () => {
     const fn = vi.fn().mockRejectedValueOnce(transientError('503'));
 
-    await expect(
-      withTtsRetry(fn, { backoffsMs: [5], maxAttempts: 1 }),
-    ).rejects.toThrow('503');
+    await expect(withTtsRetry(fn, { backoffsMs: [5], maxAttempts: 1 })).rejects.toThrow('503');
 
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it('aborts mid-backoff promptly when signal fires during the sleep', async () => {
     const controller = new AbortController();
-    const fn = vi.fn()
+    const fn = vi
+      .fn()
       .mockRejectedValueOnce(transientError('503'))
       .mockResolvedValueOnce('would-not-reach');
 
@@ -143,7 +144,8 @@ describe('withTtsRetry', () => {
 
   it('reads beyond the backoffs[] array by repeating the last value', async () => {
     // 4 attempts but only 2 backoff entries → entries [0]=10, [1]=10, [2]=10 (repeat last).
-    const fn = vi.fn()
+    const fn = vi
+      .fn()
       .mockRejectedValueOnce(transientError('t1'))
       .mockRejectedValueOnce(transientError('t2'))
       .mockRejectedValueOnce(transientError('t3'))

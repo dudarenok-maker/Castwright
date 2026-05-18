@@ -20,7 +20,7 @@ owner: null
 
 ## Why this regressed
 
-Plan 12's invariants documented the *public* shape of reassignment (action name, PUT payload) but never the *internal* keying. The hydrate merge picked up `(chapterId, id)` keying when the "whole book under the last chapter" bug forced the issue, but the reassign reducers were written earlier against the single-chapter fixture (`src/data/sentences.ts`, all chapter 3) and never re-examined. Unit tests in `manuscript-slice.test.ts` for `setSentenceCharacter` / `setSentencesCharacter` only used chapter-1 sentences, so the collision was invisible to the suite. There was no existing jsdom integration or e2e for the reassign flow, so the prop-wiring seam was uncovered too.
+Plan 12's invariants documented the _public_ shape of reassignment (action name, PUT payload) but never the _internal_ keying. The hydrate merge picked up `(chapterId, id)` keying when the "whole book under the last chapter" bug forced the issue, but the reassign reducers were written earlier against the single-chapter fixture (`src/data/sentences.ts`, all chapter 3) and never re-examined. Unit tests in `manuscript-slice.test.ts` for `setSentenceCharacter` / `setSentencesCharacter` only used chapter-1 sentences, so the collision was invisible to the suite. There was no existing jsdom integration or e2e for the reassign flow, so the prop-wiring seam was uncovered too.
 
 ## Architectural impact
 
@@ -54,7 +54,7 @@ Plan 12's invariants documented the *public* shape of reassignment (action name,
   - `setSentenceCharacter scopes by chapterId — chapter 2 reassignment leaves chapter 1 untouched`
   - `setSentencesCharacter scopes by chapterId — chapter 2 batch leaves chapter 1 untouched`
   - `splitSentence scopes by chapterId — chapter 2 split leaves chapter 1 untouched`
-  
+
   Each one fails against the pre-fix reducer (matching by `id` alone returns the wrong chapter's sentence) and passes after the chapterId scoping lands. The existing `splitSentence` describe also gained `chapterId: 1` in every payload — behaviour they assert is unchanged.
 
 - **Vitest jsdom integration (`src/views/manuscript.test.tsx`)** — new spec `ManuscriptView — cross-chapter reassign isolation` renders the full view with two chapters sharing sentence id=1, opens the SegmentInspector on chapter 2, clicks the Eliza chip in "Reassign whole segment to", and asserts via `store.getState().manuscript.sentences` that chapter 2's sentence is reassigned and chapter 1's same-id sentence is untouched. Pins the prop wiring (`SegmentInspector.onReassignSentence(chapterId, sentenceId, newCharId)`) end-to-end through real React + real redux.

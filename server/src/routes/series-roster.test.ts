@@ -24,32 +24,51 @@ let unlockedBookId: string;
 let standaloneBookId: string;
 let siblingBookId: string;
 
-function seed(workspace: string, author: string, series: string, title: string, opts: {
-  confirmed: boolean;
-  characters: Array<{ id: string; name: string; voiceId?: string; aliases?: string[]; gender?: string; ageRange?: string }>;
-  isStandalone?: boolean;
-}): string {
+function seed(
+  workspace: string,
+  author: string,
+  series: string,
+  title: string,
+  opts: {
+    confirmed: boolean;
+    characters: Array<{
+      id: string;
+      name: string;
+      voiceId?: string;
+      aliases?: string[];
+      gender?: string;
+      ageRange?: string;
+    }>;
+    isStandalone?: boolean;
+  },
+): string {
   const bookId = `${author.toLowerCase().replace(/\s+/g, '-')}__${series.toLowerCase().replace(/\s+/g, '-')}__${title.toLowerCase().replace(/\s+/g, '-')}`;
   const dir = join(workspace, 'books', author, series, title);
   mkdirSync(join(dir, '.audiobook'), { recursive: true });
-  writeFileSync(join(dir, '.audiobook', 'state.json'), JSON.stringify({
-    bookId,
-    manuscriptId: `m_${title.toLowerCase().replace(/\s+/g, '_')}`,
-    title,
-    author,
-    series,
-    seriesPosition: null,
-    isStandalone: opts.isStandalone === true,
-    manuscriptFile: 'manuscript.epub',
-    castConfirmed: opts.confirmed,
-    chapters: [],
-    coverGradient: ['#000', '#fff'],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }));
-  writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({
-    characters: opts.characters.map(c => ({ role: 'character', color: 'unset', ...c })),
-  }));
+  writeFileSync(
+    join(dir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId,
+      manuscriptId: `m_${title.toLowerCase().replace(/\s+/g, '_')}`,
+      title,
+      author,
+      series,
+      seriesPosition: null,
+      isStandalone: opts.isStandalone === true,
+      manuscriptFile: 'manuscript.epub',
+      castConfirmed: opts.confirmed,
+      chapters: [],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  writeFileSync(
+    join(dir, '.audiobook', 'cast.json'),
+    JSON.stringify({
+      characters: opts.characters.map((c) => ({ role: 'character', color: 'unset', ...c })),
+    }),
+  );
   return bookId;
 }
 
@@ -61,15 +80,22 @@ beforeAll(async () => {
     confirmed: true,
     characters: [
       { id: 'narrator', name: 'Narrator' },
-      { id: 'Wren',   name: 'Wren', voiceId: 'v_Wren', aliases: ['Wren Sparrow'], gender: 'female', ageRange: 'teen' },
-      { id: 'Hart',      name: 'Hart', voiceId: 'v_Hart', gender: 'male', ageRange: 'teen' },
+      {
+        id: 'Wren',
+        name: 'Wren',
+        voiceId: 'v_Wren',
+        aliases: ['Wren Sparrow'],
+        gender: 'female',
+        ageRange: 'teen',
+      },
+      { id: 'Hart', name: 'Hart', voiceId: 'v_Hart', gender: 'male', ageRange: 'teen' },
     ],
   });
   bonusBookId = seed(workspaceRoot, AUTHOR, SERIES, 'the Coalfall Commission', {
     confirmed: true,
     characters: [
       { id: 'Marlow', name: 'Marlow', voiceId: 'v_Marlow' },
-      { id: 'ro',    name: 'Ro',    voiceId: 'v_ro' },
+      { id: 'ro', name: 'Ro', voiceId: 'v_ro' },
     ],
   });
   unlockedBookId = seed(workspaceRoot, AUTHOR, SERIES, 'Unlocked', {
@@ -102,7 +128,7 @@ describe('GET /api/books/:bookId/series-roster', () => {
     expect(res.status).toBe(200);
     /* Keeper itself excluded → Bonus Marlow's 2 characters remain. */
     expect(res.body.characters).toHaveLength(2);
-    const names = (res.body.characters as Array<{ name: string }>).map(c => c.name).sort();
+    const names = (res.body.characters as Array<{ name: string }>).map((c) => c.name).sort();
     expect(names).toEqual(['Marlow', 'Ro']);
   });
 
@@ -110,8 +136,17 @@ describe('GET /api/books/:bookId/series-roster', () => {
     /* Query from Unlocked's vantage so Keeper #1's full cast surfaces. */
     const res = await request(app).get(`/api/books/${unlockedBookId}/series-roster`);
     expect(res.status).toBe(200);
-    const Wren = (res.body.characters as Array<{ name: string; voiceId?: string; aliases?: string[]; gender?: string; ageRange?: string; bookId: string; bookTitle: string }>)
-      .find(c => c.name === 'Wren');
+    const Wren = (
+      res.body.characters as Array<{
+        name: string;
+        voiceId?: string;
+        aliases?: string[];
+        gender?: string;
+        ageRange?: string;
+        bookId: string;
+        bookTitle: string;
+      }>
+    ).find((c) => c.name === 'Wren');
     expect(Wren).toBeDefined();
     expect(Wren?.voiceId).toBe('v_Wren');
     expect(Wren?.aliases).toEqual(['Wren Sparrow']);
@@ -124,7 +159,7 @@ describe('GET /api/books/:bookId/series-roster', () => {
   it('excludes unconfirmed casts and standalones', async () => {
     const res = await request(app).get(`/api/books/${bonusBookId}/series-roster`);
     expect(res.status).toBe(200);
-    const ids = (res.body.characters as Array<{ id: string }>).map(c => c.id);
+    const ids = (res.body.characters as Array<{ id: string }>).map((c) => c.id);
     /* Bonus excluded itself. Keeper #1 surfaces 3. Unlocked is unconfirmed
        (excluded). Standalone excluded by isStandalone gate. Sibling Book
        is in a different series (excluded). */
@@ -134,7 +169,7 @@ describe('GET /api/books/:bookId/series-roster', () => {
   it('excludes books in a different series even when the author matches', async () => {
     const res = await request(app).get(`/api/books/${keeperBookId}/series-roster`);
     expect(res.status).toBe(200);
-    const ids = (res.body.characters as Array<{ id: string }>).map(c => c.id);
+    const ids = (res.body.characters as Array<{ id: string }>).map((c) => c.id);
     expect(ids).not.toContain('unrelated');
   });
 

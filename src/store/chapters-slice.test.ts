@@ -34,7 +34,9 @@ describe('chaptersSlice — applyGenerationTick', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-13T10:00:00Z'));
   });
-  afterEach(() => { vi.useRealTimers(); });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   describe('progress', () => {
     it('flips the live character to in_progress and demotes the previous one back to queued (NOT done)', () => {
@@ -52,9 +54,19 @@ describe('chaptersSlice — applyGenerationTick', () => {
           characters: { narrator: 'in_progress', halloran: 'queued', eliza: 'queued' },
         }),
       ]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'progress', chapterId: 3, characterId: 'halloran', progress: 0.55, currentLine: 100, totalLines: 200 }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({
+            type: 'progress',
+            chapterId: 3,
+            characterId: 'halloran',
+            progress: 0.55,
+            currentLine: 100,
+            totalLines: 200,
+          }),
+        ),
+      );
       expect(next.chapters[0].characters).toEqual({
         narrator: 'queued',
         halloran: 'in_progress',
@@ -74,9 +86,12 @@ describe('chaptersSlice — applyGenerationTick', () => {
           characters: { narrator: 'in_progress', halloran: 'skipped', eliza: 'queued' },
         }),
       ]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'progress', chapterId: 3, characterId: 'eliza', progress: 0.7 }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'progress', chapterId: 3, characterId: 'eliza', progress: 0.7 }),
+        ),
+      );
       expect(next.chapters[0].characters.halloran).toBe('skipped');
       expect(next.chapters[0].characters.narrator).toBe('queued');
       expect(next.chapters[0].characters.eliza).toBe('in_progress');
@@ -95,16 +110,34 @@ describe('chaptersSlice — applyGenerationTick', () => {
           characters: { narrator: 'in_progress', halloran: 'queued' },
         }),
       ]);
-      const afterHalloran = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'progress', chapterId: 3, characterId: 'halloran', progress: 0.2, currentLine: 5 }),
-      ));
+      const afterHalloran = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({
+            type: 'progress',
+            chapterId: 3,
+            characterId: 'halloran',
+            progress: 0.2,
+            currentLine: 5,
+          }),
+        ),
+      );
       expect(afterHalloran.chapters[0].characters).toEqual({
         narrator: 'queued',
         halloran: 'in_progress',
       });
-      const afterNarratorAgain = chaptersSlice.reducer(afterHalloran, chaptersActions.applyGenerationTick(
-        tick({ type: 'progress', chapterId: 3, characterId: 'narrator', progress: 0.3, currentLine: 8 }),
-      ));
+      const afterNarratorAgain = chaptersSlice.reducer(
+        afterHalloran,
+        chaptersActions.applyGenerationTick(
+          tick({
+            type: 'progress',
+            chapterId: 3,
+            characterId: 'narrator',
+            progress: 0.3,
+            currentLine: 8,
+          }),
+        ),
+      );
       expect(afterNarratorAgain.chapters[0].characters).toEqual({
         narrator: 'in_progress',
         halloran: 'queued',
@@ -114,22 +147,31 @@ describe('chaptersSlice — applyGenerationTick', () => {
     it('sets generationStartedAt on the first progress tick and leaves it alone on later ticks', () => {
       const start = baseState([makeChapter(3, { state: 'in_progress' })]);
       const t0 = Date.now();
-      const after1 = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'progress', chapterId: 3, characterId: 'narrator', progress: 0.1 }),
-      ));
+      const after1 = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'progress', chapterId: 3, characterId: 'narrator', progress: 0.1 }),
+        ),
+      );
       expect(after1.generationStartedAt).toBe(t0);
       vi.advanceTimersByTime(60_000);
-      const after2 = chaptersSlice.reducer(after1, chaptersActions.applyGenerationTick(
-        tick({ type: 'progress', chapterId: 3, characterId: 'narrator', progress: 0.2 }),
-      ));
+      const after2 = chaptersSlice.reducer(
+        after1,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'progress', chapterId: 3, characterId: 'narrator', progress: 0.2 }),
+        ),
+      );
       expect(after2.generationStartedAt).toBe(t0);
     });
 
     it('does not crash when the tick references an unknown chapterId', () => {
       const start = baseState([makeChapter(3)]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'progress', chapterId: 99, characterId: 'narrator', progress: 0.5 }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'progress', chapterId: 99, characterId: 'narrator', progress: 0.5 }),
+        ),
+      );
       expect(next.chapters).toEqual(start.chapters);
     });
 
@@ -146,9 +188,19 @@ describe('chaptersSlice — applyGenerationTick', () => {
           characters: { narrator: 'in_progress', halloran: 'queued', eliza: 'skipped' },
         }),
       ]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'progress', chapterId: 3, characterId: 'ghost-speaker', progress: 0.6, currentLine: 80, totalLines: 200 }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({
+            type: 'progress',
+            chapterId: 3,
+            characterId: 'ghost-speaker',
+            progress: 0.6,
+            currentLine: 80,
+            totalLines: 200,
+          }),
+        ),
+      );
       expect(next.chapters[0].characters).toEqual({
         narrator: 'in_progress',
         halloran: 'queued',
@@ -169,9 +221,12 @@ describe('chaptersSlice — applyGenerationTick', () => {
           characters: { narrator: 'in_progress', halloran: 'queued', eliza: 'skipped' },
         }),
       ]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'progress', chapterId: 3, characterId: 'eliza', progress: 0.5 }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'progress', chapterId: 3, characterId: 'eliza', progress: 0.5 }),
+        ),
+      );
       expect(next.chapters[0].characters).toEqual({
         narrator: 'in_progress',
         halloran: 'queued',
@@ -183,9 +238,10 @@ describe('chaptersSlice — applyGenerationTick', () => {
   describe('chapter_assembling', () => {
     it('sets phase=assembling and defaults progress to 0.995', () => {
       const start = baseState([makeChapter(3, { state: 'in_progress', progress: 0.9 })]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'chapter_assembling', chapterId: 3 }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(tick({ type: 'chapter_assembling', chapterId: 3 })),
+      );
       expect(next.chapters[0].phase).toBe('assembling');
       expect(next.chapters[0].state).toBe('in_progress');
       expect(next.chapters[0].progress).toBeCloseTo(0.995);
@@ -193,9 +249,10 @@ describe('chaptersSlice — applyGenerationTick', () => {
 
     it('also starts the ETA clock if not already started', () => {
       const start = baseState([makeChapter(3, { state: 'in_progress' })]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'chapter_assembling', chapterId: 3 }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(tick({ type: 'chapter_assembling', chapterId: 3 })),
+      );
       expect(next.generationStartedAt).toBe(Date.now());
     });
 
@@ -206,22 +263,29 @@ describe('chaptersSlice — applyGenerationTick', () => {
          page load. The Generate row therefore reported every freshly-
          finished chapter as 0:00. */
       const start = baseState([makeChapter(3, { state: 'in_progress', duration: '00:00' })]);
-      const subMinute = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'chapter_assembling', chapterId: 3, durationSec: 42.4 }),
-      ));
+      const subMinute = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_assembling', chapterId: 3, durationSec: 42.4 }),
+        ),
+      );
       expect(subMinute.chapters[0].duration).toBe('00:42');
 
-      const overHour = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'chapter_assembling', chapterId: 3, durationSec: 3725.6 }),
-      ));
+      const overHour = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_assembling', chapterId: 3, durationSec: 3725.6 }),
+        ),
+      );
       expect(overHour.chapters[0].duration).toBe('01:02:06');
     });
 
     it('leaves ch.duration untouched when the assembling tick omits durationSec', () => {
       const start = baseState([makeChapter(3, { state: 'in_progress', duration: '12:34' })]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'chapter_assembling', chapterId: 3 }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(tick({ type: 'chapter_assembling', chapterId: 3 })),
+      );
       expect(next.chapters[0].duration).toBe('12:34');
     });
   });
@@ -236,9 +300,12 @@ describe('chaptersSlice — applyGenerationTick', () => {
           characters: { narrator: 'in_progress', halloran: 'queued', eliza: 'skipped' },
         }),
       ]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'chapter_complete', chapterId: 3, totalLines: 400 }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_complete', chapterId: 3, totalLines: 400 }),
+        ),
+      );
       expect(next.chapters[0].state).toBe('done');
       expect(next.chapters[0].progress).toBe(1);
       expect(next.chapters[0].phase).toBe(null);
@@ -257,9 +324,12 @@ describe('chaptersSlice — applyGenerationTick', () => {
         makeChapter(3, { state: 'in_progress' }),
         makeChapter(4, { state: 'queued' }),
       ]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'chapter_failed', chapterId: 3, errorReason: 'TTS sidecar timed out' }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_failed', chapterId: 3, errorReason: 'TTS sidecar timed out' }),
+        ),
+      );
       expect(next.chapters[0].state).toBe('failed');
       expect(next.chapters[0].errorReason).toBe('TTS sidecar timed out');
       expect(next.chapters[1].state).toBe('queued');
@@ -271,9 +341,12 @@ describe('chaptersSlice — applyGenerationTick', () => {
         makeChapter(3, { state: 'in_progress' }),
         makeChapter(4, { state: 'queued' }),
       ]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'chapter_failed', errorReason: 'modelKey rejected' }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_failed', errorReason: 'modelKey rejected' }),
+        ),
+      );
       expect(next.lastError).toBe('modelKey rejected');
       expect(next.chapters[0].state).toBe('failed');
       expect(next.chapters[0].errorReason).toBe('modelKey rejected');
@@ -285,11 +358,14 @@ describe('chaptersSlice — applyGenerationTick', () => {
         makeChapter(3, { state: 'queued' }),
         makeChapter(4, { state: 'queued' }),
       ]);
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'chapter_failed', errorReason: 'cast missing' }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_failed', errorReason: 'cast missing' }),
+        ),
+      );
       expect(next.lastError).toBe('cast missing');
-      expect(next.chapters.every(c => c.state === 'queued')).toBe(true);
+      expect(next.chapters.every((c) => c.state === 'queued')).toBe(true);
     });
   });
 
@@ -300,9 +376,10 @@ describe('chaptersSlice — applyGenerationTick', () => {
         pendingRegen: { chapterIds: [3], force: true },
         generationStartedAt: Date.now() - 60_000,
       };
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'idle' }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(tick({ type: 'idle' })),
+      );
       expect(next.pendingRegen).toBe(null);
       expect(next.generationStartedAt).toBe(null);
     });
@@ -314,9 +391,10 @@ describe('chaptersSlice — applyGenerationTick', () => {
         pendingRegen: { chapterIds: [3], force: true },
         generationStartedAt: startedAt,
       };
-      const next = chaptersSlice.reducer(start, chaptersActions.applyGenerationTick(
-        tick({ type: 'idle' }),
-      ));
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(tick({ type: 'idle' })),
+      );
       expect(next.pendingRegen).toBe(null);
       expect(next.generationStartedAt).toBe(startedAt);
     });
@@ -326,10 +404,17 @@ describe('chaptersSlice — applyGenerationTick', () => {
 describe('chaptersSlice — regenerate reducers', () => {
   it('regenerateChapter (this) sets pendingRegen to just that chapter and bumps regenEpoch', () => {
     const start = baseState([
-      makeChapter(3, { state: 'done', progress: 1, characters: { narrator: 'done', halloran: 'done', eliza: 'done' } }),
+      makeChapter(3, {
+        state: 'done',
+        progress: 1,
+        characters: { narrator: 'done', halloran: 'done', eliza: 'done' },
+      }),
       makeChapter(4, { state: 'queued' }),
     ]);
-    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapter({ chapterId: 3, scope: 'this' }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.regenerateChapter({ chapterId: 3, scope: 'this' }),
+    );
     expect(next.pendingRegen).toEqual({ chapterIds: [3], force: true });
     expect(next.regenEpoch).toBe(1);
     expect(next.chapters[0].state).toBe('in_progress');
@@ -354,17 +439,23 @@ describe('chaptersSlice — regenerate reducers', () => {
         characters: { narrator: 'in_progress', halloran: 'queued' },
       }),
     ]);
-    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapter({ chapterId: 3, scope: 'this' }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.regenerateChapter({ chapterId: 3, scope: 'this' }),
+    );
     expect(next.chapters[0].currentLine).toBe(0);
   });
 
   it('regenerateChapter (forward) targets the chapter and everything after', () => {
     const start = baseState([
-      makeChapter(3, { state: 'done',  progress: 1 }),
-      makeChapter(4, { state: 'done',  progress: 1 }),
+      makeChapter(3, { state: 'done', progress: 1 }),
+      makeChapter(4, { state: 'done', progress: 1 }),
       makeChapter(5, { state: 'queued' }),
     ]);
-    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapter({ chapterId: 4, scope: 'forward' }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.regenerateChapter({ chapterId: 4, scope: 'forward' }),
+    );
     expect(next.pendingRegen).toEqual({ chapterIds: [4, 5], force: true });
     expect(next.regenEpoch).toBe(1);
     expect(next.chapters[0].state).toBe('done');
@@ -378,19 +469,32 @@ describe('chaptersSlice — regenerate reducers', () => {
       lastError: 'something exploded',
       generationStartedAt: Date.now() - 10_000,
     };
-    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapter({ chapterId: 3, scope: 'this' }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.regenerateChapter({ chapterId: 3, scope: 'this' }),
+    );
     expect(next.lastError).toBe(null);
     expect(next.generationStartedAt).toBe(null);
   });
 
   it('regenerateCharacter targets only chapters where the character is active', () => {
     const start = baseState([
-      makeChapter(3, { state: 'done', characters: { narrator: 'done', halloran: 'done', eliza: 'skipped' } }),
-      makeChapter(4, { state: 'done', characters: { narrator: 'done', halloran: 'done', eliza: 'done' } }),
+      makeChapter(3, {
+        state: 'done',
+        characters: { narrator: 'done', halloran: 'done', eliza: 'skipped' },
+      }),
+      makeChapter(4, {
+        state: 'done',
+        characters: { narrator: 'done', halloran: 'done', eliza: 'done' },
+      }),
     ]);
-    const next = chaptersSlice.reducer(start, chaptersActions.regenerateCharacter({
-      characterId: 'eliza', chapterIds: [3, 4],
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.regenerateCharacter({
+        characterId: 'eliza',
+        chapterIds: [3, 4],
+      }),
+    );
     expect(next.pendingRegen).toEqual({ chapterIds: [4], force: true });
     expect(next.regenEpoch).toBe(1);
     expect(next.chapters[0].state).toBe('done');
@@ -403,21 +507,35 @@ describe('chaptersSlice — regenerate reducers', () => {
     const start = baseState([
       makeChapter(3, { state: 'done', characters: { narrator: 'done', halloran: 'skipped' } }),
     ]);
-    const next = chaptersSlice.reducer(start, chaptersActions.regenerateCharacter({
-      characterId: 'halloran', chapterIds: [3],
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.regenerateCharacter({
+        characterId: 'halloran',
+        chapterIds: [3],
+      }),
+    );
     expect(next.pendingRegen).toBe(null);
     expect(next.regenEpoch).toBe(0);
   });
 
   it('batchRegenerateCharacters skips chapters where none of the listed characters are active', () => {
     const start = baseState([
-      makeChapter(3, { state: 'done', characters: { narrator: 'done', halloran: 'skipped', eliza: 'skipped' } }),
-      makeChapter(4, { state: 'done', characters: { narrator: 'done', halloran: 'done',    eliza: 'done'    } }),
+      makeChapter(3, {
+        state: 'done',
+        characters: { narrator: 'done', halloran: 'skipped', eliza: 'skipped' },
+      }),
+      makeChapter(4, {
+        state: 'done',
+        characters: { narrator: 'done', halloran: 'done', eliza: 'done' },
+      }),
     ]);
-    const next = chaptersSlice.reducer(start, chaptersActions.batchRegenerateCharacters({
-      characterIds: ['halloran', 'eliza'], chapterIds: [3, 4],
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.batchRegenerateCharacters({
+        characterIds: ['halloran', 'eliza'],
+        chapterIds: [3, 4],
+      }),
+    );
     expect(next.pendingRegen).toEqual({ chapterIds: [4], force: true });
     expect(next.regenEpoch).toBe(1);
     expect(next.chapters[0].characters.halloran).toBe('skipped');
@@ -432,14 +550,22 @@ describe('chaptersSlice — regenerate reducers', () => {
      facet of the contract the middleware + view depend on. */
   it('regenerateChapterIds re-queues every listed chapter and stamps pendingRegen', () => {
     const start = baseState([
-      makeChapter(3, { state: 'done',   progress: 1, audioModelKey: 'coqui-xtts-v2', characters: { narrator: 'done', halloran: 'done', eliza: 'done' } }),
-      makeChapter(4, { state: 'done',   progress: 1, audioModelKey: 'coqui-xtts-v2' }),
+      makeChapter(3, {
+        state: 'done',
+        progress: 1,
+        audioModelKey: 'coqui-xtts-v2',
+        characters: { narrator: 'done', halloran: 'done', eliza: 'done' },
+      }),
+      makeChapter(4, { state: 'done', progress: 1, audioModelKey: 'coqui-xtts-v2' }),
       makeChapter(5, { state: 'queued', progress: 0 }),
-      makeChapter(6, { state: 'done',   progress: 1, audioModelKey: 'coqui-xtts-v2' }),
+      makeChapter(6, { state: 'done', progress: 1, audioModelKey: 'coqui-xtts-v2' }),
     ]);
-    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapterIds({
-      chapterIds: [3, 4, 6],
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.regenerateChapterIds({
+        chapterIds: [3, 4, 6],
+      }),
+    );
     /* Non-contiguous list — chapter 5 was never drifted (queued), so it
        stays untouched. The pendingRegen list mirrors the targets in
        slice order so the head row (id 3) goes in_progress and the
@@ -455,12 +581,13 @@ describe('chaptersSlice — regenerate reducers', () => {
   });
 
   it('regenerateChapterIds is a no-op when the list contains only unknown ids', () => {
-    const start = baseState([
-      makeChapter(3, { state: 'done' }),
-    ]);
-    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapterIds({
-      chapterIds: [99, 100],
-    }));
+    const start = baseState([makeChapter(3, { state: 'done' })]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.regenerateChapterIds({
+        chapterIds: [99, 100],
+      }),
+    );
     expect(next.pendingRegen).toBe(null);
     expect(next.regenEpoch).toBe(0);
     expect(next.chapters[0].state).toBe('done');
@@ -473,12 +600,15 @@ describe('chaptersSlice — regenerate reducers', () => {
        view's activeChapters filter and keeps the bulk action honest
        even if a stale id list slips through. */
     const start = baseState([
-      makeChapter(3, { state: 'done',   audioModelKey: 'coqui-xtts-v2', excluded: false }),
-      makeChapter(4, { state: 'queued', audioModelKey: 'coqui-xtts-v2', excluded: true  }),
+      makeChapter(3, { state: 'done', audioModelKey: 'coqui-xtts-v2', excluded: false }),
+      makeChapter(4, { state: 'queued', audioModelKey: 'coqui-xtts-v2', excluded: true }),
     ]);
-    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapterIds({
-      chapterIds: [3, 4],
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.regenerateChapterIds({
+        chapterIds: [3, 4],
+      }),
+    );
     expect(next.pendingRegen).toEqual({ chapterIds: [3], force: true });
     expect(next.chapters[0].state).toBe('in_progress');
     expect(next.chapters[1].state).toBe('queued'); // unchanged
@@ -491,9 +621,12 @@ describe('chaptersSlice — regenerate reducers', () => {
       lastError: 'previous run failed',
       generationStartedAt: Date.now() - 10_000,
     };
-    const next = chaptersSlice.reducer(start, chaptersActions.regenerateChapterIds({
-      chapterIds: [3],
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.regenerateChapterIds({
+        chapterIds: [3],
+      }),
+    );
     expect(next.lastError).toBe(null);
     expect(next.generationStartedAt).toBe(null);
   });
@@ -506,49 +639,82 @@ describe('chaptersSlice — hydrateFromAnalysis', () => {
        view's expanded chapter row shows no speakers until the first SSE
        tick names a character. */
     const start = baseState([]);
-    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromAnalysis({
-      bookId: 'b',
-      manuscriptId: 'm',
-      title: 'Bonus',
-      phaseTimings: [],
-      characters: [
-        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator', lines: 0, scenes: 0 },
-        { id: 'halloran', name: 'Halloran', role: 'main',     color: 'magenta',  lines: 0, scenes: 0 },
-      ] as never,
-      chapters: [
-        { id: 1, title: 'Chapter 1', duration: '00:00', state: 'queued', progress: 0, characters: {} },
-        { id: 2, title: 'Chapter 2', duration: '00:00', state: 'queued', progress: 0, characters: {} },
-      ],
-      sentences: [
-        { id: 1, chapterId: 1, characterId: 'narrator', text: 'a' },
-        { id: 2, chapterId: 1, characterId: 'narrator', text: 'b' },
-        { id: 3, chapterId: 2, characterId: 'narrator', text: 'c' },
-        { id: 4, chapterId: 2, characterId: 'halloran', text: 'd' },
-      ] as never,
-      libraryMatches: [],
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromAnalysis({
+        bookId: 'b',
+        manuscriptId: 'm',
+        title: 'Bonus',
+        phaseTimings: [],
+        characters: [
+          {
+            id: 'narrator',
+            name: 'Narrator',
+            role: 'narrator',
+            color: 'narrator',
+            lines: 0,
+            scenes: 0,
+          },
+          { id: 'halloran', name: 'Halloran', role: 'main', color: 'magenta', lines: 0, scenes: 0 },
+        ] as never,
+        chapters: [
+          {
+            id: 1,
+            title: 'Chapter 1',
+            duration: '00:00',
+            state: 'queued',
+            progress: 0,
+            characters: {},
+          },
+          {
+            id: 2,
+            title: 'Chapter 2',
+            duration: '00:00',
+            state: 'queued',
+            progress: 0,
+            characters: {},
+          },
+        ],
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narrator', text: 'a' },
+          { id: 2, chapterId: 1, characterId: 'narrator', text: 'b' },
+          { id: 3, chapterId: 2, characterId: 'narrator', text: 'c' },
+          { id: 4, chapterId: 2, characterId: 'halloran', text: 'd' },
+        ] as never,
+        libraryMatches: [],
+      }),
+    );
     expect(next.chapters[0].characters).toEqual({ narrator: 'queued' });
     expect(next.chapters[1].characters).toEqual({ narrator: 'queued', halloran: 'queued' });
   });
 
   it('preserves a pre-populated chapter.characters map (does not clobber later state)', () => {
     const start = baseState([]);
-    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromAnalysis({
-      bookId: 'b',
-      manuscriptId: 'm',
-      title: 'Bonus',
-      phaseTimings: [],
-      characters: [] as never,
-      chapters: [
-        { id: 1, title: 'Chapter 1', duration: '00:00', state: 'in_progress', progress: 0.5,
-          characters: { narrator: 'done', halloran: 'in_progress' } },
-      ],
-      sentences: [
-        { id: 1, chapterId: 1, characterId: 'narrator', text: 'a' },
-        { id: 2, chapterId: 1, characterId: 'eliza',    text: 'b' },
-      ] as never,
-      libraryMatches: [],
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromAnalysis({
+        bookId: 'b',
+        manuscriptId: 'm',
+        title: 'Bonus',
+        phaseTimings: [],
+        characters: [] as never,
+        chapters: [
+          {
+            id: 1,
+            title: 'Chapter 1',
+            duration: '00:00',
+            state: 'in_progress',
+            progress: 0.5,
+            characters: { narrator: 'done', halloran: 'in_progress' },
+          },
+        ],
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narrator', text: 'a' },
+          { id: 2, chapterId: 1, characterId: 'eliza', text: 'b' },
+        ] as never,
+        libraryMatches: [],
+      }),
+    );
     expect(next.chapters[0].characters).toEqual({ narrator: 'done', halloran: 'in_progress' });
   });
 });
@@ -556,8 +722,8 @@ describe('chaptersSlice — hydrateFromAnalysis', () => {
 describe('chaptersSlice — hydrateFromBookState', () => {
   const cast = [
     { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator', lines: 0, scenes: 0 },
-    { id: 'halloran', name: 'Halloran', role: 'main',     color: 'magenta',  lines: 0, scenes: 0 },
-    { id: 'eliza',    name: 'Eliza',    role: 'main',     color: 'rose',     lines: 0, scenes: 0 },
+    { id: 'halloran', name: 'Halloran', role: 'main', color: 'magenta', lines: 0, scenes: 0 },
+    { id: 'eliza', name: 'Eliza', role: 'main', color: 'rose', lines: 0, scenes: 0 },
   ] as never;
 
   const chapters = [
@@ -571,42 +737,53 @@ describe('chaptersSlice — hydrateFromBookState', () => {
        clobbered by the next getBookState fetch and the Generate view's
        pill list flickered from "filtered" to "everyone in the book". */
     const start = baseState([]);
-    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
-      chapters,
-      completedSlugs: [],
-      characters: cast,
-      chapterCharacters: {
-        1: ['narrator', 'halloran'],
-        2: ['narrator', 'eliza'],
-      },
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters,
+        completedSlugs: [],
+        characters: cast,
+        chapterCharacters: {
+          1: ['narrator', 'halloran'],
+          2: ['narrator', 'eliza'],
+        },
+      }),
+    );
     expect(next.chapters[0].characters).toEqual({ narrator: 'queued', halloran: 'queued' });
     expect(next.chapters[1].characters).toEqual({ narrator: 'queued', eliza: 'queued' });
   });
 
   it('falls back to all-cast seeding when chapterCharacters is omitted (back-compat for older servers / pre-analysis)', () => {
     const start = baseState([]);
-    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
-      chapters,
-      completedSlugs: [],
-      characters: cast,
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters,
+        completedSlugs: [],
+        characters: cast,
+      }),
+    );
     expect(next.chapters[0].characters).toEqual({
-      narrator: 'queued', halloran: 'queued', eliza: 'queued',
+      narrator: 'queued',
+      halloran: 'queued',
+      eliza: 'queued',
     });
   });
 
   it('marks completed chapters as done with only their analysed speakers (not all-cast)', () => {
     const start = baseState([]);
-    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
-      chapters,
-      completedSlugs: ['01-chapter-one'],
-      characters: cast,
-      chapterCharacters: {
-        1: ['narrator', 'halloran'],
-        2: ['narrator', 'eliza'],
-      },
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters,
+        completedSlugs: ['01-chapter-one'],
+        characters: cast,
+        chapterCharacters: {
+          1: ['narrator', 'halloran'],
+          2: ['narrator', 'eliza'],
+        },
+      }),
+    );
     expect(next.chapters[0].state).toBe('done');
     expect(next.chapters[0].characters).toEqual({ narrator: 'done', halloran: 'done' });
     expect(next.chapters[1].state).toBe('queued');
@@ -618,11 +795,14 @@ describe('chaptersSlice — hydrateFromBookState', () => {
        every hydrate — which meant landing on Generate after confirming
        cast required an explicit Resume click before anything started. */
     const start: ChaptersState = { ...baseState([]), paused: false };
-    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
-      chapters,
-      completedSlugs: [],
-      characters: cast,
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters,
+        completedSlugs: [],
+        characters: cast,
+      }),
+    );
     expect(next.paused).toBe(false);
   });
 
@@ -638,11 +818,14 @@ describe('chaptersSlice — hydrateFromBookState', () => {
        only — setPaused dispatched from the Stop button or the
        local-analyzer guard — and is never inferred from disk state. */
     const start: ChaptersState = { ...baseState([]), paused: false };
-    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
-      chapters,
-      completedSlugs: ['01-chapter-one'],
-      characters: cast,
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters,
+        completedSlugs: ['01-chapter-one'],
+        characters: cast,
+      }),
+    );
     expect(next.paused).toBe(false);
   });
 
@@ -651,11 +834,14 @@ describe('chaptersSlice — hydrateFromBookState', () => {
        a follow-up hydrate (e.g. opening the same book again) must NOT
        silently clear the pause and resume. */
     const start: ChaptersState = { ...baseState([]), paused: true };
-    const next = chaptersSlice.reducer(start, chaptersActions.hydrateFromBookState({
-      chapters,
-      completedSlugs: ['01-chapter-one'],
-      characters: cast,
-    }));
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters,
+        completedSlugs: ['01-chapter-one'],
+        characters: cast,
+      }),
+    );
     expect(next.paused).toBe(true);
   });
 });

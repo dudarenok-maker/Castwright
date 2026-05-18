@@ -81,7 +81,7 @@ beforeAll(async () => {
       synthesizedAt: new Date().toISOString(),
       segments: [
         { groupIndex: 0, characterId: 'Marlow', sentenceIds: [101, 102], startSec: 0, endSec: 6.2 },
-        { groupIndex: 1, characterId: 'Oduvan', sentenceIds: [103],      startSec: 6.2, endSec: 12.5 },
+        { groupIndex: 1, characterId: 'Oduvan', sentenceIds: [103], startSec: 6.2, endSec: 12.5 },
       ],
     }),
   );
@@ -108,7 +108,11 @@ function writeMp3(bytes = 4096) {
 }
 
 function rmIfExists(name: string) {
-  try { rmSync(join(audioRoot, name)); } catch { /* ignore */ }
+  try {
+    rmSync(join(audioRoot, name));
+  } catch {
+    /* ignore */
+  }
 }
 
 function resetAudio() {
@@ -150,7 +154,10 @@ function writePreviousSegments() {
 
 describe('chapter-audio router', () => {
   describe('mp3 chapter', () => {
-    beforeAll(() => { resetAudio(); writeMp3(); });
+    beforeAll(() => {
+      resetAudio();
+      writeMp3();
+    });
 
     it('JSON metadata points at .mp3 URL', async () => {
       const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
@@ -183,7 +190,9 @@ describe('chapter-audio router', () => {
   });
 
   describe('no audio file', () => {
-    beforeAll(() => { resetAudio(); });
+    beforeAll(() => {
+      resetAudio();
+    });
 
     it('JSON metadata 404s', async () => {
       const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
@@ -227,7 +236,10 @@ describe('chapter-audio router', () => {
   });
 
   describe('unknown ids', () => {
-    beforeAll(() => { resetAudio(); writeMp3(); });
+    beforeAll(() => {
+      resetAudio();
+      writeMp3();
+    });
 
     it('unknown bookId → 404', async () => {
       const res = await request(app).get('/api/books/does-not-exist__x__y/chapters/1/audio');
@@ -247,12 +259,19 @@ describe('chapter-audio router', () => {
 
   describe('preserved previous audio', () => {
     describe('GET /audio/previous', () => {
-      beforeAll(() => { resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments(); });
+      beforeAll(() => {
+        resetAudio();
+        writeMp3();
+        writePreviousMp3();
+        writePreviousSegments();
+      });
 
       it('JSON metadata points at audio/previous.mp3 URL', async () => {
         const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous`);
         expect(res.status).toBe(200);
-        expect(res.body.url).toBe(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio/previous.mp3`);
+        expect(res.body.url).toBe(
+          `/api/books/${encodeURIComponent(bookId)}/chapters/1/audio/previous.mp3`,
+        );
         expect(res.body.durationSec).toBe(11.0);
         expect(res.body.segments).toHaveLength(1);
       });
@@ -273,7 +292,12 @@ describe('chapter-audio router', () => {
     });
 
     describe('DELETE /audio/previous (accept)', () => {
-      beforeAll(() => { resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments(); });
+      beforeAll(() => {
+        resetAudio();
+        writeMp3();
+        writePreviousMp3();
+        writePreviousSegments();
+      });
 
       it('removes both .previous.* files and 204s', async () => {
         const fs = await import('node:fs');
@@ -308,7 +332,9 @@ describe('chapter-audio router', () => {
         const prevBytes = fs.readFileSync(join(audioRoot, `${SLUG}.previous.mp3`));
         expect(liveBytes.equals(prevBytes)).toBe(false);
 
-        const res = await request(app).post(`/api/books/${bookId}/chapters/1/audio/previous/restore`);
+        const res = await request(app).post(
+          `/api/books/${bookId}/chapters/1/audio/previous/restore`,
+        );
         expect(res.status).toBe(204);
 
         /* Previous pair is gone; live now holds what was previous. */
@@ -322,7 +348,9 @@ describe('chapter-audio router', () => {
       it('404s when nothing preserved', async () => {
         resetAudio();
         writeMp3();
-        const res = await request(app).post(`/api/books/${bookId}/chapters/1/audio/previous/restore`);
+        const res = await request(app).post(
+          `/api/books/${bookId}/chapters/1/audio/previous/restore`,
+        );
         expect(res.status).toBe(404);
       });
 
@@ -345,7 +373,9 @@ describe('chapter-audio router', () => {
 
         resetAudio();
         writePreviousMp3();
-        const res = await request(mockedApp).post(`/api/books/${bookId}/chapters/1/audio/previous/restore`);
+        const res = await request(mockedApp).post(
+          `/api/books/${bookId}/chapters/1/audio/previous/restore`,
+        );
         expect(res.status).toBe(409);
         /* .previous.mp3 must still be on disk — refused, not partially executed. */
         const fs = await import('node:fs');

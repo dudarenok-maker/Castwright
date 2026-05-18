@@ -15,7 +15,7 @@ Voice (plan 33) consumes a single `.m4b` per book — clean for a library
 that's one-file-per-book. The wider set of folder-scanning players
 (Smart AudioBook Player + Audiobookshelf + BookPlayer iOS) instead
 expect a directory of MP3s under a book-named subfolder. Plan 32's
-MP3.ZIP fits *some* of those apps after the user manually unzips on
+MP3.ZIP fits _some_ of those apps after the user manually unzips on
 device; that extra step is the paper-cut B1+B2-B4 removes.
 
 Per-MP3 ID3v2.4 tags + the optional APIC cover frame (plan 36 A3)
@@ -67,7 +67,7 @@ app that wakes mid-copy never sees a half-written file.
   `mp3-zip` and `m4b` accept both destinations. The route validates
   this BEFORE allocating the export id, so a 400 here doesn't leak a
   partial manifest. Pinned by `export.test.ts` (`mp3-folder requires
-  destination='sync-folder'`).
+destination='sync-folder'`).
 - **Staging shape is per-format.** `mp3-zip` and `m4b` stage a single
   file at `<exportId>/<filename>`; `mp3-folder` stages a directory at
   `<exportId>/<book-slug>/<NN-chapter>.mp3`. The route's
@@ -100,8 +100,8 @@ Use the canonical end-to-end manuscript at
 1. With `VITE_USE_MOCKS=false`, server running, and a generated book
    on disk: configure `exportSyncFolder` under Account.
 2. `curl -X POST http://localhost:8080/api/books/<bookId>/exports
-   -H 'Content-Type: application/json'
-   -d '{"format":"mp3-folder","destination":"download"}'` → 400
+-H 'Content-Type: application/json'
+-d '{"format":"mp3-folder","destination":"download"}'` → 400
    `invalid_destination` (the route refuses the combo before
    allocating an id).
 3. Retry with `"destination":"sync-folder"`. Response is a job in
@@ -129,20 +129,20 @@ shared `TILE_HINTS` config object in
 `src/modals/export-audiobook.tsx`; B3 and B4 are one-entry
 additions to it plus the matching handler in `src/views/listen.tsx`.
 
-- **B2 — Smart AudioBook Player** *(shipped)*. `appHint:
-  'smart_audiobook'`, defaults to `{ format: 'mp3-folder',
-  destination: 'sync-folder' }`. The modal collapses the format +
+- **B2 — Smart AudioBook Player** _(shipped)_. `appHint:
+'smart_audiobook'`, defaults to `{ format: 'mp3-folder',
+destination: 'sync-folder' }`. The modal collapses the format +
   destination toggles via the `TILE_HINTS` lookup; per-tile body /
   caption / header / submit copy lives in the config entry. Tile-
   specific testid `export-tile-body-smart_audiobook` (Voice keeps its
   plan-33 alias `export-voice-body`).
-- **B3 — BookPlayer** *(shipped)*. `appHint: 'bookplayer'`, defaults
+- **B3 — BookPlayer** _(shipped)_. `appHint: 'bookplayer'`, defaults
   to `{ format: 'mp3-folder', destination: 'sync-folder' }`. Modal
   copy nods at AirDrop from the synced folder via Finder. Tile-
   specific testid `export-tile-body-bookplayer`. The B2 refactor
   reduced B3 to a one-entry config addition + a one-line handler
   wire-up in `ListenView`.
-- **B4 — Audiobookshelf** *(shipped)*. `appHint: 'audiobookshelf'`,
+- **B4 — Audiobookshelf** _(shipped)_. `appHint: 'audiobookshelf'`,
   defaults to `{ format: 'mp3-folder', destination: 'sync-folder' }`.
   Modal copy points the sync folder at the Audiobookshelf scan root
   and notes that the server picks the book up on its next rescan.

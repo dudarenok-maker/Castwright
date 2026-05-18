@@ -76,31 +76,23 @@ describe('user-settings router', () => {
 
   it('PUT round-trips minorCastMinLines and rejects out-of-range values', async () => {
     /* Happy path — explicit override persists. */
-    const ok = await request(app)
-      .put('/api/user/settings')
-      .send({ minorCastMinLines: 5 });
+    const ok = await request(app).put('/api/user/settings').send({ minorCastMinLines: 5 });
     expect(ok.status).toBe(200);
     expect(ok.body.minorCastMinLines).toBe(5);
     const onDisk = JSON.parse(readFileSync(userSettingsPath, 'utf8'));
     expect(onDisk.minorCastMinLines).toBe(5);
 
     /* 0 disables the line-count trigger entirely (still a valid setting). */
-    const zero = await request(app)
-      .put('/api/user/settings')
-      .send({ minorCastMinLines: 0 });
+    const zero = await request(app).put('/api/user/settings').send({ minorCastMinLines: 0 });
     expect(zero.status).toBe(200);
     expect(zero.body.minorCastMinLines).toBe(0);
 
     /* Negative is out of schema range. */
-    const neg = await request(app)
-      .put('/api/user/settings')
-      .send({ minorCastMinLines: -1 });
+    const neg = await request(app).put('/api/user/settings').send({ minorCastMinLines: -1 });
     expect(neg.status).toBe(400);
 
     /* > 50 cap. */
-    const big = await request(app)
-      .put('/api/user/settings')
-      .send({ minorCastMinLines: 51 });
+    const big = await request(app).put('/api/user/settings').send({ minorCastMinLines: 51 });
     expect(big.status).toBe(400);
   });
 
@@ -123,14 +115,12 @@ describe('user-settings router', () => {
   });
 
   it('PUT drops secret-shaped fields — the API key never reaches disk', async () => {
-    const res = await request(app)
-      .put('/api/user/settings')
-      .send({
-        displayName: 'Phisher',
-        geminiApiKey: 'leaked-key-12345',
-        apiKey: 'another-leaked-key',
-        GEMINI_API_KEY: 'shouted-leaked-key',
-      });
+    const res = await request(app).put('/api/user/settings').send({
+      displayName: 'Phisher',
+      geminiApiKey: 'leaked-key-12345',
+      apiKey: 'another-leaked-key',
+      GEMINI_API_KEY: 'shouted-leaked-key',
+    });
 
     expect(res.status).toBe(200);
     // Echoed shape carries no api-key field
@@ -160,14 +150,12 @@ describe('user-settings router', () => {
   });
 
   it('PUT ignores read-only fields submitted in the body', async () => {
-    const res = await request(app)
-      .put('/api/user/settings')
-      .send({
-        displayName: 'Adversary',
-        apiKeyStatus: 'set',           // can't be promoted by the client
-        workspaceRoot: '/etc/secret',  // can't be retargeted by the client
-        workspaceSource: 'env',
-      });
+    const res = await request(app).put('/api/user/settings').send({
+      displayName: 'Adversary',
+      apiKeyStatus: 'set', // can't be promoted by the client
+      workspaceRoot: '/etc/secret', // can't be retargeted by the client
+      workspaceSource: 'env',
+    });
 
     expect(res.status).toBe(200);
     // Echoed values come from the env-derived layer, not the body.

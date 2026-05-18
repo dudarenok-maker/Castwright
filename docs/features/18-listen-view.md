@@ -10,11 +10,13 @@
 The "ready to listen" view shows the cover, audiobook metadata, chapter list with play buttons, a mini-player for the active track, "Listen on your favourite app" cards, an export queue, three download tiles, and a metadata editor.
 
 **Wired (real backend or store-driven):**
+
 - The header (cover, title, author, narrator, runtime/chapter/voice stats, action strip).
 - The metadata editor: edits flow through `book-meta-slice` and persist via `PUT /api/books/:bookId/state` slice='state'.
 - Chapter playback: `api.getChapterAudio` calls `GET /api/books/:bookId/chapters/:chapterId/audio` for the JSON meta (url + durationSec + segments), and the `<audio>` element in `MiniPlayer` streams the returned `audio.mp3` URL with range-request support for `<audio>` seeking.
 
 **Intentionally mocked (with "Coming soon" affordances on every interactive surface):**
+
 - All six listener-app cards (Audiobookshelf, BookPlayer, Smart AudioBook Player, Apple Books, Plex, PocketBook).
 - All three download tiles (m4b chaptered, MP3 ZIP, streaming link).
 - The export queue rows (the table renders from the demo fixture; no row actions fire).
@@ -24,6 +26,7 @@ The "ready to listen" view shows the cover, audiobook metadata, chapter list wit
 ## Invariants to preserve
 
 ### Header / metadata wiring
+
 - Header title/author/series/narratorCredit/genre/publicationDate read through `selectEffectiveMeta(bookId)` from `book-meta-slice`. The cover gradient comes from `library.books.find(b => b.bookId === bookId)?.coverGradient`. No hardcoded "Northern Star" / "Mike Dudarenok" / "Anders Vale" literals may live in `listen.tsx`.
 - Narrator-credit precedence (`src/views/listen.tsx` and `narratorNameFromCast` in `src/store/book-meta-slice.ts`): explicit `bookMeta.narratorCredit` → cast character with `id === 'narrator'` → first character → null (the "narrated by …" phrase is suppressed).
 - `book-meta-slice` shape: `{ draft: Partial<EditableBookMeta> | null, saved: Record<bookId, EditableBookMeta> }`. The draft is the in-flight edit buffer; `selectEffectiveMeta` overlays it on top of `saved[bookId]` so the header updates live as the user types.
@@ -38,6 +41,7 @@ The "ready to listen" view shows the cover, audiobook metadata, chapter list wit
 - Hydration: `layout.tsx`'s per-book hydrate dispatches `bookMeta/hydrateFromBookState` after the on-disk fetch lands. A separate fallback effect seeds `bookMeta` from the matching `library.books` entry when the on-disk fetch is unavailable (mock mode, fresh import before state.json exists). The on-disk fetch overwrites it on arrival.
 
 ### Chapter playback / mini-player
+
 - `mockGetChapterAudio` returns `{ url: null, durationSec, peaks: float[240], sampleRate: 44100, segments: [] }`. Null `url` is the documented signal for "no live audio" and the UI must handle it without crashing.
 - `realGetChapterAudio` does a real `GET /api/books/:bookId/chapters/:chapterId/audio` fetch (`src/lib/api.ts:1577-1584`); the server route at `server/src/routes/chapter-audio.ts` resolves the chapter's on-disk MP3 and returns the JSON meta `{ url, durationSec, peaks: [], sampleRate, segments }`. Non-2xx throws an `Error("Chapter audio fetch failed (status): detail")` that the mini-player surfaces via `setError`.
 - The meta endpoint's `url` is itself a route on the same server (`audio.mp3`); the server `sendFile`s with `Accept-Ranges: bytes` so the `<audio>` element can seek via 206 partial-content responses. `findChapterAudio` (`server/src/workspace/chapter-audio-file.ts`) is the single-format probe.
@@ -47,6 +51,7 @@ The "ready to listen" view shows the cover, audiobook metadata, chapter list wit
 - Server-side regression coverage: `server/src/routes/chapter-audio.test.ts` pins the meta endpoint, the MP3 file endpoint, range requests, and 404s (including `audio.wav` → 404 since the route isn't registered).
 
 ### Coming-soon affordances
+
 - Every still-mocked interactive surface (six listener-app cards + their "Send to …" buttons; three download tiles + their Download buttons; export-queue per-row actions; header "Download" + "Share"; cover Replace + Regenerate) is rendered `disabled` with muted styling and a `<ComingSoonBadge/>` (`src/components/primitives.tsx`).
 - Each mocked section carries a `<MockedPreviewBanner>` (also in primitives) above the cards/rows so a smoke pass can tell the section apart from a shipped one at a glance. Three banners total: listener-apps, export-queue, downloads.
 - PocketBook is present as the sixth listener-app entry (`src/data/listener-apps.ts`) and will be the first to flip from mocked to live when real handoff lands.
@@ -57,11 +62,13 @@ The "ready to listen" view shows the cover, audiobook metadata, chapter list wit
 Run against the canonical e2e manuscript (`~/Downloads/the Coalfall Commission.txt`, see project CLAUDE.md).
 
 ### Top section reads from the store
+
 1. Open a confirmed book; URL ends in `#/books/<id>/listen`.
-2. The h1 in the header shows the book's *actual* title (the one entered at confirm), not "The Northern Star". The cover-art h2 in the corner shows the same string. The "By X" line shows the actual author. The "narrated by Y" suffix shows the cast's narrator character (or whatever you set in the metadata editor — see below).
+2. The h1 in the header shows the book's _actual_ title (the one entered at confirm), not "The Northern Star". The cover-art h2 in the corner shows the same string. The "By X" line shows the actual author. The "narrated by Y" suffix shows the cast's narrator character (or whatever you set in the metadata editor — see below).
 3. The cover-art panel is painted with `library.books.<this book>.coverGradient`, not the fallback peach.
 
 ### Metadata editor end-to-end
+
 4. Scroll to the "Edit the audiobook details" card. Every field is a controlled input pre-filled from the current saved snapshot.
 5. Edit the **Title** field. The h1 at the top of the page updates live as you type (the draft is overlaid via `selectEffectiveMeta`). The Save button enables.
 6. Click **Cancel** → the field reverts to the saved value, the h1 reverts, Save disables.
@@ -69,17 +76,20 @@ Run against the canonical e2e manuscript (`~/Downloads/the Coalfall Commission.t
 8. Refresh the page. All six edits survive — the persistence middleware fired a `PUT /api/books/:bookId/state` with slice='state' and the body included all six editable fields; the server wrote `.audiobook/state.json` and on reload the hydration seeded the slice from disk.
 
 ### Coming-soon affordances
+
 9. The "Listen on your favourite app" section shows a single peach-tinted "Mocked preview" banner. Six cards (incl. PocketBook) each carry a "SOON" badge next to the app name and a disabled "Send to …" button. Hovering the button shows the "— coming soon" tooltip; clicking does **not** open the walkthrough modal.
 10. The "Export queue" section shows its own banner. Per-row action icons (copy, download, retry, remove) are all disabled.
 11. The "Or download a file" section shows the third banner. All three Download buttons are disabled with the SOON badge in the tile header.
 12. In the metadata editor, **Replace cover** and **Regenerate cover** are disabled with SOON badges.
 
 ### Chapter playback (mock mode)
+
 13. Click play on a chapter → `setCurrentTrack(chapterId)`; mini-player slides up showing the chapter title and duration. No audio plays (mock `url: null`); UI does not crash.
 14. Click mini-player next / prev → `ui.currentTrack` increments/decrements.
 15. Click close on mini-player → `setCurrentTrack(null)`; mini-player hides.
 
 ### Chapter playback (real mode regression)
+
 16. With `VITE_USE_MOCKS=false`, server + sidecar running, generate at least one chapter end-to-end first so an MP3 lives on disk under `<bookDir>/audio/<slug>.mp3`. Open the Listen view, click play on that chapter. The mini-player slides up, the `<audio>` element's `src` points at `/api/books/:bookId/chapters/:chapterId/audio.mp3`, audio plays, the scrubber advances in real time. Click somewhere mid-bar → `<audio>.currentTime` jumps and playback resumes from there (range request returns 206). Click next / prev to swap chapters → previous chapter's audio stops synchronously; new chapter loads.
 17. Negative regression: click play on a chapter that has no audio yet. The mini-player surfaces "Chapter audio fetch failed (404): Chapter audio not found." via the `setError` path; the rest of the Listen view continues to work.
 

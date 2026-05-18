@@ -55,7 +55,7 @@ function bookSkeleton(
       isStandalone: true,
       manuscriptFile: 'manuscript.txt',
       castConfirmed: !!opts.castConfirmed,
-      chapters: chapters.map(c => ({ id: c.id, title: `Chapter ${c.id}`, slug: c.slug })),
+      chapters: chapters.map((c) => ({ id: c.id, title: `Chapter ${c.id}`, slug: c.slug })),
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -65,10 +65,7 @@ function bookSkeleton(
 }
 
 function writeCast(bookDir: string, characters: Array<{ id: string; voiceId?: string }>) {
-  writeFileSync(
-    join(bookDir, '.audiobook', 'cast.json'),
-    JSON.stringify({ characters }),
-  );
+  writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters }));
 }
 
 function writeSegments(audioRoot: string, slug: string, durationSec: number) {
@@ -90,9 +87,7 @@ function writeSegments(audioRoot: string, slug: string, durationSec: number) {
 function flatten() {
   /* Convenience: scanLibrary returns the 3-level hierarchy; tests assert
      on a flat list since each test fixture only writes one book per case. */
-  return scanLibrary().then(r =>
-    r.authors.flatMap(a => a.series.flatMap(s => s.books)),
-  );
+  return scanLibrary().then((r) => r.authors.flatMap((a) => a.series.flatMap((s) => s.books)));
 }
 
 beforeAll(async () => {
@@ -123,7 +118,7 @@ describe('scanLibrary derived stats', () => {
   it('analysing book (state-only, no cast) reports zero voices/characters and no runtime', async () => {
     bookSkeleton('Analysing Book');
     const books = await flatten();
-    const b = books.find(x => x.title === 'Analysing Book')!;
+    const b = books.find((x) => x.title === 'Analysing Book')!;
     expect(b.status).toBe('analysing');
     expect(b.characterCount).toBe(0);
     expect(b.voiceCount).toBe(0);
@@ -141,7 +136,7 @@ describe('scanLibrary derived stats', () => {
       { id: 'Wren', voiceId: 'voice-bright-young' },
     ]);
     const books = await flatten();
-    const b = books.find(x => x.title === 'Cast Pending Book')!;
+    const b = books.find((x) => x.title === 'Cast Pending Book')!;
     expect(b.status).toBe('cast_pending');
     expect(b.characterCount).toBe(3);
     expect(b.voiceCount).toBe(3);
@@ -156,10 +151,10 @@ describe('scanLibrary derived stats', () => {
     writeCast(bookDir, [
       { id: 'narrator' },
       { id: 'Hespa', voiceId: 'voice-elder-female' },
-      { id: 'Corvin',   voiceId: 'voice-elder-female' },
+      { id: 'Corvin', voiceId: 'voice-elder-female' },
     ]);
     const books = await flatten();
-    const b = books.find(x => x.title === 'Shared Voice Book')!;
+    const b = books.find((x) => x.title === 'Shared Voice Book')!;
     expect(b.characterCount).toBe(3);
     expect(b.voiceCount).toBe(2);
   });
@@ -174,10 +169,7 @@ describe('scanLibrary derived stats', () => {
       ],
     });
     await seedAnalysisCache(`m_${bookId}`, [1, 2, 3]);
-    writeCast(bookDir, [
-      { id: 'narrator' },
-      { id: 'Marlow', voiceId: 'voice-warm-male' },
-    ]);
+    writeCast(bookDir, [{ id: 'narrator' }, { id: 'Marlow', voiceId: 'voice-warm-male' }]);
     /* 1500 + 1500 + 600 = 3600 sec = 60 min = '1h 0m' */
     writeSegments(audioRoot, 'ch-01', 1500);
     writeSegments(audioRoot, 'ch-02', 1500);
@@ -189,7 +181,7 @@ describe('scanLibrary derived stats', () => {
     writeFileSync(join(audioRoot, 'ch-03.mp3'), '');
 
     const books = await flatten();
-    const b = books.find(x => x.title === 'Complete Book')!;
+    const b = books.find((x) => x.title === 'Complete Book')!;
     expect(b.status).toBe('complete');
     expect(b.characterCount).toBe(2);
     expect(b.voiceCount).toBe(2);
@@ -206,7 +198,7 @@ describe('scanLibrary derived stats', () => {
     writeSegments(audioRoot, 'only-ch', 47 * 60); // 47 min
     writeFileSync(join(audioRoot, 'only-ch.mp3'), '');
     const books = await flatten();
-    const b = books.find(x => x.title === 'Short Book')!;
+    const b = books.find((x) => x.title === 'Short Book')!;
     expect(b.runtime).toBe('47m');
   });
 
@@ -226,7 +218,7 @@ describe('scanLibrary derived stats', () => {
     writeSegments(audioRoot, 'p-01', 30 * 60); // 30 min
     writeFileSync(join(audioRoot, 'p-01.mp3'), '');
     const books = await flatten();
-    const b = books.find(x => x.title === 'Partial Book')!;
+    const b = books.find((x) => x.title === 'Partial Book')!;
     expect(b.status).toBe('generating');
     expect(b.runtime).toBe('30m');
   });
@@ -238,7 +230,7 @@ describe('scanLibrary derived stats', () => {
     await seedAnalysisCache(`m_${bookId}`, [1]);
     writeFileSync(join(bookDir, '.audiobook', 'cast.json'), '{not valid json');
     const books = await flatten();
-    const b = books.find(x => x.title === 'Broken Cast Book')!;
+    const b = books.find((x) => x.title === 'Broken Cast Book')!;
     /* Book row still renders; counts stay at 0 (the badge will show '—').
        Status falls back to 'analysing' — there's nothing to confirm on an
        unparseable cast file. */
@@ -255,12 +247,9 @@ describe('scanLibrary derived stats', () => {
        back to the analysing view to finish the run. */
     const { bookDir, bookId } = bookSkeleton('Empty Cast Book');
     await seedAnalysisCache(`m_${bookId}`, [1]);
-    writeFileSync(
-      join(bookDir, '.audiobook', 'cast.json'),
-      JSON.stringify({ characters: [] }),
-    );
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters: [] }));
     const books = await flatten();
-    const b = books.find(x => x.title === 'Empty Cast Book')!;
+    const b = books.find((x) => x.title === 'Empty Cast Book')!;
     expect(b.status).toBe('analysing');
     expect(b.characterCount).toBe(0);
     expect(b.voiceCount).toBe(0);
@@ -284,12 +273,9 @@ describe('scanLibrary derived stats', () => {
     });
     /* 2 of 4 chapters analysed. */
     await seedAnalysisCache(`m_${bookId}`, [1, 2]);
-    writeCast(bookDir, [
-      { id: 'narrator' },
-      { id: 'Marlow', voiceId: 'voice-warm-male' },
-    ]);
+    writeCast(bookDir, [{ id: 'narrator' }, { id: 'Marlow', voiceId: 'voice-warm-male' }]);
     const books = await flatten();
-    const b = books.find(x => x.title === 'Half-Done Book')!;
+    const b = books.find((x) => x.title === 'Half-Done Book')!;
     expect(b.status).toBe('analysing');
     expect(b.progress).toBeCloseTo(0.5, 5);
   });
@@ -335,12 +321,9 @@ describe('scanLibrary derived stats', () => {
     );
     /* Cache covers only the active chapters (3 + 4). */
     await seedAnalysisCache(`m_${bookId}`, [3, 4]);
-    writeCast(bookDir, [
-      { id: 'narrator' },
-      { id: 'Marlow', voiceId: 'voice-warm-male' },
-    ]);
+    writeCast(bookDir, [{ id: 'narrator' }, { id: 'Marlow', voiceId: 'voice-warm-male' }]);
     const books = await flatten();
-    const b = books.find(x => x.title === 'Excluded-Heavy Book')!;
+    const b = books.find((x) => x.title === 'Excluded-Heavy Book')!;
     expect(b.status).toBe('cast_pending');
     expect(b.chapterCount).toBe(2);
   });
@@ -360,7 +343,7 @@ describe('scanLibrary derived stats', () => {
     writeFileSync(join(audioRoot, 'ms-01.mp3'), '');
     writeFileSync(join(audioRoot, 'ms-02.mp3'), '');
     const books = await flatten();
-    const b = books.find(x => x.title === 'Mixed Segments Book')!;
+    const b = books.find((x) => x.title === 'Mixed Segments Book')!;
     /* Only ms-01's 10 minutes is counted; ms-02's bad JSON doesn't poison
        the whole row. */
     expect(b.runtime).toBe('10m');
@@ -407,9 +390,7 @@ describe('scanLibrary backfills audioModelKey from segments.json', () => {
   it('leaves an already-stamped chapter untouched and does not bump updatedAt', async () => {
     const { bookDir, audioRoot, bookId } = bookSkeleton('Already-Stamped Book', {
       castConfirmed: true,
-      chapters: [
-        { id: 1, slug: 'as-01' },
-      ],
+      chapters: [{ id: 1, slug: 'as-01' }],
     });
     await seedAnalysisCache(`m_${bookId}`, [1]);
     writeCast(bookDir, [{ id: 'narrator' }]);

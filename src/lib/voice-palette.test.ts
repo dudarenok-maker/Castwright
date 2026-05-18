@@ -27,23 +27,33 @@ describe('gradientForTtsVoice', () => {
 
   it('two different voices within the same bucket get different gradients', () => {
     expect(gradientForTtsVoice('Damien Black')).not.toEqual(gradientForTtsVoice('Wulf Carlevaro'));
-    expect(gradientForTtsVoice('Claribel Dervla')).not.toEqual(gradientForTtsVoice('Alison Dietlinde'));
+    expect(gradientForTtsVoice('Claribel Dervla')).not.toEqual(
+      gradientForTtsVoice('Alison Dietlinde'),
+    );
   });
 
   it('every routed Coqui voice maps to a defined gradient', () => {
-    for (const profile of Object.keys(COQUI_PROFILE_VOICES) as Array<keyof typeof COQUI_PROFILE_VOICES>) {
+    for (const profile of Object.keys(COQUI_PROFILE_VOICES) as Array<
+      keyof typeof COQUI_PROFILE_VOICES
+    >) {
       for (const name of COQUI_PROFILE_VOICES[profile]) {
         const grad = gradientForTtsVoice(name);
-        expect(grad, `${name} (${profile}) should resolve to a bucket gradient`).toEqual(BUCKET_GRADIENTS[profile][COQUI_PROFILE_VOICES[profile].indexOf(name) as 0 | 1]);
+        expect(grad, `${name} (${profile}) should resolve to a bucket gradient`).toEqual(
+          BUCKET_GRADIENTS[profile][COQUI_PROFILE_VOICES[profile].indexOf(name) as 0 | 1],
+        );
       }
     }
   });
 
   it('every routed Gemini voice maps to a defined gradient', () => {
-    for (const profile of Object.keys(GEMINI_PROFILE_VOICES) as Array<keyof typeof GEMINI_PROFILE_VOICES>) {
+    for (const profile of Object.keys(GEMINI_PROFILE_VOICES) as Array<
+      keyof typeof GEMINI_PROFILE_VOICES
+    >) {
       for (const name of GEMINI_PROFILE_VOICES[profile]) {
         const grad = gradientForTtsVoice(name);
-        expect(grad, `${name} (${profile}) should resolve to a bucket gradient`).toEqual(BUCKET_GRADIENTS[profile][GEMINI_PROFILE_VOICES[profile].indexOf(name) as 0 | 1]);
+        expect(grad, `${name} (${profile}) should resolve to a bucket gradient`).toEqual(
+          BUCKET_GRADIENTS[profile][GEMINI_PROFILE_VOICES[profile].indexOf(name) as 0 | 1],
+        );
       }
     }
   });

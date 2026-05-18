@@ -21,8 +21,10 @@ import './styles.css';
   try {
     const raw = window.localStorage.getItem('persist:ui');
     if (!raw) {
-      document.documentElement.dataset.theme =
-        window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = window.matchMedia('(prefers-color-scheme: dark)')
+        .matches
+        ? 'dark'
+        : 'light';
       return;
     }
     const wrapper = JSON.parse(raw) as Record<string, string>;
@@ -30,11 +32,14 @@ import './styles.css';
     const themeOverride = wrapper.themeOverride
       ? (JSON.parse(wrapper.themeOverride) as 'light' | 'dark' | 'system' | null)
       : null;
-    const mode = themeOverride
-      ?? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    const mode =
+      themeOverride ??
+      (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     document.documentElement.dataset.theme =
       mode === 'system'
-        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        ? window.matchMedia('(prefers-color-scheme: dark)').matches
+          ? 'dark'
+          : 'light'
         : mode;
   } catch {
     /* localStorage disabled or JSON malformed — fall through with no
@@ -54,6 +59,8 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'e2e') {
 
 createRoot(document.getElementById('root')!).render(
   <ErrorBoundary>
-    <Provider store={store}><RouterProvider router={router}/></Provider>
-  </ErrorBoundary>
+    <Provider store={store}>
+      <RouterProvider router={router} />
+    </Provider>
+  </ErrorBoundary>,
 );

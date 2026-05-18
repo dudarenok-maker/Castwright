@@ -47,16 +47,14 @@ describe('POST /api/books — binary preservation', () => {
     expect(importRes.status).toBe(200);
     const tempId = importRes.body.tempId;
 
-    const confirmRes = await request(app)
-      .post('/api/books')
-      .send({
-        tempId,
-        author: 'Verbatim Author',
-        title:  'Verbatim Book',
-        series: 'Verbatim Series',
-        seriesPosition: 1,
-        isStandalone: false,
-      });
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId,
+      author: 'Verbatim Author',
+      title: 'Verbatim Book',
+      series: 'Verbatim Series',
+      seriesPosition: 1,
+      isStandalone: false,
+    });
     expect(confirmRes.status).toBe(201);
     const bookDir = confirmRes.body.paths.bookDir;
     const manuscriptPath = join(bookDir, 'manuscript.epub');
@@ -83,15 +81,13 @@ describe('POST /api/books — binary preservation', () => {
     expect(importRes.status).toBe(200);
     const tempId = importRes.body.tempId;
 
-    const confirmRes = await request(app)
-      .post('/api/books')
-      .send({
-        tempId,
-        author: 'Markdown Author',
-        title:  'Markdown Book',
-        seriesPosition: null,
-        isStandalone: true,
-      });
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId,
+      author: 'Markdown Author',
+      title: 'Markdown Book',
+      seriesPosition: null,
+      isStandalone: true,
+    });
     expect(confirmRes.status).toBe(201);
     const bookDir = confirmRes.body.paths.bookDir;
     const manuscriptPath = join(bookDir, 'manuscript.md');
@@ -139,7 +135,7 @@ describe('POST /api/import → POST /api/books — excluded chapters round-trip'
       expect(c.wordCount).toBeGreaterThanOrEqual(0);
     }
     const dedication = chapters.find((c: { title: string }) => /dedication/i.test(c.title));
-    const real      = chapters.find((c: { title: string }) => /chapter\s*one/i.test(c.title));
+    const real = chapters.find((c: { title: string }) => /chapter\s*one/i.test(c.title));
     expect(dedication).toBeTruthy();
     expect(real).toBeTruthy();
     expect(real.wordCount).toBeGreaterThan(dedication.wordCount);
@@ -177,11 +173,11 @@ describe('POST /api/import → POST /api/books — excluded chapters round-trip'
         .slice(0, 60);
     }
     const dedicationSlug = (() => {
-      const c = chapters.find(c => /dedication/i.test(c.title))!;
+      const c = chapters.find((c) => /dedication/i.test(c.title))!;
       return `${String(c.id).padStart(2, '0')}-${slugify(c.title)}`;
     })();
     const aboutSlug = (() => {
-      const c = chapters.find(c => /about/i.test(c.title))!;
+      const c = chapters.find((c) => /about/i.test(c.title))!;
       return `${String(c.id).padStart(2, '0')}-${slugify(c.title)}`;
     })();
 
@@ -190,13 +186,15 @@ describe('POST /api/import → POST /api/books — excluded chapters round-trip'
       .send({
         tempId,
         author: 'Roundtrip Author',
-        title:  'Roundtrip Book',
+        title: 'Roundtrip Book',
         seriesPosition: null,
         isStandalone: true,
         excludedSlugs: [dedicationSlug, aboutSlug],
       });
     expect(confirmRes.status).toBe(201);
-    const stateJson = JSON.parse(readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'));
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
 
     /* state.json must have excluded=true on the two we flagged and not
        set on the real chapter. */
@@ -214,17 +212,17 @@ describe('POST /api/import → POST /api/books — excluded chapters round-trip'
     const importRes = await request(app)
       .post('/api/import')
       .send({ text: md, fileName: 'no-exclusions.md' });
-    const confirmRes = await request(app)
-      .post('/api/books')
-      .send({
-        tempId: importRes.body.tempId,
-        author: 'No Excl Author',
-        title:  'No Excl Book',
-        seriesPosition: null,
-        isStandalone: true,
-      });
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'No Excl Author',
+      title: 'No Excl Book',
+      seriesPosition: null,
+      isStandalone: true,
+    });
     expect(confirmRes.status).toBe(201);
-    const stateJson = JSON.parse(readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'));
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
     for (const c of stateJson.chapters as Array<{ excluded?: boolean }>) {
       expect(c.excluded).toBeFalsy();
     }

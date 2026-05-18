@@ -44,8 +44,9 @@ export function useTtsLifecycle(): TtsLifecycle {
   useEffect(() => {
     let cancelled = false;
     const probe = () => {
-      api.getSidecarHealth()
-        .then(h => {
+      api
+        .getSidecarHealth()
+        .then((h) => {
           if (cancelled) return;
           setSidecarHealth(h);
           setPendingPillState(null);
@@ -58,7 +59,10 @@ export function useTtsLifecycle(): TtsLifecycle {
     };
     probe();
     const id = setInterval(probe, 30_000);
-    return () => { cancelled = true; clearInterval(id); };
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [healthProbeKey]);
 
   const state: ModelControlState = (() => {
@@ -108,7 +112,7 @@ export function useTtsLifecycle(): TtsLifecycle {
       setLoadErrorNotice(`Couldn't reach the sidecar: ${(e as Error).message ?? 'fetch failed'}`);
       setPendingPillState(null);
     }
-    setHealthProbeKey(k => k + 1);
+    setHealthProbeKey((k) => k + 1);
   };
 
   const onStop = async () => {
@@ -125,7 +129,7 @@ export function useTtsLifecycle(): TtsLifecycle {
       setLoadErrorNotice(`Couldn't reach the sidecar: ${(e as Error).message ?? 'fetch failed'}`);
       setPendingPillState(null);
     }
-    setHealthProbeKey(k => k + 1);
+    setHealthProbeKey((k) => k + 1);
   };
 
   const dismissNotices = () => {

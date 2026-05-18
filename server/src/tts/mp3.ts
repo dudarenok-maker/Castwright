@@ -24,14 +24,22 @@ export async function encodePcmToMp3(
   const quality = opts.quality ?? 2;
 
   const args = [
-    '-loglevel', 'error',
-    '-f', 's16le',
-    '-ar', String(sampleRate),
-    '-ac', '1',
-    '-i', 'pipe:0',
-    '-c:a', 'libmp3lame',
-    '-q:a', String(quality),
-    '-f', 'mp3',
+    '-loglevel',
+    'error',
+    '-f',
+    's16le',
+    '-ar',
+    String(sampleRate),
+    '-ac',
+    '1',
+    '-i',
+    'pipe:0',
+    '-c:a',
+    'libmp3lame',
+    '-q:a',
+    String(quality),
+    '-f',
+    'mp3',
     'pipe:1',
   ];
 
@@ -41,19 +49,21 @@ export async function encodePcmToMp3(
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
-    child.stdout.on('data', chunk => stdoutChunks.push(chunk));
-    child.stderr.on('data', chunk => stderrChunks.push(chunk));
+    child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
+    child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
 
-    child.on('error', err => {
+    child.on('error', (err) => {
       /* spawn failure: ffmpeg not on PATH. Surface a friendly hint — the
          preflight in start-app.ps1 should normally prevent this. */
-      reject(new Error(
-        `Failed to spawn ffmpeg: ${err.message}. ` +
-        `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
-      ));
+      reject(
+        new Error(
+          `Failed to spawn ffmpeg: ${err.message}. ` +
+            `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
+        ),
+      );
     });
 
-    child.on('close', code => {
+    child.on('close', (code) => {
       if (code === 0) {
         resolve(Buffer.concat(stdoutChunks));
       } else {
@@ -62,7 +72,7 @@ export async function encodePcmToMp3(
       }
     });
 
-    child.stdin.on('error', err => {
+    child.stdin.on('error', (err) => {
       /* EPIPE if ffmpeg dies before we finish writing the PCM. The 'close'
          handler will report the real reason via stderr; swallow here so the
          promise doesn't reject twice. */

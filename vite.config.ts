@@ -16,9 +16,9 @@ export default defineConfig({
     port: 5173,
     open: true,
     proxy: {
-      '/api':   { target: 'http://localhost:8080', changeOrigin: true },
+      '/api': { target: 'http://localhost:8080', changeOrigin: true },
       '/audio': { target: 'http://localhost:8080', changeOrigin: true },
     },
   },
-  build:  { outDir: 'dist', sourcemap: true },
+  build: { outDir: 'dist', sourcemap: true },
 });

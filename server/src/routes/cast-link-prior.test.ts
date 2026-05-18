@@ -26,9 +26,9 @@ import request from 'supertest';
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const KEEPER_BOOK = 'The Hollow Tide';
-const NEW_BOOK    = 'New the Hollow Tide Book';
-const OTHER_BOOK  = 'Other Series Book';
-const STANDALONE  = 'Some Standalone';
+const NEW_BOOK = 'New the Hollow Tide Book';
+const OTHER_BOOK = 'Other Series Book';
+const STANDALONE = 'Some Standalone';
 
 let workspaceRoot: string;
 let app: Express;
@@ -39,13 +39,26 @@ let standaloneBookId: string;
 
 const initialKeeperCast = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
-  { id: 'Hart',      name: 'Hart',      role: 'character', color: 'unset', voiceId: 'v_Hart', aliases: ['Hartwell'] },
-  { id: 'Wren',   name: 'Wren',   role: 'character', color: 'unset', voiceId: 'v_Wren' },
+  {
+    id: 'Hart',
+    name: 'Hart',
+    role: 'character',
+    color: 'unset',
+    voiceId: 'v_Hart',
+    aliases: ['Hartwell'],
+  },
+  { id: 'Wren', name: 'Wren', role: 'character', color: 'unset', voiceId: 'v_Wren' },
 ];
 
 const initialNewBookCast = [
-  { id: 'narrator',             name: 'Narrator',             role: 'narrator',  color: 'unset' },
-  { id: 'Hartwell-alvin-Vale',  name: 'Hartwell Brennan Vale',  role: 'character', color: 'unset', aliases: ['Bren'] },
+  { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+  {
+    id: 'Hartwell-alvin-Vale',
+    name: 'Hartwell Brennan Vale',
+    role: 'character',
+    color: 'unset',
+    aliases: ['Bren'],
+  },
 ];
 
 function writeBookOnDisk(
@@ -59,27 +72,35 @@ function writeBookOnDisk(
 ) {
   const dir = join(workspace, 'books', author, series, title);
   mkdirSync(join(dir, '.audiobook'), { recursive: true });
-  writeFileSync(join(dir, '.audiobook', 'state.json'), JSON.stringify({
-    bookId,
-    manuscriptId: `m_${bookId}`,
-    title,
-    author,
-    series,
-    seriesPosition: null,
-    isStandalone: opts.isStandalone === true,
-    manuscriptFile: 'manuscript.txt',
-    castConfirmed: true,
-    chapters: [],
-    coverGradient: ['#000', '#fff'],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }));
+  writeFileSync(
+    join(dir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId,
+      manuscriptId: `m_${bookId}`,
+      title,
+      author,
+      series,
+      seriesPosition: null,
+      isStandalone: opts.isStandalone === true,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed: true,
+      chapters: [],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
   writeFileSync(join(dir, 'manuscript.txt'), 'placeholder');
   writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters }));
   return dir;
 }
 
-function readCast(workspace: string, author: string, series: string, title: string): { characters: Array<Record<string, unknown>> } {
+function readCast(
+  workspace: string,
+  author: string,
+  series: string,
+  title: string,
+): { characters: Array<Record<string, unknown>> } {
   const path = join(workspace, 'books', author, series, title, '.audiobook', 'cast.json');
   return JSON.parse(readFileSync(path, 'utf8'));
 }
@@ -92,10 +113,10 @@ beforeAll(async () => {
     import('./cast-link-prior.js'),
     import('../workspace/paths.js'),
   ]);
-  keeperBookId      = makeBookId(AUTHOR, SERIES, KEEPER_BOOK);
-  newBookId         = makeBookId(AUTHOR, SERIES, NEW_BOOK);
-  otherBookId       = makeBookId(AUTHOR, 'Different Series', OTHER_BOOK);
-  standaloneBookId  = makeBookId(AUTHOR, SERIES, STANDALONE);
+  keeperBookId = makeBookId(AUTHOR, SERIES, KEEPER_BOOK);
+  newBookId = makeBookId(AUTHOR, SERIES, NEW_BOOK);
+  otherBookId = makeBookId(AUTHOR, 'Different Series', OTHER_BOOK);
+  standaloneBookId = makeBookId(AUTHOR, SERIES, STANDALONE);
 
   app = express();
   app.use(express.json());
@@ -106,10 +127,16 @@ beforeAll(async () => {
    bleed into each other. Cheap (4 books × 2 small files each). */
 beforeEach(() => {
   writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, initialKeeperCast);
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK,    newBookId,    initialNewBookCast);
-  writeBookOnDisk(workspaceRoot, AUTHOR, 'Different Series', OTHER_BOOK, otherBookId,
-    [{ id: 'unrelated', name: 'Unrelated', role: 'character', color: 'unset' }]);
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, STANDALONE, standaloneBookId,
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, initialNewBookCast);
+  writeBookOnDisk(workspaceRoot, AUTHOR, 'Different Series', OTHER_BOOK, otherBookId, [
+    { id: 'unrelated', name: 'Unrelated', role: 'character', color: 'unset' },
+  ]);
+  writeBookOnDisk(
+    workspaceRoot,
+    AUTHOR,
+    SERIES,
+    STANDALONE,
+    standaloneBookId,
     [{ id: 'lonely', name: 'Lonely', role: 'character', color: 'unset' }],
     { isStandalone: true },
   );
@@ -221,7 +248,9 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
       voiceId: 'v_Hart',
     });
 
-    const HartOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(c => c.id === 'Hart');
+    const HartOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'Hart',
+    );
     expect(HartOnDisk).toBeDefined();
     expect(HartOnDisk?.aliases).toEqual(['Hartwell', 'Hartwell Brennan Vale', 'Bren']);
   });
@@ -246,7 +275,7 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     expect(afterSecond).toEqual(beforeSecond);
   });
 
-  it('does not modify the source book\'s cast.json', async () => {
+  it("does not modify the source book's cast.json", async () => {
     const before = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK);
     await callLink(newBookId, {
       sourceCharacterId: 'Hartwell-alvin-Vale',
@@ -261,7 +290,13 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     /* Edge case: source.aliases already contains the target's name.
        After the merge, target.aliases should NOT list its own name. */
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [
-      { id: 'Hartwell-alvin-Vale', name: 'Hartwell Brennan Vale', role: 'character', color: 'unset', aliases: ['Hart'] },
+      {
+        id: 'Hartwell-alvin-Vale',
+        name: 'Hartwell Brennan Vale',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Hart'],
+      },
     ]);
     const res = await callLink(newBookId, {
       sourceCharacterId: 'Hartwell-alvin-Vale',
@@ -269,7 +304,9 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
       targetCharacterId: 'Hart',
     });
     expect(res.status).toBe(200);
-    const HartOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(c => c.id === 'Hart');
+    const HartOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'Hart',
+    );
     /* "Hart" was in source's aliases, but it equals target.name → filtered. */
     expect(HartOnDisk?.aliases).not.toContain('Hart');
     expect(HartOnDisk?.aliases).toContain('Hartwell Brennan Vale');

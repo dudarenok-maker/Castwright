@@ -83,12 +83,12 @@ export function diffCatalogAgainstModel(
     (modelSet.has(name) ? validInCatalog : invalidInCatalog).push(name);
   }
 
-  const unusedInModel = modelSpeakers.filter(s => !catalogNames.has(s));
+  const unusedInModel = modelSpeakers.filter((s) => !catalogNames.has(s));
 
   const healthyProfiles: string[] = [];
   const degradedProfiles: string[] = [];
   for (const [profile, options] of Object.entries(COQUI_PROFILE_VOICES)) {
-    const anyInvalid = options.some(o => !modelSet.has(o));
+    const anyInvalid = options.some((o) => !modelSet.has(o));
     (anyInvalid ? degradedProfiles : healthyProfiles).push(profile);
   }
 
@@ -115,7 +115,7 @@ async function fetchSpeakersOnce(url: string, timeoutMs: number): Promise<string
   try {
     const r = await fetch(target, { signal: controller.signal });
     if (!r.ok) return null;
-    const body = await r.json().catch(() => null) as { coqui?: string[] } | null;
+    const body = (await r.json().catch(() => null)) as { coqui?: string[] } | null;
     const list = body?.coqui;
     if (!Array.isArray(list) || list.length === 0) return null;
     return list;
@@ -132,12 +132,7 @@ async function fetchSpeakersOnce(url: string, timeoutMs: number): Promise<string
     Promise that resolves with the final audit (or null if all attempts
     failed within the window). Never throws. */
 export async function runCatalogAudit(opts: AuditOptions): Promise<CoquiCatalogAudit | null> {
-  const {
-    sidecarUrl,
-    maxAttempts = 24,
-    attemptDelayMs = 5_000,
-    probeTimeoutMs = 2_000,
-  } = opts;
+  const { sidecarUrl, maxAttempts = 24, attemptDelayMs = 5_000, probeTimeoutMs = 2_000 } = opts;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const speakers = await fetchSpeakersOnce(sidecarUrl, probeTimeoutMs);
@@ -148,15 +143,15 @@ export async function runCatalogAudit(opts: AuditOptions): Promise<CoquiCatalogA
       return audit;
     }
     if (attempt < maxAttempts - 1) {
-      await new Promise(r => setTimeout(r, attemptDelayMs));
+      await new Promise((r) => setTimeout(r, attemptDelayMs));
     }
   }
   // eslint-disable-next-line no-console
   console.warn(
     `[tts:catalog-audit] Could not reach ${sidecarUrl}/speakers within ` +
-    `${(maxAttempts * attemptDelayMs / 1000).toFixed(0)}s — skipping audit. ` +
-    `Start the sidecar and run \`curl ${sidecarUrl}/api/sidecar/catalog-audit\` ` +
-    `(or restart the server) to retry.`,
+      `${((maxAttempts * attemptDelayMs) / 1000).toFixed(0)}s — skipping audit. ` +
+      `Start the sidecar and run \`curl ${sidecarUrl}/api/sidecar/catalog-audit\` ` +
+      `(or restart the server) to retry.`,
   );
   return null;
 }
@@ -178,7 +173,9 @@ function logAudit(audit: CoquiCatalogAudit): void {
   if (audit.invalidInCatalog.length === 0) {
     log(`  ✓ All ${audit.validInCatalog.length} catalog names are present in the model.`);
   } else {
-    log(`  ✗ ${audit.invalidInCatalog.length} catalog name(s) NOT in the model — fix server/src/tts/voice-mapping.ts:`);
+    log(
+      `  ✗ ${audit.invalidInCatalog.length} catalog name(s) NOT in the model — fix server/src/tts/voice-mapping.ts:`,
+    );
     for (const name of audit.invalidInCatalog) {
       log(`      • "${name}"`);
     }
@@ -194,11 +191,15 @@ function logAudit(audit: CoquiCatalogAudit): void {
 
   if (audit.unusedInModel.length > 0 && audit.unusedInModel.length <= 12) {
     log('');
-    log(`  i ${audit.unusedInModel.length} model speaker(s) unused by the catalog (candidates if you need more variety):`);
+    log(
+      `  i ${audit.unusedInModel.length} model speaker(s) unused by the catalog (candidates if you need more variety):`,
+    );
     log(`      ${audit.unusedInModel.join(', ')}`);
   } else if (audit.unusedInModel.length > 12) {
     log('');
-    log(`  i ${audit.unusedInModel.length} model speaker(s) unused by the catalog — see GET /api/sidecar/catalog-audit.`);
+    log(
+      `  i ${audit.unusedInModel.length} model speaker(s) unused by the catalog — see GET /api/sidecar/catalog-audit.`,
+    );
   }
   log(line);
   log('');

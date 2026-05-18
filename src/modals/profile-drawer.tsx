@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react';
-import { IconClose, IconWaveform, IconRefresh, IconStar, IconLock, IconPlus, IconPause, IconSpinner } from '../lib/icons';
+import {
+  IconClose,
+  IconWaveform,
+  IconRefresh,
+  IconStar,
+  IconLock,
+  IconPlus,
+  IconPause,
+  IconSpinner,
+} from '../lib/icons';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import type { BaseVoice, TtsEngine, TtsModelKey } from '../lib/types';
 import { Avatar, VoiceSwatch, Pill, PrimaryButton } from '../components/primitives';
@@ -45,7 +54,11 @@ interface Props {
       series." Server appends source.name to target's aliases on disk and
       returns a matchedFrom payload the parent uses to seed the
       "Continuity preserved" footer. */
-  onLinkPrior?: (sourceId: string, targetBookId: string, targetCharacterId: string) => Promise<void>;
+  onLinkPrior?: (
+    sourceId: string,
+    targetBookId: string,
+    targetCharacterId: string,
+  ) => Promise<void>;
 }
 
 export interface PriorMergeCandidate {
@@ -55,50 +68,64 @@ export interface PriorMergeCandidate {
   bookTitle: string;
 }
 
-type CharGender   = NonNullable<Character['gender']>;
+type CharGender = NonNullable<Character['gender']>;
 type CharAgeRange = NonNullable<Character['ageRange']>;
 
 /* Standing background buckets the analyser's fold step creates and the
    cast-merge route auto-synthesises on first downgrade. Keep in sync with
    server/src/analyzer/fold-minor-cast.ts's MALE_BUCKET_ID /
    FEMALE_BUCKET_ID. */
-const UNKNOWN_MALE_ID   = 'unknown-male';
+const UNKNOWN_MALE_ID = 'unknown-male';
 const UNKNOWN_FEMALE_ID = 'unknown-female';
-const NARRATOR_ID       = 'narrator';
+const NARRATOR_ID = 'narrator';
 /* Discriminator for prior-book options in the merge dropdown so the
    change handler can distinguish "fold into another in-book character"
    from "link to a prior series character" without parsing bookIds
    (which contain `__` separators). Option value is
    `${PRIOR_PREFIX}${index}` for priors; the index resolves back to the
    PriorMergeCandidate via the priorByKey Map at render time. */
-const PRIOR_PREFIX      = 'prior:';
+const PRIOR_PREFIX = 'prior:';
 const GENDER_OPTIONS: Array<{ value: CharGender; label: string }> = [
-  { value: 'male',    label: 'Male' },
-  { value: 'female',  label: 'Female' },
+  { value: 'male', label: 'Male' },
+  { value: 'female', label: 'Female' },
   { value: 'neutral', label: 'Neutral' },
 ];
 const AGE_OPTIONS: Array<{ value: CharAgeRange; label: string }> = [
-  { value: 'child',   label: 'Child' },
-  { value: 'teen',    label: 'Teen' },
-  { value: 'adult',   label: 'Adult' },
+  { value: 'child', label: 'Child' },
+  { value: 'teen', label: 'Teen' },
+  { value: 'adult', label: 'Adult' },
   { value: 'elderly', label: 'Elderly' },
 ];
 
-export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onShowMatchDetail, onRegenerateCharacter, mergeCandidates, mergeCandidatesPrior, onMerge, onLinkPrior }: Props) {
-  const [tone, setTone] = useState(character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 });
+export function ProfileDrawer({
+  character,
+  voice,
+  onClose,
+  onSave,
+  onLock,
+  onShowMatchDetail,
+  onRegenerateCharacter,
+  mergeCandidates,
+  mergeCandidatesPrior,
+  onMerge,
+  onLinkPrior,
+}: Props) {
+  const [tone, setTone] = useState(
+    character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 },
+  );
   /* Editable identity. The analyzer's guess (or the absence of one) seeds
      these; saving the drawer persists them onto the character. They drive
      the voice picker server-side, so a wrong inference can be corrected
      manually without retriggering analysis. */
-  const [gender, setGender]     = useState<CharGender | ''>(character.gender ?? '');
+  const [gender, setGender] = useState<CharGender | ''>(character.gender ?? '');
   const [ageRange, setAgeRange] = useState<CharAgeRange | ''>(character.ageRange ?? '');
   const c = CHAR_COLORS[character.color as CharColor] ?? CHAR_COLORS.narrator;
   const playback = useSamplePlayback();
   const dispatch = useAppDispatch();
-  const ttsModelKey = useAppSelector(s => s.ui.ttsModelKey);
+  const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const ttsEngine = engineForModelKey(ttsModelKey);
-  const baseVoices = useAppSelector(s => s.voices.baseVoices);
-  const baseVoicesLoaded = useAppSelector(s => s.voices.baseVoicesLoaded);
+  const baseVoices = useAppSelector((s) => s.voices.baseVoices);
+  const baseVoicesLoaded = useAppSelector((s) => s.voices.baseVoicesLoaded);
   const [overrideError, setOverrideError] = useState<string | null>(null);
   const [sampleStatus, setSampleStatus] = useState<SampleStatus | 'idle'>('idle');
   const [sampleError, setSampleError] = useState<string | null>(null);
@@ -124,8 +151,8 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
   const [mergeBusy, setMergeBusy] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [showMergePicker, setShowMergePicker] = useState(false);
-  const isBucket    = character.id === UNKNOWN_MALE_ID || character.id === UNKNOWN_FEMALE_ID;
-  const isNarrator  = character.id === NARRATOR_ID;
+  const isBucket = character.id === UNKNOWN_MALE_ID || character.id === UNKNOWN_FEMALE_ID;
+  const isNarrator = character.id === NARRATOR_ID;
   /* "Downgrade" — fold this character into a standing background bucket.
      Reuses the merge transport: server auto-synthesises the bucket if the
      book hasn't accumulated one yet. Disabled when the source character is
@@ -169,7 +196,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
      character-derived stub so brand-new (unmatched) characters can still
      preview their attributes. Server file is namespaced `char-<id>` for
      character samples to keep them separate from library voice samples. */
-  const sampleVoiceId  = voice ? voice.id : `char-${character.id}`;
+  const sampleVoiceId = voice ? voice.id : `char-${character.id}`;
   /* Recompute against the *edited* identity so the displayed TTS voice
      updates live as the user changes the dropdowns. Saving the drawer
      persists these values; until then the recompute is local-only. */
@@ -207,22 +234,23 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
        chosen differently. Tone sliders can nudge but can't bridge a
        child↔adult-or-deeper gap. */
   const voiceGender = voiceGenderFromAttributes(voice?.attributes);
-  const voiceAge    = voiceAgeFromAttributes(voice?.attributes);
+  const voiceAge = voiceAgeFromAttributes(voice?.attributes);
   const editedGender = (gender || character.gender) as CharGender | undefined;
-  const editedAge    = (ageRange || character.ageRange) as CharAgeRange | undefined;
-  const hasGenderConflict = !!voice
-    && !!voiceGender
-    && !!editedGender
-    && editedGender !== 'neutral'
-    && editedGender !== voiceGender;
-  const hasAgeConflict = !!voice
-    && !!voiceAge
-    && !!editedAge
-    && editedAge !== voiceAge;
+  const editedAge = (ageRange || character.ageRange) as CharAgeRange | undefined;
+  const hasGenderConflict =
+    !!voice &&
+    !!voiceGender &&
+    !!editedGender &&
+    editedGender !== 'neutral' &&
+    editedGender !== voiceGender;
+  const hasAgeConflict = !!voice && !!voiceAge && !!editedAge && editedAge !== voiceAge;
   const hasConflict = hasGenderConflict || hasAgeConflict;
 
   async function playSample() {
-    if (isPlayingThis) { playback.stop(); return; }
+    if (isPlayingThis) {
+      playback.stop();
+      return;
+    }
     setSampleError(null);
     setEvictionBanner(null);
     /* `synthesizing` is the most common starting status — for a warm model
@@ -243,7 +271,12 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
     console.log('[sample] requesting', { voiceId: sampleVoiceId, modelKey: ttsModelKey });
     try {
       await playSampleWithAutoLoad({
-        args: { voiceId: sampleVoiceId, voice: sampleSubject, modelKey: ttsModelKey, characterHint },
+        args: {
+          voiceId: sampleVoiceId,
+          voice: sampleSubject,
+          modelKey: ttsModelKey,
+          characterHint,
+        },
         playback,
         onStatus: (status, { analyzerEvicted }) => {
           setSampleStatus(status);
@@ -261,15 +294,17 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
 
   return (
     <>
-      <div onClick={onClose} className="fixed inset-0 bg-ink/30 z-40 fade-in"/>
+      <div onClick={onClose} className="fixed inset-0 bg-ink/30 z-40 fade-in" />
       <aside className="fixed top-0 right-0 bottom-0 w-full max-w-[520px] bg-white shadow-drawer z-50 overflow-y-auto slide-in-right">
         <div className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-ink/10 px-6 py-4 flex items-center gap-3">
-          <Avatar name={character.name} color={character.color as CharColor} size={40}/>
+          <Avatar name={character.name} color={character.color as CharColor} size={40} />
           <div className="flex-1 min-w-0">
             <h3 className="text-lg font-bold text-ink leading-tight truncate">{character.name}</h3>
             <p className="text-xs text-ink/60 truncate">{character.role}</p>
           </div>
-          <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60"><IconClose className="w-4 h-4"/></button>
+          <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60">
+            <IconClose className="w-4 h-4" />
+          </button>
         </div>
 
         <div className="p-6 space-y-8">
@@ -277,28 +312,46 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
 
           <section>
             <div className="flex items-center justify-between mb-4">
-              <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">Voice profile</p>
+              <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
+                Voice profile
+              </p>
               <div className="flex items-center gap-3">
-                {character.voiceState === 'reused'    && <Pill color="library">Reused</Pill>}
+                {character.voiceState === 'reused' && <Pill color="library">Reused</Pill>}
                 {character.voiceState === 'generated' && <Pill color="success">Generated</Pill>}
-                {character.voiceState === 'tuned'     && <Pill color="warning">Tuned</Pill>}
+                {character.voiceState === 'tuned' && <Pill color="warning">Tuned</Pill>}
               </div>
             </div>
 
             <div className="flex items-center gap-4 p-4 rounded-2xl bg-canvas border border-ink/10">
               <div>
-                <VoiceSwatch voice={voice} size="md" showLabel={false}
-                  onSelect={() => { void playSample(); }}
-                  loading={sampleLoading}/>
+                <VoiceSwatch
+                  voice={voice}
+                  size="md"
+                  showLabel={false}
+                  onSelect={() => {
+                    void playSample();
+                  }}
+                  loading={sampleLoading}
+                />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-base font-bold text-ink truncate">{voice?.character ?? character.name}</p>
+                <p className="text-base font-bold text-ink truncate">
+                  {voice?.character ?? character.name}
+                </p>
                 {character.matchedFrom ? (
-                  <button onClick={() => onShowMatchDetail?.(character.id)} className="mt-0.5 text-xs text-purple-deep/70 hover:text-purple-deep underline-offset-2 hover:underline text-left">
-                    Matched from <span className="font-semibold">{character.matchedFrom.bookTitle}</span> · {Math.round((character.matchedFrom.confidence ?? 0) * 100)}% confidence — see why
+                  <button
+                    onClick={() => onShowMatchDetail?.(character.id)}
+                    className="mt-0.5 text-xs text-purple-deep/70 hover:text-purple-deep underline-offset-2 hover:underline text-left"
+                  >
+                    Matched from{' '}
+                    <span className="font-semibold">{character.matchedFrom.bookTitle}</span> ·{' '}
+                    {Math.round((character.matchedFrom.confidence ?? 0) * 100)}% confidence — see
+                    why
                   </button>
                 ) : (
-                  <p className="text-xs text-ink/60 mt-0.5">Synthesised from {character.lines} lines of dialogue</p>
+                  <p className="text-xs text-ink/60 mt-0.5">
+                    Synthesised from {character.lines} lines of dialogue
+                  </p>
                 )}
                 {/* Engine-aware TTS voice assignment — what the user will
                     actually hear when they click Play. Mirrors the cast
@@ -307,7 +360,9 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                   className="mt-1 text-[11px] truncate"
                   title={`${capitalise(sampleSubject.ttsVoice.provider)} voice — ${sampleSubject.ttsVoice.description}`}
                 >
-                  <span className="text-ink/40">{capitalise(sampleSubject.ttsVoice.provider)} · </span>
+                  <span className="text-ink/40">
+                    {capitalise(sampleSubject.ttsVoice.provider)} ·{' '}
+                  </span>
                   <span className="font-semibold text-ink/70">{sampleSubject.ttsVoice.name}</span>
                   <span className="text-ink/40"> · {sampleSubject.ttsVoice.description}</span>
                 </p>
@@ -325,27 +380,30 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                   >
                     {sampleLoading ? (
                       <>
-                        <IconSpinner className="w-3.5 h-3.5"/>
+                        <IconSpinner className="w-3.5 h-3.5" />
                         <span>{sampleLoadingLabel(sampleStatus, ttsModelKey)}</span>
                       </>
                     ) : isPlayingThis ? (
                       <>
-                        <IconPause className="w-3.5 h-3.5"/>
+                        <IconPause className="w-3.5 h-3.5" />
                         <span>Stop sample</span>
                       </>
                     ) : (
                       <>
-                        <IconWaveform className="w-3.5 h-3.5"/>
+                        <IconWaveform className="w-3.5 h-3.5" />
                         <span>Play 12s sample</span>
                       </>
                     )}
                   </button>
                   {!voice && (
-                    <p className="mt-1 text-[11px] text-ink/50">No library voice matched yet — sampling directly from {character.name}'s attributes.</p>
+                    <p className="mt-1 text-[11px] text-ink/50">
+                      No library voice matched yet — sampling directly from {character.name}'s
+                      attributes.
+                    </p>
                   )}
                   {evictionBanner && (
                     <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-emerald-700">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                       {evictionBanner}
                     </p>
                   )}
@@ -357,8 +415,11 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
             </div>
 
             <ModelVoiceOverridePicker
-              voiceId={voice?.id ?? (character.voiceId ?? character.id)}
-              currentOverrides={mapOverridesToBaseVoiceMap(voice?.overrideTtsVoices ?? null, voice?.overrideTtsVoice ?? null)}
+              voiceId={voice?.id ?? character.voiceId ?? character.id}
+              currentOverrides={mapOverridesToBaseVoiceMap(
+                voice?.overrideTtsVoices ?? null,
+                voice?.overrideTtsVoice ?? null,
+              )}
               autoVoiceName={sampleSubject.ttsVoice.name}
               autoVoiceEngine={sampleSubject.ttsVoice.provider as TtsEngine}
               activeEngine={ttsEngine}
@@ -367,7 +428,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
               error={overrideError}
               onChange={async (next) => {
                 setOverrideError(null);
-                const voiceIdForApi = voice?.id ?? (character.voiceId ?? character.id);
+                const voiceIdForApi = voice?.id ?? character.voiceId ?? character.id;
                 /* Optimistic local update — slice mutation only takes effect
                    when the targeted Voice exists in the library payload. For
                    unmatched characters (no library Voice yet) the reducer
@@ -388,14 +449,18 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                     if (prior) {
                       for (const [engine, slot] of Object.entries(prior)) {
                         if (slot?.name) {
-                          dispatch(voicesActions.setOverride({
-                            voiceId: voiceIdForApi,
-                            override: { engine: engine as TtsEngine, name: slot.name },
-                          }));
+                          dispatch(
+                            voicesActions.setOverride({
+                              voiceId: voiceIdForApi,
+                              override: { engine: engine as TtsEngine, name: slot.name },
+                            }),
+                          );
                         }
                       }
                     } else {
-                      dispatch(voicesActions.setOverride({ voiceId: voiceIdForApi, override: null }));
+                      dispatch(
+                        voicesActions.setOverride({ voiceId: voiceIdForApi, override: null }),
+                      );
                     }
                   }
                 }
@@ -406,44 +471,62 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
               <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-xs text-amber-900">
                 <p className="font-semibold">⚠ Library voice / identity mismatch</p>
                 <p className="mt-1 leading-relaxed">
-                  <span className="font-semibold">{voice?.character}</span> is {[
+                  <span className="font-semibold">{voice?.character}</span> is{' '}
+                  {[
                     voiceGender ? capitalise(voiceGender) : null,
                     voiceAge ? capitalise(voiceAge) : null,
-                  ].filter(Boolean).join(' · ')}, but you've set this character to {[
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                  , but you've set this character to{' '}
+                  {[
                     hasGenderConflict && editedGender ? capitalise(editedGender) : null,
                     hasAgeConflict && editedAge ? capitalise(editedAge) : null,
-                  ].filter(Boolean).join(' · ')}.
-                  {' '}
-                  Saving will clear the library match and re-synthesise from {character.name}'s attributes — the prebuilt voice picker will pick the right slot for the new identity.
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                  . Saving will clear the library match and re-synthesise from {character.name}'s
+                  attributes — the prebuilt voice picker will pick the right slot for the new
+                  identity.
                 </p>
               </div>
             )}
 
             <div className="mt-3 grid grid-cols-2 gap-2">
               <button className="px-3 py-2 rounded-xl border border-ink/10 hover:bg-ink/[0.04] text-xs font-medium text-ink inline-flex items-center justify-center gap-1.5">
-                <IconStar className="w-3.5 h-3.5"/> Save to library
+                <IconStar className="w-3.5 h-3.5" /> Save to library
               </button>
               <button
                 onClick={() => onLock(character)}
                 className={`px-3 py-2 rounded-xl border text-xs font-medium inline-flex items-center justify-center gap-1.5 ${character.voiceState === 'locked' ? 'border-ink/30 bg-ink/[0.06] text-ink' : 'border-ink/10 hover:bg-ink/[0.04] text-ink'}`}
               >
-                <IconLock className="w-3.5 h-3.5"/> {character.voiceState === 'locked' ? 'Locked' : 'Lock'}
+                <IconLock className="w-3.5 h-3.5" />{' '}
+                {character.voiceState === 'locked' ? 'Locked' : 'Lock'}
               </button>
             </div>
-            <button onClick={() => onRegenerateCharacter?.(character.id)} className="mt-3 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl bg-peach/15 hover:bg-peach/25 text-magenta text-sm font-semibold transition-colors">
-              <IconRefresh className="w-4 h-4"/> Regenerate {character.name.split(' ')[0]}'s lines across the book
+            <button
+              onClick={() => onRegenerateCharacter?.(character.id)}
+              className="mt-3 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl bg-peach/15 hover:bg-peach/25 text-magenta text-sm font-semibold transition-colors"
+            >
+              <IconRefresh className="w-4 h-4" /> Regenerate {character.name.split(' ')[0]}'s lines
+              across the book
             </button>
           </section>
 
           <section>
-            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">Evidence from the manuscript</p>
+            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
+              Evidence from the manuscript
+            </p>
             <div className="space-y-3">
               {(showAllEvidence
                 ? character.evidence
                 : character.evidence?.slice(0, EVIDENCE_PREVIEW_LIMIT)
               )?.map((ev, i) => (
                 <div key={i} className="p-4 rounded-2xl bg-canvas border border-ink/10">
-                  <blockquote className="font-serif italic text-sm text-ink/85 leading-relaxed border-l-2 pl-3" style={{ borderColor: c.hex }}>
+                  <blockquote
+                    className="font-serif italic text-sm text-ink/85 leading-relaxed border-l-2 pl-3"
+                    style={{ borderColor: c.hex }}
+                  >
                     {ev.quote}
                   </blockquote>
                   <p className="mt-2 text-xs text-ink/60 leading-relaxed">{ev.note}</p>
@@ -452,7 +535,7 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
             </div>
             {character.evidence && character.evidence.length > EVIDENCE_PREVIEW_LIMIT && (
               <button
-                onClick={() => setShowAllEvidence(v => !v)}
+                onClick={() => setShowAllEvidence((v) => !v)}
                 className="mt-3 text-xs font-medium text-ink/70 hover:text-ink underline-offset-4 hover:underline"
               >
                 {showAllEvidence
@@ -463,7 +546,9 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
           </section>
 
           <section>
-            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">Identity</p>
+            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
+              Identity
+            </p>
             <div className="grid grid-cols-2 gap-3">
               <label className="flex flex-col gap-1.5">
                 <span className="text-[11px] text-ink/60 font-medium">Gender</span>
@@ -473,8 +558,10 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                   className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
                 >
                   <option value="">— unset —</option>
-                  {GENDER_OPTIONS.map(o => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
+                  {GENDER_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -486,52 +573,73 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                   className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
                 >
                   <option value="">— unset —</option>
-                  {AGE_OPTIONS.map(o => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
+                  {AGE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
                   ))}
                 </select>
               </label>
             </div>
             <p className="mt-2 text-[11px] text-ink/50">
-              Drives the gender + register slot in the voice picker. If the engine picked the wrong voice for this character, correct these and Save — the TTS voice line above updates immediately.
+              Drives the gender + register slot in the voice picker. If the engine picked the wrong
+              voice for this character, correct these and Save — the TTS voice line above updates
+              immediately.
             </p>
           </section>
 
           <section>
-            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">Inferred attributes</p>
+            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
+              Inferred attributes
+            </p>
             <div className="flex flex-wrap gap-1.5">
-              {character.attributes?.map(a => <Pill key={a}>{a}</Pill>)}
-              <button className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-dashed border-ink/20 text-ink/50 hover:border-peach hover:text-peach"><IconPlus className="w-3 h-3"/>Add</button>
+              {character.attributes?.map((a) => (
+                <Pill key={a}>{a}</Pill>
+              ))}
+              <button className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-dashed border-ink/20 text-ink/50 hover:border-peach hover:text-peach">
+                <IconPlus className="w-3 h-3" />
+                Add
+              </button>
             </div>
           </section>
 
           <section>
-            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">Cast roster</p>
+            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
+              Cast roster
+            </p>
             {character.aliases && character.aliases.length > 0 && (
               <div className="mb-3">
                 <p className="text-xs text-ink/55 mb-1.5">Also known as</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {character.aliases.map(a => <Pill key={a} color="library">{a}</Pill>)}
+                  {character.aliases.map((a) => (
+                    <Pill key={a} color="library">
+                      {a}
+                    </Pill>
+                  ))}
                 </div>
               </div>
             )}
             {(() => {
-              const inBookCount = (onMerge && mergeCandidates?.length) ? mergeCandidates.length : 0;
-              const priorCount  = (onLinkPrior && mergeCandidatesPrior?.length) ? mergeCandidatesPrior.length : 0;
-              const totalCount  = inBookCount + priorCount;
+              const inBookCount = onMerge && mergeCandidates?.length ? mergeCandidates.length : 0;
+              const priorCount =
+                onLinkPrior && mergeCandidatesPrior?.length ? mergeCandidatesPrior.length : 0;
+              const totalCount = inBookCount + priorCount;
               if (totalCount === 0) {
                 return (
                   <p className="text-[11px] text-ink/50">
                     {character.aliases?.length
                       ? 'These names were merged into this character. The voice matcher will use them when later books in the series detect the same person.'
-                      : 'Once another character is detected as the same person, you can merge them here — their name joins this character\'s aliases and the matcher learns the link for later books.'}
+                      : "Once another character is detected as the same person, you can merge them here — their name joins this character's aliases and the matcher learns the link for later books."}
                   </p>
                 );
               }
               if (!showMergePicker) {
                 return (
                   <button
-                    onClick={() => { setShowMergePicker(true); setMergeError(null); }}
+                    onClick={() => {
+                      setShowMergePicker(true);
+                      setMergeError(null);
+                    }}
                     className="w-full px-3 py-2 rounded-xl border border-dashed border-ink/20 hover:border-peach hover:text-peach text-xs font-medium text-ink/65 inline-flex items-center justify-center gap-1.5"
                   >
                     Merge {character.name.split(' ')[0]} into another character…
@@ -545,20 +653,21 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                  (some of which contain `__` separators that would
                  complicate a flat string scheme). */
               const inBookCandidates = inBookCount > 0 ? mergeCandidates! : [];
-              const priorCandidates  = priorCount  > 0 ? mergeCandidatesPrior! : [];
+              const priorCandidates = priorCount > 0 ? mergeCandidatesPrior! : [];
               const priorByKey = new Map<string, PriorMergeCandidate>(
                 priorCandidates.map((p, i) => [`${PRIOR_PREFIX}${i}`, p]),
               );
               const selectedPrior = priorByKey.get(mergeTargetId);
               const selectedInBook = !selectedPrior
-                ? inBookCandidates.find(c => c.id === mergeTargetId)
+                ? inBookCandidates.find((c) => c.id === mergeTargetId)
                 : undefined;
-              const seriesLabel = priorCandidates[0]
-                ? `From prior books in this series`
-                : '';
+              const seriesLabel = priorCandidates[0] ? `From prior books in this series` : '';
               return (
                 <div className="rounded-2xl bg-canvas border border-ink/10 p-3">
-                  <label className="block text-[11px] text-ink/60 font-medium mb-1.5" htmlFor="profile-merge-target">
+                  <label
+                    className="block text-[11px] text-ink/60 font-medium mb-1.5"
+                    htmlFor="profile-merge-target"
+                  >
                     Keep which character as the survivor?
                   </label>
                   <select
@@ -566,14 +675,19 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                     aria-label="Merge target"
                     value={mergeTargetId}
                     disabled={mergeBusy}
-                    onChange={(e) => { setMergeTargetId(e.target.value); setMergeError(null); }}
+                    onChange={(e) => {
+                      setMergeTargetId(e.target.value);
+                      setMergeError(null);
+                    }}
                     className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
                   >
                     <option value="">— pick a character —</option>
                     {inBookCandidates.length > 0 && (
                       <optgroup label="From this book">
-                        {inBookCandidates.map(c => (
-                          <option key={c.id} value={c.id}>{c.name}</option>
+                        {inBookCandidates.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
                         ))}
                       </optgroup>
                     )}
@@ -589,17 +703,21 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                   </select>
                   {selectedInBook && (
                     <p className="mt-2 text-[11px] text-ink/65 leading-relaxed">
-                      <span className="font-semibold text-ink">{character.name}</span> will be folded into{' '}
-                      <span className="font-semibold text-ink">{selectedInBook.name}</span>.
-                      Their name joins the survivor's aliases and every sentence they spoke is reattributed.
+                      <span className="font-semibold text-ink">{character.name}</span> will be
+                      folded into{' '}
+                      <span className="font-semibold text-ink">{selectedInBook.name}</span>. Their
+                      name joins the survivor's aliases and every sentence they spoke is
+                      reattributed.
                     </p>
                   )}
                   {selectedPrior && (
                     <p className="mt-2 text-[11px] text-ink/65 leading-relaxed">
-                      <span className="font-semibold text-ink">{character.name}</span> will be linked as the same person as{' '}
+                      <span className="font-semibold text-ink">{character.name}</span> will be
+                      linked as the same person as{' '}
                       <span className="font-semibold text-ink">{selectedPrior.name}</span> from{' '}
-                      <span className="font-semibold text-ink">{selectedPrior.bookTitle}</span>.
-                      The matcher learns this link for future books in the series; you can then sync profiles from the cast card.
+                      <span className="font-semibold text-ink">{selectedPrior.bookTitle}</span>. The
+                      matcher learns this link for future books in the series; you can then sync
+                      profiles from the cast card.
                     </p>
                   )}
                   {mergeError && (
@@ -608,14 +726,21 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                   <div className="mt-3 flex items-center justify-end gap-2">
                     <button
                       disabled={mergeBusy}
-                      onClick={() => { setShowMergePicker(false); setMergeTargetId(''); setMergeError(null); }}
+                      onClick={() => {
+                        setShowMergePicker(false);
+                        setMergeTargetId('');
+                        setMergeError(null);
+                      }}
                       className="px-3 py-1.5 text-xs font-medium text-ink/65 hover:text-ink"
-                    >Cancel</button>
+                    >
+                      Cancel
+                    </button>
                     <button
                       disabled={!mergeTargetId || mergeBusy}
                       onClick={() => {
                         if (!mergeTargetId) return;
-                        if (selectedPrior) void runLinkPriorTo(selectedPrior.bookId, selectedPrior.id);
+                        if (selectedPrior)
+                          void runLinkPriorTo(selectedPrior.bookId, selectedPrior.id);
                         else void runMergeTo(mergeTargetId);
                       }}
                       className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
@@ -624,7 +749,13 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                           : 'bg-magenta text-white hover:bg-magenta/90 disabled:bg-ink/20 disabled:text-ink/50 disabled:cursor-not-allowed'
                       }`}
                     >
-                      {mergeBusy ? (selectedPrior ? 'Linking…' : 'Merging…') : (selectedPrior ? 'Link' : 'Merge')}
+                      {mergeBusy
+                        ? selectedPrior
+                          ? 'Linking…'
+                          : 'Merging…'
+                        : selectedPrior
+                          ? 'Link'
+                          : 'Merge'}
                     </button>
                   </div>
                 </div>
@@ -659,7 +790,8 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
                   </button>
                 </div>
                 <p className="mt-2 text-[11px] text-ink/50 leading-relaxed">
-                  Folds {character.name.split(' ')[0]} into the matching background bucket — every line they speak shares one generic voice with other one-off bystanders.
+                  Folds {character.name.split(' ')[0]} into the matching background bucket — every
+                  line they speak shares one generic voice with other one-off bystanders.
                 </p>
                 {mergeError && !showMergePicker && (
                   <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {mergeError}</p>
@@ -669,18 +801,49 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
           </section>
 
           <section>
-            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-4">Tone profile</p>
+            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-4">
+              Tone profile
+            </p>
             <div className="space-y-5">
-              <ToneSlider label="Warmth"    value={tone.warmth ?? 50}    onChange={(v) => setTone({ ...tone, warmth: v })}    leftLabel="Cool"       rightLabel="Warm"/>
-              <ToneSlider label="Pace"      value={tone.pace ?? 50}      onChange={(v) => setTone({ ...tone, pace: v })}      leftLabel="Slow"       rightLabel="Brisk"/>
-              <ToneSlider label="Authority" value={tone.authority ?? 50} onChange={(v) => setTone({ ...tone, authority: v })} leftLabel="Soft"       rightLabel="Commanding"/>
-              <ToneSlider label="Emotion"   value={tone.emotion ?? 50}   onChange={(v) => setTone({ ...tone, emotion: v })}   leftLabel="Restrained" rightLabel="Expressive"/>
+              <ToneSlider
+                label="Warmth"
+                value={tone.warmth ?? 50}
+                onChange={(v) => setTone({ ...tone, warmth: v })}
+                leftLabel="Cool"
+                rightLabel="Warm"
+              />
+              <ToneSlider
+                label="Pace"
+                value={tone.pace ?? 50}
+                onChange={(v) => setTone({ ...tone, pace: v })}
+                leftLabel="Slow"
+                rightLabel="Brisk"
+              />
+              <ToneSlider
+                label="Authority"
+                value={tone.authority ?? 50}
+                onChange={(v) => setTone({ ...tone, authority: v })}
+                leftLabel="Soft"
+                rightLabel="Commanding"
+              />
+              <ToneSlider
+                label="Emotion"
+                value={tone.emotion ?? 50}
+                onChange={(v) => setTone({ ...tone, emotion: v })}
+                leftLabel="Restrained"
+                rightLabel="Expressive"
+              />
             </div>
           </section>
         </div>
 
         <div className="sticky bottom-0 bg-white border-t border-ink/10 px-6 py-4 flex items-center gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-ink/70 hover:text-ink">Discard</button>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-ink/70 hover:text-ink"
+          >
+            Discard
+          </button>
           <PrimaryButton
             variant="dark"
             onClick={() => {
@@ -702,7 +865,9 @@ export function ProfileDrawer({ character, voice, onClose, onSave, onLock, onSho
               }
               onSave(next, { hadConflict: hasConflict });
             }}
-          >Save changes</PrimaryButton>
+          >
+            Save changes
+          </PrimaryButton>
         </div>
       </aside>
     </>
@@ -719,7 +884,7 @@ function sampleUrlPrefixFor(voiceId: string, modelKey: string): string {
 }
 
 function ttsModelLabel(key: TtsModelKey): string {
-  return TTS_MODEL_OPTIONS.find(o => o.id === key)?.label ?? key;
+  return TTS_MODEL_OPTIONS.find((o) => o.id === key)?.label ?? key;
 }
 
 /* Button label per phase of the auto-load + synth pipeline. Mirrors the
@@ -727,8 +892,10 @@ function ttsModelLabel(key: TtsModelKey): string {
    surfaces sees consistent terminology. */
 function sampleLoadingLabel(status: SampleStatus | 'idle', modelKey: TtsModelKey): string {
   switch (status) {
-    case 'evicting':    return 'Evicting analyzer to free VRAM…';
-    case 'loading-tts': return 'Loading TTS model (~30s)…';
+    case 'evicting':
+      return 'Evicting analyzer to free VRAM…';
+    case 'loading-tts':
+      return 'Loading TTS model (~30s)…';
     case 'synthesizing':
     case 'idle':
     default:
@@ -748,7 +915,7 @@ function voiceGenderFromAttributes(attrs: string[] | undefined): CharGender | nu
   if (!attrs) return null;
   for (const raw of attrs) {
     const lc = raw.toLowerCase();
-    if (lc === 'male')   return 'male';
+    if (lc === 'male') return 'male';
     if (lc === 'female') return 'female';
     if (lc === 'neutral') return 'neutral';
   }
@@ -764,9 +931,9 @@ function voiceAgeFromAttributes(attrs: string[] | undefined): CharAgeRange | nul
   if (!attrs) return null;
   for (const raw of attrs) {
     const lc = raw.toLowerCase().trim();
-    if (lc === 'child')   return 'child';
-    if (lc === 'teen')    return 'teen';
-    if (lc === 'adult')   return 'adult';
+    if (lc === 'child') return 'child';
+    if (lc === 'teen') return 'teen';
+    if (lc === 'adult') return 'adult';
     if (lc === 'elderly') return 'elderly';
     /* "60s", "70s", "12", "12yo" — pull leading digits and bucket. */
     const m = lc.match(/^(\d{1,3})/);
@@ -831,8 +998,15 @@ interface OverridePickerProps {
   onChange: (next: BaseVoice | null) => Promise<void> | void;
 }
 function ModelVoiceOverridePicker({
-  voiceId, currentOverrides, autoVoiceName, autoVoiceEngine, activeEngine,
-  baseVoices, baseVoicesLoaded, error, onChange,
+  voiceId,
+  currentOverrides,
+  autoVoiceName,
+  autoVoiceEngine,
+  activeEngine,
+  baseVoices,
+  baseVoicesLoaded,
+  error,
+  onChange,
 }: OverridePickerProps) {
   /* Group base voices by engine. Order tabs deterministically so the UI
      doesn't reshuffle between renders — Coqui first (longest-running),
@@ -844,7 +1018,7 @@ function ModelVoiceOverridePicker({
     byEngine.set(bv.engine, list);
   }
   const tabOrder: TtsEngine[] = ['coqui', 'kokoro', 'piper', 'gemini'];
-  const availableEngines = tabOrder.filter(e => byEngine.has(e));
+  const availableEngines = tabOrder.filter((e) => byEngine.has(e));
   /* Pick a sensible default tab: the active engine if its catalog has
      voices, otherwise the first available. */
   const initialTab: TtsEngine = availableEngines.includes(activeEngine)
@@ -856,7 +1030,9 @@ function ModelVoiceOverridePicker({
      lands on the slot that actually drives current synthesis. */
   useEffect(() => {
     if (availableEngines.includes(activeEngine) && engineTab !== activeEngine) {
-      const otherSlots = (Object.keys(currentOverrides) as TtsEngine[]).filter(e => e !== engineTab);
+      const otherSlots = (Object.keys(currentOverrides) as TtsEngine[]).filter(
+        (e) => e !== engineTab,
+      );
       /* Don't surprise the user mid-edit — only swap to the active
          engine if no slot is currently selected in the other engines
          (i.e. they haven't actively been working in a different tab). */
@@ -867,9 +1043,7 @@ function ModelVoiceOverridePicker({
 
   const AUTO = 'auto';
   const currentForTab = currentOverrides[engineTab] ?? null;
-  const selectedValue = currentForTab
-    ? `${currentForTab.engine}|${currentForTab.name}`
-    : AUTO;
+  const selectedValue = currentForTab ? `${currentForTab.engine}|${currentForTab.name}` : AUTO;
   const voicesForTab = byEngine.get(engineTab) ?? [];
 
   return (
@@ -881,8 +1055,12 @@ function ModelVoiceOverridePicker({
         <span className="text-[10px] text-ink/40">Active engine: {capitalise(activeEngine)}</span>
       </div>
       {availableEngines.length > 1 && (
-        <div role="tablist" aria-label="Override engine" className="mb-2 inline-flex rounded-xl border border-ink/10 bg-white/40 p-0.5">
-          {availableEngines.map(engine => {
+        <div
+          role="tablist"
+          aria-label="Override engine"
+          className="mb-2 inline-flex rounded-xl border border-ink/10 bg-white/40 p-0.5"
+        >
+          {availableEngines.map((engine) => {
             const isCurrent = engine === engineTab;
             const slotFilled = !!currentOverrides[engine];
             return (
@@ -898,7 +1076,9 @@ function ModelVoiceOverridePicker({
                 }`}
               >
                 <span>{capitalise(engine)}</span>
-                {slotFilled && <span className="w-1.5 h-1.5 rounded-full bg-magenta" aria-hidden="true"/>}
+                {slotFilled && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-magenta" aria-hidden="true" />
+                )}
                 {engine === activeEngine && (
                   <span className="text-[9px] uppercase tracking-wider text-ink/40">Active</span>
                 )}
@@ -914,7 +1094,10 @@ function ModelVoiceOverridePicker({
         disabled={!baseVoicesLoaded}
         onChange={(e) => {
           const raw = e.target.value;
-          if (raw === AUTO) { void onChange(null); return; }
+          if (raw === AUTO) {
+            void onChange(null);
+            return;
+          }
           const [engine, ...rest] = raw.split('|');
           const name = rest.join('|');
           void onChange({ engine: engine as TtsEngine, name });
@@ -926,7 +1109,7 @@ function ModelVoiceOverridePicker({
             ? `Auto — currently ${capitalise(autoVoiceEngine)} · ${autoVoiceName}`
             : `Auto for ${capitalise(engineTab)} — attribute-driven`}
         </option>
-        {voicesForTab.map(bv => (
+        {voicesForTab.map((bv) => (
           <option key={`${bv.engine}|${bv.name}`} value={`${bv.engine}|${bv.name}`}>
             {bv.name}
           </option>
@@ -935,17 +1118,22 @@ function ModelVoiceOverridePicker({
       {!baseVoicesLoaded && (
         <p className="mt-2 text-[11px] text-ink/50">Loading base voice catalog…</p>
       )}
-      {error && (
-        <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {error}</p>
-      )}
+      {error && <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {error}</p>}
       <p className="mt-2 text-[11px] text-ink/50">
-        Each engine has its own voice slot — switching the project's engine picks up the corresponding slot, so you don't need to re-cast when toggling Coqui ↔ Kokoro.
+        Each engine has its own voice slot — switching the project's engine picks up the
+        corresponding slot, so you don't need to re-cast when toggling Coqui ↔ Kokoro.
       </p>
     </div>
   );
 }
 
-interface ToneSliderProps { label: string; value: number; onChange: (v: number) => void; leftLabel: string; rightLabel: string; }
+interface ToneSliderProps {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  leftLabel: string;
+  rightLabel: string;
+}
 export function ToneSlider({ label, value, onChange, leftLabel, rightLabel }: ToneSliderProps) {
   return (
     <div>
@@ -954,12 +1142,26 @@ export function ToneSlider({ label, value, onChange, leftLabel, rightLabel }: To
         <span className="text-xs text-ink/50 tabular-nums">{value}</span>
       </div>
       <div className="relative h-1.5 rounded-full bg-ink/10">
-        <div className="absolute left-0 top-0 bottom-0 rounded-full bg-gradient-cta-horizontal" style={{ width: `${value}%` }}/>
-        <input type="range" min={0} max={100} value={value} onChange={(e) => onChange(Number(e.target.value))} className="absolute inset-0 w-full opacity-0 cursor-pointer"/>
-        <span className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-white border border-ink/30 shadow pointer-events-none" style={{ left: `${value}%` }}/>
+        <div
+          className="absolute left-0 top-0 bottom-0 rounded-full bg-gradient-cta-horizontal"
+          style={{ width: `${value}%` }}
+        />
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="absolute inset-0 w-full opacity-0 cursor-pointer"
+        />
+        <span
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-white border border-ink/30 shadow pointer-events-none"
+          style={{ left: `${value}%` }}
+        />
       </div>
       <div className="flex items-center justify-between mt-1.5 text-[11px] text-ink/40">
-        <span>{leftLabel}</span><span>{rightLabel}</span>
+        <span>{leftLabel}</span>
+        <span>{rightLabel}</span>
       </div>
     </div>
   );

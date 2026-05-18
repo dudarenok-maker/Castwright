@@ -3,7 +3,9 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { Character, AnalyseResponse, VoiceMatchResponse } from '../lib/types';
 
-export interface CastState { characters: Character[]; }
+export interface CastState {
+  characters: Character[];
+}
 
 /* Empty initial state — the fixture seed (`initialCharacters` from
    ../data/characters) used to live here so the demo had something to show,
@@ -17,21 +19,26 @@ export const castSlice = createSlice({
   name: 'cast',
   initialState,
   reducers: {
-    setCharacters: (s, a: PayloadAction<Character[]>) => { s.characters = a.payload; },
+    setCharacters: (s, a: PayloadAction<Character[]>) => {
+      s.characters = a.payload;
+    },
     declineMatch: (s, a: PayloadAction<string>) => {
-      const c = s.characters.find(x => x.id === a.payload);
-      if (c) { c.matchedFrom = undefined; c.voiceState = 'generated'; }
+      const c = s.characters.find((x) => x.id === a.payload);
+      if (c) {
+        c.matchedFrom = undefined;
+        c.voiceState = 'generated';
+      }
     },
     /* Pin a character's voice so subsequent regenerates preserve it. The
        Profile Drawer's Lock button dispatches this; the change-log slice
        records the matching voice_lock event. */
     lockVoice: (s, a: PayloadAction<string>) => {
-      const c = s.characters.find(x => x.id === a.payload);
+      const c = s.characters.find((x) => x.id === a.payload);
       if (c) c.voiceState = 'locked';
     },
     updateCharacter: (s, a: PayloadAction<Character>) => {
       const next = a.payload;
-      s.characters = s.characters.map(c => c.id === next.id ? { ...c, ...next } : c);
+      s.characters = s.characters.map((c) => (c.id === next.id ? { ...c, ...next } : c));
     },
     /* From POST /api/manuscripts/:id/analysis response. The analyser schema
        leaves voiceState optional, but freshly-analysed characters have, by
@@ -41,7 +48,9 @@ export const castSlice = createSlice({
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
       const { characters } = a.payload;
       if (characters?.length) {
-        s.characters = characters.map(c => c.voiceState ? c : { ...c, voiceState: 'generated' });
+        s.characters = characters.map((c) =>
+          c.voiceState ? c : { ...c, voiceState: 'generated' },
+        );
       }
     },
     /* Live cast-update events from Phase 0a (per-chapter cast detection).
@@ -52,7 +61,7 @@ export const castSlice = createSlice({
     mergeCharacters: (s, a: PayloadAction<Character[]>) => {
       const incoming = a.payload;
       if (!incoming?.length) return;
-      const byId = new Map(s.characters.map(c => [c.id, c]));
+      const byId = new Map(s.characters.map((c) => [c.id, c]));
       const next: Character[] = [];
       const seen = new Set<string>();
       for (const inc of incoming) {
@@ -64,10 +73,10 @@ export const castSlice = createSlice({
              snapshot that doesn't know about them. */
           next.push({
             ...inc,
-            voiceId:      existing.voiceId      ?? inc.voiceId,
-            matchedFrom:  existing.matchedFrom  ?? inc.matchedFrom,
+            voiceId: existing.voiceId ?? inc.voiceId,
+            matchedFrom: existing.matchedFrom ?? inc.matchedFrom,
             matchFactors: existing.matchFactors ?? inc.matchFactors,
-            voiceState:   existing.voiceState   ?? inc.voiceState ?? 'generated',
+            voiceState: existing.voiceState ?? inc.voiceState ?? 'generated',
           });
         } else {
           next.push(inc.voiceState ? inc : { ...inc, voiceState: 'generated' });
@@ -94,16 +103,16 @@ export const castSlice = createSlice({
       /* Preserve voiceId / matchedFrom / matchFactors / voiceState on each
          surviving character — those are local-only or library-derived and
          the server's character list doesn't carry them. */
-      const byId = new Map(s.characters.map(c => [c.id, c]));
-      s.characters = characters.map(inc => {
+      const byId = new Map(s.characters.map((c) => [c.id, c]));
+      s.characters = characters.map((inc) => {
         const existing = byId.get(inc.id);
         if (!existing) return inc;
         return {
           ...inc,
-          voiceId:      existing.voiceId      ?? inc.voiceId,
-          matchedFrom:  existing.matchedFrom  ?? inc.matchedFrom,
+          voiceId: existing.voiceId ?? inc.voiceId,
+          matchedFrom: existing.matchedFrom ?? inc.matchedFrom,
           matchFactors: existing.matchFactors ?? inc.matchFactors,
-          voiceState:   existing.voiceState   ?? inc.voiceState,
+          voiceState: existing.voiceState ?? inc.voiceState,
         };
       });
     },
@@ -115,13 +124,16 @@ export const castSlice = createSlice({
        footer + "Sync profile" checkbox light up exactly like the
        auto-match path. Tuned voice (voiceState='locked' / 'tuned') is
        preserved — the user already invested effort in it. */
-    applyManualMatch: (s, a: PayloadAction<{
-      characterId: string;
-      matchedFrom: NonNullable<Character['matchedFrom']>;
-      voiceId?: string;
-    }>) => {
+    applyManualMatch: (
+      s,
+      a: PayloadAction<{
+        characterId: string;
+        matchedFrom: NonNullable<Character['matchedFrom']>;
+        voiceId?: string;
+      }>,
+    ) => {
       const { characterId, matchedFrom, voiceId } = a.payload;
-      const c = s.characters.find(x => x.id === characterId);
+      const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
       c.matchedFrom = matchedFrom;
       if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') {
@@ -134,8 +146,8 @@ export const castSlice = createSlice({
        stable handle on the library record (POST /api/library-cast/override). */
     applyVoiceMatches: (s, a: PayloadAction<VoiceMatchResponse>) => {
       const { matches } = a.payload;
-      const byId = Object.fromEntries((matches || []).map(m => [m.characterId, m]));
-      s.characters = s.characters.map(c => {
+      const byId = Object.fromEntries((matches || []).map((m) => [m.characterId, m]));
+      s.characters = s.characters.map((c) => {
         const m = byId[c.id];
         if (!m || !m.candidates?.length) return c;
         const top = m.candidates[0];

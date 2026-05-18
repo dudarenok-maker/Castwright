@@ -48,14 +48,18 @@ function emitWindowsHint() {
      has it installed but their shell predates the install; the fix is
      "open a new terminal" not "install something." */
   function readRegistryPath(scope) {
-    const key = scope === 'user'
-      ? 'HKCU\\Environment'
-      : 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment';
+    const key =
+      scope === 'user'
+        ? 'HKCU\\Environment'
+        : 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment';
     const r = spawnSync('reg', ['query', key, '/v', 'Path'], { encoding: 'utf8' });
     if (r.status !== 0 || !r.stdout) return [];
     const match = r.stdout.match(/Path\s+REG[^\s]*\s+([^\r\n]+)/);
     if (!match) return [];
-    return match[1].split(';').map(s => s.trim()).filter(Boolean);
+    return match[1]
+      .split(';')
+      .map((s) => s.trim())
+      .filter(Boolean);
   }
 
   function expandEnv(p) {
@@ -67,7 +71,9 @@ function emitWindowsHint() {
       try {
         const candidate = path.join(expandEnv(dir), 'ffmpeg.exe');
         if (fs.existsSync(candidate)) return candidate;
-      } catch { /* ignore unreadable segment */ }
+      } catch {
+        /* ignore unreadable segment */
+      }
     }
     return null;
   }
@@ -78,35 +84,36 @@ function emitWindowsHint() {
   if (registryHit) {
     process.stderr.write(
       `\n${BOLD}${RED}[preflight] ffmpeg not on this shell's PATH — but it IS installed.${RESET}\n\n` +
-      `Found at:\n  ${registryHit}\n\n` +
-      `That directory is on your User PATH in the registry, but the current\n` +
-      `shell session was started before it was added. Every process npm spawns\n` +
-      `inherits this stale PATH, so the MP3 encoder tests skip and chapter\n` +
-      `generation rejects at the encode step.\n\n` +
-      `${BOLD}Fix:${RESET} close this terminal, open a fresh PowerShell, and re-run the command.\n\n` +
-      `(Or set ${BOLD}SKIP_FFMPEG_PREFLIGHT=1${RESET} for a single run if you don't need ffmpeg right now.)\n\n`,
+        `Found at:\n  ${registryHit}\n\n` +
+        `That directory is on your User PATH in the registry, but the current\n` +
+        `shell session was started before it was added. Every process npm spawns\n` +
+        `inherits this stale PATH, so the MP3 encoder tests skip and chapter\n` +
+        `generation rejects at the encode step.\n\n` +
+        `${BOLD}Fix:${RESET} close this terminal, open a fresh PowerShell, and re-run the command.\n\n` +
+        `(Or set ${BOLD}SKIP_FFMPEG_PREFLIGHT=1${RESET} for a single run if you don't need ffmpeg right now.)\n\n`,
     );
     return;
   }
 
   process.stderr.write(
     `\n${BOLD}${RED}[preflight] ffmpeg not found.${RESET}\n\n` +
-    `The server encodes chapter audio to MP3 (LAME VBR V2) via system ffmpeg.\n` +
-    `Without it, chapter generation rejects at the encode step.\n\n` +
-    `${BOLD}Install:${RESET}\n  winget install Gyan.FFmpeg\n\n` +
-    `Then ${BOLD}close + reopen this terminal${RESET} so the updated PATH is picked up.\n\n` +
-    `(Or set ${BOLD}SKIP_FFMPEG_PREFLIGHT=1${RESET} for a single run if you don't need ffmpeg right now.)\n\n`,
+      `The server encodes chapter audio to MP3 (LAME VBR V2) via system ffmpeg.\n` +
+      `Without it, chapter generation rejects at the encode step.\n\n` +
+      `${BOLD}Install:${RESET}\n  winget install Gyan.FFmpeg\n\n` +
+      `Then ${BOLD}close + reopen this terminal${RESET} so the updated PATH is picked up.\n\n` +
+      `(Or set ${BOLD}SKIP_FFMPEG_PREFLIGHT=1${RESET} for a single run if you don't need ffmpeg right now.)\n\n`,
   );
 }
 
 function emitGenericHint() {
-  const tips = os.platform() === 'darwin'
-    ? '  brew install ffmpeg'
-    : '  apt install ffmpeg     # Debian/Ubuntu\n  dnf install ffmpeg     # Fedora';
+  const tips =
+    os.platform() === 'darwin'
+      ? '  brew install ffmpeg'
+      : '  apt install ffmpeg     # Debian/Ubuntu\n  dnf install ffmpeg     # Fedora';
   process.stderr.write(
     `\n${BOLD}${RED}[preflight] ffmpeg not found on PATH.${RESET}\n\n` +
-    `The server shells out to ffmpeg for MP3 encoding. Install it:\n${tips}\n\n` +
-    `${YELLOW}(Set SKIP_FFMPEG_PREFLIGHT=1 to skip this check.)${RESET}\n\n`,
+      `The server shells out to ffmpeg for MP3 encoding. Install it:\n${tips}\n\n` +
+      `${YELLOW}(Set SKIP_FFMPEG_PREFLIGHT=1 to skip this check.)${RESET}\n\n`,
   );
 }
 

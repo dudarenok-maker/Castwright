@@ -109,8 +109,6 @@ describe('migrateStateJson', () => {
   it('throws for a schema older than CURRENT (no migration registered yet)', () => {
     /* No path exists today because field-absent already covers the
        only pre-v1 case. A schema = 0 would be a user-corrupted file. */
-    expect(() => migrateStateJson({ ...baseState, schema: 0 })).toThrow(
-      /No migration registered/,
-    );
+    expect(() => migrateStateJson({ ...baseState, schema: 0 })).toThrow(/No migration registered/);
   });
 });

@@ -40,7 +40,7 @@ server-side; the client just consumes the resulting `chapters[].title`.
   the parser looks ahead to the next non-empty line. If it passes the
   `looksLikeTitle` heuristic (title-case-with-stopwords, ≤ 80 chars, no
   terminal `.`/`!`), the title is merged as `Chapter 3 — The
-  Beginning` and the subtitle line is consumed so it doesn't bleed
+Beginning` and the subtitle line is consumed so it doesn't bleed
   into the chapter body. Headings already carrying descriptive text
   (`Chapter 3: The Beginning`, `## Day One`) are left alone.
 

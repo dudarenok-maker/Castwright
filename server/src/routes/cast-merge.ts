@@ -63,11 +63,13 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
 
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   if (!cast?.characters?.length) {
-    return res.status(409).json({ error: 'Book has no cast on disk yet. Run analysis before merging characters.' });
+    return res
+      .status(409)
+      .json({ error: 'Book has no cast on disk yet. Run analysis before merging characters.' });
   }
 
-  const source = cast.characters.find(c => c.id === sourceId);
-  let target = cast.characters.find(c => c.id === targetId);
+  const source = cast.characters.find((c) => c.id === sourceId);
+  let target = cast.characters.find((c) => c.id === targetId);
   if (!source) return res.status(404).json({ error: `Character "${sourceId}" not found.` });
   /* Downgrade-to-bucket path: when the caller targets one of the standing
      `unknown-male` / `unknown-female` buckets and that bucket doesn't yet
@@ -98,7 +100,10 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
   merged.aliases = mergeAliases(target, source);
 
   /* Description: longer wins. The longer one usually carries more context. */
-  if (source.description && (!target.description || source.description.length > target.description.length)) {
+  if (
+    source.description &&
+    (!target.description || source.description.length > target.description.length)
+  ) {
     merged.description = source.description;
   }
 
@@ -114,7 +119,7 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
   }
 
   /* Identity fields: only adopt source's value when target lacks one. */
-  if (!merged.gender   && source.gender)   merged.gender   = source.gender;
+  if (!merged.gender && source.gender) merged.gender = source.gender;
   if (!merged.ageRange && source.ageRange) merged.ageRange = source.ageRange;
 
   /* Filter source out of the cast (in-place build for stable order). */
@@ -133,7 +138,7 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
   let editsAfter: SentenceOutput[] | null = null;
   if (edits?.sentences?.length) {
     let changed = 0;
-    editsAfter = edits.sentences.map(s => {
+    editsAfter = edits.sentences.map((s) => {
       if (s.characterId === sourceId) {
         changed += 1;
         return { ...s, characterId: targetId };
@@ -164,7 +169,7 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
     /* No edits on disk — best effort: sum lines, sum scenes (will
        over-count if they overlapped, but that recomputes the moment
        stage 2 lands). */
-    merged.lines  = (target.lines  ?? 0) + (source.lines  ?? 0);
+    merged.lines = (target.lines ?? 0) + (source.lines ?? 0);
     merged.scenes = (target.scenes ?? 0) + (source.scenes ?? 0);
   }
 
@@ -179,12 +184,12 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
   if (cache.stage1?.characters?.length) {
     const before = cache.stage1.characters.length;
     let next = cache.stage1.characters
-      .filter(c => c.id !== sourceId)
-      .map(c => c.id === targetId ? merged : c);
+      .filter((c) => c.id !== sourceId)
+      .map((c) => (c.id === targetId ? merged : c));
     /* Auto-created bucket: the cache wouldn't have known about it yet, so
        append the merged entry so a Phase-1 cache replay sees the same
        roster as cast.json. */
-    if (createdBucket && !next.some(c => c.id === targetId)) {
+    if (createdBucket && !next.some((c) => c.id === targetId)) {
       next = [...next, merged];
       cacheTouched = true;
     }
@@ -194,8 +199,11 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
   if (cache.chapters) {
     for (const [chapterId, sentences] of Object.entries(cache.chapters)) {
       let chChanged = false;
-      const remapped = sentences.map(s => {
-        if (s.characterId === sourceId) { chChanged = true; return { ...s, characterId: targetId }; }
+      const remapped = sentences.map((s) => {
+        if (s.characterId === sourceId) {
+          chChanged = true;
+          return { ...s, characterId: targetId };
+        }
         return s;
       });
       if (chChanged) {
@@ -210,8 +218,8 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
 
   console.log(
     `[cast-merge] book=${bookId} merged ${sourceId} → ${targetId}` +
-    (editsTouched ? ' (remapped sentences)' : '') +
-    (cacheTouched ? ' (rewrote cache)' : ''),
+      (editsTouched ? ' (remapped sentences)' : '') +
+      (cacheTouched ? ' (rewrote cache)' : ''),
   );
 
   return res.json({ characters: nextCharacters });
@@ -258,10 +266,7 @@ function mergeEvidence(
 
 /* Union two string lists, lower-case dedup, preserving first-seen order
    and casing. */
-function unionStrings(
-  a: string[] | undefined,
-  b: string[] | undefined,
-): string[] | undefined {
+function unionStrings(a: string[] | undefined, b: string[] | undefined): string[] | undefined {
   if (!a?.length && !b?.length) return undefined;
   const seen = new Set<string>();
   const out: string[] = [];

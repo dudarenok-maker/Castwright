@@ -27,7 +27,10 @@
    one candidate is returned for a character. */
 
 import { Router, type Request, type Response } from 'express';
-import { scanLibraryCharacters, type LibraryCharacterRecord } from '../workspace/library-cast-scan.js';
+import {
+  scanLibraryCharacters,
+  type LibraryCharacterRecord,
+} from '../workspace/library-cast-scan.js';
 import { jaccard, nameTokens, normaliseForMatch } from '../util/text-match.js';
 
 export const voiceMatchRouter = Router();
@@ -84,10 +87,12 @@ function projectLibraryVoice(rec: LibraryCharacterRecord): LibraryVoice | null {
     bookTitle: rec.bookTitle,
     characterId: c.id,
     name: c.name ?? c.id,
-    aliases: Array.isArray(c.aliases) ? c.aliases.filter(a => typeof a === 'string') : [],
+    aliases: Array.isArray(c.aliases) ? c.aliases.filter((a) => typeof a === 'string') : [],
     gender: c.gender,
     ageRange: c.ageRange,
-    attributes: Array.isArray(c.attributes) ? c.attributes.filter(a => typeof a === 'string') : [],
+    attributes: Array.isArray(c.attributes)
+      ? c.attributes.filter((a) => typeof a === 'string')
+      : [],
   };
 }
 
@@ -95,7 +100,7 @@ function projectLibraryVoice(rec: LibraryCharacterRecord): LibraryVoice | null {
    aliases. Used by both the exact and token scorers so "Marlow" hits when
    the library entry is "Wren" with aliases ['Marlow']. */
 function nameForms(name: string, aliases: string[]): string[] {
-  return [name, ...aliases].filter(s => typeof s === 'string' && s.length > 0);
+  return [name, ...aliases].filter((s) => typeof s === 'string' && s.length > 0);
 }
 
 function exactNameOverlap(aForms: string[], bForms: string[]): boolean {
@@ -111,14 +116,23 @@ function exactNameOverlap(aForms: string[], bForms: string[]): boolean {
    "Marlow Halden" with a multi-word alias like "Sir Singe" would drop
    from 0.5 to 0.25 and fall through the floor). Alias matches travel the
    exact-overlap path, which is the right precision for them. */
-function tokenOverlap(aName: string, bName: string): { score: number; aTokens: number; bTokens: number; shared: number } {
+function tokenOverlap(
+  aName: string,
+  bName: string,
+): { score: number; aTokens: number; bTokens: number; shared: number } {
   const aTok = nameTokens(aName);
   const bTok = nameTokens(bName);
-  if (aTok.size === 0 || bTok.size === 0) return { score: 0, aTokens: aTok.size, bTokens: bTok.size, shared: 0 };
+  if (aTok.size === 0 || bTok.size === 0)
+    return { score: 0, aTokens: aTok.size, bTokens: bTok.size, shared: 0 };
   let shared = 0;
   for (const t of aTok) if (bTok.has(t)) shared++;
   const union = aTok.size + bTok.size - shared;
-  return { score: union === 0 ? 0 : shared / union, aTokens: aTok.size, bTokens: bTok.size, shared };
+  return {
+    score: union === 0 ? 0 : shared / union,
+    aTokens: aTok.size,
+    bTokens: bTok.size,
+    shared,
+  };
 }
 
 function identityFactor(
@@ -126,15 +140,21 @@ function identityFactor(
   b: string | undefined,
 ): { score: number; detail: string; contributed: boolean } {
   if (!a && !b) return { score: 0.5, detail: 'both unspecified', contributed: false };
-  if (!a || !b)  return { score: 0.5, detail: `${a ?? 'unspecified'} / ${b ?? 'unspecified'}`, contributed: false };
-  if (a === b)   return { score: 1, detail: `${a} ≡ ${b}`, contributed: true };
+  if (!a || !b)
+    return {
+      score: 0.5,
+      detail: `${a ?? 'unspecified'} / ${b ?? 'unspecified'}`,
+      contributed: false,
+    };
+  if (a === b) return { score: 1, detail: `${a} ≡ ${b}`, contributed: true };
   return { score: 0, detail: `${a} ≠ ${b}`, contributed: true };
 }
 
 function attributesFactor(a: string[], b: string[]): { score: number; detail: string } {
-  const aSet = new Set(a.map(s => s.toLowerCase()).filter(s => s && s !== 'narrator'));
-  const bSet = new Set(b.map(s => s.toLowerCase()).filter(s => s && s !== 'narrator'));
-  if (aSet.size === 0 && bSet.size === 0) return { score: 0, detail: 'no attributes on either side' };
+  const aSet = new Set(a.map((s) => s.toLowerCase()).filter((s) => s && s !== 'narrator'));
+  const bSet = new Set(b.map((s) => s.toLowerCase()).filter((s) => s && s !== 'narrator'));
+  if (aSet.size === 0 && bSet.size === 0)
+    return { score: 0, detail: 'no attributes on either side' };
   let shared = 0;
   for (const x of aSet) if (bSet.has(x)) shared++;
   const score = jaccard(aSet, bSet);
@@ -158,10 +178,12 @@ function scoreOne(input: CharacterMatchInput, voice: LibraryVoice): Candidate | 
   if (nameScore < 0.34) return null;
 
   const gender = identityFactor(input.gender, voice.gender);
-  const age    = identityFactor(input.ageRange, voice.ageRange);
-  const attrs  = attributesFactor(input.attributes ?? [], voice.attributes);
+  const age = identityFactor(input.ageRange, voice.ageRange);
+  const attrs = attributesFactor(input.attributes ?? [], voice.attributes);
 
-  const overall = clamp01(0.65 * nameScore + 0.15 * gender.score + 0.10 * age.score + 0.10 * attrs.score);
+  const overall = clamp01(
+    0.65 * nameScore + 0.15 * gender.score + 0.1 * age.score + 0.1 * attrs.score,
+  );
 
   const factors: MatchFactor[] = [];
   if (exact) {
@@ -186,7 +208,12 @@ function scoreOne(input: CharacterMatchInput, voice: LibraryVoice): Candidate | 
     factors.push({ id: 'age_range', label: 'Age range', score: age.score, detail: age.detail });
   }
   if (attrs.score > 0) {
-    factors.push({ id: 'attributes', label: 'Attribute overlap', score: attrs.score, detail: attrs.detail });
+    factors.push({
+      id: 'attributes',
+      label: 'Attribute overlap',
+      score: attrs.score,
+      detail: attrs.detail,
+    });
   }
 
   return {
@@ -215,15 +242,21 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
   const characters: CharacterMatchInput[] = Array.isArray(body.characters)
     ? body.characters
         .filter((c): c is Record<string, unknown> => typeof c === 'object' && c !== null)
-        .map((c): CharacterMatchInput => ({
-          id: String(c.id ?? ''),
-          name: String(c.name ?? c.id ?? ''),
-          aliases: Array.isArray(c.aliases) ? c.aliases.filter((s): s is string => typeof s === 'string') : [],
-          gender: asGender(c.gender),
-          ageRange: asAgeRange(c.ageRange),
-          attributes: Array.isArray(c.attributes) ? c.attributes.filter((s): s is string => typeof s === 'string') : [],
-        }))
-        .filter(c => c.id.length > 0)
+        .map(
+          (c): CharacterMatchInput => ({
+            id: String(c.id ?? ''),
+            name: String(c.name ?? c.id ?? ''),
+            aliases: Array.isArray(c.aliases)
+              ? c.aliases.filter((s): s is string => typeof s === 'string')
+              : [],
+            gender: asGender(c.gender),
+            ageRange: asAgeRange(c.ageRange),
+            attributes: Array.isArray(c.attributes)
+              ? c.attributes.filter((s): s is string => typeof s === 'string')
+              : [],
+          }),
+        )
+        .filter((c) => c.id.length > 0)
     : [];
 
   const allow = Array.isArray(body.libraryVoiceIds)
@@ -243,7 +276,7 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
       voices.push(v);
     }
 
-    const matches = characters.map(c => {
+    const matches = characters.map((c) => {
       const scored: Candidate[] = [];
       for (const v of voices) {
         const cand = scoreOne(c, v);

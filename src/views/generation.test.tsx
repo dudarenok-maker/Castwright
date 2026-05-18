@@ -28,8 +28,8 @@ function HostedGenerationView(props: ComponentProps<typeof GenerationView>) {
   return (
     <MemoryRouter>
       <Routes>
-        <Route element={<HostedOutlet/>}>
-          <Route path="*" element={<UnwrappedGenerationView {...props}/>}/>
+        <Route element={<HostedOutlet />}>
+          <Route path="*" element={<UnwrappedGenerationView {...props} />} />
         </Route>
       </Routes>
     </MemoryRouter>
@@ -41,7 +41,7 @@ const UnwrappedGenerationView = GenerationView;
 function HostedOutlet() {
   const ttsLifecycle = useTtsLifecycle();
   const ctx: LayoutContext = { showInfo: vi.fn(), showError: vi.fn(), ttsLifecycle };
-  return <Outlet context={ctx}/>;
+  return <Outlet context={ctx} />;
 }
 
 const streamGenerationMock = vi.fn();
@@ -61,7 +61,7 @@ vi.mock('../lib/api', () => ({
       streamGenerationMock(args);
       return () => {};
     },
-    getChapterAudio:  () => new Promise(() => {}),
+    getChapterAudio: () => new Promise(() => {}),
     /* Sidecar status pill polls this on mount. Resolve with a happy status
        so the pill renders the green variant without spamming console
        warnings during the test render. */
@@ -69,11 +69,14 @@ vi.mock('../lib/api', () => ({
     /* The Generate-screen Load TTS button checks analyzer health to decide
        whether to surface the auto-evict banner — wire a controllable stub
        so each test can simulate "analyzer loaded" vs "nothing to evict". */
-    getOllamaHealth:  () => getOllamaHealthSpy(),
-    loadSidecar:      () => loadSidecarSpy(),
-    unloadSidecar:    () => unloadSidecarSpy(),
-    loadAnalyzer:     () => Promise.resolve({ status: 'ready' }),
-    unloadAnalyzer:   () => { unloadAnalyzerSpy(); return Promise.resolve({ status: 'unloaded' }); },
+    getOllamaHealth: () => getOllamaHealthSpy(),
+    loadSidecar: () => loadSidecarSpy(),
+    unloadSidecar: () => unloadSidecarSpy(),
+    loadAnalyzer: () => Promise.resolve({ status: 'ready' }),
+    unloadAnalyzer: () => {
+      unloadAnalyzerSpy();
+      return Promise.resolve({ status: 'unloaded' });
+    },
     /* Drives the Include-in-book toggle. The handler always flips the
        flag first, then runs subset analysis on the un-exclude path. */
     setChapterExcluded: (bookId: string, chapterId: number, excluded: boolean) =>
@@ -105,7 +108,13 @@ beforeEach(() => {
   getSidecarHealthSpy.mockReset();
   setChapterExcludedSpy.mockReset();
   runAnalysisForChaptersSpy.mockReset();
-  getOllamaHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', models: [], resident: [], modelResident: false });
+  getOllamaHealthSpy.mockResolvedValue({
+    status: 'reachable',
+    url: '(test)',
+    models: [],
+    resident: [],
+    modelResident: false,
+  });
   getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
   loadSidecarSpy.mockResolvedValue({ status: 'ready' });
   unloadSidecarSpy.mockResolvedValue({ status: 'idle' });
@@ -119,14 +128,14 @@ beforeEach(() => {
 
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
-  { id: 'Marlow',    name: 'Marlow',    role: 'Empath',   color: 'peach' },
+  { id: 'Marlow', name: 'Marlow', role: 'Empath', color: 'peach' },
 ];
 
 const sentences: Sentence[] = [
-  { id: 1, chapterId: 1, characterId: 'narrator', text: 'A long room.' },                    // 3 words
-  { id: 2, chapterId: 1, characterId: 'Marlow',    text: 'Hello there friend!' },             // 3 words
-  { id: 3, chapterId: 1, characterId: 'Marlow',    text: 'How are you today on this fine evening?' }, // 8 words
-  { id: 4, chapterId: 2, characterId: 'narrator', text: 'Elsewhere entirely.' },             // 2 words
+  { id: 1, chapterId: 1, characterId: 'narrator', text: 'A long room.' }, // 3 words
+  { id: 2, chapterId: 1, characterId: 'Marlow', text: 'Hello there friend!' }, // 3 words
+  { id: 3, chapterId: 1, characterId: 'Marlow', text: 'How are you today on this fine evening?' }, // 8 words
+  { id: 4, chapterId: 2, characterId: 'narrator', text: 'Elsewhere entirely.' }, // 2 words
 ];
 
 const chapter1: Chapter = {
@@ -149,22 +158,24 @@ const chapter2: Chapter = {
 function makeStore() {
   const store = configureStore({
     reducer: {
-      ui:         uiSlice.reducer,
-      chapters:   chaptersSlice.reducer,
+      ui: uiSlice.reducer,
+      chapters: chaptersSlice.reducer,
       manuscript: manuscriptSlice.reducer,
-      changeLog:  changeLogSlice.reducer,
-      cast:       castSlice.reducer,
-      library:    librarySlice.reducer,
+      changeLog: changeLogSlice.reducer,
+      cast: castSlice.reducer,
+      library: librarySlice.reducer,
     },
   });
   store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
-  store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-    bookId: 'b1',
-    characters,
-    chapters: [chapter1, chapter2],
-    sentences,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any));
+  store.dispatch(
+    manuscriptSlice.actions.hydrateFromAnalysis({
+      bookId: 'b1',
+      characters,
+      chapters: [chapter1, chapter2],
+      sentences,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any),
+  );
   return store;
 }
 
@@ -190,7 +201,9 @@ function renderView() {
 }
 
 describe('GenerationView — chapter & character metadata (regression for screenshot bug)', () => {
-  beforeEach(() => { /* paused=true so the streamGeneration effect short-circuits */ });
+  beforeEach(() => {
+    /* paused=true so the streamGeneration effect short-circuits */
+  });
 
   it('shows manuscript-derived word/line/speaker counts under each chapter title', () => {
     renderView();
@@ -205,7 +218,7 @@ describe('GenerationView — chapter & character metadata (regression for screen
     renderView();
     /* The chapter row toggle is the first button containing "CH 01". */
     fireEvent.click(screen.getByText('Chapter 1'));
-    expect(screen.getByText(/1 line · 3 words/)).toBeInTheDocument();   // narrator in ch 1
+    expect(screen.getByText(/1 line · 3 words/)).toBeInTheDocument(); // narrator in ch 1
     expect(screen.getByText(/2 lines · 11 words/)).toBeInTheDocument(); // Marlow in ch 1
   });
 
@@ -245,22 +258,24 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     ];
     const store = configureStore({
       reducer: {
-        ui:         uiSlice.reducer,
-        chapters:   chaptersSlice.reducer,
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
-        changeLog:  changeLogSlice.reducer,
-        cast:       castSlice.reducer,
-        library:    librarySlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([ch1Done, ch2Queued, ch3Excluded]));
-    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-      bookId: 'b1',
-      characters,
-      chapters: [ch1Done, ch2Queued, ch3Excluded],
-      sentences: [...sentences, ...ch3Sentences],
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [ch1Done, ch2Queued, ch3Excluded],
+        sentences: [...sentences, ...ch3Sentences],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+    );
     render(
       <Provider store={store}>
         <HostedGenerationView
@@ -318,10 +333,15 @@ describe('GenerationView — early-tick render guards (regression)', () => {
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([live]));
-    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-      bookId: 'b1', characters, chapters: [live], sentences,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [live],
+        sentences,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+    );
     render(
       <Provider store={store}>
         <HostedGenerationView
@@ -346,8 +366,9 @@ describe('GenerationView — early-tick render guards (regression)', () => {
        counters in the page header (Completed/Failed) don't trip it. */
     const card = screen.getByText('Chapter 1').closest('.rounded-3xl');
     expect(card).not.toBeNull();
-    const stray = Array.from(card!.querySelectorAll('*'))
-      .filter(el => el.children.length === 0 && el.textContent === '0');
+    const stray = Array.from(card!.querySelectorAll('*')).filter(
+      (el) => el.children.length === 0 && el.textContent === '0',
+    );
     expect(stray).toHaveLength(0);
   });
 });
@@ -361,9 +382,9 @@ describe('GenerationView — per-character progress is derived from the manuscri
 
   const cast: Character[] = [
     { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
-    { id: 'Marlow',    name: 'Marlow',    role: 'Empath',   color: 'peach' },
-    { id: 'ro',       name: 'Ro',       role: 'Goblin',   color: 'magenta' },
-    { id: 'Oduvan',    name: 'Oduvan',    role: 'Physician', color: 'violet' },
+    { id: 'Marlow', name: 'Marlow', role: 'Empath', color: 'peach' },
+    { id: 'ro', name: 'Ro', role: 'Goblin', color: 'magenta' },
+    { id: 'Oduvan', name: 'Oduvan', role: 'Physician', color: 'violet' },
   ];
 
   /* Day-One-shaped chapter: narrator dominates, the other three each speak
@@ -372,27 +393,27 @@ describe('GenerationView — per-character progress is derived from the manuscri
      not "Done". Pre-fix the slice would have marked all three "done" the
      moment the next speaker took over. */
   const dayOne: Sentence[] = [
-    { id: 1,  chapterId: 2, characterId: 'narrator', text: 'open' },
-    { id: 2,  chapterId: 2, characterId: 'narrator', text: 'b' },
-    { id: 3,  chapterId: 2, characterId: 'Marlow',    text: 'k1' },
-    { id: 4,  chapterId: 2, characterId: 'narrator', text: 'c' },
-    { id: 5,  chapterId: 2, characterId: 'ro',       text: 'r1' },
-    { id: 6,  chapterId: 2, characterId: 'narrator', text: 'd' },
-    { id: 7,  chapterId: 2, characterId: 'Oduvan',    text: 'e1' },
-    { id: 8,  chapterId: 2, characterId: 'narrator', text: 'e' },
-    { id: 9,  chapterId: 2, characterId: 'narrator', text: 'f' },
+    { id: 1, chapterId: 2, characterId: 'narrator', text: 'open' },
+    { id: 2, chapterId: 2, characterId: 'narrator', text: 'b' },
+    { id: 3, chapterId: 2, characterId: 'Marlow', text: 'k1' },
+    { id: 4, chapterId: 2, characterId: 'narrator', text: 'c' },
+    { id: 5, chapterId: 2, characterId: 'ro', text: 'r1' },
+    { id: 6, chapterId: 2, characterId: 'narrator', text: 'd' },
+    { id: 7, chapterId: 2, characterId: 'Oduvan', text: 'e1' },
+    { id: 8, chapterId: 2, characterId: 'narrator', text: 'e' },
+    { id: 9, chapterId: 2, characterId: 'narrator', text: 'f' },
     { id: 10, chapterId: 2, characterId: 'narrator', text: 'g' },
     { id: 11, chapterId: 2, characterId: 'narrator', text: 'h' },
     { id: 12, chapterId: 2, characterId: 'narrator', text: 'i' },
     { id: 13, chapterId: 2, characterId: 'narrator', text: 'j (current)' },
     /* Each non-narrator has at least one line still ahead of line 13 so
        they appear as partial progress, not "Done". */
-    { id: 14, chapterId: 2, characterId: 'Marlow',    text: 'k2' },
-    { id: 15, chapterId: 2, characterId: 'Oduvan',    text: 'e2' },
-    { id: 16, chapterId: 2, characterId: 'ro',       text: 'r2' },
-    { id: 17, chapterId: 2, characterId: 'Marlow',    text: 'k3' },
-    { id: 18, chapterId: 2, characterId: 'Oduvan',    text: 'e3' },
-    { id: 19, chapterId: 2, characterId: 'Oduvan',    text: 'e4' },
+    { id: 14, chapterId: 2, characterId: 'Marlow', text: 'k2' },
+    { id: 15, chapterId: 2, characterId: 'Oduvan', text: 'e2' },
+    { id: 16, chapterId: 2, characterId: 'ro', text: 'r2' },
+    { id: 17, chapterId: 2, characterId: 'Marlow', text: 'k3' },
+    { id: 18, chapterId: 2, characterId: 'Oduvan', text: 'e3' },
+    { id: 19, chapterId: 2, characterId: 'Oduvan', text: 'e4' },
     { id: 20, chapterId: 2, characterId: 'narrator', text: 'closer' },
   ];
 
@@ -410,9 +431,9 @@ describe('GenerationView — per-character progress is derived from the manuscri
          back at 'queued'. Pre-fix they'd all have been 'done' here. */
       characters: {
         narrator: 'in_progress',
-        Marlow:    'queued',
-        ro:       'queued',
-        Oduvan:    'queued',
+        Marlow: 'queued',
+        ro: 'queued',
+        Oduvan: 'queued',
       },
     };
     const store = configureStore({
@@ -426,10 +447,15 @@ describe('GenerationView — per-character progress is derived from the manuscri
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([liveChapter]));
-    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-      bookId: 'b1', characters: cast, chapters: [liveChapter], sentences: dayOne,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters: cast,
+        chapters: [liveChapter],
+        sentences: dayOne,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+    );
     return render(
       <Provider store={store}>
         <HostedGenerationView
@@ -503,18 +529,29 @@ describe('GenerationView — heartbeat / stalled state', () => {
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([live]));
-    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-      bookId: 'b1', characters, chapters: [live], sentences,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [live],
+        sentences,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+    );
     /* Drive a real progress tick so the slice writes lastTickAt = Date.now()
        at the anchored instant. Then advance the clock by 60s and render —
        the view computes `stalled = Date.now() - lastTickAt > 30_000`. */
-    store.dispatch(chaptersSlice.actions.applyGenerationTick({
-      type: 'progress', chapterId: 1, characterId: 'narrator',
-      progress: 0.5, currentLine: 50, totalLines: 100,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any));
+    store.dispatch(
+      chaptersSlice.actions.applyGenerationTick({
+        type: 'progress',
+        chapterId: 1,
+        characterId: 'narrator',
+        progress: 0.5,
+        currentLine: 50,
+        totalLines: 100,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+    );
     vi.setSystemTime(new Date('2026-05-13T15:01:00Z'));
 
     render(
@@ -561,17 +598,21 @@ describe('GenerationView — activity sidebar', () => {
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
     /* Replace the default seed with a single system event so the assertion
        is unambiguous. */
-    store.dispatch(changeLogSlice.actions.hydrateFromBookState([{
-      id: 1,
-      at: new Date().toISOString(),
-      ts: 'Just now',
-      date: 'today',
-      type: 'chapter_complete',
-      title: 'Chapter 1 complete',
-      note: 'Finished synthesising "Chapter 1".',
-      actor: 'system',
-      chapterId: 1,
-    }]));
+    store.dispatch(
+      changeLogSlice.actions.hydrateFromBookState([
+        {
+          id: 1,
+          at: new Date().toISOString(),
+          ts: 'Just now',
+          date: 'today',
+          type: 'chapter_complete',
+          title: 'Chapter 1 complete',
+          note: 'Finished synthesising "Chapter 1".',
+          actor: 'system',
+          chapterId: 1,
+        },
+      ]),
+    );
 
     render(
       <Provider store={store}>
@@ -603,7 +644,13 @@ describe('GenerationView — header action once the run is complete', () => {
      Regenerate entry-point that opens the existing modal. */
   it('replaces Pause/Resume with a book-level Regenerate when every chapter is done', () => {
     const allDone1: Chapter = { ...chapter1 };
-    const allDone2: Chapter = { ...chapter2, state: 'done', progress: 1, duration: '00:42', characters: { narrator: 'done', Marlow: 'done' } };
+    const allDone2: Chapter = {
+      ...chapter2,
+      state: 'done',
+      progress: 1,
+      duration: '00:42',
+      characters: { narrator: 'done', Marlow: 'done' },
+    };
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -615,10 +662,15 @@ describe('GenerationView — header action once the run is complete', () => {
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([allDone1, allDone2]));
-    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-      bookId: 'b1', characters, chapters: [allDone1, allDone2], sentences,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [allDone1, allDone2],
+        sentences,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+    );
 
     const onRegenerateBook = vi.fn();
     render(
@@ -660,10 +712,15 @@ describe('GenerationView — header action once the run is complete', () => {
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
-    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-      bookId: 'b1', characters, chapters: [chapter1, chapter2], sentences,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [chapter1, chapter2],
+        sentences,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+    );
 
     render(
       <Provider store={store}>
@@ -699,32 +756,39 @@ describe('GenerationView — reverse local-analyzer guard on Resume (D2)', () =>
   function makeStoreWithAnalysis(opts: { engine?: 'local' | 'gemini' } = {}) {
     const store = configureStore({
       reducer: {
-        ui:         uiSlice.reducer,
-        chapters:   chaptersSlice.reducer,
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
-        changeLog:  changeLogSlice.reducer,
-        cast:       castSlice.reducer,
-        library:    librarySlice.reducer,
-        analysis:   analysisSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        analysis: analysisSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
-    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-      bookId: 'b1', characters, chapters: [chapter1, chapter2], sentences,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any));
-    store.dispatch(analysisActions.setActiveStream({
-      bookId: 'other_book',
-      manuscriptId: 'm_other',
-      bookTitle: 'Other Book Mid-Analysis',
-      engine: opts.engine ?? 'local',
-      phaseId: 0,
-      phaseLabel: 'Detecting characters',
-      phaseProgress: 0.1,
-      remainingMs: null,
-      lastTickAt: Date.now(),
-      state: 'running',
-    }));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [chapter1, chapter2],
+        sentences,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+    );
+    store.dispatch(
+      analysisActions.setActiveStream({
+        bookId: 'other_book',
+        manuscriptId: 'm_other',
+        bookTitle: 'Other Book Mid-Analysis',
+        engine: opts.engine ?? 'local',
+        phaseId: 0,
+        phaseLabel: 'Detecting characters',
+        phaseProgress: 0.1,
+        remainingMs: null,
+        lastTickAt: Date.now(),
+        state: 'running',
+      }),
+    );
     return store;
   }
 
@@ -818,7 +882,9 @@ describe('GenerationView — reverse local-analyzer guard on Resume (D2)', () =>
 });
 
 describe('generationStreamMiddleware — Pause/Resume regenerate loop (regression)', () => {
-  beforeEach(() => { streamGenerationMock.mockClear(); });
+  beforeEach(() => {
+    streamGenerationMock.mockClear();
+  });
 
   it('opens the SSE on regenerateChapter and drains pendingRegen immediately', () => {
     /* The bug: pause aborts the SSE before the server's idle tick arrives,
@@ -854,7 +920,10 @@ describe('generationStreamMiddleware — Pause/Resume regenerate loop (regressio
     /* streamGeneration MUST have been called with the spec (otherwise we'd
        have broken the regenerate path entirely). */
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    const callArgs = streamGenerationMock.mock.calls[0]?.[0] as { chapterIds?: unknown; force?: unknown };
+    const callArgs = streamGenerationMock.mock.calls[0]?.[0] as {
+      chapterIds?: unknown;
+      force?: unknown;
+    };
     expect(callArgs?.chapterIds).toEqual([1]);
     expect(callArgs?.force).toBe(true);
 
@@ -880,9 +949,13 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
     /* modelResident is the truth: pulled-but-not-resident shouldn't fire
        the banner. /api/ps says qwen3.5:4b is in VRAM right now. */
     getOllamaHealthSpy.mockResolvedValue({
-      status: 'reachable', url: '(test)',
-      models: ['qwen3.5:4b'], expectedModel: 'qwen3.5:4b', modelPulled: true,
-      resident: ['qwen3.5:4b'], modelResident: true,
+      status: 'reachable',
+      url: '(test)',
+      models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b',
+      modelPulled: true,
+      resident: ['qwen3.5:4b'],
+      modelResident: true,
     });
 
     renderView();
@@ -891,11 +964,12 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
 
     /* unloadAnalyzer must run before loadSidecar — otherwise both models
        briefly share VRAM and the GPU OOMs on a tight box. */
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     expect(unloadAnalyzerSpy).toHaveBeenCalled();
     expect(loadSidecarSpy).toHaveBeenCalled();
-    expect(unloadAnalyzerSpy.mock.invocationCallOrder[0])
-      .toBeLessThan(loadSidecarSpy.mock.invocationCallOrder[0]);
+    expect(unloadAnalyzerSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      loadSidecarSpy.mock.invocationCallOrder[0],
+    );
 
     expect(await screen.findByText(/Analyzer unloaded to free VRAM/i)).toBeInTheDocument();
   });
@@ -905,29 +979,37 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
        got wrong — it fired the banner for a model that was never warmed.
        modelResident:false guards against that lie. */
     getOllamaHealthSpy.mockResolvedValue({
-      status: 'reachable', url: '(test)',
-      models: ['qwen3.5:4b'], expectedModel: 'qwen3.5:4b', modelPulled: true,
-      resident: [], modelResident: false,
+      status: 'reachable',
+      url: '(test)',
+      models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b',
+      modelPulled: true,
+      resident: [],
+      modelResident: false,
     });
 
     renderView();
     const loadBtn = await findLoadTtsButton();
     fireEvent.click(loadBtn);
 
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     expect(loadSidecarSpy).toHaveBeenCalled();
     expect(screen.queryByText(/Analyzer unloaded to free VRAM/i)).not.toBeInTheDocument();
   });
 
   it('calls unloadSidecar when the user clicks Stop', async () => {
-    getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: true });
+    getSidecarHealthSpy.mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      modelLoaded: true,
+    });
 
     renderView();
     /* Pill state should be "ready" → button reads "Stop". */
     const stopBtn = await screen.findByRole('button', { name: /stop \(tts model\)/i });
     fireEvent.click(stopBtn);
 
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     expect(unloadSidecarSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -971,22 +1053,24 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
   function renderWithChapters(chapters: Chapter[], modelKey: 'coqui-xtts-v2' | 'kokoro-v1'): void {
     const store = configureStore({
       reducer: {
-        ui:         uiSlice.reducer,
-        chapters:   chaptersSlice.reducer,
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
-        changeLog:  changeLogSlice.reducer,
-        cast:       castSlice.reducer,
-        library:    librarySlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters(chapters));
-    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-      bookId: 'b1',
-      characters,
-      chapters,
-      sentences,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters,
+        sentences,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+    );
     render(
       <Provider store={store}>
         <HostedGenerationView
@@ -1018,13 +1102,15 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
     expect(screen.queryByText(/Generated with .* · current engine is/i)).toBeNull();
   });
 
-  it('surfaces a per-row drift caption when a done chapter\'s audioModelKey differs from the active engine', () => {
+  it("surfaces a per-row drift caption when a done chapter's audioModelKey differs from the active engine", () => {
     const drifted: Chapter = {
       ...chapter1,
       audioModelKey: 'coqui-xtts-v2',
     };
     renderWithChapters([drifted, chapter2], 'kokoro-v1');
-    expect(screen.getByText(/Generated with Coqui XTTS v2 · current engine is Kokoro v1/i)).toBeTruthy();
+    expect(
+      screen.getByText(/Generated with Coqui XTTS v2 · current engine is Kokoro v1/i),
+    ).toBeTruthy();
   });
 
   it('top-of-view banner counts every drifted done chapter', () => {
@@ -1081,22 +1167,24 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
   function makeDriftStore(chapters: Chapter[]) {
     const store = configureStore({
       reducer: {
-        ui:         uiSlice.reducer,
-        chapters:   chaptersSlice.reducer,
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
-        changeLog:  changeLogSlice.reducer,
-        cast:       castSlice.reducer,
-        library:    librarySlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters(chapters));
-    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-      bookId: 'b1',
-      characters,
-      chapters,
-      sentences,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters,
+        sentences,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+    );
     return store;
   }
 
@@ -1152,9 +1240,9 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
        queues; chapter 2 (queued, never drifted) is untouched. */
     const state = store.getState();
     expect(state.chapters.pendingRegen).toEqual({ chapterIds: [1, 3], force: true });
-    expect(state.chapters.chapters.find(c => c.id === 1)?.state).toBe('in_progress');
-    expect(state.chapters.chapters.find(c => c.id === 2)?.state).toBe('queued');
-    expect(state.chapters.chapters.find(c => c.id === 3)?.state).toBe('queued');
+    expect(state.chapters.chapters.find((c) => c.id === 1)?.state).toBe('in_progress');
+    expect(state.chapters.chapters.find((c) => c.id === 2)?.state).toBe('queued');
+    expect(state.chapters.chapters.find((c) => c.id === 3)?.state).toBe('queued');
     expect(state.chapters.regenEpoch).toBe(1);
   });
 
@@ -1259,7 +1347,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     ],
     sentences: [
       { id: 50, chapterId: 3, characterId: 'narrator', text: 'Chapter three begins.' },
-      { id: 51, chapterId: 3, characterId: 'Wren',   text: 'I have something to say.' },
+      { id: 51, chapterId: 3, characterId: 'Wren', text: 'I have something to say.' },
     ],
     libraryMatches: [],
   };
@@ -1273,12 +1361,12 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
   } = {}) {
     const store = configureStore({
       reducer: {
-        ui:         uiSlice.reducer,
-        chapters:   chaptersSlice.reducer,
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
-        changeLog:  changeLogSlice.reducer,
-        cast:       castSlice.reducer,
-        library:    librarySlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2, ch3Excluded]));
@@ -1289,39 +1377,45 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
        would pollute our subset-merge assertions). uploadComplete
        second to set manuscriptId — the un-exclude handler bails out
        early when it's null, so we need a value before the click. */
-    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({
-      bookId: 'b1',
-      manuscriptId: 'm1',
-      title: 'the Coalfall Commission',
-      characters,
-      chapters: [chapter1, chapter2, ch3Excluded],
-      sentences,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any));
-    store.dispatch(manuscriptSlice.actions.uploadComplete({
-      manuscriptId: 'm1',
-      title: 'the Coalfall Commission',
-      format: 'plaintext',
-      wordCount: 0,
-      byteSize: 0,
-      uploadedAt: new Date().toISOString(),
-      sourceText: '',
-    }));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        title: 'the Coalfall Commission',
+        characters,
+        chapters: [chapter1, chapter2, ch3Excluded],
+        sentences,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+    );
+    store.dispatch(
+      manuscriptSlice.actions.uploadComplete({
+        manuscriptId: 'm1',
+        title: 'the Coalfall Commission',
+        format: 'plaintext',
+        wordCount: 0,
+        byteSize: 0,
+        uploadedAt: new Date().toISOString(),
+        sourceText: '',
+      }),
+    );
     store.dispatch(castSlice.actions.setCharacters(characters));
     if (selectedModel) {
       store.dispatch(uiSlice.actions.setSelectedModel(selectedModel));
     }
     if (activeStream) {
-      store.dispatch(chaptersSlice.actions.setActiveStream({
-        bookId: activeStream.bookId,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        modelKey: activeStream.modelKey as any,
-        done: 0,
-        total: 2,
-        inProgress: 1,
-        lastTickAt: Date.now(),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any));
+      store.dispatch(
+        chaptersSlice.actions.setActiveStream({
+          bookId: activeStream.bookId,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          modelKey: activeStream.modelKey as any,
+          done: 0,
+          total: 2,
+          inProgress: 1,
+          lastTickAt: Date.now(),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any),
+      );
     }
     return store;
   }
@@ -1348,7 +1442,12 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
 
   it('on success, merges sentences into the manuscript slice, characters into cast, and clears the row excluded flag', async () => {
     const store = makeIncludeStore();
-    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    setChapterExcludedSpy.mockResolvedValue({
+      id: 3,
+      title: 'Chapter 3',
+      slug: '03-chapter-3',
+      excluded: false,
+    });
     runAnalysisForChaptersSpy.mockResolvedValue(subsetResponse);
 
     renderInclude(store);
@@ -1359,22 +1458,27 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
        the slice change is the load-bearing signal that the merge ran. */
     await screen.findByText('14 words · 3 lines · 2 speakers'); // chapter 1 still renders normally
     const state = store.getState();
-    expect(state.chapters.chapters.find(c => c.id === 3)?.excluded).toBeUndefined();
+    expect(state.chapters.chapters.find((c) => c.id === 3)?.excluded).toBeUndefined();
     /* Manuscript merge — pre-fix this stayed as the original 4 sentences. */
-    const ch3Sentences = state.manuscript.sentences.filter(s => s.chapterId === 3);
+    const ch3Sentences = state.manuscript.sentences.filter((s) => s.chapterId === 3);
     expect(ch3Sentences).toHaveLength(2);
-    expect(ch3Sentences.map(s => s.characterId).sort()).toEqual(['narrator', 'Wren']);
+    expect(ch3Sentences.map((s) => s.characterId).sort()).toEqual(['narrator', 'Wren']);
     /* Cast merge — Wren is a newly-detected character. */
-    expect(state.cast.characters.some(c => c.id === 'Wren')).toBe(true);
+    expect(state.cast.characters.some((c) => c.id === 'Wren')).toBe(true);
     /* Chapter characters map populated for ch3 — the row will render
        Wren + narrator as queued speakers on the next paint. */
-    const ch3 = state.chapters.chapters.find(c => c.id === 3);
+    const ch3 = state.chapters.chapters.find((c) => c.id === 3);
     expect(ch3?.characters).toMatchObject({ narrator: 'queued', Wren: 'queued' });
   });
 
   it('renders inline phase + percentage while subset analysis is streaming', async () => {
     const store = makeIncludeStore();
-    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    setChapterExcludedSpy.mockResolvedValue({
+      id: 3,
+      title: 'Chapter 3',
+      slug: '03-chapter-3',
+      excluded: false,
+    });
     /* Capture the opts to invoke onPhase synchronously after the click,
        and return a never-resolving promise so the row stays in the
        running variant for assertion. */
@@ -1391,13 +1495,20 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     await screen.findByRole('button', { name: /Cancel/i });
 
     capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.37 });
-    expect(await screen.findByText(/Re-analyzing — Detecting characters \(Phase 0a\)/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Re-analyzing — Detecting characters \(Phase 0a\)/i),
+    ).toBeInTheDocument();
     expect(screen.getByText('37%')).toBeInTheDocument();
   });
 
   it('Cancel aborts the underlying signal and reverts the row to the idle Include CTA', async () => {
     const store = makeIncludeStore();
-    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    setChapterExcludedSpy.mockResolvedValue({
+      id: 3,
+      title: 'Chapter 3',
+      slug: '03-chapter-3',
+      excluded: false,
+    });
     let capturedSignal: AbortSignal | undefined;
     runAnalysisForChaptersSpy.mockImplementation((_id, _ids, opts) => {
       capturedSignal = (opts as { signal?: AbortSignal })?.signal;
@@ -1422,7 +1533,12 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
 
   it('on error, surfaces the message inline with a Retry button that re-runs the subset call', async () => {
     const store = makeIncludeStore();
-    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    setChapterExcludedSpy.mockResolvedValue({
+      id: 3,
+      title: 'Chapter 3',
+      slug: '03-chapter-3',
+      excluded: false,
+    });
     runAnalysisForChaptersSpy.mockRejectedValueOnce(new Error('analyzer offline'));
 
     renderInclude(store);
@@ -1447,7 +1563,12 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       selectedModel: 'qwen3.5:4b',
       activeStream: { bookId: 'other-book', modelKey: 'coqui-xtts-v2' },
     });
-    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    setChapterExcludedSpy.mockResolvedValue({
+      id: 3,
+      title: 'Chapter 3',
+      slug: '03-chapter-3',
+      excluded: false,
+    });
     runAnalysisForChaptersSpy.mockResolvedValue(subsetResponse);
 
     renderInclude(store);
@@ -1469,7 +1590,12 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       selectedModel: 'gemini-2.5-flash',
       activeStream: { bookId: 'other-book', modelKey: 'coqui-xtts-v2' },
     });
-    setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+    setChapterExcludedSpy.mockResolvedValue({
+      id: 3,
+      title: 'Chapter 3',
+      slug: '03-chapter-3',
+      excluded: false,
+    });
     runAnalysisForChaptersSpy.mockResolvedValue(subsetResponse);
 
     renderInclude(store);

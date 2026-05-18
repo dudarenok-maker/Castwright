@@ -32,8 +32,8 @@ export function splitSentenceSegments(s: string, minLen = 8): string[] {
   return s
     .split(/[.!?]+\s+/)
     .map(stripTerminalSentencePunct)
-    .map(seg => seg.trim())
-    .filter(seg => seg.length >= minLen);
+    .map((seg) => seg.trim())
+    .filter((seg) => seg.length >= minLen);
 }
 
 export type QuoteMatchTier = 'verbatim' | 'terminal_punct' | 'segments';
@@ -55,10 +55,7 @@ export type QuoteMatchTier = 'verbatim' | 'terminal_punct' | 'segments';
 
     Returns `null` when no tier passes — the verifier then drops the quote
     and the ledger records the reason. */
-export function matchQuoteInSource(
-  norm: string,
-  normalisedSource: string,
-): QuoteMatchTier | null {
+export function matchQuoteInSource(norm: string, normalisedSource: string): QuoteMatchTier | null {
   if (norm.length === 0) return null;
   if (normalisedSource.includes(norm)) return 'verbatim';
 
@@ -68,7 +65,7 @@ export function matchQuoteInSource(
   }
 
   const segments = splitSentenceSegments(norm);
-  if (segments.length >= 2 && segments.every(seg => normalisedSource.includes(seg))) {
+  if (segments.length >= 2 && segments.every((seg) => normalisedSource.includes(seg))) {
     return 'segments';
   }
 
@@ -84,7 +81,7 @@ export function nameTokens(name: string): Set<string> {
   return new Set(
     normaliseForMatch(name)
       .split(/[\s\-_'.]+/)
-      .filter(t => t.length >= 2),
+      .filter((t) => t.length >= 2),
   );
 }
 

@@ -61,8 +61,8 @@ delegating work — prefer it over running multiple agents on the same checkout.
 Conflicts are avoided by **agreeing what each branch touches**, not by clever
 merge tooling. Two parallel branches should have near-disjoint file sets:
 
-| Scope      | File set                                             |
-| ---------- | ---------------------------------------------------- |
+| Scope      | File set                                              |
+| ---------- | ----------------------------------------------------- |
 | `frontend` | `src/`                                                |
 | `server`   | `server/src/`                                         |
 | `sidecar`  | `server/tts-sidecar/`                                 |
@@ -210,8 +210,8 @@ GitHub auto-populates the body from [`.github/pull_request_template.md`](.github
 Two required sections:
 
 1. **`## Summary`** — 1-3 sentences: what changes, why. If a regression plan
-   under `docs/features/` applies, link it here (e.g. *"Implements
-   `docs/features/44-pr-hygiene.md`."*). If the PR fills a plan's Ship notes,
+   under `docs/features/` applies, link it here (e.g. _"Implements
+   `docs/features/44-pr-hygiene.md`."_). If the PR fills a plan's Ship notes,
    say so.
 2. **`## Test plan`** — checklist of what was run and what reviewers should
    look at. Always start with `- [ ] npm run verify — green` (the pre-push

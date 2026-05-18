@@ -86,7 +86,7 @@ export const changeLogSlice = createSlice({
        no chapterId and survive — they're either still accurate or remain
        informative across a reparse. */
     wipeBookShapeEvents: (s) => {
-      s.events = s.events.filter(e => e.chapterId === undefined);
+      s.events = s.events.filter((e) => e.chapterId === undefined);
     },
     hydrateFromBookState: (s, a: PayloadAction<ChangeLogEvent[] | null | undefined>) => {
       s.events = a.payload && a.payload.length > 0 ? a.payload : [];
@@ -95,9 +95,9 @@ export const changeLogSlice = createSlice({
        Resets cursor + counts atomically with the events so a stale total
        from a previous mount doesn't briefly render alongside the new page. */
     hydrateWorkspaceFirstPage: (s, a: PayloadAction<WorkspacePagePayload>) => {
-      s.workspaceEvents         = a.payload.events;
-      s.workspaceNextCursor     = a.payload.nextCursor;
-      s.workspaceTotalCount     = a.payload.totalCount;
+      s.workspaceEvents = a.payload.events;
+      s.workspaceNextCursor = a.payload.nextCursor;
+      s.workspaceTotalCount = a.payload.totalCount;
       s.workspaceCategoryCounts = a.payload.categoryCounts;
     },
     /* Append the next page to the workspace cache without disturbing the
@@ -108,7 +108,7 @@ export const changeLogSlice = createSlice({
       s.workspaceNextCursor = a.payload.nextCursor;
       /* Server's totals are authoritative — re-sync in case a write landed
          between page fetches. */
-      s.workspaceTotalCount     = a.payload.totalCount;
+      s.workspaceTotalCount = a.payload.totalCount;
       s.workspaceCategoryCounts = a.payload.categoryCounts;
     },
     /* Legacy single-list hydrate — preserved so callers that only have a
@@ -116,15 +116,15 @@ export const changeLogSlice = createSlice({
        path) still compile. New code should prefer hydrateWorkspaceFirstPage
        so counts + cursor stay in sync. */
     hydrateWorkspaceEvents: (s, a: PayloadAction<ChangeLogEvent[]>) => {
-      s.workspaceEvents     = a.payload;
+      s.workspaceEvents = a.payload;
       s.workspaceNextCursor = null;
       s.workspaceTotalCount = a.payload.length;
     },
     reset: (s) => {
-      s.events                  = [];
-      s.workspaceEvents         = [];
-      s.workspaceNextCursor     = null;
-      s.workspaceTotalCount     = 0;
+      s.events = [];
+      s.workspaceEvents = [];
+      s.workspaceNextCursor = null;
+      s.workspaceTotalCount = 0;
       s.workspaceCategoryCounts = { voice: 0, generation: 0, manuscript: 0, cast: 0 };
     },
   },

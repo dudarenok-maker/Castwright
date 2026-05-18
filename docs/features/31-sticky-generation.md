@@ -36,41 +36,41 @@ remote APIs and don't touch local VRAM.
      the NEXT generation start.
 
 1a. **Browser reload also survives.** The server-side run is owned by a
-   `RunningJob` keyed on `bookId` in
-   `server/src/routes/generation.ts`. Each POST to `/generation`
-   attaches a `Subscriber` (`{ send, res }`) to the job's broadcast
-   set; `req.on('close')` unsubscribes ONLY (does NOT abort the
-   controller). When the browser reloads, the old SSE closes →
-   subscriber unsubscribes → the job keeps running. The post-reload
-   page POSTs again with no `chapterIds` → the new request attaches as
-   a fresh subscriber to the same job and receives the catch-up
-   `chapter_complete` replay for everything already on disk, then
-   live ticks from there.
+`RunningJob` keyed on `bookId` in
+`server/src/routes/generation.ts`. Each POST to `/generation`
+attaches a `Subscriber` (`{ send, res }`) to the job's broadcast
+set; `req.on('close')` unsubscribes ONLY (does NOT abort the
+controller). When the browser reloads, the old SSE closes →
+subscriber unsubscribes → the job keeps running. The post-reload
+page POSTs again with no `chapterIds` → the new request attaches as
+a fresh subscriber to the same job and receives the catch-up
+`chapter_complete` replay for everything already on disk, then
+live ticks from there.
 
-   Pause is no longer a side-effect of SSE close — it has its own
-   endpoint: `POST /api/books/:bookId/generation/pause`. The
-   middleware fires this via `api.pauseGeneration` on
-   `setPaused(true)` BEFORE closing the local handle, so the server
-   gets an explicit "stop" signal that the loop's AbortError catch
-   surfaces as a final `idle` tick to every subscriber.
+Pause is no longer a side-effect of SSE close — it has its own
+endpoint: `POST /api/books/:bookId/generation/pause`. The
+middleware fires this via `api.pauseGeneration` on
+`setPaused(true)` BEFORE closing the local handle, so the server
+gets an explicit "stop" signal that the loop's AbortError catch
+surfaces as a final `idle` tick to every subscriber.
 
-   Regenerate stays as displacement: a POST with `chapterIds + force`
-   aborts the existing job before starting a fresh one with the new
-   spec.
+Regenerate stays as displacement: a POST with `chapterIds + force`
+aborts the existing job before starting a fresh one with the new
+spec.
 
 2. **The `chapters.activeStream` snapshot is the source of truth for
    the global header pill.** It is set on `openHandle`, refreshed on
    every non-idle `applyGenerationTick`, and cleared on `closeHandle`.
    The pill in `src/components/layout.tsx` reads from this snapshot
    only — never from `chapters.chapters` directly — so it keeps
-   rendering the *generating* book's progress even after the user has
+   rendering the _generating_ book's progress even after the user has
    navigated into a different book and the slice has been rehydrated
    with that other book's rows.
 
 3. **Cross-book tick guard.** `chapters/applyGenerationTick`
    short-circuits when `activeStream.bookId !== currentBookId` — the
    in-flight stream's progress payload must not clobber the chapter
-   rows of a *different* book the user has just opened. The middleware
+   rows of a _different_ book the user has just opened. The middleware
    keeps the snapshot moving out-of-band; the per-chapter UI is
    refreshed only when the slice and the stream agree on which book
    they're describing.
@@ -117,7 +117,7 @@ analyzer + the TTS sidecar must all be up.
      stream in the Network tab must not be re-opened.
 
 2. **Sticky across `openBook` to a different book.**
-   - With generation still running on book A, click any *other* book
+   - With generation still running on book A, click any _other_ book
      in the library.
    - URL becomes `/books/<otherId>/<view>` and the per-book hydration
      fires for that book. The header pill must continue showing book
@@ -127,29 +127,31 @@ analyzer + the TTS sidecar must all be up.
      original stream alive.
 
 2b. **Cross-book title doesn't smear.**
-   - Open book A and start (or land mid-) analysing. The Analysing
-     view's H1 says `Analysing <A>`; the top-bar breadcrumb says `A`.
-   - With analysis still running on book A, click the header
-     generation pill (which is anchored to book B's still-streaming
-     run).
-   - URL becomes `/books/<bookB>/generate`. The Generate view's H1
-     must say `Generating <B>` (NOT `Generating <A>`) and the top-bar
-     breadcrumb must say `B`. Pre-fix the manuscript slice short-
-     circuited Layout's per-book hydrate, so book A's title leaked
-     into book B's screen until the user manually re-opened B from
-     the library.
+
+- Open book A and start (or land mid-) analysing. The Analysing
+  view's H1 says `Analysing <A>`; the top-bar breadcrumb says `A`.
+- With analysis still running on book A, click the header
+  generation pill (which is anchored to book B's still-streaming
+  run).
+- URL becomes `/books/<bookB>/generate`. The Generate view's H1
+  must say `Generating <B>` (NOT `Generating <A>`) and the top-bar
+  breadcrumb must say `B`. Pre-fix the manuscript slice short-
+  circuited Layout's per-book hydrate, so book A's title leaked
+  into book B's screen until the user manually re-opened B from
+  the library.
 
 2a. **Sticky across browser reload.**
-   - With generation running, hit F5 / Ctrl+R / browser reload.
-   - The previous SSE in the Network tab closes; the page re-mounts;
-     a fresh POST `/generation` lands. On the server it attaches as a
-     subscriber to the existing in-flight job (the run is keyed on
-     bookId, not on the connection), receives the catch-up replay,
-     and continues ticking live. The Generate view shows the
-     completed chapter count tick up where it left off.
-   - Confirm via `server/logs/server.log` that the second POST does
-     NOT trigger a fresh `synthesiseChapter` walk — just a subscribe
-     + catch-up.
+
+- With generation running, hit F5 / Ctrl+R / browser reload.
+- The previous SSE in the Network tab closes; the page re-mounts;
+  a fresh POST `/generation` lands. On the server it attaches as a
+  subscriber to the existing in-flight job (the run is keyed on
+  bookId, not on the connection), receives the catch-up replay,
+  and continues ticking live. The Generate view shows the
+  completed chapter count tick up where it left off.
+- Confirm via `server/logs/server.log` that the second POST does
+  NOT trigger a fresh `synthesiseChapter` walk — just a subscribe
+  - catch-up.
 
 3. **Sticky across TTS model switch.**
    - Open Account; flip the TTS model picker to a different option.
@@ -204,7 +206,7 @@ analyzer + the TTS sidecar must all be up.
 - [16 — Generation stream](16-generation-stream.md) — the underlying SSE
   contract this plan amends. Plan 16 still describes the per-tick
   payload and chapter-state reducer paths; this plan only changes
-  *when* the handle is opened and closed.
+  _when_ the handle is opened and closed.
 - [04 — Analysing view & SSE progress](04-analysing-view-progress.md) —
   the local-analyzer trigger this guard wraps.
 - [13 — TTS engine picker](13-tts-engine-picker.md) — model-switch

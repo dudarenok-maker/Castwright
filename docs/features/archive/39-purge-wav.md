@@ -273,8 +273,8 @@ plan:
   → 404" assertions in both the mp3-chapter and no-audio describe
   blocks plus a new "legacy .wav on disk is invisible" describe.
 - `server/src/workspace/chapter-audio-file.test.ts` (new) — `findChapterAudio`
-  + `chapterAudioExists` regression suite proving `.wav` on disk is
-  ignored.
+  - `chapterAudioExists` regression suite proving `.wav` on disk is
+    ignored.
 
 Verification: `npm run typecheck`, `npm run test` (frontend, 747 passed),
 `cd server && npm run test` (server, 735 passed), `npm run build`.

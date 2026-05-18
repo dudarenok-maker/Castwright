@@ -34,19 +34,19 @@ Voice scan the library folder.
 
 ## What Voice on Android reads from an `.m4b`
 
-| Atom              | Purpose                                                | Required for Voice-Android |
-|-------------------|--------------------------------------------------------|----------------------------|
-| `chap` track      | Chapter markers — Voice's chapter navigator            | **Yes** (primary)          |
-| `©nam` (title)    | Book title                                             | **Yes**                    |
-| `©ART` (artist)   | Author or narrator credit                              | **Yes**                    |
-| `©alb` (album)    | Book title (Voice ignores; harmless duplicate)         | Optional                   |
-| `aART` (album_artist) | Author                                             | Optional                   |
-| `©gen` (genre)    | Genre                                                  | Optional                   |
-| `©day` (date)     | Publication date                                       | Optional                   |
-| `covr`            | Cover art (embedded JPEG/PNG)                          | Optional. Now embedded via plan 36 A2 when `<bookDir>/.audiobook/cover.jpg` exists; absent → Voice falls back to the default tile. |
-| `stik = 2`        | iTunes "audiobook" media kind                          | Not required by Voice on Android specifically — Voice treats every file in its library as an audiobook regardless. **Still worth keeping** for cross-app library moves (Apple Books, Plex, BookPlayer) and as a stable signal of "this is an audiobook." |
-| `pgap = 1`        | Gapless playback flag                                  | No effect on Voice-Android with single-file M4B |
-| `soal` / series   | Sort fields                                            | Voice groups by folder, not album tag — no effect |
+| Atom                  | Purpose                                        | Required for Voice-Android                                                                                                                                                                                                                               |
+| --------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chap` track          | Chapter markers — Voice's chapter navigator    | **Yes** (primary)                                                                                                                                                                                                                                        |
+| `©nam` (title)        | Book title                                     | **Yes**                                                                                                                                                                                                                                                  |
+| `©ART` (artist)       | Author or narrator credit                      | **Yes**                                                                                                                                                                                                                                                  |
+| `©alb` (album)        | Book title (Voice ignores; harmless duplicate) | Optional                                                                                                                                                                                                                                                 |
+| `aART` (album_artist) | Author                                         | Optional                                                                                                                                                                                                                                                 |
+| `©gen` (genre)        | Genre                                          | Optional                                                                                                                                                                                                                                                 |
+| `©day` (date)         | Publication date                               | Optional                                                                                                                                                                                                                                                 |
+| `covr`                | Cover art (embedded JPEG/PNG)                  | Optional. Now embedded via plan 36 A2 when `<bookDir>/.audiobook/cover.jpg` exists; absent → Voice falls back to the default tile.                                                                                                                       |
+| `stik = 2`            | iTunes "audiobook" media kind                  | Not required by Voice on Android specifically — Voice treats every file in its library as an audiobook regardless. **Still worth keeping** for cross-app library moves (Apple Books, Plex, BookPlayer) and as a stable signal of "this is an audiobook." |
+| `pgap = 1`            | Gapless playback flag                          | No effect on Voice-Android with single-file M4B                                                                                                                                                                                                          |
+| `soal` / series       | Sort fields                                    | Voice groups by folder, not album tag — no effect                                                                                                                                                                                                        |
 
 ## What the existing pipeline does
 
@@ -66,7 +66,7 @@ already produces a Voice-Android-conformant audiobook M4B. The shape:
 4. Concat-demuxer file lists the absolute MP3 paths, single-quoted so Windows
    backslashes pass through.
 5. One ffmpeg pass: concat + FFMETADATA → AAC-LC 96 kbps mono 44.1 kHz with
-   `+faststart`. Stream copy is intentionally *not* used inside MP4 — that
+   `+faststart`. Stream copy is intentionally _not_ used inside MP4 — that
    produces a file no major player accepts.
 
 The mapping `FFMETADATA media_type=2` → mp4 `stik` atom = 2 is the cross-app
@@ -118,7 +118,7 @@ installed from F-Droid or Google Play.
    M4B format badge and ticks `queued` → `in_progress` → `done`.
 4. On disk: `<exportSyncFolder>/<book-title>.m4b` exists.
 5. `ffprobe -v error -show_chapters -show_format -show_entries
-   format_tags=media_type,title,album,artist,album_artist <m4b>` should
+format_tags=media_type,title,album,artist,album_artist <m4b>` should
    return:
    - `format_tags.media_type = 2` (the audiobook media-kind atom)
    - one chapter per non-excluded source chapter with the source titles
@@ -136,6 +136,7 @@ installed from F-Droid or Google Play.
    keyed).
 
 Negative path:
+
 - With `exportSyncFolder` unset in user settings, click the Voice tile.
   The empty-sync-folder banner appears (reused from the generic modal's
   sync-folder tab). Configure the folder, save, retry.

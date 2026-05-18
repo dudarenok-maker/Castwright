@@ -128,12 +128,9 @@ describe('parsePdf — outline-based chapter title replacement', () => {
       text: 'Chapter 1\nbody one\n\nChapter 2\nbody two',
       info: {},
     });
-    outlineMock = [
-      { title: 'The Berth at Liverpool' },
-      { title: 'A Manifest Two Names Short' },
-    ];
+    outlineMock = [{ title: 'The Berth at Liverpool' }, { title: 'A Manifest Two Names Short' }];
     const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
-    expect(out.chapters.map(c => c.title)).toEqual([
+    expect(out.chapters.map((c) => c.title)).toEqual([
       'The Berth at Liverpool',
       'A Manifest Two Names Short',
     ]);
@@ -145,13 +142,13 @@ describe('parsePdf — outline-based chapter title replacement', () => {
       info: {},
     });
     outlineMock = [
-      { title: 'Copyright' },                       // filtered
-      { title: 'Dedication' },                      // filtered
-      { title: 'The Berth at Liverpool' },          // chapter 1
-      { title: 'A Manifest Two Names Short' },      // chapter 2
+      { title: 'Copyright' }, // filtered
+      { title: 'Dedication' }, // filtered
+      { title: 'The Berth at Liverpool' }, // chapter 1
+      { title: 'A Manifest Two Names Short' }, // chapter 2
     ];
     const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
-    expect(out.chapters.map(c => c.title)).toEqual([
+    expect(out.chapters.map((c) => c.title)).toEqual([
       'The Berth at Liverpool',
       'A Manifest Two Names Short',
     ]);
@@ -165,10 +162,10 @@ describe('parsePdf — outline-based chapter title replacement', () => {
     outlineMock = [
       { title: 'The Berth at Liverpool' },
       { title: 'A Manifest Two Names Short' },
-      { title: 'What the Captain Knew' },           // one too many
+      { title: 'What the Captain Knew' }, // one too many
     ];
     const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
-    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 1', 'Chapter 2']);
+    expect(out.chapters.map((c) => c.title)).toEqual(['Chapter 1', 'Chapter 2']);
   });
 
   it('keeps parseText titles when no outline is present', async () => {
@@ -178,7 +175,7 @@ describe('parsePdf — outline-based chapter title replacement', () => {
     });
     outlineMock = null;
     const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
-    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 1', 'Chapter 2']);
+    expect(out.chapters.map((c) => c.title)).toEqual(['Chapter 1', 'Chapter 2']);
   });
 
   it('keeps parseText titles when the outline is an empty array', async () => {
@@ -188,7 +185,7 @@ describe('parsePdf — outline-based chapter title replacement', () => {
     });
     outlineMock = [];
     const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
-    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 1']);
+    expect(out.chapters.map((c) => c.title)).toEqual(['Chapter 1']);
   });
 
   it('tolerates getDocument throwing — falls back to parseText titles, no crash', async () => {
@@ -198,6 +195,6 @@ describe('parsePdf — outline-based chapter title replacement', () => {
     });
     getDocumentShouldThrow = true;
     const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
-    expect(out.chapters.map(c => c.title)).toEqual(['Chapter 1']);
+    expect(out.chapters.map((c) => c.title)).toEqual(['Chapter 1']);
   });
 });

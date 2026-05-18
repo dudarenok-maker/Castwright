@@ -3,12 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  validateCommitSubject,
-  extractSubject,
-  TYPES,
-  SCOPES,
-} from '../validate-commit-msg.mjs';
+import { validateCommitSubject, extractSubject, TYPES, SCOPES } from '../validate-commit-msg.mjs';
 
 const accepted = [
   'feat(frontend): add voice library compare entry',
@@ -51,14 +46,22 @@ const rejected = [
 for (const subject of accepted) {
   test(`accepts: ${subject}`, () => {
     const result = validateCommitSubject(subject);
-    assert.equal(result.ok, true, `expected ok=true for "${subject}", got ${JSON.stringify(result)}`);
+    assert.equal(
+      result.ok,
+      true,
+      `expected ok=true for "${subject}", got ${JSON.stringify(result)}`,
+    );
   });
 }
 
 for (const subject of rejected) {
   test(`rejects: ${JSON.stringify(subject)}`, () => {
     const result = validateCommitSubject(subject);
-    assert.equal(result.ok, false, `expected ok=false for "${subject}", got ${JSON.stringify(result)}`);
+    assert.equal(
+      result.ok,
+      false,
+      `expected ok=false for "${subject}", got ${JSON.stringify(result)}`,
+    );
   });
 }
 
@@ -83,7 +86,14 @@ test('every documented scope is acceptable', () => {
 });
 
 test('extractSubject skips blank lines and # comments', () => {
-  const content = ['# please write a subject', '', '', 'feat(frontend): real subject', '', 'body line'].join('\n');
+  const content = [
+    '# please write a subject',
+    '',
+    '',
+    'feat(frontend): real subject',
+    '',
+    'body line',
+  ].join('\n');
   assert.equal(extractSubject(content), 'feat(frontend): real subject');
 });
 

@@ -25,9 +25,13 @@ function bookDirFor(title: string): string {
   return join(workspaceRoot, 'books', AUTHOR, SERIES, title);
 }
 
-function seedBook(title: string, log: LogEntry[] | null, opts: { wrapEvents?: boolean } = {}): string {
+function seedBook(
+  title: string,
+  log: LogEntry[] | null,
+  opts: { wrapEvents?: boolean } = {},
+): string {
   const bookDir = bookDirFor(title);
-  const dotDir  = join(bookDir, '.audiobook');
+  const dotDir = join(bookDir, '.audiobook');
   mkdirSync(dotDir, { recursive: true });
   /* state.json isn't strictly required by the migration (it walks dirs by
      name), but write one for realism so future code that depends on its
@@ -79,8 +83,18 @@ describe('migrateLegacyChangeLogs', () => {
        many generations has accumulated chapter_complete spam — we move
        it aside and start fresh. */
     const bookDir = seedBook('Noisy Book', [
-      { id: 1, at: '2026-05-13T15:00:00.000Z', type: 'chapter_complete', title: 'Chapter 1 complete' },
-      { id: 2, at: '2026-05-13T15:01:00.000Z', type: 'chapter_complete', title: 'Chapter 2 complete' },
+      {
+        id: 1,
+        at: '2026-05-13T15:00:00.000Z',
+        type: 'chapter_complete',
+        title: 'Chapter 1 complete',
+      },
+      {
+        id: 2,
+        at: '2026-05-13T15:01:00.000Z',
+        type: 'chapter_complete',
+        title: 'Chapter 2 complete',
+      },
       { id: 3, at: '2026-05-13T15:02:00.000Z', type: 'regenerate', title: 'Regenerated Chapter 1' },
     ]);
 
@@ -93,8 +107,12 @@ describe('migrateLegacyChangeLogs', () => {
     /* Live file is now an empty `{ events: [] }` wrapper (matches what the
        persistence middleware writes on the next PUT). Legacy backup keeps
        the originals in their original shape. */
-    expect(readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.json'))).toEqual({ events: [] });
-    const legacyRaw = readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.legacy.json')) as { events: LogEntry[] };
+    expect(readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.json'))).toEqual({
+      events: [],
+    });
+    const legacyRaw = readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.legacy.json')) as {
+      events: LogEntry[];
+    };
     expect(legacyRaw.events).toHaveLength(3);
     expect(legacyRaw.events[0].type).toBe('chapter_complete');
     expect(legacyRaw.events[2].type).toBe('regenerate');
@@ -104,17 +122,35 @@ describe('migrateLegacyChangeLogs', () => {
     /* Pre-wrap-events versions of the persistence middleware may have written
        a bare array. The migration's narrow-on-read keeps those compatible
        so users on older snapshots still get migrated. */
-    const bookDir = seedBook('Bare Array Book', [
-      { id: 7, at: '2026-05-13T09:00:00.000Z', type: 'chapter_complete', title: 'Chapter 7 complete' },
-    ], { wrapEvents: false });
+    const bookDir = seedBook(
+      'Bare Array Book',
+      [
+        {
+          id: 7,
+          at: '2026-05-13T09:00:00.000Z',
+          type: 'chapter_complete',
+          title: 'Chapter 7 complete',
+        },
+      ],
+      { wrapEvents: false },
+    );
 
     const result = await migrateLegacyChangeLogs();
 
     expect(result.migrated).toEqual([bookDir]);
-    expect(readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.json'))).toEqual({ events: [] });
-    const legacyRaw = readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.legacy.json')) as LogEntry[];
+    expect(readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.json'))).toEqual({
+      events: [],
+    });
+    const legacyRaw = readJsonFromDisk(
+      join(bookDir, '.audiobook', 'change-log.legacy.json'),
+    ) as LogEntry[];
     expect(legacyRaw).toEqual([
-      { id: 7, at: '2026-05-13T09:00:00.000Z', type: 'chapter_complete', title: 'Chapter 7 complete' },
+      {
+        id: 7,
+        at: '2026-05-13T09:00:00.000Z',
+        type: 'chapter_complete',
+        title: 'Chapter 7 complete',
+      },
     ]);
   });
 
@@ -122,11 +158,16 @@ describe('migrateLegacyChangeLogs', () => {
     /* The sentinel guarantee: a second boot must not clobber the fresh
        log the user has been accumulating new events into. */
     const bookDir = seedBook('Already Migrated Book', [
-      { id: 99, at: '2026-05-14T12:00:00.000Z', type: 'generation_run_complete', title: 'Generated 3 chapters' },
+      {
+        id: 99,
+        at: '2026-05-14T12:00:00.000Z',
+        type: 'generation_run_complete',
+        title: 'Generated 3 chapters',
+      },
     ]);
     seedLegacySidecar('Already Migrated Book');
 
-    const beforeLive   = readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.json'));
+    const beforeLive = readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.json'));
     const beforeLegacy = readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.legacy.json'));
 
     const result = await migrateLegacyChangeLogs();
@@ -135,7 +176,9 @@ describe('migrateLegacyChangeLogs', () => {
     expect(result.alreadyMigrated).toEqual([bookDir]);
 
     expect(readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.json'))).toEqual(beforeLive);
-    expect(readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.legacy.json'))).toEqual(beforeLegacy);
+    expect(readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.legacy.json'))).toEqual(
+      beforeLegacy,
+    );
   });
 
   it('leaves a log untouched when it contains no chapter_complete entries (already post-collapse)', async () => {
@@ -143,7 +186,12 @@ describe('migrateLegacyChangeLogs', () => {
        steady state. No backup gets created — there is nothing legacy
        about it. */
     const bookDir = seedBook('Clean Book', [
-      { id: 1, at: '2026-05-15T12:00:00.000Z', type: 'generation_run_complete', title: 'Generated 5 chapters' },
+      {
+        id: 1,
+        at: '2026-05-15T12:00:00.000Z',
+        type: 'generation_run_complete',
+        title: 'Generated 5 chapters',
+      },
       { id: 2, at: '2026-05-15T12:30:00.000Z', type: 'voice_tune', title: 'Tuned Eliza' },
     ]);
 
@@ -152,7 +200,9 @@ describe('migrateLegacyChangeLogs', () => {
     expect(result.clean).toEqual([bookDir]);
     expect(result.migrated).toEqual([]);
     expect(existsSync(join(bookDir, '.audiobook', 'change-log.legacy.json'))).toBe(false);
-    const live = readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.json')) as { events: LogEntry[] };
+    const live = readJsonFromDisk(join(bookDir, '.audiobook', 'change-log.json')) as {
+      events: LogEntry[];
+    };
     expect(live.events).toHaveLength(2);
   });
 

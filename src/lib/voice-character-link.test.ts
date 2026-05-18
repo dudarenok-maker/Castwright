@@ -10,16 +10,23 @@ import { findVoiceForCharacter, findCharacterForVoice } from './voice-character-
 import type { Character, Voice } from './types';
 
 const makeChar = (id: string, voiceId?: string): Character => ({
-  id, name: id, role: 'role', color: id,
+  id,
+  name: id,
+  role: 'role',
+  color: id,
   voiceState: 'generated',
   voiceId,
 });
 
 const makeVoice = (id: string, character: string): Voice => ({
-  id, character,
-  bookTitle: 'the Coalfall Commission', bookId: 'bks',
-  attributes: [], gradient: ['#A43C6C', '#3C194F'],
-  usedIn: 1, source: 'current',
+  id,
+  character,
+  bookTitle: 'the Coalfall Commission',
+  bookId: 'bks',
+  attributes: [],
+  gradient: ['#A43C6C', '#3C194F'],
+  usedIn: 1,
+  source: 'current',
   ttsVoice: { provider: 'coqui', name: 'Claribel Dervla', description: '' },
 });
 
@@ -60,10 +67,7 @@ describe('findCharacterForVoice', () => {
        to equal v_shared. The voiceId mapping must win — otherwise reused
        library voices would open the wrong drawer in the cast view. */
     const v = makeVoice('v_shared', 'Shared');
-    const characters = [
-      makeChar('different-char', 'v_shared'),
-      makeChar('v_shared'),
-    ];
+    const characters = [makeChar('different-char', 'v_shared'), makeChar('v_shared')];
     expect(findCharacterForVoice(v, characters)?.id).toBe('different-char');
   });
 

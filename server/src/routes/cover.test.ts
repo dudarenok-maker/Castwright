@@ -92,16 +92,20 @@ function imageResponse(bytes: Uint8Array): Response {
   return new Response(bytes, { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
 }
 
-const SAMPLE_JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00]);
+const SAMPLE_JPEG = new Uint8Array([
+  0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00,
+]);
 
 describe('cover router — happy path', () => {
   it('GET /candidates calls OpenLibrary search with the book title + author', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({
-      docs: [
-        { cover_i: 111, title: TITLE },
-        { cover_i: 222, title: TITLE },
-      ],
-    }));
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        docs: [
+          { cover_i: 111, title: TITLE },
+          { cover_i: 222, title: TITLE },
+        ],
+      }),
+    );
 
     const res = await request(app).get(`/api/books/${bookId}/cover/candidates`);
     expect(res.status).toBe(200);
@@ -197,7 +201,9 @@ describe('cover router — error paths', () => {
   it('all four endpoints return 404 for an unknown bookId', async () => {
     const stranger = 'no-such-book__nowhere__nope';
     const r1 = await request(app).get(`/api/books/${stranger}/cover/candidates`);
-    const r2 = await request(app).post(`/api/books/${stranger}/cover`).send({ openLibraryId: 'cover-i:1' });
+    const r2 = await request(app)
+      .post(`/api/books/${stranger}/cover`)
+      .send({ openLibraryId: 'cover-i:1' });
     const r3 = await request(app).get(`/api/books/${stranger}/cover`);
     const r4 = await request(app).delete(`/api/books/${stranger}/cover`);
     expect(r1.status).toBe(404);
@@ -215,7 +221,9 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
     const sharp = (await import('sharp')).default;
     const jpeg = await sharp({
       create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
-    }).jpeg({ quality: 85 }).toBuffer();
+    })
+      .jpeg({ quality: 85 })
+      .toBuffer();
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cover/upload`)
@@ -239,7 +247,9 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
     const sharp = (await import('sharp')).default;
     const png = await sharp({
       create: { width: 8, height: 8, channels: 4, background: { r: 80, g: 30, b: 200, alpha: 1 } },
-    }).png().toBuffer();
+    })
+      .png()
+      .toBuffer();
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cover/upload`)
@@ -269,7 +279,9 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
     const sharp = (await import('sharp')).default;
     const jpeg = await sharp({
       create: { width: 4, height: 4, channels: 3, background: { r: 0, g: 0, b: 0 } },
-    }).jpeg().toBuffer();
+    })
+      .jpeg()
+      .toBuffer();
     const res = await request(app)
       .post('/api/books/no-such-book__nowhere__nope/cover/upload')
       .attach('image', jpeg, { filename: 'x.jpg', contentType: 'image/jpeg' });
@@ -283,7 +295,9 @@ describe('PATCH /:bookId/cover/framing (plan 40)', () => {
     const sharp = (await import('sharp')).default;
     const jpeg = await sharp({
       create: { width: 4, height: 4, channels: 3, background: { r: 0, g: 0, b: 0 } },
-    }).jpeg().toBuffer();
+    })
+      .jpeg()
+      .toBuffer();
     await request(app)
       .post(`/api/books/${bookId}/cover/upload`)
       .attach('image', jpeg, { filename: 'seed.jpg', contentType: 'image/jpeg' });

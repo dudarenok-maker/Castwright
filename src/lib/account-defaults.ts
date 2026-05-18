@@ -12,7 +12,8 @@
 
 import type { UserSettings } from './types';
 
-export const FRONTEND_ACCOUNT_DEFAULTS: Pick<UserSettings,
+export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
+  UserSettings,
   | 'displayName'
   | 'defaultAnalysisModel'
   | 'defaultTtsEngine'
@@ -26,7 +27,7 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<UserSettings,
   | 'defaultThemePreference'
   | 'autoStartSidecar'
 > = {
-  displayName:          'Mike Dudarenok',
+  displayName: 'Mike Dudarenok',
   /* Gemini 3.1 Flash Lite over the Google API key is the new default
      for analysis — free tier (15 RPM, 250K TPM, 500/day) handles a
      full novel without saturating the local GPU. Local Ollama models
@@ -34,19 +35,19 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<UserSettings,
      run on-device. Flip in lockstep with
      server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   defaultAnalysisModel: 'gemini-3.1-flash-lite',
-  defaultTtsEngine:     'local',
+  defaultTtsEngine: 'local',
   /* Kokoro v1 is the new default — quality-tuned, ~1 GB VRAM (vs ~3 GB
      for XTTS), eagerly loaded by the sidecar. XTTS stays available as
      an alternate in the picker for users who want its zero-shot voice
      cloning. Flip in lockstep with
      server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
-  defaultTtsModelKey:   'kokoro-v1',
-  sidecarUrl:           'http://localhost:9000',
+  defaultTtsModelKey: 'kokoro-v1',
+  sidecarUrl: 'http://localhost:9000',
   /* Gemini matches the analysis-model default; Local stays an opt-in. */
-  analysisEngine:       'gemini',
-  ollamaUrl:            'http://localhost:11434',
+  analysisEngine: 'gemini',
+  ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
-  minorCastMinLines:    3,
+  minorCastMinLines: 3,
   /* Plan 40 — which CoverPicker tab opens first. `'search'` matches
      today's behaviour (OpenLibrary candidates first). Users who lean
      on local artwork can flip to `'upload'` in the Account view.

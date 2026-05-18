@@ -104,7 +104,7 @@ interface EngineFetchResult {
 function buildCoquiVoices(liveSpeakers: string[] | undefined): EngineFetchResult {
   if (liveSpeakers && liveSpeakers.length > 0) {
     return {
-      voices: [...liveSpeakers].sort().map(name => ({ engine: 'coqui' as TtsEngine, name })),
+      voices: [...liveSpeakers].sort().map((name) => ({ engine: 'coqui' as TtsEngine, name })),
       fromSidecar: true,
     };
   }
@@ -117,7 +117,7 @@ function buildCoquiVoices(liveSpeakers: string[] | undefined): EngineFetchResult
   }
   for (const n of Object.keys(COQUI_VOICE_DESCRIPTIONS)) fallback.add(n);
   return {
-    voices: [...fallback].sort().map(name => ({ engine: 'coqui' as TtsEngine, name })),
+    voices: [...fallback].sort().map((name) => ({ engine: 'coqui' as TtsEngine, name })),
     fromSidecar: false,
   };
 }
@@ -125,7 +125,7 @@ function buildCoquiVoices(liveSpeakers: string[] | undefined): EngineFetchResult
 function buildKokoroVoices(liveVoices: string[] | undefined): EngineFetchResult {
   if (liveVoices && liveVoices.length > 0) {
     return {
-      voices: [...liveVoices].sort().map(name => ({ engine: 'kokoro' as TtsEngine, name })),
+      voices: [...liveVoices].sort().map((name) => ({ engine: 'kokoro' as TtsEngine, name })),
       fromSidecar: true,
     };
   }
@@ -140,7 +140,7 @@ function buildKokoroVoices(liveVoices: string[] | undefined): EngineFetchResult 
   }
   for (const n of Object.keys(KOKORO_VOICE_DESCRIPTIONS)) fallback.add(n);
   return {
-    voices: [...fallback].sort().map(name => ({ engine: 'kokoro' as TtsEngine, name })),
+    voices: [...fallback].sort().map((name) => ({ engine: 'kokoro' as TtsEngine, name })),
     fromSidecar: false,
   };
 }
@@ -169,5 +169,5 @@ async function fetchSpeakersOnce(url: string, timeoutMs: number): Promise<Speake
 function listGeminiVoices(): BaseVoiceEntry[] {
   return Object.keys(GEMINI_VOICE_DESCRIPTIONS)
     .sort()
-    .map(name => ({ engine: 'gemini' as TtsEngine, name }));
+    .map((name) => ({ engine: 'gemini' as TtsEngine, name }));
 }

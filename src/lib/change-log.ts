@@ -50,15 +50,17 @@ function formatClock(d: Date): string {
 /** Recompute `ts` + `date` on every event that carries an `at` timestamp,
     leaving fixture-only entries untouched so their hand-authored copy
     survives. */
-export function withRecomputedDisplay(events: ChangeLogEvent[], now: Date = new Date()): ChangeLogEvent[] {
-  return events.map(e => e.at
-    ? { ...e, ts: relativeTime(e.at, now), date: bucketDate(e.at, now) }
-    : e,
+export function withRecomputedDisplay(
+  events: ChangeLogEvent[],
+  now: Date = new Date(),
+): ChangeLogEvent[] {
+  return events.map((e) =>
+    e.at ? { ...e, ts: relativeTime(e.at, now), date: bucketDate(e.at, now) } : e,
   );
 }
 
 function reasonLabel(reasonId: string): string {
-  return REGEN_REASONS.find(r => r.id === reasonId)?.label ?? 'Unknown reason';
+  return REGEN_REASONS.find((r) => r.id === reasonId)?.label ?? 'Unknown reason';
 }
 
 /** Build a `regenerate` log event for a whole-chapter regen. */
@@ -73,11 +75,12 @@ export function buildChapterRegenEvent(args: {
 }): ChangeLogEvent {
   const { chapter, scope, reason, note, affectedChapterCount } = args;
   const now = args.now ?? new Date();
-  const scopeText = scope === 'forward'
-    ? affectedChapterCount > 1
-      ? ` Propagated forward through ${affectedChapterCount} chapters.`
-      : ' Propagated forward.'
-    : '';
+  const scopeText =
+    scope === 'forward'
+      ? affectedChapterCount > 1
+        ? ` Propagated forward through ${affectedChapterCount} chapters.`
+        : ' Propagated forward.'
+      : '';
   const noteSuffix = note.trim() ? ` ${note.trim()}` : '';
   return {
     id: now.getTime(),
@@ -105,11 +108,8 @@ export function buildCharacterRegenEvent(args: {
   const { character, chapterIds, reason, note } = args;
   const now = args.now ?? new Date();
   const n = chapterIds.length;
-  const scopeText = n === 0
-    ? ''
-    : n === 1
-      ? ` in Chapter ${chapterIds[0]}`
-      : ` across ${n} chapters`;
+  const scopeText =
+    n === 0 ? '' : n === 1 ? ` in Chapter ${chapterIds[0]}` : ` across ${n} chapters`;
   const noteSuffix = note.trim() ? ` ${note.trim()}` : '';
   return {
     id: now.getTime(),
@@ -142,12 +142,14 @@ export function buildGenerationStartedEvent(args: {
     ts: 'Just now',
     date: 'today',
     type: 'generation_started',
-    title: n === 0 ? 'Generation started' : `Generation started — ${n} chapter${n === 1 ? '' : 's'}`,
-    note: n === 0
-      ? 'Resuming any chapters that still need audio.'
-      : n === 1
-        ? `Synthesising Chapter ${chapterIds[0]}.`
-        : `Synthesising chapters ${chapterIds.slice(0, 4).join(', ')}${n > 4 ? `, +${n - 4} more` : ''}.`,
+    title:
+      n === 0 ? 'Generation started' : `Generation started — ${n} chapter${n === 1 ? '' : 's'}`,
+    note:
+      n === 0
+        ? 'Resuming any chapters that still need audio.'
+        : n === 1
+          ? `Synthesising Chapter ${chapterIds[0]}.`
+          : `Synthesising chapters ${chapterIds.slice(0, 4).join(', ')}${n > 4 ? `, +${n - 4} more` : ''}.`,
     actor: 'system',
     chapterId: n === 1 ? chapterIds[0] : undefined,
   };
@@ -169,13 +171,14 @@ export function buildGenerationRunCompleteEvent(args: {
   const now = args.now ?? new Date();
   const n = chapterIds.length;
   const sortedIds = [...chapterIds].sort((a, b) => a - b);
-  const rangeText = n === 0
-    ? ''
-    : n === 1
-      ? `Chapter ${sortedIds[0]}.`
-      : sortedIds[n - 1] - sortedIds[0] === n - 1
-        ? `Chapters ${sortedIds[0]}–${sortedIds[n - 1]}.`
-        : `Chapters ${sortedIds.slice(0, 4).join(', ')}${n > 4 ? `, +${n - 4} more` : ''}.`;
+  const rangeText =
+    n === 0
+      ? ''
+      : n === 1
+        ? `Chapter ${sortedIds[0]}.`
+        : sortedIds[n - 1] - sortedIds[0] === n - 1
+          ? `Chapters ${sortedIds[0]}–${sortedIds[n - 1]}.`
+          : `Chapters ${sortedIds.slice(0, 4).join(', ')}${n > 4 ? `, +${n - 4} more` : ''}.`;
   return {
     id: now.getTime(),
     at: now.toISOString(),
@@ -195,14 +198,13 @@ export function buildGenerationRunCompleteEvent(args: {
     persisted entries from before the rollup migration still render with the
     right copy. Retained as a builder because per-book reparse paths and
     other one-off flows may still emit a single chapter_complete. */
-export function buildChapterCompleteEvent(args: {
-  chapter: Chapter;
-  now?: Date;
-}): ChangeLogEvent {
+export function buildChapterCompleteEvent(args: { chapter: Chapter; now?: Date }): ChangeLogEvent {
   const { chapter } = args;
   const now = args.now ?? new Date();
   const lines = chapter.totalLines ?? null;
-  const lineSuffix = lines ? ` — ${lines.toLocaleString()} line${lines === 1 ? '' : 's'} synthesised.` : '';
+  const lineSuffix = lines
+    ? ` — ${lines.toLocaleString()} line${lines === 1 ? '' : 's'} synthesised.`
+    : '';
   return {
     id: now.getTime(),
     at: now.toISOString(),
@@ -290,10 +292,7 @@ export function buildVoiceTuneEvent(args: {
 }
 
 /** User-emitted event: a character's voice was locked via Profile Drawer. */
-export function buildVoiceLockEvent(args: {
-  character: Character;
-  now?: Date;
-}): ChangeLogEvent {
+export function buildVoiceLockEvent(args: { character: Character; now?: Date }): ChangeLogEvent {
   const { character } = args;
   const now = args.now ?? new Date();
   return {
@@ -342,10 +341,11 @@ export function buildBatchCharacterRegenEvent(args: {
 }): ChangeLogEvent {
   const { characters, chapterIds, reason, note } = args;
   const now = args.now ?? new Date();
-  const names = characters.map(c => c.name).join(', ');
-  const scopeText = chapterIds.length > 0
-    ? ` across ${chapterIds.length} ${chapterIds.length === 1 ? 'chapter' : 'chapters'}`
-    : '';
+  const names = characters.map((c) => c.name).join(', ');
+  const scopeText =
+    chapterIds.length > 0
+      ? ` across ${chapterIds.length} ${chapterIds.length === 1 ? 'chapter' : 'chapters'}`
+      : '';
   const noteSuffix = note.trim() ? ` ${note.trim()}` : '';
   return {
     id: now.getTime(),

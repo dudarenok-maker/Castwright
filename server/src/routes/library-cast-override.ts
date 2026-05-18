@@ -60,14 +60,17 @@ interface OverrideBody {
 
 libraryCastOverrideRouter.post('/library-cast/override', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as OverrideBody;
-  const sourceBookId      = typeof body.sourceBookId      === 'string' ? body.sourceBookId.trim()      : '';
-  const sourceCharacterId = typeof body.sourceCharacterId === 'string' ? body.sourceCharacterId.trim() : '';
-  const targetBookId      = typeof body.targetBookId      === 'string' ? body.targetBookId.trim()      : '';
-  const targetCharacterId = typeof body.targetCharacterId === 'string' ? body.targetCharacterId.trim() : '';
+  const sourceBookId = typeof body.sourceBookId === 'string' ? body.sourceBookId.trim() : '';
+  const sourceCharacterId =
+    typeof body.sourceCharacterId === 'string' ? body.sourceCharacterId.trim() : '';
+  const targetBookId = typeof body.targetBookId === 'string' ? body.targetBookId.trim() : '';
+  const targetCharacterId =
+    typeof body.targetCharacterId === 'string' ? body.targetCharacterId.trim() : '';
 
   if (!sourceBookId || !sourceCharacterId || !targetBookId || !targetCharacterId) {
     return res.status(400).json({
-      error: 'sourceBookId, sourceCharacterId, targetBookId, and targetCharacterId are all required.',
+      error:
+        'sourceBookId, sourceCharacterId, targetBookId, and targetCharacterId are all required.',
     });
   }
   if (sourceBookId === targetBookId && sourceCharacterId === targetCharacterId) {
@@ -75,9 +78,11 @@ libraryCastOverrideRouter.post('/library-cast/override', async (req: Request, re
   }
 
   const sourceLocated = await findBookByBookId(sourceBookId);
-  if (!sourceLocated) return res.status(404).json({ error: `Source book "${sourceBookId}" not found.` });
+  if (!sourceLocated)
+    return res.status(404).json({ error: `Source book "${sourceBookId}" not found.` });
   const targetLocated = await findBookByBookId(targetBookId);
-  if (!targetLocated) return res.status(404).json({ error: `Target book "${targetBookId}" not found.` });
+  if (!targetLocated)
+    return res.status(404).json({ error: `Target book "${targetBookId}" not found.` });
 
   const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
   const targetCast = await readJson<CastFile>(castJsonPath(targetLocated.bookDir));
@@ -88,20 +93,22 @@ libraryCastOverrideRouter.post('/library-cast/override', async (req: Request, re
     return res.status(409).json({ error: 'Target book has no cast on disk.' });
   }
 
-  const source = sourceCast.characters.find(c => c.id === sourceCharacterId);
-  const target = targetCast.characters.find(c => c.id === targetCharacterId);
-  if (!source) return res.status(404).json({ error: `Source character "${sourceCharacterId}" not found.` });
-  if (!target) return res.status(404).json({ error: `Target character "${targetCharacterId}" not found.` });
+  const source = sourceCast.characters.find((c) => c.id === sourceCharacterId);
+  const target = targetCast.characters.find((c) => c.id === targetCharacterId);
+  if (!source)
+    return res.status(404).json({ error: `Source character "${sourceCharacterId}" not found.` });
+  if (!target)
+    return res.status(404).json({ error: `Target character "${targetCharacterId}" not found.` });
 
   /* Identity-level fields are merged ONCE — both books end up with these
      identical values. Per-book audio + metric fields are then applied
      when each side's record is composed. */
   const sharedDescription = longest(source.description, target.description);
-  const sharedRole        = preferSource(source.role, target.role);
-  const sharedGender      = preferSource(source.gender, target.gender);
-  const sharedAgeRange    = preferSource(source.ageRange, target.ageRange);
-  const sharedTone        = mergeTone(source.tone, target.tone);
-  const sharedAttributes  = unionStrings(source.attributes, target.attributes);
+  const sharedRole = preferSource(source.role, target.role);
+  const sharedGender = preferSource(source.gender, target.gender);
+  const sharedAgeRange = preferSource(source.ageRange, target.ageRange);
+  const sharedTone = mergeTone(source.tone, target.tone);
+  const sharedAttributes = unionStrings(source.attributes, target.attributes);
 
   /* Aliases — union of the full pool of name forms across both sides
      (each side's aliases plus the other side's name). Each side then
@@ -112,26 +119,30 @@ libraryCastOverrideRouter.post('/library-cast/override', async (req: Request, re
   const mergedSource: CharacterOutput = {
     ...source,
     description: sharedDescription ?? source.description,
-    role:        sharedRole ?? source.role,
-    gender:      sharedGender,
-    ageRange:    sharedAgeRange,
-    tone:        sharedTone,
-    attributes:  sharedAttributes,
-    aliases:     aliasesExcludingSelf(aliasPool, source.name),
+    role: sharedRole ?? source.role,
+    gender: sharedGender,
+    ageRange: sharedAgeRange,
+    tone: sharedTone,
+    attributes: sharedAttributes,
+    aliases: aliasesExcludingSelf(aliasPool, source.name),
   };
   const mergedTarget: CharacterOutput = {
     ...target,
     description: sharedDescription ?? target.description,
-    role:        sharedRole ?? target.role,
-    gender:      sharedGender,
-    ageRange:    sharedAgeRange,
-    tone:        sharedTone,
-    attributes:  sharedAttributes,
-    aliases:     aliasesExcludingSelf(aliasPool, target.name),
+    role: sharedRole ?? target.role,
+    gender: sharedGender,
+    ageRange: sharedAgeRange,
+    tone: sharedTone,
+    attributes: sharedAttributes,
+    aliases: aliasesExcludingSelf(aliasPool, target.name),
   };
 
-  const nextSourceCharacters = sourceCast.characters.map(c => c.id === sourceCharacterId ? mergedSource : c);
-  const nextTargetCharacters = targetCast.characters.map(c => c.id === targetCharacterId ? mergedTarget : c);
+  const nextSourceCharacters = sourceCast.characters.map((c) =>
+    c.id === sourceCharacterId ? mergedSource : c,
+  );
+  const nextTargetCharacters = targetCast.characters.map((c) =>
+    c.id === targetCharacterId ? mergedTarget : c,
+  );
 
   /* Write both sides. Atomic-rename each — if the target write fails
      after the source write succeeded, re-running the call is safe: the
@@ -231,6 +242,6 @@ function collectAliasPool(source: CharacterOutput, target: CharacterOutput): str
    absent on the output character. */
 function aliasesExcludingSelf(pool: string[], ownName: string): string[] | undefined {
   const own = ownName.trim().toLowerCase();
-  const out = pool.filter(s => s.trim().toLowerCase() !== own);
+  const out = pool.filter((s) => s.trim().toLowerCase() !== own);
   return out.length ? out : undefined;
 }

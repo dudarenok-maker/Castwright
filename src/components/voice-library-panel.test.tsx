@@ -9,17 +9,29 @@ import { VoiceCard, VoiceLibraryPanel } from './voice-library-panel';
 import type { Character, Voice } from '../lib/types';
 
 const makeVoice = (id: string, character: string, overrides: Partial<Voice> = {}): Voice => ({
-  id, character,
-  bookTitle: 'the Coalfall Commission', bookId: 'bks',
-  attributes: ['Warm'], gradient: ['#A43C6C', '#3C194F'],
-  usedIn: 1, source: 'current',
+  id,
+  character,
+  bookTitle: 'the Coalfall Commission',
+  bookId: 'bks',
+  attributes: ['Warm'],
+  gradient: ['#A43C6C', '#3C194F'],
+  usedIn: 1,
+  source: 'current',
   ttsVoice: { provider: 'coqui', name: 'Claribel Dervla', description: '' },
   ...overrides,
 });
 
-const makeCharacter = (id: string, voiceId: string, overrides: Partial<Character> = {}): Character => ({
-  id, name: id, role: 'role', color: id,
-  voiceState: 'generated', voiceId,
+const makeCharacter = (
+  id: string,
+  voiceId: string,
+  overrides: Partial<Character> = {},
+): Character => ({
+  id,
+  name: id,
+  role: 'role',
+  color: id,
+  voiceState: 'generated',
+  voiceId,
   ...overrides,
 });
 
@@ -34,7 +46,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
         onPlaySample={vi.fn()}
-      />
+      />,
     );
     fireEvent.click(screen.getByText('Marlow').closest('[role="button"]')!);
     expect(onOpenProfile).toHaveBeenCalledWith('Marlow');
@@ -51,7 +63,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
         onPlaySample={onPlaySample}
-      />
+      />,
     );
     const card = screen.getByText('Marlow').closest('[role="button"]')!;
     fireEvent.click(within(card as HTMLElement).getAllByRole('button')[0]);
@@ -73,13 +85,19 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        series voices use; switch to All so the test sees it. */
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('v_series', 'Other-book speaker', { source: 'library', bookTitle: 'Earlier Book', bookId: 'eb' })]}
+        library={[
+          makeVoice('v_series', 'Other-book speaker', {
+            source: 'library',
+            bookTitle: 'Earlier Book',
+            bookId: 'eb',
+          }),
+        ]}
         characters={[]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
         onPlaySample={onPlaySample}
-      />
+      />,
     );
     const card = screen.getByText('Other-book speaker').closest('div.group')!;
     expect(card.getAttribute('role')).toBeNull();
@@ -97,13 +115,13 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const onPlaySample = vi.fn();
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('Marlow', 'Marlow')]}            /* Voice.id mirrors character.id */
-        characters={[makeCharacter('Marlow', '')]}          /* character has no voiceId */
+        library={[makeVoice('Marlow', 'Marlow')]} /* Voice.id mirrors character.id */
+        characters={[makeCharacter('Marlow', '')]} /* character has no voiceId */
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
         onPlaySample={onPlaySample}
-      />
+      />,
     );
     const card = screen.getByText('Marlow').closest('[role="button"]')!;
     fireEvent.click(card);
@@ -121,14 +139,14 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
       <VoiceLibraryPanel
         library={[makeVoice('v_shared', 'Shared voice')]}
         characters={[
-          makeCharacter('different-char', 'v_shared'), /* explicit voiceId match */
-          makeCharacter('v_shared', ''),               /* id collides with the voice id */
+          makeCharacter('different-char', 'v_shared') /* explicit voiceId match */,
+          makeCharacter('v_shared', '') /* id collides with the voice id */,
         ]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
         onPlaySample={vi.fn()}
-      />
+      />,
     );
     fireEvent.click(screen.getByText('Shared voice').closest('[role="button"]')!);
     expect(onOpenProfile).toHaveBeenCalledWith('different-char');
@@ -144,7 +162,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
         library={[makeVoice('v_Marlow', 'Marlow')]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
-      />
+      />,
     );
     const card = screen.getByText('Marlow').closest('div.group')!;
     expect(card.getAttribute('role')).toBeNull();
@@ -159,7 +177,12 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const onSelect = vi.fn();
     const voice = makeVoice('v_Marlow', 'Marlow');
     render(
-      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} onSelect={onSelect}/>
+      <VoiceCard
+        voice={voice}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+        onSelect={onSelect}
+      />,
     );
     const card = screen.getByText('Marlow').closest('[role="button"]')!;
     expect(card).not.toBeNull();
@@ -181,18 +204,30 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        `onToggleSelect`; either alone keeps the legacy DOM. */
     const voice = makeVoice('v_Marlow', 'Marlow');
     const { rerender } = render(
-      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()}/>
+      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
     );
     expect(screen.queryByLabelText(/Select voice for compare|Deselect voice/)).toBeNull();
 
     /* Only `selected` set — still no checkbox. */
-    rerender(<VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} selected={false}/>);
+    rerender(
+      <VoiceCard
+        voice={voice}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+        selected={false}
+      />,
+    );
     expect(screen.queryByLabelText(/Select voice for compare|Deselect voice/)).toBeNull();
 
     /* Both set — checkbox appears. */
     rerender(
-      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()}
-                 selected={false} onToggleSelect={vi.fn()}/>
+      <VoiceCard
+        voice={voice}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+        selected={false}
+        onToggleSelect={vi.fn()}
+      />,
     );
     expect(screen.getByLabelText('Select voice for compare')).toBeInTheDocument();
   });
@@ -205,8 +240,14 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const onSelect = vi.fn();
     const voice = makeVoice('v_Marlow', 'Marlow');
     render(
-      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()}
-                 selected={false} onToggleSelect={onToggleSelect} onSelect={onSelect}/>
+      <VoiceCard
+        voice={voice}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+        selected={false}
+        onToggleSelect={onToggleSelect}
+        onSelect={onSelect}
+      />,
     );
     fireEvent.click(screen.getByLabelText('Select voice for compare'));
     expect(onToggleSelect).toHaveBeenCalledTimes(1);
@@ -217,14 +258,24 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
   it('paints the card with bg-peach tint when selected (plan 22a — mirrors cast.tsx:~199)', () => {
     const voice = makeVoice('v_Marlow', 'Marlow');
     const { rerender } = render(
-      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()}
-                 selected={false} onToggleSelect={vi.fn()}/>
+      <VoiceCard
+        voice={voice}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+        selected={false}
+        onToggleSelect={vi.fn()}
+      />,
     );
     const card = screen.getByText('Marlow').closest('div.group')!;
     expect(card.className).not.toMatch(/bg-peach/);
     rerender(
-      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()}
-                 selected={true} onToggleSelect={vi.fn()}/>
+      <VoiceCard
+        voice={voice}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+        selected={true}
+        onToggleSelect={vi.fn()}
+      />,
     );
     /* The peach tint variant is `bg-peach/[0.04]` — same DOM rule as
        cast.tsx for the selected-row highlight. */
@@ -240,7 +291,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
         library={[makeVoice('v_Marlow', 'Marlow')]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
-      />
+      />,
     );
     const scroller = screen.getByTestId('voice-library-scroll');
     expect(scroller.className).toMatch(/overflow-y-auto/);

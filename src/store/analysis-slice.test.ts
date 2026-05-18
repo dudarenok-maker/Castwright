@@ -40,13 +40,16 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
 
   it('applyAnalysisSnapshotTick updates phase + progress + lastTickAt', () => {
     const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
-    const s2 = analysisSlice.reducer(s1, analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1',
-      phaseId: 1,
-      phaseLabel: 'Parsing and attribution',
-      phaseProgress: 0.42,
-      lastTickAt: 2500,
-    }));
+    const s2 = analysisSlice.reducer(
+      s1,
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 1,
+        phaseLabel: 'Parsing and attribution',
+        phaseProgress: 0.42,
+        lastTickAt: 2500,
+      }),
+    );
     expect(s2.activeStream).toMatchObject({
       phaseId: 1,
       phaseLabel: 'Parsing and attribution',
@@ -59,19 +62,28 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
   });
 
   it('applyAnalysisSnapshotTick only updates fields supplied — undefined leaves prior values intact', () => {
-    const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream({
-      ...baseSnapshot, phaseId: 1, phaseProgress: 0.5, remainingMs: 30_000,
-    }));
+    const s1 = analysisSlice.reducer(
+      undefined,
+      analysisActions.setActiveStream({
+        ...baseSnapshot,
+        phaseId: 1,
+        phaseProgress: 0.5,
+        remainingMs: 30_000,
+      }),
+    );
     /* eta-only tick. */
-    const s2 = analysisSlice.reducer(s1, analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1',
-      remainingMs: 12_000,
-      lastTickAt: 3000,
-    }));
+    const s2 = analysisSlice.reducer(
+      s1,
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        remainingMs: 12_000,
+        lastTickAt: 3000,
+      }),
+    );
     expect(s2.activeStream?.remainingMs).toBe(12_000);
-    expect(s2.activeStream?.phaseId).toBe(1);          // preserved
-    expect(s2.activeStream?.phaseProgress).toBe(0.5);  // preserved
-    expect(s2.activeStream?.lastTickAt).toBe(3000);    // updated
+    expect(s2.activeStream?.phaseId).toBe(1); // preserved
+    expect(s2.activeStream?.phaseProgress).toBe(0.5); // preserved
+    expect(s2.activeStream?.lastTickAt).toBe(3000); // updated
   });
 
   it('cross-book guard: applyAnalysisSnapshotTick for a different manuscriptId is a no-op', () => {
@@ -79,40 +91,52 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
        tab analysing a different book must not clobber this tab's
        snapshot just because both are dispatching ticks. */
     const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
-    const s2 = analysisSlice.reducer(s1, analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm_OTHER',
-      phaseId: 2,
-      phaseProgress: 0.99,
-    }));
+    const s2 = analysisSlice.reducer(
+      s1,
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm_OTHER',
+        phaseId: 2,
+        phaseProgress: 0.99,
+      }),
+    );
     expect(s2.activeStream).toEqual(baseSnapshot);
   });
 
   it('applyAnalysisSnapshotTick is a no-op when activeStream is null (no snapshot to update)', () => {
-    const s1 = analysisSlice.reducer(undefined, analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1',
-      phaseId: 1,
-    }));
+    const s1 = analysisSlice.reducer(
+      undefined,
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 1,
+      }),
+    );
     expect(s1.activeStream).toBeNull();
   });
 
   it('setHalted flips state + carries the code + message; cross-book guarded', () => {
     const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
-    const s2 = analysisSlice.reducer(s1, analysisActions.setHalted({
-      manuscriptId: 'm1',
-      code: 'attribution_drift',
-      message: 'Phase 1 demoted 60% of sentences.',
-    }));
+    const s2 = analysisSlice.reducer(
+      s1,
+      analysisActions.setHalted({
+        manuscriptId: 'm1',
+        code: 'attribution_drift',
+        message: 'Phase 1 demoted 60% of sentences.',
+      }),
+    );
     expect(s2.activeStream).toMatchObject({
       state: 'halted',
       haltCode: 'attribution_drift',
       haltReason: 'Phase 1 demoted 60% of sentences.',
     });
     /* Wrong-manuscript halt does not touch the snapshot. */
-    const s3 = analysisSlice.reducer(s2, analysisActions.setHalted({
-      manuscriptId: 'm_OTHER',
-      code: 'unknown',
-      message: 'other tab',
-    }));
+    const s3 = analysisSlice.reducer(
+      s2,
+      analysisActions.setHalted({
+        manuscriptId: 'm_OTHER',
+        code: 'unknown',
+        message: 'other tab',
+      }),
+    );
     expect(s3.activeStream).toEqual(s2.activeStream);
   });
 
@@ -126,21 +150,27 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
 
   it('setSeriesPrior populates the snapshot field with count + names; cross-book guarded', () => {
     const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
-    const s2 = analysisSlice.reducer(s1, analysisActions.setSeriesPrior({
-      manuscriptId: 'm1',
-      count: 41,
-      names: ['Wren', 'Marlow', 'Oduvan'],
-    }));
+    const s2 = analysisSlice.reducer(
+      s1,
+      analysisActions.setSeriesPrior({
+        manuscriptId: 'm1',
+        count: 41,
+        names: ['Wren', 'Marlow', 'Oduvan'],
+      }),
+    );
     expect(s2.activeStream?.seriesPrior).toEqual({
       count: 41,
       names: ['Wren', 'Marlow', 'Oduvan'],
     });
     /* Cross-book: another tab's series-prior event must not poison this tab. */
-    const s3 = analysisSlice.reducer(s2, analysisActions.setSeriesPrior({
-      manuscriptId: 'm_OTHER',
-      count: 99,
-      names: ['Wrong'],
-    }));
+    const s3 = analysisSlice.reducer(
+      s2,
+      analysisActions.setSeriesPrior({
+        manuscriptId: 'm_OTHER',
+        count: 99,
+        names: ['Wrong'],
+      }),
+    );
     expect(s3.activeStream?.seriesPrior?.count).toBe(41);
   });
 
@@ -149,11 +179,14 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
        is set (the view dispatches setActiveStream before opening the
        SSE), so this case is defensive — a malformed action that lands
        early must not throw. */
-    const s1 = analysisSlice.reducer(undefined, analysisActions.setSeriesPrior({
-      manuscriptId: 'm1',
-      count: 5,
-      names: ['x', 'y'],
-    }));
+    const s1 = analysisSlice.reducer(
+      undefined,
+      analysisActions.setSeriesPrior({
+        manuscriptId: 'm1',
+        count: 5,
+        names: ['x', 'y'],
+      }),
+    );
     expect(s1.activeStream).toBeNull();
   });
 

@@ -20,9 +20,12 @@ afterEach(() => {
 
 function mockSpeakersResponse(speakers: string[], kokoroVoices: string[] = []) {
   globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
-    const target = typeof input === 'string'
-      ? input
-      : input instanceof URL ? input.toString() : (input as Request).url;
+    const target =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : (input as Request).url;
     if (target.endsWith('/speakers')) {
       return new Response(JSON.stringify({ coqui: speakers, kokoro: kokoroVoices }), {
         status: 200,
@@ -43,8 +46,8 @@ describe('listBaseVoices', () => {
   it('merges live Coqui /speakers with the static Gemini catalog', async () => {
     mockSpeakersResponse(['Asya Anara', 'Damien Black', 'Sofia Hellen']);
     const voices = await listBaseVoices({ sidecarUrl: SIDECAR_URL });
-    const coqui = voices.filter(v => v.engine === 'coqui').map(v => v.name);
-    const gemini = voices.filter(v => v.engine === 'gemini').map(v => v.name);
+    const coqui = voices.filter((v) => v.engine === 'coqui').map((v) => v.name);
+    const gemini = voices.filter((v) => v.engine === 'gemini').map((v) => v.name);
     expect(coqui).toContain('Asya Anara');
     expect(coqui).toContain('Damien Black');
     expect(coqui).toContain('Sofia Hellen');
@@ -59,23 +62,20 @@ describe('listBaseVoices', () => {
   it('falls back to the static catalog when the sidecar is unreachable so the UI does not go empty', async () => {
     mockSidecarDown();
     const voices = await listBaseVoices({ sidecarUrl: SIDECAR_URL });
-    const coqui = voices.filter(v => v.engine === 'coqui').map(v => v.name);
+    const coqui = voices.filter((v) => v.engine === 'coqui').map((v) => v.name);
     /* COQUI_PROFILE_VOICES contains these — sidecar fallback uses that
        catalog so the picker still has something to offer. */
     expect(coqui).toContain('Asya Anara');
     expect(coqui).toContain('Damien Black');
     /* Gemini section is always static, unaffected by sidecar state. */
-    const gemini = voices.filter(v => v.engine === 'gemini');
+    const gemini = voices.filter((v) => v.engine === 'gemini');
     expect(gemini.length).toBeGreaterThanOrEqual(30);
   });
 
   it('includes Kokoro English voices from the live sidecar /speakers response', async () => {
-    mockSpeakersResponse(
-      ['Damien Black'],
-      ['af_heart', 'am_michael', 'bf_emma'],
-    );
+    mockSpeakersResponse(['Damien Black'], ['af_heart', 'am_michael', 'bf_emma']);
     const voices = await listBaseVoices({ sidecarUrl: SIDECAR_URL });
-    const kokoro = voices.filter(v => v.engine === 'kokoro').map(v => v.name);
+    const kokoro = voices.filter((v) => v.engine === 'kokoro').map((v) => v.name);
     expect(kokoro).toEqual(['af_heart', 'am_michael', 'bf_emma']);
   });
 
@@ -83,9 +83,9 @@ describe('listBaseVoices', () => {
     /* Older sidecar / Kokoro weights not installed yet → sidecar returns
        {coqui: [...]} with no kokoro key. The fallback uses the curated
        catalog so the picker still has the English subset to offer. */
-    mockSpeakersResponse(['Damien Black']);  // no kokoro
+    mockSpeakersResponse(['Damien Black']); // no kokoro
     const voices = await listBaseVoices({ sidecarUrl: SIDECAR_URL });
-    const kokoro = voices.filter(v => v.engine === 'kokoro').map(v => v.name);
+    const kokoro = voices.filter((v) => v.engine === 'kokoro').map((v) => v.name);
     expect(kokoro).toContain('af_heart');
     expect(kokoro).toContain('am_onyx');
     /* English-only invariant — must mirror the sidecar filter. */

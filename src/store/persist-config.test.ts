@@ -49,8 +49,10 @@ describe('UI_PERSIST_WHITELIST', () => {
       'previewMode',
     ];
     for (const key of transientKeys) {
-      expect(UI_PERSIST_WHITELIST, `transient field ${String(key)} must not be persisted`)
-        .not.toContain(key);
+      expect(
+        UI_PERSIST_WHITELIST,
+        `transient field ${String(key)} must not be persisted`,
+      ).not.toContain(key);
     }
   });
 
@@ -60,7 +62,9 @@ describe('UI_PERSIST_WHITELIST', () => {
        silently stop persisting the value. */
     const initial = uiSlice.reducer(undefined, { type: 'noop' });
     for (const key of UI_PERSIST_WHITELIST) {
-      expect(initial, `whitelist key ${String(key)} missing from UiState`).toHaveProperty(String(key));
+      expect(initial, `whitelist key ${String(key)} missing from UiState`).toHaveProperty(
+        String(key),
+      );
     }
   });
 });
@@ -84,15 +88,19 @@ describe('MANUSCRIPT_PERSIST_WHITELIST', () => {
       'importCandidate',
     ];
     for (const key of transientKeys) {
-      expect(MANUSCRIPT_PERSIST_WHITELIST, `transient field ${String(key)} must not be persisted`)
-        .not.toContain(key);
+      expect(
+        MANUSCRIPT_PERSIST_WHITELIST,
+        `transient field ${String(key)} must not be persisted`,
+      ).not.toContain(key);
     }
   });
 
   it('every whitelisted key exists on the slice initial state (typo-guard)', () => {
     const initial = manuscriptSlice.reducer(undefined, { type: 'noop' });
     for (const key of MANUSCRIPT_PERSIST_WHITELIST) {
-      expect(initial, `whitelist key ${String(key)} missing from ManuscriptState`).toHaveProperty(String(key));
+      expect(initial, `whitelist key ${String(key)} missing from ManuscriptState`).toHaveProperty(
+        String(key),
+      );
     }
   });
 });
