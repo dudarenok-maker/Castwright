@@ -207,6 +207,31 @@ describe('POST /api/import → POST /api/books — excluded chapters round-trip'
     expect(stateByTitle.get('chapter one')?.excluded).toBeFalsy();
   });
 
+  it('returns 415 with error: "drm_protected" when a MOBI file has the encryption byte set', async () => {
+    /* Hand-crafted MOBI-shaped buffer with encryption byte 2 (Kindle
+       Store DRM). The DRM detector in parseMobi reads bytes 78..82 for
+       the record-0 offset and then the u16 at offset+0x0C; we set those
+       directly and pad the rest with zeros. The library is NEVER
+       invoked on this path — readMobiEncryptionType returns non-zero
+       and parseMobi throws DrmProtectedError before init*File is
+       called. Pairs with the unit tests in mobi.test.ts that pin the
+       detection bytes. */
+    const drmBuffer = Buffer.alloc(256, 0);
+    const record0 = 96;
+    drmBuffer.writeUInt32BE(record0, 78);
+    drmBuffer.writeUInt16BE(2, record0 + 0x0c);
+
+    const importRes = await request(app)
+      .post('/api/import')
+      .attach('file', drmBuffer, {
+        filename: 'drm-protected.mobi',
+        contentType: 'application/x-mobipocket-ebook',
+      });
+    expect(importRes.status).toBe(415);
+    expect(importRes.body.error).toBe('drm_protected');
+    expect(importRes.body.message).toMatch(/DRM-protected/i);
+  });
+
   it('leaves every chapter included when excludedSlugs is absent', async () => {
     const md = '# A Book\n\n## Chapter One\n\nLine one. Line two. Line three.';
     const importRes = await request(app)
