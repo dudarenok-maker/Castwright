@@ -1,0 +1,119 @@
+name: Release
+
+# Plan 49 — tag-triggered release pipeline.
+# Push a `vX.Y.Z` tag (scripts/bump-version.mjs creates it) to fire this.
+# Builds the platform-independent release zip, attaches the tag annotation
+# as the release body, publishes to GitHub Releases.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  # Sanity-net: confirm the tagged commit builds + tests on every supported
+  # deployer OS (Windows + macOS + Ubuntu — Ubuntu doubles as the Linux
+  # deployer smoke test). If any matrix leg fails, the publish job is
+  # skipped and the release does NOT land.
+  verify:
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install server deps
+        run: npm --prefix server ci
+
+      # `verify:quick` is `test:all` (hooks + frontend + server + scripts +
+      # sidecar). Scripts use PowerShell — Windows has it natively; macOS
+      # and Ubuntu both ship `pwsh` on the GitHub runner images, so Pester
+      # runs there too. Sidecar tests skip with a banner if the venv isn't
+      # bootstrapped (which it won't be on a fresh runner — that's fine,
+      # we don't ship a sidecar test gate for the release pipeline).
+      - name: Verify
+        run: npm run verify:quick
+
+      - name: Build
+        run: npm run build
+
+  # Publish: builds the zip + SHA-256 on Ubuntu (the zip is platform-
+  # independent, no need to build it three times) and uploads them to the
+  # GitHub Release. Gated on every verify matrix leg passing.
+  publish:
+    name: Publish release zip
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Need the tag annotation reachable as the release body.
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install server deps
+        run: npm --prefix server ci
+
+      - name: Build (frontend + server)
+        run: npm run build
+
+      - name: Build release zip
+        run: node scripts/build-release-zip.mjs --version "${{ github.ref_name }}"
+
+      - name: SHA-256
+        run: |
+          cd release
+          shasum -a 256 "audiobook-generator-${{ github.ref_name }}.zip" \
+            > "audiobook-generator-${{ github.ref_name }}.zip.sha256"
+          cat "audiobook-generator-${{ github.ref_name }}.zip.sha256"
+
+      - name: Read tag annotation for release body
+        # `--format='%(contents)'` returns the annotated tag message verbatim.
+        # If the bumper used the placeholder annotation (no --notes-file), the
+        # body will be brief — that's expected and the maintainer is reminded
+        # at bump time to use --notes-file for real releases.
+        run: |
+          git tag -l --format='%(contents)' "${{ github.ref_name }}" \
+            > release/tag-notes.md
+          cat release/tag-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            "release/audiobook-generator-${{ github.ref_name }}.zip" \
+            "release/audiobook-generator-${{ github.ref_name }}.zip.sha256" \
+            --title "Audiobook generator ${{ github.ref_name }}" \
+            --notes-file release/tag-notes.md
