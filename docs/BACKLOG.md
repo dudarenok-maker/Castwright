@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18 (post plan 37 ship):** Must 0 · Should 3 · Could 31 · Won't 9
+**Counts as of 2026-05-18 (post plan 18a slice):** Must 0 · Should 3 · Could 34 · Won't 9
 
 ---
 
@@ -381,6 +381,36 @@ Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 - _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`; `src/views/settings.tsx` (Plex token field — see Could #24 power-user panel); new `server/src/export/plex.ts` for the optional upload path.
 - _Depends on:_ plan 18b shipped; ideally Could #24 (power-user panel) for the token storage.
 - _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
+
+### 33. Listen-view download tiles wiring (m4b chaptered / MP3 zip / streaming link)
+
+Source: plan 18 follow-up (2026-05-18). Deferred from plan 18a (Listen view wiring) — scope-cut because the download paths need new server endpoints (MP3 zip bundling + streaming-link minting), which is more than a single PR.
+
+- _What:_ Replace the three "Coming soon" download tiles on the Listen view with live affordances. M4B chaptered already has a working pipeline (plan 33 voice export) — wire that tile to open the existing `ExportAudiobookModal` pre-filled to `format: 'm4b'`. MP3 ZIP needs a new `server/src/export/build-mp3-zip.ts` that walks the chapter MP3s and bundles them via Node's `node:stream` + a streaming zip writer. Streaming link needs a server-minted shareable URL (likely a slugged route under `/share/:slug` that proxies the M4B from disk).
+- _Acceptance:_ Each tile's Download button enabled; clicking M4B chaptered opens the export modal in M4B mode; MP3 ZIP triggers a `POST /api/books/:bookId/export` with `format: 'mp3-zip'` and the job appears in the rail; streaming link mints a URL the user can copy + share. Server Vitest covers the MP3-zip builder; new Playwright spec covers the three-tile flow.
+- _Key files:_ `src/views/listen.tsx` (DownloadCard wiring); new `server/src/export/build-mp3-zip.ts`; `server/src/routes/exports.ts` (extend to handle mp3-zip + streaming-link formats); `openapi.yaml` (extend `BookExportJob.format` enum if streaming-link is added).
+- _Depends on:_ none structural. Tile wiring is straightforward; the MP3-zip builder is the meatiest piece.
+- _Benefit (user):_ closes the second-largest "Coming soon" surface on the Listen view. Today the user can only export via the listener-app tiles (which gate on a target app); these download tiles offer direct artifact retrieval.
+
+### 34. Export queue Retry + Download row actions
+
+Source: plan 18 follow-up (2026-05-18). Deferred from plan 18a — needs middleware integration to re-fire a failed export, which is bigger than a row-handler wiring.
+
+- _What:_ The Listen view's Export queue surfaces Retry (on `failed` rows) and Download (on `done` rows without a URL) as wired buttons. Retry re-fires the original `POST /api/books/:bookId/export` with the same payload via a middleware action that reads the job's recorded `format`/`destination`/`syncPath`. Download triggers a `GET /api/exports/:exportId/download` redirect (or a `window.location.assign(item.url)` when the job already carries `downloadUrl`).
+- _Acceptance:_ Click Retry on a failed row → a new export job appears with the same parameters and the failed row is dismissed. Click Download on a done-with-URL row → file downloads. Vitest covers the middleware re-fire path; e2e covers the visible buttons.
+- _Key files:_ `src/views/listen.tsx` (ExportQueue handlers); `src/store/exports-middleware.ts` (extend with `retryExport` thunk); `server/src/routes/exports.ts` (add `/exports/:exportId/download` redirect if needed).
+- _Depends on:_ Could #33 (download tiles) for the underlying export endpoints to be live.
+- _Benefit (user):_ closes the remaining "Coming soon" stubs in the queue rail. Today copy + remove work (shipped in plan 18a); retry + download are the other two row actions promised by the design.
+
+### 35. Listen-view waveform card driven by real chapter peaks
+
+Source: plan 18 known gap (2026-05-18). The chapter-audio meta endpoint currently returns `peaks: []`; the Listen view's waveform card derives its bars from a mock `peaks: float[240]` array that doesn't reflect the actual chapter audio.
+
+- _What:_ Extend the chapter encode pipeline (`server/src/tts/synthesise-chapter.ts` or the MP3 step) to compute a fixed-length (240-bin) RMS-peaks summary alongside the MP3 and persist it under `<bookDir>/audio/<slug>.peaks.json`. The chapter-audio meta endpoint (`server/src/routes/chapter-audio.ts`) reads + returns it. Listen view consumes it via the existing `peaks` field — no frontend changes beyond removing the `peaks: []` fallback path.
+- _Acceptance:_ Generate a chapter from scratch → `<slug>.peaks.json` exists on disk with 240 floats. Open Listen view → the waveform card paints those peaks (not mock). Server Vitest covers the peak-compute + read paths.
+- _Key files:_ `server/src/tts/mp3.ts` (extend to emit peaks during encode); `server/src/routes/chapter-audio.ts` (read + return peaks); new `server/src/audio/compute-peaks.ts` (240-bin RMS reducer).
+- _Depends on:_ none structural. Pairs naturally with Could #3 (per-chapter loudness report) — both emit chapter-level audio metadata at encode time.
+- _Benefit (user):_ the Listen view's waveform card stops lying about chapter shape (loud passages, silences, fades all become visible). Spotting problem chapters at a glance.
 
 ---
 

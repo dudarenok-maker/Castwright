@@ -4,11 +4,26 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
+
+/* CoverPicker's real implementation runs network-y effects on mount
+   (findCoverCandidates). Stub it with a marker that surfaces the
+   open/initialTab props so the cover-button wiring tests can assert
+   *which* tab the parent asked the modal to open with, without
+   re-doing the picker's own test coverage. The modal's behaviour is
+   pinned by src/modals/cover-picker.test.tsx. */
+vi.mock('../modals/cover-picker', () => ({
+  CoverPicker: (props: { open: boolean; initialTab?: 'search' | 'upload' }) =>
+    props.open ? (
+      <div data-testid="cover-picker-stub" data-initial-tab={props.initialTab ?? 'none'} />
+    ) : null,
+}));
+
 import { ListenView } from './listen';
-import { exportsSlice } from '../store/exports-slice';
+import { exportsSlice, exportsActions } from '../store/exports-slice';
 import { accountSlice } from '../store/account-slice';
 import { uiSlice } from '../store/ui-slice';
-import type { Chapter, Character, Voice } from '../lib/types';
+import { notificationsSlice } from '../store/notifications-slice';
+import type { Chapter, Character, Voice, BookExportJob } from '../lib/types';
 import type { EditableBookMeta } from '../store/book-meta-slice';
 
 const chapters: Chapter[] = [
@@ -65,6 +80,7 @@ function makeStore() {
       exports: exportsSlice.reducer,
       account: accountSlice.reducer,
       ui: uiSlice.reducer,
+      notifications: notificationsSlice.reducer,
     },
   });
 }
@@ -437,5 +453,158 @@ describe('ListenView — chapter list scroll cap', () => {
     const scroller = screen.getByTestId('listen-chapters-scroll');
     expect(within(scroller).getByText('The Approach')).toBeInTheDocument();
     expect(within(scroller).getByText('Into the Fog')).toBeInTheDocument();
+  });
+});
+
+describe('ListenView — export-queue per-row actions (plan 18a)', () => {
+  /* The Copy link button writes to navigator.clipboard and fires an info
+     toast. The Remove button dispatches exportsActions.exportDismissed
+     so the live row leaves the rail. Mock-fallback rows (design-system
+     fixtures with synthetic ids) dispatch the same action but with no
+     matching entry in `byBookId`, so the dispatch is a no-op visually —
+     that's an acceptable mock-mode degradation since real exports
+     replace the fixture entirely. */
+
+  it('Copy link button on a URL row writes to clipboard and pushes an info toast', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: { clipboard: { writeText } },
+    });
+
+    const store = configureStore({
+      reducer: {
+        exports: exportsSlice.reducer,
+        account: accountSlice.reducer,
+        ui: uiSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+    });
+    /* Seed one live export job. downloadUrl is what the adapter maps to
+       ExportQueueItem.url, which the row uses to render the Copy button
+       (instead of the Download button). */
+    const job: BookExportJob = {
+      id: 'job-1',
+      bookId: 'demo__sa__test',
+      status: 'done',
+      format: 'm4b',
+      destination: 'download',
+      downloadUrl: 'https://example.com/listen/abc',
+      createdAt: new Date().toISOString(),
+      progress: 1,
+      filename: 'Demo — Full audiobook.m4b',
+      sizeBytes: 1234,
+    };
+    store.dispatch(exportsActions.exportStarted(job));
+
+    const handlers = baseHandlers();
+    render(
+      <Provider store={store}>
+        <ListenView
+          bookId="demo__sa__test"
+          chapters={chapters}
+          characters={characters}
+          library={voices}
+          currentTrack={null}
+          bookMeta={baseMeta()}
+          bookCoverGradient={['#2C7A4B', '#0F3A23']}
+          bookCoverImageUrl={null}
+          isMetaDirty={false}
+          {...handlers}
+        />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTitle('Copy link'));
+
+    // Wait one microtask for the await writeText() to resolve.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(writeText).toHaveBeenCalledWith('https://example.com/listen/abc');
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].message).toMatch(/copied/i);
+    expect(toasts[0].kind).toBe('info');
+  });
+
+  it('Remove button on a live row dispatches exportDismissed', () => {
+    const store = configureStore({
+      reducer: {
+        exports: exportsSlice.reducer,
+        account: accountSlice.reducer,
+        ui: uiSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+    });
+    const job: BookExportJob = {
+      id: 'job-2',
+      bookId: 'demo__sa__test',
+      status: 'done',
+      format: 'm4b',
+      destination: 'download',
+      downloadUrl: 'https://example.com/file.m4b',
+      createdAt: new Date().toISOString(),
+      progress: 1,
+      filename: 'Demo — Full audiobook.m4b',
+      sizeBytes: 1234,
+    };
+    store.dispatch(exportsActions.exportStarted(job));
+
+    expect(store.getState().exports.byBookId['demo__sa__test']).toHaveLength(1);
+
+    const handlers = baseHandlers();
+    render(
+      <Provider store={store}>
+        <ListenView
+          bookId="demo__sa__test"
+          chapters={chapters}
+          characters={characters}
+          library={voices}
+          currentTrack={null}
+          bookMeta={baseMeta()}
+          bookCoverGradient={['#2C7A4B', '#0F3A23']}
+          bookCoverImageUrl={null}
+          isMetaDirty={false}
+          {...handlers}
+        />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTitle('Remove'));
+
+    expect(store.getState().exports.byBookId['demo__sa__test']).toHaveLength(0);
+  });
+});
+
+describe('ListenView — metadata-editor cover buttons (plan 18a)', () => {
+  /* Before plan 18a these two buttons rendered as disabled "Coming soon"
+     stubs. Now they open the CoverPicker; Replace routes to Upload tab,
+     Regenerate to Search tab. The modal's own behaviour is covered in
+     cover-picker.test.tsx; here we pin the parent's open/route wiring. */
+
+  it('cover Replace button is enabled and opens the picker on Upload tab', () => {
+    renderView();
+    const replace = screen.getByTestId('meta-cover-replace');
+    expect(replace).not.toBeDisabled();
+    /* Modal is unmounted before click. */
+    expect(screen.queryByTestId('cover-picker-stub')).not.toBeInTheDocument();
+
+    fireEvent.click(replace);
+
+    const stub = screen.getByTestId('cover-picker-stub');
+    expect(stub.getAttribute('data-initial-tab')).toBe('upload');
+  });
+
+  it('cover Regenerate button is enabled and opens the picker on Search tab', () => {
+    renderView();
+    const regenerate = screen.getByTestId('meta-cover-regenerate');
+    expect(regenerate).not.toBeDisabled();
+    expect(screen.queryByTestId('cover-picker-stub')).not.toBeInTheDocument();
+
+    fireEvent.click(regenerate);
+
+    const stub = screen.getByTestId('cover-picker-stub');
+    expect(stub.getAttribute('data-initial-tab')).toBe('search');
   });
 });
