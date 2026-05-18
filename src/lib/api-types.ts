@@ -17,7 +17,10 @@ export interface paths {
          *     `server/user-settings.json` (created on first GET with defaults) and
          *     layers in env-derived read-only fields: `apiKeyStatus`,
          *     `workspaceRoot`, `workspaceSource`. The Gemini API key itself is
-         *     never echoed back — only the binary "is something set in .env" flag.
+         *     never echoed back — only the binary "is something set" flag.
+         *     Plan 49: `apiKeyStatus` is `set` iff either the env var
+         *     `GEMINI_API_KEY` is configured OR a key has been saved via
+         *     PUT /api/user/settings/gemini-key (stored in user-settings.json).
          */
         get: operations["getUserSettings"];
         /**
@@ -25,12 +28,44 @@ export interface paths {
          * @description Partial update. Only the writable fields from the request body are
          *     persisted; `apiKeyStatus`, `workspaceRoot`, `workspaceSource` are
          *     derived and silently ignored if submitted. Any field named
-         *     `geminiApiKey` (or similar secret-shaped key) is also dropped — the
-         *     API key never leaves `server/.env`. Changes to `sidecarUrl` take
-         *     effect on the next request; `workspaceDirOverride` is persisted
-         *     but requires a server restart to apply.
+         *     `geminiApiKey` (or similar secret-shaped key) is also dropped from
+         *     the general PUT — use PUT /api/user/settings/gemini-key for that.
+         *     Changes to `sidecarUrl` take effect on the next request;
+         *     `workspaceDirOverride` is persisted but requires a server restart
+         *     to apply.
          */
         put: operations["putUserSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/user/settings/gemini-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save (or clear) the UI-managed Gemini API key
+         * @description Plan 49 — dedicated write surface for the Gemini API key, kept off
+         *     the general /api/user/settings PUT so a misaddressed payload can't
+         *     leak the secret into an unrelated field. The key is stored
+         *     plaintext in `server/user-settings.json` (gitignored, same trust
+         *     model as `server/.env`). Pass `{ "key": null }` to clear it.
+         *
+         *     The env var `GEMINI_API_KEY` still wins when present — setting a
+         *     key here while env is set is allowed but visually a no-op
+         *     (apiKeyStatus stays `set` either way).
+         *
+         *     The response shape matches GET /api/user/settings: the plaintext
+         *     key is NEVER returned, only the redacted `apiKeyStatus` boolean.
+         */
+        put: operations["putGeminiApiKey"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1633,6 +1668,44 @@ export interface operations {
         };
         responses: {
             /** @description Updated settings (same shape as GET) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description Malformed body (failed schema validation) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putGeminiApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description The new Gemini API key, or `null` to clear the saved
+                     *     value. Whitespace is trimmed; empty / whitespace-only
+                     *     strings are coerced to `null`.
+                     */
+                    key: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated settings (same shape as GET /api/user/settings) */
             200: {
                 headers: {
                     [name: string]: unknown;
