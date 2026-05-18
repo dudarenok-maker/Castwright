@@ -132,6 +132,22 @@
   background-color: #1f1b19;
 }
 
+/* Translucent variants of bg-white. Tailwind generates `.bg-white\/60`
+   / `.bg-white\/70` as `rgb(255 255 255 / 0.X)` — a different selector
+   from the bare `.bg-white` rule above, so the dark redirect doesn't
+   reach them and they paint as a near-cream wash (~70% white) over
+   the dark canvas. The ConnPill on the Analysing view sits on
+   `bg-white/70` with `text-emerald-700` text → light-on-light when
+   streaming. Drop these to subtle ink-overlays so the on-top text
+   reads. Alpha sits one step below the hover variants below so the
+   "base → hover" elevation ordering is preserved. */
+[data-theme='dark'] .bg-white\/60 {
+  background-color: rgba(244, 239, 236, 0.04);
+}
+[data-theme='dark'] .bg-white\/70 {
+  background-color: rgba(244, 239, 236, 0.05);
+}
+
 /* Hover variants of bg-white. Tailwind generates these as
    `.hover\:bg-white:hover` etc., a different selector than the bare
    `.bg-white` rule above, so they need their own dark overrides —
