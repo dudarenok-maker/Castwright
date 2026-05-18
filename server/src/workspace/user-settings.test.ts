@@ -46,7 +46,7 @@ describe('userSettingsSchema — defaultThemePreference (plan 41)', () => {
   });
 
   it('treats the field as optional — legacy settings files without it parse cleanly', () => {
-    const { defaultThemePreference, ...legacy } = DEFAULT_USER_SETTINGS;
+    const { defaultThemePreference: _defaultThemePreference, ...legacy } = DEFAULT_USER_SETTINGS;
     const parsed = userSettingsSchema.parse(legacy);
     expect(parsed.defaultThemePreference).toBeUndefined();
   });
@@ -93,7 +93,7 @@ describe('userSettingsSchema — autoStartSidecar (plan 43)', () => {
   });
 
   it('treats the field as optional — legacy settings files without it parse cleanly', () => {
-    const { autoStartSidecar, ...legacy } = DEFAULT_USER_SETTINGS;
+    const { autoStartSidecar: _autoStartSidecar, ...legacy } = DEFAULT_USER_SETTINGS;
     const parsed = userSettingsSchema.parse(legacy);
     expect(parsed.autoStartSidecar).toBeUndefined();
   });
@@ -132,10 +132,14 @@ describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
   });
 
   it("accepts 'search' and 'upload'", () => {
-    expect(userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, coverPickerDefaultTab: 'search' })
-      .coverPickerDefaultTab).toBe('search');
-    expect(userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, coverPickerDefaultTab: 'upload' })
-      .coverPickerDefaultTab).toBe('upload');
+    expect(
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, coverPickerDefaultTab: 'search' })
+        .coverPickerDefaultTab,
+    ).toBe('search');
+    expect(
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, coverPickerDefaultTab: 'upload' })
+        .coverPickerDefaultTab,
+    ).toBe('upload');
   });
 
   it("rejects unknown values such as 'frame' (Frame tab is never a valid default)", () => {
@@ -145,7 +149,7 @@ describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
   });
 
   it('treats the field as optional — legacy settings files without it parse cleanly', () => {
-    const { coverPickerDefaultTab, ...legacy } = DEFAULT_USER_SETTINGS;
+    const { coverPickerDefaultTab: _coverPickerDefaultTab, ...legacy } = DEFAULT_USER_SETTINGS;
     const parsed = userSettingsSchema.parse(legacy);
     expect(parsed.coverPickerDefaultTab).toBeUndefined();
   });
@@ -167,7 +171,9 @@ describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
       expect(reread.coverPickerDefaultTab).toBe('upload');
     } finally {
       // Restore so we don't pollute the dev's user-settings.json.
-      await mod.writeUserSettings({ coverPickerDefaultTab: before.coverPickerDefaultTab ?? 'search' });
+      await mod.writeUserSettings({
+        coverPickerDefaultTab: before.coverPickerDefaultTab ?? 'search',
+      });
       mod._resetUserSettingsCache();
     }
   });

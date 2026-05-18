@@ -39,7 +39,9 @@ describe('GeminiRateLimiter', () => {
     /* Advance only a sliver — the acquire must still be blocked. */
     await vi.advanceTimersByTimeAsync(10);
     let settled = false;
-    pending.then(() => { settled = true; });
+    pending.then(() => {
+      settled = true;
+    });
     expect(settled).toBe(false);
     /* The acquire fired onWait with reason='rpm' and a wait near 60 s. */
     expect(onWait).toHaveBeenCalled();
@@ -88,7 +90,9 @@ describe('GeminiRateLimiter', () => {
     for (let i = 0; i < 3; i += 1) {
       await limiter.acquire('fake-model', 1_000);
     }
-    await expect(limiter.acquire('fake-model', 1_000)).rejects.toBeInstanceOf(DailyQuotaExhaustedError);
+    await expect(limiter.acquire('fake-model', 1_000)).rejects.toBeInstanceOf(
+      DailyQuotaExhaustedError,
+    );
     /* Reset boundary is next UTC midnight. */
     try {
       await limiter.acquire('fake-model', 1_000);

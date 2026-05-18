@@ -60,14 +60,16 @@ interface GuardResult {
   modal: ReactNode;
 }
 
-export function useReverseLocalAnalyzerGuard({ analysingBookTitle }: GuardOptions = {}): GuardResult {
+export function useReverseLocalAnalyzerGuard({
+  analysingBookTitle,
+}: GuardOptions = {}): GuardResult {
   const dispatch = useAppDispatch();
   /* Defensive reads — tests routinely build configureStore() without
      every slice. Without `?.` here those stores would throw the
      moment a view that mounts this hook renders. Production always
      has both slices wired via `src/store/index.ts`. */
-  const activeStream = useAppSelector(s => s.analysis?.activeStream ?? null);
-  const libraryBooks = useAppSelector(s => s.library?.books ?? []);
+  const activeStream = useAppSelector((s) => s.analysis?.activeStream ?? null);
+  const libraryBooks = useAppSelector((s) => s.library?.books ?? []);
 
   const [pending, setPending] = useState<(() => void) | null>(null);
 
@@ -84,31 +86,30 @@ export function useReverseLocalAnalyzerGuard({ analysingBookTitle }: GuardOption
   const close = () => setPending(null);
 
   const titleFromLibrary = activeStream?.bookId
-    ? libraryBooks.find(b => b.bookId === activeStream.bookId)?.title ?? null
+    ? (libraryBooks.find((b) => b.bookId === activeStream.bookId)?.title ?? null)
     : null;
   const resolvedTitle =
-    analysingBookTitle
-    ?? activeStream?.bookTitle
-    ?? titleFromLibrary
-    ?? activeStream?.bookId
-    ?? 'the other book';
+    analysingBookTitle ??
+    activeStream?.bookTitle ??
+    titleFromLibrary ??
+    activeStream?.bookId ??
+    'the other book';
 
   const modal = (
     <ConfirmDialog
       open={pending != null}
       eyebrow="Analysis in progress"
       title="Pause analysis to generate?"
-      icon={<IconWarning className="w-4 h-4"/>}
+      icon={<IconWarning className="w-4 h-4" />}
       body={
         <>
           <p>
-            Local analysis needs the same GPU as the TTS sidecar, so
-            analysis for <b>{resolvedTitle}</b> will pause while
-            audio is generated.
+            Local analysis needs the same GPU as the TTS sidecar, so analysis for{' '}
+            <b>{resolvedTitle}</b> will pause while audio is generated.
           </p>
           <p className="mt-3 text-ink/60">
-            You can resume analysis from the analysing screen
-            afterwards — it picks up where it left off.
+            You can resume analysis from the analysing screen afterwards — it picks up where it left
+            off.
           </p>
         </>
       }

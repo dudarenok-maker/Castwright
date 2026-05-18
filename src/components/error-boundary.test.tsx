@@ -20,11 +20,17 @@ function ThrowOnce({ message }: { message: string }) {
   return <div>recovered</div>;
 }
 
-beforeEach(() => { armed = true; });
+beforeEach(() => {
+  armed = true;
+});
 
 describe('ErrorBoundary', () => {
   it('renders children when no error', () => {
-    render(<ErrorBoundary><span>ok</span></ErrorBoundary>);
+    render(
+      <ErrorBoundary>
+        <span>ok</span>
+      </ErrorBoundary>,
+    );
     expect(screen.getByText('ok')).toBeTruthy();
   });
 
@@ -34,7 +40,11 @@ describe('ErrorBoundary', () => {
     const origError = console.error;
     console.error = () => undefined;
     try {
-      render(<ErrorBoundary><ThrowOnce message="reducer crashed on a tick"/></ErrorBoundary>);
+      render(
+        <ErrorBoundary>
+          <ThrowOnce message="reducer crashed on a tick" />
+        </ErrorBoundary>,
+      );
       expect(screen.getByRole('alert')).toBeTruthy();
       expect(screen.getByText(/reducer crashed on a tick/)).toBeTruthy();
       expect(screen.getByRole('button', { name: /try again/i })).toBeTruthy();
@@ -47,7 +57,11 @@ describe('ErrorBoundary', () => {
     const origError = console.error;
     console.error = () => undefined;
     try {
-      render(<ErrorBoundary><ThrowOnce message="transient"/></ErrorBoundary>);
+      render(
+        <ErrorBoundary>
+          <ThrowOnce message="transient" />
+        </ErrorBoundary>,
+      );
       expect(screen.getByRole('alert')).toBeTruthy();
       armed = false;
       fireEvent.click(screen.getByRole('button', { name: /try again/i }));

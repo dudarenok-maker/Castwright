@@ -207,7 +207,10 @@ describe('buildVoiceTuneEvent', () => {
 
 describe('buildVoiceLockEvent', () => {
   it('records the lock action against the character', () => {
-    const ev = buildVoiceLockEvent({ character: makeChar('halloran', 'Captain Halloran'), now: NOW });
+    const ev = buildVoiceLockEvent({
+      character: makeChar('halloran', 'Captain Halloran'),
+      now: NOW,
+    });
     expect(ev.type).toBe('voice_lock');
     expect(ev.title).toBe("Locked Captain Halloran's voice");
     expect(ev.actor).toBe('you');
@@ -248,7 +251,13 @@ describe('display-time formatters', () => {
 
   it('withRecomputedDisplay recomputes ts/date for entries with `at` and leaves fixture entries untouched', () => {
     const fixture: ChangeLogEvent = {
-      id: 1, ts: 'Last week', date: 'earlier', type: 'import', title: 't', note: 'n', actor: 'you',
+      id: 1,
+      ts: 'Last week',
+      date: 'earlier',
+      type: 'import',
+      title: 't',
+      note: 'n',
+      actor: 'you',
     };
     const real: ChangeLogEvent = {
       id: 2,

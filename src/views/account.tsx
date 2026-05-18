@@ -17,30 +17,36 @@ import { fetchAccountSettings, saveAccountSettings } from '../store/account-slic
 
 export function AccountView() {
   const dispatch = useAppDispatch();
-  const account = useAppSelector(s => s.account);
+  const account = useAppSelector((s) => s.account);
 
   /* Local form state — initialised from the slice and re-synced when the
      slice rehydrates (after Save or after the boot-time fetch lands). The
      workspaceDirOverride field is tracked separately so an "edited but not
      saved" diff can render the restart-required badge. */
-  const [displayName,           setDisplayName]           = useState(account.displayName);
-  const [defaultAnalysisModel,  setDefaultAnalysisModel]  = useState(account.defaultAnalysisModel);
-  const [defaultTtsEngine,      setDefaultTtsEngine]      = useState<TtsEngineId>(account.defaultTtsEngine);
-  const [defaultTtsModelKey,    setDefaultTtsModelKey]    = useState<TtsModelKey>(account.defaultTtsModelKey);
-  const [sidecarUrl,            setSidecarUrl]            = useState(account.sidecarUrl);
-  const [analysisEngine,        setAnalysisEngine]        = useState<'local' | 'gemini'>(account.analysisEngine);
-  const [ollamaUrl,             setOllamaUrl]             = useState(account.ollamaUrl);
-  const [workspaceDirOverride,  setWorkspaceDirOverride]  = useState<string>(account.workspaceDirOverride ?? '');
-  const [minorCastMinLines,     setMinorCastMinLines]     = useState<number>(account.minorCastMinLines);
-  const [coverPickerDefaultTab, setCoverPickerDefaultTab] = useState<NonNullable<UserSettings['coverPickerDefaultTab']>>(account.coverPickerDefaultTab ?? 'search');
+  const [displayName, setDisplayName] = useState(account.displayName);
+  const [defaultAnalysisModel, setDefaultAnalysisModel] = useState(account.defaultAnalysisModel);
+  const [defaultTtsEngine, setDefaultTtsEngine] = useState<TtsEngineId>(account.defaultTtsEngine);
+  const [defaultTtsModelKey, setDefaultTtsModelKey] = useState<TtsModelKey>(
+    account.defaultTtsModelKey,
+  );
+  const [sidecarUrl, setSidecarUrl] = useState(account.sidecarUrl);
+  const [analysisEngine, setAnalysisEngine] = useState<'local' | 'gemini'>(account.analysisEngine);
+  const [ollamaUrl, setOllamaUrl] = useState(account.ollamaUrl);
+  const [workspaceDirOverride, setWorkspaceDirOverride] = useState<string>(
+    account.workspaceDirOverride ?? '',
+  );
+  const [minorCastMinLines, setMinorCastMinLines] = useState<number>(account.minorCastMinLines);
+  const [coverPickerDefaultTab, setCoverPickerDefaultTab] = useState<
+    NonNullable<UserSettings['coverPickerDefaultTab']>
+  >(account.coverPickerDefaultTab ?? 'search');
   const [defaultThemePreference, setDefaultThemePreference] = useState<ThemePreference>(
     account.defaultThemePreference ?? 'system',
   );
   const [autoStartSidecar, setAutoStartSidecar] = useState<boolean>(
     account.autoStartSidecar ?? true,
   );
-  const themeOverride = useAppSelector(s => s.ui.themeOverride);
-  const [showSaved,             setShowSaved]             = useState(false);
+  const themeOverride = useAppSelector((s) => s.ui.themeOverride);
+  const [showSaved, setShowSaved] = useState(false);
 
   useEffect(() => {
     setDisplayName(account.displayName);
@@ -55,21 +61,28 @@ export function AccountView() {
     setCoverPickerDefaultTab(account.coverPickerDefaultTab ?? 'search');
     setDefaultThemePreference(account.defaultThemePreference ?? 'system');
     setAutoStartSidecar(account.autoStartSidecar ?? true);
-  }, [account.hydrated, account.displayName, account.defaultAnalysisModel,
-      account.defaultTtsEngine, account.defaultTtsModelKey,
-      account.sidecarUrl, account.analysisEngine, account.ollamaUrl,
-      account.workspaceDirOverride,
-      account.minorCastMinLines,
-      account.coverPickerDefaultTab,
-      account.defaultThemePreference,
-      account.autoStartSidecar]);
+  }, [
+    account.hydrated,
+    account.displayName,
+    account.defaultAnalysisModel,
+    account.defaultTtsEngine,
+    account.defaultTtsModelKey,
+    account.sidecarUrl,
+    account.analysisEngine,
+    account.ollamaUrl,
+    account.workspaceDirOverride,
+    account.minorCastMinLines,
+    account.coverPickerDefaultTab,
+    account.defaultThemePreference,
+    account.autoStartSidecar,
+  ]);
 
   /* When the engine switches, the selected modelKey may not belong to the
      new engine's group. Default to the new group's first model so the
      dropdown never shows a mismatched value. */
-  const engineGroup = TTS_ENGINES.find(g => g.id === defaultTtsEngine) ?? TTS_ENGINES[0];
+  const engineGroup = TTS_ENGINES.find((g) => g.id === defaultTtsEngine) ?? TTS_ENGINES[0];
   useEffect(() => {
-    if (!engineGroup.models.some(m => m.id === defaultTtsModelKey)) {
+    if (!engineGroup.models.some((m) => m.id === defaultTtsModelKey)) {
       setDefaultTtsModelKey(engineGroup.models[0].id);
     }
   }, [defaultTtsEngine, engineGroup, defaultTtsModelKey]);
@@ -85,23 +98,35 @@ export function AccountView() {
   const autoStartDirty = autoStartSidecar !== persistedAutoStart;
 
   const dirty = useMemo(() => {
-    return displayName           !== account.displayName
-        || defaultAnalysisModel  !== account.defaultAnalysisModel
-        || defaultTtsEngine      !== account.defaultTtsEngine
-        || defaultTtsModelKey    !== account.defaultTtsModelKey
-        || sidecarUrl            !== account.sidecarUrl
-        || analysisEngine        !== account.analysisEngine
-        || ollamaUrl             !== account.ollamaUrl
-        || minorCastMinLines     !== account.minorCastMinLines
-        || coverPickerDefaultTab !== (account.coverPickerDefaultTab ?? 'search')
-        || defaultThemePreference !== (account.defaultThemePreference ?? 'system')
-        || autoStartDirty
-        || workspaceDirty;
-  }, [displayName, defaultAnalysisModel, defaultTtsEngine, defaultTtsModelKey,
-      sidecarUrl, analysisEngine, ollamaUrl,
-      minorCastMinLines, coverPickerDefaultTab, defaultThemePreference,
-      autoStartDirty,
-      workspaceDirty, account]);
+    return (
+      displayName !== account.displayName ||
+      defaultAnalysisModel !== account.defaultAnalysisModel ||
+      defaultTtsEngine !== account.defaultTtsEngine ||
+      defaultTtsModelKey !== account.defaultTtsModelKey ||
+      sidecarUrl !== account.sidecarUrl ||
+      analysisEngine !== account.analysisEngine ||
+      ollamaUrl !== account.ollamaUrl ||
+      minorCastMinLines !== account.minorCastMinLines ||
+      coverPickerDefaultTab !== (account.coverPickerDefaultTab ?? 'search') ||
+      defaultThemePreference !== (account.defaultThemePreference ?? 'system') ||
+      autoStartDirty ||
+      workspaceDirty
+    );
+  }, [
+    displayName,
+    defaultAnalysisModel,
+    defaultTtsEngine,
+    defaultTtsModelKey,
+    sidecarUrl,
+    analysisEngine,
+    ollamaUrl,
+    minorCastMinLines,
+    coverPickerDefaultTab,
+    defaultThemePreference,
+    autoStartDirty,
+    workspaceDirty,
+    account,
+  ]);
 
   const onSave = async () => {
     const patch: UserSettingsPatch = {
@@ -141,37 +166,36 @@ export function AccountView() {
         <div className="mb-8">
           <SectionLabel>Account</SectionLabel>
           <div className="mt-4">
-            <MixedHeading regular="Your" bold="defaults" level="h1"/>
+            <MixedHeading regular="Your" bold="defaults" level="h1" />
           </div>
         </div>
         {account.status === 'error' ? (
           <section
             role="alert"
-            className="rounded-2xl border border-rose-200 bg-rose-50 p-6 shadow-card">
-            <h2 className="text-base font-semibold text-rose-900">
-              Couldn't load your settings
-            </h2>
+            className="rounded-2xl border border-rose-200 bg-rose-50 p-6 shadow-card"
+          >
+            <h2 className="text-base font-semibold text-rose-900">Couldn't load your settings</h2>
             <p className="mt-2 text-sm text-rose-900/85">
               The analysis backend at <code className="font-mono">/api/user/settings</code> isn't
-              reachable. Your saved choices are still on disk in
-              {' '}<code className="font-mono">server/user-settings.json</code> — the form is
-              hidden so it doesn't render the built-in defaults as if they were
-              your saved values.
+              reachable. Your saved choices are still on disk in{' '}
+              <code className="font-mono">server/user-settings.json</code> — the form is hidden so
+              it doesn't render the built-in defaults as if they were your saved values.
             </p>
             <p className="mt-2 text-xs text-rose-900/70">
               Start the server with{' '}
               <code className="font-mono">cd server &amp;&amp; npm run dev</code>, then retry.
             </p>
             {account.error && (
-              <p className="mt-3 text-xs font-mono text-rose-900/70 break-all">
-                {account.error}
-              </p>
+              <p className="mt-3 text-xs font-mono text-rose-900/70 break-all">{account.error}</p>
             )}
             <div className="mt-4">
               <PrimaryButton
                 variant="dark"
                 icon={false}
-                onClick={() => { void dispatch(fetchAccountSettings()); }}>
+                onClick={() => {
+                  void dispatch(fetchAccountSettings());
+                }}
+              >
                 Retry
               </PrimaryButton>
             </div>
@@ -188,36 +212,43 @@ export function AccountView() {
       <div className="mb-8">
         <SectionLabel>Account</SectionLabel>
         <div className="mt-4">
-          <MixedHeading regular="Your" bold="defaults" level="h1"/>
+          <MixedHeading regular="Your" bold="defaults" level="h1" />
         </div>
         <p className="mt-3 text-ink/60 max-w-xl">
-          Workspace-wide preferences. Defaults seed new books — once you
-          pick a model for a specific book, that choice sticks for that book.
+          Workspace-wide preferences. Defaults seed new books — once you pick a model for a specific
+          book, that choice sticks for that book.
         </p>
       </div>
 
       <div className="space-y-6">
         <FormCard title="Profile" hint="How you appear in the top bar and the change log.">
           <FieldRow label="Display name">
-            <input type="text"
+            <input
+              type="text"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Your name"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"/>
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            />
           </FieldRow>
         </FormCard>
 
-        <FormCard title="Defaults for new books"
-          hint="Used the first time you open a book that hasn't been touched yet. Per-book choices override these and persist.">
+        <FormCard
+          title="Defaults for new books"
+          hint="Used the first time you open a book that hasn't been touched yet. Per-book choices override these and persist."
+        >
           <FieldRow label="Analysis model">
             <select
               value={defaultAnalysisModel}
               onChange={(e) => setDefaultAnalysisModel(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30">
-              {MODEL_OPTION_GROUPS.map(g => (
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            >
+              {MODEL_OPTION_GROUPS.map((g) => (
                 <optgroup key={g.engine} label={g.label}>
-                  {g.models.map(m => (
-                    <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>
+                  {g.models.map((m) => (
+                    <option key={m.id} value={m.id} title={m.hint}>
+                      {m.label}
+                    </option>
                   ))}
                 </optgroup>
               ))}
@@ -227,9 +258,12 @@ export function AccountView() {
             <select
               value={defaultTtsEngine}
               onChange={(e) => setDefaultTtsEngine(e.target.value as TtsEngineId)}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30">
-              {TTS_ENGINES.map(g => (
-                <option key={g.id} value={g.id} title={g.hint}>{g.label}</option>
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            >
+              {TTS_ENGINES.map((g) => (
+                <option key={g.id} value={g.id} title={g.hint}>
+                  {g.label}
+                </option>
               ))}
             </select>
           </FieldRow>
@@ -237,21 +271,29 @@ export function AccountView() {
             <select
               value={defaultTtsModelKey}
               onChange={(e) => setDefaultTtsModelKey(e.target.value as TtsModelKey)}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30">
-              {engineGroup.models.map(m => (
-                <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            >
+              {engineGroup.models.map((m) => (
+                <option key={m.id} value={m.id} title={m.hint}>
+                  {m.label}
+                </option>
               ))}
             </select>
           </FieldRow>
         </FormCard>
 
-        <FormCard title="Cast analysis"
-          hint="How the analyzer decides which characters earn a dedicated voice profile vs. get folded into the generic Unknown male / Unknown female buckets.">
-          <FieldRow label="Minor-cast threshold (sentences)"
+        <FormCard
+          title="Cast analysis"
+          hint="How the analyzer decides which characters earn a dedicated voice profile vs. get folded into the generic Unknown male / Unknown female buckets."
+        >
+          <FieldRow
+            label="Minor-cast threshold (sentences)"
             sublabel={
               'Characters with fewer than this many attributed sentences (each individual sentence the model assigns to that speaker counts as one — the same number shown as "Lines" on the cast roster, not word count) get folded into Unknown male / Unknown female at analysis time. Characters whose name begins with "Unknown" always fold regardless of this number. Set to 0 to disable the line-count trigger entirely. Default 3.'
-            }>
-            <input type="number"
+            }
+          >
+            <input
+              type="number"
               min={0}
               max={50}
               step={1}
@@ -264,33 +306,44 @@ export function AccountView() {
                   setMinorCastMinLines(Math.max(0, Math.min(50, parsed)));
                 }
               }}
-              className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"/>
+              className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            />
           </FieldRow>
         </FormCard>
 
-        <FormCard title="Covers"
-          hint="How the cover picker opens for new books. Plan 40 added local-disk upload alongside the OpenLibrary search.">
-          <FieldRow label="Default cover picker tab"
-            sublabel="Which tab opens first when you click 'Cover image' on a book. Search (the default) shows OpenLibrary candidates; Upload jumps straight to the file picker for users who routinely bring their own art.">
+        <FormCard
+          title="Covers"
+          hint="How the cover picker opens for new books. Plan 40 added local-disk upload alongside the OpenLibrary search."
+        >
+          <FieldRow
+            label="Default cover picker tab"
+            sublabel="Which tab opens first when you click 'Cover image' on a book. Search (the default) shows OpenLibrary candidates; Upload jumps straight to the file picker for users who routinely bring their own art."
+          >
             <select
               value={coverPickerDefaultTab}
               onChange={(e) => setCoverPickerDefaultTab(e.target.value as 'search' | 'upload')}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30">
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            >
               <option value="search">Search OpenLibrary (default)</option>
               <option value="upload">Upload local</option>
             </select>
           </FieldRow>
         </FormCard>
 
-        <FormCard title="Appearance"
-          hint="How the app looks. The sun/moon toggle in the top bar is a device-only override; this picker sets the default that any new device or fresh session inherits.">
-          <FieldRow label="Default theme"
-            sublabel="System follows your OS's dark/light setting at runtime and auto-flips at sundown. Light or Dark pins one regardless of OS. Changes here are server-persisted; the top-bar toggle's per-device override always wins until you clear it below.">
+        <FormCard
+          title="Appearance"
+          hint="How the app looks. The sun/moon toggle in the top bar is a device-only override; this picker sets the default that any new device or fresh session inherits."
+        >
+          <FieldRow
+            label="Default theme"
+            sublabel="System follows your OS's dark/light setting at runtime and auto-flips at sundown. Light or Dark pins one regardless of OS. Changes here are server-persisted; the top-bar toggle's per-device override always wins until you clear it below."
+          >
             <select
               value={defaultThemePreference}
               onChange={(e) => setDefaultThemePreference(e.target.value as ThemePreference)}
               data-testid="account-default-theme"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30">
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            >
               <option value="system">System (follows OS — default)</option>
               <option value="light">Light</option>
               <option value="dark">Dark</option>
@@ -299,34 +352,40 @@ export function AccountView() {
           {themeOverride !== null && (
             <div
               data-testid="theme-override-pill"
-              className="flex items-center justify-between gap-3 rounded-xl border border-magenta/30 bg-magenta/10 px-4 py-3">
+              className="flex items-center justify-between gap-3 rounded-xl border border-magenta/30 bg-magenta/10 px-4 py-3"
+            >
               <div className="text-xs text-ink/75">
-                <span className="font-semibold text-magenta">This device is overridden</span>
-                {' '}— the top-bar toggle is set to{' '}
-                <span className="font-mono text-ink">{themeOverride}</span>.
-                Clear the override to follow the account default again.
+                <span className="font-semibold text-magenta">This device is overridden</span> — the
+                top-bar toggle is set to <span className="font-mono text-ink">{themeOverride}</span>
+                . Clear the override to follow the account default again.
               </div>
               <PrimaryButton
                 variant="ghost"
                 icon={false}
-                onClick={() => dispatch(uiActions.clearThemeOverride())}>
+                onClick={() => dispatch(uiActions.clearThemeOverride())}
+              >
                 Use account default
               </PrimaryButton>
             </div>
           )}
         </FormCard>
 
-        <FormCard title="TTS sidecar"
-          hint="The Python sidecar process that runs Kokoro / Coqui XTTS locally. The Node server can launch it for you automatically.">
-          <FieldRow label="Auto-start with server"
-            sublabel="When the analysis server starts (start-app.bat or `cd server && npm run dev`), automatically spawn the Python TTS sidecar as a child process. Disable to run `npm run tts:sidecar` yourself, e.g. for debugging or to swap engines per-session. Takes effect on the next server restart.">
+        <FormCard
+          title="TTS sidecar"
+          hint="The Python sidecar process that runs Kokoro / Coqui XTTS locally. The Node server can launch it for you automatically."
+        >
+          <FieldRow
+            label="Auto-start with server"
+            sublabel="When the analysis server starts (start-app.bat or `cd server && npm run dev`), automatically spawn the Python TTS sidecar as a child process. Disable to run `npm run tts:sidecar` yourself, e.g. for debugging or to swap engines per-session. Takes effect on the next server restart."
+          >
             <label className="inline-flex items-center gap-3 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={autoStartSidecar}
                 onChange={(e) => setAutoStartSidecar(e.target.checked)}
                 data-testid="account-auto-start-sidecar"
-                className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"/>
+                className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
+              />
               <span className="text-sm text-ink">
                 {autoStartSidecar
                   ? 'Enabled — the server will spawn the sidecar at boot.'
@@ -341,56 +400,75 @@ export function AccountView() {
           </FieldRow>
         </FormCard>
 
-        <FormCard title="Server configuration"
-          hint="Non-secret overrides for what's in server/.env. Sidecar URL and Ollama settings take effect on the next request; workspace directory needs a server restart.">
-          <FieldRow label="Sidecar URL"
-            sublabel="Local TTS sidecar endpoint. Default: http://localhost:9000">
-            <input type="text"
+        <FormCard
+          title="Server configuration"
+          hint="Non-secret overrides for what's in server/.env. Sidecar URL and Ollama settings take effect on the next request; workspace directory needs a server restart."
+        >
+          <FieldRow
+            label="Sidecar URL"
+            sublabel="Local TTS sidecar endpoint. Default: http://localhost:9000"
+          >
+            <input
+              type="text"
               value={sidecarUrl}
               onChange={(e) => setSidecarUrl(e.target.value)}
               placeholder="http://localhost:9000"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"/>
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            />
           </FieldRow>
-          <FieldRow label="Analyzer engine"
+          <FieldRow
+            label="Analyzer engine"
             sublabel={
               'Default — Gemini API sends every chapter straight to Google using the GEMINI_API_KEY in server/.env. Local routes analysis through the Ollama daemon on this machine instead (with Gemini as automatic fallback only when the daemon is unreachable, assuming GEMINI_API_KEY is configured). Pick Local only if you want analysis to run on-device.'
-            }>
+            }
+          >
             <select
               value={analysisEngine}
               onChange={(e) => setAnalysisEngine(e.target.value as 'local' | 'gemini')}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30">
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            >
               <option value="gemini">Gemini API (default — direct)</option>
               <option value="local">Local Ollama (on-device, with Gemini fallback)</option>
             </select>
           </FieldRow>
-          <FieldRow label="Ollama URL"
+          <FieldRow
+            label="Ollama URL"
             sublabel={
               'Local Ollama daemon endpoint. Default: http://localhost:11434. The Ollama model tag is whatever you pick above under "Analysis model" — pull it once with `ollama pull <tag>` before first run.'
-            }>
-            <input type="text"
+            }
+          >
+            <input
+              type="text"
               value={ollamaUrl}
               onChange={(e) => setOllamaUrl(e.target.value)}
               placeholder="http://localhost:11434"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"/>
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            />
           </FieldRow>
-          <FieldRow label="Workspace directory override"
-            sublabel="Absolute or relative-to-server/ path. Leave empty to use WORKSPACE_DIR from server/.env.">
-            <input type="text"
+          <FieldRow
+            label="Workspace directory override"
+            sublabel="Absolute or relative-to-server/ path. Leave empty to use WORKSPACE_DIR from server/.env."
+          >
+            <input
+              type="text"
               value={workspaceDirOverride}
               onChange={(e) => setWorkspaceDirOverride(e.target.value)}
               placeholder="(leave empty to use server/.env)"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"/>
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            />
             {workspaceDirty && (
               <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
                 Restart the server to apply this change.
               </p>
             )}
           </FieldRow>
-          <ReadOnlyRow label="Active workspace root"
+          <ReadOnlyRow
+            label="Active workspace root"
             value={account.workspaceRoot || '(unknown)'}
-            sublabel={`Source: ${account.workspaceSource}`}/>
+            sublabel={`Source: ${account.workspaceSource}`}
+          />
           <ReadOnlyRow label="Gemini API key">
-            <ApiKeyPill status={account.apiKeyStatus}/>
+            <ApiKeyPill status={account.apiKeyStatus} />
           </ReadOnlyRow>
         </FormCard>
 
@@ -398,9 +476,7 @@ export function AccountView() {
           <PrimaryButton variant={dirty ? 'dark' : 'ghost'} onClick={onSave} icon={false}>
             {saving ? 'Saving…' : 'Save changes'}
           </PrimaryButton>
-          {showSaved && (
-            <span className="text-xs text-magenta font-semibold">Saved.</span>
-          )}
+          {showSaved && <span className="text-xs text-magenta font-semibold">Saved.</span>}
           {account.status === 'error' && account.error && (
             <span className="text-xs text-rose-700">{account.error}</span>
           )}
@@ -410,7 +486,11 @@ export function AccountView() {
   );
 }
 
-function FormCard({ title, hint, children }: {
+function FormCard({
+  title,
+  hint,
+  children,
+}: {
   title: string;
   hint?: string;
   children: React.ReactNode;
@@ -424,7 +504,11 @@ function FormCard({ title, hint, children }: {
   );
 }
 
-function FieldRow({ label, sublabel, children }: {
+function FieldRow({
+  label,
+  sublabel,
+  children,
+}: {
   label: string;
   sublabel?: string;
   children: React.ReactNode;
@@ -438,7 +522,12 @@ function FieldRow({ label, sublabel, children }: {
   );
 }
 
-function ReadOnlyRow({ label, sublabel, value, children }: {
+function ReadOnlyRow({
+  label,
+  sublabel,
+  value,
+  children,
+}: {
   label: string;
   sublabel?: string;
   value?: string;
@@ -463,14 +552,14 @@ function ApiKeyPill({ status }: { status: 'set' | 'unset' }) {
   if (status === 'set') {
     return (
       <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-semibold">
-        <span className="w-2 h-2 rounded-full bg-emerald-600"/>
+        <span className="w-2 h-2 rounded-full bg-emerald-600" />
         Set in server/.env
       </span>
     );
   }
   return (
     <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold">
-      <span className="w-2 h-2 rounded-full bg-amber-600"/>
+      <span className="w-2 h-2 rounded-full bg-amber-600" />
       Not set — add GEMINI_API_KEY to server/.env
     </span>
   );

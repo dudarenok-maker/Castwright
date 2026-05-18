@@ -16,23 +16,52 @@ import {
 } from './voice-mapping.js';
 
 type VoiceProfile =
-  | 'male-deep' | 'male-mid' | 'male-light'
-  | 'female-deep' | 'female-mid' | 'female-light'
-  | 'narrator-warm' | 'narrator-cool';
+  | 'male-deep'
+  | 'male-mid'
+  | 'male-light'
+  | 'female-deep'
+  | 'female-mid'
+  | 'female-light'
+  | 'narrator-warm'
+  | 'narrator-cool';
 
 /* 8 buckets × 2 slots = 16 distinct gradients. Hue ranges are mnemonic:
    blues → deep male, greens → mid male, teals → light male,
    purples → deep female, roses → mid female, peaches → light female,
    golds → warm narrator, slates → cool narrator. */
 export const BUCKET_GRADIENTS: Record<VoiceProfile, [[string, string], [string, string]]> = {
-  'male-deep':     [['#2C4760', '#0E1A26'], ['#42647E', '#172A3A']],
-  'male-mid':      [['#4A7B6B', '#1F3A2E'], ['#6B9482', '#2E4D3D']],
-  'male-light':    [['#5BA3B0', '#1F5562'], ['#7AC0CC', '#357A87']],
-  'female-deep':   [['#6E3B7A', '#2B0E33'], ['#8B4F8C', '#3A1A40']],
-  'female-mid':    [['#C25A8C', '#6B1F4D'], ['#D67399', '#7A2E5E']],
-  'female-light':  [['#F79A83', '#A43C6C'], ['#F4B49B', '#C16557']],
-  'narrator-warm': [['#D4A04E', '#7B5A26'], ['#C68B5A', '#6E4925']],
-  'narrator-cool': [['#6B6663', '#1A1A1A'], ['#8B8682', '#3A3835']],
+  'male-deep': [
+    ['#2C4760', '#0E1A26'],
+    ['#42647E', '#172A3A'],
+  ],
+  'male-mid': [
+    ['#4A7B6B', '#1F3A2E'],
+    ['#6B9482', '#2E4D3D'],
+  ],
+  'male-light': [
+    ['#5BA3B0', '#1F5562'],
+    ['#7AC0CC', '#357A87'],
+  ],
+  'female-deep': [
+    ['#6E3B7A', '#2B0E33'],
+    ['#8B4F8C', '#3A1A40'],
+  ],
+  'female-mid': [
+    ['#C25A8C', '#6B1F4D'],
+    ['#D67399', '#7A2E5E'],
+  ],
+  'female-light': [
+    ['#F79A83', '#A43C6C'],
+    ['#F4B49B', '#C16557'],
+  ],
+  'narrator-warm': [
+    ['#D4A04E', '#7B5A26'],
+    ['#C68B5A', '#6E4925'],
+  ],
+  'narrator-cool': [
+    ['#6B6663', '#1A1A1A'],
+    ['#8B8682', '#3A3835'],
+  ],
 };
 
 const FALLBACK_PALETTE: ReadonlyArray<[string, string]> = [

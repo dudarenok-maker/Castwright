@@ -28,7 +28,12 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { putManuscript, getManuscript, getOrHydrateManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
+import {
+  putManuscript,
+  getManuscript,
+  getOrHydrateManuscript,
+  type ManuscriptRecord,
+} from '../store/manuscripts.js';
 import { clearAnalysisCache, loadAnalysisCache } from '../store/analysis-cache.js';
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
@@ -68,16 +73,31 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
        into .epub/.pdf, so route those through the text parser
        instead of crashing parseEpub on a non-zip file. */
     const buffer = await readFile(manuscriptPath);
-    const looksLikeEpub = buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04;
-    const looksLikePdf  = buffer.length >= 5 && buffer.slice(0, 5).toString('ascii') === '%PDF-';
-    const claimsBinary  = state.manuscriptFile.endsWith('.epub') || state.manuscriptFile.endsWith('.pdf');
+    const looksLikeEpub =
+      buffer.length >= 4 &&
+      buffer[0] === 0x50 &&
+      buffer[1] === 0x4b &&
+      buffer[2] === 0x03 &&
+      buffer[3] === 0x04;
+    const looksLikePdf = buffer.length >= 5 && buffer.slice(0, 5).toString('ascii') === '%PDF-';
+    const claimsBinary =
+      state.manuscriptFile.endsWith('.epub') || state.manuscriptFile.endsWith('.pdf');
     const isLegacyTextMasqueradingAsBinary = claimsBinary && !looksLikeEpub && !looksLikePdf;
     const parsed = isLegacyTextMasqueradingAsBinary
-      ? await parseManuscript({ text: buffer.toString('utf8'), fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt') })
-      : await parseManuscript({ buffer, fileName: state.manuscriptFile, sourcePath: manuscriptPath });
+      ? await parseManuscript({
+          text: buffer.toString('utf8'),
+          fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt'),
+        })
+      : await parseManuscript({
+          buffer,
+          fileName: state.manuscriptFile,
+          sourcePath: manuscriptPath,
+        });
 
     if (parsed.chapters.length !== state.chapters.length) {
-      console.warn(`[book-state] title-refresh skipped for ${state.bookId}: parsed ${parsed.chapters.length} chapters, state has ${state.chapters.length}. Chapter split logic changed — won't risk misalignment.`);
+      console.warn(
+        `[book-state] title-refresh skipped for ${state.bookId}: parsed ${parsed.chapters.length} chapters, state has ${state.chapters.length}. Chapter split logic changed — won't risk misalignment.`,
+      );
       return state;
     }
 
@@ -107,9 +127,11 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
 
     const { bookDir } = located;
     const state = await refreshChapterTitles(located.state, bookDir);
-    const cast      = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
-    let   edits     = await readJson<{ sentences?: unknown[] }>(manuscriptEditsJsonPath(bookDir));
-    const revs      = await readJson<{ pending?: unknown[]; drift?: unknown[]; dismissed?: string[] }>(revisionsJsonPath(bookDir));
+    const cast = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
+    let edits = await readJson<{ sentences?: unknown[] }>(manuscriptEditsJsonPath(bookDir));
+    const revs = await readJson<{ pending?: unknown[]; drift?: unknown[]; dismissed?: string[] }>(
+      revisionsJsonPath(bookDir),
+    );
     const changeLog = await readJson<{ events?: unknown[] }>(changeLogJsonPath(bookDir));
 
     /* Fallback for books whose stage 2 ran on older code (or hasn't fully
@@ -150,10 +172,10 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
             cacheIds.add(s.id);
             if (s.id > maxCacheId) maxCacheId = s.id;
           }
-          const filtered = (edits.sentences as Array<{ id?: number }>).filter(s => {
-            if (typeof s?.id !== 'number') return true;       // malformed entries pass through; toolchain can deal
-            if (cacheIds.has(s.id)) return true;              // still a valid sentence
-            return s.id > maxCacheId;                         // likely a split offspring
+          const filtered = (edits.sentences as Array<{ id?: number }>).filter((s) => {
+            if (typeof s?.id !== 'number') return true; // malformed entries pass through; toolchain can deal
+            if (cacheIds.has(s.id)) return true; // still a valid sentence
+            return s.id > maxCacheId; // likely a split offspring
           });
           edits = { sentences: filtered };
         }
@@ -179,7 +201,10 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
           if (typeof sent?.chapterId !== 'number') continue;
           if (typeof sent?.characterId !== 'string') continue;
           let bucket = bucketByChapter.get(sent.chapterId);
-          if (!bucket) { bucket = new Set(); bucketByChapter.set(sent.chapterId, bucket); }
+          if (!bucket) {
+            bucket = new Set();
+            bucketByChapter.set(sent.chapterId, bucket);
+          }
           bucket.add(sent.characterId);
         }
         for (const [id, ids] of bucketByChapter) chapterCharacters[id] = [...ids];
@@ -199,11 +224,13 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     let completedSlugs: string[] = [];
     try {
       const files = existsSync(audioDir(bookDir)) ? await readdir(audioDir(bookDir)) : [];
-      const audioFiles = files.filter(f => /\.(mp3|m4a|opus)$/i.test(f));
+      const audioFiles = files.filter((f) => /\.(mp3|m4a|opus)$/i.test(f));
       completedSlugs = state.chapters
-        .filter(c => audioFiles.some(f => f.startsWith(c.slug)))
-        .map(c => c.slug);
-    } catch { /* fall through with empty list */ }
+        .filter((c) => audioFiles.some((f) => f.startsWith(c.slug)))
+        .map((c) => c.slug);
+    } catch {
+      /* fall through with empty list */
+    }
 
     /* Rehydrate the in-memory ManuscriptRecord if missing (after a server
        restart). Must parse the manuscript fully — a previous version read
@@ -215,9 +242,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        circuits on whatever is already in the store, so the poisoned record
        persisted through the analysis run. */
     const rec = await getOrHydrateManuscript(state.manuscriptId);
-    const manuscript = rec
-      ? { wordCount: rec.wordCount, format: rec.format }
-      : null;
+    const manuscript = rec ? { wordCount: rec.wordCount, format: rec.format } : null;
 
     res.json({
       state,
@@ -315,7 +340,10 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
 
-    const body = req.body as { slice?: 'cast' | 'manuscript' | 'revisions' | 'state' | 'changeLog'; patch?: unknown };
+    const body = req.body as {
+      slice?: 'cast' | 'manuscript' | 'revisions' | 'state' | 'changeLog';
+      patch?: unknown;
+    };
     if (!body?.slice || body.patch === undefined) {
       return res.status(400).json({ error: 'slice and patch are required.' });
     }
@@ -340,7 +368,10 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         const patch = body.patch as Partial<BookStateJson>;
         const pickString = (incoming: unknown, fallback: string): string =>
           typeof incoming === 'string' && incoming.trim() ? incoming : fallback;
-        const pickNullable = (incoming: unknown, fallback: string | null | undefined): string | null => {
+        const pickNullable = (
+          incoming: unknown,
+          fallback: string | null | undefined,
+        ): string | null => {
           if (incoming === undefined) return fallback ?? null;
           if (incoming === null) return null;
           if (typeof incoming !== 'string') return fallback ?? null;
@@ -371,13 +402,15 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           ...state,
           castConfirmed: patch.castConfirmed ?? state.castConfirmed,
           chapters: patch.chapters ?? state.chapters,
-          title:           pickString(patch.title,  state.title),
-          author:          pickString(patch.author, state.author),
-          series:          pickString(patch.series, state.series),
-          seriesPosition:  nextIsStandalone ? null : pickSeriesPosition(patch.seriesPosition, state.seriesPosition),
-          isStandalone:    nextIsStandalone,
-          narratorCredit:  pickNullable(patch.narratorCredit,  state.narratorCredit),
-          genre:           pickNullable(patch.genre,           state.genre),
+          title: pickString(patch.title, state.title),
+          author: pickString(patch.author, state.author),
+          series: pickString(patch.series, state.series),
+          seriesPosition: nextIsStandalone
+            ? null
+            : pickSeriesPosition(patch.seriesPosition, state.seriesPosition),
+          isStandalone: nextIsStandalone,
+          narratorCredit: pickNullable(patch.narratorCredit, state.narratorCredit),
+          genre: pickNullable(patch.genre, state.genre),
           publicationDate: pickNullable(patch.publicationDate, state.publicationDate),
           updatedAt: new Date().toISOString(),
         };
@@ -393,7 +426,8 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         if (newDir !== bookDir) {
           if (existsSync(newDir)) {
             return res.status(409).json({
-              error: 'A book already exists at that Author/Series/Title path. Pick a different title or series.',
+              error:
+                'A book already exists at that Author/Series/Title path. Pick a different title or series.',
             });
           }
           /* Make sure the new parent (and grandparent) directories exist
@@ -425,8 +459,12 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           await writeStateJsonAtomic(stateJsonPath(newDir), next);
           const oldSeriesDir = dirname(bookDir);
           const oldAuthorDir = dirname(oldSeriesDir);
-          await rmdir(oldSeriesDir).catch(() => { /* not empty or locked → leave it */ });
-          await rmdir(oldAuthorDir).catch(() => { /* not empty or locked → leave it */ });
+          await rmdir(oldSeriesDir).catch(() => {
+            /* not empty or locked → leave it */
+          });
+          await rmdir(oldAuthorDir).catch(() => {
+            /* not empty or locked → leave it */
+          });
         } else {
           await writeStateJsonAtomic(stateJsonPath(bookDir), next);
         }
@@ -466,15 +504,21 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
 
     const manuscriptPath = join(bookDir, state.manuscriptFile);
     if (!existsSync(manuscriptPath)) {
-      return res.status(409).json({ error: `Manuscript file missing on disk: ${state.manuscriptFile}` });
+      return res
+        .status(409)
+        .json({ error: `Manuscript file missing on disk: ${state.manuscriptFile}` });
     }
 
     /* Snapshot the edits file count BEFORE we clear analysis cache so the
        change-log entry below can summarise what's carrying forward. We don't
        touch the edits file itself — the GET-side merge reconciles ids on the
        next book-state read once a fresh analysis populates the cache. */
-    const existingEdits = await readJson<{ sentences?: unknown[] }>(manuscriptEditsJsonPath(bookDir));
-    const preservedEditCount = Array.isArray(existingEdits?.sentences) ? existingEdits!.sentences!.length : 0;
+    const existingEdits = await readJson<{ sentences?: unknown[] }>(
+      manuscriptEditsJsonPath(bookDir),
+    );
+    const preservedEditCount = Array.isArray(existingEdits?.sentences)
+      ? existingEdits!.sentences!.length
+      : 0;
 
     /* Read the original file as a Buffer so the parser dispatcher can route
        binary formats (PDF, EPUB) the same way the upload route does. The
@@ -490,13 +534,21 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
        crashing those books and still gives the user a fresh chapter
        split from the persisted text. */
     const buffer = await readFile(manuscriptPath);
-    const looksLikeEpub = buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04;
-    const looksLikePdf  = buffer.length >= 5 && buffer.slice(0, 5).toString('ascii') === '%PDF-';
-    const claimsBinary  = state.manuscriptFile.endsWith('.epub') || state.manuscriptFile.endsWith('.pdf');
+    const looksLikeEpub =
+      buffer.length >= 4 &&
+      buffer[0] === 0x50 &&
+      buffer[1] === 0x4b &&
+      buffer[2] === 0x03 &&
+      buffer[3] === 0x04;
+    const looksLikePdf = buffer.length >= 5 && buffer.slice(0, 5).toString('ascii') === '%PDF-';
+    const claimsBinary =
+      state.manuscriptFile.endsWith('.epub') || state.manuscriptFile.endsWith('.pdf');
     const isLegacyTextMasqueradingAsBinary = claimsBinary && !looksLikeEpub && !looksLikePdf;
     let parsed;
     if (isLegacyTextMasqueradingAsBinary) {
-      console.warn(`[book-state] reparse: ${state.manuscriptFile} is plain text on disk (pre-fix import). Routing through parseText.`);
+      console.warn(
+        `[book-state] reparse: ${state.manuscriptFile} is plain text on disk (pre-fix import). Routing through parseText.`,
+      );
       parsed = await parseManuscript({
         text: buffer.toString('utf8'),
         fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt'),
@@ -523,12 +575,12 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
        sections) but the new side still has a chapter whose title-derived
        slug matches an old excluded one. New chapters default to included. */
     const prevExcludedIds = new Set<number>(
-      state.chapters.filter(c => c.excluded).map(c => c.id),
+      state.chapters.filter((c) => c.excluded).map((c) => c.id),
     );
     const prevExcludedSlugs = new Set<string>(
-      state.chapters.filter(c => c.excluded).map(c => c.slug),
+      state.chapters.filter((c) => c.excluded).map((c) => c.slug),
     );
-    const newChapters: BookStateJson['chapters'] = parsed.chapters.map(c => {
+    const newChapters: BookStateJson['chapters'] = parsed.chapters.map((c) => {
       const newSlug = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
       const carryover = prevExcludedIds.has(c.id) || prevExcludedSlugs.has(newSlug);
       return {
@@ -544,7 +596,7 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
       ...state,
       chapters: newChapters,
       chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
-      castConfirmed: false,    // cast keys to chapters; force re-confirm.
+      castConfirmed: false, // cast keys to chapters; force re-confirm.
       updatedAt: new Date().toISOString(),
     };
     await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
@@ -563,9 +615,13 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     const ad = audioDir(bookDir);
     await Promise.all([
       clearAnalysisCache(state.manuscriptId),
-      existsSync(castJsonPath(bookDir))      ? rm(castJsonPath(bookDir),      { force: true }) : Promise.resolve(),
-      existsSync(revisionsJsonPath(bookDir)) ? rm(revisionsJsonPath(bookDir), { force: true }) : Promise.resolve(),
-      existsSync(ad)                          ? rm(ad,                          { recursive: true, force: true }) : Promise.resolve(),
+      existsSync(castJsonPath(bookDir))
+        ? rm(castJsonPath(bookDir), { force: true })
+        : Promise.resolve(),
+      existsSync(revisionsJsonPath(bookDir))
+        ? rm(revisionsJsonPath(bookDir), { force: true })
+        : Promise.resolve(),
+      existsSync(ad) ? rm(ad, { recursive: true, force: true }) : Promise.resolve(),
     ]);
 
     /* Append a change-log entry summarising what carried forward. The note
@@ -609,7 +665,7 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
       byteSize: Buffer.byteLength(sourceText, 'utf8'),
       uploadedAt: state.createdAt,
       sourceText,
-      chapterHints: parsed.chapters.map(c => ({
+      chapterHints: parsed.chapters.map((c) => ({
         ...c,
         excluded: newExcludedById.get(c.id) || undefined,
       })),
@@ -632,11 +688,11 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     res.json({
       state: nextState,
       chapterCount: newChapters.length,
-      chapterTitles: newChapters.map(c => c.title),
+      chapterTitles: newChapters.map((c) => c.title),
       /* Rich chapter records so the re-parse dialog can render
          checkboxes (preserved excluded + auto-suggest by wordCount)
          identical to the confirm-stage form. */
-      chapters: newChapters.map(c => ({
+      chapters: newChapters.map((c) => ({
         id: c.id,
         title: c.title,
         slug: c.slug,
@@ -667,77 +723,84 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
 
    Idempotent — calling with the same value twice is a no-op (still
    returns 200 with the current chapter entry). */
-bookStateRouter.post('/:bookId/chapters/:chapterId/exclude', async (req: Request, res: Response) => {
-  try {
-    const chapterId = Number(req.params.chapterId);
-    if (!Number.isInteger(chapterId)) {
-      return res.status(400).json({ error: 'chapterId must be an integer.' });
-    }
-    const rawExcluded = (req.body as { excluded?: unknown })?.excluded;
-    if (typeof rawExcluded !== 'boolean') {
-      return res.status(400).json({ error: '`excluded` is required and must be a boolean.' });
-    }
-    const excluded: boolean = rawExcluded;
+bookStateRouter.post(
+  '/:bookId/chapters/:chapterId/exclude',
+  async (req: Request, res: Response) => {
+    try {
+      const chapterId = Number(req.params.chapterId);
+      if (!Number.isInteger(chapterId)) {
+        return res.status(400).json({ error: 'chapterId must be an integer.' });
+      }
+      const rawExcluded = (req.body as { excluded?: unknown })?.excluded;
+      if (typeof rawExcluded !== 'boolean') {
+        return res.status(400).json({ error: '`excluded` is required and must be a boolean.' });
+      }
+      const excluded: boolean = rawExcluded;
 
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir, state } = located;
+      const located = await findBookByBookId(req.params.bookId);
+      if (!located) return res.status(404).json({ error: 'Book not found.' });
+      const { bookDir, state } = located;
 
-    const idx = state.chapters.findIndex(c => c.id === chapterId);
-    if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
+      const idx = state.chapters.findIndex((c) => c.id === chapterId);
+      if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
 
-    const current = state.chapters[idx];
-    const updated = { ...current, excluded: excluded ? true : undefined };
-    const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
+      const current = state.chapters[idx];
+      const updated = { ...current, excluded: excluded ? true : undefined };
+      const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
 
-    /* Write state.json first so a crash mid-call leaves the user's
+      /* Write state.json first so a crash mid-call leaves the user's
        choice on disk; audio cleanup is best-effort below. */
-    const nextState: BookStateJson = {
-      ...state,
-      chapters: nextChapters,
-      updatedAt: new Date().toISOString(),
-    };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
+      const nextState: BookStateJson = {
+        ...state,
+        chapters: nextChapters,
+        updatedAt: new Date().toISOString(),
+      };
+      await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
 
-    /* Propagate to the live ManuscriptRecord if it's loaded. The
+      /* Propagate to the live ManuscriptRecord if it's loaded. The
        analysis route reads chapterHints directly from this; without
        the propagation we'd have to wait for a server restart or a
        book-state GET to pick up the change. */
-    if (state.manuscriptId) {
-      const rec = getManuscript(state.manuscriptId);
-      if (rec) {
-        rec.chapterHints = rec.chapterHints.map(h =>
-          h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
-        );
+      if (state.manuscriptId) {
+        const rec = getManuscript(state.manuscriptId);
+        if (rec) {
+          rec.chapterHints = rec.chapterHints.map((h) =>
+            h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
+          );
+        }
       }
-    }
 
-    /* When newly excluded, delete the chapter's audio + segments so the
+      /* When newly excluded, delete the chapter's audio + segments so the
        library / chapter list don't keep counting it as "done". The user
        can re-include later; audio regenerates from the (still-cached)
        sentence attribution. */
-    if (excluded) {
-      const audioRoot = audioDir(bookDir);
-      const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
-      const audioCandidates = ['mp3', 'm4a', 'opus'].map(ext => join(audioRoot, `${current.slug}.${ext}`));
-      for (const p of [segmentsPath, ...audioCandidates]) {
-        if (existsSync(p)) {
-          await rm(p, { force: true }).catch(() => { /* best effort */ });
+      if (excluded) {
+        const audioRoot = audioDir(bookDir);
+        const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
+        const audioCandidates = ['mp3', 'm4a', 'opus'].map((ext) =>
+          join(audioRoot, `${current.slug}.${ext}`),
+        );
+        for (const p of [segmentsPath, ...audioCandidates]) {
+          if (existsSync(p)) {
+            await rm(p, { force: true }).catch(() => {
+              /* best effort */
+            });
+          }
         }
       }
-    }
 
-    res.json({
-      id: updated.id,
-      title: updated.title,
-      slug: updated.slug,
-      excluded: !!updated.excluded,
-    });
-  } catch (e) {
-    console.error('[book-state] exclude toggle failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to toggle exclude.' });
-  }
-});
+      res.json({
+        id: updated.id,
+        title: updated.title,
+        slug: updated.slug,
+        excluded: !!updated.excluded,
+      });
+    } catch (e) {
+      console.error('[book-state] exclude toggle failed', e);
+      res.status(500).json({ error: (e as Error).message || 'Failed to toggle exclude.' });
+    }
+  },
+);
 
 /* DELETE /api/books/:bookId — removes the book directory (Author/Series/Title/)
    and its analysis cache. Destructive; the frontend confirms with the user
@@ -761,4 +824,3 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
     res.status(500).json({ error: (e as Error).message || 'Failed to delete book.' });
   }
 });
-

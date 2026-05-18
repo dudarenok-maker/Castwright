@@ -5,7 +5,15 @@
    non-excluded source chapter, with cumulative timestamps. */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, statSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  statSync,
+  existsSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
@@ -15,10 +23,12 @@ import type { BookStateJson } from '../workspace/scan.js';
 
 const toolsPresent = (() => {
   try {
-    const a = spawnSync('ffmpeg',  ['-version'], { stdio: 'ignore' }).status === 0;
+    const a = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
     const b = spawnSync('ffprobe', ['-version'], { stdio: 'ignore' }).status === 0;
     return a && b;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 })();
 const describeIfTools = toolsPresent ? describe : describe.skip;
 
@@ -35,9 +45,9 @@ function makeState(): BookStateJson {
     castConfirmed: true,
     chapters: [
       { id: 1, title: 'Chapter 1 — Opening', slug: '01-chapter-1', duration: '0:00' },
-      { id: 2, title: 'Chapter 2',            slug: '02-chapter-2', duration: '0:00' },
-      { id: 3, title: 'Front matter',         slug: '00-front-matter', excluded: true },
-      { id: 4, title: 'Chapter 3',            slug: '04-chapter-3', duration: '0:00' },
+      { id: 2, title: 'Chapter 2', slug: '02-chapter-2', duration: '0:00' },
+      { id: 3, title: 'Front matter', slug: '00-front-matter', excluded: true },
+      { id: 4, title: 'Chapter 3', slug: '04-chapter-3', duration: '0:00' },
     ],
     coverGradient: ['#abc', '#def'],
     createdAt: '2025-01-01T00:00:00Z',
@@ -104,7 +114,9 @@ function probeStik(m4bPath: string): number | null {
         const n = Number(raw);
         if (Number.isFinite(n)) return n;
       }
-    } catch {/* fall through to raw atom scan */}
+    } catch {
+      /* fall through to raw atom scan */
+    }
   }
   return readStikFromBuffer(readFileSync(m4bPath));
 }
@@ -185,7 +197,9 @@ describeIfTools('buildM4b', () => {
     }
   });
 
-  afterAll(() => { rmSync(tmpRoot, { recursive: true, force: true }); });
+  afterAll(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
 
   it('produces an MP4 audio file with AAC mono 44.1 kHz and one chapter per non-excluded source', async () => {
     const result = await buildM4b({ bookDir, state: makeState(), outPath });
@@ -199,7 +213,7 @@ describeIfTools('buildM4b', () => {
     expect(head.subarray(4, 8).toString('ascii')).toBe('ftyp');
 
     const probe = ffprobeJson(outPath);
-    const audio = probe.streams.find(s => s.codec_type === 'audio');
+    const audio = probe.streams.find((s) => s.codec_type === 'audio');
     expect(audio).toBeDefined();
     expect(audio?.codec_name).toBe('aac');
     expect(audio?.channels).toBe(1);
@@ -248,10 +262,10 @@ describeIfTools('buildM4b', () => {
        through ffmpeg's image demuxer; pixel content is irrelevant. */
     const jpegBytes = Buffer.from(
       '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
-      'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB/9sAQwEBAQEBAQEBAQEBAQEB' +
-      'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
-      '/8AAEQgAAQABAwERAAIRAQMRAf/EABQAAQAAAAAAAAAAAAAAAAAAAAj/xAAUAQEAAAAAAAAA' +
-      'AAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Aov8A/9k=',
+        'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB/9sAQwEBAQEBAQEBAQEBAQEB' +
+        'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
+        '/8AAEQgAAQABAwERAAIRAQMRAf/EABQAAQAAAAAAAAAAAAAAAAAAAAj/xAAUAQEAAAAAAAAA' +
+        'AAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Aov8A/9k=',
       'base64',
     );
     const coverPath = join(coverDir, 'cover.jpg');
@@ -261,12 +275,12 @@ describeIfTools('buildM4b', () => {
     await buildM4b({ bookDir, state: makeState(), outPath: outPathCover });
 
     const probe = ffprobeJson(outPathCover);
-    const video = probe.streams.find(s => s.codec_type === 'video');
+    const video = probe.streams.find((s) => s.codec_type === 'video');
     expect(video).toBeDefined();
     expect(video?.codec_name).toMatch(/mjpeg|png/);
     expect(video?.disposition?.attached_pic).toBe(1);
     /* Audio stream still intact. */
-    const audio = probe.streams.find(s => s.codec_type === 'audio');
+    const audio = probe.streams.find((s) => s.codec_type === 'audio');
     expect(audio?.codec_name).toBe('aac');
 
     /* Clean up so the absence-test below sees no cover file. */
@@ -284,8 +298,8 @@ describeIfTools('buildM4b', () => {
     await buildM4b({ bookDir, state: makeState(), outPath: outPathNoCover });
 
     const probe = ffprobeJson(outPathNoCover);
-    expect(probe.streams.find(s => s.codec_type === 'video')).toBeUndefined();
-    expect(probe.streams.find(s => s.codec_type === 'audio')?.codec_name).toBe('aac');
+    expect(probe.streams.find((s) => s.codec_type === 'video')).toBeUndefined();
+    expect(probe.streams.find((s) => s.codec_type === 'audio')?.codec_name).toBe('aac');
   }, 30_000);
 
   it('writes the iTunes audiobook media-kind atom (stik = 2) so cross-app players treat it as an audiobook', async () => {
@@ -308,7 +322,7 @@ describeIfTools('buildM4b', () => {
       bookDir,
       state: makeState(),
       outPath: join(tmpRoot, 'progress.m4b'),
-      onProgress: r => ratios.push(r),
+      onProgress: (r) => ratios.push(r),
     });
     expect(ratios.length).toBeGreaterThan(0);
     expect(ratios[ratios.length - 1]).toBe(1);

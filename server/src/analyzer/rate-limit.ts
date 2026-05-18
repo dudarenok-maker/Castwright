@@ -34,11 +34,11 @@ const FALLBACK_LIMITS: ModelLimits = { rpm: 5, tpm: 100_000, rpd: 50 };
    docs/features/06-analyzer-gemini.md (regression plan) when limits
    change. */
 const BUILTIN_LIMITS: Record<string, ModelLimits> = {
-  'gemini-3.1-flash-lite':  { rpm: 15, tpm: 250_000, rpd: 500 },
-  'gemini-3-flash-preview': { rpm: 5,  tpm: 250_000, rpd: 20 },
-  'gemini-2.5-flash':       { rpm: 5,  tpm: 250_000, rpd: 20 },
-  'gemma-4-31b-it':         { rpm: 15, tpm: Infinity, rpd: 1500 },
-  'gemma-4-26b-a4b-it':     { rpm: 15, tpm: Infinity, rpd: 1500 },
+  'gemini-3.1-flash-lite': { rpm: 15, tpm: 250_000, rpd: 500 },
+  'gemini-3-flash-preview': { rpm: 5, tpm: 250_000, rpd: 20 },
+  'gemini-2.5-flash': { rpm: 5, tpm: 250_000, rpd: 20 },
+  'gemma-4-31b-it': { rpm: 15, tpm: Infinity, rpd: 1500 },
+  'gemma-4-26b-a4b-it': { rpm: 15, tpm: Infinity, rpd: 1500 },
 };
 
 /* Slug-ify a model id for env-var lookup: lowercase non-alphanum → `_`,
@@ -71,7 +71,10 @@ function resolveLimits(model: string): ModelLimits {
     no retry on this; the user must switch model or wait. */
 export class DailyQuotaExhaustedError extends Error {
   readonly code = 'DAILY_QUOTA_EXHAUSTED';
-  constructor(public readonly model: string, public readonly resetAt: Date) {
+  constructor(
+    public readonly model: string,
+    public readonly resetAt: Date,
+  ) {
     super(`Gemini ${model} daily quota exhausted — resets at ${resetAt.toISOString()}.`);
     this.name = 'DailyQuotaExhaustedError';
   }
@@ -87,10 +90,10 @@ interface TpmEntry {
 }
 
 interface ModelState {
-  rpmWindow: number[];          // sliding 60-s window of acquire timestamps
-  tpmWindow: TpmEntry[];        // sliding 60-s window of {ts, tokens}
-  rpdCount: number;             // requests so far this UTC day
-  rpdDayKey: string;            // 'YYYY-MM-DD' (UTC) — flip resets rpdCount
+  rpmWindow: number[]; // sliding 60-s window of acquire timestamps
+  tpmWindow: TpmEntry[]; // sliding 60-s window of {ts, tokens}
+  rpdCount: number; // requests so far this UTC day
+  rpdDayKey: string; // 'YYYY-MM-DD' (UTC) — flip resets rpdCount
   /** Hard floor on the next acquire's timestamp, set by recordRejection.
       0 means no override; otherwise acquire waits until Date.now() >=
       this value before checking RPM/TPM. Aligns our view with Google's
@@ -176,7 +179,7 @@ export class GeminiRateLimiter {
          retry-delay overrides our window math until the deadline
          passes. */
       if (s.blockUntil > now) {
-        const waitMs = (s.blockUntil - now) + Math.floor(Math.random() * 200) + 50;
+        const waitMs = s.blockUntil - now + Math.floor(Math.random() * 200) + 50;
         opts.onWait?.(waitMs, 'retry-after');
         await this.sleep(waitMs, opts.signal);
         continue;

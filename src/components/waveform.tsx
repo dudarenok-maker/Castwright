@@ -18,11 +18,13 @@ export function Waveform({ progress, active }: WaveformProps) {
   return (
     <div className="flex items-end gap-[2px] h-7">
       {bars.map((h, i) => {
-        const filled = (i / bars.length) <= progress;
+        const filled = i / bars.length <= progress;
         return (
-          <span key={i}
+          <span
+            key={i}
             className={`w-[3px] rounded-sm transition-colors ${active && filled ? 'bg-magenta' : active ? 'bg-ink/15' : 'bg-ink/20'}`}
-            style={{ height: `${h * 100}%` }}/>
+            style={{ height: `${h * 100}%` }}
+          />
         );
       })}
     </div>

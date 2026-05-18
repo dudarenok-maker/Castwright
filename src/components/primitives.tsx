@@ -14,28 +14,47 @@ interface PrimaryButtonProps {
   size?: ButtonSize;
   disabled?: boolean;
 }
-export function PrimaryButton({ children, variant = 'dark', onClick, icon = true, size = 'md', disabled = false }: PrimaryButtonProps) {
+export function PrimaryButton({
+  children,
+  variant = 'dark',
+  onClick,
+  icon = true,
+  size = 'md',
+  disabled = false,
+}: PrimaryButtonProps) {
   const styles: Record<ButtonVariant, string> = {
-    dark:   'bg-ink text-canvas hover:bg-ink-soft',
-    light:  'bg-canvas text-ink hover:bg-white',
-    ghost:  'bg-transparent text-ink border border-ink/15 hover:bg-ink/5',
+    dark: 'bg-ink text-canvas hover:bg-ink-soft',
+    light: 'bg-canvas text-ink hover:bg-white',
+    ghost: 'bg-transparent text-ink border border-ink/15 hover:bg-ink/5',
     danger: 'bg-magenta text-white hover:opacity-90',
-    peach:  'bg-peach text-ink hover:bg-peach/90',
+    peach: 'bg-peach text-ink hover:bg-peach/90',
   };
   const sizing = size === 'sm' ? 'pl-3.5 pr-1 py-1 text-xs' : 'pl-5 pr-1.5 py-1.5 text-sm';
   const dot = size === 'sm' ? 'w-5 h-5' : 'w-7 h-7';
   const disabledCls = disabled ? 'opacity-50 cursor-not-allowed pointer-events-none' : '';
   return (
-    <button onClick={onClick} disabled={disabled} aria-disabled={disabled}
-            className={`inline-flex items-center gap-2 rounded-full font-medium transition-colors ${sizing} ${styles[variant]} ${disabledCls}`}>
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      aria-disabled={disabled}
+      className={`inline-flex items-center gap-2 rounded-full font-medium transition-colors ${sizing} ${styles[variant]} ${disabledCls}`}
+    >
       <span>{children}</span>
-      {icon && <span className={`grid place-items-center rounded-full bg-white/15 ${dot}`}><IconArrow className="w-3.5 h-3.5"/></span>}
+      {icon && (
+        <span className={`grid place-items-center rounded-full bg-white/15 ${dot}`}>
+          <IconArrow className="w-3.5 h-3.5" />
+        </span>
+      )}
     </button>
   );
 }
 
 export function SectionLabel({ children }: { children: ReactNode }) {
-  return <span className="inline-block px-3 py-1 rounded-full border border-ink/10 text-xs font-medium text-ink/80 bg-white">{children}</span>;
+  return (
+    <span className="inline-block px-3 py-1 rounded-full border border-ink/10 text-xs font-medium text-ink/80 bg-white">
+      {children}
+    </span>
+  );
 }
 
 interface MixedHeadingProps {
@@ -54,13 +73,29 @@ export function MixedHeading({ regular, bold, level = 'h2', className = '' }: Mi
   );
 }
 
-interface AvatarProps { name: string; color?: CharColor; size?: number; }
+interface AvatarProps {
+  name: string;
+  color?: CharColor;
+  size?: number;
+}
 export function Avatar({ name, color = 'narrator', size = 36 }: AvatarProps) {
-  const initials = name.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
+  const initials = name
+    .split(' ')
+    .map((s) => s[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
   const c = CHAR_COLORS[color] ?? CHAR_COLORS.narrator;
   return (
-    <div className="rounded-full grid place-items-center text-white font-semibold shrink-0"
-      style={{ width: size, height: size, background: `linear-gradient(135deg, ${c.hex}, ${shade(c.hex, -25)})`, fontSize: size * 0.36 }}>
+    <div
+      className="rounded-full grid place-items-center text-white font-semibold shrink-0"
+      style={{
+        width: size,
+        height: size,
+        background: `linear-gradient(135deg, ${c.hex}, ${shade(c.hex, -25)})`,
+        fontSize: size * 0.36,
+      }}
+    >
       {initials}
     </div>
   );
@@ -68,7 +103,12 @@ export function Avatar({ name, color = 'narrator', size = 36 }: AvatarProps) {
 
 export function ColorDot({ color, size = 10 }: { color?: CharColor; size?: number }) {
   const c = CHAR_COLORS[color ?? 'narrator'] ?? CHAR_COLORS.narrator;
-  return <span className="inline-block rounded-full shrink-0" style={{ width: size, height: size, background: c.hex }} />;
+  return (
+    <span
+      className="inline-block rounded-full shrink-0"
+      style={{ width: size, height: size, background: c.hex }}
+    />
+  );
 }
 
 interface VoiceSwatchProps {
@@ -85,36 +125,67 @@ interface VoiceSwatchProps {
      can't fire a second concurrent request. */
   loading?: boolean;
 }
-export function VoiceSwatch({ voice, size = 'md', selected = false, showLabel = true, onSelect, loading = false }: VoiceSwatchProps) {
+export function VoiceSwatch({
+  voice,
+  size = 'md',
+  selected = false,
+  showLabel = true,
+  onSelect,
+  loading = false,
+}: VoiceSwatchProps) {
   const [hovered, setHovered] = useState(false);
   const dim = { sm: 36, md: 64, lg: 96 }[size];
   const ringSize = dim + 10;
   const [from, to] = voice?.gradient ?? ['#A43C6C', '#3C194F'];
   const overlayVisible = loading || hovered;
   const accessibleLabel = onSelect
-    ? (loading
-        ? `Generating sample for ${voice?.character ?? 'voice'}`
-        : `Play sample for ${voice?.character ?? 'voice'}`)
+    ? loading
+      ? `Generating sample for ${voice?.character ?? 'voice'}`
+      : `Play sample for ${voice?.character ?? 'voice'}`
     : undefined;
   return (
     <div className="inline-flex flex-col items-start">
-      <button type="button" onClick={() => onSelect?.(voice?.id)}
+      <button
+        type="button"
+        onClick={() => onSelect?.(voice?.id)}
         disabled={loading}
         aria-busy={loading || undefined}
         aria-label={accessibleLabel}
-        onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         className={`relative inline-grid place-items-center transition-transform hover:scale-[1.02] ${loading ? 'cursor-wait' : ''}`}
-        style={{ width: ringSize, height: ringSize }}>
-        <span className={`absolute inset-0 rounded-full transition-opacity ring-peach-2 ${selected ? 'opacity-100' : 'opacity-0'}`}/>
-        <span className="rounded-full shadow-[0_8px_24px_rgba(15,14,13,0.12)] relative overflow-hidden"
-          style={{ width: dim, height: dim, background: `radial-gradient(circle at 30% 30%, ${from}, ${to})` }}>
+        style={{ width: ringSize, height: ringSize }}
+      >
+        <span
+          className={`absolute inset-0 rounded-full transition-opacity ring-peach-2 ${selected ? 'opacity-100' : 'opacity-0'}`}
+        />
+        <span
+          className="rounded-full shadow-[0_8px_24px_rgba(15,14,13,0.12)] relative overflow-hidden"
+          style={{
+            width: dim,
+            height: dim,
+            background: `radial-gradient(circle at 30% 30%, ${from}, ${to})`,
+          }}
+        >
           <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full opacity-40">
-            <circle cx="50" cy="50" r="44" fill="none" stroke="white" strokeWidth="1" strokeDasharray="2 4"/>
+            <circle
+              cx="50"
+              cy="50"
+              r="44"
+              fill="none"
+              stroke="white"
+              strokeWidth="1"
+              strokeDasharray="2 4"
+            />
           </svg>
-          <span className={`absolute inset-0 grid place-items-center bg-ink/35 transition-opacity ${overlayVisible ? 'opacity-100' : 'opacity-0'}`}>
-            {loading
-              ? <IconSpinner className="w-5 h-5 text-white"/>
-              : <IconPlay className="w-5 h-5 text-white"/>}
+          <span
+            className={`absolute inset-0 grid place-items-center bg-ink/35 transition-opacity ${overlayVisible ? 'opacity-100' : 'opacity-0'}`}
+          >
+            {loading ? (
+              <IconSpinner className="w-5 h-5 text-white" />
+            ) : (
+              <IconPlay className="w-5 h-5 text-white" />
+            )}
           </span>
         </span>
       </button>
@@ -133,11 +204,17 @@ export function Pill({ children, color = 'neutral' }: { children: ReactNode; col
     neutral: 'bg-ink/[0.04] text-ink/70 border-ink/10',
     success: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     warning: 'bg-amber-50 text-amber-700 border-amber-200',
-    danger:  'bg-rose-50 text-rose-700 border-rose-200',
-    peach:   'bg-peach/15 text-magenta border-peach/30',
+    danger: 'bg-rose-50 text-rose-700 border-rose-200',
+    peach: 'bg-peach/15 text-magenta border-peach/30',
     library: 'bg-purple-deep/[0.06] text-purple-deep border-purple-deep/15',
   };
-  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${map[color]}`}>{children}</span>;
+  return (
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${map[color]}`}
+    >
+      {children}
+    </span>
+  );
 }
 
 /* Coming-soon affordance for still-mocked sections (listener-app cards,
@@ -146,8 +223,10 @@ export function Pill({ children, color = 'neutral' }: { children: ReactNode; col
    UI for shipped behaviour. */
 export function ComingSoonBadge({ label = 'Soon' }: { label?: string }) {
   return (
-    <span data-testid="coming-soon-badge"
-          className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-peach/20 text-magenta border border-peach/40">
+    <span
+      data-testid="coming-soon-badge"
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-peach/20 text-magenta border border-peach/40"
+    >
       {label}
     </span>
   );
@@ -158,8 +237,10 @@ export function ComingSoonBadge({ label = 'Soon' }: { label?: string }) {
    row at viewport widths the rest of the app supports. */
 export function MockedPreviewBanner({ children }: { children: ReactNode }) {
   return (
-    <div data-testid="mocked-preview-banner"
-         className="mb-3 px-4 py-2 rounded-xl bg-peach/10 border border-peach/30 text-[12px] text-ink/70 leading-relaxed">
+    <div
+      data-testid="mocked-preview-banner"
+      className="mb-3 px-4 py-2 rounded-xl bg-peach/10 border border-peach/30 text-[12px] text-ink/70 leading-relaxed"
+    >
       <span className="font-semibold text-magenta">Mocked preview</span> — {children}
     </div>
   );

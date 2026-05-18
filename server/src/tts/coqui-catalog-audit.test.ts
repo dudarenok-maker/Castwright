@@ -41,14 +41,14 @@ describe('diffCatalogAgainstModel', () => {
     /* Remove exactly one name from the model — say the first option of
        narrator-cool — and confirm only that profile flips to degraded. */
     const dropped = COQUI_PROFILE_VOICES['narrator-cool'][0];
-    const speakers = [...allCatalogNames()].filter(n => n !== dropped);
+    const speakers = [...allCatalogNames()].filter((n) => n !== dropped);
     const audit = diffCatalogAgainstModel(speakers, 'http://test/');
 
     expect(audit.invalidInCatalog).toEqual([dropped]);
     expect(audit.degradedProfiles).toEqual(['narrator-cool']);
     /* Every other profile is healthy. */
     const allProfiles = Object.keys(COQUI_PROFILE_VOICES);
-    const healthyExpected = allProfiles.filter(p => p !== 'narrator-cool').sort();
+    const healthyExpected = allProfiles.filter((p) => p !== 'narrator-cool').sort();
     expect(audit.healthyProfiles).toEqual(healthyExpected);
   });
 

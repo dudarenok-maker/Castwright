@@ -8,7 +8,12 @@ import { join } from 'node:path';
 import type { ChapterHint } from '../store/manuscripts.js';
 import type { ParsedManuscript } from './text.js';
 import { parseFilenameMetadata } from './text.js';
-import { tagExcitedDialog, tagHesitantDialog, tagHtmlEmphasis, tagShoutingDialog } from './audio-tags.js';
+import {
+  tagExcitedDialog,
+  tagHesitantDialog,
+  tagHtmlEmphasis,
+  tagShoutingDialog,
+} from './audio-tags.js';
 
 function stripHtml(html: string): string {
   return tagHtmlEmphasis(html)
@@ -53,9 +58,13 @@ function extractFirstHeading(html: string): string | null {
    Used to detect generic NCX titles that should be augmented with the
    body's <h1>. Mirrors the bare-numbered-heading test in text.ts but
    self-contained here to keep the parsers loosely coupled. */
-const GENERIC_NCX_RE = /^chapter\s+(?:[ivxlcdm\d]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?\s*$/i;
+const GENERIC_NCX_RE =
+  /^chapter\s+(?:[ivxlcdm\d]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?\s*$/i;
 
-export async function parseEpub(buffer: Buffer, opts: { fileName?: string; sourcePath?: string }): Promise<ParsedManuscript> {
+export async function parseEpub(
+  buffer: Buffer,
+  opts: { fileName?: string; sourcePath?: string },
+): Promise<ParsedManuscript> {
   /* When the caller already has the EPUB on disk (re-parse path: workspace
      book directory), read it straight from there. The temp-roundtrip path
      below was originally needed because epub2's createAsync only accepts a
@@ -89,7 +98,9 @@ export async function parseEpub(buffer: Buffer, opts: { fileName?: string; sourc
       const entry = epub.flow[i];
       if (!entry?.id) continue;
       const html = await new Promise<string>((resolve, reject) => {
-        epub.getChapter(entry.id!, (err: Error | null, text?: string) => err ? reject(err) : resolve(text ?? ''));
+        epub.getChapter(entry.id!, (err: Error | null, text?: string) =>
+          err ? reject(err) : resolve(text ?? ''),
+        );
       });
       const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(stripHtml(html))));
       if (!body) continue;
@@ -110,7 +121,11 @@ export async function parseEpub(buffer: Buffer, opts: { fileName?: string; sourc
       let chTitle: string;
       if (!ncxTitle) {
         chTitle = bodyHeading || `Chapter ${chapters.length + 1}`;
-      } else if (GENERIC_NCX_RE.test(ncxTitle) && bodyHeading && !GENERIC_NCX_RE.test(bodyHeading)) {
+      } else if (
+        GENERIC_NCX_RE.test(ncxTitle) &&
+        bodyHeading &&
+        !GENERIC_NCX_RE.test(bodyHeading)
+      ) {
         chTitle = `${ncxTitle} — ${bodyHeading}`;
       } else {
         chTitle = ncxTitle;
@@ -122,7 +137,7 @@ export async function parseEpub(buffer: Buffer, opts: { fileName?: string; sourc
       throw new Error('EPUB had no extractable text in its spine.');
     }
 
-    const sourceText = chapters.map(c => c.body).join('\n\n');
+    const sourceText = chapters.map((c) => c.body).join('\n\n');
     const fileMeta = parseFilenameMetadata(opts.fileName);
     return {
       format: 'epub',
@@ -131,9 +146,10 @@ export async function parseEpub(buffer: Buffer, opts: { fileName?: string; sourc
       chapters,
       author: author || fileMeta.author,
       series: series || fileMeta.series,
-      seriesPosition: seriesPosition != null && !Number.isNaN(seriesPosition)
-        ? seriesPosition
-        : fileMeta.seriesPosition,
+      seriesPosition:
+        seriesPosition != null && !Number.isNaN(seriesPosition)
+          ? seriesPosition
+          : fileMeta.seriesPosition,
     };
   } finally {
     /* Only clean up the tempdir we created. When sourcePath was given we

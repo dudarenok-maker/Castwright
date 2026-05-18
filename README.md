@@ -157,13 +157,13 @@ suite runs against.
 
 Five harnesses, all wired into `npm run verify`:
 
-| Harness                | Command                  | What it covers                          |
-| ---------------------- | ------------------------ | --------------------------------------- |
-| Frontend               | `npm test`               | Vitest + jsdom, React Testing Library   |
-| Server                 | `npm run test:server`    | Vitest + node, ffmpeg integration       |
-| Sidecar                | `npm run test:sidecar`   | pytest against the Python venv          |
-| PowerShell scripts     | `npm run test:scripts`   | Pester 5 against `scripts/lib/`         |
-| End-to-end             | `npm run test:e2e`       | Playwright + Chromium against mock mode |
+| Harness            | Command                | What it covers                          |
+| ------------------ | ---------------------- | --------------------------------------- |
+| Frontend           | `npm test`             | Vitest + jsdom, React Testing Library   |
+| Server             | `npm run test:server`  | Vitest + node, ffmpeg integration       |
+| Sidecar            | `npm run test:sidecar` | pytest against the Python venv          |
+| PowerShell scripts | `npm run test:scripts` | Pester 5 against `scripts/lib/`         |
+| End-to-end         | `npm run test:e2e`     | Playwright + Chromium against mock mode |
 
 Commit gating runs `verify:fast` on pre-commit and the full `verify` on
 pre-push. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the commit

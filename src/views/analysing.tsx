@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconCheck, IconClose, IconRefresh, IconSpinner } from '../lib/icons';
 import { SectionLabel, MixedHeading } from '../components/primitives';
-import { api, AnalysisError, type AnalysisLiveInfo, type AnalysisLiveChapter, type AnalysisHeartbeat, type OllamaHealth } from '../lib/api';
+import {
+  api,
+  AnalysisError,
+  type AnalysisLiveInfo,
+  type AnalysisLiveChapter,
+  type AnalysisHeartbeat,
+  type OllamaHealth,
+} from '../lib/api';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../lib/models';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
@@ -35,7 +42,13 @@ const ACTIVE_PHASE_LOG_MAX_H = 'max-h-48'; // ≈ 12rem; tuned to fit ~12 lines
    elapsed is advanced locally between server ticks so the seconds counter
    never visibly stalls — each row re-anchors to the server's elapsedMs on
    every update. */
-function LiveChapterRow({ chapter, totalChapters }: { chapter: AnalysisLiveChapter; totalChapters: number }) {
+function LiveChapterRow({
+  chapter,
+  totalChapters,
+}: {
+  chapter: AnalysisLiveChapter;
+  totalChapters: number;
+}) {
   const [displayMs, setDisplayMs] = useState(chapter.elapsedMs);
   useEffect(() => {
     const baseline = Date.now() - chapter.elapsedMs;
@@ -46,12 +59,20 @@ function LiveChapterRow({ chapter, totalChapters }: { chapter: AnalysisLiveChapt
 
   const overBudget = displayMs > chapter.estMs * 1.25;
   return (
-    <div className={`inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${overBudget ? 'text-amber-700' : 'text-ink/60'}`}>
-      <span className="font-semibold">Chapter {chapter.chapterIndex}/{totalChapters}</span>
+    <div
+      className={`inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${overBudget ? 'text-amber-700' : 'text-ink/60'}`}
+    >
+      <span className="font-semibold">
+        Chapter {chapter.chapterIndex}/{totalChapters}
+      </span>
       <span className="text-ink/30">·</span>
-      <span className="truncate max-w-[220px]" title={chapter.chapterTitle}>{chapter.chapterTitle}</span>
+      <span className="truncate max-w-[220px]" title={chapter.chapterTitle}>
+        {chapter.chapterTitle}
+      </span>
       <span className="text-ink/30">·</span>
-      <span>{humanSecondsCompact(displayMs)} of ~{humanSecondsCompact(chapter.estMs)}</span>
+      <span>
+        {humanSecondsCompact(displayMs)} of ~{humanSecondsCompact(chapter.estMs)}
+      </span>
       {overBudget && <span className="ml-1 font-semibold">over budget</span>}
     </div>
   );
@@ -60,8 +81,8 @@ function LiveChapterRow({ chapter, totalChapters }: { chapter: AnalysisLiveChapt
 function LiveChapterTicker({ live }: { live: AnalysisLiveInfo }) {
   return (
     <div className="mt-2 flex flex-col gap-1">
-      {live.chapters.map(ch => (
-        <LiveChapterRow key={ch.chapterIndex} chapter={ch} totalChapters={live.totalChapters}/>
+      {live.chapters.map((ch) => (
+        <LiveChapterRow key={ch.chapterIndex} chapter={ch} totalChapters={live.totalChapters} />
       ))}
     </div>
   );
@@ -111,10 +132,7 @@ function ActivePhaseLog({ lines }: { lines: string[] }) {
     >
       <ul className="space-y-1.5 text-xs font-mono text-ink/70">
         {lines.map((s, i) => (
-          <li
-            key={i}
-            className={i === lines.length - 1 ? 'tick-up font-semibold text-ink' : ''}
-          >
+          <li key={i} className={i === lines.length - 1 ? 'tick-up font-semibold text-ink' : ''}>
             {s}
           </li>
         ))}
@@ -129,14 +147,19 @@ function ActivePhaseLog({ lines }: { lines: string[] }) {
    keep wide casts on a single row at viewport widths the rest of the app
    supports; full list is always visible on the cast view once stage='confirm'. */
 function LiveCastPreview() {
-  const characters = useAppSelector(s => s.cast.characters);
+  const characters = useAppSelector((s) => s.cast.characters);
   if (characters.length === 0) return null;
   return (
     <div className="mt-3 text-[11px] text-ink/60">
-      <div className="font-semibold text-ink/80">Cast so far · {characters.length} character{characters.length === 1 ? '' : 's'}</div>
+      <div className="font-semibold text-ink/80">
+        Cast so far · {characters.length} character{characters.length === 1 ? '' : 's'}
+      </div>
       <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
-        {characters.map(c => (
-          <span key={c.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-ink/[0.04] text-ink/70">
+        {characters.map((c) => (
+          <span
+            key={c.id}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-ink/[0.04] text-ink/70"
+          >
             {c.name}
           </span>
         ))}
@@ -158,21 +181,23 @@ function SeriesPriorPill() {
      the analysis slice (legacy tests pre-dating B2). Production always
      has it. Optional chain via the type assertion since useAppSelector's
      state is non-nullable in production. */
-  const seriesPrior = useAppSelector(s => (s as { analysis?: { activeStream?: { seriesPrior?: { count: number; names: string[] } } } }).analysis?.activeStream?.seriesPrior);
+  const seriesPrior = useAppSelector(
+    (s) =>
+      (s as { analysis?: { activeStream?: { seriesPrior?: { count: number; names: string[] } } } })
+        .analysis?.activeStream?.seriesPrior,
+  );
   if (!seriesPrior || seriesPrior.count === 0) return null;
   const { count, names } = seriesPrior;
   const sample = names.slice(0, 3).join(', ');
   const more = count > names.length ? ` +${count - names.length}` : '';
   return (
-    <div
-      className="mt-3 text-[11px] text-ink/60"
-      data-testid="series-prior-pill"
-    >
+    <div className="mt-3 text-[11px] text-ink/60" data-testid="series-prior-pill">
       <div className="font-semibold text-ink/80">
         Carried in from prior books in this series · {count} character{count === 1 ? '' : 's'}
       </div>
       <div className="mt-1 text-ink/60">
-        {sample}{more}
+        {sample}
+        {more}
       </div>
     </div>
   );
@@ -186,15 +211,28 @@ function SeriesPriorPill() {
    threshold is a separate workflow. Re-fetches when the run completes
    so a fresh batch from the just-finished verify pass shows up
    without a page reload. */
-function DroppedQuotesPanel({ bookId, refreshKey }: { bookId: string | null | undefined; refreshKey: number }) {
+function DroppedQuotesPanel({
+  bookId,
+  refreshKey,
+}: {
+  bookId: string | null | undefined;
+  refreshKey: number;
+}) {
   const [file, setFile] = useState<DroppedQuotesResponse | null>(null);
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
-    api.getDroppedQuotes(bookId)
-      .then(f => { if (!cancelled) setFile(f); })
-      .catch(err => { console.warn('[analysing] dropped-quotes fetch skipped:', err.message); });
-    return () => { cancelled = true; };
+    api
+      .getDroppedQuotes(bookId)
+      .then((f) => {
+        if (!cancelled) setFile(f);
+      })
+      .catch((err) => {
+        console.warn('[analysing] dropped-quotes fetch skipped:', err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [bookId, refreshKey]);
   const latest = file?.batches.length ? file.batches[file.batches.length - 1] : null;
   if (!latest || latest.entries.length === 0) return null;
@@ -210,7 +248,8 @@ function DroppedQuotesPanel({ bookId, refreshKey }: { bookId: string | null | un
   return (
     <details className="mt-3 text-[11px] text-ink/60">
       <summary className="cursor-pointer select-none font-semibold text-ink/80">
-        Verifier dropped {latest.totalDropped} quote{latest.totalDropped === 1 ? '' : 's'} across {latest.affectedCharacters} character{latest.affectedCharacters === 1 ? '' : 's'}
+        Verifier dropped {latest.totalDropped} quote{latest.totalDropped === 1 ? '' : 's'} across{' '}
+        {latest.affectedCharacters} character{latest.affectedCharacters === 1 ? '' : 's'}
         <span className="ml-2 font-normal text-ink/50">· latest batch</span>
       </summary>
       <ul className="mt-2 space-y-2">
@@ -225,7 +264,9 @@ function DroppedQuotesPanel({ bookId, refreshKey }: { bookId: string | null | un
                     {e.truncated && <span className="ml-1 text-ink/40">[truncated]</span>}
                   </div>
                   <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] text-ink/40">
-                    <span>{e.reason === 'not_in_source' ? 'not in source' : 'empty after normalisation'}</span>
+                    <span>
+                      {e.reason === 'not_in_source' ? 'not in source' : 'empty after normalisation'}
+                    </span>
                     {e.note && <span>· note: {e.note}</span>}
                   </div>
                 </li>
@@ -252,7 +293,15 @@ const STALL_THRESHOLD_LOCAL_SEC = 60;
    Displays size received, throughput, and seconds since the last chunk —
    the third value is the most reassuring during long runs because it ticks
    forward even between server heartbeats (we re-anchor on each event). */
-function HeartbeatRow({ hb, receivedAt, stallThresholdSec }: { hb: AnalysisHeartbeat; receivedAt: number; stallThresholdSec: number }) {
+function HeartbeatRow({
+  hb,
+  receivedAt,
+  stallThresholdSec,
+}: {
+  hb: AnalysisHeartbeat;
+  receivedAt: number;
+  stallThresholdSec: number;
+}) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -264,8 +313,12 @@ function HeartbeatRow({ hb, receivedAt, stallThresholdSec }: { hb: AnalysisHeart
   const sizeText = sizeKb >= 10 ? `${Math.round(sizeKb)} KB` : `${sizeKb.toFixed(1)} KB`;
   const stalled = sinceLastSec > stallThresholdSec;
   return (
-    <div className={`mt-2 inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${stalled ? 'text-amber-700' : 'text-emerald-700'}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${stalled ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`}/>
+    <div
+      className={`mt-2 inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${stalled ? 'text-amber-700' : 'text-emerald-700'}`}
+    >
+      <span
+        className={`w-1.5 h-1.5 rounded-full ${stalled ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`}
+      />
       <span className="font-semibold">{stalled ? 'Stalled' : 'Receiving response'}</span>
       <span className="text-ink/30">·</span>
       <span>{sizeText}</span>
@@ -286,26 +339,39 @@ function HeartbeatRow({ hb, receivedAt, stallThresholdSec }: { hb: AnalysisHeart
    Google retry-delay after a 429). Countdown re-renders every second
    without needing a new SSE event. Auto-hides at `until`, after which
    the next heartbeat / chapter event takes over the row. */
-function ThrottleRow({ until, model, reason }: { until: number; model: string; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after' }) {
+function ThrottleRow({
+  until,
+  model,
+  reason,
+}: {
+  until: number;
+  model: string;
+  reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after';
+}) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(id);
   }, []);
   const remainingSec = Math.max(0, Math.ceil((until - now) / 1000));
-  const modelLabel = MODEL_OPTIONS.find(m => m.id === model)?.label ?? model;
+  const modelLabel = MODEL_OPTIONS.find((m) => m.id === model)?.label ?? model;
   const reasonText = (() => {
     switch (reason) {
-      case 'rpm': return 'requests-per-minute cap';
-      case 'tpm': return 'tokens-per-minute cap';
-      case 'rpd': return 'daily request cap';
-      case 'retry-after': return 'upstream retry-delay';
-      default: return 'rate limit';
+      case 'rpm':
+        return 'requests-per-minute cap';
+      case 'tpm':
+        return 'tokens-per-minute cap';
+      case 'rpd':
+        return 'daily request cap';
+      case 'retry-after':
+        return 'upstream retry-delay';
+      default:
+        return 'rate limit';
     }
   })();
   return (
     <div className="mt-2 inline-flex items-center gap-2 text-[11px] font-mono tabular-nums text-amber-700">
-      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"/>
+      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
       <span className="font-semibold">Throttling {modelLabel}</span>
       <span className="text-ink/30">·</span>
       <span>resuming in {remainingSec}s</span>
@@ -317,17 +383,30 @@ function ThrottleRow({ until, model, reason }: { until: number; model: string; r
 
 function ConnPill({ state, sinceLastSec }: { state: ConnState; sinceLastSec: number | null }) {
   const meta = (() => {
-    if (state === 'idle')       return { label: 'Idle',                tone: 'text-ink/50',    dot: 'bg-ink/30' };
-    if (state === 'connecting') return { label: 'Connecting to server…', tone: 'text-amber-700', dot: 'bg-amber-500 animate-pulse' };
-    if (state === 'streaming')  return { label: sinceLastSec != null && sinceLastSec > 8
-                                            ? `Streaming · last update ${sinceLastSec}s ago`
-                                            : 'Streaming live', tone: 'text-emerald-700', dot: 'bg-emerald-500 animate-pulse' };
-    if (state === 'done')       return { label: 'Done',                  tone: 'text-emerald-700', dot: 'bg-emerald-500' };
-    return { label: 'Stopped',  tone: 'text-red-700',     dot: 'bg-red-500' };
+    if (state === 'idle') return { label: 'Idle', tone: 'text-ink/50', dot: 'bg-ink/30' };
+    if (state === 'connecting')
+      return {
+        label: 'Connecting to server…',
+        tone: 'text-amber-700',
+        dot: 'bg-amber-500 animate-pulse',
+      };
+    if (state === 'streaming')
+      return {
+        label:
+          sinceLastSec != null && sinceLastSec > 8
+            ? `Streaming · last update ${sinceLastSec}s ago`
+            : 'Streaming live',
+        tone: 'text-emerald-700',
+        dot: 'bg-emerald-500 animate-pulse',
+      };
+    if (state === 'done') return { label: 'Done', tone: 'text-emerald-700', dot: 'bg-emerald-500' };
+    return { label: 'Stopped', tone: 'text-red-700', dot: 'bg-red-500' };
   })();
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/70 border border-ink/10 ${meta.tone}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`}/>
+    <span
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/70 border border-ink/10 ${meta.tone}`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`} />
       <span className="font-medium tabular-nums">{meta.label}</span>
     </span>
   );
@@ -339,8 +418,8 @@ function describeSize(wordCount?: number): string {
   const words = wordCount.toLocaleString();
   if (estMs < 90_000) return `${words} words — usually under 90 seconds.`;
   const mins = Math.max(2, Math.round(estMs / 60_000));
-  if (mins <= 5)   return `${words} words — usually ~${mins} minutes.`;
-  if (mins <= 15)  return `${words} words — usually ~${mins} minutes. Grab a coffee.`;
+  if (mins <= 5) return `${words} words — usually ~${mins} minutes.`;
+  if (mins <= 15) return `${words} words — usually ~${mins} minutes. Grab a coffee.`;
   return `${words} words — usually ~${mins} minutes. This is a long one.`;
 }
 
@@ -355,7 +434,8 @@ function describeRemaining(remainingMs: number, wordCount?: number): string {
     return `${words}~${secs} seconds remaining at the current pace.`;
   }
   const mins = Math.max(1, Math.round(remainingMs / 60_000));
-  if (mins <= 5)  return `${words}~${mins} minute${mins === 1 ? '' : 's'} remaining at the current pace.`;
+  if (mins <= 5)
+    return `${words}~${mins} minute${mins === 1 ? '' : 's'} remaining at the current pace.`;
   if (mins <= 15) return `${words}~${mins} minutes remaining at the current pace. Grab a coffee.`;
   return `${words}~${mins} minutes remaining at the current pace. This is a long one.`;
 }
@@ -371,13 +451,26 @@ interface Props {
 
 type ConnState = 'idle' | 'connecting' | 'streaming' | 'error' | 'done';
 
-export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, onComplete }: Props) {
+export function AnalysingView({
+  manuscriptId,
+  bookId,
+  title,
+  wordCount,
+  model,
+  onComplete,
+}: Props) {
   const dispatch = useAppDispatch();
   const [phase, setPhase] = useState(0);
   const [phaseProgress, setPhaseProgress] = useState(0);
   const [logs, setLogs] = useState<Record<number, string[]>>({});
-  const [error, setError] = useState<{ message: string; code: string; detail?: string } | null>(null);
-  const [retry, setRetry] = useState<{ nonce: number; fresh: boolean; allowStage1Shrink?: boolean }>({ nonce: 0, fresh: false });
+  const [error, setError] = useState<{ message: string; code: string; detail?: string } | null>(
+    null,
+  );
+  const [retry, setRetry] = useState<{
+    nonce: number;
+    fresh: boolean;
+    allowStage1Shrink?: boolean;
+  }>({ nonce: 0, fresh: false });
   const [conn, setConn] = useState<ConnState>('idle');
   const [lastEventAt, setLastEventAt] = useState<number | null>(null);
   const [live, setLive] = useState<AnalysisLiveInfo | null>(null);
@@ -386,13 +479,17 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
      phase's UI. Heartbeat events arrive throttled (~one per 2s); the local
      re-render every second between events advances the "last chunk Ns ago"
      counter so the indicator never visibly stalls. */
-  const [heartbeatByPhase, setHeartbeatByPhase] = useState<Record<number, { hb: AnalysisHeartbeat; receivedAt: number }>>({});
+  const [heartbeatByPhase, setHeartbeatByPhase] = useState<
+    Record<number, { hb: AnalysisHeartbeat; receivedAt: number }>
+  >({});
   /* Per-phase rate-limit throttle indicator. Set on `throttle` SSE
      events from the limiter; the ThrottleRow re-renders a countdown
      until `until` passes. The next heartbeat naturally overwrites the
      visual; the state itself stays until cleared on phase change so a
      replay or component re-render doesn't lose the pill mid-wait. */
-  const [throttleByPhase, setThrottleByPhase] = useState<Record<number, { until: number; model: string; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after' }>>({});
+  const [throttleByPhase, setThrottleByPhase] = useState<
+    Record<number, { until: number; model: string; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after' }>
+  >({});
   /* Server-refined total-remaining-ms. Null until the first chapter
      completes — then the heading swaps from the static describeSize
      string (Gemini-calibrated 22ms/word) to a value that reflects the
@@ -414,7 +511,9 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
   /* Per-chapter cast-detection failures that survive across reload. Seeded
      from /api/books/:bookId/state on mount; appended to from the SSE's
      chapter-failed event; cleared per id when a Retry succeeds. */
-  const [failedChapters, setFailedChapters] = useState<Array<{ chapterId: number; message: string }>>([]);
+  const [failedChapters, setFailedChapters] = useState<
+    Array<{ chapterId: number; message: string }>
+  >([]);
   const [retryingChapterId, setRetryingChapterId] = useState<number | null>(null);
   /* Bump to refetch the dropped-quotes ledger. Goes up when the server
      finishes a verify pass (run completes, hits cast_incomplete, or a
@@ -438,7 +537,9 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
      button re-fires the analysis with allowStage1Shrink:true so the
      next attempt bypasses the gate. Null when no shrink has been
      refused on this view session. */
-  const [stage1ShrinkInfo, setStage1ShrinkInfo] = useState<{ prev: number; next: number } | null>(null);
+  const [stage1ShrinkInfo, setStage1ShrinkInfo] = useState<{ prev: number; next: number } | null>(
+    null,
+  );
 
   /* Explicit "Start analysis" gate. The previous auto-fire path was hard
      to reason about — auto-load fires, probe re-runs, isAnalyzerReady
@@ -468,7 +569,9 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
      harnesses construct configureStore without the analysis slice.
      Production always has it. */
   const activeStreamSnapshot = useAppSelector(
-    s => (s as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } }).analysis?.activeStream ?? null,
+    (s) =>
+      (s as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } }).analysis
+        ?.activeStream ?? null,
   );
   const coldBootRehydratedRef = useRef(false);
   useEffect(() => {
@@ -490,7 +593,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
      safe to fire the SSE. */
   const selectedModel = useMemo(() => {
     const id = model ?? MODEL_OPTIONS[0].id;
-    return MODEL_OPTIONS.find(m => m.id === id);
+    return MODEL_OPTIONS.find((m) => m.id === id);
   }, [model]);
   const isLocalAnalyzer = selectedModel?.engine === 'local';
   const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
@@ -501,12 +604,12 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
      throws. Without it the auto-load path looks stuck on "Loading…" and
      the manual Load click silently bounces the pill back to idle. */
   const [analyzerLoadError, setAnalyzerLoadError] = useState<string | null>(null);
-  const isAnalyzerReady = !isLocalAnalyzer || (
-    ollamaHealth?.status === 'reachable' && ollamaHealth?.modelResident === true
-  );
+  const isAnalyzerReady =
+    !isLocalAnalyzer ||
+    (ollamaHealth?.status === 'reachable' && ollamaHealth?.modelResident === true);
 
   useEffect(() => {
-    if (!manuscriptId) return;     // nothing to analyse — UI shows a CTA below
+    if (!manuscriptId) return; // nothing to analyse — UI shows a CTA below
     /* Explicit user click — see analysisStarted comment above. */
     if (!analysisStarted) {
       setConn('idle');
@@ -559,22 +662,24 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
        (B3) can read live progress from Redux even after the user
        navigates away from this view. The snapshot updates on every
        phase / eta tick below and is torn down on terminal events. */
-    dispatch(analysisActions.setActiveStream({
-      bookId: bookId ?? null,
-      manuscriptId,
-      bookTitle: title ?? undefined,
-      /* Engine captured at start time, not read from ui.selectedModel
+    dispatch(
+      analysisActions.setActiveStream({
+        bookId: bookId ?? null,
+        manuscriptId,
+        bookTitle: title ?? undefined,
+        /* Engine captured at start time, not read from ui.selectedModel
          later. A user model-switch mid-stream must not mis-classify a
          running analysis from the reverse-direction guard's
          perspective (see use-reverse-local-analyzer-guard.tsx). */
-      engine: selectedModel?.engine,
-      phaseId: 0,
-      phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
-      phaseProgress: 0,
-      remainingMs: null,
-      lastTickAt: Date.now(),
-      state: 'running',
-    }));
+        engine: selectedModel?.engine,
+        phaseId: 0,
+        phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
+        phaseProgress: 0,
+        remainingMs: null,
+        lastTickAt: Date.now(),
+        state: 'running',
+      }),
+    );
     (async () => {
       try {
         const payload = await api.analyseManuscript(manuscriptId, {
@@ -586,24 +691,26 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
             if (cancelled) return;
             setConn('streaming');
             markEvent();
-            dispatch(analysisActions.applyAnalysisSnapshotTick({
-              manuscriptId,
-              phaseId,
-              phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
-              phaseProgress: progress,
-              lastTickAt: Date.now(),
-            }));
-            setPhase(prev => {
+            dispatch(
+              analysisActions.applyAnalysisSnapshotTick({
+                manuscriptId,
+                phaseId,
+                phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
+                phaseProgress: progress,
+                lastTickAt: Date.now(),
+              }),
+            );
+            setPhase((prev) => {
               /* Drop heartbeat for the previous phase the moment the active
                  phase advances — completed phases shouldn't keep a "still
                  receiving" hint. */
               if (prev !== phaseId) {
-                setHeartbeatByPhase(hbs => {
+                setHeartbeatByPhase((hbs) => {
                   if (!(prev in hbs)) return hbs;
                   const { [prev]: _drop, ...rest } = hbs;
                   return rest;
                 });
-                setThrottleByPhase(ts => {
+                setThrottleByPhase((ts) => {
                   if (!(prev in ts)) return ts;
                   const { [prev]: _drop, ...rest } = ts;
                   return rest;
@@ -621,24 +728,29 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
             if (cancelled) return;
             setConn('streaming');
             markEvent();
-            setLogs(prev => ({ ...prev, [phaseId]: [...(prev[phaseId] ?? []), message] }));
+            setLogs((prev) => ({ ...prev, [phaseId]: [...(prev[phaseId] ?? []), message] }));
           },
           onHeartbeat: (hb) => {
             if (cancelled) return;
             setConn('streaming');
             markEvent();
-            setHeartbeatByPhase(prev => ({ ...prev, [hb.phaseId]: { hb, receivedAt: Date.now() } }));
+            setHeartbeatByPhase((prev) => ({
+              ...prev,
+              [hb.phaseId]: { hb, receivedAt: Date.now() },
+            }));
           },
           onEta: ({ remainingMs: ms }) => {
             if (cancelled) return;
             setConn('streaming');
             markEvent();
             setRemainingMs(ms);
-            dispatch(analysisActions.applyAnalysisSnapshotTick({
-              manuscriptId,
-              remainingMs: ms,
-              lastTickAt: Date.now(),
-            }));
+            dispatch(
+              analysisActions.applyAnalysisSnapshotTick({
+                manuscriptId,
+                remainingMs: ms,
+                lastTickAt: Date.now(),
+              }),
+            );
           },
           onCastUpdate: ({ characters }) => {
             if (cancelled) return;
@@ -656,8 +768,8 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
             /* Upsert by chapterId so a retry of the same chapter (which
                will fail again, replaying chapter-failed) doesn't double
                the row. */
-            setFailedChapters(prev => {
-              const filtered = prev.filter(f => f.chapterId !== chapterId);
+            setFailedChapters((prev) => {
+              const filtered = prev.filter((f) => f.chapterId !== chapterId);
               return [...filtered, { chapterId, message }];
             });
           },
@@ -669,12 +781,12 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                user doesn't click Retry on something the server has
                already fixed (pre-fix that click kicked a duplicate
                subset run and raced the main route's writes). */
-            setFailedChapters(prev => prev.filter(f => f.chapterId !== chapterId));
+            setFailedChapters((prev) => prev.filter((f) => f.chapterId !== chapterId));
           },
           onThrottle: ({ phaseId, model: throttleModel, waitMs, reason }) => {
             if (cancelled) return;
             markEvent();
-            setThrottleByPhase(prev => ({
+            setThrottleByPhase((prev) => ({
               ...prev,
               [phaseId]: { until: Date.now() + waitMs, model: throttleModel, reason },
             }));
@@ -692,7 +804,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
         if (cancelled || completedRef.current) return;
         completedRef.current = true;
         setConn('done');
-        setDroppedQuotesRefreshKey(k => k + 1);
+        setDroppedQuotesRefreshKey((k) => k + 1);
         /* Run completed cleanly — tear down the cross-navigation snapshot
            so the pill drops out (the view will transition to confirm
            via onComplete below anyway). */
@@ -722,7 +834,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
         if (e instanceof AnalysisError && e.code === 'cast_incomplete') {
           setConn('idle');
           setCastIncomplete(true);
-          setDroppedQuotesRefreshKey(k => k + 1);
+          setDroppedQuotesRefreshKey((k) => k + 1);
           dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
           return;
         }
@@ -742,7 +854,13 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
         setConn('error');
         const code = e instanceof AnalysisError ? e.code : 'unknown';
         const detail = e instanceof AnalysisError ? e.detail : undefined;
-        dispatch(analysisActions.setHalted({ manuscriptId, code, message: (e as Error)?.message ?? 'Analysis failed.' }));
+        dispatch(
+          analysisActions.setHalted({
+            manuscriptId,
+            code,
+            message: (e as Error)?.message ?? 'Analysis failed.',
+          }),
+        );
         setError({ message: (e as Error).message || 'Analysis failed.', code, detail });
       }
     })();
@@ -775,28 +893,33 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
-    api.getBookState(bookId)
-      .then(res => {
+    api
+      .getBookState(bookId)
+      .then((res) => {
         if (cancelled || res === null) return;
         const titles: Record<number, string> = {};
         for (const c of res.state.chapters) titles[c.id] = c.title;
         setChapterTitleById(titles);
         const failedIds = res.analysis?.failedChapterIds ?? [];
         if (failedIds.length === 0) return;
-        setFailedChapters(prev => {
+        setFailedChapters((prev) => {
           /* Merge with whatever the SSE already pushed during this session
              so we don't clobber a fresh chapter-failed event whose
              message is more useful than the hydration placeholder. */
-          const messageById = new Map(prev.map(f => [f.chapterId, f.message]));
-          return failedIds.map(id => ({
+          const messageById = new Map(prev.map((f) => [f.chapterId, f.message]));
+          return failedIds.map((id) => ({
             chapterId: id,
-            message: messageById.get(id)
-              ?? 'Analysis failed on a previous attempt. Retry to try again.',
+            message:
+              messageById.get(id) ?? 'Analysis failed on a previous attempt. Retry to try again.',
           }));
         });
       })
-      .catch(err => { console.warn('[analysing] failed-chapter hydrate skipped:', err.message); });
-    return () => { cancelled = true; };
+      .catch((err) => {
+        console.warn('[analysing] failed-chapter hydrate skipped:', err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [bookId]);
 
   /* Auto-resume the main run after the user resolves every failed
@@ -810,7 +933,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
     if (!castIncomplete) return;
     if (failedChapters.length > 0) return;
     if (retryingChapterId !== null) return;
-    setRetry(r => ({ nonce: r.nonce + 1, fresh: false }));
+    setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
   }, [castIncomplete, failedChapters.length, retryingChapterId]);
 
   /* Per-chapter retry handler. Hits POST /api/manuscripts/:id/analysis/
@@ -847,8 +970,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
        handle that path on its own (it kicks once every failedChapter
        row clears). */
     const pausedMainForRetry =
-      analysisControllerRef.current !== null &&
-      (conn === 'streaming' || conn === 'connecting');
+      analysisControllerRef.current !== null && (conn === 'streaming' || conn === 'connecting');
     if (pausedMainForRetry) {
       analysisControllerRef.current?.abort();
       setAnalysisStarted(false);
@@ -864,20 +986,22 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
        and the middleware would have tried to subscribe to the main
        map (which has no job) and either start a fresh main run or
        fall through. */
-    dispatch(analysisActions.setActiveStream({
-      bookId: bookId ?? null,
-      manuscriptId,
-      bookTitle: title ?? undefined,
-      engine: selectedModel?.engine,
-      phaseId: 0,
-      phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
-      phaseProgress: 0,
-      remainingMs: null,
-      lastTickAt: Date.now(),
-      state: 'running',
-      kind: 'subset',
-      subsetChapterIds: [chapterId],
-    }));
+    dispatch(
+      analysisActions.setActiveStream({
+        bookId: bookId ?? null,
+        manuscriptId,
+        bookTitle: title ?? undefined,
+        engine: selectedModel?.engine,
+        phaseId: 0,
+        phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
+        phaseProgress: 0,
+        remainingMs: null,
+        lastTickAt: Date.now(),
+        state: 'running',
+        kind: 'subset',
+        subsetChapterIds: [chapterId],
+      }),
+    );
     /* Track whether the server re-emitted chapter-failed for THIS id
        during the retry. We use this instead of relying on .then() vs
        .catch() because the subset route may end without a `result`
@@ -888,70 +1012,77 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
        succeeded. The retryReFailed flag lets us correctly drop the
        row on success regardless of which promise branch we land in. */
     let retryReFailed = false;
-    api.runAnalysisForChapters(manuscriptId, [chapterId], {
-      model,
-      onPhase: ({ phaseId, progress, live }) => {
-        markEvent();
-        setConn('streaming');
-        setPhase(phaseId); setPhaseProgress(progress);
-        if (live) setLive(live);
-        /* Snapshot tick — proof to the middleware that the subset
+    api
+      .runAnalysisForChapters(manuscriptId, [chapterId], {
+        model,
+        onPhase: ({ phaseId, progress, live }) => {
+          markEvent();
+          setConn('streaming');
+          setPhase(phaseId);
+          setPhaseProgress(progress);
+          if (live) setLive(live);
+          /* Snapshot tick — proof to the middleware that the subset
            SSE is alive so it can attach as a second subscriber. */
-        dispatch(analysisActions.applyAnalysisSnapshotTick({
-          manuscriptId,
-          phaseId,
-          phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
-          phaseProgress: progress,
-          lastTickAt: Date.now(),
-        }));
-      },
-      onLog: ({ phaseId, message }) => {
-        markEvent();
-        setConn('streaming');
-        setLogs(prev => ({ ...prev, [phaseId]: [...(prev[phaseId] ?? []), message] }));
-      },
-      onHeartbeat: (hb) => {
-        markEvent();
-        setConn('streaming');
-        setHeartbeatByPhase(prev => ({ ...prev, [hb.phaseId]: { hb, receivedAt: Date.now() } }));
-      },
-      onCastUpdate: ({ characters }) => {
-        markEvent();
-        dispatch(castActions.mergeCharacters(characters));
-      },
-      onChapterFailed: ({ chapterId: failedId, message }) => {
-        markEvent();
-        if (failedId === chapterId) retryReFailed = true;
-        setFailedChapters(prev => {
-          const filtered = prev.filter(f => f.chapterId !== failedId);
-          return [...filtered, { chapterId: failedId, message }];
-        });
-      },
-      onChapterResolved: ({ chapterId: resolvedId }) => {
-        markEvent();
-        setFailedChapters(prev => prev.filter(f => f.chapterId !== resolvedId));
-      },
-      onThrottle: ({ phaseId, model: throttleModel, waitMs, reason }) => {
-        markEvent();
-        setThrottleByPhase(prev => ({
-          ...prev,
-          [phaseId]: { until: Date.now() + waitMs, model: throttleModel, reason },
-        }));
-      },
-    })
+          dispatch(
+            analysisActions.applyAnalysisSnapshotTick({
+              manuscriptId,
+              phaseId,
+              phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
+              phaseProgress: progress,
+              lastTickAt: Date.now(),
+            }),
+          );
+        },
+        onLog: ({ phaseId, message }) => {
+          markEvent();
+          setConn('streaming');
+          setLogs((prev) => ({ ...prev, [phaseId]: [...(prev[phaseId] ?? []), message] }));
+        },
+        onHeartbeat: (hb) => {
+          markEvent();
+          setConn('streaming');
+          setHeartbeatByPhase((prev) => ({
+            ...prev,
+            [hb.phaseId]: { hb, receivedAt: Date.now() },
+          }));
+        },
+        onCastUpdate: ({ characters }) => {
+          markEvent();
+          dispatch(castActions.mergeCharacters(characters));
+        },
+        onChapterFailed: ({ chapterId: failedId, message }) => {
+          markEvent();
+          if (failedId === chapterId) retryReFailed = true;
+          setFailedChapters((prev) => {
+            const filtered = prev.filter((f) => f.chapterId !== failedId);
+            return [...filtered, { chapterId: failedId, message }];
+          });
+        },
+        onChapterResolved: ({ chapterId: resolvedId }) => {
+          markEvent();
+          setFailedChapters((prev) => prev.filter((f) => f.chapterId !== resolvedId));
+        },
+        onThrottle: ({ phaseId, model: throttleModel, waitMs, reason }) => {
+          markEvent();
+          setThrottleByPhase((prev) => ({
+            ...prev,
+            [phaseId]: { until: Date.now() + waitMs, model: throttleModel, reason },
+          }));
+        },
+      })
       .then(() => {
         if (!retryReFailed) {
-          setFailedChapters(prev => prev.filter(f => f.chapterId !== chapterId));
+          setFailedChapters((prev) => prev.filter((f) => f.chapterId !== chapterId));
         }
         setConn('idle');
       })
-      .catch(err => {
+      .catch((err) => {
         /* The subset route ends without a `result` event when other
            chapters still need retry (Phase 1 gate). api.ts throws
            "no result" in that case — not a real failure, drop the
            row if this chapter itself succeeded. */
         if (!retryReFailed) {
-          setFailedChapters(prev => prev.filter(f => f.chapterId !== chapterId));
+          setFailedChapters((prev) => prev.filter((f) => f.chapterId !== chapterId));
         } else {
           console.warn('[analysing] retry failed:', err);
         }
@@ -959,7 +1090,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
       })
       .finally(() => {
         setRetryingChapterId(null);
-        setDroppedQuotesRefreshKey(k => k + 1);
+        setDroppedQuotesRefreshKey((k) => k + 1);
         /* Resume the main run if Retry paused it. The analysis effect
            is keyed off (analysisStarted, retry.nonce, …) so we flip
            analysisStarted back on and bump the nonce to re-enter — the
@@ -974,20 +1105,22 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
              setActiveStream when it re-fires, which will overwrite this
              with fresh phase data — but the kind has to flip back first
              or the middleware would still be aiming at the subset route. */
-          dispatch(analysisActions.setActiveStream({
-            bookId: bookId ?? null,
-            manuscriptId,
-            bookTitle: title ?? undefined,
-            engine: selectedModel?.engine,
-            phaseId: 0,
-            phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
-            phaseProgress: 0,
-            remainingMs: null,
-            lastTickAt: Date.now(),
-            state: 'running',
-          }));
+          dispatch(
+            analysisActions.setActiveStream({
+              bookId: bookId ?? null,
+              manuscriptId,
+              bookTitle: title ?? undefined,
+              engine: selectedModel?.engine,
+              phaseId: 0,
+              phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
+              phaseProgress: 0,
+              remainingMs: null,
+              lastTickAt: Date.now(),
+              state: 'running',
+            }),
+          );
           setAnalysisStarted(true);
-          setRetry(r => ({ nonce: r.nonce + 1, fresh: false }));
+          setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
         } else {
           /* Main wasn't running — retry was a standalone (cast_incomplete
              auto-resume path). Clear the snapshot so the pill drops out;
@@ -998,7 +1131,9 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
   };
 
   const overall = (phase + phaseProgress) / ANALYSIS_PHASES.length;
-  const sinceLastSec = lastEventAt ? Math.max(0, Math.round((Date.now() - lastEventAt) / 1000)) : null;
+  const sinceLastSec = lastEventAt
+    ? Math.max(0, Math.round((Date.now() - lastEventAt) / 1000))
+    : null;
 
   /* Analyzer Load/Stop control. Only meaningful when the selected analyzer
      is a local Ollama model — Gemini lives in the cloud and has no local
@@ -1013,8 +1148,9 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
     }
     let cancelled = false;
     const probe = () => {
-      api.getOllamaHealth()
-        .then(h => {
+      api
+        .getOllamaHealth()
+        .then((h) => {
           if (cancelled) return;
           setOllamaHealth(h);
           setPendingAnalyzerPill(null);
@@ -1027,7 +1163,10 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
     };
     probe();
     const id = setInterval(probe, 30_000);
-    return () => { cancelled = true; clearInterval(id); };
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [isLocalAnalyzer, analyzerProbeKey]);
 
   /* Pill on this screen shows only the coarse state ("Streaming live") —
@@ -1089,7 +1228,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
       setAnalyzerLoadError(`Couldn't reach Ollama: ${(e as Error).message ?? 'fetch failed'}`);
       setPendingAnalyzerPill(null);
     }
-    setAnalyzerProbeKey(k => k + 1);
+    setAnalyzerProbeKey((k) => k + 1);
   };
 
   const handleStopAnalyzer = async () => {
@@ -1106,7 +1245,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
       setAnalyzerLoadError(`Couldn't reach Ollama: ${(e as Error).message ?? 'fetch failed'}`);
       setPendingAnalyzerPill(null);
     }
-    setAnalyzerProbeKey(k => k + 1);
+    setAnalyzerProbeKey((k) => k + 1);
   };
 
   /* Auto-warm the analyzer on arrival when:
@@ -1123,11 +1262,11 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
   useEffect(() => {
     if (!manuscriptId) return;
     if (!isLocalAnalyzer) return;
-    if (!ollamaHealth) return;                   // probe still pending
+    if (!ollamaHealth) return; // probe still pending
     if (ollamaHealth.status !== 'reachable') return;
-    if (ollamaHealth.modelResident) return;      // already warm
-    if (pendingAnalyzerPill) return;             // a Load is already in flight
-    if (autoLoadFiredRef.current) return;        // one-shot per mount
+    if (ollamaHealth.modelResident) return; // already warm
+    if (pendingAnalyzerPill) return; // a Load is already in flight
+    if (autoLoadFiredRef.current) return; // one-shot per mount
     autoLoadFiredRef.current = true;
     void handleLoadAnalyzer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1135,15 +1274,17 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
 
   return (
     <div className="relative min-h-[calc(100vh-64px)] flex items-center justify-center px-6 py-16">
-      <div className="absolute inset-0 bg-gradient-hero-wash opacity-60 pointer-events-none"/>
+      <div className="absolute inset-0 bg-gradient-hero-wash opacity-60 pointer-events-none" />
       <div className="relative max-w-2xl w-full">
         <div className="text-center mb-10">
           <SectionLabel>Analysing</SectionLabel>
           <div className="mt-5">
-            <MixedHeading level="h1" regular="Reading" bold={title || 'your manuscript'}/>
+            <MixedHeading level="h1" regular="Reading" bold={title || 'your manuscript'} />
           </div>
           <p className="mt-4 text-ink/70">
-            {remainingMs !== null ? describeRemaining(remainingMs, wordCount) : describeSize(wordCount)}
+            {remainingMs !== null
+              ? describeRemaining(remainingMs, wordCount)
+              : describeSize(wordCount)}
           </p>
           {/* Analyzer Load/Stop control. Rendered even without a manuscript
               so the user can pre-warm Ollama from the Analysing screen (the
@@ -1179,65 +1320,69 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
               immediately bounce, looking like a broken button to the
               user. For Gemini the button enables as soon as the
               manuscript is loaded (no local lifecycle to wait on). */}
-          {manuscriptId && conn !== 'done' && (() => {
-            const isRunning = conn === 'streaming' || conn === 'connecting';
-            const label = isRunning
-              ? 'Pause analysis'
-              : (isAnalyzerReady
-                  ? (hasStartedOnceRef.current ? 'Resume analysis' : 'Start analysis')
-                  : 'Waiting for analyzer…');
-            const onClick = () => {
-              if (isRunning) {
-                /* Imperative abort tears down the per-tab fetch consumer
+          {manuscriptId &&
+            conn !== 'done' &&
+            (() => {
+              const isRunning = conn === 'streaming' || conn === 'connecting';
+              const label = isRunning
+                ? 'Pause analysis'
+                : isAnalyzerReady
+                  ? hasStartedOnceRef.current
+                    ? 'Resume analysis'
+                    : 'Start analysis'
+                  : 'Waiting for analyzer…';
+              const onClick = () => {
+                if (isRunning) {
+                  /* Imperative abort tears down the per-tab fetch consumer
                    so conn flips to idle immediately (without waiting on
                    effect cleanup). Dispatching setPaused additionally
                    fires the server-side /analysis/pause via the
                    analysis-stream middleware — post-B1 the server
                    treats SSE close as "unsubscribe" and won't actually
                    stop the analyzer without this explicit signal. */
-                analysisControllerRef.current?.abort();
-                if (manuscriptId) dispatch(analysisActions.setPaused({ manuscriptId }));
-                setAnalysisStarted(false);
-                setConn('idle');
-              } else {
-                /* Resume after a pause — bump retry.nonce so the effect
+                  analysisControllerRef.current?.abort();
+                  if (manuscriptId) dispatch(analysisActions.setPaused({ manuscriptId }));
+                  setAnalysisStarted(false);
+                  setConn('idle');
+                } else {
+                  /* Resume after a pause — bump retry.nonce so the effect
                    re-runs even if analysisStarted is already true (it
                    isn't here, but bumping is the established idiom for
                    re-entering the effect, see Try again at the error
                    panel below). */
-                setAnalysisStarted(true);
-                setRetry(r => ({ nonce: r.nonce + 1, fresh: false }));
-              }
-            };
-            const disabled = !isRunning && !isAnalyzerReady;
-            return (
-              <div className="mt-6 flex flex-col items-center gap-2">
-                <button
-                  type="button"
-                  onClick={onClick}
-                  disabled={disabled}
-                  className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-colors ${
-                    disabled
-                      ? 'bg-ink/15 text-ink/40 cursor-not-allowed'
-                      : 'bg-ink text-canvas hover:bg-ink/90'
-                  }`}
-                >
-                  {label}
-                </button>
-                {isLocalAnalyzer && !isAnalyzerReady && !isRunning && (
-                  <p className="text-[11px] text-ink/50">
-                    The model needs to be resident in VRAM before analysis can run.
-                    {pendingAnalyzerPill === 'loading' ? ' Loading now…' : ' Click Load above to warm it.'}
-                  </p>
-                )}
-              </div>
-            );
-          })()}
+                  setAnalysisStarted(true);
+                  setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
+                }
+              };
+              const disabled = !isRunning && !isAnalyzerReady;
+              return (
+                <div className="mt-6 flex flex-col items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={onClick}
+                    disabled={disabled}
+                    className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-colors ${
+                      disabled
+                        ? 'bg-ink/15 text-ink/40 cursor-not-allowed'
+                        : 'bg-ink text-canvas hover:bg-ink/90'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                  {isLocalAnalyzer && !isAnalyzerReady && !isRunning && (
+                    <p className="text-[11px] text-ink/50">
+                      The model needs to be resident in VRAM before analysis can run.
+                      {pendingAnalyzerPill === 'loading'
+                        ? ' Loading now…'
+                        : ' Click Load above to warm it.'}
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
           {manuscriptId && (
             <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs">
-              {!isLocalAnalyzer && (
-                <ConnPill state={conn} sinceLastSec={sinceLastSec}/>
-              )}
+              {!isLocalAnalyzer && <ConnPill state={conn} sinceLastSec={sinceLastSec} />}
               {/* Live model picker. Changing the model mid-run cancels the
                   in-flight request and restarts from the first uncached
                   chapter — completed chapters in the analysis cache survive,
@@ -1255,15 +1400,17 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                        with the new model. fresh stays false — cached
                        chapters from the previous model are still valid
                        (the cache key is the manuscript, not the model). */
-                    setRetry(r => ({ nonce: r.nonce + 1, fresh: false }));
+                    setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
                   }}
                   className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
                   title="Switch the analysis model. Cancels the in-flight request and resumes from the first uncached chapter."
                 >
-                  {MODEL_OPTION_GROUPS.map(g => (
+                  {MODEL_OPTION_GROUPS.map((g) => (
                     <optgroup key={g.engine} label={g.label}>
-                      {g.models.map(m => (
-                        <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>
+                      {g.models.map((m) => (
+                        <option key={m.id} value={m.id} title={m.hint}>
+                          {m.label}
+                        </option>
                       ))}
                     </optgroup>
                   ))}
@@ -1279,14 +1426,16 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
           )}
           {analyzerEvictionNotice && (
             <p className="mt-3 inline-flex items-center gap-2 text-[11px] text-emerald-700">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               {analyzerEvictionNotice}
             </p>
           )}
           {analyzerLoadError && (
-            <p className="mt-3 inline-flex items-start gap-2 text-[11px] text-rose-700 max-w-prose mx-auto text-left"
-               role="alert">
-              <span className="w-1.5 h-1.5 mt-1 rounded-full bg-rose-500 shrink-0"/>
+            <p
+              className="mt-3 inline-flex items-start gap-2 text-[11px] text-rose-700 max-w-prose mx-auto text-left"
+              role="alert"
+            >
+              <span className="w-1.5 h-1.5 mt-1 rounded-full bg-rose-500 shrink-0" />
               <span>{analyzerLoadError}</span>
               <button
                 type="button"
@@ -1294,7 +1443,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                 aria-label="Dismiss error"
                 className="ml-1 text-rose-600/70 hover:text-rose-800"
               >
-                <IconClose className="w-3 h-3"/>
+                <IconClose className="w-3 h-3" />
               </button>
             </p>
           )}
@@ -1302,9 +1451,9 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
             <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left">
               <p className="text-sm font-semibold text-amber-900">No manuscript loaded</p>
               <p className="mt-1 text-sm text-amber-800">
-                The browser tab lost its in-progress upload (page refresh, a URL pasted directly,
-                or an opened book whose <code>state.json</code> is missing a <code>manuscriptId</code>).
-                Re-open the book from the library to resume, or import a fresh manuscript.
+                The browser tab lost its in-progress upload (page refresh, a URL pasted directly, or
+                an opened book whose <code>state.json</code> is missing a <code>manuscriptId</code>
+                ). Re-open the book from the library to resume, or import a fresh manuscript.
               </p>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
@@ -1325,7 +1474,9 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
           {error && (
             <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-left">
               <p className="text-sm font-semibold text-red-900">
-                {error.code === 'daily_quota' ? 'Daily free-tier quota exhausted' : 'Analysis failed'}
+                {error.code === 'daily_quota'
+                  ? 'Daily free-tier quota exhausted'
+                  : 'Analysis failed'}
               </p>
               <p className="mt-1 text-sm text-red-800 break-words">{error.message}</p>
               {error.detail && (
@@ -1353,25 +1504,29 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                     onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
                     className="px-3 py-1.5 rounded-full border border-red-300/60 bg-white text-xs font-medium text-ink focus:outline-none focus:ring-2 focus:ring-red-400/40"
                   >
-                    {MODEL_OPTION_GROUPS.map(g => (
+                    {MODEL_OPTION_GROUPS.map((g) => (
                       <optgroup key={g.engine} label={g.label}>
-                        {g.models.map(m => (
-                          <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>
+                        {g.models.map((m) => (
+                          <option key={m.id} value={m.id} title={m.hint}>
+                            {m.label}
+                          </option>
                         ))}
                       </optgroup>
                     ))}
                   </select>
                 </label>
                 <button
-                  onClick={() => setRetry(r => ({ nonce: r.nonce + 1, fresh: false }))}
+                  onClick={() => setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }))}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink/90"
                 >
-                  <IconRefresh className="w-3.5 h-3.5"/> Try again
+                  <IconRefresh className="w-3.5 h-3.5" /> Try again
                 </button>
                 <button
                   onClick={() => {
-                    if (confirm('Discard all cached progress for this manuscript and start over?')) {
-                      setRetry(r => ({ nonce: r.nonce + 1, fresh: true }));
+                    if (
+                      confirm('Discard all cached progress for this manuscript and start over?')
+                    ) {
+                      setRetry((r) => ({ nonce: r.nonce + 1, fresh: true }));
                     }
                   }}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-red-300/60 bg-white text-red-700 text-xs font-semibold hover:bg-red-50"
@@ -1380,7 +1535,8 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                 </button>
               </div>
               <p className="mt-2 text-xs text-red-700/70">
-                Try again resumes from the first uncached chapter. Start fresh discards all cached progress and re-runs stage 1.
+                Try again resumes from the first uncached chapter. Start fresh discards all cached
+                progress and re-runs stage 1.
               </p>
             </div>
           )}
@@ -1388,34 +1544,59 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
 
         <div className="mb-8">
           <div className="flex items-center justify-between text-xs text-ink/60 mb-2">
-            <span>Overall</span><span className="tabular-nums font-semibold text-ink">{Math.round(overall * 100)}%</span>
+            <span>Overall</span>
+            <span className="tabular-nums font-semibold text-ink">
+              {Math.round(overall * 100)}%
+            </span>
           </div>
           <div className="relative h-2 rounded-full bg-ink/[0.06] overflow-hidden">
-            <div className="absolute inset-y-0 left-0 bg-gradient-progress rounded-full" style={{ width: `${overall * 100}%` }}>
-              <div className="absolute inset-0 stripe-travel"/>
+            <div
+              className="absolute inset-y-0 left-0 bg-gradient-progress rounded-full"
+              style={{ width: `${overall * 100}%` }}
+            >
+              <div className="absolute inset-0 stripe-travel" />
             </div>
           </div>
         </div>
 
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card divide-y divide-ink/5">
-          {ANALYSIS_PHASES.map(p => {
+          {ANALYSIS_PHASES.map((p) => {
             const isActive = phase === p.id;
-            const isDone   = phase > p.id;
+            const isDone = phase > p.id;
             const phaseLogs = logs[p.id] ?? [];
             return (
               <div key={p.id} className="px-6 py-4 flex items-start gap-4">
                 <div className="mt-1 shrink-0">
-                  {isDone   && <span className="w-7 h-7 rounded-full bg-emerald-100 grid place-items-center"><IconCheck className="w-4 h-4 text-emerald-700"/></span>}
-                  {isActive && <span className="w-7 h-7 rounded-full bg-peach/20 grid place-items-center"><IconSpinner className="w-4 h-4 text-magenta"/></span>}
-                  {!isDone && !isActive && <span className="w-7 h-7 rounded-full border border-ink/15"/>}
+                  {isDone && (
+                    <span className="w-7 h-7 rounded-full bg-emerald-100 grid place-items-center">
+                      <IconCheck className="w-4 h-4 text-emerald-700" />
+                    </span>
+                  )}
+                  {isActive && (
+                    <span className="w-7 h-7 rounded-full bg-peach/20 grid place-items-center">
+                      <IconSpinner className="w-4 h-4 text-magenta" />
+                    </span>
+                  )}
+                  {!isDone && !isActive && (
+                    <span className="w-7 h-7 rounded-full border border-ink/15" />
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className={`font-semibold ${isDone || isActive ? 'text-ink' : 'text-ink/40'}`}>{p.label}</p>
-                  <p className={`text-sm mt-0.5 ${isDone || isActive ? 'text-ink/60' : 'text-ink/30'}`}>{p.detail}</p>
+                  <p className={`font-semibold ${isDone || isActive ? 'text-ink' : 'text-ink/40'}`}>
+                    {p.label}
+                  </p>
+                  <p
+                    className={`text-sm mt-0.5 ${isDone || isActive ? 'text-ink/60' : 'text-ink/30'}`}
+                  >
+                    {p.detail}
+                  </p>
                   {isActive && (
                     <>
                       <div className="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
-                        <div className="h-full bg-gradient-progress rounded-full" style={{ width: `${phaseProgress * 100}%` }}/>
+                        <div
+                          className="h-full bg-gradient-progress rounded-full"
+                          style={{ width: `${phaseProgress * 100}%` }}
+                        />
                       </div>
                       {/* Bridging status while the SSE is open but no log
                           lines have arrived yet. On a fresh server the
@@ -1423,45 +1604,55 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                           getOrHydrateManuscript re-parsing the EPUB —
                           silence during that window made the screen look
                           frozen / the button look broken. */}
-                      {p.id === 0 && phaseLogs.length === 0 && analysisStarted && conn === 'connecting' && (
-                        <p className="mt-3 text-xs font-mono text-ink/50 italic">
-                          Reading the manuscript (parsing chapters)…
-                        </p>
-                      )}
+                      {p.id === 0 &&
+                        phaseLogs.length === 0 &&
+                        analysisStarted &&
+                        conn === 'connecting' && (
+                          <p className="mt-3 text-xs font-mono text-ink/50 italic">
+                            Reading the manuscript (parsing chapters)…
+                          </p>
+                        )}
                       {throttleByPhase[p.id] && throttleByPhase[p.id].until > Date.now() ? (
                         <ThrottleRow
                           until={throttleByPhase[p.id].until}
                           model={throttleByPhase[p.id].model}
                           reason={throttleByPhase[p.id].reason}
                         />
-                      ) : heartbeatByPhase[p.id] && (
-                        <HeartbeatRow
-                          hb={heartbeatByPhase[p.id].hb}
-                          receivedAt={heartbeatByPhase[p.id].receivedAt}
-                          stallThresholdSec={isLocalAnalyzer ? STALL_THRESHOLD_LOCAL_SEC : STALL_THRESHOLD_CLOUD_SEC}
-                        />
+                      ) : (
+                        heartbeatByPhase[p.id] && (
+                          <HeartbeatRow
+                            hb={heartbeatByPhase[p.id].hb}
+                            receivedAt={heartbeatByPhase[p.id].receivedAt}
+                            stallThresholdSec={
+                              isLocalAnalyzer
+                                ? STALL_THRESHOLD_LOCAL_SEC
+                                : STALL_THRESHOLD_CLOUD_SEC
+                            }
+                          />
+                        )
                       )}
-                      {live && live.chapters.length > 0 && (
-                        <LiveChapterTicker live={live}/>
-                      )}
+                      {live && live.chapters.length > 0 && <LiveChapterTicker live={live} />}
                     </>
                   )}
                   {/* Cast roster is Phase 0's outcome — keep it visible after
                       Phase 0 completes (or is skipped via a cached resume after
                       a model switch) so the user doesn't lose the detected
                       cast just because the active phase advanced. */}
-                  {p.id === 0 && <SeriesPriorPill/>}
-                  {p.id === 0 && <LiveCastPreview/>}
-                  {p.id === 0 && <DroppedQuotesPanel bookId={bookId} refreshKey={droppedQuotesRefreshKey}/>}
-                  {phaseLogs.length > 0 && (
-                    isActive
-                      ? <ActivePhaseLog lines={phaseLogs}/>
-                      : (
-                        <ul className="mt-3 space-y-1.5 text-xs font-mono text-ink/50">
-                          {phaseLogs.slice(-COMPLETED_PHASE_TAIL).map((s, i) => <li key={i}>{s}</li>)}
-                        </ul>
-                      )
+                  {p.id === 0 && <SeriesPriorPill />}
+                  {p.id === 0 && <LiveCastPreview />}
+                  {p.id === 0 && (
+                    <DroppedQuotesPanel bookId={bookId} refreshKey={droppedQuotesRefreshKey} />
                   )}
+                  {phaseLogs.length > 0 &&
+                    (isActive ? (
+                      <ActivePhaseLog lines={phaseLogs} />
+                    ) : (
+                      <ul className="mt-3 space-y-1.5 text-xs font-mono text-ink/50">
+                        {phaseLogs.slice(-COMPLETED_PHASE_TAIL).map((s, i) => (
+                          <li key={i}>{s}</li>
+                        ))}
+                      </ul>
+                    ))}
                 </div>
               </div>
             );
@@ -1483,12 +1674,20 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
               Refusing to shrink the cast roster
             </p>
             <p className="mt-1 text-xs text-amber-800/80">
-              The previous run detected <span className="font-semibold">{stage1ShrinkInfo.prev} characters</span>, and the new run would replace it with <span className="font-semibold">{stage1ShrinkInfo.next}</span>. This usually means a worse model collapsed the cast (or the manuscript was re-parsed and quotes no longer match). The existing roster is preserved on disk — you can try a different model, or accept the smaller roster if it's what you want.
+              The previous run detected{' '}
+              <span className="font-semibold">{stage1ShrinkInfo.prev} characters</span>, and the new
+              run would replace it with{' '}
+              <span className="font-semibold">{stage1ShrinkInfo.next}</span>. This usually means a
+              worse model collapsed the cast (or the manuscript was re-parsed and quotes no longer
+              match). The existing roster is preserved on disk — you can try a different model, or
+              accept the smaller roster if it's what you want.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => setRetry(r => ({ nonce: r.nonce + 1, fresh: false, allowStage1Shrink: true }))}
+                onClick={() =>
+                  setRetry((r) => ({ nonce: r.nonce + 1, fresh: false, allowStage1Shrink: true }))
+                }
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-ink text-canvas hover:bg-ink/90 transition-colors"
               >
                 Accept smaller roster ({stage1ShrinkInfo.next} characters)
@@ -1516,28 +1715,33 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
           <div className="mt-6 rounded-3xl border border-amber-200 bg-amber-50/60 px-6 py-4">
             <p className="text-sm font-semibold text-amber-900">
               {castIncomplete
-                ? (failedChapters.length === 1
-                    ? 'Paused — 1 chapter still needs cast detection'
-                    : `Paused — ${failedChapters.length} chapters still need cast detection`)
-                : (failedChapters.length === 1
-                    ? '1 chapter failed cast detection'
-                    : `${failedChapters.length} chapters failed cast detection`)}
+                ? failedChapters.length === 1
+                  ? 'Paused — 1 chapter still needs cast detection'
+                  : `Paused — ${failedChapters.length} chapters still need cast detection`
+                : failedChapters.length === 1
+                  ? '1 chapter failed cast detection'
+                  : `${failedChapters.length} chapters failed cast detection`}
             </p>
             <p className="mt-1 text-xs text-amber-800/80">
               {castIncomplete
-                ? 'Phase 1 (sentence attribution) won\'t start until every chapter has a cast. Click Retry below — the rest of the analysis resumes automatically once they all clear.'
-                : 'The model produced malformed output on these chapters even after the analyzer\'s built-in retry. Retry runs them again on the currently-selected model. If the main run is in flight, Retry pauses it for the duration of the subset call and resumes automatically when the row clears.'}
+                ? "Phase 1 (sentence attribution) won't start until every chapter has a cast. Click Retry below — the rest of the analysis resumes automatically once they all clear."
+                : "The model produced malformed output on these chapters even after the analyzer's built-in retry. Retry runs them again on the currently-selected model. If the main run is in flight, Retry pauses it for the duration of the subset call and resumes automatically when the row clears."}
             </p>
             <ul className="mt-3 space-y-2">
-              {failedChapters.map(f => {
+              {failedChapters.map((f) => {
                 const isRetrying = retryingChapterId === f.chapterId;
                 const anotherRetryInFlight = retryingChapterId !== null && !isRetrying;
                 const disabled = isRetrying || anotherRetryInFlight;
                 const title = chapterTitleById[f.chapterId] ?? `Chapter ${f.chapterId}`;
                 return (
-                  <li key={f.chapterId} className="flex items-start gap-3 rounded-2xl bg-white px-4 py-3 border border-amber-200/70">
+                  <li
+                    key={f.chapterId}
+                    className="flex items-start gap-3 rounded-2xl bg-white px-4 py-3 border border-amber-200/70"
+                  >
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-ink truncate" title={title}>{title}</p>
+                      <p className="text-sm font-semibold text-ink truncate" title={title}>
+                        {title}
+                      </p>
                       <p className="mt-0.5 text-xs text-ink/60 break-words">{f.message}</p>
                     </div>
                     <button
@@ -1550,7 +1754,7 @@ export function AnalysingView({ manuscriptId, bookId, title, wordCount, model, o
                           : 'bg-ink text-canvas hover:bg-ink/90'
                       }`}
                     >
-                      <IconRefresh className="w-3.5 h-3.5"/>
+                      <IconRefresh className="w-3.5 h-3.5" />
                       {isRetrying ? 'Retrying…' : 'Retry chapter'}
                     </button>
                   </li>

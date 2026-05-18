@@ -26,11 +26,15 @@ const SERVER_ROOT = resolve(__dirname, '..', '..');
    would corrupt path resolution. The UI flags edits as "restart required". */
 const ENV_DIR = process.env.WORKSPACE_DIR?.trim();
 const OVERRIDE_DIR = readBootOverride();
-const RESOLVED_DIR = OVERRIDE_DIR ?? (ENV_DIR && ENV_DIR.length > 0 ? ENV_DIR : '../audiobook-workspace');
+const RESOLVED_DIR =
+  OVERRIDE_DIR ?? (ENV_DIR && ENV_DIR.length > 0 ? ENV_DIR : '../audiobook-workspace');
 export const WORKSPACE_ROOT = resolve(SERVER_ROOT, RESOLVED_DIR);
 export const BOOKS_ROOT = join(WORKSPACE_ROOT, 'books');
-export const WORKSPACE_SOURCE: 'env' | 'default' | 'override' =
-  OVERRIDE_DIR ? 'override' : (ENV_DIR && ENV_DIR.length > 0 ? 'env' : 'default');
+export const WORKSPACE_SOURCE: 'env' | 'default' | 'override' = OVERRIDE_DIR
+  ? 'override'
+  : ENV_DIR && ENV_DIR.length > 0
+    ? 'env'
+    : 'default';
 
 /* Sync best-effort read of user-settings.json so the boot-time workspace
    resolution can honour an override without an async dance. A missing or
@@ -58,13 +62,15 @@ export function ensureWorkspace(): void {
 /** URL-safe slug. Strips diacritics, lowercases, replaces non-alnum with '-',
     collapses runs, trims, caps at 80 chars. */
 export function slug(s: string): string {
-  return s
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80) || 'untitled';
+  return (
+    s
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'untitled'
+  );
 }
 
 export const STANDALONES_SERIES = 'Standalones';
@@ -75,9 +81,11 @@ export function makeBookId(author: string, series: string, title: string): strin
 }
 
 /** Parse a bookId back into its three slug parts. Returns null if malformed. */
-export function parseBookId(bookId: string): { authorSlug: string; seriesSlug: string; titleSlug: string } | null {
+export function parseBookId(
+  bookId: string,
+): { authorSlug: string; seriesSlug: string; titleSlug: string } | null {
   const parts = bookId.split('__');
-  if (parts.length !== 3 || parts.some(p => !p)) return null;
+  if (parts.length !== 3 || parts.some((p) => !p)) return null;
   return { authorSlug: parts[0], seriesSlug: parts[1], titleSlug: parts[2] };
 }
 

@@ -7,7 +7,7 @@
 
 Today the `ModelControlPill` (Load / Stop) lives in two view-local spots: the
 Analysing view (analyzer pill) and the Generation view (TTS pill). Surfaces
-that *use* the models but don't render a pill — the Profile Drawer's Play
+that _use_ the models but don't render a pill — the Profile Drawer's Play
 button, the Cast view per-row Play, the future per-character regenerate
 button — currently rely on JIT auto-load (`playSampleWithAutoLoad`) to warm
 the TTS sidecar on demand.
@@ -25,7 +25,7 @@ TTS now" affordance, two failure modes get louder:
 
 The fix is to hoist a single TTS pill into the top bar (`layout.tsx`) so
 it's visible from Confirm Cast / Cast / Drawer / Generation. The JIT
-auto-load helper stays — surfaces that need TTS *right now* still trigger
+auto-load helper stays — surfaces that need TTS _right now_ still trigger
 the load themselves — but the pill provides the always-on visual state
 and a single Load/Stop the user can use proactively.
 

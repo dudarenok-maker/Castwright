@@ -87,8 +87,10 @@ const TILE_HINTS: Record<TileHintKey, TileHint> = {
     destination: 'sync-folder',
     headerTitle: 'Send to Voice library',
     submitLabel: 'Export to Voice library',
-    footerNote: 'Voice on the device picks up the new .m4b once your sync folder finishes pushing it.',
-    bodyIntro: "Voice scans a folder on your Android device for new audiobooks. Point this at the same folder your sync app (Syncthing, OneDrive, Google Drive desktop) keeps mirrored to the phone — your M4B lands there and Voice picks it up on its next library scan.",
+    footerNote:
+      'Voice on the device picks up the new .m4b once your sync folder finishes pushing it.',
+    bodyIntro:
+      'Voice scans a folder on your Android device for new audiobooks. Point this at the same folder your sync app (Syncthing, OneDrive, Google Drive desktop) keeps mirrored to the phone — your M4B lands there and Voice picks it up on its next library scan.',
     folderInputLabel: 'Voice library folder',
     savedCaption: (saved) => `Saves to your Voice library at ${saved}.`,
   },
@@ -97,8 +99,10 @@ const TILE_HINTS: Record<TileHintKey, TileHint> = {
     destination: 'sync-folder',
     headerTitle: 'Send to Smart AudioBook Player',
     submitLabel: 'Export to Smart AudioBook Player',
-    footerNote: 'Smart AudioBook Player scans its books folder on the device — the new book appears after your sync app finishes pushing it.',
-    bodyIntro: "Smart AudioBook Player reads a folder per book from a configurable books directory on your Android device. Point this at the same folder your sync app mirrors there — the per-chapter MP3s arrive tagged with title, author, and cover art (when one is set).",
+    footerNote:
+      'Smart AudioBook Player scans its books folder on the device — the new book appears after your sync app finishes pushing it.',
+    bodyIntro:
+      'Smart AudioBook Player reads a folder per book from a configurable books directory on your Android device. Point this at the same folder your sync app mirrors there — the per-chapter MP3s arrive tagged with title, author, and cover art (when one is set).',
     folderInputLabel: 'Smart AudioBook Player books folder',
     savedCaption: (saved) => `Saves to your Smart AudioBook Player books folder at ${saved}.`,
   },
@@ -109,8 +113,10 @@ const TILE_HINTS: Record<TileHintKey, TileHint> = {
     destination: 'sync-folder',
     headerTitle: 'Send to BookPlayer',
     submitLabel: 'Export for BookPlayer',
-    footerNote: 'AirDrop the folder from Finder to your iPhone, then open with BookPlayer. The Files import preserves the chapter order.',
-    bodyIntro: "BookPlayer reads a folder per book on iOS via the Files app. Point this at a folder on your Mac that you can AirDrop from — the per-chapter MP3s arrive with tags and cover art ready to import.",
+    footerNote:
+      'AirDrop the folder from Finder to your iPhone, then open with BookPlayer. The Files import preserves the chapter order.',
+    bodyIntro:
+      'BookPlayer reads a folder per book on iOS via the Files app. Point this at a folder on your Mac that you can AirDrop from — the per-chapter MP3s arrive with tags and cover art ready to import.',
     folderInputLabel: 'BookPlayer staging folder',
     savedCaption: (saved) => `Stages BookPlayer-ready folders at ${saved}.`,
   },
@@ -120,8 +126,10 @@ const TILE_HINTS: Record<TileHintKey, TileHint> = {
     destination: 'sync-folder',
     headerTitle: 'Send to Audiobookshelf',
     submitLabel: 'Export to Audiobookshelf library',
-    footerNote: 'Audiobookshelf rescans its library on a schedule — the new book appears after the next scan once your sync finishes pushing it.',
-    bodyIntro: "Audiobookshelf scans a configured library root on the server and treats each subfolder as one book. Point this at the same folder your sync app mirrors to the server's library path — the chapters arrive tagged and ready.",
+    footerNote:
+      'Audiobookshelf rescans its library on a schedule — the new book appears after the next scan once your sync finishes pushing it.',
+    bodyIntro:
+      "Audiobookshelf scans a configured library root on the server and treats each subfolder as one book. Point this at the same folder your sync app mirrors to the server's library path — the chapters arrive tagged and ready.",
     folderInputLabel: 'Audiobookshelf library folder',
     savedCaption: (saved) => `Saves to your Audiobookshelf library at ${saved}.`,
   },
@@ -132,10 +140,16 @@ function tileHintFor(appHint: string | undefined): TileHint | null {
   return (TILE_HINTS as Record<string, TileHint | undefined>)[appHint] ?? null;
 }
 
-export function ExportAudiobookModal({ open, bookId, initialTab = 'download', prefill, onClose }: Props) {
+export function ExportAudiobookModal({
+  open,
+  bookId,
+  initialTab = 'download',
+  prefill,
+  onClose,
+}: Props) {
   const dispatch = useAppDispatch();
-  const lanUrls = useAppSelector(s => s.exports.lanUrls);
-  const account = useAppSelector(s => s.account);
+  const lanUrls = useAppSelector((s) => s.exports.lanUrls);
+  const account = useAppSelector((s) => s.account);
   /* prefill (when set) overrides the initialTab/default-format on open
      and on each open-toggle reset. Tile callers (Voice, Smart AudioBook
      Player, BookPlayer, Audiobookshelf, …) pass `appHint` so the modal
@@ -157,10 +171,17 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
     if (!open) return;
     if (lanUrls.length > 0) return;
     let cancelled = false;
-    api.getExportLanUrls().then(info => {
-      if (!cancelled) dispatch(exportsActions.lanUrlsHydrated(info));
-    }).catch(() => { /* swallow — modal still renders, just without a URL */ });
-    return () => { cancelled = true; };
+    api
+      .getExportLanUrls()
+      .then((info) => {
+        if (!cancelled) dispatch(exportsActions.lanUrlsHydrated(info));
+      })
+      .catch(() => {
+        /* swallow — modal still renders, just without a URL */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, lanUrls.length, dispatch]);
 
   /* Reset transient UI state on close so the next open is a clean slate.
@@ -182,12 +203,21 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
      the tab agree it's worth drawing. */
   useEffect(() => {
     const url = lanUrls[0];
-    if (!open || tab !== 'download' || !url) { setQrDataUrl(null); return; }
+    if (!open || tab !== 'download' || !url) {
+      setQrDataUrl(null);
+      return;
+    }
     let cancelled = false;
-    QRCode.toDataURL(url, { margin: 1, scale: 6 }).then(dataUrl => {
-      if (!cancelled) setQrDataUrl(dataUrl);
-    }).catch(() => { /* fall back to text URL */ });
-    return () => { cancelled = true; };
+    QRCode.toDataURL(url, { margin: 1, scale: 6 })
+      .then((dataUrl) => {
+        if (!cancelled) setQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        /* fall back to text URL */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, tab, lanUrls]);
 
   /* Poll the active job until terminal. */
@@ -203,7 +233,9 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
         if (job.status === 'in_progress' || job.status === 'queued') {
           pollHandle.current = setTimeout(tick, 800);
         }
-      } catch { /* keep modal open; user can dismiss manually */ }
+      } catch {
+        /* keep modal open; user can dismiss manually */
+      }
     };
     pollHandle.current = setTimeout(tick, 400);
     return () => {
@@ -212,10 +244,9 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
     };
   }, [activeJobId, bookId, dispatch]);
 
-
   /* Hook must run on every render — keep it above the early return. */
-  const activeJob: BookExportJob | undefined = useAppSelector(s =>
-    activeJobId ? (s.exports.byBookId[bookId] ?? []).find(j => j.id === activeJobId) : undefined,
+  const activeJob: BookExportJob | undefined = useAppSelector((s) =>
+    activeJobId ? (s.exports.byBookId[bookId] ?? []).find((j) => j.id === activeJobId) : undefined,
   );
 
   if (!open) return null;
@@ -261,8 +292,11 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
     const idAtClick = activeJobId;
     setActiveJobId(null);
     setMissing(null);
-    try { await api.cancelBookExport(bookId, idAtClick); }
-    catch { /* server may already be gone; local dismiss still wins */ }
+    try {
+      await api.cancelBookExport(bookId, idAtClick);
+    } catch {
+      /* server may already be gone; local dismiss still wins */
+    }
     dispatch(exportsActions.exportDismissed({ bookId, exportId: idAtClick }));
   };
 
@@ -280,59 +314,75 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
 
   const lanUrl = lanUrls[0] ?? null;
   const syncFolder = account.exportSyncFolder ?? null;
-  const canSubmit = !submitting && (
-    tab === 'download'
-      ? lanUrl != null
-      : syncFolder != null && syncFolder.length > 0
-  );
+  const canSubmit =
+    !submitting &&
+    (tab === 'download' ? lanUrl != null : syncFolder != null && syncFolder.length > 0);
 
   return (
     <>
-      <div onClick={onClose} className="fixed inset-0 bg-ink/40 z-50 fade-in"/>
+      <div onClick={onClose} className="fixed inset-0 bg-ink/40 z-50 fade-in" />
       <div className="fixed inset-0 z-50 grid place-items-center p-6 pointer-events-none">
-        <div className="bg-white rounded-3xl shadow-float w-full max-w-2xl pointer-events-auto fade-in overflow-hidden"
-             data-testid="export-audiobook-modal">
+        <div
+          className="bg-white rounded-3xl shadow-float w-full max-w-2xl pointer-events-auto fade-in overflow-hidden"
+          data-testid="export-audiobook-modal"
+        >
           <header className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
             <span className="w-9 h-9 rounded-full grid place-items-center shrink-0 bg-peach/15 text-magenta">
-              <IconDownload className="w-4 h-4"/>
+              <IconDownload className="w-4 h-4" />
             </span>
             <div className="flex-1 min-w-0">
-              <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">Export audiobook</p>
+              <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
+                Export audiobook
+              </p>
               <h3 className="text-base font-bold text-ink truncate">
                 {tileHint?.headerTitle ?? 'Sideload to your phone or sync folder'}
               </h3>
             </div>
-            <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60" aria-label="Close">
-              <IconClose className="w-4 h-4"/>
+            <button
+              onClick={onClose}
+              className="p-2 rounded-full hover:bg-ink/5 text-ink/60"
+              aria-label="Close"
+            >
+              <IconClose className="w-4 h-4" />
             </button>
           </header>
 
           {!tileHint && (
             <div className="px-6 pt-4 flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
-                {([
-                  { id: 'download',     label: 'Download to phone' },
-                  { id: 'sync-folder',  label: 'Save to sync folder' },
-                ] as Array<{ id: TabId; label: string }>).map(t => (
-                  <button key={t.id}
-                          data-testid={`export-tab-${t.id}`}
-                          onClick={() => setTab(t.id)}
-                          className={`px-3 py-1.5 rounded-full font-medium transition-colors ${tab === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}>
+                {(
+                  [
+                    { id: 'download', label: 'Download to phone' },
+                    { id: 'sync-folder', label: 'Save to sync folder' },
+                  ] as Array<{ id: TabId; label: string }>
+                ).map((t) => (
+                  <button
+                    key={t.id}
+                    data-testid={`export-tab-${t.id}`}
+                    onClick={() => setTab(t.id)}
+                    className={`px-3 py-1.5 rounded-full font-medium transition-colors ${tab === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}
+                  >
                     {t.label}
                   </button>
                 ))}
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">Format</span>
+                <span className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
+                  Format
+                </span>
                 <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
-                  {([
-                    { id: 'm4b',     label: 'M4B' },
-                    { id: 'mp3-zip', label: 'MP3.ZIP' },
-                  ] as Array<{ id: FormatId; label: string }>).map(f => (
-                    <button key={f.id}
-                            data-testid={`export-format-${f.id}`}
-                            onClick={() => setFormat(f.id)}
-                            className={`px-3 py-1.5 rounded-full font-medium transition-colors ${format === f.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}>
+                  {(
+                    [
+                      { id: 'm4b', label: 'M4B' },
+                      { id: 'mp3-zip', label: 'MP3.ZIP' },
+                    ] as Array<{ id: FormatId; label: string }>
+                  ).map((f) => (
+                    <button
+                      key={f.id}
+                      data-testid={`export-format-${f.id}`}
+                      onClick={() => setFormat(f.id)}
+                      className={`px-3 py-1.5 rounded-full font-medium transition-colors ${format === f.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}
+                    >
                       {f.label}
                     </button>
                   ))}
@@ -353,7 +403,7 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
                 onSave={handleSaveSyncFolder}
               />
             ) : tab === 'download' ? (
-              <DownloadTab url={lanUrl} qrDataUrl={qrDataUrl}/>
+              <DownloadTab url={lanUrl} qrDataUrl={qrDataUrl} />
             ) : (
               <SyncFolderTab
                 draft={syncFolderDraft}
@@ -365,11 +415,15 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
             )}
 
             {missing && missing.length > 0 && (
-              <div data-testid="export-missing-banner"
-                   className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-rose-800">
+              <div
+                data-testid="export-missing-banner"
+                className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-rose-800"
+              >
                 <p className="font-semibold text-sm">Some chapters still need audio.</p>
                 <ul className="mt-1 text-xs list-disc list-inside">
-                  {missing.slice(0, 6).map(slug => <li key={slug}>{slug}</li>)}
+                  {missing.slice(0, 6).map((slug) => (
+                    <li key={slug}>{slug}</li>
+                  ))}
                   {missing.length > 6 && <li>… and {missing.length - 6} more.</li>}
                 </ul>
                 <p className="mt-2 text-xs">
@@ -379,11 +433,15 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
             )}
 
             {activeJob && (
-              <div className="mt-5 bg-canvas rounded-2xl border border-ink/10 overflow-hidden"
-                   data-testid="export-active-job">
+              <div
+                className="mt-5 bg-canvas rounded-2xl border border-ink/10 overflow-hidden"
+                data-testid="export-active-job"
+              >
                 <ExportQueueRow
                   item={bookExportJobToQueueItem(activeJob)}
-                  onDownload={() => { if (activeJob.downloadUrl) window.location.assign(activeJob.downloadUrl); }}
+                  onDownload={() => {
+                    if (activeJob.downloadUrl) window.location.assign(activeJob.downloadUrl);
+                  }}
                 />
               </div>
             )}
@@ -400,8 +458,11 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
                     : 'MP3 folder: per-chapter tagged MP3s mirrored into your sync folder. Folder-scanning apps pick them up.'}
             </p>
             <div className="flex items-center gap-3">
-              <button onClick={onClose} className="text-sm font-medium text-ink/60 hover:text-ink">Close</button>
-              {activeJob && (activeJob.status === 'in_progress' || activeJob.status === 'queued') ? (
+              <button onClick={onClose} className="text-sm font-medium text-ink/60 hover:text-ink">
+                Close
+              </button>
+              {activeJob &&
+              (activeJob.status === 'in_progress' || activeJob.status === 'queued') ? (
                 /* EXPORTING — Cancel signals the server to abort and
                    returns the picker. Building copy stays as "Starting…"
                    for the brief window before the first poll lands. */
@@ -433,7 +494,9 @@ export function ExportAudiobookModal({ open, bookId, initialTab = 'download', pr
                     ? 'Starting…'
                     : tileHint
                       ? tileHint.submitLabel
-                      : (tab === 'download' ? 'Build download' : 'Build and save')}
+                      : tab === 'download'
+                        ? 'Build download'
+                        : 'Build and save'}
                 </button>
               )}
             </div>
@@ -448,8 +511,8 @@ function DownloadTab({ url, qrDataUrl }: { url: string | null; qrDataUrl: string
   if (!url) {
     return (
       <p>
-        The server doesn't currently see a LAN-routable IP. Make sure your PC and phone are on
-        the same Wi-Fi, then re-open this modal.
+        The server doesn't currently see a LAN-routable IP. Make sure your PC and phone are on the
+        same Wi-Fi, then re-open this modal.
       </p>
     );
   }
@@ -462,17 +525,28 @@ function DownloadTab({ url, qrDataUrl }: { url: string | null; qrDataUrl: string
           markers and title/author tags already in place.
         </p>
         <div className="mt-3 inline-flex items-center gap-2 px-3 py-2 rounded-full bg-canvas border border-ink/10 text-sm font-mono">
-          <a href={url} target="_blank" rel="noreferrer" className="text-ink hover:underline">{url}</a>
-          <IconExternal className="w-3.5 h-3.5 text-ink/50"/>
+          <a href={url} target="_blank" rel="noreferrer" className="text-ink hover:underline">
+            {url}
+          </a>
+          <IconExternal className="w-3.5 h-3.5 text-ink/50" />
         </div>
         <p className="mt-3 text-xs text-ink/55">
-          The "Build download" button below stages a zip on the server, then the link above takes you to it.
+          The "Build download" button below stages a zip on the server, then the link above takes
+          you to it.
         </p>
       </div>
       <div className="flex justify-end">
-        {qrDataUrl
-          ? <img src={qrDataUrl} alt="LAN URL QR code" className="w-[160px] h-[160px] rounded-xl border border-ink/10 bg-white p-1"/>
-          : <div className="w-[160px] h-[160px] rounded-xl border border-dashed border-ink/15 grid place-items-center text-xs text-ink/40">QR…</div>}
+        {qrDataUrl ? (
+          <img
+            src={qrDataUrl}
+            alt="LAN URL QR code"
+            className="w-[160px] h-[160px] rounded-xl border border-ink/10 bg-white p-1"
+          />
+        ) : (
+          <div className="w-[160px] h-[160px] rounded-xl border border-dashed border-ink/15 grid place-items-center text-xs text-ink/40">
+            QR…
+          </div>
+        )}
       </div>
     </div>
   );
@@ -494,11 +568,13 @@ function SyncFolderTab({ draft, setDraft, saved, saving, onSave }: SyncFolderTab
         finished archive lands there and your phone picks it up automatically.
       </p>
       <label className="block">
-        <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">Sync folder</span>
+        <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
+          Sync folder
+        </span>
         <input
           type="text"
           value={draft}
-          onChange={e => setDraft(e.target.value)}
+          onChange={(e) => setDraft(e.target.value)}
           placeholder="C:\Users\you\OneDrive\Audiobooks"
           className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30 font-mono"
           aria-label="Sync folder"
@@ -537,8 +613,9 @@ interface TileBodyProps extends SyncFolderTabProps {
 }
 function TileBody({ hint, hintKey, draft, setDraft, saved, saving, onSave }: TileBodyProps) {
   const isDirty = (saved ?? '') !== draft;
-  const bodyTestId    = hintKey === 'voice' ? 'export-voice-body'    : `export-tile-body-${hintKey}`;
-  const captionTestId = hintKey === 'voice' ? 'export-voice-caption' : `export-tile-caption-${hintKey}`;
+  const bodyTestId = hintKey === 'voice' ? 'export-voice-body' : `export-tile-body-${hintKey}`;
+  const captionTestId =
+    hintKey === 'voice' ? 'export-voice-caption' : `export-tile-caption-${hintKey}`;
   return (
     <div className="space-y-3" data-testid={bodyTestId}>
       <p>{hint.bodyIntro}</p>
@@ -548,11 +625,13 @@ function TileBody({ hint, hintKey, draft, setDraft, saved, saving, onSave }: Til
         </p>
       ) : null}
       <label className="block">
-        <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">{hint.folderInputLabel}</span>
+        <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
+          {hint.folderInputLabel}
+        </span>
         <input
           type="text"
           value={draft}
-          onChange={e => setDraft(e.target.value)}
+          onChange={(e) => setDraft(e.target.value)}
           placeholder="C:\Users\you\OneDrive\Audiobooks"
           className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30 font-mono"
           aria-label={hint.folderInputLabel}

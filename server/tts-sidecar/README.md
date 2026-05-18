@@ -88,7 +88,7 @@ which is where the remaining time goes after CUDA + fp16. On Windows it is
 **not pip-installable directly** — the PyPI wheel is built against torch 2.3
 and refuses to load against our torch 2.6, and the PyPI sdist has half a
 dozen Windows-specific bugs that have to be worked around manually. The
-procedure below is the *actually-working* recipe we figured out the hard
+procedure below is the _actually-working_ recipe we figured out the hard
 way. Plan ~30 min wall time the first time.
 
 #### Prerequisites
@@ -101,10 +101,12 @@ way. Plan ~30 min wall time the first time.
 
 2. **Visual Studio Build Tools 2022 (C++ workload)** — DeepSpeed compiles
    its CUDA kernels through `cl.exe`. Get it via winget:
+
    ```powershell
    winget install --id Microsoft.VisualStudio.2022.BuildTools `
      --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
    ```
+
    ~3 GB. No reboot needed; UAC will prompt.
 
 3. **`wheel` package in the sidecar venv** — pip needs `bdist_wheel` to
@@ -167,7 +169,7 @@ import sys
    DeepSpeed lazy-compiles `transformer_inference.pyd` on first synth, and
    that compile needs `nvcc` + `cl.exe` reachable. The simplest is to use
    the same PowerShell session you ran the install in, then `npm run
-   tts:sidecar`. If you start the sidecar from a fresh shell without the
+tts:sidecar`. If you start the sidecar from a fresh shell without the
    env wired, the compile will fail and DeepSpeed falls back to vanilla
    mode (sidecar still works, just no speedup).
 3. First synth after restart takes 30–60 s longer than usual — that's the
@@ -175,6 +177,7 @@ import sys
 
 The sidecar logs `DeepSpeed inference enabled.` once the build succeeds.
 If it logs `DeepSpeed enable failed (…)`, search the `…` for the cause:
+
 - `PyTorch version mismatch` → wheel install slipped through, redo step 3.
 - `Error building extension 'transformer_inference'` → ninja log under
   `%LOCALAPPDATA%\torch_extensions\torch_extensions\Cache\py311_cu124\transformer_inference\`
@@ -247,12 +250,15 @@ upgrade-stash dance fail mid-transaction with
 collide with pip's move-then-delete pattern. **Workaround**: pause
 OneDrive sync (system tray → Pause sync), or pre-purge the offending
 dirs manually before pip:
+
 ```powershell
 Remove-Item -Recurse -Force .\.venv\Lib\site-packages\<package>
 Remove-Item -Recurse -Force .\.venv\Lib\site-packages\<package>-*.dist-info
 ```
+
 Direct PowerShell `Remove-Item` works where pip's `shutil.move` fails.
 After install, sweep ghost `~*` dirs to silence pip warnings:
+
 ```powershell
 Get-ChildItem .\.venv\Lib\site-packages\~* | Remove-Item -Recurse -Force
 ```
@@ -272,11 +278,13 @@ shim) — same end result, no policy check on the outer call.
 **vcvars64.bat doesn't propagate into PowerShell directly.** It is a
 cmd-only batch script. To bring its env into PowerShell, capture `set`
 output after invoking it and re-export each line:
+
 ```powershell
 cmd /c "`"$vcvars`" >nul 2>&1 && set" | ForEach-Object {
     if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
 }
 ```
+
 Note: vcvars64.bat will overwrite `CUDA_HOME` if it had been set —
 re-export it after sourcing.
 
@@ -285,7 +293,7 @@ deepspeed` pulls a pre-built wheel that fails at import time:
 `PyTorch version mismatch! Install torch version=2.3, Runtime torch
 version=2.6`. **Workaround**: install from sdist (`pip install
 --no-build-isolation <path-to-sdist>` — see DeepSpeed install
-procedure above). `--no-binary=deepspeed` *should* do the same but pip's
+procedure above). `--no-binary=deepspeed` _should_ do the same but pip's
 resolver drops to ancient 0.3.x versions when you set it, so direct
 tarball install is the reliable path.
 

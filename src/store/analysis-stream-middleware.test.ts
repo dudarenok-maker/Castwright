@@ -99,7 +99,7 @@ const baseSnapshot: AnalysisStreamSnapshot = {
 function buildStore() {
   return configureStore({
     reducer: { analysis: analysisSlice.reducer },
-    middleware: getDefault => getDefault().concat(analysisStreamMiddleware),
+    middleware: (getDefault) => getDefault().concat(analysisStreamMiddleware),
   });
 }
 
@@ -108,43 +108,45 @@ beforeEach(() => {
   analyseManuscriptMock.mockReset();
   runAnalysisForChaptersMock.mockReset();
   captured = [];
-  const makeImpl = (kindMarker: 'main' | 'subset') => (
-    manuscriptId: string,
-    chapterIdsOrOpts: number[] | { signal: AbortSignal },
-    maybeOpts?: {
-      signal: AbortSignal;
-      onPhase?: (e: { phaseId: number; progress: number }) => void;
-      onEta?: (e: { remainingMs: number }) => void;
-      onSeriesPrior?: (e: { count: number; names: string[] }) => void;
-    },
-  ) => {
-    const opts = (kindMarker === 'subset' ? maybeOpts : chapterIdsOrOpts) as {
-      signal: AbortSignal;
-      onPhase?: (e: { phaseId: number; progress: number }) => void;
-      onEta?: (e: { remainingMs: number }) => void;
-      onSeriesPrior?: (e: { count: number; names: string[] }) => void;
-    };
-    const chapterIds = kindMarker === 'subset' ? (chapterIdsOrOpts as number[]) : undefined;
-    return new Promise<void>((resolve, reject) => {
-      const entry: CapturedAnalysisCall = {
-        manuscriptId,
-        kind: kindMarker,
-        chapterIds,
-        signal: opts.signal,
-        onPhase: opts.onPhase,
-        onEta: opts.onEta,
-        onSeriesPrior: opts.onSeriesPrior,
-        resolve: () => resolve(),
-        reject: (e: unknown) => reject(e),
+  const makeImpl =
+    (kindMarker: 'main' | 'subset') =>
+    (
+      manuscriptId: string,
+      chapterIdsOrOpts: number[] | { signal: AbortSignal },
+      maybeOpts?: {
+        signal: AbortSignal;
+        onPhase?: (e: { phaseId: number; progress: number }) => void;
+        onEta?: (e: { remainingMs: number }) => void;
+        onSeriesPrior?: (e: { count: number; names: string[] }) => void;
+      },
+    ) => {
+      const opts = (kindMarker === 'subset' ? maybeOpts : chapterIdsOrOpts) as {
+        signal: AbortSignal;
+        onPhase?: (e: { phaseId: number; progress: number }) => void;
+        onEta?: (e: { remainingMs: number }) => void;
+        onSeriesPrior?: (e: { count: number; names: string[] }) => void;
       };
-      captured.push(entry);
-      opts.signal.addEventListener('abort', () => {
-        const err = new Error('aborted');
-        err.name = 'AbortError';
-        reject(err);
+      const chapterIds = kindMarker === 'subset' ? (chapterIdsOrOpts as number[]) : undefined;
+      return new Promise<void>((resolve, reject) => {
+        const entry: CapturedAnalysisCall = {
+          manuscriptId,
+          kind: kindMarker,
+          chapterIds,
+          signal: opts.signal,
+          onPhase: opts.onPhase,
+          onEta: opts.onEta,
+          onSeriesPrior: opts.onSeriesPrior,
+          resolve: () => resolve(),
+          reject: (e: unknown) => reject(e),
+        };
+        captured.push(entry);
+        opts.signal.addEventListener('abort', () => {
+          const err = new Error('aborted');
+          err.name = 'AbortError';
+          reject(err);
+        });
       });
-    });
-  };
+    };
   analyseManuscriptMock.mockImplementation(makeImpl('main'));
   runAnalysisForChaptersMock.mockImplementation(makeImpl('subset'));
 });
@@ -161,10 +163,16 @@ describe('analysisStreamMiddleware — pause-bridge (pre-D1 contract, still pinn
   it('does NOT fire api.pauseAnalysis for non-pause actions', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 1, phaseProgress: 0.5,
-    }));
-    store.dispatch(analysisActions.setHalted({ manuscriptId: 'm1', code: 'unknown', message: 'x' }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 1,
+        phaseProgress: 0.5,
+      }),
+    );
+    store.dispatch(
+      analysisActions.setHalted({ manuscriptId: 'm1', code: 'unknown', message: 'x' }),
+    );
     store.dispatch(analysisActions.clearActiveStream());
     expect(pauseAnalysisSpy).not.toHaveBeenCalled();
   });
@@ -193,13 +201,22 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('opens the handle on the first applyAnalysisSnapshotTick', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     expect(analyseManuscriptMock).toHaveBeenCalledTimes(1);
     const args = analyseManuscriptMock.mock.calls[0];
     expect(args[0]).toBe('m1');
-    const opts = args[1] as { signal: AbortSignal; model?: string; fresh?: boolean; allowStage1Shrink?: boolean };
+    const opts = args[1] as {
+      signal: AbortSignal;
+      model?: string;
+      fresh?: boolean;
+      allowStage1Shrink?: boolean;
+    };
     /* Subscribe-only: middleware MUST NOT pass start-decision opts.
        The view's POST owns those. */
     expect(opts.model).toBeUndefined();
@@ -211,31 +228,52 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('does NOT re-open the handle on subsequent ticks for the same manuscriptId', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.2,
-    }));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 1, phaseProgress: 0.0,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.2,
+      }),
+    );
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 1,
+        phaseProgress: 0.0,
+      }),
+    );
     expect(analyseManuscriptMock).toHaveBeenCalledTimes(1);
   });
 
   it('stays open across slice-irrelevant actions (no close on noise)', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     expect(captured).toHaveLength(1);
     /* Dispatch a series of additional ticks (simulating live SSE events
        from the view's path); the handle should not be torn down. */
     for (let i = 0; i < 5; i++) {
-      store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-        manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 + i * 0.1, lastTickAt: 1000 + i,
-      }));
+      store.dispatch(
+        analysisActions.applyAnalysisSnapshotTick({
+          manuscriptId: 'm1',
+          phaseId: 0,
+          phaseProgress: 0.1 + i * 0.1,
+          lastTickAt: 1000 + i,
+        }),
+      );
     }
     expect(captured[0]?.signal.aborted).toBe(false);
   });
@@ -243,9 +281,13 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('closes the handle on setPaused (aborts the SSE in addition to the pause API call)', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     expect(captured[0]?.signal.aborted).toBe(false);
     store.dispatch(analysisActions.setPaused({ manuscriptId: 'm1' }));
     expect(captured[0]?.signal.aborted).toBe(true);
@@ -255,9 +297,13 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('closes the handle on clearActiveStream (terminal success)', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     store.dispatch(analysisActions.clearActiveStream());
     expect(captured[0]?.signal.aborted).toBe(true);
   });
@@ -265,21 +311,33 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('closes the handle on setHalted (any halted code)', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
-    store.dispatch(analysisActions.setHalted({
-      manuscriptId: 'm1', code: 'attribution_drift', message: 'x',
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
+    store.dispatch(
+      analysisActions.setHalted({
+        manuscriptId: 'm1',
+        code: 'attribution_drift',
+        message: 'x',
+      }),
+    );
     expect(captured[0]?.signal.aborted).toBe(true);
   });
 
   it('dispatches phase ticks from the SSE onPhase callback', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     lastCall().onPhase?.({ phaseId: 1, progress: 0.42 });
     const snap = store.getState().analysis.activeStream;
     expect(snap?.phaseId).toBe(1);
@@ -291,9 +349,13 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('dispatches ETA ticks from the SSE onEta callback', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     lastCall().onEta?.({ remainingMs: 12345 });
     expect(store.getState().analysis.activeStream?.remainingMs).toBe(12345);
   });
@@ -301,9 +363,13 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('dispatches setSeriesPrior from the SSE onSeriesPrior callback', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     lastCall().onSeriesPrior?.({ count: 3, names: ['Sophie', 'Keefe', 'Biana'] });
     const snap = store.getState().analysis.activeStream;
     expect(snap?.seriesPrior).toEqual({ count: 3, names: ['Sophie', 'Keefe', 'Biana'] });
@@ -312,9 +378,13 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('clears the snapshot when the SSE resolves cleanly (terminal result)', async () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     lastCall().resolve();
     /* Let the catch/then chain settle. */
     await Promise.resolve();
@@ -325,9 +395,13 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('flips state to paused when the SSE rejects with AnalysisError code=aborted', async () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     lastCall().reject(new AnalysisError('paused', 'aborted'));
     await Promise.resolve();
     await Promise.resolve();
@@ -337,9 +411,13 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('flips state to halted when the SSE rejects with AnalysisError code=attribution_drift', async () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     lastCall().reject(new AnalysisError('drift', 'attribution_drift'));
     await Promise.resolve();
     await Promise.resolve();
@@ -351,9 +429,13 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('does NOT poison the snapshot when an AbortError surfaces from the SSE (clean cancel)', async () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     /* setPaused aborts the SSE — the rejection lands as an AbortError
        (the fetch consumer surfaces it that way). The middleware must
        swallow it; setPaused already updated state to 'paused' via
@@ -368,22 +450,32 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
   it('handles cross-manuscript displacement (close old handle, open new on first tick)', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     expect(captured).toHaveLength(1);
     const firstSignal = captured[0]?.signal;
 
     /* New analysis on a different manuscript. setActiveStream lands;
        middleware closes the old handle. New handle opens on its own
        first tick. */
-    store.dispatch(analysisActions.setActiveStream({ ...baseSnapshot, manuscriptId: 'm2', bookId: 'b2' }));
+    store.dispatch(
+      analysisActions.setActiveStream({ ...baseSnapshot, manuscriptId: 'm2', bookId: 'b2' }),
+    );
     expect(firstSignal?.aborted).toBe(true);
-    expect(captured).toHaveLength(1);  // no new SSE yet
+    expect(captured).toHaveLength(1); // no new SSE yet
 
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm2', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm2',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     expect(captured).toHaveLength(2);
     expect(captured[1]?.manuscriptId).toBe('m2');
   });
@@ -396,13 +488,19 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
        resolution. */
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     const firstCall = lastCall();
     /* Displace: new manuscript snapshot. Middleware aborts the old
        SSE — the AbortError catches in the IIFE swallow it. */
-    store.dispatch(analysisActions.setActiveStream({ ...baseSnapshot, manuscriptId: 'm2', bookId: 'b2' }));
+    store.dispatch(
+      analysisActions.setActiveStream({ ...baseSnapshot, manuscriptId: 'm2', bookId: 'b2' }),
+    );
     /* Resolve the OLD call cleanly (simulating a race where the server
        sent `result` just before our abort landed). The middleware
        must notice it's been displaced and NOT clear the m2 snapshot. */
@@ -435,9 +533,13 @@ describe('analysisStreamMiddleware — subset-retry route (plan 32 follow-up)', 
   it('routes the subscribe POST to runAnalysisForChapters when kind === subset', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     expect(runAnalysisForChaptersMock).toHaveBeenCalledTimes(1);
     expect(analyseManuscriptMock).not.toHaveBeenCalled();
     const args = runAnalysisForChaptersMock.mock.calls[0];
@@ -450,9 +552,13 @@ describe('analysisStreamMiddleware — subset-retry route (plan 32 follow-up)', 
   it('stays on the main route when kind is undefined (legacy snapshot)', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     expect(analyseManuscriptMock).toHaveBeenCalledTimes(1);
     expect(runAnalysisForChaptersMock).not.toHaveBeenCalled();
   });
@@ -460,9 +566,13 @@ describe('analysisStreamMiddleware — subset-retry route (plan 32 follow-up)', 
   it('dispatches phase ticks from the subset SSE onPhase callback', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     lastCall().onPhase?.({ phaseId: 1, progress: 0.42 });
     const snap = store.getState().analysis.activeStream;
     expect(snap?.phaseId).toBe(1);
@@ -472,9 +582,13 @@ describe('analysisStreamMiddleware — subset-retry route (plan 32 follow-up)', 
   it('closes the subset handle on setPaused', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     expect(captured[0]?.signal.aborted).toBe(false);
     store.dispatch(analysisActions.setPaused({ manuscriptId: 'm1' }));
     expect(captured[0]?.signal.aborted).toBe(true);
@@ -488,9 +602,13 @@ describe('analysisStreamMiddleware — subset-retry route (plan 32 follow-up)', 
        subset one on the next tick) rather than no-op. */
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     expect(analyseManuscriptMock).toHaveBeenCalledTimes(1);
     const mainSignal = captured[0]?.signal;
 
@@ -501,9 +619,13 @@ describe('analysisStreamMiddleware — subset-retry route (plan 32 follow-up)', 
     expect(mainSignal?.aborted).toBe(true);
     expect(captured).toHaveLength(1);
 
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     expect(runAnalysisForChaptersMock).toHaveBeenCalledTimes(1);
     expect(captured).toHaveLength(2);
     expect(captured[1]?.kind).toBe('subset');
@@ -518,13 +640,19 @@ describe('analysisStreamMiddleware — subset-retry route (plan 32 follow-up)', 
        the server will 400 the request and the middleware's error
        handler will surface the error via setHalted. */
     const store = buildStore();
-    store.dispatch(analysisActions.setActiveStream({
-      ...subsetSnapshot,
-      subsetChapterIds: undefined,
-    }));
-    store.dispatch(analysisActions.applyAnalysisSnapshotTick({
-      manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1,
-    }));
+    store.dispatch(
+      analysisActions.setActiveStream({
+        ...subsetSnapshot,
+        subsetChapterIds: undefined,
+      }),
+    );
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
     expect(runAnalysisForChaptersMock).toHaveBeenCalledTimes(1);
     expect(runAnalysisForChaptersMock.mock.calls[0][1]).toEqual([]);
   });

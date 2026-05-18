@@ -13,9 +13,9 @@ owner: null
 
 ## Benefit / Rationale
 
-- **User (developer-facing):** `git log --grep="(sidecar)"` returns a clean area history without hand-curation. `git blame` lines carry a scope tag so the *why* of any line is one step away from the *what*.
+- **User (developer-facing):** `git log --grep="(sidecar)"` returns a clean area history without hand-curation. `git blame` lines carry a scope tag so the _why_ of any line is one step away from the _what_.
 - **Technical:** A pre-commit-msg gate makes drift impossible — the convention is either followed or the commit doesn't land. Branch naming mirrors commit scope, so `git branch --list 'feat/server-*'` gives the open server work at a glance.
-- **Architectural:** Forces every change to declare which area it touches *before* it merges. Parallel-agent work in disjoint scopes (e.g. `frontend` + `sidecar`) collides far less often because the scope vocabulary names the disjoint file sets explicitly. The reconciliation pattern (`integration/<date>` branch, verify between merges) gives a single chokepoint for resolving cross-scope conflicts rather than letting them spread across N feature branches.
+- **Architectural:** Forces every change to declare which area it touches _before_ it merges. Parallel-agent work in disjoint scopes (e.g. `frontend` + `sidecar`) collides far less often because the scope vocabulary names the disjoint file sets explicitly. The reconciliation pattern (`integration/<date>` branch, verify between merges) gives a single chokepoint for resolving cross-scope conflicts rather than letting them spread across N feature branches.
 
 ## Architectural impact
 

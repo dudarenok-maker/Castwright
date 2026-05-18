@@ -14,7 +14,12 @@ import { IconClose, IconImage, IconRefresh } from '../lib/icons';
 import { api, UploadCoverError } from '../lib/api';
 import { useAppSelector } from '../store';
 import type { CoverCandidate } from '../lib/types';
-import { type CoverFraming, DEFAULT_FRAMING, clampFraming, computeCoverStyle } from '../lib/cover-framing';
+import {
+  type CoverFraming,
+  DEFAULT_FRAMING,
+  clampFraming,
+  computeCoverStyle,
+} from '../lib/cover-framing';
 
 interface Props {
   open: boolean;
@@ -52,9 +57,19 @@ const MAX_UPLOAD_MB = 10;
 const FRAMING_DEBOUNCE_MS = 300;
 
 export function CoverPicker(props: Props) {
-  const { open, bookId, bookTitle, bookAuthor, currentCoverUrl, currentFraming, onClose, onPicked, onFramingChanged } = props;
+  const {
+    open,
+    bookId,
+    bookTitle,
+    bookAuthor,
+    currentCoverUrl,
+    currentFraming,
+    onClose,
+    onPicked,
+    onFramingChanged,
+  } = props;
 
-  const accountDefaultTab = useAppSelector(s => s.account.coverPickerDefaultTab ?? 'search');
+  const accountDefaultTab = useAppSelector((s) => s.account.coverPickerDefaultTab ?? 'search');
   const [tab, setTab] = useState<TabKey>(accountDefaultTab === 'upload' ? 'upload' : 'search');
 
   /* Search-tab state */
@@ -157,9 +172,8 @@ export function CoverPicker(props: Props) {
       onPicked(coverImageUrl);
       setTab('frame');
     } catch (e) {
-      const msg = e instanceof UploadCoverError
-        ? e.message
-        : (e as Error).message || 'Cover upload failed.';
+      const msg =
+        e instanceof UploadCoverError ? e.message : (e as Error).message || 'Cover upload failed.';
       setUploadError(msg);
     } finally {
       setUploading(false);
@@ -169,11 +183,14 @@ export function CoverPicker(props: Props) {
   function scheduleFramingPatch(next: CoverFraming) {
     if (framingTimer.current) clearTimeout(framingTimer.current);
     framingTimer.current = setTimeout(() => {
-      void api.patchCoverFraming(bookId, next).then(() => {
-        onFramingChanged?.(next);
-      }).catch(() => {
-        /* Swallow — framing is a polish op; failures don't get a banner. */
-      });
+      void api
+        .patchCoverFraming(bookId, next)
+        .then(() => {
+          onFramingChanged?.(next);
+        })
+        .catch(() => {
+          /* Swallow — framing is a polish op; failures don't get a banner. */
+        });
     }, FRAMING_DEBOUNCE_MS);
   }
 
@@ -192,34 +209,59 @@ export function CoverPicker(props: Props) {
 
   return (
     <>
-      <div onClick={busy ? undefined : onClose} className="fixed inset-0 bg-ink/40 z-50 fade-in"/>
+      <div onClick={busy ? undefined : onClose} className="fixed inset-0 bg-ink/40 z-50 fade-in" />
       <div className="fixed inset-0 z-50 grid place-items-center p-6 pointer-events-none">
-        <div data-testid="cover-picker"
-             className="bg-white rounded-3xl shadow-float w-full max-w-2xl pointer-events-auto fade-in overflow-hidden">
+        <div
+          data-testid="cover-picker"
+          className="bg-white rounded-3xl shadow-float w-full max-w-2xl pointer-events-auto fade-in overflow-hidden"
+        >
           <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
             <span className="w-9 h-9 rounded-full bg-peach/15 grid place-items-center text-magenta shrink-0">
-              <IconImage className="w-4 h-4"/>
+              <IconImage className="w-4 h-4" />
             </span>
             <div className="flex-1 min-w-0">
-              <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">Cover image</p>
+              <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
+                Cover image
+              </p>
               <h3 className="text-base font-bold text-ink truncate">{bookTitle}</h3>
             </div>
-            <button onClick={onClose} disabled={busy}
-                    className="p-2 rounded-full hover:bg-ink/5 text-ink/60 disabled:opacity-40 disabled:cursor-not-allowed"
-                    aria-label="Close">
-              <IconClose className="w-4 h-4"/>
+            <button
+              onClick={onClose}
+              disabled={busy}
+              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 disabled:opacity-40 disabled:cursor-not-allowed"
+              aria-label="Close"
+            >
+              <IconClose className="w-4 h-4" />
             </button>
           </div>
 
-          <div role="tablist" aria-label="Cover picker tabs"
-               className="px-6 pt-3 border-b border-ink/10 flex items-center gap-1 text-sm">
-            <TabButton id="tab-search" active={tab === 'search'} onClick={() => setTab('search')} disabled={busy}>
+          <div
+            role="tablist"
+            aria-label="Cover picker tabs"
+            className="px-6 pt-3 border-b border-ink/10 flex items-center gap-1 text-sm"
+          >
+            <TabButton
+              id="tab-search"
+              active={tab === 'search'}
+              onClick={() => setTab('search')}
+              disabled={busy}
+            >
               Search OpenLibrary
             </TabButton>
-            <TabButton id="tab-upload" active={tab === 'upload'} onClick={() => setTab('upload')} disabled={busy}>
+            <TabButton
+              id="tab-upload"
+              active={tab === 'upload'}
+              onClick={() => setTab('upload')}
+              disabled={busy}
+            >
               Upload
             </TabButton>
-            <TabButton id="tab-frame" active={tab === 'frame'} onClick={() => setTab('frame')} disabled={busy || !hasCover}>
+            <TabButton
+              id="tab-frame"
+              active={tab === 'frame'}
+              onClick={() => setTab('frame')}
+              disabled={busy || !hasCover}
+            >
               Frame
             </TabButton>
           </div>
@@ -256,21 +298,39 @@ export function CoverPicker(props: Props) {
           <div className="px-6 py-4 border-t border-ink/10 flex items-center justify-between gap-3 flex-wrap">
             <p className="text-[11px] text-ink/50">
               {tab === 'search' && (
-                <>Covers from <a className="underline" href="https://openlibrary.org" target="_blank" rel="noreferrer">OpenLibrary</a>. Click a cover to use it.</>
+                <>
+                  Covers from{' '}
+                  <a
+                    className="underline"
+                    href="https://openlibrary.org"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    OpenLibrary
+                  </a>
+                  . Click a cover to use it.
+                </>
               )}
-              {tab === 'upload' && <>JPEG or PNG, up to {MAX_UPLOAD_MB} MB. PNGs are converted to JPEG.</>}
+              {tab === 'upload' && (
+                <>JPEG or PNG, up to {MAX_UPLOAD_MB} MB. PNGs are converted to JPEG.</>
+              )}
               {tab === 'frame' && <>Drag and zoom to reframe. Saves automatically.</>}
             </p>
             <div className="flex items-center gap-3">
               {currentCoverUrl && (
-                <button onClick={() => void remove()}
-                        disabled={busy}
-                        className="text-sm font-medium text-red-700 hover:text-red-800 disabled:opacity-40 disabled:cursor-not-allowed">
+                <button
+                  onClick={() => void remove()}
+                  disabled={busy}
+                  className="text-sm font-medium text-red-700 hover:text-red-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
                   Remove cover
                 </button>
               )}
-              <button onClick={onClose} disabled={busy}
-                      className="text-sm font-medium text-ink/60 hover:text-ink disabled:opacity-40 disabled:cursor-not-allowed">
+              <button
+                onClick={onClose}
+                disabled={busy}
+                className="text-sm font-medium text-ink/60 hover:text-ink disabled:opacity-40 disabled:cursor-not-allowed"
+              >
                 Cancel
               </button>
             </div>
@@ -281,7 +341,13 @@ export function CoverPicker(props: Props) {
   );
 }
 
-function TabButton({ id, active, disabled, onClick, children }: {
+function TabButton({
+  id,
+  active,
+  disabled,
+  onClick,
+  children,
+}: {
   id: string;
   active: boolean;
   disabled?: boolean;
@@ -296,13 +362,22 @@ function TabButton({ id, active, disabled, onClick, children }: {
       data-testid={id}
       onClick={onClick}
       disabled={disabled}
-      className={`px-3 py-2 border-b-2 -mb-px font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${active ? 'border-magenta text-ink' : 'border-transparent text-ink/55 hover:text-ink'}`}>
+      className={`px-3 py-2 border-b-2 -mb-px font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${active ? 'border-magenta text-ink' : 'border-transparent text-ink/55 hover:text-ink'}`}
+    >
       {children}
     </button>
   );
 }
 
-function SearchPanel({ state, bookTitle, bookAuthor, busy, submitting, onPick, onRetry }: {
+function SearchPanel({
+  state,
+  bookTitle,
+  bookAuthor,
+  busy,
+  submitting,
+  onPick,
+  onRetry,
+}: {
   state: LoadState;
   bookTitle: string;
   bookAuthor: string;
@@ -313,26 +388,33 @@ function SearchPanel({ state, bookTitle, bookAuthor, busy, submitting, onPick, o
 }) {
   return (
     <>
-      {state.kind === 'loading' && <CoverGridSkeleton/>}
+      {state.kind === 'loading' && <CoverGridSkeleton />}
       {state.kind === 'error' && (
         <div className="py-6 text-center">
           <p className="text-sm text-red-700 mb-4">{state.message}</p>
-          <button onClick={onRetry}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink hover:bg-ink/[0.04]">
-            <IconRefresh className="w-4 h-4"/> Try again
+          <button
+            onClick={onRetry}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink hover:bg-ink/[0.04]"
+          >
+            <IconRefresh className="w-4 h-4" /> Try again
           </button>
         </div>
       )}
       {state.kind === 'ready' && state.candidates.length === 0 && (
         <p className="py-10 text-center text-sm text-ink/60">
           No covers found for <span className="font-semibold text-ink">{bookTitle}</span>
-          {bookAuthor ? <> by <span className="font-semibold text-ink">{bookAuthor}</span></> : null}
-          {' '}on OpenLibrary.
+          {bookAuthor ? (
+            <>
+              {' '}
+              by <span className="font-semibold text-ink">{bookAuthor}</span>
+            </>
+          ) : null}{' '}
+          on OpenLibrary.
         </p>
       )}
       {state.kind === 'ready' && state.candidates.length > 0 && (
         <div data-testid="cover-grid" className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {state.candidates.map(c => (
+          {state.candidates.map((c) => (
             <button
               key={c.openLibraryId}
               data-testid={`cover-candidate-${c.openLibraryId}`}
@@ -359,7 +441,11 @@ function SearchPanel({ state, bookTitle, bookAuthor, busy, submitting, onPick, o
   );
 }
 
-function UploadPanel({ uploading, error, onPick }: {
+function UploadPanel({
+  uploading,
+  error,
+  onPick,
+}: {
   uploading: boolean;
   error: string | null;
   onPick: (f: File) => void;
@@ -371,7 +457,10 @@ function UploadPanel({ uploading, error, onPick }: {
     <div className="py-2">
       <div
         data-testid="upload-dropzone"
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => {
           e.preventDefault();
@@ -381,15 +470,14 @@ function UploadPanel({ uploading, error, onPick }: {
         }}
         className={`relative rounded-2xl border-2 border-dashed py-12 px-6 text-center transition-colors ${dragOver ? 'border-magenta bg-magenta/[0.04]' : 'border-ink/15 bg-canvas'} ${uploading ? 'opacity-70 pointer-events-none' : ''}`}
       >
-        <IconImage className="w-8 h-8 mx-auto text-ink/30"/>
-        <p className="mt-3 text-sm text-ink/70">
-          Drag and drop a cover image here, or
-        </p>
+        <IconImage className="w-8 h-8 mx-auto text-ink/30" />
+        <p className="mt-3 text-sm text-ink/70">Drag and drop a cover image here, or</p>
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
           disabled={uploading}
-          className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/20 bg-white text-sm font-semibold text-ink hover:bg-ink/[0.04] disabled:opacity-50">
+          className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/20 bg-white text-sm font-semibold text-ink hover:bg-ink/[0.04] disabled:opacity-50"
+        >
           {uploading ? 'Uploading…' : 'Choose file'}
         </button>
         <input
@@ -405,18 +493,23 @@ function UploadPanel({ uploading, error, onPick }: {
             e.target.value = '';
           }}
         />
-        <p className="mt-3 text-[11px] text-ink/45">
-          JPEG or PNG · max {MAX_UPLOAD_MB} MB
-        </p>
+        <p className="mt-3 text-[11px] text-ink/45">JPEG or PNG · max {MAX_UPLOAD_MB} MB</p>
       </div>
       {error && (
-        <p data-testid="upload-error" className="mt-3 text-sm text-red-700">{error}</p>
+        <p data-testid="upload-error" className="mt-3 text-sm text-red-700">
+          {error}
+        </p>
       )}
     </div>
   );
 }
 
-function FramePanel({ coverUrl, framing, onChange, onReset }: {
+function FramePanel({
+  coverUrl,
+  framing,
+  onChange,
+  onReset,
+}: {
   coverUrl: string;
   framing: CoverFraming;
   onChange: (f: CoverFraming) => void;
@@ -515,7 +608,7 @@ function CoverGridSkeleton() {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3" aria-hidden>
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="rounded-2xl bg-ink/[0.06] aspect-[2/3] pulse-bar"/>
+        <div key={i} className="rounded-2xl bg-ink/[0.06] aspect-[2/3] pulse-bar" />
       ))}
     </div>
   );

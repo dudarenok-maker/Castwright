@@ -19,7 +19,7 @@ import type { Revision, Chapter, Character, ChapterAudio } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
-    getChapterAudio:         vi.fn(),
+    getChapterAudio: vi.fn(),
     getChapterAudioPrevious: vi.fn(),
   },
 }));
@@ -75,15 +75,17 @@ beforeEach(() => {
   vi.clearAllMocks();
   (api.getChapterAudio as ReturnType<typeof vi.fn>).mockResolvedValue(audioMeta('blob:b'));
   (api.getChapterAudioPrevious as ReturnType<typeof vi.fn>).mockResolvedValue(audioMeta('blob:a'));
-  basePlay = vi.spyOn(HTMLMediaElement.prototype, 'play')
-    .mockImplementation(function (this: HTMLMediaElement) {
-      Object.defineProperty(this, 'paused', { value: false, configurable: true, writable: true });
-      return Promise.resolve();
-    });
-  basePause = vi.spyOn(HTMLMediaElement.prototype, 'pause')
-    .mockImplementation(function (this: HTMLMediaElement) {
-      Object.defineProperty(this, 'paused', { value: true, configurable: true, writable: true });
-    });
+  basePlay = vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (
+    this: HTMLMediaElement,
+  ) {
+    Object.defineProperty(this, 'paused', { value: false, configurable: true, writable: true });
+    return Promise.resolve();
+  });
+  basePause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(function (
+    this: HTMLMediaElement,
+  ) {
+    Object.defineProperty(this, 'paused', { value: true, configurable: true, writable: true });
+  });
 });
 
 afterEach(() => {
@@ -170,12 +172,28 @@ describe('RevisionDiffPlayer', () => {
   });
 
   it('calls onAccept with the captured selection map when Commit selection clicks', () => {
-    const { onAccept } = renderPlayer(makeRevision({
-      segments: [
-        { id: 1, text: 'Hello.', changed: true,  oldDuration: '00:01', newDuration: '00:01', narratorOnly: false },
-        { id: 2, text: 'World.', changed: false, oldDuration: '00:01', newDuration: '00:01', narratorOnly: false },
-      ],
-    }));
+    const { onAccept } = renderPlayer(
+      makeRevision({
+        segments: [
+          {
+            id: 1,
+            text: 'Hello.',
+            changed: true,
+            oldDuration: '00:01',
+            newDuration: '00:01',
+            narratorOnly: false,
+          },
+          {
+            id: 2,
+            text: 'World.',
+            changed: false,
+            oldDuration: '00:01',
+            newDuration: '00:01',
+            narratorOnly: false,
+          },
+        ],
+      }),
+    );
     fireEvent.click(screen.getByRole('button', { name: /Commit selection/i }));
     expect(onAccept).toHaveBeenCalledTimes(1);
     /* Initial selection: changed segments → 'B', unchanged → 'A'. */

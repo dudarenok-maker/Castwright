@@ -42,9 +42,7 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:5174',
     trace: 'retain-on-failure',
   },
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-  ],
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
     /* `--mode e2e` makes Vite load .env.e2e (VITE_USE_MOCKS=true) instead
        of .env.development. We deliberately avoid `--mode test` because

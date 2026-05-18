@@ -68,9 +68,9 @@ export interface FoldResult {
 
 const MIN_LINES_DEFAULT = 3;
 
-export const MALE_BUCKET_ID   = 'unknown-male';
+export const MALE_BUCKET_ID = 'unknown-male';
 export const FEMALE_BUCKET_ID = 'unknown-female';
-const NARRATOR_ID      = 'narrator';
+const NARRATOR_ID = 'narrator';
 
 /* Generic-role nouns that, when they appear as the LAST word of a
    character name preceded by at least one other word, indicate a
@@ -81,8 +81,17 @@ const NARRATOR_ID      = 'narrator';
    "<adj> Doctor" / "<adj> Captain" extension is easy if observed in
    real runs. */
 const GENERIC_ROLE_TAIL = new Set([
-  'boy', 'girl', 'man', 'woman', 'guy', 'lady', 'kid',
-  'person', 'figure', 'stranger', 'voice',
+  'boy',
+  'girl',
+  'man',
+  'woman',
+  'guy',
+  'lady',
+  'kid',
+  'person',
+  'figure',
+  'stranger',
+  'voice',
 ]);
 
 /* Decides whether a character's `name` reads as a descriptor rather
@@ -132,7 +141,8 @@ export function makeBucket(id: string, gender: 'male' | 'female'): CharacterOutp
     role: 'background',
     color: 'narrator',
     gender,
-    description: `Composite voice covering one-off ${label} bystanders, ` +
+    description:
+      `Composite voice covering one-off ${label} bystanders, ` +
       `intruders, joggers, and similar background speakers who only have ` +
       `a handful of lines. Folded automatically at analysis time so they ` +
       `share a single generic voice instead of consuming one cast slot each.`,
@@ -202,21 +212,21 @@ export function foldMinorCast(
   }
 
   /* Rewrite sentence character ids. */
-  const rewrittenSentences = sentences.map(s =>
+  const rewrittenSentences = sentences.map((s) =>
     rewrites[s.characterId] ? { ...s, characterId: rewrites[s.characterId] } : s,
   );
 
   /* Determine which buckets actually received folds. */
   const targets = new Set(Object.values(rewrites));
-  const needMale     = targets.has(MALE_BUCKET_ID);
-  const needFemale   = targets.has(FEMALE_BUCKET_ID);
+  const needMale = targets.has(MALE_BUCKET_ID);
+  const needFemale = targets.has(FEMALE_BUCKET_ID);
 
   /* Existing characters minus folded ones AND dropped ones, narrator
      preserved in place. */
-  const survivors = characters.filter(c => !(c.id in rewrites) && !droppedIds.has(c.id));
+  const survivors = characters.filter((c) => !(c.id in rewrites) && !droppedIds.has(c.id));
 
   /* Synthesise missing buckets (or re-use if already present in the input). */
-  const survivorById = new Map(survivors.map(c => [c.id, c]));
+  const survivorById = new Map(survivors.map((c) => [c.id, c]));
   if (needMale && !survivorById.has(MALE_BUCKET_ID)) {
     const bucket = makeBucket(MALE_BUCKET_ID, 'male');
     survivors.push(bucket);
@@ -238,7 +248,7 @@ export function foldMinorCast(
     if (!target) continue;
     const seen = new Set<string>([
       target.name.toLowerCase(),
-      ...(target.aliases ?? []).map(a => a.toLowerCase()),
+      ...(target.aliases ?? []).map((a) => a.toLowerCase()),
     ]);
     const next = [...(target.aliases ?? [])];
     const add = (name: string) => {
@@ -255,24 +265,28 @@ export function foldMinorCast(
   /* Recompute lines/scenes on every surviving character from the rewritten
      sentence list — buckets need accurate counts, and folded-source counts
      have to roll up. */
-  const lines  = new Map<string, number>();
+  const lines = new Map<string, number>();
   const scenes = new Map<string, Set<number>>();
   for (const s of rewrittenSentences) {
     lines.set(s.characterId, (lines.get(s.characterId) ?? 0) + 1);
     let set = scenes.get(s.characterId);
-    if (!set) { set = new Set(); scenes.set(s.characterId, set); }
+    if (!set) {
+      set = new Set();
+      scenes.set(s.characterId, set);
+    }
     set.add(s.chapterId);
   }
-  const withCounts = survivors.map(c => ({
+  const withCounts = survivors.map((c) => ({
     ...c,
-    lines:  lines.get(c.id)  ?? c.lines  ?? 0,
+    lines: lines.get(c.id) ?? c.lines ?? 0,
     scenes: scenes.get(c.id)?.size ?? c.scenes ?? 0,
   }));
 
   /* Summary counters for the log line. */
-  let intoMale = 0, intoFemale = 0;
+  let intoMale = 0,
+    intoFemale = 0;
   for (const target of Object.values(rewrites)) {
-    if (target === MALE_BUCKET_ID)        intoMale++;
+    if (target === MALE_BUCKET_ID) intoMale++;
     else if (target === FEMALE_BUCKET_ID) intoFemale++;
   }
 

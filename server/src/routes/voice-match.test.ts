@@ -63,10 +63,7 @@ function writeBookOnDisk(
     }),
   );
   writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
-  writeFileSync(
-    join(bookDir, '.audiobook', 'cast.json'),
-    JSON.stringify({ characters: cast }),
-  );
+  writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters: cast }));
 }
 
 beforeAll(async () => {
@@ -80,40 +77,71 @@ beforeAll(async () => {
   makeBookIdFn = makeBookId;
 
   /* Book 1 — confirmed; contains Keefe with an alias and a Sophie. */
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, 'Book One',
+  writeBookOnDisk(
+    workspaceRoot,
+    AUTHOR,
+    SERIES,
+    'Book One',
     makeBookId(AUTHOR, SERIES, 'Book One'),
     [
-      { id: 'keefe',  name: 'Keefe',         voiceId: 'v_keefe',
-        aliases: ['Lord Hunkyhair'], attributes: ['playful', 'sarcastic'],
-        gender: 'male',   ageRange: 'teen' },
-      { id: 'sophie', name: 'Sophie Foster', voiceId: 'v_sophie',
+      {
+        id: 'keefe',
+        name: 'Keefe',
+        voiceId: 'v_keefe',
+        aliases: ['Lord Hunkyhair'],
+        attributes: ['playful', 'sarcastic'],
+        gender: 'male',
+        ageRange: 'teen',
+      },
+      {
+        id: 'sophie',
+        name: 'Sophie Foster',
+        voiceId: 'v_sophie',
         attributes: ['curious', 'brave'],
-        gender: 'female', ageRange: 'teen' },
+        gender: 'female',
+        ageRange: 'teen',
+      },
     ],
     true,
   );
 
   /* Book 2 — confirmed; contains a second Keefe with stronger attribute
      overlap, plus a Grady (no overlap with anything in book-3 requests). */
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, 'Book Two',
+  writeBookOnDisk(
+    workspaceRoot,
+    AUTHOR,
+    SERIES,
+    'Book Two',
     makeBookId(AUTHOR, SERIES, 'Book Two'),
     [
-      { id: 'keefe',  name: 'Keefe Sencen',  voiceId: 'v_keefe_alt',
+      {
+        id: 'keefe',
+        name: 'Keefe Sencen',
+        voiceId: 'v_keefe_alt',
         attributes: ['playful', 'rebellious', 'empath'],
-        gender: 'male',   ageRange: 'teen' },
-      { id: 'grady',  name: 'Grady Ruewen',  voiceId: 'v_grady',
+        gender: 'male',
+        ageRange: 'teen',
+      },
+      {
+        id: 'grady',
+        name: 'Grady Ruewen',
+        voiceId: 'v_grady',
         attributes: ['gruff'],
-        gender: 'male',   ageRange: 'adult' },
+        gender: 'male',
+        ageRange: 'adult',
+      },
     ],
     true,
   );
 
   /* Book 3 — unconfirmed; voices here must NEVER appear in candidates. */
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, 'Book Three Unconfirmed',
+  writeBookOnDisk(
+    workspaceRoot,
+    AUTHOR,
+    SERIES,
+    'Book Three Unconfirmed',
     makeBookId(AUTHOR, SERIES, 'Book Three Unconfirmed'),
-    [
-      { id: 'fitz', name: 'Fitz', voiceId: 'v_fitz_wip', gender: 'male', ageRange: 'teen' },
-    ],
+    [{ id: 'fitz', name: 'Fitz', voiceId: 'v_fitz_wip', gender: 'male', ageRange: 'teen' }],
     false,
   );
 
@@ -142,8 +170,13 @@ describe('voice-match router', () => {
   it('returns empty matches when the library has nothing useful', async () => {
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'newperson', name: 'Some Random Stranger',
-          attributes: [], gender: 'female', ageRange: 'adult' },
+        {
+          id: 'newperson',
+          name: 'Some Random Stranger',
+          attributes: [],
+          gender: 'female',
+          ageRange: 'adult',
+        },
       ],
     });
     expect(res.status).toBe(200);
@@ -156,9 +189,13 @@ describe('voice-match router', () => {
   it('exact-name hit: Keefe vs library Keefe → name_exact factor, score ≥ 0.9', async () => {
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'keefe', name: 'Keefe',
+        {
+          id: 'keefe',
+          name: 'Keefe',
           attributes: ['playful', 'sarcastic'],
-          gender: 'male', ageRange: 'teen' },
+          gender: 'male',
+          ageRange: 'teen',
+        },
       ],
     });
     expect(res.status).toBe(200);
@@ -182,15 +219,16 @@ describe('voice-match router', () => {
        we want the only library Keefe to be the single-token "Keefe" from Book One. */
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'keefe', name: 'Keefe Sencen',
-          attributes: [], gender: 'male', ageRange: 'teen' },
+        { id: 'keefe', name: 'Keefe Sencen', attributes: [], gender: 'male', ageRange: 'teen' },
       ],
     });
     expect(res.status).toBe(200);
     const m = res.body.matches[0];
     /* Both "Keefe" (Book One) and "Keefe Sencen" (Book Two, exact) appear.
        Pick the candidate that came from Book One — its factor should be name_tokens. */
-    const fromBookOne = m.candidates.find((c: { fromBookTitle: string }) => c.fromBookTitle === 'Book One');
+    const fromBookOne = m.candidates.find(
+      (c: { fromBookTitle: string }) => c.fromBookTitle === 'Book One',
+    );
     expect(fromBookOne).toBeDefined();
     const ids = fromBookOne!.factors.map((f: { id: string }) => f.id);
     expect(ids).toContain('name_tokens');
@@ -200,8 +238,13 @@ describe('voice-match router', () => {
   it('alias hit on the library side: "Lord Hunkyhair" → name_exact via library aliases', async () => {
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'lordhunkyhair', name: 'Lord Hunkyhair',
-          attributes: [], gender: 'male', ageRange: 'teen' },
+        {
+          id: 'lordhunkyhair',
+          name: 'Lord Hunkyhair',
+          attributes: [],
+          gender: 'male',
+          ageRange: 'teen',
+        },
       ],
     });
     expect(res.status).toBe(200);
@@ -219,8 +262,7 @@ describe('voice-match router', () => {
        Floor (nameScore < 0.34) must drop every library voice. */
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'bronte', name: 'Bronte',
-          attributes: ['stern'], gender: 'male', ageRange: 'adult' },
+        { id: 'bronte', name: 'Bronte', attributes: ['stern'], gender: 'male', ageRange: 'adult' },
       ],
     });
     expect(res.status).toBe(200);
@@ -234,25 +276,21 @@ describe('voice-match router', () => {
     const bookOneId = makeBookIdFn(AUTHOR, SERIES, 'Book One');
     const res = await callMatch(bookOneId, {
       characters: [
-        { id: 'keefe', name: 'Keefe',
-          attributes: ['playful'], gender: 'male', ageRange: 'teen' },
+        { id: 'keefe', name: 'Keefe', attributes: ['playful'], gender: 'male', ageRange: 'teen' },
       ],
     });
     expect(res.status).toBe(200);
     const m = res.body.matches[0];
     const voiceIds = m.candidates.map((c: { voiceId: string }) => c.voiceId);
-    expect(voiceIds).not.toContain('v_keefe');     // own book excluded
-    expect(voiceIds).toContain('v_keefe_alt');     // other book still in
+    expect(voiceIds).not.toContain('v_keefe'); // own book excluded
+    expect(voiceIds).toContain('v_keefe_alt'); // other book still in
   });
 
   it('unconfirmed books are excluded from the library', async () => {
     /* Book Three (Fitz) is castConfirmed: false. Even an exact-name request
        for Fitz must return empty candidates. */
     const res = await callMatch(CURRENT_BOOK_ID, {
-      characters: [
-        { id: 'fitz', name: 'Fitz',
-          attributes: [], gender: 'male', ageRange: 'teen' },
-      ],
+      characters: [{ id: 'fitz', name: 'Fitz', attributes: [], gender: 'male', ageRange: 'teen' }],
     });
     expect(res.status).toBe(200);
     expect(res.body.matches[0].candidates).toEqual([]);
@@ -261,8 +299,7 @@ describe('voice-match router', () => {
   it('libraryVoiceIds allow-list restricts candidates to the listed voices', async () => {
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'keefe', name: 'Keefe',
-          attributes: [], gender: 'male', ageRange: 'teen' },
+        { id: 'keefe', name: 'Keefe', attributes: [], gender: 'male', ageRange: 'teen' },
       ],
       libraryVoiceIds: ['v_keefe_alt'],
     });
@@ -279,14 +316,19 @@ describe('voice-match router', () => {
        rank above token-overlap. */
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'keefe', name: 'Keefe Sencen',
-          attributes: ['playful'], gender: 'male', ageRange: 'teen' },
+        {
+          id: 'keefe',
+          name: 'Keefe Sencen',
+          attributes: ['playful'],
+          gender: 'male',
+          ageRange: 'teen',
+        },
       ],
     });
     expect(res.status).toBe(200);
     const m = res.body.matches[0];
     expect(m.candidates.length).toBeGreaterThanOrEqual(2);
-    expect(m.candidates[0].voiceId).toBe('v_keefe_alt');   // Book Two — exact
+    expect(m.candidates[0].voiceId).toBe('v_keefe_alt'); // Book Two — exact
     expect(m.candidates[0].score).toBeGreaterThan(m.candidates[1].score);
     /* The runner-up is Book One's Keefe (token-overlap). */
     expect(m.candidates[1].voiceId).toBe('v_keefe');
@@ -295,16 +337,25 @@ describe('voice-match router', () => {
   it('processes every input character, even when some have no candidates', async () => {
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'keefe',     name: 'Keefe',     attributes: [], gender: 'male',   ageRange: 'teen' },
-        { id: 'nobody',    name: 'Some Random Stranger', attributes: [], gender: 'female', ageRange: 'adult' },
-        { id: 'sophie',    name: 'Sophie',    attributes: [], gender: 'female', ageRange: 'teen' },
+        { id: 'keefe', name: 'Keefe', attributes: [], gender: 'male', ageRange: 'teen' },
+        {
+          id: 'nobody',
+          name: 'Some Random Stranger',
+          attributes: [],
+          gender: 'female',
+          ageRange: 'adult',
+        },
+        { id: 'sophie', name: 'Sophie', attributes: [], gender: 'female', ageRange: 'teen' },
       ],
     });
     expect(res.status).toBe(200);
-    expect(res.body.matches.map((m: { characterId: string }) => m.characterId))
-      .toEqual(['keefe', 'nobody', 'sophie']);
+    expect(res.body.matches.map((m: { characterId: string }) => m.characterId)).toEqual([
+      'keefe',
+      'nobody',
+      'sophie',
+    ]);
     expect(res.body.matches[0].candidates.length).toBeGreaterThan(0); // keefe matched
-    expect(res.body.matches[1].candidates).toEqual([]);               // nobody empty
+    expect(res.body.matches[1].candidates).toEqual([]); // nobody empty
     expect(res.body.matches[2].candidates.length).toBeGreaterThan(0); // sophie matched
   });
 });

@@ -70,7 +70,7 @@ async function listBookDirs(): Promise<string[]> {
 async function listDirs(path: string): Promise<string[]> {
   try {
     const ents = await readdir(path, { withFileTypes: true });
-    return ents.filter(d => d.isDirectory()).map(d => d.name);
+    return ents.filter((d) => d.isDirectory()).map((d) => d.name);
   } catch {
     return [];
   }
@@ -79,11 +79,14 @@ async function listDirs(path: string): Promise<string[]> {
 export async function migrateLegacyChangeLogs(): Promise<MigrateResult> {
   const result: MigrateResult = { migrated: [], clean: [], alreadyMigrated: [] };
   for (const bookDir of await listBookDirs()) {
-    const logPath    = changeLogJsonPath(bookDir);
+    const logPath = changeLogJsonPath(bookDir);
     const legacyPath = join(dotAudiobook(bookDir), 'change-log.legacy.json');
 
     if (!existsSync(logPath)) continue;
-    if (existsSync(legacyPath)) { result.alreadyMigrated.push(bookDir); continue; }
+    if (existsSync(legacyPath)) {
+      result.alreadyMigrated.push(bookDir);
+      continue;
+    }
 
     /* readJson returns the FULL parsed document. .audiobook/change-log.json
        on disk is a bare events array (see persistence middleware), so we
@@ -96,7 +99,10 @@ export async function migrateLegacyChangeLogs(): Promise<MigrateResult> {
         ? (doc as { events: unknown[] }).events
         : [];
 
-    if (!looksLegacy(events)) { result.clean.push(bookDir); continue; }
+    if (!looksLegacy(events)) {
+      result.clean.push(bookDir);
+      continue;
+    }
 
     /* Atomic rename + empty rewrite. Live shape mirrors what the persistence
        middleware writes — `{ events: [] }` — so the next PUT round-trip

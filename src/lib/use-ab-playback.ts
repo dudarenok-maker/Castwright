@@ -93,10 +93,12 @@ export function useAbPlayback({ urlA, urlB }: Args): UseAbPlaybackResult {
     return () => {
       if (refA.current) {
         refA.current.pause();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
         refA.current.removeAttribute('src');
       }
       if (refB.current) {
         refB.current.pause();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
         refB.current.removeAttribute('src');
       }
     };
@@ -126,7 +128,10 @@ export function useAbPlayback({ urlA, urlB }: Args): UseAbPlaybackResult {
        audio every time it loops past the old end. */
     const handler = target.dataset.abHandler;
     if (handler && (target as unknown as { _abListener?: EventListener })._abListener) {
-      target.removeEventListener('timeupdate', (target as unknown as { _abListener: EventListener })._abListener);
+      target.removeEventListener(
+        'timeupdate',
+        (target as unknown as { _abListener: EventListener })._abListener,
+      );
     }
     if (typeof opts.end === 'number' && Number.isFinite(opts.end)) {
       const endSec = opts.end;
@@ -134,7 +139,7 @@ export function useAbPlayback({ urlA, urlB }: Args): UseAbPlaybackResult {
         if (target.currentTime >= endSec) {
           target.pause();
           target.removeEventListener('timeupdate', listener);
-          setSnap(s => (s.playing === version ? { playing: null, segmentId: null } : s));
+          setSnap((s) => (s.playing === version ? { playing: null, segmentId: null } : s));
         }
       };
       target.addEventListener('timeupdate', listener);
@@ -146,7 +151,7 @@ export function useAbPlayback({ urlA, urlB }: Args): UseAbPlaybackResult {
        playback (no `end` bound) relies on this, not the timeupdate
        listener. */
     target.onended = () => {
-      setSnap(s => (s.playing === version ? { playing: null, segmentId: null } : s));
+      setSnap((s) => (s.playing === version ? { playing: null, segmentId: null } : s));
     };
 
     setSnap({ playing: version, segmentId: opts.segmentId ?? null });
@@ -155,7 +160,7 @@ export function useAbPlayback({ urlA, urlB }: Args): UseAbPlaybackResult {
     } catch (err) {
       /* Autoplay-policy reject, decode error, 404 — flip back to paused
          so the UI doesn't get stuck in a phantom "playing" state. */
-      setSnap(s => (s.playing === version ? { playing: null, segmentId: null } : s));
+      setSnap((s) => (s.playing === version ? { playing: null, segmentId: null } : s));
       throw err;
     }
   }, []);

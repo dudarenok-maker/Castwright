@@ -26,7 +26,9 @@ class FakeAudio {
     if (!set) return;
     for (const fn of Array.from(set)) fn(new Event(name));
   }
-  play = vi.fn(async () => { /* resolves immediately */ });
+  play = vi.fn(async () => {
+    /* resolves immediately */
+  });
   pause = vi.fn(() => {});
 }
 
@@ -37,7 +39,9 @@ const OriginalAudio = (globalThis as AudioSlot).Audio;
 beforeEach(async () => {
   vi.resetModules();
   fake = new FakeAudio();
-  (globalThis as AudioSlot).Audio = function Audio() { return fake; };
+  (globalThis as AudioSlot).Audio = function Audio() {
+    return fake;
+  };
 });
 
 afterEach(() => {
@@ -50,11 +54,15 @@ describe('useSamplePlayback', () => {
     const { useSamplePlayback } = await import('./use-sample-playback');
     const { result } = renderHook(() => useSamplePlayback());
 
-    await act(async () => { await result.current.play('/audio/voices/x.mp3'); });
+    await act(async () => {
+      await result.current.play('/audio/voices/x.mp3');
+    });
     expect(result.current.isPlaying).toBe(true);
 
     const pending = result.current.playUntilEnded();
-    await act(async () => { fake.dispatch('ended'); });
+    await act(async () => {
+      fake.dispatch('ended');
+    });
     await expect(pending).resolves.toEqual({ cancelled: false });
     expect(result.current.isPlaying).toBe(false);
   });
@@ -63,10 +71,14 @@ describe('useSamplePlayback', () => {
     const { useSamplePlayback } = await import('./use-sample-playback');
     const { result } = renderHook(() => useSamplePlayback());
 
-    await act(async () => { await result.current.play('/audio/voices/x.mp3'); });
+    await act(async () => {
+      await result.current.play('/audio/voices/x.mp3');
+    });
 
     const pending = result.current.playUntilEnded();
-    await act(async () => { result.current.stop(); });
+    await act(async () => {
+      result.current.stop();
+    });
     await expect(pending).resolves.toEqual({ cancelled: true });
     expect(result.current.isPlaying).toBe(false);
   });
@@ -84,9 +96,13 @@ describe('useSamplePlayback', () => {
     const { useSamplePlayback } = await import('./use-sample-playback');
     const { result } = renderHook(() => useSamplePlayback());
 
-    await act(async () => { await result.current.play('/audio/voices/a.mp3'); });
+    await act(async () => {
+      await result.current.play('/audio/voices/a.mp3');
+    });
     const pending = result.current.playUntilEnded();
-    await act(async () => { await result.current.play('/audio/voices/b.mp3'); });
+    await act(async () => {
+      await result.current.play('/audio/voices/b.mp3');
+    });
     await expect(pending).resolves.toEqual({ cancelled: true });
   });
 });

@@ -20,7 +20,9 @@ describe('writeToSyncFolder', () => {
     writeFileSync(srcPath, Buffer.from('hello world'));
   });
 
-  afterEach(() => { rmSync(tmpRoot, { recursive: true, force: true }); });
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
 
   it('copies the source into the destination folder, returning the final path', async () => {
     const dest = join(tmpRoot, 'sync');
@@ -49,7 +51,7 @@ describe('writeToSyncFolder', () => {
   it('does not leave .tmp- droppings on success', async () => {
     const dest = join(tmpRoot, 'sync');
     await writeToSyncFolder(srcPath, dest, 'audiobook.zip');
-    const stragglers = readdirSync(dest).filter(n => n.includes('.tmp-'));
+    const stragglers = readdirSync(dest).filter((n) => n.includes('.tmp-'));
     expect(stragglers).toEqual([]);
   });
 });

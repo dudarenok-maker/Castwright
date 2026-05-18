@@ -46,7 +46,7 @@ export const librarySlice = createSlice({
     /** Optimistically add a book after import. Server scan on next refresh
         is authoritative. */
     addBook: (s, a: PayloadAction<LibraryBook>) => {
-      const existing = s.books.findIndex(b => b.bookId === a.payload.bookId);
+      const existing = s.books.findIndex((b) => b.bookId === a.payload.bookId);
       if (existing >= 0) s.books[existing] = a.payload;
       else s.books.push(a.payload);
     },

@@ -21,14 +21,14 @@ speaking character, then write the result to
       "chapterId": 1,
       "characterId": "narrator",
       "text": "The wind had turned by the time Halloran reached the wheelhouse.",
-      "confidence": 0.97
+      "confidence": 0.97,
     },
     {
       "id": 2,
       "chapterId": 1,
       "characterId": "narrator",
       "text": "He could feel it before he saw it — a pressure shift behind his right ear that thirty winters at sea had taught him to trust more than any instrument the Admiralty could nail to a wall.",
-      "confidence": 0.94
+      "confidence": 0.94,
     },
     // A sentence with a quote AND a narrative tag is split: quoted text is
     // the speaker, the tag/beat is the narrator. See "Splitting" below.
@@ -38,14 +38,14 @@ speaking character, then write the result to
       "chapterId": 1,
       "characterId": "halloran",
       "text": "“Hard to starboard,”",
-      "confidence": 0.91
+      "confidence": 0.91,
     },
     {
       "id": 4,
       "chapterId": 1,
       "characterId": "narrator",
       "text": "he said, not loudly, because Halloran had never had to be loud to be obeyed.",
-      "confidence": 0.96
+      "confidence": 0.96,
     },
     // Quote with NO tag, following Halloran's line — likely still him, but
     // mid-confidence because no explicit attribution.
@@ -54,7 +54,7 @@ speaking character, then write the result to
       "chapterId": 1,
       "characterId": "halloran",
       "text": "“And keep her there until I say otherwise.”",
-      "confidence": 0.78
+      "confidence": 0.78,
     },
     // Reply from a character only identified by role; the speaker is
     // plausible from context but not certain — LOW confidence.
@@ -63,17 +63,17 @@ speaking character, then write the result to
       "chapterId": 1,
       "characterId": "marcus",
       "text": "“Aye, Captain,”",
-      "confidence": 0.58
+      "confidence": 0.58,
     },
     {
       "id": 7,
       "chapterId": 1,
       "characterId": "narrator",
       "text": "came the answer from somewhere behind him.",
-      "confidence": 0.93
-    }
+      "confidence": 0.93,
+    },
     // ... one entry per sentence-segment, in reading order, across all chapters.
-  ]
+  ],
 }
 ```
 
@@ -117,7 +117,7 @@ Rules:
   or relocate it.
 - **Tags go at the start of the spoken portion only.** When you split a
   source sentence into quote + narrative tag entries (see "Splitting"), the
-  audio tag belongs on the *spoken* split, not the `narrator` split.
+  audio tag belongs on the _spoken_ split, not the `narrator` split.
 - **Add a tag when the narrator describes the delivery.**
   - `"You can't do that," she whispered.` → spoken split becomes
     `"[whispers] You can't do that,"` (`whispers`).
@@ -129,7 +129,7 @@ Rules:
   - `"Try me," she laughed.` → spoken split is `"[laughs] Try me,"`.
 - **Tag from the current sentence, not the scene.** The cue must come from
   the sentence itself — either an explicit narrator descriptor ("she
-  whispered", "he shouted"), the *punctuation pattern* of the spoken
+  whispered", "he shouted"), the _punctuation pattern_ of the spoken
   text (`!` for `[excited]`, leading/trailing `…` for `[hesitant]`), or
   the character's described emotional state at that moment ("Keefe's
   hands shook" + the quote that follows). Scene-level mood is NOT enough
@@ -142,7 +142,7 @@ Rules:
 ## Attribution heuristics
 
 - Narrative prose (no quotes) → `narrator`.
-- Quoted text inside dialogue → the speaker who's talking. (The dialogue tag itself — `he said`, `Keefe promised` — is a *separate* entry, see "Splitting".)
+- Quoted text inside dialogue → the speaker who's talking. (The dialogue tag itself — `he said`, `Keefe promised` — is a _separate_ entry, see "Splitting".)
 - Consecutive quoted sentences with no tag → continue the previous speaker.
 - An action beat between two quotes (`"…" He stood. "…"`) → the action beat is its own entry attributed to `narrator`; the second quote continues the previous speaker unless context changes.
 - When a character refers to themself in third person ("Marcus was already moving") it is still narration — that line is `narrator`, not Marcus.
@@ -168,12 +168,14 @@ whitespace) must reproduce the original sentence with no loss.
 Source: `"Look! I'm all better!" Keefe promised, waving his arms.`
 
 The parser pre-tagged the quote because of the exclamation marks. Two entries:
+
 - `"[excited] Look! I'm all better!"` → `keefe`
 - `Keefe promised, waving his arms.` → `narrator`
 
 Source: `"Hard to starboard," he said, "before the rocks."`
 
 Three entries (mid-quote interruption):
+
 - `"Hard to starboard,"` → `halloran`
 - `he said,` → `narrator`
 - `"before the rocks."` → `halloran`
@@ -183,6 +185,7 @@ Source: `Marcus turned. "Get below," he muttered, then drew the blade.`
 Three entries (action beat + quote + tag + action beat — collapse the
 narrative spans on each side of the quote, don't fragment beyond what
 the quotes naturally separate):
+
 - `Marcus turned.` → `narrator`
 - `"Get below,"` → `marcus`
 - `he muttered, then drew the blade.` → `narrator`

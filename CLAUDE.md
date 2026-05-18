@@ -5,6 +5,7 @@ Redux Toolkit. Mocked API surface today; designed to swap to a real backend
 without changing component code.
 
 ## Commands
+
 - `npm run dev` — Vite dev server (HMR) on `http://localhost:5173`.
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
@@ -40,6 +41,7 @@ without changing component code.
     for the limits table.
 
 ## Layout
+
 - `src/main.tsx` — entry; mounts `<App/>` inside `<Provider>`.
 - `src/App.tsx` — root component; selects off the discriminated-union `ui.stage`
   and renders the matching view + any active modals.
@@ -47,16 +49,17 @@ without changing component code.
   `types.ts`, generated `api-types.ts`.
 - `src/data/` — design fixtures (characters, chapters, voices, books, etc.).
 - `src/store/` — RTK slices (`ui`, `cast`, `chapters`, `revisions`, `manuscript`)
-  + `index.ts` (configureStore, typed `useAppDispatch`/`useAppSelector`, router
-  install).
+  - `index.ts` (configureStore, typed `useAppDispatch`/`useAppSelector`, router
+    install).
 - `src/components/`, `src/modals/`, `src/views/` — UI.
 - `src/mocks/canned-data.ts` + `src/mocks/manuscripts/` — mock API payloads.
 - `openapi.yaml` (root) — **API contract**, source of truth for backend shapes.
 
 ## Conventions worth preserving
+
 - **Discriminated-union `ui.stage`** (`src/store/ui-slice.ts`) — `{ kind: 'books'
-  | 'upload' | 'analysing' | 'confirm' | 'ready' }`, with `view`/`currentChapterId`/
-  `openProfileId` living *inside* the `ready` variant. Don't flatten.
+| 'upload' | 'analysing' | 'confirm' | 'ready' }`, with `view`/`currentChapterId`/
+  `openProfileId` living _inside_ the `ready` variant. Don't flatten.
 - **Hash router grammar** (`src/lib/router.ts`) — pure `parseHash`/`stageToHash`,
   installed against the store via the `RouterStore` adapter so the router stays
   decoupled. Same URL grammar as the original prototype.
@@ -87,6 +90,7 @@ not replace them.
   hashchange timing). One Playwright spec per feature surface is the bar.
 
 Harnesses (five tiers):
+
 - Frontend: `npm run test` (Vitest + jsdom + React Testing Library). Tests live next to the unit (`*.test.ts(x)`).
 - Server: `cd server && npm run test` (Vitest + node env, real-ffmpeg integration where relevant). Same colocation.
 - Sidecar (`server/tts-sidecar/`): pytest harness at `server/tts-sidecar/tests/`,
@@ -128,7 +132,7 @@ same PR — the backlog is only useful while it stays current.
 When in planning mode, or when asked "what's outstanding?" / "what's left?" / "summarise what we'd do":
 
 - **List ALL items, in priority order.** No top-N truncation, no "and a few more" hand-waves. If there are 12 things, write 12. The user reads the whole list and re-prioritises if needed — collapsing it to "top 3" forces them to ask follow-ups.
-- **Each item carries a one-line benefit.** Tag it `*Benefit (user / technical / architectural):*` so the *why* is visible at a glance. An item without a benefit line is a TODO masquerading as a plan — write the benefit or drop the item.
+- **Each item carries a one-line benefit.** Tag it `*Benefit (user / technical / architectural):*` so the _why_ is visible at a glance. An item without a benefit line is a TODO masquerading as a plan — write the benefit or drop the item.
 - **Priority is explicit.** Number the list (1, 2, 3 …) — do not present a flat unordered set. If two items are genuinely tied, group them under one number and say so.
 - **Distinguish "must do" from "nice to have."** When the plan has a natural break (e.g. v1 vs. follow-up), call it out with a heading rather than burying it in adjectives.
 - **Do not narrate work already done in the summary section.** Past tense belongs in a separate "Done in this session" line, NOT mixed into the outstanding list.
@@ -147,12 +151,13 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 6. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
 
 ## Out of scope until told otherwise
+
 - New features. Surface area is final for v1.
 - Visual redesign. Reproduce the existing look pixel-for-pixel.
 - Backend work. This repo is the frontend that will call the OpenAPI spec.
 
 ## Suggested follow-ups (not requirements)
-- ESLint + Prettier, axe-core a11y pass.
+
 - **Model lifecycle is split between eager and button-driven** —
   - **Kokoro v1 (default, new in 2026-05)**: eagerly loaded at sidecar
     startup, ~1 s cold load, ~1 GB VRAM. Permanently resident alongside
@@ -171,12 +176,14 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
     evict on real chat calls).
   - **Per-character voice profiles are per-engine**: each cast member
     carries an `overrideTtsVoices: { coqui?: {name}, kokoro?: {name},
-    gemini?: {name} }` map. Engine switches preserve cast assignments;
+gemini?: {name} }` map. Engine switches preserve cast assignments;
     no re-cast needed when toggling Coqui ↔ Kokoro. Legacy single-field
     `overrideTtsVoice` is migrated lazily at cast.json read time.
 
 ## Commit gate
+
 Three-tier automated gate, enforced by husky hooks in `.husky/`:
+
 - **commit-msg** (`.husky/commit-msg`): runs `scripts/validate-commit-msg.mjs`
   on the subject line. Rejects commits that don't match the
   `<type>(<scope>): <subject>` convention (with `chore: <subject>` as the
@@ -190,6 +197,12 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   pre-push so commits stay snappy.
 - **pre-push** (`.husky/pre-push`): runs `npm run verify` — typecheck +
   all tests + e2e + build. Refuses the push if any step fails.
+
+`npm run verify` also prepends `lint` (ESLint + Prettier via
+`eslint-config-prettier`) and includes `test:a11y` (axe-core on the four
+core views) — see [docs/features/archive/46-lint-format-a11y.md](docs/features/archive/46-lint-format-a11y.md)
+for the rulesets, the autofix-baseline shape, and the rationale for each
+relaxed rule.
 
 Branching model and the full commit convention (allowed types, allowed scopes,
 multi-scope syntax, worktrees for parallel agent work) are documented in
@@ -240,7 +253,7 @@ in parallel:
 - The Agent tool auto-names the temporary branch (`claude/wt-…`). When the
   agent finishes, rename the branch to the proper `<type>/<scope>-<slug>`
   shape before merge — or pre-create the branch with `git switch -c
-  feat/server-foo` and tell the agent in its prompt to check it out as its
+feat/server-foo` and tell the agent in its prompt to check it out as its
   first step.
 - Reconcile multiple parallel branches via the
   [`integration/<date>` pattern](CONTRIBUTING.md#reconciliation-pattern):
@@ -259,11 +272,13 @@ Hooks activate automatically after `npm install` via the `prepare` script
 `npm install` once and you're done.
 
 Additional one-time setup:
+
 - **Pester >= 5.0** for the PowerShell-scripts harness (Windows-bundled Pester 3.4 isn't API-compatible). Install once per user:
 
       Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck
 
   `scripts/tests/run.ps1` prints this same hint if it can't find Pester 5+.
+
 - **Playwright chromium** for the e2e harness:
 
       npx playwright install chromium
@@ -271,6 +286,7 @@ Additional one-time setup:
   One ~100 MB download, cached in `%LOCALAPPDATA%\ms-playwright`. `npm run test:e2e` errors with a clear hint if chromium is missing.
 
 Working practice:
+
 - Before committing anything non-trivial, run `npm run verify` — same battery
   as pre-push. Catching failures in the same turn beats catching them at
   push time.

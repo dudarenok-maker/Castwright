@@ -42,14 +42,15 @@ export class GeminiTtsProvider implements TtsProvider {
        Gemini run. Substitute and log. */
     let actualVoice = voiceName;
     if (!(voiceName in GEMINI_VOICE_DESCRIPTIONS)) {
-      const fallback = GEMINI_FALLBACK_VOICE in GEMINI_VOICE_DESCRIPTIONS
-        ? GEMINI_FALLBACK_VOICE
-        : Object.keys(GEMINI_VOICE_DESCRIPTIONS)[0];
+      const fallback =
+        GEMINI_FALLBACK_VOICE in GEMINI_VOICE_DESCRIPTIONS
+          ? GEMINI_FALLBACK_VOICE
+          : Object.keys(GEMINI_VOICE_DESCRIPTIONS)[0];
       console.warn(
         `[tts:gemini] Voice "${voiceName}" is not in the Gemini prebuilt voice list — ` +
-        `substituting "${fallback}". This usually means a non-Gemini voice name was ` +
-        `passed to the Gemini provider (cross-engine bleed). Check that ` +
-        `pickVoiceForEngine was called with engine='gemini' for this character.`,
+          `substituting "${fallback}". This usually means a non-Gemini voice name was ` +
+          `passed to the Gemini provider (cross-engine bleed). Check that ` +
+          `pickVoiceForEngine was called with engine='gemini' for this character.`,
       );
       actualVoice = fallback;
     }

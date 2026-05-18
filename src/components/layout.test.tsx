@@ -38,15 +38,15 @@ vi.mock('../lib/api', () => ({
   api: {
     /* Library + voice library + base-voice catalogue hydrate on mount —
        resolve to empty so they no-op without throwing. */
-    getLibrary:      vi.fn(async () => ({ books: [] })),
-    getVoices:       vi.fn(async () => ({ voices: [], dropped: [] })),
-    getBaseVoices:   vi.fn(async () => ({ voices: [] })),
+    getLibrary: vi.fn(async () => ({ books: [] })),
+    getVoices: vi.fn(async () => ({ voices: [], dropped: [] })),
+    getBaseVoices: vi.fn(async () => ({ voices: [] })),
     /* Account fetch (createAsyncThunk wraps this) — resolve to minimal
        UserSettings so the slice's hydrate doesn't reject. */
     getUserSettings: vi.fn(async () => ({})),
     /* The line this test is actually about. Configured per-test via
        getBookStateMock.mockResolvedValue. */
-    getBookState:    (...args: unknown[]) => getBookStateMock(...args),
+    getBookState: (...args: unknown[]) => getBookStateMock(...args),
     /* Cold-boot analysis state probe — return null so the analysing-pill
        rehydration short-circuits. */
     getAnalysisState: vi.fn(async () => null),
@@ -55,17 +55,19 @@ vi.mock('../lib/api', () => ({
     getActiveAnalyses: vi.fn(async () => ({ snapshots: [] })),
     /* The 30 s pollRevisions interval. Resolve to empty so it doesn't
        overwrite the slice between hydrate and the test's assertions. */
-    pollRevisions:   (...args: unknown[]) => pollRevisionsMock(...args),
+    pollRevisions: (...args: unknown[]) => pollRevisionsMock(...args),
     /* useTtsLifecycle polls /health on mount; resolve to unreachable so
        no pending pill state lands. */
     getSidecarHealth: vi.fn(async () => ({ status: 'unreachable', url: '(test)' })),
     /* Voice matching fires on the confirm stage only; we render at
        'ready' here so it shouldn't trigger, but keep a stub so any
        drift in that guard doesn't crash the test. */
-    matchVoices:     vi.fn(async () => ({ matches: [] })),
+    matchVoices: vi.fn(async () => ({ matches: [] })),
   },
   AnalysisError: class extends Error {},
-  ExportIncompleteError: class extends Error { missing: string[] = []; },
+  ExportIncompleteError: class extends Error {
+    missing: string[] = [];
+  },
 }));
 
 import { Layout } from './layout';
@@ -74,18 +76,18 @@ import { uiActions } from '../store/ui-slice';
 function makeStore() {
   return configureStore({
     reducer: {
-      ui:         uiSlice.reducer,
-      account:    accountSlice.reducer,
-      cast:       castSlice.reducer,
-      chapters:   chaptersSlice.reducer,
-      revisions:  revisionsSlice.reducer,
+      ui: uiSlice.reducer,
+      account: accountSlice.reducer,
+      cast: castSlice.reducer,
+      chapters: chaptersSlice.reducer,
+      revisions: revisionsSlice.reducer,
       manuscript: manuscriptSlice.reducer,
-      library:    librarySlice.reducer,
-      voices:     voicesSlice.reducer,
-      changeLog:  changeLogSlice.reducer,
-      bookMeta:   bookMetaSlice.reducer,
-      exports:    exportsSlice.reducer,
-      analysis:   analysisSlice.reducer,
+      library: librarySlice.reducer,
+      voices: voicesSlice.reducer,
+      changeLog: changeLogSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
+      exports: exportsSlice.reducer,
+      analysis: analysisSlice.reducer,
     },
   });
 }
@@ -145,7 +147,7 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       <Provider store={store}>
         <MemoryRouter initialEntries={['/books/b1/cast']}>
           <Routes>
-            <Route path="/books/:bookId/cast" element={<Layout/>}/>
+            <Route path="/books/:bookId/cast" element={<Layout />} />
           </Routes>
         </MemoryRouter>
       </Provider>,
@@ -161,8 +163,8 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
     await waitFor(() => {
       const s = store.getState();
       expect(s.revisions.loaded).toBe(true);
-      expect(s.revisions.pending.map(r => r.id)).toEqual(['r1']);
-      expect(s.revisions.drift.map(d => d.id)).toEqual(['d1']);
+      expect(s.revisions.pending.map((r) => r.id)).toEqual(['r1']);
+      expect(s.revisions.drift.map((d) => d.id)).toEqual(['d1']);
       expect(s.revisions.dismissed).toEqual(['old-id']);
       expect(s.revisions.acceptedSelections).toEqual({ 'r-prev': { 4: 'B' } });
     });
@@ -199,7 +201,11 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
         createdAt: '2026-05-17T00:00:00Z',
         updatedAt: '2026-05-17T00:00:00Z',
       },
-      cast: { characters: [{ id: 'narrator', name: 'Narrator', role: 'Third-person observer', color: 'narrator' }] },
+      cast: {
+        characters: [
+          { id: 'narrator', name: 'Narrator', role: 'Third-person observer', color: 'narrator' },
+        ],
+      },
       manuscript: { wordCount: 0, format: 'epub' },
       manuscriptEdits: null,
       revisions: null,
@@ -218,11 +224,25 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
        would see "0 speaking characters detected" on confirm. */
     store.dispatch({
       type: 'manuscript/uploadComplete',
-      payload: { manuscriptId: 'mns_test', title: 'Unlocked', format: 'epub', wordCount: 100, sourceText: null },
+      payload: {
+        manuscriptId: 'mns_test',
+        title: 'Unlocked',
+        format: 'epub',
+        wordCount: 100,
+        sourceText: null,
+      },
     });
     store.dispatch({
       type: 'manuscript/hydrateFromAnalysis',
-      payload: { bookId: 'b1', manuscriptId: 'mns_test', title: 'Unlocked', characters: [], chapters: [], sentences: [], phaseTimings: [] },
+      payload: {
+        bookId: 'b1',
+        manuscriptId: 'mns_test',
+        title: 'Unlocked',
+        characters: [],
+        chapters: [],
+        sentences: [],
+        phaseTimings: [],
+      },
     });
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
 
@@ -230,7 +250,7 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       <Provider store={store}>
         <MemoryRouter initialEntries={['/books/b1/confirm']}>
           <Routes>
-            <Route path="/books/:bookId/confirm" element={<Layout/>}/>
+            <Route path="/books/:bookId/confirm" element={<Layout />} />
           </Routes>
         </MemoryRouter>
       </Provider>,
@@ -244,7 +264,7 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
        1 speaking character (narrator) instead of "0 speaking
        characters detected". */
     await waitFor(() => {
-      expect(store.getState().cast.characters.map(c => c.id)).toEqual(['narrator']);
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['narrator']);
     });
   });
 
@@ -285,7 +305,7 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       <Provider store={store}>
         <MemoryRouter initialEntries={['/books/b1/cast']}>
           <Routes>
-            <Route path="/books/:bookId/cast" element={<Layout/>}/>
+            <Route path="/books/:bookId/cast" element={<Layout />} />
           </Routes>
         </MemoryRouter>
       </Provider>,

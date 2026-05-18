@@ -47,10 +47,16 @@ interface BookEventRecord {
    for its pill labels are computed the same way the client-side per-book
    pills are. */
 const CATEGORY_MAP = {
-  voice:      new Set(['voice_tune', 'voice_reuse', 'voice_lock', 'library_add']),
-  generation: new Set(['regenerate', 'generation_run_complete', 'chapter_complete', 'chapter_failed', 'generation_started']),
+  voice: new Set(['voice_tune', 'voice_reuse', 'voice_lock', 'library_add']),
+  generation: new Set([
+    'regenerate',
+    'generation_run_complete',
+    'chapter_complete',
+    'chapter_failed',
+    'generation_started',
+  ]),
   manuscript: new Set(['boundary_move', 'import', 'reparse']),
-  cast:       new Set(['cast_confirm', 'analysis_complete']),
+  cast: new Set(['cast_confirm', 'analysis_complete']),
 } as const;
 
 const DEFAULT_LIMIT = 50;
@@ -63,7 +69,7 @@ workspaceRouter.get('/changelog', async (req, res) => {
 
     const per = await listAllChangeLogs();
     const tagged = per.flatMap(({ bookId, bookTitle, author, events }) =>
-      events.map(e => ({
+      events.map((e) => ({
         ...(e as Record<string, unknown>),
         bookId,
         bookTitle,
@@ -77,17 +83,17 @@ workspaceRouter.get('/changelog', async (req, res) => {
     for (const e of tagged) {
       const t = (e as BookEventRecord).type;
       if (typeof t !== 'string') continue;
-      if (CATEGORY_MAP.voice.has(t))      categoryCounts.voice      += 1;
+      if (CATEGORY_MAP.voice.has(t)) categoryCounts.voice += 1;
       if (CATEGORY_MAP.generation.has(t)) categoryCounts.generation += 1;
       if (CATEGORY_MAP.manuscript.has(t)) categoryCounts.manuscript += 1;
-      if (CATEGORY_MAP.cast.has(t))       categoryCounts.cast       += 1;
+      if (CATEGORY_MAP.cast.has(t)) categoryCounts.cast += 1;
     }
 
     /* Cursor: page starts at the first event strictly older than `before`.
        Strict `<` (not `<=`) so a re-request with the same cursor doesn't
        re-serve the boundary event the client already has. */
     const startIdx = Number.isFinite(before)
-      ? tagged.findIndex(e => sortKey(e as BookEventRecord) < before)
+      ? tagged.findIndex((e) => sortKey(e as BookEventRecord) < before)
       : 0;
     const safeStart = startIdx < 0 ? tagged.length : startIdx;
     const page = tagged.slice(safeStart, safeStart + limit);

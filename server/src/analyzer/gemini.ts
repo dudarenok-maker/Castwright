@@ -84,7 +84,14 @@ export class GeminiAnalyzer implements Analyzer {
     call: StageCall,
   ): Promise<Stage1ChapterOutput> {
     const key = `1-ch${chapterId}` as const;
-    return this.runStage(manuscriptId, key, 'per_chapter_stage1', promptMd, stage1ChapterSchema, call);
+    return this.runStage(
+      manuscriptId,
+      key,
+      'per_chapter_stage1',
+      promptMd,
+      stage1ChapterSchema,
+      call,
+    );
   }
 
   async runStage2Chapter(
@@ -94,7 +101,14 @@ export class GeminiAnalyzer implements Analyzer {
     call: StageCall,
   ): Promise<Stage2ChapterOutput> {
     const key = `2-ch${chapterId}` as const;
-    return this.runStage(manuscriptId, key, 'per_chapter_stage2', promptMd, stage2ChapterSchema, call);
+    return this.runStage(
+      manuscriptId,
+      key,
+      'per_chapter_stage2',
+      promptMd,
+      stage2ChapterSchema,
+      call,
+    );
   }
 
   private async runStage<T>(
@@ -131,7 +145,11 @@ export class GeminiAnalyzer implements Analyzer {
       // Retry once with the validation errors fed back.
       await writeFile(
         errorPath(manuscriptId, key),
-        JSON.stringify({ kind: firstAttempt.kind, detail: firstAttempt.detail, attempt: 1 }, null, 2),
+        JSON.stringify(
+          { kind: firstAttempt.kind, detail: firstAttempt.detail, attempt: 1 },
+          null,
+          2,
+        ),
         'utf8',
       );
 
@@ -239,7 +257,9 @@ export class GeminiAnalyzer implements Analyzer {
           geminiRateLimiter.recordRejection(this.model, retryAfterMs);
           if (attempt >= MAX_ATTEMPTS - 1) break;
           const backoff = jitterMs(Math.max(retryAfterMs ?? 0, BACKOFFS[attempt] ?? 6000));
-          console.warn(`[gemini] 429 — retrying in ${backoff}ms (attempt ${attempt + 2}/${MAX_ATTEMPTS})`);
+          console.warn(
+            `[gemini] 429 — retrying in ${backoff}ms (attempt ${attempt + 2}/${MAX_ATTEMPTS})`,
+          );
           if (backoff > 1000) call.onThrottle?.(backoff, 'retry-after');
           await sleep(backoff, call.signal);
           continue;
@@ -248,7 +268,9 @@ export class GeminiAnalyzer implements Analyzer {
         if (isRetryable5xx(err)) {
           if (attempt >= MAX_ATTEMPTS - 1) break;
           const backoff = jitterMs(BACKOFFS[attempt] ?? 6000);
-          console.warn(`[gemini] transient ${describeStatus(err)} — retrying in ${backoff}ms (attempt ${attempt + 2}/${MAX_ATTEMPTS})`);
+          console.warn(
+            `[gemini] transient ${describeStatus(err)} — retrying in ${backoff}ms (attempt ${attempt + 2}/${MAX_ATTEMPTS})`,
+          );
           if (backoff > 1000) call.onThrottle?.(backoff, 'retry-after');
           await sleep(backoff, call.signal);
           continue;
@@ -559,15 +581,22 @@ export function repairUnescapedQuotes(raw: string): string {
          `\\`, `\n`, `\uXXXX` (the first two chars suffice — the four hex
          digits are normal string content from this walker's POV). */
       out += c;
-      if (i + 1 < raw.length) { out += raw[i + 1]; i += 2; }
-      else { i += 1; }
+      if (i + 1 < raw.length) {
+        out += raw[i + 1];
+        i += 2;
+      } else {
+        i += 1;
+      }
       continue;
     }
     if (c === '"') {
       /* Peek the next non-whitespace char to decide if this `"` is a real
          string close or an unescaped inner quote. */
       let j = i + 1;
-      while (j < raw.length && (raw[j] === ' ' || raw[j] === '\t' || raw[j] === '\n' || raw[j] === '\r')) {
+      while (
+        j < raw.length &&
+        (raw[j] === ' ' || raw[j] === '\t' || raw[j] === '\n' || raw[j] === '\r')
+      ) {
         j += 1;
       }
       const next = j < raw.length ? raw[j] : '';
@@ -612,12 +641,22 @@ export function trimTrailingProse(raw: string): string {
   for (let i = 0; i < raw.length; i += 1) {
     const c = raw[i];
     if (inString) {
-      if (c === '\\') { i += 1; continue; }      /* skip escape target */
+      if (c === '\\') {
+        i += 1;
+        continue;
+      } /* skip escape target */
       if (c === '"') inString = false;
       continue;
     }
-    if (c === '"') { inString = true; continue; }
-    if (c === '{' || c === '[') { depth += 1; started = true; continue; }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === '{' || c === '[') {
+      depth += 1;
+      started = true;
+      continue;
+    }
     if (c === '}' || c === ']') {
       depth -= 1;
       if (started && depth === 0) {
@@ -703,8 +742,18 @@ export function repairStructuralPunctuation(raw: string, maxInserts = 2): string
       inString = true;
       continue;
     }
-    if (c === '{') { out += c; openStack.push('}'); lastNonWsWasValueEnd = false; continue; }
-    if (c === '[') { out += c; openStack.push(']'); lastNonWsWasValueEnd = false; continue; }
+    if (c === '{') {
+      out += c;
+      openStack.push('}');
+      lastNonWsWasValueEnd = false;
+      continue;
+    }
+    if (c === '[') {
+      out += c;
+      openStack.push(']');
+      lastNonWsWasValueEnd = false;
+      continue;
+    }
     if (c === '}' || c === ']') {
       out += c;
       openStack.pop();
@@ -749,6 +798,10 @@ export function summariseDetail(detail: unknown): string {
   }
 }
 
-export async function persistResponse(manuscriptId: string, key: HandoffKey, raw: string): Promise<void> {
+export async function persistResponse(
+  manuscriptId: string,
+  key: HandoffKey,
+  raw: string,
+): Promise<void> {
   await writeFile(outboxPath(manuscriptId, key), raw, 'utf8');
 }

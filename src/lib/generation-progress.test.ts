@@ -2,8 +2,12 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  characterLinePositionsByChapter, characterStatsByChapter, countWords,
-  linesDoneAt, overallProgress, sentencesPerChapter,
+  characterLinePositionsByChapter,
+  characterStatsByChapter,
+  countWords,
+  linesDoneAt,
+  overallProgress,
+  sentencesPerChapter,
 } from './generation-progress';
 import type { Chapter, Sentence } from './types';
 
@@ -17,8 +21,12 @@ const makeChapter = (id: number, overrides: Partial<Chapter> = {}): Chapter => (
   ...overrides,
 });
 
-const mkSentence = (id: number, chapterId: number, characterId: string, text: string): Sentence =>
-  ({ id, chapterId, characterId, text });
+const mkSentence = (
+  id: number,
+  chapterId: number,
+  characterId: string,
+  text: string,
+): Sentence => ({ id, chapterId, characterId, text });
 
 describe('countWords', () => {
   it('counts whitespace-delimited tokens', () => {
@@ -39,7 +47,7 @@ describe('sentencesPerChapter', () => {
   it('groups sentence counts by chapterId', () => {
     const out = sentencesPerChapter([
       mkSentence(1, 1, 'narrator', 'a.'),
-      mkSentence(2, 1, 'eliza',    'b.'),
+      mkSentence(2, 1, 'eliza', 'b.'),
       mkSentence(3, 2, 'narrator', 'c.'),
     ]);
     expect(out).toEqual({ 1: 2, 2: 1 });
@@ -51,13 +59,13 @@ describe('characterStatsByChapter', () => {
     const out = characterStatsByChapter([
       mkSentence(1, 1, 'narrator', 'One two three.'),
       mkSentence(2, 1, 'narrator', 'Four.'),
-      mkSentence(3, 1, 'eliza',    'Five six.'),
+      mkSentence(3, 1, 'eliza', 'Five six.'),
       mkSentence(4, 2, 'narrator', 'Seven.'),
     ]);
     expect(out).toEqual({
       1: {
         narrator: { lines: 2, words: 4 },
-        eliza:    { lines: 1, words: 2 },
+        eliza: { lines: 1, words: 2 },
       },
       2: {
         narrator: { lines: 1, words: 1 },
@@ -78,15 +86,15 @@ describe('characterLinePositionsByChapter + linesDoneAt — the false-Done regre
        Narrator speaks 4 of the first 13 lines, then everyone else speaks
        once before line 13, then narrator carries through. Mirrors the
        "Day One" chapter from the screenshot enough to pin the bug. */
-    { id: 1,  chapterId: 2, characterId: 'narrator', text: 'opening line' },
-    { id: 2,  chapterId: 2, characterId: 'narrator', text: 'narrator continues' },
-    { id: 3,  chapterId: 2, characterId: 'keefe',    text: 'keefe one' },
-    { id: 4,  chapterId: 2, characterId: 'narrator', text: 'narrator three' },
-    { id: 5,  chapterId: 2, characterId: 'ro',       text: 'ro one' },
-    { id: 6,  chapterId: 2, characterId: 'narrator', text: 'narrator four' },
-    { id: 7,  chapterId: 2, characterId: 'elwin',    text: 'elwin one' },
-    { id: 8,  chapterId: 2, characterId: 'narrator', text: 'narrator five' },
-    { id: 9,  chapterId: 2, characterId: 'narrator', text: 'narrator six' },
+    { id: 1, chapterId: 2, characterId: 'narrator', text: 'opening line' },
+    { id: 2, chapterId: 2, characterId: 'narrator', text: 'narrator continues' },
+    { id: 3, chapterId: 2, characterId: 'keefe', text: 'keefe one' },
+    { id: 4, chapterId: 2, characterId: 'narrator', text: 'narrator three' },
+    { id: 5, chapterId: 2, characterId: 'ro', text: 'ro one' },
+    { id: 6, chapterId: 2, characterId: 'narrator', text: 'narrator four' },
+    { id: 7, chapterId: 2, characterId: 'elwin', text: 'elwin one' },
+    { id: 8, chapterId: 2, characterId: 'narrator', text: 'narrator five' },
+    { id: 9, chapterId: 2, characterId: 'narrator', text: 'narrator six' },
     { id: 10, chapterId: 2, characterId: 'narrator', text: 'narrator seven' },
     { id: 11, chapterId: 2, characterId: 'narrator', text: 'narrator eight' },
     { id: 12, chapterId: 2, characterId: 'narrator', text: 'narrator nine' },
@@ -109,27 +117,27 @@ describe('characterLinePositionsByChapter + linesDoneAt — the false-Done regre
        finished. Pre-fix the slice would have marked keefe/ro/elwin as
        "done" with a full green bar at this moment. */
     expect(linesDoneAt(positions.narrator, 13)).toBe(10);
-    expect(linesDoneAt(positions.keefe,    13)).toBe(1);
-    expect(linesDoneAt(positions.ro,       13)).toBe(1);
-    expect(linesDoneAt(positions.elwin,    13)).toBe(1);
+    expect(linesDoneAt(positions.keefe, 13)).toBe(1);
+    expect(linesDoneAt(positions.ro, 13)).toBe(1);
+    expect(linesDoneAt(positions.elwin, 13)).toBe(1);
   });
 
   it('returns 0 when currentLine is 0 or negative (start-of-run / post-regenerate)', () => {
     const positions = characterLinePositionsByChapter(screenshotChapter)[2];
     expect(linesDoneAt(positions.narrator, 0)).toBe(0);
-    expect(linesDoneAt(positions.keefe,    0)).toBe(0);
+    expect(linesDoneAt(positions.keefe, 0)).toBe(0);
     expect(linesDoneAt(positions.narrator, -1)).toBe(0);
   });
 
   it('returns positions.length once currentLine reaches the chapter end (chapter_complete)', () => {
     const positions = characterLinePositionsByChapter(screenshotChapter)[2];
     expect(linesDoneAt(positions.narrator, 14)).toBe(11);
-    expect(linesDoneAt(positions.keefe,    14)).toBe(1);
+    expect(linesDoneAt(positions.keefe, 14)).toBe(1);
   });
 
   it('returns 0 for an unknown character (no positions)', () => {
     expect(linesDoneAt(undefined, 13)).toBe(0);
-    expect(linesDoneAt([],        13)).toBe(0);
+    expect(linesDoneAt([], 13)).toBe(0);
   });
 });
 
@@ -139,13 +147,13 @@ describe('overallProgress — the 3/7-done-shows-4 % regression', () => {
      chapter, collapsing the bar to its own progress (~4 %). */
   it('counts Done chapters at full weight using the manuscript counts', () => {
     const chapters = [
-      makeChapter(1, { state: 'done',        progress: 1    }),
-      makeChapter(2, { state: 'done',        progress: 1    }),
-      makeChapter(3, { state: 'done',        progress: 1    }),
+      makeChapter(1, { state: 'done', progress: 1 }),
+      makeChapter(2, { state: 'done', progress: 1 }),
+      makeChapter(3, { state: 'done', progress: 1 }),
       makeChapter(4, { state: 'in_progress', progress: 0.04, totalLines: 100 }),
-      makeChapter(5, { state: 'queued',      progress: 0    }),
-      makeChapter(6, { state: 'queued',      progress: 0    }),
-      makeChapter(7, { state: 'queued',      progress: 0    }),
+      makeChapter(5, { state: 'queued', progress: 0 }),
+      makeChapter(6, { state: 'queued', progress: 0 }),
+      makeChapter(7, { state: 'queued', progress: 0 }),
     ];
     /* Each chapter is roughly the same size in the manuscript: 100 lines. */
     const counts = { 1: 100, 2: 100, 3: 100, 4: 100, 5: 100, 6: 100, 7: 100 };
@@ -165,7 +173,7 @@ describe('overallProgress — the 3/7-done-shows-4 % regression', () => {
 
   it('uses live totalLines when the manuscript count is missing', () => {
     const chapters = [
-      makeChapter(1, { progress: 1,   totalLines: 200 }),
+      makeChapter(1, { progress: 1, totalLines: 200 }),
       makeChapter(2, { progress: 0.5, totalLines: 200 }),
     ];
     expect(overallProgress(chapters, {})).toBeCloseTo(0.75, 5);
@@ -173,9 +181,9 @@ describe('overallProgress — the 3/7-done-shows-4 % regression', () => {
 
   it('fills unknown weights with the average of known weights', () => {
     const chapters = [
-      makeChapter(1, { progress: 1 }),                       // unknown weight
-      makeChapter(2, { progress: 0, totalLines: 100 }),       // known: 100
-      makeChapter(3, { progress: 0, totalLines: 300 }),       // known: 300
+      makeChapter(1, { progress: 1 }), // unknown weight
+      makeChapter(2, { progress: 0, totalLines: 100 }), // known: 100
+      makeChapter(3, { progress: 0, totalLines: 300 }), // known: 300
     ];
     /* avg known = 200; chapter 1 gets weight 200; total = 600; weighted
        numerator = 1 * 200 = 200; → 200/600 = 0.333… */
