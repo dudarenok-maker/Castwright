@@ -31,7 +31,7 @@
     "test:all": "npm run test:hooks && npm run test && npm run test:server && npm run test:scripts && npm run test:sidecar",
     "verify": "node scripts/verify-cache.mjs",
     "verify:quick": "npm run test:all",
-    "verify:fast": "npm run test:fast",
+    "verify:fast": "node scripts/verify-cache.mjs --steps test:hooks,test,test:server",
     "openapi:types": "openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts",
     "reconcile-cast": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/reconcile-broken-cast.ps1",
     "prepare": "husky"
