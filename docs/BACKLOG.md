@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18:** Must 1 · Should 1 · Could 14 · Won't 9
+**Counts as of 2026-05-18:** Must 1 · Should 0 · Could 14 · Won't 9
 
 ---
 
@@ -35,27 +35,19 @@ Ranking within each bucket = top is highest priority.
 
 ### 1. Verify-cache for cheap retries after flake
 
-Source: net-new (2026-05-18). Follow-up to plan 45 (Vitest pool tuning + one-retry policy). Plan 45 lowers the *probability* of `npm run verify` flaking; this lever drops the *cost* of any remaining flake to near-zero.
+Source: net-new (2026-05-18). Follow-up to plan 45 (Vitest pool tuning + one-retry policy). Plan 45 lowers the _probability_ of `npm run verify` flaking; this lever drops the _cost_ of any remaining flake to near-zero.
 
-- *What:* Add a `.verify-cache.json` (gitignored) that records, per pipeline step (`typecheck`, `test:hooks`, `test` (frontend), `test:server`, `test:scripts`, `test:sidecar`, `test:e2e`, `build`), the input hash that produced the last green result. The input hash is the SHA-256 of every file the step reads (resolvable from `tsconfig.json` includes for typecheck, the Vitest `include` globs for each Vitest config, etc.) plus the lockfile hash. On `npm run verify`, each step computes its current input hash; if it matches the cached green hash, the step is skipped with a `[cached]` marker. On a green completion, the cache is updated. Cache invalidates automatically when any input changes. Manual override: `npm run verify -- --no-cache` re-runs everything.
-- *Acceptance:* (1) Run `npm run verify` on a clean tree → all steps run, cache populated. (2) Re-run immediately, no changes → every step prints `[cached] (input hash unchanged)` and exits in under 5 s total. (3) Touch one file in `src/lib/` → the frontend `test` step re-runs, every other step stays cached. (4) Touch `server/src/foo.ts` → server `test` and `typecheck` re-run, frontend test stays cached. (5) Force a flake on the server suite, retry without touching anything → cached typecheck + frontend + sidecar + Pester + e2e + build skip; only the server suite re-runs. (6) `npm run verify -- --no-cache` runs everything regardless of cache. (7) New Vitest spec covers the input-hash computation + cache hit/miss decision; manual: walk steps 1-6 once.
-- *Key files:* new `scripts/verify-cache.mjs` (the cache + step-runner); `package.json` `scripts.verify` (delegate to the new script); new `scripts/tests/verify-cache.test.mjs`; `.gitignore` (add `.verify-cache.json`).
-- *Depends on:* plan 45 shipped (already on this branch — the retry policy means the cache doesn't have to worry about transient-pass-then-fail; one retry stabilises before the green hash is written).
-- *Benefit (user / developer):* the user explicitly flagged "commits don't waste too much time doing double takes." Today a transient worker death at step 5 of 6 re-runs all 6 steps from scratch on the next push, even though steps 1–4 produced identical output. This cache makes the *recovery* cost of a flake = the cost of one re-run of the step that actually failed (typically ~60 s for the server suite) instead of ~6 min for the whole pipeline. Even on clean re-pushes after editing one file, the developer feedback loop drops from ~6 min to ~30–60 s. Compounds with plan 45: plan 45 makes flakes rarer, this lever makes them cheap when they do happen.
+- _What:_ Add a `.verify-cache.json` (gitignored) that records, per pipeline step (`typecheck`, `test:hooks`, `test` (frontend), `test:server`, `test:scripts`, `test:sidecar`, `test:e2e`, `build`), the input hash that produced the last green result. The input hash is the SHA-256 of every file the step reads (resolvable from `tsconfig.json` includes for typecheck, the Vitest `include` globs for each Vitest config, etc.) plus the lockfile hash. On `npm run verify`, each step computes its current input hash; if it matches the cached green hash, the step is skipped with a `[cached]` marker. On a green completion, the cache is updated. Cache invalidates automatically when any input changes. Manual override: `npm run verify -- --no-cache` re-runs everything.
+- _Acceptance:_ (1) Run `npm run verify` on a clean tree → all steps run, cache populated. (2) Re-run immediately, no changes → every step prints `[cached] (input hash unchanged)` and exits in under 5 s total. (3) Touch one file in `src/lib/` → the frontend `test` step re-runs, every other step stays cached. (4) Touch `server/src/foo.ts` → server `test` and `typecheck` re-run, frontend test stays cached. (5) Force a flake on the server suite, retry without touching anything → cached typecheck + frontend + sidecar + Pester + e2e + build skip; only the server suite re-runs. (6) `npm run verify -- --no-cache` runs everything regardless of cache. (7) New Vitest spec covers the input-hash computation + cache hit/miss decision; manual: walk steps 1-6 once.
+- _Key files:_ new `scripts/verify-cache.mjs` (the cache + step-runner); `package.json` `scripts.verify` (delegate to the new script); new `scripts/tests/verify-cache.test.mjs`; `.gitignore` (add `.verify-cache.json`).
+- _Depends on:_ plan 45 shipped (already on this branch — the retry policy means the cache doesn't have to worry about transient-pass-then-fail; one retry stabilises before the green hash is written).
+- _Benefit (user / developer):_ the user explicitly flagged "commits don't waste too much time doing double takes." Today a transient worker death at step 5 of 6 re-runs all 6 steps from scratch on the next push, even though steps 1–4 produced identical output. This cache makes the _recovery_ cost of a flake = the cost of one re-run of the step that actually failed (typically ~60 s for the server suite) instead of ~6 min for the whole pipeline. Even on clean re-pushes after editing one file, the developer feedback loop drops from ~6 min to ~30–60 s. Compounds with plan 45: plan 45 makes flakes rarer, this lever makes them cheap when they do happen.
 
 ---
 
 ## Should — important, not blocking ship
 
-### 1. Bulk-apply library sync on confirm-cast
-
-Source: [`41-bulk-library-sync.md`](features/41-bulk-library-sync.md) (draft) — supersedes plan 09 §"Bulk-accept-all UI".
-
-- _What:_ Add a "Sync N profiles from library" pill at the top of the confirm-cast view that ticks every eligible character's "Sync profile" checkbox in one click. Inverse "Clear all syncs" when all are already ticked. No server changes — existing `handleConfirm` batch (`src/views/confirm-cast.tsx:62-86`) handles the per-character library-cast-override calls already.
-- _Acceptance:_ Pill appears when at least one character has `matchedFrom.bookId + characterId` set; click ticks every such character's checkbox; click again clears; per-character untick still works as the exception path. New Vitest covers pill render + bulk-toggle logic; new Playwright spec walks cold-boot → confirm → click pill → click Confirm cast.
-- _Key files:_ `src/views/confirm-cast.tsx`; new `src/views/confirm-cast.test.tsx`; new `e2e/bulk-sync-library.spec.ts`; new `docs/features/41-bulk-library-sync.md`.
-- _Depends on:_ none. Plan 09's per-character override (shipped) is the API path; this is purely a UI compression.
-- _Benefit (user):_ large manuscripts in long-running series (12+ carryovers) currently demand a click per character before "Confirm cast". One-click bulk + exception ticking matches how the user actually thinks ("reuse all, except these").
+(empty — every Should item has shipped or moved to Could.)
 
 ---
 
