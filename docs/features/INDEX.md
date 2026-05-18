@@ -90,7 +90,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 ### I. Revisions & drift
 
-- [20 — Revisions & drift](20-revisions-and-drift.md) — Pending drafts + drift events + a/b audio audition (rollback-preserved previous audio) + stale-audio banner on voice edits.
 
 ### J. Library & workspace
 
@@ -148,3 +147,4 @@ breadcrumb so cross-references still resolve.
 - [37 — Playwright e2e harness](archive/37-e2e-playwright.md) — Browser-level smoke + on-ramp for visual regression; 14 specs / 30 tests at ship, covering library, upload, analysing, confirm, ready, listen, voices, cast/drawer, theme, toast, manual continuity, revision diff, bulk sync, cover framing, plus per-surface visual baselines (light + dark). Shipped 2026-05-18.
 - [14 — Coqui XTTS sidecar](archive/14-tts-sidecar-coqui.md) — Local sidecar TTS alternate (zero-shot voice cloning); bounded-retry with provider-side classification of transient (network blip / 5xx / 408) vs non-transient (4xx / CUDA-poisoned 503) failures; full failure-path table. Shipped 2026-05-18.
 - [33 — Voice export](archive/33-voice-export.md) — Live Voice (Android audiobook player) tile on the Listen tab; M4B-standards conformance (`stik = 2` + `desc` / `ldes`) regression-guarded; defaults to M4B + sync-folder. Long-form description field shipped alongside. Shipped 2026-05-18.
+- [20 — Revisions & drift](archive/20-revisions-and-drift.md) — Pending drafts + drift events + a/b audio audition (rollback-preserved previous audio) + stale-audio banner on voice edits. Close-out adds startup fsck for half-preserved rollback pairs + mid-flight Reject toast. Shipped 2026-05-18.
