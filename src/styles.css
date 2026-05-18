@@ -184,6 +184,43 @@
 [data-theme='dark'] .bg-red-50 {
   background-color: rgba(239, 68, 68, 0.1);
 }
+[data-theme='dark'] .bg-red-100,
+[data-theme='dark'] .bg-red-100\/60 {
+  background-color: rgba(239, 68, 68, 0.18);
+}
+/* Hover variants of the rose / red status fills. Same selector caveat
+   as `.hover\:bg-white` above — Tailwind compiles
+   `.hover\:bg-rose-100:hover` as its own rule, so the bare `.bg-rose-100`
+   redirect doesn't reach it. Without an override the pill hover flashes
+   back to its near-pink light-mode fill on the dark canvas. Alphas trend
+   one step above the base translucent overlay so the hover elevation
+   still reads. */
+[data-theme='dark'] .hover\:bg-rose-100:hover {
+  background-color: rgba(244, 63, 94, 0.22);
+}
+[data-theme='dark'] .hover\:bg-rose-200:hover {
+  background-color: rgba(244, 63, 94, 0.28);
+}
+[data-theme='dark'] .hover\:bg-red-50:hover {
+  background-color: rgba(239, 68, 68, 0.15);
+}
+/* Translucent `.bg-rose-50\/30` / `/50` / `/70` / `/80` variants used as
+   layered washes on the generation view's progress stripes. Same logic
+   as the `.bg-white\/60` overrides — the bare `.bg-rose-50` rule above
+   targets a different selector, so the /N forms still paint a near-pink
+   wash unless given their own dark override. */
+[data-theme='dark'] .bg-rose-50\/30 {
+  background-color: rgba(244, 63, 94, 0.04);
+}
+[data-theme='dark'] .bg-rose-50\/50 {
+  background-color: rgba(244, 63, 94, 0.06);
+}
+[data-theme='dark'] .bg-rose-50\/70 {
+  background-color: rgba(244, 63, 94, 0.08);
+}
+[data-theme='dark'] .bg-rose-50\/80 {
+  background-color: rgba(244, 63, 94, 0.1);
+}
 [data-theme='dark'] .bg-emerald-50 {
   background-color: rgba(16, 185, 129, 0.1);
 }
@@ -220,8 +257,47 @@
 [data-theme='dark'] .text-rose-300 {
   color: #fca5a5;
 }
+/* Mid-ladder rose text. The light palette uses rose-600/800 on pale
+   fills (book-library "Halted" pill, export-audiobook quota notice,
+   generation view error rows). Collapsing to the same legible tint as
+   rose-700/900 keeps every rose-text paint at ~10:1 on the dark canvas
+   — verified against the contrast invariant in
+   docs/features/42-dark-mode.md. The /70 /80 /90 alpha modifiers
+   ride along on the same lightened tint; flattening the alpha is fine
+   on dark since the underlying text is already light. */
+[data-theme='dark'] .text-rose-600,
+[data-theme='dark'] .text-rose-600\/70,
+[data-theme='dark'] .text-rose-800,
+[data-theme='dark'] .text-rose-800\/90 {
+  color: #fca5a5;
+}
+/* Hover lifts to a brighter rose so the interactive affordance is still
+   visible against the static text colour above. */
+[data-theme='dark'] .hover\:text-rose-700:hover,
+[data-theme='dark'] .hover\:text-rose-800:hover,
+[data-theme='dark'] .hover\:text-rose-900:hover {
+  color: #fecaca;
+}
 [data-theme='dark'] .text-red-700 {
   color: #fca5a5;
+}
+/* Mid-ladder red text. The analysing-view error panel and a handful of
+   modal "remove" affordances paint -600/-800/-900 on red-50 / red-100
+   washes. Same collapse-to-one-legible-tint approach as rose above. */
+[data-theme='dark'] .text-red-600,
+[data-theme='dark'] .text-red-600\/80,
+[data-theme='dark'] .text-red-600\/90,
+[data-theme='dark'] .text-red-700\/70,
+[data-theme='dark'] .text-red-700\/80,
+[data-theme='dark'] .text-red-800,
+[data-theme='dark'] .text-red-800\/90,
+[data-theme='dark'] .text-red-900,
+[data-theme='dark'] .text-red-900\/80 {
+  color: #fca5a5;
+}
+[data-theme='dark'] .hover\:text-red-800:hover,
+[data-theme='dark'] .hover\:text-red-900:hover {
+  color: #fecaca;
 }
 [data-theme='dark'] .text-emerald-800 {
   color: #6ee7b7;
@@ -263,6 +339,13 @@
 }
 [data-theme='dark'] .border-rose-200 {
   border-color: rgba(244, 63, 94, 0.3);
+}
+[data-theme='dark'] .border-red-200 {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+[data-theme='dark'] .border-red-300,
+[data-theme='dark'] .border-red-300\/60 {
+  border-color: rgba(239, 68, 68, 0.35);
 }
 
 /* Page chrome -------------------------------------------------------------- */
