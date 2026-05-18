@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18:** Must 1 · Should 0 · Could 14 · Won't 9
+**Counts as of 2026-05-18:** Must 1 · Should 0 · Could 13 · Won't 9
 
 ---
 
@@ -71,16 +71,6 @@ Source: net-new (2026-05-17). Validated absent in `src/views/listen.tsx` + `src/
 - _Key files:_ `src/views/listen.tsx`; `src/components/mini-player.tsx`; new `src/store/listen-progress-slice.ts`; new server endpoint under `server/src/routes/`.
 - _Depends on:_ persistence-model decision (recommendation: sibling file).
 - _Benefit (user):_ the single feature audiobook users assume exists. Today's behaviour (reset to 0) actively trains the user not to refresh. Also unblocks Should #4's resume-from-position e2e case.
-
-### 4. Global error toast / banner surface
-
-Source: net-new (2026-05-17). Today errors land in `chapters.lastError`; only `src/components/stale-audio-banner.tsx` is wired as a domain banner.
-
-- _What:_ Add a top-level `notifications` slice with `pushToast({ kind: 'error'|'warn'|'info', message, dedupeKey? })` and an auto-dismiss timer. Mount a `<ToastStack/>` in `src/components/layout.tsx`. Route middleware-surfaced errors (analysis-stream, generation-stream, export) through the slice.
-- _Acceptance:_ New Vitest spec asserts dedupe-by-key suppresses repeats; e2e spec triggers a forced 500 on an export and asserts the toast appears + auto-dismisses; existing `stale-audio-banner.tsx` continues to work (it's a domain banner, not a transient toast).
-- _Key files:_ new `src/store/notifications-slice.ts`; new `src/components/toast-stack.tsx`; `src/store/analysis-stream-middleware.ts`; `src/store/generation-stream-middleware.ts`; `src/components/layout.tsx`.
-- _Depends on:_ none.
-- _Benefit (user):_ transient failures today are invisible to the user — they just see the UI not advance. A toast surface closes the "did anything happen?" gap.
 
 ### 5. Audio loudness normalization (ffmpeg `loudnorm`)
 
