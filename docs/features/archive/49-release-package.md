@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-18
 owner: dudarenok
 ---
 
 # 49 — Release packages on git-tag push
 
-> Status: active (PR open)
+> Status: stable
 > Key files: `.github/workflows/release.yml`, `scripts/bump-version.mjs`, `scripts/build-release-zip.mjs`, `scripts/start-app-prod.mjs`, `scripts/stop-app.mjs`, `server/tts-sidecar/scripts/install-kokoro.sh`, `server/src/frontend-static.ts`, `INSTALL.md`, `CONTRIBUTING.md` (Releasing section), `README.md` (Releases link).
 > URL surface: `http://localhost:8080` (production-mode launch via `npm run start:prod`).
 > OpenAPI ops: `PUT /api/user/settings/gemini-key` (new — UI-managed API key).
@@ -76,4 +76,31 @@ owner: dudarenok
 
 ## Ship notes
 
-(Filled when status flips to `stable`. Append: shipped date, commit SHA, first real tag pushed, release URL, any deltas vs. this spec.)
+- **Shipped:** 2026-05-18 as `v1.2.2`.
+- **Commit:** `e367c93c8ea0d75bbaa9b450ee66f57b4086c500` (`chore: bump version to 1.2.2`).
+- **Release:** [v1.2.2 — Audiobook generator](https://github.com/dudarenok-maker/AudioBook-Generator/releases/tag/v1.2.2), asset `audiobook-generator-v1.2.2.zip` + `.sha256`, body sourced from the annotated tag.
+- **Dry-runs that surfaced the deltas:** `v1.2.0` and `v1.2.1` were both tagged and pushed but never published — each fell over on a different cross-platform CI gap. The third real attempt (`v1.2.2`) was the first one to make it through the verify matrix + publish job. Two retracted tags are evidence the verify gate (invariant 5) does what it claims; CONTRIBUTING.md's "delete release + tag, fix forward" recipe was exercised twice end-to-end.
+
+### Deltas vs. spec
+
+The spec called for a single-shot release; reality needed four follow-up fixes before `v1.2.2` shipped. All are now baked into the workflow + npm scripts; future tag pushes don't need any of them re-applied.
+
+1. **ffmpeg install on the verify matrix** (PR #29, `ci(ci): install ffmpeg per-OS before release verify`). GitHub runners don't ship ffmpeg pre-installed; the server's `preflight-ffmpeg.cjs` hook refused to run. Workflow now does `apt-get install` / `brew install` / `choco install` per matrix OS before invoking `verify:quick`. Plan didn't anticipate this — `SKIP_FFMPEG_PREFLIGHT=1` is the documented escape hatch but it silently skips `mp3.test.ts`, weakening the gate.
+2. **Cross-platform test:hooks + test:scripts wrappers** (PR #30, `ci(scripts,ci): cross-platform test:hooks + test:scripts wrappers`). Three sub-issues, all environmental:
+   - `node --test scripts/tests/*.test.mjs` depended on shell glob expansion. Windows cmd.exe doesn't expand. Replaced with `scripts/run-hooks-tests.mjs` (globs in JS via `fast-glob`).
+   - `test:scripts` / `test:sidecar` invoked `powershell` directly. Ubuntu runners only ship `pwsh` (PowerShell 7+). Replaced with `scripts/run-powershell.mjs` that picks `pwsh` when available, falls back to `powershell.exe` on Windows so the maintainer's local environment (which only has Windows PowerShell 5.1) keeps working without a hard `pwsh` prereq.
+   - macOS happened to ship a `powershell` shim that resolved to `pwsh`, so the verify on macOS passed v1.2.0 / v1.2.1 before falling over elsewhere — both wrappers preserve that path.
+3. **E2e cold-load stabilisation** (PR #31, `fix(e2e): absorb cold-load + toast auto-dismiss races on contended hosts`). Pre-push verify on the v1.2.2 bump failed at the local e2e gate — `revision-diff.spec.ts` + 7 others timed out at `page.goto('/')` under parallel-worker contention. Not gated by the release matrix (which runs `verify:quick`, no e2e), but blocked `git push` via the husky pre-push hook. Bumped local `retries: 2` (matching CI) + `use.navigationTimeout: 60_000` in `playwright.config.ts`; bumped `toast-surface.spec.ts`'s auto-dismiss margin from 8 s to 12 s. Post-fix: 0 hard failures, 5 flaky-pass on a 30-spec suite.
+4. **Tag annotation in publish job** (PR #32, `fix(ci): fetch tag annotations in release publish job`). v1.2.2 actually shipped — the workflow went green, the zip + SHA-256 uploaded — but the GitHub Release body came out as the bare commit subject (`chore: bump version to 1.2.2`) instead of the long annotation. Root cause: `actions/checkout@v4` defaults to `fetch-tags: false` even with `fetch-depth: 0`. The tag *object* never reached the runner, so `git tag -l --format='%(contents)'` fell back to the commit subject. Workflow now sets `fetch-tags: true` on the publish job's checkout. v1.2.2's body was restored manually via `gh release edit --notes-file …` from the local tag annotation; future tags need no manual restoration.
+
+### Spec invariants — final status
+
+All seven invariants from the "Invariants to preserve" section held in shipped form:
+
+1. **Version lockstep** — ✅ both `package.json` files at `1.2.2`. `scripts/bump-version.mjs`'s pre-flight check refused to run on the two retracted attempts because the working tree was already at the bumped version (lockstep was intact, just the wrong number); refresher cycle was clean.
+2. **Tag ↔ commit lockstep** — ✅ `v1.2.2` points at the `chore: bump version to 1.2.2` commit. v1.2.0 / v1.2.1 retractions used `git push origin :vX.Y.Z` + `git tag -d vX.Y.Z` per the documented recipe; no force-pushes of published tags.
+3. **Reproducibility from tag** — ✅ the zip content is derived from the tagged commit alone; nothing leaks in from the runner environment apart from the version-string-in-the-archive's-name (which is the tag name itself).
+4. **Asset-exclusion list** — ✅ verified by `scripts/tests/release-manifest.test.mjs` (69 assertions, green on all three OSes in the v1.2.2 matrix).
+5. **Verify gate** — ✅ enforced harder than expected: v1.2.0 + v1.2.1 *did not publish* because verify failed on at least one matrix leg each time. The "publish job needs verify" dependency held.
+6. **Release notes from git** — ✅ restored to true after PR #32. v1.2.2 itself was the counter-example that forced the fix; from here on the workflow is the source.
+7. **API key never echoed** — ✅ `server/src/routes/user-settings.test.ts` and `src/views/account.test.tsx` extensions are green; the dedicated `PUT /api/user/settings/gemini-key` is the only write path and `GET /api/user/settings` returns only `apiKeyStatus: 'set' | 'unset'`.
