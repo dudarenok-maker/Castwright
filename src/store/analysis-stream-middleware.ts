@@ -42,6 +42,7 @@
 import type { Dispatch, Middleware } from '@reduxjs/toolkit';
 import { api, AnalysisError } from '../lib/api';
 import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
+import { notificationsActions } from './notifications-slice';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 
 interface AnalysisRootState {
@@ -152,13 +153,32 @@ export const analysisStreamMiddleware: Middleware = (store) => {
         }
         if (e instanceof AnalysisError) {
           dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message: e.message,
+              dedupeKey: 'analysis-stream',
+            }),
+          );
           return;
         }
+        const fallbackMessage = (e as Error)?.message ?? 'Analysis failed.';
         dispatch(
           analysisActions.setHalted({
             manuscriptId,
             code: 'unknown',
-            message: (e as Error)?.message ?? 'Analysis failed.',
+            message: fallbackMessage,
+          }),
+        );
+        /* Surface the same fallback to the user via toast — closes
+           the "did anything happen?" gap when the analysing view
+           isn't on-screen at the moment the stream dies. Dedupe so a
+           reconnect-and-fail loop doesn't stack. */
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message: fallbackMessage,
+            dedupeKey: 'analysis-stream',
           }),
         );
       }

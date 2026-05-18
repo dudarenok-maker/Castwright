@@ -48,6 +48,7 @@ import {
 import { chaptersActions } from './chapters-slice';
 import { changeLogActions } from './change-log-slice';
 import { revisionsActions } from './revisions-slice';
+import { notificationsActions } from './notifications-slice';
 import { buildPendingRevisionStub } from '../lib/build-pending-revision';
 import type { ActiveStreamSnapshot, ChaptersState } from './chapters-slice';
 import type { CastState } from './cast-slice';
@@ -416,6 +417,21 @@ export const generationStreamMiddleware: Middleware = (store) => {
             ),
           );
         }
+      } else if (ev && ev.type === 'chapter_failed' && ev.chapterId == null && sliceMatchesHandle) {
+        /* Stream-level halt (setup / sidecar / cast issue — chapter id
+           absent). The chapters reducer flipped any in-flight chapter
+           to 'failed' and set lastError; per-chapter rows already
+           surface that. This toast covers the "did anything happen?"
+           gap when the user is on a different view (Cast, Library)
+           when the stream dies. Dedupe on 'generation-stream' so a
+           burst of halt ticks doesn't stack. */
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message: ev.errorReason ?? 'Generation halted.',
+            dedupeKey: 'generation-stream',
+          }),
+        );
       }
     }
 
