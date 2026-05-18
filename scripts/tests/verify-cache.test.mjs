@@ -177,9 +177,49 @@ test('path normalization — Windows and POSIX produce identical hashes', () => 
 });
 
 test('parseFlags recognizes --no-cache anywhere in argv', () => {
-  assert.deepEqual(parseFlags([]), { noCache: false });
-  assert.deepEqual(parseFlags(['--no-cache']), { noCache: true });
-  assert.deepEqual(parseFlags(['a', 'b', '--no-cache', 'c']), { noCache: true });
+  assert.deepEqual(parseFlags([]), { noCache: false, steps: null });
+  assert.deepEqual(parseFlags(['--no-cache']), { noCache: true, steps: null });
+  assert.deepEqual(parseFlags(['a', 'b', '--no-cache', 'c']), { noCache: true, steps: null });
+});
+
+test('parseFlags --steps with space-separated form', () => {
+  assert.deepEqual(parseFlags(['--steps', 'test:hooks,test,test:server']), {
+    noCache: false,
+    steps: ['test:hooks', 'test', 'test:server'],
+  });
+});
+
+test('parseFlags --steps with = form', () => {
+  assert.deepEqual(parseFlags(['--steps=test:hooks,test,test:server']), {
+    noCache: false,
+    steps: ['test:hooks', 'test', 'test:server'],
+  });
+});
+
+test('parseFlags --steps trims whitespace and drops empty segments', () => {
+  assert.deepEqual(parseFlags(['--steps=test:hooks , , test']), {
+    noCache: false,
+    steps: ['test:hooks', 'test'],
+  });
+});
+
+test('parseFlags --steps combines with --no-cache', () => {
+  assert.deepEqual(parseFlags(['--steps=test:hooks,test', '--no-cache']), {
+    noCache: true,
+    steps: ['test:hooks', 'test'],
+  });
+});
+
+test('parseFlags missing --steps argument yields empty list (caller errors out)', () => {
+  // `--steps` with no following arg, or followed by another `--flag`, is a
+  // user-error case that runPipeline surfaces as a non-zero exit rather than
+  // silently running the full pipeline.
+  assert.deepEqual(parseFlags(['--steps']), { noCache: false, steps: [] });
+  assert.deepEqual(parseFlags(['--steps', '--no-cache']), { noCache: true, steps: [] });
+});
+
+test('parseFlags absent --steps leaves steps null (full pipeline)', () => {
+  assert.deepEqual(parseFlags(['some', 'other', 'arg']), { noCache: false, steps: null });
 });
 
 test('hashFile returns __missing__ for absent files (no throw)', () => {
