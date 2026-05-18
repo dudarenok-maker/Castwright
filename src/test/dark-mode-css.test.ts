@@ -38,6 +38,26 @@ describe('dark-mode CSS overrides (styles.css)', () => {
     { selector: '.hover\\:bg-white:hover', label: 'hover solid white' },
     { selector: '.hover\\:bg-white\\/60:hover', label: 'hover /60' },
     { selector: '.hover\\:bg-white\\/70:hover', label: 'hover /70' },
+    /* Plan-42 follow-up (2026-05-18): the analysing-view error panel
+       and the top-bar Halted pill paint -800/-900 red/rose text on
+       pale red/rose fills. Without a dark override they bleed
+       dark-on-dark — the exact bug the user hit in the screenshot
+       that opened this round. */
+    { selector: '.text-rose-800', label: 'rose-800 pill text' },
+    { selector: '.text-rose-600', label: 'rose-600 muted text' },
+    { selector: '.text-red-800', label: 'red-800 error body text' },
+    { selector: '.text-red-900', label: 'red-900 error header text' },
+    { selector: '.text-red-600', label: 'red-600 modal-action text' },
+    { selector: '.text-red-700\\/70', label: 'red-700 /70 caption text' },
+    { selector: '.text-red-800\\/90', label: 'red-800 /90 body text' },
+    { selector: '.text-red-900\\/80', label: 'red-900 /80 label text' },
+    { selector: '.bg-red-100', label: 'red-100 fill' },
+    { selector: '.bg-red-100\\/60', label: 'red-100 /60 fill (details pre)' },
+    { selector: '.hover\\:bg-rose-100:hover', label: 'hover rose-100' },
+    { selector: '.hover\\:bg-rose-200:hover', label: 'hover rose-200 (Halted pill)' },
+    { selector: '.hover\\:bg-red-50:hover', label: 'hover red-50' },
+    { selector: '.border-red-200', label: 'red-200 panel border' },
+    { selector: '.border-red-300\\/60', label: 'red-300 /60 select border' },
   ])('repaints $label ($selector) under [data-theme=\'dark\']', ({ selector }) => {
     const pattern = new RegExp(
       String.raw`\[data-theme='dark'\][^{]*` +
