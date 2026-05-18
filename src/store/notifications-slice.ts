@@ -77,4 +77,11 @@ export const notificationsSlice = createSlice({
 });
 
 export const notificationsActions = notificationsSlice.actions;
-export const selectToasts = (s: { notifications: NotificationsState }) => s.notifications.toasts;
+/* Defensive read: existing test stores composed before plan 48 don't
+   register the notifications slice. Returning an empty list when
+   absent lets the ToastStack mount without crashing those tests; in
+   the real app the slice is always present (registered in
+   src/store/index.ts), so the fallback is invisible in production. */
+const EMPTY_TOASTS: Toast[] = [];
+export const selectToasts = (s: { notifications?: NotificationsState }) =>
+  s.notifications?.toasts ?? EMPTY_TOASTS;

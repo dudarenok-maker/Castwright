@@ -12,6 +12,7 @@ import { libraryActions } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { bookMetaActions, narratorNameFromCast } from '../store/book-meta-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import {
   buildChapterRegenEvent,
   buildCharacterRegenEvent,
@@ -37,6 +38,7 @@ import { BatchCharacterRegenerateModal } from '../modals/batch-character-regener
 import { DriftReportModal } from '../modals/drift-report';
 import { ProfileDrawer } from '../modals/profile-drawer';
 import { ConfirmDialog } from '../modals/confirm-dialog';
+import { ToastStack } from './toast-stack';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { IconRefresh, IconWarning } from '../lib/icons';
 
@@ -58,6 +60,14 @@ export interface LayoutContext {
     onPrimary?: () => void;
   }) => void;
   showError: (title: string, body: ReactNode, eyebrow?: string) => void;
+  /* Plan 48: transient toast surface for stream / network errors.
+     Coexists with showError (modal-level errors with a CTA) and
+     <StaleAudioBanner/> (domain banner anchored under chapter audio).
+     Routes call this when a SSE stream halts, an export 5xx fires,
+     or any other "did anything happen?" signal needs surfacing
+     without interrupting focus. dedupeKey collapses repeated pushes
+     into a single timer-bumped toast. */
+  pushToast: (args: { kind: 'error' | 'warn' | 'info'; message: string; dedupeKey?: string }) => void;
   ttsLifecycle: TtsLifecycle;
 }
 
@@ -133,6 +143,8 @@ export function Layout() {
     setResultDialog({ open: true, kind: 'info', ...args });
   const showError: LayoutContext['showError'] = (title, body, eyebrow) =>
     setResultDialog({ open: true, kind: 'error', title, body, eyebrow });
+  const pushToast: LayoutContext['pushToast'] = (args) =>
+    dispatch(notificationsActions.pushToast(args));
 
   /* Redux → URL sync. Skip the first effect run so a deep-link mount
      (e.g. user opens #/books/abc/cast?chapter=5) doesn't race the route
@@ -529,7 +541,7 @@ export function Layout() {
      hydrate, OS scheme flip). Return value unused at this layer —
      the paint surface is CSS, not React. */
   useTheme();
-  const ctx: LayoutContext = { showInfo, showError, ttsLifecycle };
+  const ctx: LayoutContext = { showInfo, showError, pushToast, ttsLifecycle };
 
   /* Reverse local-analyzer guard for the regenerate modals (D2 in
      plan 32). The modals' onConfirm callbacks all dispatch a
@@ -674,6 +686,8 @@ export function Layout() {
       />
 
       <Outlet context={ctx} />
+
+      <ToastStack />
 
       {stageKind === 'ready' && bookId && (
         <MiniPlayer

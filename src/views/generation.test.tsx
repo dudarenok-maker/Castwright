@@ -40,7 +40,12 @@ function HostedGenerationView(props: ComponentProps<typeof GenerationView>) {
 const UnwrappedGenerationView = GenerationView;
 function HostedOutlet() {
   const ttsLifecycle = useTtsLifecycle();
-  const ctx: LayoutContext = { showInfo: vi.fn(), showError: vi.fn(), ttsLifecycle };
+  const ctx: LayoutContext = {
+    showInfo: vi.fn(),
+    showError: vi.fn(),
+    pushToast: vi.fn(),
+    ttsLifecycle,
+  };
   return <Outlet context={ctx} />;
 }
 
