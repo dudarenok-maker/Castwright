@@ -335,6 +335,41 @@ export interface paths {
         patch: operations["setCoverFraming"];
         trace?: never;
     };
+    "/api/books/{bookId}/listen-progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the per-book resume bookmark
+         * @description Returns `{ chapterId, currentSec, updatedAt }` for the last
+         *     chapter the user listened to in this book, or `null` if no
+         *     listening session has been recorded yet. Backed by a sibling
+         *     `listen-progress.json` next to `state.json` so the
+         *     schema-versioning shape from plan 27 stays stable. Plan
+         *     [47](docs/features/47-listen-progress.md).
+         */
+        get: operations["getListenProgress"];
+        /**
+         * Stamp the per-book resume bookmark
+         * @description Persist `{ chapterId, currentSec }` for this book; the server
+         *     stamps `updatedAt = new Date().toISOString()`. Writes via
+         *     `writeJsonAtomic` to `listen-progress.json` (no backup
+         *     rotation — the file is cheap to re-derive on loss, unlike
+         *     `state.json`). Called debounced from the mini-player's
+         *     `onTimeUpdate` (once per 5 s) plus one final flush on chapter
+         *     switch / close. Plan [47](docs/features/47-listen-progress.md).
+         */
+        put: operations["putListenProgress"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/voices/base": {
         parameters: {
             query?: never;
@@ -893,6 +928,26 @@ export interface components {
             coverUrl: string;
             /** @description Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy. */
             edition?: string;
+        };
+        /**
+         * @description Per-book resume bookmark. The mini-player writes one of these
+         *     every ~5 s during playback (plus one final flush on chapter
+         *     switch / close), and reads the latest record on chapter mount
+         *     to seek the audio element. Persisted as a sibling
+         *     `listen-progress.json` next to `state.json` so the
+         *     schema-versioning shape from plan 27 stays stable. Plan
+         *     [47](docs/features/47-listen-progress.md).
+         */
+        ListenProgress: {
+            /** @description Chapter that was playing when the record was last stamped. */
+            chapterId: number;
+            /** @description Playback position within the chapter, in seconds. */
+            currentSec: number;
+            /**
+             * Format: date-time
+             * @description Server-stamped ISO timestamp. Clients only read this; PUT body omits it.
+             */
+            updatedAt: string;
         };
         /**
          * @description Pan + zoom transform applied to the on-disk cover image at render
@@ -2122,6 +2177,78 @@ export interface operations {
                 content?: never;
             };
             /** @description Body is missing fields or contains non-numeric values */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getListenProgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Listen-progress record, or null when no session has been recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListenProgress"] | null;
+                };
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putListenProgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    chapterId: number;
+                    currentSec: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The just-saved record, including the server-stamped updatedAt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListenProgress"];
+                };
+            };
+            /** @description Body missing chapterId or currentSec */
             400: {
                 headers: {
                     [name: string]: unknown;

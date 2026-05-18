@@ -32,6 +32,7 @@ import { SUPPORTED_APPS } from '../data/listener-apps';
 import { EXPORT_QUEUE } from '../data/export-queue';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
 import { useAppSelector } from '../store';
+import { selectListenProgress } from '../store/listen-progress-slice';
 import type { Chapter, Character, Voice, ListenerApp, ExportQueueItem } from '../lib/types';
 import type { EditableBookMeta, EditableBookMetaField } from '../store/book-meta-slice';
 
@@ -250,6 +251,7 @@ export function ListenView({
               return (
                 <ChapterListenRow
                   key={ch.id}
+                  bookId={bookId}
                   chapter={ch}
                   charactersIn={charsIn}
                   isPlaying={currentTrack === ch.id}
@@ -435,6 +437,7 @@ function CoverArt({
 }
 
 interface ChapterListenRowProps {
+  bookId: string;
   chapter: Chapter;
   charactersIn: Character[];
   isPlaying: boolean;
@@ -443,12 +446,18 @@ interface ChapterListenRowProps {
 }
 
 function ChapterListenRow({
+  bookId,
   chapter,
   charactersIn,
   isPlaying,
   onPlay,
   onRegenerate,
 }: ChapterListenRowProps) {
+  /* Plan 47 — read the per-book resume bookmark. The pill renders
+     only when it points at THIS chapter and the user got past the
+     first 5 s (same noise-floor as the mini-player's save gate). */
+  const resume = useAppSelector(selectListenProgress(bookId));
+  const showResume = resume?.chapterId === chapter.id && resume.currentSec > 5;
   const [progress, setProgress] = useState(0);
   useEffect(() => {
     if (!isPlaying) return;
@@ -478,8 +487,13 @@ function ChapterListenRow({
         CH {String(chapter.id).padStart(2, '0')}
       </span>
       <span className="min-w-0">
-        <span className="block font-semibold text-ink truncate">
-          {stripChapterPrefix(chapter.title)}
+        <span className="flex items-center gap-2">
+          <span className="font-semibold text-ink truncate">
+            {stripChapterPrefix(chapter.title)}
+          </span>
+          {showResume && resume && (
+            <Pill color="library">Resume at {formatTime(resume.currentSec)}</Pill>
+          )}
         </span>
         <span className="block text-xs text-ink/50 truncate mt-0.5">
           With{' '}
