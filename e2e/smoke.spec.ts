@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
 
+/* Plan 58 — file-level serial mode. The cold-boot smoke test
+   intermittently raced other workers' Vite startup under contention. */
+test.describe.configure({ mode: 'serial' });
+
 /**
  * Golden-path smoke test — first Playwright spec.
  *
