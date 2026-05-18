@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18 (post plan 52 commit):** Must 0 · Should 2 · Could 33 · Won't 9
+**Counts as of 2026-05-19 (post plan 53 commit):** Must 0 · Should 1 · Could 31 · Won't 9
 
 ---
 
@@ -38,16 +38,6 @@ Ranking within each bucket = top is highest priority.
 ---
 
 ## Should — important, not blocking ship
-
-### 1. Playback speed control in the mini-player
-
-Source: net-new (2026-05-18). Promoted from Could to Should in Round 0 re-prioritisation — table-stakes audiobook listener feature, missing today.
-
-- _What:_ Add a speed-selector affordance to the mini-player exposing 0.75x / 1.0x / 1.25x / 1.5x / 1.75x / 2.0x rates. Uses `HTMLMediaElement.playbackRate` (browser-native, no audio reprocessing). Selection persists per book in `listen-progress.json` so a chosen rate carries across sessions.
-- _Acceptance:_ Play chapter, click 1.5x → playback speeds up immediately, pitch unchanged. Refresh → still at 1.5x. Vitest covers the slice extension; e2e covers the speed-change + persistence flow.
-- _Key files:_ `src/components/mini-player.tsx` (speed picker UI); `src/store/listen-progress-slice.ts` (extend with `playbackRate`); `server/src/routes/listen-progress.ts` (payload extension); new `e2e/playback-speed.spec.ts`.
-- _Depends on:_ plan 47 (listen progress) shipped — relies on the same persistence seam.
-- _Benefit (user):_ standard audiobook player feature; users expect 0.75x–2x as basic controls. Today only 1x is available, forcing browser zoom-and-pinch or per-chapter regeneration workarounds.
 
 ### 2. Extend verify-cache to `verify:fast` (pre-commit gate)
 
@@ -94,26 +84,6 @@ Source: net-new (2026-05-18). Pairs with Could #1 (loudnorm).
 - _Key files:_ new `src/components/loudness-report.tsx`; `src/views/listen.tsx` (mount); `server/src/tts/mp3.ts` (emit loudness metadata to chapter meta); `server/src/routes/chapter-audio.ts` (surface in meta endpoint).
 - _Depends on:_ Could #1 (loudnorm) — without normalization there's no expected target to compare against.
 - _Benefit (user):_ catch problem chapters before export (e.g. a voice that came out 4 LU softer than the rest). Pairs with Could #1 to make loudness drift visible, not just corrected.
-
-### 4. User-placed markers / bookmarks in the listen view
-
-Source: net-new (2026-05-18). Builds on plan 47's `listen-progress.json` persistence seam.
-
-- _What:_ Extend `listen-progress.json` to carry a `markers: Array<{ id, chapterId, sec, label, kind: 'note' | 'rerecord', createdAt }>` list per book. Listen-view mini-player exposes "Add bookmark here" affordance (keyboard shortcut + button) that captures the current `chapterId + currentSec`. Sidebar lists all markers per chapter, click → seek to that position. Each marker has a short editable label and a kind toggle (general note vs flag for re-record).
-- _Acceptance:_ Drop a marker at 1:23 in chapter 3 with label "re-record this", reload page, marker persists and click-to-seek returns to 1:23 ±1s. Vitest covers the slice (add/edit/delete marker, payload roundtrip). Server Vitest covers the marker payload extension. New e2e spec covers add-marker + reload + seek.
-- _Key files:_ `src/store/listen-progress-slice.ts` (extend reducers); `src/views/listen.tsx` (sidebar + add-button); `src/components/mini-player.tsx` (shortcut); `server/src/routes/listen-progress.ts` (payload extension); new `e2e/listen-bookmarks.spec.ts`.
-- _Depends on:_ plan 47 shipped (already shipped 2026-05-17).
-- _Benefit (user):_ today re-record candidates have nowhere to live — the user must remember a timestamp manually. Markers give a per-book scratchpad of "fix this later" annotations without leaving the listen view.
-
-### 5. Sleep timer + auto-stop on chapter boundary
-
-Source: net-new (2026-05-18). Validated absent in `src/components/mini-player.tsx`.
-
-- _What:_ Add a sleep-timer affordance to the mini-player: countdown picker (15 / 30 / 45 / 60 min, plus "End of chapter" option). When the timer expires, the player pauses and saves the listen-progress position. The "End of chapter" mode pauses at the next chapter boundary regardless of elapsed time. Picker UI is a dropdown menu off a clock icon in the mini-player.
-- _Acceptance:_ Set 5-minute timer, leave playing, after 5 min mini-player auto-pauses and listen-progress is saved. Set "End of chapter" while at 2:00/15:00 → auto-pauses at 15:00 (chapter end). Vitest covers the timer state machine; e2e spec covers the "end of chapter" boundary case.
-- _Key files:_ `src/components/mini-player.tsx`; new `src/lib/sleep-timer.ts` (state machine); `src/store/listen-progress-slice.ts` (no changes — relies on existing save).
-- _Depends on:_ plan 47 shipped (relies on the same save seam).
-- _Benefit (user):_ standard audiobook listener pattern — most listeners fall asleep mid-chapter and want playback to stop at a natural boundary. Parity with standalone audiobook apps.
 
 ### 6. Share a 30-second chapter clip as MP3
 

@@ -1052,7 +1052,9 @@ export interface components {
          *     to seek the audio element. Persisted as a sibling
          *     `listen-progress.json` next to `state.json` so the
          *     schema-versioning shape from plan 27 stays stable. Plan
-         *     [47](docs/features/47-listen-progress.md).
+         *     [47](docs/features/47-listen-progress.md); extended by plan
+         *     [53](docs/features/53-mini-player-feature-pack.md) with
+         *     `playbackRate` + `markers`.
          */
         ListenProgress: {
             /** @description Chapter that was playing when the record was last stamped. */
@@ -1064,6 +1066,42 @@ export interface components {
              * @description Server-stamped ISO timestamp. Clients only read this; PUT body omits it.
              */
             updatedAt: string;
+            /**
+             * @description Plan 53 — per-book playback rate
+             *     (`HTMLMediaElement.playbackRate`). Optional / absent on
+             *     pre-plan-53 records; clients default to 1.0.
+             */
+            playbackRate?: number;
+            /**
+             * @description Plan 53 — user-placed bookmarks. Optional / absent on
+             *     pre-plan-53 records.
+             */
+            markers?: components["schemas"]["ListenMarker"][];
+        };
+        /**
+         * @description Plan 53 — user-placed bookmark inside a book. The listen-view
+         *     sidebar lists these per chapter; click → seek to `sec`.
+         */
+        ListenMarker: {
+            /** @description Client-minted UUID. Server treats as opaque. */
+            id: string;
+            /** @description Chapter the marker was dropped in. */
+            chapterId: number;
+            /** @description Playback position within the chapter, in seconds. */
+            sec: number;
+            /** @description User-editable short label. Empty string is allowed. */
+            label: string;
+            /**
+             * @description `note` = general bookmark; `rerecord` = flag for another voice
+             *     take. Server rejects any other value with 400.
+             * @enum {string}
+             */
+            kind: "note" | "rerecord";
+            /**
+             * Format: date-time
+             * @description Client-stamped ISO timestamp at marker creation.
+             */
+            createdAt: string;
         };
         /**
          * @description Pan + zoom transform applied to the on-disk cover image at render
@@ -2555,6 +2593,20 @@ export interface operations {
                 "application/json": {
                     chapterId: number;
                     currentSec: number;
+                    /**
+                     * @description Plan 53 — per-book playback rate
+                     *     (`HTMLMediaElement.playbackRate`). Optional; absent on
+                     *     pre-plan-53 records. Server validates 0.25 <= rate <= 4.0
+                     *     so a malformed PUT can't poison the on-disk JSON.
+                     */
+                    playbackRate?: number;
+                    /**
+                     * @description Plan 53 — user-placed bookmarks. Optional; absent on
+                     *     pre-plan-53 records. Each marker carries a label + kind
+                     *     so the listen-view sidebar can group "general notes"
+                     *     from "re-record" flags.
+                     */
+                    markers?: components["schemas"]["ListenMarker"][];
                 };
             };
         };

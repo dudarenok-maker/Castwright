@@ -1,17 +1,39 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import {
-  IconWaveform,
-  IconRewind,
+  IconBook,
+  IconClock,
+  IconClose,
+  IconForward,
   IconPause,
   IconPlay,
-  IconForward,
+  IconRewind,
   IconVolume,
-  IconClose,
+  IconWaveform,
 } from '../lib/icons';
 import { api } from '../lib/api';
 import { parseDuration, formatTime } from '../lib/time';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import type { Chapter, ChapterAudio } from '../lib/types';
+import { useAppDispatch, useAppSelector } from '../store';
+import {
+  getPlaybackRate,
+  listenProgressActions,
+  selectListenProgress,
+  selectPendingSeek,
+  type ListenMarker,
+} from '../store/listen-progress-slice';
+import {
+  IDLE,
+  SLEEP_TIMER_PRESETS_MIN,
+  cancel as sleepCancel,
+  isFired as sleepIsFired,
+  notifyChapterEnded as sleepNotifyChapterEnded,
+  remainingMs as sleepRemainingMs,
+  startCountdown as sleepStartCountdown,
+  startEndOfChapter as sleepStartEndOfChapter,
+  tick as sleepTick,
+  type SleepTimerState,
+} from '../lib/sleep-timer';
 
 interface MiniPlayerProps {
   chapter: Chapter | null;
@@ -21,6 +43,18 @@ interface MiniPlayerProps {
   onNext: () => void;
   prevAvailable: boolean;
   nextAvailable: boolean;
+}
+
+/* Plan 53 — playback-rate picker presets. Exposed at module scope so
+   the e2e spec can assert against the same list without importing the
+   component. */
+export const PLAYBACK_RATE_OPTIONS = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0] as const;
+
+/* Format a playbackRate as the picker label ("1.5×"). Single digit
+   fractions get a trailing × to mirror standalone-app conventions
+   (Voice / BookPlayer / Smart AudioBook Player). */
+function formatRate(rate: number): string {
+  return `${Number.isInteger(rate) ? rate.toFixed(1) : rate}×`;
 }
 
 export function MiniPlayer({
@@ -49,6 +83,33 @@ export function MiniPlayer({
   const pendingSeekRef = useRef<number | null>(null);
   const currentSecRef = useRef(0);
   const lastSavedAtRef = useRef(0);
+
+  /* Plan 53 — playback rate + markers + sleep timer.
+
+     The slice is read once at chapter mount so the rate sticks
+     across reload (per-book persistence). Local component state
+     drives the picker UI immediately; the same handler then dispatches
+     the slice update AND the optional PUT to keep on-disk in sync. */
+  const dispatch = useAppDispatch();
+  const persisted = useAppSelector(selectListenProgress(bookId));
+  const [playbackRate, setPlaybackRate] = useState<number>(() => getPlaybackRate(persisted));
+  /* Ref so onLoadedMetadata + the audio.url effect can set
+     el.playbackRate without re-running on every rate change. */
+  const playbackRateRef = useRef(playbackRate);
+  playbackRateRef.current = playbackRate;
+  /* (Marker list itself is read in the Listen view sidebar via the
+     same selector — the mini-player only owns the add-marker entry
+     point.) */
+  /* Sleep timer — per-session, NOT persisted to listen-progress.json
+     (matches every standalone audiobook player). State lives in the
+     mini-player so closing it cancels the timer. */
+  const [sleepTimer, setSleepTimer] = useState<SleepTimerState>(IDLE);
+  /* Hover-driven popovers for the two RHS toolbar buttons. */
+  const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
+  const [sleepMenuOpen, setSleepMenuOpen] = useState(false);
+  /* Marker-add inline form — opens under the player when the user
+     drops a marker so they can type a label without leaving listen. */
+  const [markerDraft, setMarkerDraft] = useState<{ chapterId: number; sec: number } | null>(null);
 
   /* Fetch the audio meta (url, durationSec, segments) whenever the chapter
      changes. We don't store the chapter id on the audio element because the
@@ -117,7 +178,11 @@ export function MiniPlayer({
   }, [bookId, chapter?.id, chapter?.duration]);
 
   /* When the URL lands, point the audio element at it. Resetting src + load
-     also clears any prior playback state from the previous chapter. */
+     also clears any prior playback state from the previous chapter.
+     Plan 53: re-apply the persisted playbackRate every time the
+     element reloads — el.playbackRate snaps back to 1.0 on every
+     new src/load cycle, which would silently undo a 1.5× selection
+     across chapter switches without this. */
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
@@ -125,6 +190,7 @@ export function MiniPlayer({
       el.src = audio.url;
       el.load();
       el.currentTime = 0;
+      el.playbackRate = playbackRateRef.current;
       if (playing)
         void el.play().catch(() => {
           /* user-gesture errors surface via <audio onerror> */
@@ -135,6 +201,61 @@ export function MiniPlayer({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audio.url]);
+
+  /* Plan 53 — reflect the picker selection onto the live element.
+     Separate effect (vs. folding into the url effect) so the user can
+     change rate mid-playback without forcing a re-load. */
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    el.playbackRate = playbackRate;
+  }, [playbackRate]);
+
+  /* Plan 53 — rehydrate the local playbackRate from the slice when
+     the persisted record lands (Layout's per-book hydrate effect
+     resolves asynchronously, so on first paint persisted=null and
+     the local state defaulted to 1.0; once the slice has a value we
+     adopt it). Guard on chapter so we don't re-stomp on every render. */
+  const persistedRate = persisted?.playbackRate;
+  useEffect(() => {
+    if (persistedRate !== undefined && persistedRate !== playbackRate) {
+      setPlaybackRate(persistedRate);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persistedRate]);
+
+  /* Plan 53 — one-shot seek requested by the listen-view marker
+     click. When the request targets the currently-playing chapter,
+     the mini-player's own chapter-mount path doesn't fire (chapter
+     id unchanged), so this effect carries the seek through. When the
+     request targets a DIFFERENT chapter, setCurrentTrack in the
+     listen view has already fired and the mini-player will remount
+     with a fresh pendingSeekRef path; the request still gets
+     consumed here so it doesn't re-fire on the next pass. */
+  const pendingSeek = useAppSelector(selectPendingSeek(bookId));
+  useEffect(() => {
+    if (!pendingSeek || !chapter) return;
+    if (pendingSeek.chapterId !== chapter.id) {
+      /* Chapter-switch case — let the chapter-mount effect's
+         listen-progress fetch carry the seek through pendingSeekRef.
+         Stamp the same value into pendingSeekRef directly so the
+         next onLoadedMetadata fires it (the fetch resolves async). */
+      pendingSeekRef.current = pendingSeek.sec;
+      dispatch(listenProgressActions.consumeSeek({ requestId: pendingSeek.requestId }));
+      return;
+    }
+    const el = audioRef.current;
+    if (el && Number.isFinite(el.duration) && el.duration > 0) {
+      el.currentTime = pendingSeek.sec;
+      setCurrentSec(pendingSeek.sec);
+      currentSecRef.current = pendingSeek.sec;
+    } else {
+      /* Audio not yet loaded for this chapter — stash for the next
+         onLoadedMetadata to consume (same path as the resume seek). */
+      pendingSeekRef.current = pendingSeek.sec;
+    }
+    dispatch(listenProgressActions.consumeSeek({ requestId: pendingSeek.requestId }));
+  }, [pendingSeek, chapter, dispatch]);
 
   /* Reflect the React `playing` flag onto the element. Browsers may also flip
      `playing` externally (ended → false) — those paths use setPlaying directly
@@ -150,6 +271,127 @@ export function MiniPlayer({
       el.pause();
     }
   }, [playing, audio.url]);
+
+  /* Plan 53 — playback-rate picker handler. Three fan-outs:
+     - local state for instant UI feedback
+     - slice update so other surfaces (sidebar pill, future surfaces)
+       see the same rate without re-fetching
+     - PUT to disk so the rate survives reload. Position-only PUTs
+       from onTimeUpdate stay light (no rate echo) because the slice
+       remembers the rate locally; this single rate PUT keeps disk
+       authoritative. */
+  const onChangePlaybackRate = useCallback(
+    (rate: number) => {
+      setPlaybackRate(rate);
+      setSpeedMenuOpen(false);
+      dispatch(listenProgressActions.setPlaybackRate({ bookId, playbackRate: rate }));
+      if (!chapter) return;
+      const chapterId = chapter.id;
+      const sec = currentSecRef.current;
+      void api
+        .putListenProgress(bookId, {
+          chapterId,
+          currentSec: sec,
+          playbackRate: rate,
+        })
+        .catch((err) => {
+          console.warn('[mini-player] playback-rate save failed', (err as Error).message);
+        });
+    },
+    [bookId, chapter, dispatch],
+  );
+
+  /* Plan 53 — marker-add. Captures current chapter + position, opens
+     the inline label form. The actual slice + disk write fires on
+     form submit (or implicit submit when the user closes without
+     typing — empty label is allowed). */
+  const startMarkerDraft = useCallback(() => {
+    if (!chapter) return;
+    setMarkerDraft({ chapterId: chapter.id, sec: currentSecRef.current });
+  }, [chapter]);
+
+  const commitMarkerDraft = useCallback(
+    (label: string) => {
+      if (!markerDraft) return;
+      /* crypto.randomUUID exists in Chromium 92+ / Safari 15.4+; both
+         our e2e + production browsers are well past that. Fall back
+         to a timestamp-id so a stub environment (jsdom < 21) doesn't
+         null-deref. */
+      const id =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `mk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const marker: ListenMarker = {
+        id,
+        chapterId: markerDraft.chapterId,
+        sec: markerDraft.sec,
+        label,
+        kind: 'note',
+        createdAt: new Date().toISOString(),
+      };
+      dispatch(listenProgressActions.addMarker({ bookId, marker }));
+      setMarkerDraft(null);
+      /* Persist the new full marker list. Read the slice for the
+         freshest list rather than appending here — Immer + the
+         dispatch above are synchronous so the next selector call
+         would land the new marker, but we already have it in scope. */
+      const nextMarkers = [...(persisted?.markers ?? []), marker];
+      const chapterId = chapter?.id ?? markerDraft.chapterId;
+      void api
+        .putListenProgress(bookId, {
+          chapterId,
+          currentSec: currentSecRef.current,
+          markers: nextMarkers,
+        })
+        .catch((err) => {
+          console.warn('[mini-player] marker save failed', (err as Error).message);
+        });
+    },
+    [bookId, chapter?.id, dispatch, markerDraft, persisted?.markers],
+  );
+
+  const cancelMarkerDraft = useCallback(() => setMarkerDraft(null), []);
+
+  /* Plan 53 — `M` keyboard shortcut. Bound to window so the user can
+     drop a marker without focusing the mini-player. Inputs / textareas
+     get a pass so typing M inside the marker-label field doesn't trip
+     a recursive marker-drop. */
+  useEffect(() => {
+    if (!chapter) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'm' && e.key !== 'M') return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      e.preventDefault();
+      startMarkerDraft();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [chapter, startMarkerDraft]);
+
+  /* Plan 53 — sleep-timer countdown tick. Only mounted while the
+     timer is in the countdown state; ticks once per second. End-of-
+     chapter mode is driven by the audio onEnded handler below. */
+  useEffect(() => {
+    if (sleepTimer.kind !== 'countdown') return;
+    const id = setInterval(() => {
+      setSleepTimer((prev) => sleepTick(prev));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [sleepTimer.kind]);
+
+  /* Plan 53 — react to the timer firing. Pauses the player + clears
+     the timer back to idle so the user's next play click isn't
+     instantly re-paused. The existing onTimeUpdate flush will catch
+     the resulting position on the next render. */
+  useEffect(() => {
+    if (!sleepIsFired(sleepTimer)) return;
+    setPlaying(false);
+    setSleepTimer(IDLE);
+  }, [sleepTimer]);
 
   if (!chapter) return null;
   const totalSec = audio.durationSec || parseDuration(chapter.duration);
@@ -229,7 +471,149 @@ export function MiniPlayer({
               {formatTime(totalSec)}
             </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 relative">
+            {/* Plan 53 — playback-speed picker. Click toggles a popover
+                with the six preset rates; the current rate sits in
+                the button label so the user can see it at a glance
+                without opening the menu. */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setSpeedMenuOpen((v) => !v);
+                  setSleepMenuOpen(false);
+                }}
+                aria-label="Playback speed"
+                data-testid="mini-player-speed-toggle"
+                aria-expanded={speedMenuOpen}
+                aria-haspopup="menu"
+                className="px-2.5 py-1 rounded-full hover:bg-canvas/10 text-[11px] tabular-nums font-semibold text-canvas/80"
+              >
+                {formatRate(playbackRate)}
+              </button>
+              {speedMenuOpen && (
+                <div
+                  role="menu"
+                  data-testid="mini-player-speed-menu"
+                  className="absolute bottom-full right-0 mb-2 min-w-[100px] rounded-xl bg-ink-soft border border-canvas/10 shadow-float py-1 z-10"
+                >
+                  {PLAYBACK_RATE_OPTIONS.map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={playbackRate === r}
+                      data-testid={`mini-player-speed-option-${r}`}
+                      onClick={() => onChangePlaybackRate(r)}
+                      className={`block w-full text-left px-3 py-1.5 text-xs tabular-nums hover:bg-canvas/10 ${
+                        playbackRate === r ? 'text-canvas font-semibold' : 'text-canvas/70'
+                      }`}
+                    >
+                      {formatRate(r)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Plan 53 — drop-marker button. Captures chapterId +
+                currentSec into a draft, which the inline form below
+                the player commits. `M` shortcut hits the same path. */}
+            <button
+              type="button"
+              onClick={startMarkerDraft}
+              aria-label="Add marker (M)"
+              data-testid="mini-player-add-marker"
+              title="Add marker (M)"
+              className="p-2 rounded-full hover:bg-canvas/10 hidden md:grid place-items-center"
+            >
+              <IconBook className="w-4 h-4" />
+            </button>
+            {/* Plan 53 — sleep timer. Clock icon toggles a popover with
+                the four preset countdowns + end-of-chapter mode. When
+                a timer is armed the button surfaces the remaining
+                time. */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setSleepMenuOpen((v) => !v);
+                  setSpeedMenuOpen(false);
+                }}
+                aria-label="Sleep timer"
+                data-testid="mini-player-sleep-toggle"
+                aria-expanded={sleepMenuOpen}
+                aria-haspopup="menu"
+                title="Sleep timer"
+                className="p-2 rounded-full hover:bg-canvas/10 hidden md:grid place-items-center"
+              >
+                <IconClock className="w-4 h-4" />
+              </button>
+              {sleepMenuOpen && (
+                <div
+                  role="menu"
+                  data-testid="mini-player-sleep-menu"
+                  className="absolute bottom-full right-0 mb-2 min-w-[160px] rounded-xl bg-ink-soft border border-canvas/10 shadow-float py-1 z-10"
+                >
+                  {SLEEP_TIMER_PRESETS_MIN.map((min) => (
+                    <button
+                      key={min}
+                      type="button"
+                      role="menuitem"
+                      data-testid={`mini-player-sleep-option-${min}`}
+                      onClick={() => {
+                        setSleepTimer(sleepStartCountdown(min * 60_000));
+                        setSleepMenuOpen(false);
+                      }}
+                      className="block w-full text-left px-3 py-1.5 text-xs tabular-nums hover:bg-canvas/10 text-canvas/80"
+                    >
+                      {min} min
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid="mini-player-sleep-option-end-of-chapter"
+                    onClick={() => {
+                      setSleepTimer(sleepStartEndOfChapter());
+                      setSleepMenuOpen(false);
+                    }}
+                    className="block w-full text-left px-3 py-1.5 text-xs hover:bg-canvas/10 text-canvas/80"
+                  >
+                    End of chapter
+                  </button>
+                  {sleepTimer.kind !== 'idle' && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="mini-player-sleep-cancel"
+                      onClick={() => {
+                        setSleepTimer(sleepCancel());
+                        setSleepMenuOpen(false);
+                      }}
+                      className="block w-full text-left px-3 py-1.5 text-xs hover:bg-canvas/10 text-rose-300 border-t border-canvas/10 mt-1 pt-1.5"
+                    >
+                      Cancel timer
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+            {sleepTimer.kind === 'countdown' && (
+              <span
+                data-testid="mini-player-sleep-pill"
+                className="text-[10px] tabular-nums text-canvas/60 hidden md:inline"
+              >
+                {formatTime(Math.ceil((sleepRemainingMs(sleepTimer) ?? 0) / 1000))}
+              </span>
+            )}
+            {sleepTimer.kind === 'end-of-chapter' && (
+              <span
+                data-testid="mini-player-sleep-pill"
+                className="text-[10px] uppercase tracking-widest text-canvas/60 hidden md:inline"
+              >
+                End of ch
+              </span>
+            )}
             <button className="p-2 rounded-full hover:bg-canvas/10 hidden md:grid place-items-center">
               <IconVolume className="w-4 h-4" />
             </button>
@@ -238,6 +622,14 @@ export function MiniPlayer({
             </button>
           </div>
         </div>
+        {markerDraft && (
+          <MarkerDraftForm
+            chapterId={markerDraft.chapterId}
+            sec={markerDraft.sec}
+            onCommit={commitMarkerDraft}
+            onCancel={cancelMarkerDraft}
+          />
+        )}
         <audio
           ref={audioRef}
           preload="metadata"
@@ -280,13 +672,92 @@ export function MiniPlayer({
                 currentSecRef.current = pending;
               }
               pendingSeekRef.current = null;
+              /* Plan 53 — re-apply the picked playback rate. Browsers
+                 reset el.playbackRate on every load, even when load is
+                 driven by the same src; without this the user's 1.5×
+                 selection silently undoes after the resume seek. */
+              target.playbackRate = playbackRateRef.current;
             }
           }}
-          onEnded={() => setPlaying(false)}
+          onEnded={() => {
+            setPlaying(false);
+            /* Plan 53 — feed the chapter-end event into the sleep
+               timer state machine. End-of-chapter mode transitions
+               to fired here; countdown / idle states ignore it. */
+            setSleepTimer((prev) => sleepNotifyChapterEnded(prev));
+          }}
           onError={() => setError('Audio failed to load.')}
           className="hidden"
         />
       </div>
     </div>
+  );
+}
+
+/* Plan 53 — inline marker-label form. Renders under the mini-player
+   strip when the user clicks "Add marker" or hits M. Submitting (with
+   or without a label) commits to the slice + disk; Esc / clicking
+   Cancel discards. Kept local to the mini-player so the marker-add
+   flow is self-contained. */
+interface MarkerDraftFormProps {
+  chapterId: number;
+  sec: number;
+  onCommit: (label: string) => void;
+  onCancel: () => void;
+}
+function MarkerDraftForm({ chapterId, sec, onCommit, onCancel }: MarkerDraftFormProps) {
+  const [label, setLabel] = useState('');
+  /* Imperative focus on mount via useEffect — the JSX `autoFocus`
+     attribute trips a11y lint (jsx-a11y/no-autofocus) because it
+     hijacks focus on every page load, but a one-shot focus inside a
+     just-opened inline form IS the right UX (user clicked Add
+     marker and wants to type immediately). */
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+  return (
+    <form
+      data-testid="mini-player-marker-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onCommit(label);
+      }}
+      className="max-w-[1500px] mx-auto px-6 py-2 flex items-center gap-3 bg-ink/95 border-t border-canvas/10"
+    >
+      <span className="text-[10px] uppercase tracking-widest text-canvas/50 shrink-0">
+        Marker · CH {String(chapterId).padStart(2, '0')} · {formatTime(sec)}
+      </span>
+      <input
+        ref={inputRef}
+        type="text"
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        placeholder="Label (optional)…"
+        data-testid="mini-player-marker-input"
+        className="flex-1 bg-transparent border-b border-canvas/20 text-sm text-canvas placeholder:text-canvas/30 focus:outline-none focus:border-canvas/60 py-1"
+      />
+      <button
+        type="submit"
+        data-testid="mini-player-marker-save"
+        className="px-3 py-1 rounded-full bg-canvas text-ink text-xs font-semibold hover:bg-white"
+      >
+        Save
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        data-testid="mini-player-marker-cancel"
+        className="px-3 py-1 rounded-full text-canvas/60 text-xs hover:text-canvas"
+      >
+        Cancel
+      </button>
+    </form>
   );
 }

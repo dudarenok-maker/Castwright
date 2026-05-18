@@ -566,13 +566,20 @@ export async function mockGetListenProgress(bookId: string): Promise<ListenProgr
 
 export async function mockPutListenProgress(
   bookId: string,
-  args: { chapterId: number; currentSec: number },
+  args: {
+    chapterId: number;
+    currentSec: number;
+    playbackRate?: number;
+    markers?: ListenProgressMarker[];
+  },
 ): Promise<ListenProgress> {
   await wait(15);
   const record: ListenProgress = {
     chapterId: args.chapterId,
     currentSec: args.currentSec,
     updatedAt: new Date().toISOString(),
+    ...(args.playbackRate !== undefined ? { playbackRate: args.playbackRate } : {}),
+    ...(args.markers !== undefined ? { markers: args.markers } : {}),
   };
   MOCK_LISTEN_PROGRESS.set(bookId, record);
   return record;
@@ -1008,11 +1015,35 @@ async function realPutBookState(bookId: string, req: PutStateRequest): Promise<v
    updatedAt and returns the saved record. The mini-player calls PUT
    debounced (~once per 5 s) during playback, plus a final flush on
    chapter switch / close. The Listen view reads GET on book hydrate
-   for the "Resume at MM:SS" pill. */
+   for the "Resume at MM:SS" pill.
+   Extended in plan 53 with optional `playbackRate` + `markers`. */
+export interface ListenProgressMarker {
+  id: string;
+  chapterId: number;
+  sec: number;
+  label: string;
+  kind: 'note' | 'rerecord';
+  createdAt: string;
+}
+
 export interface ListenProgress {
   chapterId: number;
   currentSec: number;
   updatedAt: string;
+  /* Plan 53. */
+  playbackRate?: number;
+  markers?: ListenProgressMarker[];
+}
+
+/* Plan 53 — PUT body extension. chapterId/currentSec stay required so
+   the mini-player's debounced position save needs no extra arguments;
+   playbackRate + markers are opt-in patches the picker / marker UI
+   pass. */
+export interface PutListenProgressArgs {
+  chapterId: number;
+  currentSec: number;
+  playbackRate?: number;
+  markers?: ListenProgressMarker[];
 }
 
 async function realGetListenProgress(bookId: string): Promise<ListenProgress | null> {
@@ -1026,7 +1057,7 @@ async function realGetListenProgress(bookId: string): Promise<ListenProgress | n
 
 async function realPutListenProgress(
   bookId: string,
-  args: { chapterId: number; currentSec: number },
+  args: PutListenProgressArgs,
 ): Promise<ListenProgress> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/listen-progress`, {
     method: 'PUT',
