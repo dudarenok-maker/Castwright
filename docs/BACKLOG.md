@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18 (post Round 0 re-prioritisation):** Must 0 · Should 3 · Could 32 · Won't 9
+**Counts as of 2026-05-18 (post plan 37 ship):** Must 0 · Should 3 · Could 31 · Won't 9
 
 ---
 
@@ -253,16 +253,6 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - _Acceptance:_ PRs that break tests are blocked from merge. Workflow runs in under 10 min cold, under 5 min warm.
 - _Key files:_ new `.github/workflows/verify.yml`.
 - _Benefit (technical):_ eliminates the "works on my machine" gap. Pairs with the visual baselines shipped 2026-05-17 (`e2e/visual.spec.ts`) — without CI, the baselines are a tree-falling-in-a-forest.
-
-### 19. More e2e golden paths (voices, cast, profile drawer)
-
-Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
-
-- _What:_ Add Playwright specs for the Voice library tab (open, see voices, pin/unpin) and the cast/profile-drawer flow (open a confirmed book, click a character, see drawer with evidence toggle).
-- _Acceptance:_ Two new spec files (`e2e/voices.spec.ts`, `e2e/cast-drawer.spec.ts`); both run in under 15 s warm.
-- _Key files:_ `e2e/smoke.spec.ts` (pattern to mirror); `src/views/voices.tsx`; `src/modals/profile-drawer.tsx`.
-- _Depends on:_ none. Will be closed by plan 37 ship (see Finish-what-we-started round).
-- _Benefit (technical):_ incremental low-cost coverage growth.
 
 ### 20. Un-quarantine the two e2e flakes (`listen-playback`, `new-book-flow`) by fixing parallel-worker contention
 
