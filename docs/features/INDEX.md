@@ -108,6 +108,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [44 — Pull request hygiene](44-pr-hygiene.md) — PR template + PR-title lint workflow + merge-commit-only / delete-branch-on-merge repo settings; codifies the Summary / Test plan shape PRs #1-#4 already use.
 - [58 — E2E coverage refresh](58-e2e-coverage-refresh.md) — Un-quarantines `listen-playback` + `new-book-flow`, adds binary-upload coverage (EPUB/PDF/MOBI/AZW3), and applies file-level serial mode to five contention-flaky spec files (cover-framing, smoke, revision-diff, toast-surface, theme-toggle).
 - [45 — Vitest pool tuning + one-retry policy](45-vitest-pool-tuning.md) — Caps the server-suite forks pool at 4 and turns on `retry: 1` on both Vitest configs so transient tinypool "Worker exited unexpectedly" failures no longer force a full pre-push re-run.
+- [54 — verify-cache `--steps` filter](54-verify-cache-fast.md) — `--steps=<csv>` selects a subset of the verify pipeline; `verify:fast` (pre-commit) now caches via the plan-50 runner, dropping warm pre-commits to under 1 s on no-source-change commits.
 - [46 — Lint, format, a11y baseline](archive/46-lint-format-a11y.md) — ESLint 8 + Prettier 3 + axe-core on four core views; lint prepended to `verify`. Shipped 2026-05-18.
 - [48 — Global toast surface](archive/48-toast-surface.md) — `notifications` slice + `<ToastStack/>`; stream-middleware halts + export 5xx dispatch through it; dedupe-by-key collapses repeats; auto-dismiss 6 s. Shipped 2026-05-18.
 
