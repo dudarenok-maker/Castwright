@@ -1,6 +1,12 @@
+---
+status: stable
+shipped: 2026-05-18
+owner: null
+---
+
 # Listen view
 
-> Status: PARTIAL: header, metadata editor, and chapter playback wired end-to-end; listener-app handoffs, download tiles, export-queue actions, and cover Replace/Regenerate intentionally mocked with "Coming soon" affordances
+> Status: stable — header, metadata editor, chapter playback, cover Replace/Regenerate, export-queue Copy/Remove, and five of seven listener-app tiles wired end-to-end. Remaining gaps (download tiles, queue Retry/Download, Apple Books, Plex, real waveform peaks) all tracked as discrete BACKLOG Could entries (#31 / #32 / #33 / #34 / #35).
 > Key files: `src/views/listen.tsx`, `src/views/listen.test.tsx`, `src/store/book-meta-slice.ts`, `src/store/book-meta-slice.test.ts`, `src/components/waveform.tsx`, `src/components/mini-player.tsx`, `src/lib/api.ts` (`getChapterAudio`), `src/data/export-queue.ts`, `src/data/listener-apps.ts`, `server/src/routes/chapter-audio.ts`
 > URL surface: `#/books/:bookId/listen`
 > OpenAPI ops: `GET /api/books/:bookId/chapters/:chapterId/audio` (JSON meta) + `audio.mp3` (file with range support, served via `server/src/routes/chapter-audio.ts`); `PUT /api/books/:bookId/state` slice='state' carries editable metadata
@@ -93,25 +99,45 @@ Run against the canonical e2e manuscript (`~/Downloads/Bonus Keefe Story.txt`, s
 16. With `VITE_USE_MOCKS=false`, server + sidecar running, generate at least one chapter end-to-end first so an MP3 lives on disk under `<bookDir>/audio/<slug>.mp3`. Open the Listen view, click play on that chapter. The mini-player slides up, the `<audio>` element's `src` points at `/api/books/:bookId/chapters/:chapterId/audio.mp3`, audio plays, the scrubber advances in real time. Click somewhere mid-bar → `<audio>.currentTime` jumps and playback resumes from there (range request returns 206). Click next / prev to swap chapters → previous chapter's audio stops synchronously; new chapter loads.
 17. Negative regression: click play on a chapter that has no audio yet. The mini-player surfaces "Chapter audio fetch failed (404): Chapter audio not found." via the `setError` path; the rest of the Listen view continues to work.
 
-## KNOWN: scaffolded
+## Listener-app integration status (corrected 2026-05-18)
 
-What's still scaffolded after plan 18a (cover + queue-action wiring slice, shipped 2026-05-18):
+The original plan 18 KNOWN-scaffolded section claimed "All six listener-app cards disabled" — that prediction is stale. Live integrations shipped piecemeal across plans 32 / 33 / 34. Current state:
+
+**Live (5 of 7 tiles):**
+
+- **PocketBook** — `appHint: 'pocketbook'`, opens export modal on Download-to-phone tab (plan 32).
+- **Voice** — `appHint: 'voice'`, opens export modal forced to M4B + sync-folder (plan 33).
+- **Smart AudioBook Player** — `appHint: 'smart_audiobook'`, opens export modal forced to MP3-folder + sync-folder (plan 34 B2).
+- **BookPlayer** — `appHint: 'bookplayer'`, opens export modal forced to MP3-folder + sync-folder (plan 34 B3).
+- **Audiobookshelf** — `appHint: 'audiobookshelf'`, opens export modal forced to MP3-folder + sync-folder (plan 34 B4).
+
+**Coming soon (2 of 7 tiles):**
+
+- **Apple Books** — `[BACKLOG Could #31]`. Closed-library API requires Mac drag-into-Books or iOS AirDrop / Files import.
+- **Plex** — `[BACKLOG Could #32]`. Self-hosted; either manual library upload or direct API push with a stored Plex token.
+
+**`AppHandoffModal` infrastructure:** still mounted in `src/components/layout.tsx` (line 737) and the walkthrough fixtures live in `src/data/walkthroughs.ts`, but **none of the live tiles dispatch `setHandoffApp(app)`** — they go through the export modal (`setExportModal({ tab, appHint })`) which is the simpler "configure-then-export" path. The handoff-walkthrough infrastructure is kept for future per-app rich-walkthrough flows (Apple Books / Plex may want it) but is not load-bearing today.
+
+## KNOWN: still scaffolded after plan 18b (2026-05-18)
 
 - `mockGetChapterAudio` returns `url: null`; no audio plays in mock mode by design.
 - Listen-view waveform card still derives from the mock `peaks: float[240]`; the real chapter-audio meta endpoint returns `peaks: []`. Tracked as `[BACKLOG Could #35]`.
-- Listener-app "Send to …" buttons (BookPlayer / Smart AudioBook Player / Apple Books / Plex) are disabled; the `AppHandoffModal` walkthrough is unreachable from those tiles. Plan 18b wires PocketBook + Audiobookshelf; the other four are tracked as `[BACKLOG Could #29-32]` per-app.
 - Download tiles (m4b chaptered, MP3 ZIP, streaming link) and the header Download/Share buttons remain non-functional stubs. Tracked as `[BACKLOG Could #33]`.
 - Export queue Retry + Download row actions remain disabled. Tracked as `[BACKLOG Could #34]`. Copy link + Remove are wired (plan 18a).
+- Apple Books + Plex listener-app tiles remain Coming Soon — `[BACKLOG Could #31, #32]`.
 
 Shipped in plan 18a (2026-05-18):
 
 - Metadata-editor cover Replace + Regenerate buttons. Replace opens `CoverPicker` on Upload tab; Regenerate opens it on Search tab. The existing per-card cover-tile click was already wired; the editor buttons now route through the same modal via a new `initialTab` prop on `CoverPicker`.
 - Export-queue row actions: **Copy link** writes the row's URL to `navigator.clipboard` + pushes an `info` toast via the plan 48 notification surface; **Remove** dispatches `exportsActions.exportDismissed({ bookId, exportId })`. Mock-fallback fixture rows (synthetic IDs) accept the dispatch as a no-op since they don't live in `byBookId` — acceptable mock-mode degradation. Pinned by `src/views/listen.test.tsx` "metadata-editor cover buttons" + "export-queue per-row actions" describes.
 
-## Out of scope
+## Out of scope (architectural, unchanged)
 
-- Real export pipeline / download URL minting.
-- Real listener-app handoff (PocketBook will be first).
-- Skipping silence / variable playback speed / sleep timer.
-- Live transcript sync with playback.
-- Cover-art upload or regeneration.
+- Skipping silence / variable playback speed / sleep timer — listening-UX cluster; tracked as BACKLOG Should #1 (playback speed) + Could (markers, sleep timer, share clip).
+- Live transcript sync with playback — not on the v1 roadmap.
+
+## Ship notes
+
+- **v1 partial shipped 2026-05-17**: header, metadata editor, chapter playback, range-request audio streaming.
+- **Plan 18a slice shipped 2026-05-18**: cover Replace + Regenerate buttons; export-queue Copy + Remove row actions.
+- **Plan 18b correction shipped 2026-05-18**: documented that 5 of 7 listener-app tiles are live (via the export modal, not the AppHandoffModal walkthrough); remaining 2 (Apple Books, Plex) filed as BACKLOG Could #31/#32; download tiles + queue Retry/Download + waveform peaks filed as Could #33/#34/#35. Plan flips to stable with all remaining gaps trackable through BACKLOG entries.
