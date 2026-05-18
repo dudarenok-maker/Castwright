@@ -1,0 +1,30 @@
+# Default: let git pick text vs binary; honour core.autocrlf for source.
+* text=auto
+
+# Husky hooks MUST be LF — they're sh scripts run by git, and CRLF makes
+# `sh` exit with "Exec format error" on Windows checkouts with
+# core.autocrlf=true. Without this rule, switching branches on a
+# Windows machine corrupts the hooks and blocks every commit.
+.husky/* text eol=lf
+
+# Shell + helper scripts: same reasoning.
+*.sh text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+
+# Generated files Prettier shouldn't touch — also keep them LF so the
+# openapi-typescript regen diff stays clean across platforms.
+src/lib/api-types.ts text eol=lf
+
+# Binary files we never want autocrlf to touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.mp3 binary
+*.wav binary
+*.m4b binary
+*.zip binary

@@ -334,6 +334,7 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     const ctx: LayoutContext = {
       showInfo,
       showError,
+      pushToast: vi.fn(),
       ttsLifecycle: {
         state: 'unreachable',
         evictionNotice: null,
@@ -452,6 +453,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
     const ctx: LayoutContext = {
       showInfo,
       showError,
+      pushToast: vi.fn(),
       ttsLifecycle: {
         state: 'unreachable',
         evictionNotice: null,

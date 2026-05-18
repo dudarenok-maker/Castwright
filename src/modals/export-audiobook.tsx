@@ -26,6 +26,7 @@ import { api, ExportIncompleteError } from '../lib/api';
 import { useAppDispatch, useAppSelector } from '../store';
 import { exportsActions } from '../store/exports-slice';
 import { saveAccountSettings } from '../store/account-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import type { BookExportJob, BookExportRequest } from '../lib/types';
 
 interface Props {
@@ -264,9 +265,26 @@ export function ExportAudiobookModal({
       setActiveJobId(job.id);
     } catch (e) {
       if (e instanceof ExportIncompleteError) {
+        /* 409 — the server is missing a chapter file. Keep the
+           in-modal missing-chapters list so the user has a direct
+           "regenerate this" path; toasting + closing the modal would
+           lose the per-chapter affordance. */
         setMissing(e.missing);
       } else {
-        setMissing([(e as Error).message]);
+        /* Everything else (5xx, network, malformed response) is not
+           a missing-chapter problem — funnelling it into the missing
+           list rendered the error text as a fake "chapter". Push it
+           through the global toast surface and dismiss the modal so
+           the user sees the failure even after they navigate away.
+           dedupeKey 'export' collapses retry storms. */
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message: (e as Error).message ?? 'Export failed.',
+            dedupeKey: 'export',
+          }),
+        );
+        onClose();
       }
     } finally {
       setSubmitting(false);
