@@ -29,7 +29,12 @@ export const initialCharacters: Character[] = [
         note: 'Lightly literary cadence; comma-split parallelism is a hallmark.',
       },
     ],
-    matchedFrom: { bookTitle: 'Solway Bay', confidence: 0.94 },
+    matchedFrom: {
+      bookTitle: 'Solway Bay',
+      bookId: 'sb',
+      characterId: 'narrator_sb',
+      confidence: 0.94,
+    },
   },
   {
     id: 'halloran',
@@ -88,6 +93,15 @@ export const initialCharacters: Character[] = [
         note: 'Habitual mode: sotto voce honesty.',
       },
     ],
+    /* Plan 41 — fixture: Eliza is also a returning character from a prior
+       series book, so the bulk-sync pill on confirm-cast has more than one
+       eligible card to toggle in mock mode. */
+    matchedFrom: {
+      bookTitle: 'Solway Bay',
+      bookId: 'sb',
+      characterId: 'eliza_sb',
+      confidence: 0.89,
+    },
   },
   {
     id: 'marcus',
@@ -114,5 +128,14 @@ export const initialCharacters: Character[] = [
       },
       { quote: '“Cold supper it is, then.”', note: 'Single line; self-directed; resigned warmth.' },
     ],
+    /* Plan 41 — fixture: Marcus is also a returning character from a prior
+       series book. Combined with the narrator + Eliza seeds, the bulk-sync
+       pill renders with N=3 in mock mode. */
+    matchedFrom: {
+      bookTitle: 'Solway Bay',
+      bookId: 'sb',
+      characterId: 'marcus_sb',
+      confidence: 0.86,
+    },
   },
 ];
