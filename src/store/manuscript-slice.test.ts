@@ -505,3 +505,72 @@ describe('manuscriptSlice — bookId anchoring', () => {
     expect(next.title).toBeNull();
   });
 });
+
+describe('manuscriptSlice — applyChapterRestructure', () => {
+  it('rewrites chapterId + sentence id per the remap table (reorder shape)', () => {
+    const start = baseState([
+      { id: 1, chapterId: 1, characterId: 'a', text: 'A1' } as Sentence,
+      { id: 2, chapterId: 1, characterId: 'a', text: 'A2' } as Sentence,
+      { id: 1, chapterId: 2, characterId: 'b', text: 'B1' } as Sentence,
+    ]);
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.applyChapterRestructure({
+        sentenceRemap: [
+          // Swap chapters: old 1 → new 2, old 2 → new 1; sentence ids unchanged.
+          { oldChapterId: 1, oldSentenceId: 1, newChapterId: 2, newSentenceId: 1 },
+          { oldChapterId: 1, oldSentenceId: 2, newChapterId: 2, newSentenceId: 2 },
+          { oldChapterId: 2, oldSentenceId: 1, newChapterId: 1, newSentenceId: 1 },
+        ],
+      }),
+    );
+    // Sorted by (chapterId, id): old (2,1) → (1,1) first; old (1,1)/(1,2) → (2,1)/(2,2)
+    expect(next.sentences.map((s) => ({ id: s.id, chapterId: s.chapterId, text: s.text }))).toEqual([
+      { id: 1, chapterId: 1, text: 'B1' },
+      { id: 1, chapterId: 2, text: 'A1' },
+      { id: 2, chapterId: 2, text: 'A2' },
+    ]);
+  });
+
+  it('renumbers per-chapter sentence ids on merge (4 sentences collapse into one chapter)', () => {
+    const start = baseState([
+      { id: 1, chapterId: 1, characterId: 'a', text: 'A1' } as Sentence,
+      { id: 2, chapterId: 1, characterId: 'a', text: 'A2' } as Sentence,
+      { id: 1, chapterId: 2, characterId: 'b', text: 'B1' } as Sentence,
+      { id: 2, chapterId: 2, characterId: 'b', text: 'B2' } as Sentence,
+    ]);
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.applyChapterRestructure({
+        sentenceRemap: [
+          { oldChapterId: 1, oldSentenceId: 1, newChapterId: 1, newSentenceId: 1 },
+          { oldChapterId: 1, oldSentenceId: 2, newChapterId: 1, newSentenceId: 2 },
+          { oldChapterId: 2, oldSentenceId: 1, newChapterId: 1, newSentenceId: 3 },
+          { oldChapterId: 2, oldSentenceId: 2, newChapterId: 1, newSentenceId: 4 },
+        ],
+      }),
+    );
+    expect(next.sentences.map((s) => s.id)).toEqual([1, 2, 3, 4]);
+    expect(next.sentences.every((s) => s.chapterId === 1)).toBe(true);
+    expect(next.sentences.map((s) => s.text)).toEqual(['A1', 'A2', 'B1', 'B2']);
+    // characterId preserved
+    expect(next.sentences.map((s) => s.characterId)).toEqual(['a', 'a', 'b', 'b']);
+  });
+
+  it('drops sentences with no remap entry (orphan / split-discarded halves)', () => {
+    const start = baseState([
+      { id: 1, chapterId: 1, characterId: 'a', text: 'kept' } as Sentence,
+      { id: 99, chapterId: 1, characterId: 'a', text: 'orphan' } as Sentence,
+    ]);
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.applyChapterRestructure({
+        sentenceRemap: [
+          { oldChapterId: 1, oldSentenceId: 1, newChapterId: 1, newSentenceId: 1 },
+        ],
+      }),
+    );
+    expect(next.sentences).toHaveLength(1);
+    expect(next.sentences[0].text).toBe('kept');
+  });
+});

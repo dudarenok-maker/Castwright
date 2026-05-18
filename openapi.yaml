@@ -381,6 +381,121 @@ paths:
         '404':
           description: Book or chapter not found
 
+  /api/books/{bookId}/chapters/merge:
+    post:
+      summary: Merge two or more contiguous chapters into one
+      operationId: mergeChapters
+      description: |
+        Concatenates the chapter bodies (joined by `\n\n`), preserves all
+        sentence attribution (text + characterId + voice assignment) by
+        rewriting `chapterId` pointers and renumbering per-chapter
+        sentence ids, and deletes audio for the merged chapter (content
+        changed → must regenerate). Chapters below the merge are
+        renumbered down; their audio files are renamed to match the new
+        slugs (content unchanged, no regen needed).
+
+        Pure remap — no Phase 1 re-analysis is triggered. See
+        `docs/features/51-restructure-chapters.md`.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chapterIds]
+              properties:
+                chapterIds:
+                  type: array
+                  items: { type: integer }
+                  minItems: 2
+                  description: 'IDs of contiguous chapters to merge (≥ 2). Server rejects non-contiguous selections with 400.'
+                mergedTitle:
+                  type: string
+                  description: 'Optional override for the merged chapter title. Defaults to the first member''s title.'
+      responses:
+        '200':
+          description: New chapter list + sentence remap table
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
+        '400': { description: 'Bad request (e.g. non-contiguous ids, fewer than 2 ids)' }
+        '404': { description: Book or chapter not found }
+
+  /api/books/{bookId}/chapters/split:
+    post:
+      summary: Split a chapter into two at a sentence boundary
+      operationId: splitChapter
+      description: |
+        Sentence `afterSentenceId` and everything before it stays in the
+        original chapter; the remainder moves to a new chapter inserted
+        immediately after. Chapter body is split at the byte offset
+        matching the end of sentence `afterSentenceId`, snapped to the
+        next paragraph break.
+
+        Audio for the source chapter is deleted (content changed →
+        regenerate); the new chapter has no prior audio; chapters below
+        the split are renumbered up by 1 and their audio renamed.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chapterId, afterSentenceId]
+              properties:
+                chapterId: { type: integer }
+                afterSentenceId:
+                  type: integer
+                  description: 'Sentence id (per-chapter) after which to split. Cannot be the last sentence — second half would be empty.'
+                newTitle:
+                  type: string
+                  description: 'Optional title for the new (second-half) chapter. Defaults to `"<original> (cont.)"`.'
+      responses:
+        '200':
+          description: New chapter list + sentence remap table
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
+        '400': { description: 'Bad request (e.g. split after last sentence)' }
+        '404': { description: Book, chapter, or sentence not found }
+
+  /api/books/{bookId}/chapters/reorder:
+    post:
+      summary: Reorder all chapters into a new sequence
+      operationId: reorderChapters
+      description: |
+        Reassigns chapter ids 1..N in the requested order. Chapter bodies
+        and per-chapter sentence ids are unchanged; sentence `chapterId`
+        pointers are remapped to match the new positions. Audio files
+        are renamed to the new slugs (two-pass via temp name to avoid
+        collisions on permutations). No audio is deleted.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order]
+              properties:
+                order:
+                  type: array
+                  items: { type: integer }
+                  description: 'Permutation of current chapter ids in new desired order.'
+      responses:
+        '200':
+          description: New chapter list + sentence remap table
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
+        '400': { description: 'Bad request (e.g. order length mismatch, duplicate or unknown ids)' }
+        '404': { description: Book not found }
+
   /api/books/{bookId}/cover/candidates:
     get:
       summary: List OpenLibrary cover candidates for a book
@@ -2122,6 +2237,47 @@ components:
         characterId: { type: string }
         startMs: { type: integer }
         endMs: { type: integer }
+
+    ChapterRestructureResponse:
+      type: object
+      required: [chapters, sentenceRemap]
+      description: |
+        Response envelope shared by `mergeChapters`, `splitChapter`, and
+        `reorderChapters`. `chapters` is the new state.json chapter list
+        (ids re-issued 1..N); `sentenceRemap` is the translation table
+        the frontend applies to its sentence cache so it can rewrite
+        `chapterId` + per-chapter `id` without re-fetching the full
+        sentence list. See `docs/features/51-restructure-chapters.md`.
+      properties:
+        chapters:
+          type: array
+          items:
+            type: object
+            required: [id, title, slug]
+            properties:
+              id: { type: integer }
+              title: { type: string }
+              slug: { type: string }
+              duration: { type: string }
+              excluded: { type: boolean }
+              audioModelKey:
+                type: string
+                enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+              audioRenderedAt: { type: string, format: date-time }
+        sentenceRemap:
+          type: array
+          description: |
+            Per-sentence translation entries. Entries whose `oldChapterId`
+            doesn't appear in this list are unchanged (mostly chapters
+            before the affected range).
+          items:
+            type: object
+            required: [oldChapterId, oldSentenceId, newChapterId, newSentenceId]
+            properties:
+              oldChapterId: { type: integer }
+              oldSentenceId: { type: integer }
+              newChapterId: { type: integer }
+              newSentenceId: { type: integer }
 
     # --- Audiobook export ------------------------------------------
     BookExportRequest:
