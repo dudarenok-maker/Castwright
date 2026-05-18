@@ -296,7 +296,7 @@ git push origin vX.Y.Z
 The workflow runs `verify:quick` on Ubuntu + macOS + Windows runners, then
 builds the platform-independent zip + SHA-256 on Ubuntu and publishes the
 GitHub Release using the tag annotation as the body. Full spec:
-[`docs/features/49-release-package.md`](docs/features/49-release-package.md).
+[`docs/features/archive/49-release-package.md`](docs/features/archive/49-release-package.md).
 
 **Invariants the bumper enforces** — read these before you bypass it:
 
