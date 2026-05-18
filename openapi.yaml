@@ -497,6 +497,61 @@ paths:
         '400': { description: Body is missing fields or contains non-numeric values }
         '404': { description: Book not found, or book has no cover pinned }
 
+  /api/books/{bookId}/listen-progress:
+    get:
+      summary: Read the per-book resume bookmark
+      operationId: getListenProgress
+      description: |
+        Returns `{ chapterId, currentSec, updatedAt }` for the last
+        chapter the user listened to in this book, or `null` if no
+        listening session has been recorded yet. Backed by a sibling
+        `listen-progress.json` next to `state.json` so the
+        schema-versioning shape from plan 27 stays stable. Plan
+        [47](docs/features/47-listen-progress.md).
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Listen-progress record, or null when no session has been recorded
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ListenProgress'
+                  - type: 'null'
+        '404': { description: Book not found }
+    put:
+      summary: Stamp the per-book resume bookmark
+      operationId: putListenProgress
+      description: |
+        Persist `{ chapterId, currentSec }` for this book; the server
+        stamps `updatedAt = new Date().toISOString()`. Writes via
+        `writeJsonAtomic` to `listen-progress.json` (no backup
+        rotation — the file is cheap to re-derive on loss, unlike
+        `state.json`). Called debounced from the mini-player's
+        `onTimeUpdate` (once per 5 s) plus one final flush on chapter
+        switch / close. Plan [47](docs/features/47-listen-progress.md).
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chapterId, currentSec]
+              properties:
+                chapterId: { type: integer, minimum: 0 }
+                currentSec: { type: number, minimum: 0 }
+      responses:
+        '200':
+          description: The just-saved record, including the server-stamped updatedAt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListenProgress' }
+        '400': { description: Body missing chapterId or currentSec, or contains non-numeric values }
+        '404': { description: Book not found }
+
   /api/voices/base:
     get:
       summary: List the raw model voices the configured engines expose
@@ -1157,6 +1212,31 @@ components:
         edition:
           type: string
           description: 'Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy.'
+
+    ListenProgress:
+      type: object
+      required: [chapterId, currentSec, updatedAt]
+      description: |
+        Per-book resume bookmark. The mini-player writes one of these
+        every ~5 s during playback (plus one final flush on chapter
+        switch / close), and reads the latest record on chapter mount
+        to seek the audio element. Persisted as a sibling
+        `listen-progress.json` next to `state.json` so the
+        schema-versioning shape from plan 27 stays stable. Plan
+        [47](docs/features/47-listen-progress.md).
+      properties:
+        chapterId:
+          type: integer
+          minimum: 0
+          description: 'Chapter that was playing when the record was last stamped.'
+        currentSec:
+          type: number
+          minimum: 0
+          description: 'Playback position within the chapter, in seconds.'
+        updatedAt:
+          type: string
+          format: date-time
+          description: 'Server-stamped ISO timestamp. Clients only read this; PUT body omits it.'
 
     CoverFraming:
       type: object
