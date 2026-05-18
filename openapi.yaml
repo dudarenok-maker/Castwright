@@ -2116,6 +2116,62 @@ components:
       properties:
         pending: { type: array, items: { $ref: '#/components/schemas/Revision' } }
         drift: { type: array, items: { $ref: '#/components/schemas/DriftEvent' } }
+        timeline:
+          description: >-
+            Per-chapter chronological log of accept / reject / rollback events
+            written by the frontend at user-action time. Read-back by the
+            Revision History view (plan 55). Keyed by chapterId; each chapter's
+            value is an append-only list in insertion order (oldest first).
+            Optional — older books without timeline entries omit it.
+          type: object
+          additionalProperties:
+            type: array
+            items: { $ref: '#/components/schemas/TimelineEntry' }
+
+    TimelineEntry:
+      type: object
+      required: [id, chapterId, eventKind, timestamp, status]
+      properties:
+        id:
+          type: string
+          description: Stable unique id (the revision id for accept/reject; a
+            generated id for rollback events).
+        chapterId: { type: integer }
+        characterId:
+          type: string
+          description: Optional — set on accept/reject (the character whose
+            revision was processed); absent on rollback events.
+        eventKind:
+          type: string
+          enum: [accepted, rejected, rolled-back]
+          description: >-
+            `accepted` / `rejected` mark the moment the user committed to or
+            discarded a pending revision. `rolled-back` marks a rollback action
+            that promoted a prior chapter render back to live.
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp the event was recorded.
+        revisionId:
+          type: string
+          description: For rollback entries — the timeline entry id being
+            rolled back to/from. Absent on accept/reject.
+        status:
+          type: string
+          enum: [active, rolled-back-from]
+          description: >-
+            `active` for the entry that represents the current chapter state
+            on disk. `rolled-back-from` for entries whose effects were undone
+            by a subsequent rollback (the entry is preserved for history but
+            no longer represents live state).
+        reversible:
+          type: boolean
+          description: >-
+            True when this entry's prior audio is still on disk (i.e. plan
+            20's `.previous.<slug>.mp3` exists for the chapter and this is
+            the most recent reversible accept/reject). The frontend only
+            enables the Rollback button when this is true. Multi-step rollback
+            (snapshot-per-entry) is parked for v1.4.0.
 
     Revision:
       type: object

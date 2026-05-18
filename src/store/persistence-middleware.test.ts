@@ -133,9 +133,38 @@ describe('persistenceMiddleware — payload shape', () => {
     const state = baseState({ revisions: { pending: [{ id: 'r1' }], drift: [{ id: 'd1' }] } });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/dismissDrift' });
     await advance(500);
+    /* Plan 55 — `timeline` rides along with every revisions persist so a
+       reload reflects the per-chapter history. The test state omits it
+       (undefined); Vitest's deepEqual treats undefined own-props as absent,
+       so this assertion still pins the dismissed-drift case shape. */
     expect(putBookState).toHaveBeenCalledWith('book-1', {
       slice: 'revisions',
       patch: { pending: [{ id: 'r1' }], drift: [{ id: 'd1' }] },
+    });
+  });
+
+  it('sends `timeline` alongside the revisions patch on every revisions action (plan 55)', async () => {
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      revisions: {
+        pending: [{ id: 'r1' }],
+        drift: [],
+        dismissed: [],
+        acceptedSelections: {},
+        timeline: { 3: [{ id: 'r0', chapterId: 3, eventKind: 'accepted' }] },
+      },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/acceptRevision' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'revisions',
+      patch: {
+        pending: [{ id: 'r1' }],
+        drift: [],
+        dismissed: [],
+        acceptedSelections: {},
+        timeline: { 3: [{ id: 'r0', chapterId: 3, eventKind: 'accepted' }] },
+      },
     });
   });
 
