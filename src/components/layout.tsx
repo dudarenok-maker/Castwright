@@ -13,6 +13,7 @@ import { voicesActions } from '../store/voices-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { bookMetaActions, narratorNameFromCast } from '../store/book-meta-slice';
 import { notificationsActions } from '../store/notifications-slice';
+import { listenProgressActions } from '../store/listen-progress-slice';
 import {
   buildChapterRegenEvent,
   buildCharacterRegenEvent,
@@ -431,6 +432,20 @@ export function Layout() {
           })
           .catch((err) => {
             console.warn('[analysis-state] cold-boot fetch failed:', err?.message);
+          });
+
+        /* Plan 47 — hydrate the per-book listen-progress bookmark so
+           the Listen view's "Resume at MM:SS" pill renders on first
+           paint. Null result clears any stale slice entry for this
+           book (e.g. the file was deleted on disk). */
+        api
+          .getListenProgress(bookId)
+          .then((progress) => {
+            if (cancelled) return;
+            dispatch(listenProgressActions.hydrate({ bookId, progress }));
+          })
+          .catch((err) => {
+            console.warn('[listen-progress] hydrate skipped:', (err as Error).message);
           });
       })
       .catch((err) => {
