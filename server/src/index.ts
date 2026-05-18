@@ -46,6 +46,7 @@ import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, ensureWorkspace } from './workspace/paths.js';
 import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
+import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
 import {
   readUserSettings,
   getResolvedSidecarUrl,
@@ -87,6 +88,30 @@ void migrateLegacyChangeLogs()
     }
   })
   .catch((err) => console.warn('[changelog] migration skipped:', err));
+
+/* Plan 20 — sibling fsck for the rollback-preservation pair. The
+   preserve helper (`workspace/preserve-previous-audio.ts`) renames two
+   files (audio + segments) sequentially; a crash between them leaves a
+   half-preserved state. On startup we walk every book's audio root,
+   promote any `.previous.mp3` back to live when the live counterpart
+   is missing (regen crash recovery), and drop orphan
+   `.previous.segments.json` files. Fire-and-forget: never blocks
+   listen, never throws. */
+void fsckAllBooks()
+  .then((r) => {
+    if (r.recovered.length > 0) {
+      console.log(
+        `[fsck] reconciled ${r.recovered.length} rollback-pair half-state(s) on startup ` +
+          `(see workspace/fsck-orphan-audio.ts).`,
+      );
+    }
+    if (r.errors.length > 0) {
+      for (const e of r.errors) {
+        console.warn(`[fsck] ${e.action} failed for ${e.slug}: ${e.message}`);
+      }
+    }
+  })
+  .catch((err) => console.warn('[fsck] sweep skipped:', err));
 app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, maxAge: '1h' }));
 
 app.get('/api/health', (_req, res) => {

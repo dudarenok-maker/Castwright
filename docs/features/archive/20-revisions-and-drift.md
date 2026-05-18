@@ -1,6 +1,12 @@
+---
+status: stable
+shipped: 2026-05-18
+owner: null
+---
+
 # Revisions & drift
 
-> Status: stable — drift detection + pending-revisions a/b audio playback fully wired; pending revisions support per-item or bulk accept/reject with a/b audition driven by server-side rollback preservation
+> Status: stable — drift detection + pending-revisions a/b audio playback fully wired; pending revisions support per-item or bulk accept/reject with a/b audition driven by server-side rollback preservation; startup fsck reconciles half-preserved rollback pairs; mid-flight Reject failures surface via the toast surface.
 > Key files: `src/views/revision-diff.tsx` (a/b player + segment seek), `src/lib/use-ab-playback.ts` (mutual-exclusion hook), `src/lib/build-pending-revision.ts`, `src/modals/drift-report.tsx`, `src/components/stale-audio-banner.tsx`, `src/store/revisions-slice.ts` (`acceptRevision`, `rejectRevision`, `enqueuePending`, `markRevisionPlayable`, `acceptAllPending`, `rejectAllPending`, `dismissDrift`, `hydrateFromBookState`), `src/store/generation-stream-middleware.ts` (enqueue on regen + flip playable on chapter_complete), `src/lib/api.ts` (`pollRevisions`, `getChapterAudioPrevious`, `acceptChapterRevision`, `rejectChapterRevision`), `src/components/layout.tsx` (poll effect + RevisionDiffPlayer wiring + auto-regen handler + onSave-driven stale-audio banner), `server/src/routes/revisions.ts` (drift detector + `autoQueueable` flag), `server/src/routes/generation.ts` (`characterSnapshots` write + `preserveExistingAsPrevious` call), `server/src/workspace/preserve-previous-audio.ts` (rollback helper), `server/src/routes/chapter-audio.ts` (`/audio/previous`, accept/reject endpoints)
 > URL surface: indirect — revisions diff opens from `ready` views; drift report is a modal
 > OpenAPI ops: `GET /api/books/:bookId/revisions` (real backend computes drift from per-chapter snapshots); `GET/DELETE /api/books/:bookId/chapters/:chapterId/audio/previous` and `POST .../audio/previous/restore` (a/b audition + accept/reject server side-effects)
@@ -55,18 +61,24 @@ Run `VITE_USE_MOCKS=true`, navigate to a `ready` book view.
 10. Dismiss a drift event. Reload the page. Wait < 30 s. The event does NOT reappear (dismissed id is filtered server-side).
 11. **Attribute drift via library-cast override** (paired with `09-voice-match-pipeline.md`). After confirming cast with the "Sync profile with …" checkbox ticked, open the library (target) book. Within 30 s a `moderate` drift event with factor `attributes` should appear in the drift report for each character whose attribute set differs from the synthesis-time snapshot. Dismissing it stays dismissed across reloads. Changing only attribute ORDER or case (e.g. via a future re-analysis) must NOT re-fire the event.
 
-## KNOWN: scaffolded
+## Shipped as part of plan 20 close-out (2026-05-18)
 
-- `acceptedSelections` is persisted but not yet consumed by anything in-app. Future per-segment TTS regen will read it to know which takes to re-render.
-- Rollback atomicity: the preserve helper renames two files (audio + segments.json). A crash between them leaves a half-preserved state. A startup `fsck` in `server/src/workspace/scan.ts` that pairs orphan halves is a documented follow-up — the gap is small (sub-millisecond window) and recoverable (orphan halves are harmless until a manual cleanup runs).
-- Mid-flight Reject surfaces as a console warning, not a user-facing toast — UI polish follow-up.
+- **Rollback fsck on server startup** — `server/src/workspace/fsck-orphan-audio.ts` walks every book's `audio/` root on startup, promotes `.previous.mp3` back to live when the live counterpart is missing (regen-crash recovery), and drops orphan `.previous.segments.json` files. Fire-and-forget from `server/src/index.ts`. Pinned by `fsck-orphan-audio.test.ts` (7 cases covering the four valid states and a multi-orphan sweep).
+- **Mid-flight Reject toast** — the 409 (or any) failure path on `api.rejectChapterRevision` (and `acceptChapterRevision`) now pushes a `warn` toast via the plan 48 notification surface with a dedupe-by-key. Replaces the silent `console.warn` so the user knows to retry once generation pauses.
 
-## Out of scope
+## Out of scope (still deferred)
 
-- Per-segment splicing of accepted takes — `acceptedSelections` still write-only; v1 accept/reject is whole-revision swap via `.previous.*` rollback.
+- **`acceptedSelections` consumer** — the slice persists per-segment A/B selections on accept, but no in-app code reads them back. Per-segment splicing of accepted takes is a bigger pipeline change (it interacts with the segments-manifest format, the regen API shape, and the chapter encoder); tracked as `[BACKLOG Could #36]`. Plan 20's "Out of scope" line on per-segment splicing remains the v1 contract.
+
+## Out of scope (architectural, unchanged from v1)
+
 - Cross-book drift detection — single-book scope.
 - Automatic auto-accept when drift severity is below threshold.
 
 ## Ship notes
 
-- Shipped: 2026-05-17. Bundles backlog Must #2 (a/b audio for revisions) + Must #4 (mock audio assets). Closes the "out of scope: a/b playback" caveat from plan 20 v1.
+- **v1 shipped: 2026-05-17.** Bundled backlog Must #2 (a/b audio for revisions) + Must #4 (mock audio assets). Closed the "out of scope: a/b playback" caveat from plan 20 v0.
+- **Close-out shipped: 2026-05-18.** Cleared the three KNOWN-scaffolded items:
+  - Rollback fsck → new `server/src/workspace/fsck-orphan-audio.ts` + 7-case Vitest spec; wired fire-and-forget from `server/src/index.ts` on startup.
+  - Mid-flight Reject toast → wired `notificationsActions.pushToast` (plan 48 surface) on `api.{accept,reject}ChapterRevision` failure paths, with dedupe-by-key.
+  - `acceptedSelections` consumer → explicitly deferred (was already "Out of scope" for per-segment splicing in v1); filed as `[BACKLOG Could #36]` so the slice's write-only persistence remains documented and trackable.
