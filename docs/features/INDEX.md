@@ -89,6 +89,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 ### I. Revisions & drift
 
+- [55 — Revision history timeline](55-revision-history-timeline.md) — Per-chapter chronological log of accept/reject events surfaced via a modal off the existing A/B player; read-side consumer for plan 20's `acceptedSelections` map. v1.3.0 ships history-only; multi-step rollback (snapshot-per-entry) is parked for v1.4.0.
 
 ### J. Library & workspace
 

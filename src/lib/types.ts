@@ -18,6 +18,7 @@ export type Sentence = components['schemas']['Sentence'] & {
 };
 export type Revision = components['schemas']['Revision'];
 export type DriftEvent = components['schemas']['DriftEvent'];
+export type TimelineEntry = components['schemas']['TimelineEntry'];
 export type MatchFactor = components['schemas']['MatchFactor'];
 export type GenerationTick = components['schemas']['GenerationTick'];
 export type ChapterAudio = components['schemas']['ChapterAudio'];

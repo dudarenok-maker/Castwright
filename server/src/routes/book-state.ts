@@ -130,9 +130,16 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     const state = await refreshChapterTitles(located.state, bookDir);
     const cast = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
     let edits = await readJson<{ sentences?: unknown[] }>(manuscriptEditsJsonPath(bookDir));
-    const revs = await readJson<{ pending?: unknown[]; drift?: unknown[]; dismissed?: string[] }>(
-      revisionsJsonPath(bookDir),
-    );
+    const revs = await readJson<{
+      pending?: unknown[];
+      drift?: unknown[];
+      dismissed?: string[];
+      acceptedSelections?: Record<string, Record<number, 'A' | 'B'>>;
+      /* Plan 55 — per-chapter timeline. Persisted by the frontend; surfaced
+         on getBookState so the Revision History view can hydrate without an
+         extra round-trip. */
+      timeline?: Record<string, unknown[]>;
+    }>(revisionsJsonPath(bookDir));
     const changeLog = await readJson<{ events?: unknown[] }>(changeLogJsonPath(bookDir));
 
     /* Fallback for books whose stage 2 ran on older code (or hasn't fully
