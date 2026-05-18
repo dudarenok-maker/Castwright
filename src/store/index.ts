@@ -36,6 +36,7 @@ import { changeLogSlice } from './change-log-slice';
 import { bookMetaSlice } from './book-meta-slice';
 import { exportsSlice } from './exports-slice';
 import { analysisSlice } from './analysis-slice';
+import { notificationsSlice } from './notifications-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
@@ -111,6 +112,7 @@ export const store = configureStore({
     bookMeta: bookMetaSlice.reducer,
     exports: exportsSlice.reducer,
     analysis: analysisSlice.reducer,
+    notifications: notificationsSlice.reducer,
   },
   middleware: (getDefault) =>
     getDefault({

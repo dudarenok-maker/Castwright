@@ -111,6 +111,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [44 — Pull request hygiene](44-pr-hygiene.md) — PR template + PR-title lint workflow + merge-commit-only / delete-branch-on-merge repo settings; codifies the Summary / Test plan shape PRs #1-#4 already use.
 - [45 — Vitest pool tuning + one-retry policy](45-vitest-pool-tuning.md) — Caps the server-suite forks pool at 4 and turns on `retry: 1` on both Vitest configs so transient tinypool "Worker exited unexpectedly" failures no longer force a full pre-push re-run.
 - [46 — Lint, format, a11y baseline](archive/46-lint-format-a11y.md) — ESLint 8 + Prettier 3 + axe-core on four core views; lint prepended to `verify`. Shipped 2026-05-18.
+- [48 — Global toast surface](archive/48-toast-surface.md) — `notifications` slice + `<ToastStack/>`; stream-middleware halts + export 5xx dispatch through it; dedupe-by-key collapses repeats; auto-dismiss 6 s. Shipped 2026-05-18.
 
 ### L. Book state persistence
 
@@ -142,3 +143,4 @@ breadcrumb so cross-references still resolve.
 - [40 — Cover framing + local-disk upload](archive/40-cover-framing-and-upload.md) — Three-tab CoverPicker (Search / Upload / Frame), PNG → JPEG transcode server-side, render-time pan + zoom via `object-position` + `transform`, account-level default for the initial tab. Shipped 2026-05-17.
 - [46 — Lint, format, a11y baseline](archive/46-lint-format-a11y.md) — ESLint 8 + Prettier 3 + axe-core on the four core views; `npm run lint` (max-warnings 0) prepended to `verify`. Shipped 2026-05-18.
 - [41 — Bulk-apply library sync on confirm-cast](archive/41-bulk-library-sync.md) — Top-of-view pill that ticks every eligible "Sync profile" checkbox in one click; per-card untick still handles exceptions; existing `handleConfirm` batch fans out the per-character library-cast-override POSTs unchanged. Shipped 2026-05-18.
+- [48 — Global toast surface](archive/48-toast-surface.md) — `notifications` slice + `<ToastStack/>`; stream-middleware halts + export 5xx dispatch through it; dedupe-by-key collapses repeats; auto-dismiss 6 s. Shipped 2026-05-18.
