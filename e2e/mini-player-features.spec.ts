@@ -10,6 +10,12 @@
 
 import { test, expect, type Page } from '@playwright/test';
 
+/* Serial within this file so the audio-element tests don't race each other
+   under parallel-worker contention on Windows. Other spec files still run
+   in parallel. Pattern mirrors what plan 58 applies to listen-playback +
+   new-book-flow. */
+test.describe.configure({ mode: 'serial' });
+
 async function openSolwayBay(page: Page): Promise<void> {
   await page.goto('/#/books/sb/listen');
   await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 })).toBeVisible({
