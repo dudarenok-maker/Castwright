@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18:** Must 0 · Should 2 · Could 14 · Won't 9
+**Counts as of 2026-05-18 (post Round 0 re-prioritisation):** Must 0 · Should 3 · Could 32 · Won't 9
 
 ---
 
@@ -39,17 +39,27 @@ Ranking within each bucket = top is highest priority.
 
 ## Should — important, not blocking ship
 
-### 1. Release packages on git-tag push
+### 1. Playback speed control in the mini-player
+
+Source: net-new (2026-05-18). Promoted from Could to Should in Round 0 re-prioritisation — table-stakes audiobook listener feature, missing today.
+
+- _What:_ Add a speed-selector affordance to the mini-player exposing 0.75x / 1.0x / 1.25x / 1.5x / 1.75x / 2.0x rates. Uses `HTMLMediaElement.playbackRate` (browser-native, no audio reprocessing). Selection persists per book in `listen-progress.json` so a chosen rate carries across sessions.
+- _Acceptance:_ Play chapter, click 1.5x → playback speeds up immediately, pitch unchanged. Refresh → still at 1.5x. Vitest covers the slice extension; e2e covers the speed-change + persistence flow.
+- _Key files:_ `src/components/mini-player.tsx` (speed picker UI); `src/store/listen-progress-slice.ts` (extend with `playbackRate`); `server/src/routes/listen-progress.ts` (payload extension); new `e2e/playback-speed.spec.ts`.
+- _Depends on:_ plan 47 (listen progress) shipped — relies on the same persistence seam.
+- _Benefit (user):_ standard audiobook player feature; users expect 0.75x–2x as basic controls. Today only 1x is available, forcing browser zoom-and-pinch or per-chapter regeneration workarounds.
+
+### 2. Release packages on git-tag push
 
 Source: net-new (2026-05-18) — user-requested ahead of handing the app to a deployer. Full plan in [`49-release-package.md`](features/49-release-package.md) (status: draft).
 
 - _What:_ Add `scripts/bump-version.ps1 -Level (patch|minor|major)` that rewrites both `package.json` versions + lockfiles, creates the `chore: bump version to X.Y.Z` commit, and creates the annotated `vX.Y.Z` tag locally. Add `.github/workflows/release.yml` that fires on `push: tags: ['v*.*.*']`, runs `npm run verify:quick && npm run build`, assembles `audiobook-generator-vX.Y.Z.zip` via a new `scripts/build-release-zip.mjs` (manifest-driven include / exclude rules), computes SHA-256, and uploads both as a GitHub Release with the tag annotation as the release notes. Ship a top-level `INSTALL.md` walking a deployer through extracting the zip, prerequisites, `install-kokoro.ps1`, and `npm start`. Add a "Releasing" section to CONTRIBUTING.md.
 - _Acceptance:_ (1) `pwsh scripts/bump-version.ps1 -Level patch` on a clean main bumps both `package.json` versions in lockstep, regenerates both lockfiles, commits with the standard subject, and tags `v<new>`. (2) `git push origin main && git push origin v<new>` triggers `release.yml`; the workflow ends green with a `audiobook-generator-v<new>.zip` + `.sha256` asset on the matching GitHub release. (3) Extracting the zip on a clean Windows 11 host and following INSTALL.md yields a runnable app at `http://localhost:5173`. (4) New Pester test `scripts/tests/bump-version.Tests.ps1` locks the bump-script post-state; new Vitest spec `scripts/tests/release-manifest.test.mjs` locks the include / exclude manifest.
 - _Key files:_ new `.github/workflows/release.yml`, `scripts/bump-version.ps1`, `scripts/build-release-zip.mjs`, `scripts/tests/bump-version.Tests.ps1`, `scripts/tests/release-manifest.test.mjs`, `INSTALL.md`, `docs/features/49-release-package.md`; edited `docs/features/INDEX.md`, `README.md` (Releases link), `CONTRIBUTING.md` (Releasing section), `.gitignore`.
-- _Depends on:_ none. Pairs naturally with Could #1 (CI integration for the test suite) — both add GitHub Actions workflows; if shipped together the same caching infrastructure is reusable.
-- _Benefit (user / technical):_ user can hand a downloadable artefact to a deployer instead of walking them through a git-clone + dev-from-source flow. Cutting a release becomes one command instead of a 4-file edit. Establishes the release seam that Could #16 (Windows installer) and Could #17 (Docker image) hang off — both extend `release.yml` rather than spawn parallel pipelines.
+- _Depends on:_ none. Pairs naturally with Could #18 (CI integration for the test suite) — both add GitHub Actions workflows; if shipped together the same caching infrastructure is reusable.
+- _Benefit (user / technical):_ user can hand a downloadable artefact to a deployer instead of walking them through a git-clone + dev-from-source flow. Cutting a release becomes one command instead of a 4-file edit. Establishes the release seam that Could #21 (Windows installer) and Could #22 (Docker image) hang off — both extend `release.yml` rather than spawn parallel pipelines.
 
-### 2. Extend verify-cache to `verify:fast` (pre-commit gate)
+### 3. Extend verify-cache to `verify:fast` (pre-commit gate)
 
 Source: net-new (2026-05-18). Follow-up to plan 50 (Verify-cache for cheap retries after flake).
 
@@ -63,16 +73,9 @@ Source: net-new (2026-05-18). Follow-up to plan 50 (Verify-cache for cheap retri
 
 ## Could — nice to have, low-cost wins
 
-### 1. CI integration for the test suite
+Ordered in clusters: audio quality → listening UX → library/workflow → cast/revisions → voice library → coverage & ops → streaming/sync → distribution → tracking → deferred listener-app handoffs.
 
-Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
-
-- _What:_ Add a GitHub Actions (or equivalent) workflow that runs `npm run verify` on every PR. Cache `node_modules` and the Playwright browser. Budget for e2e being the slowest job (~60 s cold).
-- _Acceptance:_ PRs that break tests are blocked from merge. Workflow runs in under 10 min cold, under 5 min warm.
-- _Key files:_ new `.github/workflows/verify.yml`.
-- _Benefit (technical):_ eliminates the "works on my machine" gap. Pairs with the visual baselines shipped 2026-05-17 (`e2e/visual.spec.ts`) — without CI, the baselines are a tree-falling-in-a-forest.
-
-### 5. Audio loudness normalization (ffmpeg `loudnorm`)
+### 1. Audio loudness normalization (ffmpeg `loudnorm`)
 
 Source: net-new (2026-05-17). Validated absent in `server/src/tts/mp3.ts` (raw PCM → LAME VBR, no loudness filter).
 
@@ -82,26 +85,147 @@ Source: net-new (2026-05-17). Validated absent in `server/src/tts/mp3.ts` (raw P
 - _Depends on:_ none. Encode latency cost is ~20-40% for single-pass loudnorm; document the trade-off.
 - _Benefit (user):_ per-voice volume drift across chapters today forces the listener to ride the volume knob. Loudnorm makes the book sit at one level.
 
-### 6. AAC/M4A or Opus output (swappable encoder)
+### 2. AAC/M4A or Opus output (swappable encoder)
 
 Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
 
 - _What:_ Generalise `encodePcmToMp3` to accept an encoder choice (`mp3 | m4a | opus`) and add a sidecar/server config knob that selects per-book output format.
 - _Acceptance:_ The boundary in `server/src/tts/mp3.ts` (or wherever `encodePcmToMp3` lives) is renamed `encodePcmToAudio` and dispatches on format; existing tests still pass; a new test covers m4a output.
 - _Key files:_ `server/src/tts/mp3.ts`; `docs/features/28-chapter-audio-format.md`.
-- _Depends on:_ none, but cluster after Could #5 (loudnorm) so the encoder boundary is generalised AFTER the loudnorm wiring lands — otherwise we re-touch the dispatch twice.
+- _Depends on:_ none, but cluster after Could #1 (loudnorm) so the encoder boundary is generalised AFTER the loudnorm wiring lands — otherwise we re-touch the dispatch twice.
 - _Benefit (user):_ smaller files / better quality for users who prefer either; small cost because the encoder seam already exists.
 
-### 7. Long-form description (`desc` / `ldes`) for Voice export
+### 3. Per-chapter loudness report / visualization
+
+Source: net-new (2026-05-18). Pairs with Could #1 (loudnorm).
+
+- _What:_ Add a "Loudness report" card to the listen view showing per-chapter integrated loudness (LUFS), peak (dBTP), and LRA, computed at chapter-encode time and persisted alongside the audio. Chapters drifting more than ±2 LU from target highlight red. Click a chapter row → opens that chapter in the listen view with the loudness numbers shown.
+- _Acceptance:_ After loudnorm-enabled chapter encode, each chapter row in the loudness report card shows LUFS / dBTP / LRA. Forced low-loudness mock chapter shows up red. New server Vitest spec covers loudness extraction from `ffmpeg -af ebur128`. Frontend Vitest covers the card rendering + click-through.
+- _Key files:_ new `src/components/loudness-report.tsx`; `src/views/listen.tsx` (mount); `server/src/tts/mp3.ts` (emit loudness metadata to chapter meta); `server/src/routes/chapter-audio.ts` (surface in meta endpoint).
+- _Depends on:_ Could #1 (loudnorm) — without normalization there's no expected target to compare against.
+- _Benefit (user):_ catch problem chapters before export (e.g. a voice that came out 4 LU softer than the rest). Pairs with Could #1 to make loudness drift visible, not just corrected.
+
+### 4. User-placed markers / bookmarks in the listen view
+
+Source: net-new (2026-05-18). Builds on plan 47's `listen-progress.json` persistence seam.
+
+- _What:_ Extend `listen-progress.json` to carry a `markers: Array<{ id, chapterId, sec, label, kind: 'note' | 'rerecord', createdAt }>` list per book. Listen-view mini-player exposes "Add bookmark here" affordance (keyboard shortcut + button) that captures the current `chapterId + currentSec`. Sidebar lists all markers per chapter, click → seek to that position. Each marker has a short editable label and a kind toggle (general note vs flag for re-record).
+- _Acceptance:_ Drop a marker at 1:23 in chapter 3 with label "re-record this", reload page, marker persists and click-to-seek returns to 1:23 ±1s. Vitest covers the slice (add/edit/delete marker, payload roundtrip). Server Vitest covers the marker payload extension. New e2e spec covers add-marker + reload + seek.
+- _Key files:_ `src/store/listen-progress-slice.ts` (extend reducers); `src/views/listen.tsx` (sidebar + add-button); `src/components/mini-player.tsx` (shortcut); `server/src/routes/listen-progress.ts` (payload extension); new `e2e/listen-bookmarks.spec.ts`.
+- _Depends on:_ plan 47 shipped (already shipped 2026-05-17).
+- _Benefit (user):_ today re-record candidates have nowhere to live — the user must remember a timestamp manually. Markers give a per-book scratchpad of "fix this later" annotations without leaving the listen view.
+
+### 5. Sleep timer + auto-stop on chapter boundary
+
+Source: net-new (2026-05-18). Validated absent in `src/components/mini-player.tsx`.
+
+- _What:_ Add a sleep-timer affordance to the mini-player: countdown picker (15 / 30 / 45 / 60 min, plus "End of chapter" option). When the timer expires, the player pauses and saves the listen-progress position. The "End of chapter" mode pauses at the next chapter boundary regardless of elapsed time. Picker UI is a dropdown menu off a clock icon in the mini-player.
+- _Acceptance:_ Set 5-minute timer, leave playing, after 5 min mini-player auto-pauses and listen-progress is saved. Set "End of chapter" while at 2:00/15:00 → auto-pauses at 15:00 (chapter end). Vitest covers the timer state machine; e2e spec covers the "end of chapter" boundary case.
+- _Key files:_ `src/components/mini-player.tsx`; new `src/lib/sleep-timer.ts` (state machine); `src/store/listen-progress-slice.ts` (no changes — relies on existing save).
+- _Depends on:_ plan 47 shipped (relies on the same save seam).
+- _Benefit (user):_ standard audiobook listener pattern — most listeners fall asleep mid-chapter and want playback to stop at a natural boundary. Parity with standalone audiobook apps.
+
+### 6. Share a 30-second chapter clip as MP3
+
+Source: net-new (2026-05-18).
+
+- _What:_ Add a "Share clip" button next to the play affordance in the listen view. Clicking opens a small modal with a draggable time range (default ±15 s around the current playhead, max 60 s); on confirm, the server slices the chapter MP3 to the requested range and offers the slice as a download. No re-encode — uses `ffmpeg -ss <start> -t <duration> -c copy`.
+- _Acceptance:_ Play chapter 2, click Share clip, set range 1:20-1:50, confirm → downloaded file plays the requested 30 s. New server Vitest spec covers the slicing route. Frontend Vitest covers the modal interactions.
+- _Key files:_ new `src/modals/share-clip.tsx`; `src/views/listen.tsx` (entry point); new `server/src/routes/clip.ts`; `openapi.yaml` (new `/api/books/:bookId/chapters/:chapterId/clip` route).
+- _Depends on:_ none.
+- _Benefit (user):_ viral loop for shared-book workflows — easy to send a friend "listen to this part." Today the only sharing path is the whole chapter MP3.
+
+### 7. Library search + tag / category filter
+
+Source: net-new (2026-05-18).
+
+- _What:_ Add a search bar to the library view that filters books by title / author substring (case-insensitive). Add a tag system: each book carries a `tags: string[]` on its `BookStateJson`; chips in the library view filter by tag. Tag-edit affordance lives in the book-meta modal.
+- _Acceptance:_ Library with 10 books → typing 3 characters of a title filters to matching books. Add tag "priority" to two books, click chip → only those two remain. Tags persist on disk via the existing state-write path. Vitest covers the filter logic + tag-edit reducer; e2e covers the search-then-filter user flow.
+- _Key files:_ `src/views/library.tsx` (search bar + chip row); `src/modals/edit-book-meta.tsx` (tag editor); `openapi.yaml` (BookStateJson `tags` field); `server/src/workspace/scan.ts` (read/write `tags`).
+- _Depends on:_ none.
+- _Benefit (user):_ library browsing becomes tenable at 10+ titles; tagging cross-cuts the alphabetical tree (priority / series / genre).
+
+### 8. Manuscript diff viewer on re-upload
+
+Source: net-new (2026-05-18).
+
+- _What:_ When a user re-uploads a revised manuscript for an existing book, show a side-by-side diff of the previous manuscript text vs the new one (sentence-level granularity, character-level highlighting within changed sentences). Surface changed sentences mapped to existing cast attribution, so the user knows which characters' lines changed.
+- _Acceptance:_ Re-upload a manuscript with 5 sentence changes → diff view shows those 5 sentences side-by-side; "View affected characters" expands per-sentence into the cast list. Vitest covers the diff algorithm; e2e covers the upload-then-diff flow.
+- _Key files:_ new `src/components/manuscript-diff.tsx`; new `src/lib/manuscript-diff.ts` (diff algorithm — leverage `diff` npm package); `src/views/upload.tsx`; new server endpoint for diff-friendly fetch of the previous manuscript.
+- _Depends on:_ none.
+- _Benefit (user):_ re-uploading a manuscript today shows no indication of what changed — the user must manually re-read or trust external version control. Diff view closes that gap.
+
+### 9. Chapter reorder / restructure panel
+
+Source: net-new (2026-05-18).
+
+- _What:_ Add a "Restructure chapters" affordance in the confirm view (and re-accessible from the ready view). Operations: renumber, merge two adjacent chapters, split a chapter at a sentence boundary, reorder via drag. Operations are applied to `state.json` and any existing per-chapter audio is invalidated with a regen prompt.
+- _Acceptance:_ Merge chapters 3+4 → chapter 3 contains both bodies, chapter 4 is gone, original chapter 5 becomes chapter 4. Split chapter 5 at sentence index 12 → chapters 5a (sentences 0-11) and 5b (sentences 12-end). Reorder chapter 7 before chapter 4 → renumbering follows. Existing audio invalidated. Vitest covers the slice ops; e2e covers merge + split + reorder.
+- _Key files:_ new `src/components/restructure-chapters.tsx`; `src/store/chapters-slice.ts` (reducers); `server/src/workspace/scan.ts` (persistence); `server/src/routes/chapter-audio.ts` (invalidation on restructure).
+- _Depends on:_ none.
+- _Benefit (user):_ post-analysis restructuring without re-uploading the whole manuscript. Common need when the analyzer's chapter boundaries don't match the author's intent.
+
+### 10. Portable book export with embedded state
+
+Source: net-new (2026-05-18).
+
+- _What:_ Add an "Export book as portable archive" affordance: zip up `<bookDir>/.audiobook/state.json` + `manuscript.txt` + all audio + cover into a single `<bookId>.zip`. Importing that zip into another workspace drops it into `<workspace>/<bookId>/` and the library view picks it up after a refresh.
+- _Acceptance:_ Export book → produces `bonus-keefe-story.zip` containing all needed state. Drop zip into a second workspace's `import/` folder → first run picks it up, restores book to library with full cast + audio + listen progress intact. Vitest covers the manifest; e2e covers the export-then-import flow.
+- _Key files:_ new `server/src/export/build-portable-book.ts`; new `server/src/import/scan-import-folder.ts`; `src/views/listen.tsx` (export button).
+- _Depends on:_ none.
+- _Benefit (user):_ hand-off between machines without re-casting; backup-and-restore semantics for individual books.
+
+### 11. Per-book editorial notes / README field
+
+Source: net-new (2026-05-18).
+
+- _What:_ Add a `notes: string` field to `BookStateJson` (markdown, no formatting toolbar — plain textarea) for editorial notes: source attribution, license, narration intent, in-progress thoughts. Displayed in a collapsible "Notes" card on the ready/listen view.
+- _Acceptance:_ Edit notes → save → notes persist on disk; reload → notes show in the listen view. Markdown line breaks render. Vitest covers the field roundtrip.
+- _Key files:_ `openapi.yaml` (BookStateJson `notes`); `server/src/workspace/scan.ts` (read/write); `src/views/listen.tsx` (display + edit affordance); `src/modals/edit-book-meta.tsx` (edit form field).
+- _Depends on:_ none. Pairs with Could #15 (long-form `desc`/`ldes`) — both add a long-form text field, but `notes` is workspace-internal (never exported), `description` lands in the M4B atom.
+- _Benefit (user):_ workspace becomes a place for editorial context, not just audio + state. Lightweight scratchpad for "things to remember about this book."
+
+### 12. Revision history timeline (visual rollback)
+
+Source: net-new (2026-05-18). Builds on plan 20's `acceptedSelections` persistence.
+
+- _What:_ Add a "Revision history" view per chapter showing a chronological timeline of every regeneration / sentence-level edit / accept-revision event, with one-click rollback to any prior version. Each timeline entry carries the diff against the prior state (what changed) and the audio fingerprint (which voice/segment manifest produced it).
+- _Acceptance:_ Generate chapter, regenerate two sentences, accept revision, regenerate again → timeline shows 4 entries. Click rollback on entry 2 → chapter audio + state revert to that point; subsequent entries marked "rolled back from this point." Vitest covers the timeline state; server Vitest covers the rollback transaction.
+- _Key files:_ new `src/components/revision-timeline.tsx`; `src/store/revisions-slice.ts` (extend with timeline accessor); `server/src/routes/revisions.ts` (add /history endpoint); `server/src/audio/revisions-store.ts` (timeline persistence).
+- _Depends on:_ plan 20 (revisions-and-drift close-out) shipped — needs the `acceptedSelections` consumer wired so timeline entries are meaningful.
+- _Benefit (user):_ today rollback is binary (revert to previous via the a/b player). Timeline gives true non-linear undo per chapter; user can experiment with multiple takes without losing history.
+
+### 13. Preview voice sample while editing the character
+
+Source: net-new (2026-05-18). Leverages existing `useTtsLifecycle`.
+
+- _What:_ In the profile drawer / cast-edit modal, expose a per-voice "Play sample" affordance that synthesises a short user-editable preview line (e.g. "The quick brown fox...") with the candidate voice without committing the assignment. Multiple candidates can be auditioned without closing the drawer.
+- _Acceptance:_ Open profile drawer, hover voice candidate row, click "Play sample" → preview audio renders in under 3 s (uses TTS sidecar lifecycle). Switch to another candidate, click → second preview replaces the first. No assignment is committed until Save. Vitest covers the preview-state slice; e2e covers the drawer-preview flow.
+- _Key files:_ `src/modals/profile-drawer.tsx` (add preview button + sample text input); `src/lib/use-tts-lifecycle.ts` (no changes — already exposed); new `src/components/voice-preview-button.tsx`.
+- _Depends on:_ none structural. Pairs with Could #28 (third-consumer lifecycle tracking) if/when that activates.
+- _Benefit (user):_ faster voice-picking feedback loop. Today the user assigns a voice, regenerates a sample, judges, optionally re-assigns — preview cuts that cycle from minutes to seconds.
+
+### 14. Batch voice-replace across all books
+
+Source: net-new (2026-05-18).
+
+- _What:_ Add a "Replace voice everywhere" affordance in the voice library: pick a current voice, pick a replacement, see a preview of all (book, character) pairs that would be affected, confirm. Affected books' cast slices are mutated; audio is invalidated (regen prompt per book).
+- _Acceptance:_ Three books each use voice `am_michael` for one character → batch replace `am_michael` → `am_eric` shows 3 affected pairs, confirm rewrites all three cast.json files, audio marked stale. Vitest covers the dry-run preview + write logic; e2e covers the modal flow.
+- _Key files:_ new `src/modals/batch-voice-replace.tsx`; `src/views/voices.tsx` (entry point); `server/src/routes/voices.ts` (cross-book write endpoint); new `server/src/audio/invalidate.ts` (multi-book audio invalidation).
+- _Depends on:_ none.
+- _Benefit (user):_ cross-book voice consistency without per-book re-casting. Common need when switching a recurring narrator across a series.
+
+### 15. Long-form description (`desc` / `ldes`) for Voice export
 
 Source: [`33-voice-export.md`](features/33-voice-export.md) known gap.
 
 - _What:_ Add a `description: string | null` field to the book metadata model; expose an edit affordance in the metadata modal; pipe the value into the M4B `desc` and `ldes` atoms during export.
 - _Acceptance:_ Editing a book and saving sets the description; an M4B export embeds `desc` / `ldes` (verified by `ffprobe -show_streams`); the Live Voice app shows the richer "About this audiobook" text.
 - _Key files:_ `src/modals/edit-book-meta.tsx`; `server/src/export/build-m4b.ts`; `openapi.yaml` (BookMetadata schema); `server/src/workspace/scan.ts` (`BookStateJson`).
+- _Depends on:_ none. Will be closed by plan 33 ship (see Finish-what-we-started round).
 - _Benefit (user):_ richer "About this audiobook" panel in Live Voice.
 
-### 8. Voice compare from the global `#/voices` tab for same-book pairs
+### 16. Voice compare from the global `#/voices` tab for same-book pairs
 
 Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
 
@@ -111,64 +235,36 @@ Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-comp
 - _Depends on:_ none structural.
 - _Benefit (user):_ closes the gap in the Voice library global view — today the global tab's Compare is fully disabled, even for pairs that would resolve cleanly with one fetch.
 
-### 9. Cross-book voice compare
+### 17. Cross-book voice compare
 
 Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
 
 - _What:_ Lift the cross-book guard. When the two selected voices belong to different `bookId`s, fetch each book's cast (one of them may be the open book — short-circuit) and pass both characters into `CompareCastModal`. Decide and document: do we route saves back to each character's source book's cast slice, or refuse the save and surface a "viewing only" banner?
 - _Acceptance:_ The Compare button enables for cross-book pairs; the modal opens with both characters; the Save behaviour is documented and tested. The e2e gains a cross-book pair assertion.
 - _Key files:_ `src/views/voices.tsx`; `src/store/cast-slice.ts` (Save routing); `src/modals/compare-cast-modal.tsx` (if the viewing-only banner is needed).
-- _Depends on:_ Could #8 (the same on-demand fetch machinery).
+- _Depends on:_ Could #16 (the same on-demand fetch machinery).
 - _Benefit (user):_ enables A/B for users who reuse the same TTS voice across books — e.g. comparing the same narrator across two books in a series to spot drift.
 
-### 10. More e2e golden paths (voices, cast, profile drawer)
+### 18. CI integration for the test suite
+
+Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
+
+- _What:_ Add a GitHub Actions (or equivalent) workflow that runs `npm run verify` on every PR. Cache `node_modules` and the Playwright browser. Budget for e2e being the slowest job (~60 s cold).
+- _Acceptance:_ PRs that break tests are blocked from merge. Workflow runs in under 10 min cold, under 5 min warm.
+- _Key files:_ new `.github/workflows/verify.yml`.
+- _Benefit (technical):_ eliminates the "works on my machine" gap. Pairs with the visual baselines shipped 2026-05-17 (`e2e/visual.spec.ts`) — without CI, the baselines are a tree-falling-in-a-forest.
+
+### 19. More e2e golden paths (voices, cast, profile drawer)
 
 Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 
 - _What:_ Add Playwright specs for the Voice library tab (open, see voices, pin/unpin) and the cast/profile-drawer flow (open a confirmed book, click a character, see drawer with evidence toggle).
 - _Acceptance:_ Two new spec files (`e2e/voices.spec.ts`, `e2e/cast-drawer.spec.ts`); both run in under 15 s warm.
 - _Key files:_ `e2e/smoke.spec.ts` (pattern to mirror); `src/views/voices.tsx`; `src/modals/profile-drawer.tsx`.
+- _Depends on:_ none. Will be closed by plan 37 ship (see Finish-what-we-started round).
 - _Benefit (technical):_ incremental low-cost coverage growth.
 
-### 11. Streaming audio for live playback during chapter generation
-
-Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
-
-- _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
-- _Acceptance:_ Generating a chapter shows audio progress under the play cursor before the chapter completes. Existing per-chapter file is still written atomically at the end.
-- _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
-- _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
-
-### 12. Cross-tab `BroadcastChannel` state sync
-
-Source: net-new (2026-05-17). Validated absent in frontend.
-
-- _What:_ Open `new BroadcastChannel('audiobook-state')` in store init; broadcast post-mutation snapshots of the analysis + generation slices keyed by `bookId`. Listening tabs hydrate without a network round-trip.
-- _Acceptance:_ Open the same book in two tabs, start an analysis in tab A → tab B's top-bar pill updates without a refresh. New Vitest spec under jsdom mocks `BroadcastChannel` and asserts inbound messages drive the right reducer.
-- _Key files:_ `src/store/index.ts`; new `src/store/broadcast-middleware.ts`; `src/store/analysis-slice.ts`; `src/store/chapters-slice.ts`.
-- _Depends on:_ none structural. Note the tension with Won't #3 (multi-tab catch-up race resilience parked) — this entry covers the cooperative cross-tab case, not the racing-writes case.
-- _Benefit (technical):_ eliminates the cold-boot endpoint round-trip (the `/api/library/active-analyses` lookup, shipped 2026-05-17) when a sibling tab already has the state. Single-user-per-workspace assumption still holds.
-
-### 13. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
-
-Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
-
-- _What:_ Research and prototype either (a) PocketBook Cloud upload (protocol is closed — needs reverse-engineering or vendor contact) or (b) sending the exported file as an attachment to `<user>@pbsync.com` (officially marketed for ebooks; audiobook size limits undocumented).
-- _Acceptance:_ A working prototype for one of the two paths; new tile on the export modal; documented size limits + caveats.
-- _Key files:_ new tile config in `src/data/listener-apps.ts`; `src/modals/export-audiobook.tsx`; `server/src/export/` for any new transport.
-- _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
-
-### 14. Single-poll TTS lifecycle for a third consumer (tracking)
-
-Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
-
-- _What:_ Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) already drives both today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
-- _Acceptance:_ The new surface reads `ttsLifecycle` from `useOutletContext<LayoutContext>()` (pattern from `generation.tsx`). No new `setInterval`, no new `/health` poll, no duplicated `evictionNotice` / `loadErrorNotice` state.
-- _Key files:_ `src/lib/use-tts-lifecycle.ts` (no changes expected — already exported); `src/components/layout.tsx` (no changes — already exposes the context); the new surface's component file.
-- _Depends on:_ an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
-- _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
-
-### 15. Un-quarantine the two e2e flakes (`listen-playback`, `new-book-flow`) by fixing parallel-worker contention
+### 20. Un-quarantine the two e2e flakes (`listen-playback`, `new-book-flow`) by fixing parallel-worker contention
 
 Source: plan 46 ship (2026-05-18). Two specs `test.fixme`'d when plan 46 landed.
 
@@ -178,25 +274,123 @@ Source: plan 46 ship (2026-05-18). Two specs `test.fixme`'d when plan 46 landed.
 - _Depends on:_ none.
 - _Benefit (technical):_ restores the two e2e specs that cover the highest-blast-radius surfaces (mini-player play + full new-book cold-boot walk). Until then both code paths only have Vitest+jsdom coverage, which is known to lie about audio playback and SSE timing.
 
-### 16. Windows installer (Inno Setup or NSIS) wrapping the release zip
+### 21. Windows installer (Inno Setup or NSIS) wrapping the release zip
 
-Source: net-new (2026-05-18). Deferred follow-up to Should #1 ([`49-release-package.md`](features/49-release-package.md)).
+Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/49-release-package.md)).
 
-- _What:_ Add an Inno Setup (or NSIS) script that wraps the `audiobook-generator-vX.Y.Z.zip` produced by Should #1 into a signed `.exe` installer. Installer extracts to `%LocalAppData%\AudiobookGenerator`, drops a Start Menu entry, runs prerequisite checks (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links shown for any missing dep, and offers to run `install-kokoro.ps1` post-install. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.
+- _What:_ Add an Inno Setup (or NSIS) script that wraps the `audiobook-generator-vX.Y.Z.zip` produced by Should #2 into a signed `.exe` installer. Installer extracts to `%LocalAppData%\AudiobookGenerator`, drops a Start Menu entry, runs prerequisite checks (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links shown for any missing dep, and offers to run `install-kokoro.ps1` post-install. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.
 - _Acceptance:_ Double-clicking the installer on a clean Windows 11 box yields a runnable app reachable at `http://localhost:5173`, with no terminal interaction required from the deployer. SmartScreen warning cleared after one user "Run anyway" click (full reputation requires an EV code-signing cert — out of scope until the cert is procured).
 - _Key files:_ new `installer/audiobook-generator.iss` (Inno Setup), new `installer/build-installer.ps1`, `.github/workflows/release.yml` (add `installer` job on `windows-latest` that runs after the zip job and uploads to the same release).
-- _Depends on:_ Should #1 shipped (the installer wraps the existing zip — no point building before the zip pipeline exists).
-- _Benefit (user):_ friction-free install for non-developers. Today's Should #1 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
+- _Depends on:_ Should #2 shipped (the installer wraps the existing zip — no point building before the zip pipeline exists).
+- _Benefit (user):_ friction-free install for non-developers. Today's Should #2 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
 
-### 17. Docker image + compose file for headless / Linux deployment
+### 22. Docker image + compose file for headless / Linux deployment
 
-Source: net-new (2026-05-18). Deferred follow-up to Should #1 ([`49-release-package.md`](features/49-release-package.md)).
+Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/49-release-package.md)).
 
 - _What:_ Add a multi-stage `Dockerfile` (frontend build → node runtime stage → sidecar Python stage) and a `docker-compose.yml` that wires the three services on `:5173 / :8080 / :9000`. Document the NVIDIA Container Toolkit GPU-passthrough prereq. Resolve whether `WORKSPACE_DIR` is bind-mounted from the host or held in a named volume (host-bind recommended — keeps per-book `.audiobook/state.json` portable across container rebuilds). Extend `release.yml` with `docker/build-push-action` to publish the image to `ghcr.io/dudarenok-maker/audiobook-generator:vX.Y.Z` on tag push.
 - _Acceptance:_ `docker compose up` on a host with NVIDIA Container Toolkit installed brings up the three-service stack reachable on the documented ports. The published image works against a fresh `WORKSPACE_DIR` bind mount; tagged versions are pullable from GHCR.
 - _Key files:_ new `Dockerfile`, new `docker-compose.yml`, new `docs/features/50-docker-image.md` (when this graduates from BACKLOG to active), `.github/workflows/release.yml` (extend with the GHCR push job).
-- _Depends on:_ Should #1 shipped (reuses the same tag-push trigger and version source); resolving the workspace-mount question.
+- _Depends on:_ Should #2 shipped (reuses the same tag-push trigger and version source); resolving the workspace-mount question.
 - _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
+
+### 23. Auto-backup scheduling for `state.json`
+
+Source: net-new (2026-05-18).
+
+- _What:_ Add a background backup job that on configurable cadence (daily / weekly) writes a snapshot of `<workspace>/<bookId>/.audiobook/state.json` to `<workspace>/.backups/<bookId>/<YYYYMMDD-HHMMSS>.json`. Keep last N (configurable, default 14). Manual "Restore from backup" affordance in workspace settings.
+- _Acceptance:_ Set daily backups → 14 daily snapshots accumulate in `.backups/`, oldest auto-pruned. Restore from snapshot → state.json reverted to that point; library view refreshes. New server Vitest spec covers the cron-like cadence + prune.
+- _Key files:_ new `server/src/workspace/auto-backup.ts`; `server/src/workspace/scan.ts` (initial trigger on server start); new settings affordance under Could #24 power-user panel (or inline in `src/views/library.tsx` if shipped first).
+- _Depends on:_ none.
+- _Benefit (user):_ disaster recovery without manual intervention. Particularly valuable on Windows where OneDrive sync conflicts can occasionally corrupt `state.json` mid-write.
+
+### 24. Keyboard shortcuts / power-user tuning panel
+
+Source: net-new (2026-05-18).
+
+- _What:_ Add a settings panel (under a gear icon in the top-bar) for power-user tuning: keyboard-shortcut overrides (e.g. spacebar = play/pause), runtime knobs (SSE chunk size, TTS concurrency cap, debounce values for autosave), accessibility toggles (high-contrast theme, larger text). Settings persist in localStorage and apply on next render.
+- _Acceptance:_ Open settings, change autosave debounce from 500ms to 2000ms → next edit waits 2s before write. Override "play/pause" shortcut to "K" → keyboard "K" toggles mini-player. Vitest covers the persistence + shortcut binding.
+- _Key files:_ new `src/views/settings.tsx`; new `src/lib/keybindings.ts`; new `src/store/settings-slice.ts`; `src/components/layout.tsx` (gear icon entry point).
+- _Depends on:_ none.
+- _Benefit (technical / accessibility):_ power-user tuning surfaces today's hardcoded values; keyboard navigation closes an accessibility gap.
+
+### 25. Streaming audio for live playback during chapter generation
+
+Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
+
+- _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
+- _Acceptance:_ Generating a chapter shows audio progress under the play cursor before the chapter completes. Existing per-chapter file is still written atomically at the end.
+- _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
+- _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
+
+### 26. Cross-tab `BroadcastChannel` state sync
+
+Source: net-new (2026-05-17). Validated absent in frontend.
+
+- _What:_ Open `new BroadcastChannel('audiobook-state')` in store init; broadcast post-mutation snapshots of the analysis + generation slices keyed by `bookId`. Listening tabs hydrate without a network round-trip.
+- _Acceptance:_ Open the same book in two tabs, start an analysis in tab A → tab B's top-bar pill updates without a refresh. New Vitest spec under jsdom mocks `BroadcastChannel` and asserts inbound messages drive the right reducer.
+- _Key files:_ `src/store/index.ts`; new `src/store/broadcast-middleware.ts`; `src/store/analysis-slice.ts`; `src/store/chapters-slice.ts`.
+- _Depends on:_ none structural. Note the tension with Won't #3 (multi-tab catch-up race resilience parked) — this entry covers the cooperative cross-tab case, not the racing-writes case.
+- _Benefit (technical):_ eliminates the cold-boot endpoint round-trip (the `/api/library/active-analyses` lookup, shipped 2026-05-17) when a sibling tab already has the state. Single-user-per-workspace assumption still holds.
+
+### 27. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
+
+Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
+
+- _What:_ Research and prototype either (a) PocketBook Cloud upload (protocol is closed — needs reverse-engineering or vendor contact) or (b) sending the exported file as an attachment to `<user>@pbsync.com` (officially marketed for ebooks; audiobook size limits undocumented).
+- _Acceptance:_ A working prototype for one of the two paths; new tile on the export modal; documented size limits + caveats.
+- _Key files:_ new tile config in `src/data/listener-apps.ts`; `src/modals/export-audiobook.tsx`; `server/src/export/` for any new transport.
+- _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
+
+### 28. Single-poll TTS lifecycle for a third consumer (tracking)
+
+Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
+
+- _What:_ Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) already drives both today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
+- _Acceptance:_ The new surface reads `ttsLifecycle` from `useOutletContext<LayoutContext>()` (pattern from `generation.tsx`). No new `setInterval`, no new `/health` poll, no duplicated `evictionNotice` / `loadErrorNotice` state.
+- _Key files:_ `src/lib/use-tts-lifecycle.ts` (no changes expected — already exported); `src/components/layout.tsx` (no changes — already exposes the context); the new surface's component file.
+- _Depends on:_ an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
+- _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
+
+### 29. BookPlayer (iOS) handoff modal
+
+Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope — see Finish-what-we-started round.
+
+- _What:_ Wire the BookPlayer tile's `AppHandoffModal` with file-import instructions. BookPlayer imports via the Files app on iOS — the modal walks the user through (1) sync the exported m4b/mp3 to iCloud Drive or AirDrop to phone, (2) open BookPlayer → "+", select the file. No direct server integration — copy-and-instructions only.
+- _Acceptance:_ Click BookPlayer tile → modal opens with the two-step instructions and "Open instructions in new tab" link. Vitest covers the modal content.
+- _Key files:_ `src/components/app-handoff-modal.tsx` (BookPlayer case); `src/data/listener-apps.ts` (instructions payload).
+- _Depends on:_ plan 18b shipped (the modal scaffolding).
+- _Benefit (user):_ closes one more "Coming soon" tile in the listen view.
+
+### 30. Smart AudioBook Player (Android) handoff modal
+
+Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
+
+- _What:_ Wire Smart AudioBook Player tile with instructions: (1) connect Android phone via USB or sync to cloud storage, (2) copy m4b to phone's `AudioBooks/` folder, (3) open Smart AudioBook Player → "Refresh." Copy-and-instructions only.
+- _Acceptance:_ Click tile → modal walks the three-step flow. Vitest covers the content.
+- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`.
+- _Depends on:_ plan 18b shipped.
+- _Benefit (user):_ closes one more "Coming soon" tile.
+
+### 31. Apple Books (iOS / macOS) handoff modal
+
+Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
+
+- _What:_ Wire Apple Books tile with the appropriate handoff: macOS supports drag-into-Books; iOS supports AirDrop or sync via Files. Modal shows the platform-specific flow (detect Mac vs other UA, default to "iOS via AirDrop"). Copy-and-instructions only — no direct integration with Apple Books library API (which is restricted).
+- _Acceptance:_ Click tile → modal shows platform-detected instructions. Vitest covers the UA detection branching.
+- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`.
+- _Depends on:_ plan 18b shipped.
+- _Benefit (user):_ closes one more "Coming soon" tile.
+
+### 32. Plex (self-hosted media server) handoff modal
+
+Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
+
+- _What:_ Wire Plex tile with two paths: (a) instructions for manual upload to a Plex server library, (b) optional direct upload via the Plex API if the user has provided a Plex token (settings field). Path (b) is the most-complex of the four — Plex auth + library scan trigger.
+- _Acceptance:_ Click tile → modal shows manual upload steps. If a Plex token is configured, an "Upload directly" button hits the Plex API. Vitest covers both modes.
+- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`; `src/views/settings.tsx` (Plex token field — see Could #24 power-user panel); new `server/src/export/plex.ts` for the optional upload path.
+- _Depends on:_ plan 18b shipped; ideally Could #24 (power-user panel) for the token storage.
+- _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
 
 ---
 
