@@ -30,6 +30,10 @@ logs/
 # Test output
 coverage/
 
+# Verify-cache (per-step input hashes for `npm run verify`; never committed).
+.verify-cache.json
+.verify-cache.json.tmp
+
 # Playwright artefacts (browsers cached in %LOCALAPPDATA%, not the repo).
 playwright-report/
 test-results/
