@@ -59,6 +59,7 @@ const baseMeta = (over: Partial<EditableBookMeta> = {}): EditableBookMeta => ({
   narratorCredit: 'Anders Vale',
   genre: 'Fantasy',
   publicationDate: '2026-05-09',
+  description: null,
   ...over,
 });
 
@@ -195,6 +196,27 @@ describe('ListenView — metadata editor wiring', () => {
     const genreInput = screen.getByLabelText('Genre') as HTMLInputElement;
     fireEvent.change(genreInput, { target: { value: '' } });
     expect(h.onEditMetaField).toHaveBeenCalledWith('genre', null);
+  });
+
+  it('typing into the Description textarea dispatches setDraftField (plan 33)', () => {
+    const h = renderView();
+    const descInput = screen.getByTestId('meta-description') as HTMLTextAreaElement;
+    expect(descInput.tagName).toBe('TEXTAREA');
+    fireEvent.change(descInput, {
+      target: { value: 'A long-form summary of this audiobook.' },
+    });
+    expect(h.onEditMetaField).toHaveBeenCalledWith(
+      'description',
+      'A long-form summary of this audiobook.',
+    );
+  });
+
+  it('clearing the Description textarea dispatches null (matches other nullable fields)', () => {
+    const h = renderView({ meta: baseMeta({ description: 'existing text' }) });
+    const descInput = screen.getByTestId('meta-description') as HTMLTextAreaElement;
+    expect(descInput.value).toBe('existing text');
+    fireEvent.change(descInput, { target: { value: '' } });
+    expect(h.onEditMetaField).toHaveBeenCalledWith('description', null);
   });
 
   it('Save and Cancel are disabled when the form is clean', () => {

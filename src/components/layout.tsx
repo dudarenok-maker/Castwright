@@ -391,6 +391,7 @@ export function Layout() {
               narratorCredit: res.state.narratorCredit ?? null,
               genre: res.state.genre ?? null,
               publicationDate: res.state.publicationDate ?? null,
+              description: res.state.description ?? null,
             },
             narratorFallback: narratorNameFromCast(res.cast?.characters ?? []),
           }),

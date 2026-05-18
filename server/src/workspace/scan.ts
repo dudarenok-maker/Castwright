@@ -108,6 +108,10 @@ export interface BookStateJson {
   narratorCredit?: string | null;
   genre?: string | null;
   publicationDate?: string | null;
+  /* Long-form "about this audiobook" copy, surfaced in the M4B `desc` /
+     `ldes` atoms during Voice export (plan 33). Free-form text (markdown
+     line breaks are preserved in the editor; M4B atoms carry plain text). */
+  description?: string | null;
 }
 
 export interface LibraryBook {

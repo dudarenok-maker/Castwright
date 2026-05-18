@@ -158,6 +158,17 @@ function buildFfmetadata(
   lines.push(`album_artist=${escapeFfmetadata(state.author)}`);
   if (state.genre) lines.push(`genre=${escapeFfmetadata(state.genre)}`);
   if (state.publicationDate) lines.push(`date=${escapeFfmetadata(state.publicationDate)}`);
+  /* Plan 33 — long-form "about this audiobook" copy. ffmpeg's mp4 muxer
+     maps `description` → iTunes `desc` atom (short description) and
+     `synopsis` → `ldes` atom (long description). Both M4B-reader apps
+     surface different fields; populate both with the same value when
+     a description is set so Voice, Plex, Apple Books all show rich
+     text regardless of which atom each prefers. */
+  const desc = state.description && state.description.trim();
+  if (desc) {
+    lines.push(`description=${escapeFfmetadata(desc)}`);
+    lines.push(`synopsis=${escapeFfmetadata(desc)}`);
+  }
   /* iTunes audiobook media kind — flips Apple/QuickTime players from
      'Music' to 'Audiobook'. Harmless on players that ignore it. */
   lines.push(`media_type=2`);
