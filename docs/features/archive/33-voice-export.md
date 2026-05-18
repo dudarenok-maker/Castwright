@@ -1,7 +1,12 @@
+---
+status: stable
+shipped: 2026-05-18
+owner: null
+---
+
 # Voice (Android audiobook player) export — M4B-standards path
 
-> Status: stable for the server contract + atom-mapping guard; live tile in the
-> Listen view lands with commit 2 of plan 33.
+> Status: stable end-to-end (live tile + description field shipped 2026-05-18).
 > Key files: `server/src/export/build-m4b.ts`, `src/data/listener-apps.ts`,
 > `src/views/listen.tsx`, `src/modals/export-audiobook.tsx`
 > Paired tests: `server/src/export/build-m4b.test.ts` (audiobook media-kind
@@ -146,9 +151,6 @@ Negative path:
 
 ## Known gaps (deferred but harmless to add later)
 
-- **Long-form description (`desc` / `ldes`)** — the state model carries no
-  description field, so there's no source data. Adding the field is a
-  separate small UX task.
 - **`pgap = 1` gapless flag** — no observable effect on Voice-Android with
   single-file M4B (no inter-file gap to suppress).
 - **Series-aware `album = series` mapping** — Voice groups books by folder,
@@ -156,6 +158,15 @@ Negative path:
 
 ## Shipped follow-ups
 
+- **Long-form description (`desc` / `ldes`)** — shipped 2026-05-18. Added a
+  `description: string | null` field to `BookStateJson`, `EditableBookMeta`,
+  and the listen-view metadata editor (a textarea below Publication date).
+  `buildM4b` writes both `description=` (mp4 `desc` atom — short
+  description) and `synopsis=` (mp4 `ldes` atom — long description) to
+  FFMETADATA with the same value when a description is set. Pinned by
+  `build-m4b.test.ts` "embeds the description into the M4B desc / ldes
+  atoms" (positive) + "omits desc / ldes atoms when state.description is
+  null or blank" (negative). Closes the `[BACKLOG Could #15]` entry.
 - **Cover art (`covr`)** — plan 36 A2 wired `buildM4b` to read
   `<bookDir>/.audiobook/cover.jpg` and embed it as the iTunes `covr`
   atom with `attached_pic` disposition. Absent cover → no video stream,
@@ -172,6 +183,12 @@ Negative path:
 - **ID3v2 CHAP frames** — irrelevant; we ship M4B for Voice.
 - **Direct USB/ADB push to the device** — Syncthing matches the existing
   `exportSyncFolder` destination's model.
+
+## Ship notes
+
+- **Shipped:** 2026-05-18.
+- **Final scope:** the originally-deferred "Long-form description" follow-up landed in the same plan close-out — `description: string | null` field on `BookStateJson` + `EditableBookMeta` + listen-view textarea + FFMETADATA `description` / `synopsis` writes. The earlier known gap is now closed; `[BACKLOG Could #15]` removed.
+- **Atom-mapping invariants pinned:** `stik=2` (audiobook media kind) + `desc` / `ldes` (description) survive the mp4 muxer, verified end-to-end by `build-m4b.test.ts` against real ffmpeg + ffprobe.
 
 ## Related plans
 

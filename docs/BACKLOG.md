@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18 (post plan 18a slice):** Must 0 · Should 3 · Could 34 · Won't 9
+**Counts as of 2026-05-18 (post plan 33 ship):** Must 0 · Should 3 · Could 33 · Won't 9
 
 ---
 
@@ -214,16 +214,6 @@ Source: net-new (2026-05-18).
 - _Key files:_ new `src/modals/batch-voice-replace.tsx`; `src/views/voices.tsx` (entry point); `server/src/routes/voices.ts` (cross-book write endpoint); new `server/src/audio/invalidate.ts` (multi-book audio invalidation).
 - _Depends on:_ none.
 - _Benefit (user):_ cross-book voice consistency without per-book re-casting. Common need when switching a recurring narrator across a series.
-
-### 15. Long-form description (`desc` / `ldes`) for Voice export
-
-Source: [`33-voice-export.md`](features/33-voice-export.md) known gap.
-
-- _What:_ Add a `description: string | null` field to the book metadata model; expose an edit affordance in the metadata modal; pipe the value into the M4B `desc` and `ldes` atoms during export.
-- _Acceptance:_ Editing a book and saving sets the description; an M4B export embeds `desc` / `ldes` (verified by `ffprobe -show_streams`); the Live Voice app shows the richer "About this audiobook" text.
-- _Key files:_ `src/modals/edit-book-meta.tsx`; `server/src/export/build-m4b.ts`; `openapi.yaml` (BookMetadata schema); `server/src/workspace/scan.ts` (`BookStateJson`).
-- _Depends on:_ none. Will be closed by plan 33 ship (see Finish-what-we-started round).
-- _Benefit (user):_ richer "About this audiobook" panel in Live Voice.
 
 ### 16. Voice compare from the global `#/voices` tab for same-book pairs
 
