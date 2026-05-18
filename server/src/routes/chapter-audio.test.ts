@@ -120,6 +120,16 @@ function resetAudio() {
   rmIfExists(`${SLUG}.wav`);
   rmIfExists(`${SLUG}.previous.mp3`);
   rmIfExists(`${SLUG}.previous.segments.json`);
+  rmIfExists(`${SLUG}.peaks.json`);
+  rmIfExists(`${SLUG}.previous.peaks.json`);
+}
+
+/** Drop a plan-56 sibling `<slug>.peaks.json` next to the MP3 with a
+ *  deterministic ramp so assertions can pin both presence AND content
+ *  flow-through. */
+function writePeaks(slug = SLUG, count = 240) {
+  const peaks = Array.from({ length: count }, (_, i) => i / Math.max(1, count - 1));
+  writeFileSync(join(audioRoot, `${slug}.peaks.json`), JSON.stringify({ peaks }));
 }
 
 function writePreviousMp3(bytes = 4096) {
@@ -254,6 +264,57 @@ describe('chapter-audio router', () => {
     it('unknown chapterId → 404', async () => {
       const res = await request(app).get(`/api/books/${bookId}/chapters/999/audio`);
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('peaks sibling (plan 56)', () => {
+    describe('when sibling .peaks.json is present', () => {
+      beforeAll(() => {
+        resetAudio();
+        writeMp3();
+        writePeaks();
+      });
+
+      it('meta endpoint returns the peaks array from disk', async () => {
+        const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+        expect(res.status).toBe(200);
+        expect(Array.isArray(res.body.peaks)).toBe(true);
+        expect(res.body.peaks).toHaveLength(240);
+        /* Verify it's the content we wrote, not the legacy `[]` fallback —
+           ramp values match the writePeaks fixture above. */
+        expect(res.body.peaks[0]).toBeCloseTo(0, 6);
+        expect(res.body.peaks[239]).toBeCloseTo(1, 6);
+      });
+    });
+
+    describe('when sibling .peaks.json is missing (legacy chapter)', () => {
+      beforeAll(() => {
+        resetAudio();
+        writeMp3();
+      });
+
+      it('meta endpoint returns peaks: [] (graceful pre-plan-56 contract)', async () => {
+        const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+        expect(res.status).toBe(200);
+        expect(res.body.peaks).toEqual([]);
+      });
+    });
+
+    describe('when sibling .peaks.json is malformed', () => {
+      beforeAll(() => {
+        resetAudio();
+        writeMp3();
+        writeFileSync(join(audioRoot, `${SLUG}.peaks.json`), '{ this is not json');
+      });
+
+      it('meta endpoint absorbs the parse error and returns peaks: []', async () => {
+        const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+        /* Critical: the route must NOT 500 on a corrupt peaks file —
+           that would take the whole Listen view down for a visualization
+           aid. The fallback path matches the legacy contract. */
+        expect(res.status).toBe(200);
+        expect(res.body.peaks).toEqual([]);
+      });
     });
   });
 
