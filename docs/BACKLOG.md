@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18:** Must 1 · Should 0 · Could 12 · Won't 9
+**Counts as of 2026-05-18:** Must 1 · Should 1 · Could 14 · Won't 9
 
 ---
 
@@ -47,7 +47,15 @@ Source: net-new (2026-05-18). Follow-up to plan 45 (Vitest pool tuning + one-ret
 
 ## Should — important, not blocking ship
 
-(empty — every Should item has shipped or moved to Could.)
+### 1. Release packages on git-tag push
+
+Source: net-new (2026-05-18) — user-requested ahead of handing the app to a deployer. Full plan in [`49-release-package.md`](features/49-release-package.md) (status: draft).
+
+- _What:_ Add `scripts/bump-version.ps1 -Level (patch|minor|major)` that rewrites both `package.json` versions + lockfiles, creates the `chore: bump version to X.Y.Z` commit, and creates the annotated `vX.Y.Z` tag locally. Add `.github/workflows/release.yml` that fires on `push: tags: ['v*.*.*']`, runs `npm run verify:quick && npm run build`, assembles `audiobook-generator-vX.Y.Z.zip` via a new `scripts/build-release-zip.mjs` (manifest-driven include / exclude rules), computes SHA-256, and uploads both as a GitHub Release with the tag annotation as the release notes. Ship a top-level `INSTALL.md` walking a deployer through extracting the zip, prerequisites, `install-kokoro.ps1`, and `npm start`. Add a "Releasing" section to CONTRIBUTING.md.
+- _Acceptance:_ (1) `pwsh scripts/bump-version.ps1 -Level patch` on a clean main bumps both `package.json` versions in lockstep, regenerates both lockfiles, commits with the standard subject, and tags `v<new>`. (2) `git push origin main && git push origin v<new>` triggers `release.yml`; the workflow ends green with a `audiobook-generator-v<new>.zip` + `.sha256` asset on the matching GitHub release. (3) Extracting the zip on a clean Windows 11 host and following INSTALL.md yields a runnable app at `http://localhost:5173`. (4) New Pester test `scripts/tests/bump-version.Tests.ps1` locks the bump-script post-state; new Vitest spec `scripts/tests/release-manifest.test.mjs` locks the include / exclude manifest.
+- _Key files:_ new `.github/workflows/release.yml`, `scripts/bump-version.ps1`, `scripts/build-release-zip.mjs`, `scripts/tests/bump-version.Tests.ps1`, `scripts/tests/release-manifest.test.mjs`, `INSTALL.md`, `docs/features/49-release-package.md`; edited `docs/features/INDEX.md`, `README.md` (Releases link), `CONTRIBUTING.md` (Releasing section), `.gitignore`.
+- _Depends on:_ none. Pairs naturally with Could #1 (CI integration for the test suite) — both add GitHub Actions workflows; if shipped together the same caching infrastructure is reusable.
+- _Benefit (user / technical):_ user can hand a downloadable artefact to a deployer instead of walking them through a git-clone + dev-from-source flow. Cutting a release becomes one command instead of a 4-file edit. Establishes the release seam that Could #16 (Windows installer) and Could #17 (Docker image) hang off — both extend `release.yml` rather than spawn parallel pipelines.
 
 ---
 
@@ -167,6 +175,26 @@ Source: plan 46 ship (2026-05-18). Two specs `test.fixme`'d when plan 46 landed.
 - _Key files:_ `e2e/listen-playback.spec.ts:15`, `e2e/new-book-flow.spec.ts:32`, `playwright.config.ts:14-26`, `e2e/helpers.ts`, `src/mocks/canned-data.ts` (if mock-tick determinism turns out to be the fix).
 - _Depends on:_ none.
 - _Benefit (technical):_ restores the two e2e specs that cover the highest-blast-radius surfaces (mini-player play + full new-book cold-boot walk). Until then both code paths only have Vitest+jsdom coverage, which is known to lie about audio playback and SSE timing.
+
+### 16. Windows installer (Inno Setup or NSIS) wrapping the release zip
+
+Source: net-new (2026-05-18). Deferred follow-up to Should #1 ([`49-release-package.md`](features/49-release-package.md)).
+
+- _What:_ Add an Inno Setup (or NSIS) script that wraps the `audiobook-generator-vX.Y.Z.zip` produced by Should #1 into a signed `.exe` installer. Installer extracts to `%LocalAppData%\AudiobookGenerator`, drops a Start Menu entry, runs prerequisite checks (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links shown for any missing dep, and offers to run `install-kokoro.ps1` post-install. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.
+- _Acceptance:_ Double-clicking the installer on a clean Windows 11 box yields a runnable app reachable at `http://localhost:5173`, with no terminal interaction required from the deployer. SmartScreen warning cleared after one user "Run anyway" click (full reputation requires an EV code-signing cert — out of scope until the cert is procured).
+- _Key files:_ new `installer/audiobook-generator.iss` (Inno Setup), new `installer/build-installer.ps1`, `.github/workflows/release.yml` (add `installer` job on `windows-latest` that runs after the zip job and uploads to the same release).
+- _Depends on:_ Should #1 shipped (the installer wraps the existing zip — no point building before the zip pipeline exists).
+- _Benefit (user):_ friction-free install for non-developers. Today's Should #1 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
+
+### 17. Docker image + compose file for headless / Linux deployment
+
+Source: net-new (2026-05-18). Deferred follow-up to Should #1 ([`49-release-package.md`](features/49-release-package.md)).
+
+- _What:_ Add a multi-stage `Dockerfile` (frontend build → node runtime stage → sidecar Python stage) and a `docker-compose.yml` that wires the three services on `:5173 / :8080 / :9000`. Document the NVIDIA Container Toolkit GPU-passthrough prereq. Resolve whether `WORKSPACE_DIR` is bind-mounted from the host or held in a named volume (host-bind recommended — keeps per-book `.audiobook/state.json` portable across container rebuilds). Extend `release.yml` with `docker/build-push-action` to publish the image to `ghcr.io/dudarenok-maker/audiobook-generator:vX.Y.Z` on tag push.
+- _Acceptance:_ `docker compose up` on a host with NVIDIA Container Toolkit installed brings up the three-service stack reachable on the documented ports. The published image works against a fresh `WORKSPACE_DIR` bind mount; tagged versions are pullable from GHCR.
+- _Key files:_ new `Dockerfile`, new `docker-compose.yml`, new `docs/features/50-docker-image.md` (when this graduates from BACKLOG to active), `.github/workflows/release.yml` (extend with the GHCR push job).
+- _Depends on:_ Should #1 shipped (reuses the same tag-push trigger and version source); resolving the workspace-mount question.
+- _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
 
 ---
 
