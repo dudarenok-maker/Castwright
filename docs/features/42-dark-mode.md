@@ -147,6 +147,23 @@ dark-mode token / utility edit must preserve these targets:
    ~10–32% alpha overlays on dark; matching text shifts to the
    -300/-400 family. Any new status-colour utility must land an
    override at the same time it's first used in component code.
+6. **Full red/rose ladder coverage** (added 2026-05-18 after the
+   Halted-pill / Analysis-halted-panel bug: the top-bar pill paints
+   `text-rose-800` and the analysing-view error panel paints
+   `text-red-800` / `text-red-900` on red/rose-50 fills — neither
+   utility had a dark override, so both bled dark-on-dark). The dark
+   overrides now cover every red/rose utility used as a text or
+   surface in component code: text shades -600 through -900 (plus
+   their `/70`-`/90` alpha modifiers) collapse to `#fca5a5` (~10:1
+   on `--canvas`); hover variants lift to `#fecaca`; `bg-red-100`,
+   `bg-red-100/60`, `bg-rose-50/30…/80`, and the `hover:bg-rose-100`
+   / `hover:bg-rose-200` / `hover:bg-red-50` surfaces drop to
+   alpha-tinted overlays; `border-red-200` / `border-red-300` join
+   `border-rose-200` at ~30–35% red alpha. Saturated paints
+   (`bg-rose-400/500`, `bg-red-500/600`, `hover:bg-red-700`,
+   `ring-red-400/40`) are intentionally left as-is — they read as
+   destructive-action / dot-indicator hues and already hold contrast
+   on dark.
 
 ## Test plan
 
@@ -183,7 +200,12 @@ dark-mode token / utility edit must preserve these targets:
   `bg-white/70` and their `hover:` counterparts exist under
   `[data-theme='dark']`. Locks the regression where a missing
   base-variant override let the ConnPill paint
-  `text-emerald-700` on a near-white wash in dark mode.
+  `text-emerald-700` on a near-white wash in dark mode. Extended
+  2026-05-18 with the red/rose ladder additions (`text-rose-800`,
+  `text-red-800`, `text-red-900`, the /N alpha modifiers,
+  `bg-red-100`, `hover:bg-rose-100` / `…-200` / `bg-red-50`,
+  `border-red-200`, `border-red-300/60`) so the Halted-pill +
+  Analysis-halted-panel regression can't reopen.
 
 ### Manual acceptance walkthrough
 
