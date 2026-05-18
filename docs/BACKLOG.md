@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18 (post plan 33 ship):** Must 0 · Should 3 · Could 33 · Won't 9
+**Counts as of 2026-05-18 (post plan 20 ship):** Must 0 · Should 3 · Could 34 · Won't 9
 
 ---
 
@@ -401,6 +401,16 @@ Source: plan 18 known gap (2026-05-18). The chapter-audio meta endpoint currentl
 - _Key files:_ `server/src/tts/mp3.ts` (extend to emit peaks during encode); `server/src/routes/chapter-audio.ts` (read + return peaks); new `server/src/audio/compute-peaks.ts` (240-bin RMS reducer).
 - _Depends on:_ none structural. Pairs naturally with Could #3 (per-chapter loudness report) — both emit chapter-level audio metadata at encode time.
 - _Benefit (user):_ the Listen view's waveform card stops lying about chapter shape (loud passages, silences, fades all become visible). Spotting problem chapters at a glance.
+
+### 36. Per-segment regen consumer for `revisions.acceptedSelections`
+
+Source: plan 20 close-out (2026-05-18). The `revisions.acceptedSelections` map is persisted by `revisionsActions.acceptRevision` but no in-app code reads it back — per-segment splicing of accepted takes was explicitly "Out of scope" for plan 20 v1, and remains so in the v1 close-out.
+
+- _What:_ Add a per-segment regen path that consumes `acceptedSelections[revisionId]` to re-render only the segments the user flipped to 'B' (the new take) while preserving 'A' (the original) segments verbatim. This requires (a) a server endpoint that accepts `{ revisionId, segmentSelections }` and dispatches per-segment synth, (b) a segments-manifest merge step that interleaves the two takes on disk, (c) a frontend trigger from the revision-diff player's "Commit selection" action.
+- _Acceptance:_ Open a pending revision, toggle segments 3 + 7 to 'B' (others 'A'), click "Commit selection" → the chapter MP3 is rewritten with segments 3 + 7 re-rendered from the new take, all other segments byte-identical to the preserved (A) take. Server Vitest covers the manifest merge + per-segment synth; frontend Vitest covers the action dispatch shape; e2e covers the audition-then-commit flow.
+- _Key files:_ new `server/src/routes/revisions-commit-segments.ts`; `server/src/tts/synthesise-chapter.ts` (extend for per-segment paths); `src/views/revision-diff.tsx` (dispatch through the new endpoint); `src/store/revisions-slice.ts` (mark the revision as committed once the segment-level synth completes).
+- _Depends on:_ plan 20 shipped (acceptedSelections persistence is already on disk). Pairs with Could #12 (revision history timeline) — the timeline becomes meaningful once per-segment commits land separately from full regens.
+- _Benefit (user):_ true segment-level revision control. Today accept/reject is whole-revision swap — if the user likes 9 of 10 segments in the new take but wants segment 7 from the original, they have to regenerate the whole chapter under different prompts to recover that one segment. This closes the loop the slice has been quietly capturing since plan 20 v1.
 
 ---
 

@@ -1021,8 +1021,13 @@ export function Layout() {
             dispatch(revisionsActions.acceptRevision({ revisionId: id, selection }));
             dispatch(uiActions.setShowRevisionPlayer(false));
             api.acceptChapterRevision({ bookId, chapterId }).catch((err) => {
-              /* eslint-disable-next-line no-console */
-              console.warn('[revision-diff] accept network call failed:', err);
+              dispatch(
+                notificationsActions.pushToast({
+                  kind: 'warn',
+                  message: `Couldn't accept the revision — ${(err as Error).message ?? 'network error'}.`,
+                  dedupeKey: 'revision-accept-failed',
+                }),
+              );
             });
           }}
           onReject={() => {
@@ -1035,8 +1040,18 @@ export function Layout() {
             dispatch(revisionsActions.rejectRevision(id));
             dispatch(uiActions.setShowRevisionPlayer(false));
             api.rejectChapterRevision({ bookId, chapterId }).catch((err) => {
-              /* eslint-disable-next-line no-console */
-              console.warn('[revision-diff] reject network call failed:', err);
+              /* Plan 20 — mid-flight Reject lands here when the server
+                 returns 409 (generation in progress, can't promote the
+                 previous take over a live render). Surface via the toast
+                 surface so the user knows to wait + retry instead of
+                 staring at a silent UI. dedupeKey collapses rapid retries. */
+              dispatch(
+                notificationsActions.pushToast({
+                  kind: 'warn',
+                  message: `Couldn't reject the revision — ${(err as Error).message ?? 'try again once generation pauses'}.`,
+                  dedupeKey: 'revision-reject-failed',
+                }),
+              );
             });
           }}
         />
