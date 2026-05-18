@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18 (post plan 20 ship):** Must 0 · Should 3 · Could 34 · Won't 9
+**Counts as of 2026-05-18 (post plan 18b ship):** Must 0 · Should 3 · Could 32 · Won't 9
 
 ---
 
@@ -331,26 +331,6 @@ Source: [`30-global-model-control.md`](features/30-global-model-control.md) "Whe
 - _Key files:_ `src/lib/use-tts-lifecycle.ts` (no changes expected — already exported); `src/components/layout.tsx` (no changes — already exposes the context); the new surface's component file.
 - _Depends on:_ an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
 - _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
-
-### 29. BookPlayer (iOS) handoff modal
-
-Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope — see Finish-what-we-started round.
-
-- _What:_ Wire the BookPlayer tile's `AppHandoffModal` with file-import instructions. BookPlayer imports via the Files app on iOS — the modal walks the user through (1) sync the exported m4b/mp3 to iCloud Drive or AirDrop to phone, (2) open BookPlayer → "+", select the file. No direct server integration — copy-and-instructions only.
-- _Acceptance:_ Click BookPlayer tile → modal opens with the two-step instructions and "Open instructions in new tab" link. Vitest covers the modal content.
-- _Key files:_ `src/components/app-handoff-modal.tsx` (BookPlayer case); `src/data/listener-apps.ts` (instructions payload).
-- _Depends on:_ plan 18b shipped (the modal scaffolding).
-- _Benefit (user):_ closes one more "Coming soon" tile in the listen view.
-
-### 30. Smart AudioBook Player (Android) handoff modal
-
-Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
-
-- _What:_ Wire Smart AudioBook Player tile with instructions: (1) connect Android phone via USB or sync to cloud storage, (2) copy m4b to phone's `AudioBooks/` folder, (3) open Smart AudioBook Player → "Refresh." Copy-and-instructions only.
-- _Acceptance:_ Click tile → modal walks the three-step flow. Vitest covers the content.
-- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`.
-- _Depends on:_ plan 18b shipped.
-- _Benefit (user):_ closes one more "Coming soon" tile.
 
 ### 31. Apple Books (iOS / macOS) handoff modal
 
