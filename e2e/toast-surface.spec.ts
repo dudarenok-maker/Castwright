@@ -42,9 +42,10 @@ test.describe('toast surface', () => {
     await expect(toast).toBeVisible({ timeout: 2_000 });
     await expect(page.getByRole('button', { name: /Dismiss notification/i })).toBeVisible();
 
-    /* Auto-dismiss fires at 6 s. Give a generous margin so a busy
-       Windows host doesn't flake on it. */
-    await expect(toast).not.toBeVisible({ timeout: 8_000 });
+    /* Auto-dismiss fires at 6 s. 12 s margin so a contended Windows
+       host with multiple parallel workers doesn't flake when the
+       setTimeout slips a couple seconds past the 6 s mark. */
+    await expect(toast).not.toBeVisible({ timeout: 12_000 });
   });
 
   test('dedupe-by-key collapses repeated pushes into a single toast', async ({ page }) => {

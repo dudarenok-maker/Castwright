@@ -16,13 +16,19 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   /* Local pre-push runs the e2e battery alongside whatever chrome
-     instances + node processes the developer left running, so parallel
-     workers occasionally lose a race to fetch+decode the bundled mock
-     MP3 or to complete a `page.reload()` navigation. One retry catches
-     these environmental flakes without masking real regressions —
-     genuine breakage fails the retry too. CI keeps 2 retries for the
-     same reason at slightly higher tolerance. */
-  retries: process.env.CI ? 2 : 1,
+     instances + node processes the developer left running, and Playwright
+     defaults to ~half the CPU cores in parallel workers. Several specs
+     issue `page.goto('/')` near-simultaneously; under sustained contention
+     Vite's first-response can stall past the default 30 s navigation
+     budget even though the dev server boots in ~270 ms. Two levers:
+       - 2 retries on local (matching CI) so a cold-load race doesn't
+         need to pass first time.
+       - `use.navigationTimeout: 60_000` raises the per-goto ceiling so
+         a slow first response gets absorbed within one attempt.
+     Genuine breakage still fails all retries. CI keeps `workers: 1` so
+     contention isn't a factor there; locally we leave parallelism on so
+     the suite stays under 2 min. */
+  retries: 2,
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
   /* Per-platform visual-regression baselines. {platform} resolves to
@@ -41,6 +47,10 @@ export default defineConfig({
   use: {
     baseURL: 'http://127.0.0.1:5174',
     trace: 'retain-on-failure',
+    /* See the retries comment above — 60 s absorbs the cold-load race
+       on the first `page.goto('/')` of each worker when the suite is
+       running fully parallel. Playwright's default is 30 s. */
+    navigationTimeout: 60_000,
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
