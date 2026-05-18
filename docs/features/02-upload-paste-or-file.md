@@ -9,7 +9,7 @@
 
 The upload screen accepts either inline pasted text or a binary file drop (`.md/.markdown/.txt/.text/.epub/.pdf/.mobi/.azw3`). Format is inferred from filename extension; word count and byte size are computed locally for previewing. On submit, the server stores the manuscript and the app transitions to the analysing stage.
 
-MOBI / AZW3 parsing is owned by [`52-mobi-parsing.md`](52-mobi-parsing.md) — that
+MOBI / AZW3 parsing is owned by [`52-mobi-parsing.md`](archive/52-mobi-parsing.md) — that
 plan covers the parser module, DRM detection, and the extension-preserving
 persist path. This plan owns the upload UI surface only.
 

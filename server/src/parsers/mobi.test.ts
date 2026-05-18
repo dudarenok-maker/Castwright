@@ -1,4 +1,4 @@
-// Pairs with docs/features/52-mobi-parsing.md.
+// Pairs with docs/features/archive/52-mobi-parsing.md.
 //
 // parseMobi wraps @lingo-reader/mobi-parser. Following the pdf.test.ts
 // pattern, the upstream library is mocked so each case exercises a

@@ -384,11 +384,11 @@ Source: net-new (2026-05-18). Plan 49 (release packaging) ships with a Kokoro-on
 
 ### 38. E2E coverage for the binary-upload flow (EPUB / PDF / MOBI / AZW3)
 
-Source: [`52-mobi-parsing.md`](features/52-mobi-parsing.md) Out-of-scope follow-up (2026-05-18). Plan 52 explicitly deferred this — EPUB and PDF have never had dedicated Playwright coverage either, and MOBI shouldn't be the exception that sets a new bar in the same PR that ships it.
+Source: [`52-mobi-parsing.md`](features/archive/52-mobi-parsing.md) Out-of-scope follow-up (2026-05-18). Plan 52 explicitly deferred this — EPUB and PDF have never had dedicated Playwright coverage either, and MOBI shouldn't be the exception that sets a new bar in the same PR that ships it.
 
 - _What:_ Add a single Playwright spec under `e2e/binary-upload.spec.ts` that drops each of the four binary fixtures (EPUB / PDF / MOBI / AZW3) onto `#/new` in mock mode and asserts the confirm-metadata screen renders with the expected title / chapter count. Wire it into `npm run test:e2e`. Fixtures: reuse `server/src/parsers/__fixtures__/sample.epub` for the EPUB case; generate a tiny MOBI/AZW3 either by checking in a small Project Gutenberg-derived file or by extending `scripts/gen-parser-fixtures.mjs` to call out to Calibre's `ebook-convert` (Calibre is a prerequisite, not bundled).
 - _Acceptance:_ `npm run test:e2e` includes the new spec; CI run in `verify` passes with the spec exercising all four formats. A regression like "MOBI parser threw on real-world files" gets caught browser-side, not just at the unit level.
-- _Key files:_ new `e2e/binary-upload.spec.ts`; possibly extend `scripts/gen-parser-fixtures.mjs` for MOBI/AZW3 generation (Calibre-dependent); `docs/features/52-mobi-parsing.md` "Test plan" section updates to cite the new spec.
+- _Key files:_ new `e2e/binary-upload.spec.ts`; possibly extend `scripts/gen-parser-fixtures.mjs` for MOBI/AZW3 generation (Calibre-dependent); `docs/features/archive/52-mobi-parsing.md` "Test plan" section updates to cite the new spec.
 - _Depends on:_ plan 52 shipped (the parser must already accept MOBI/AZW3). Independent of the existing flaky e2e items (Could #20).
 - _Benefit (technical):_ binary parsers are the highest-risk seam in the upload flow — third-party libs (epub2 / pdf-parse / @lingo-reader/mobi-parser) have real-world quirks that unit tests with mocked libraries can't catch. Browser-level coverage locks the integration contract.
 
