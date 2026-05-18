@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { findBookByManuscriptId } from '../workspace/scan.js';
 import { parseManuscript } from '../parsers/index.js';
 
-export type ManuscriptFormat = 'markdown' | 'plaintext' | 'epub' | 'pdf';
+export type ManuscriptFormat = 'markdown' | 'plaintext' | 'epub' | 'pdf' | 'mobi';
 
 export interface ChapterHint {
   /** 1-based index used as the canonical chapter id. */
