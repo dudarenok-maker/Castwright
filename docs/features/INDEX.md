@@ -99,6 +99,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [37 — Playwright e2e harness](37-e2e-playwright.md) — Browser-level smoke + on-ramp for visual regression. KNOWN: scaffolded — one golden-path spec, broader coverage deferred.
 - [38 — Branching & commit convention](38-branching-and-commit-convention.md) — Trunk-based branching + Conventional-Commits subject format; `.husky/commit-msg` gates the convention.
 - [44 — Pull request hygiene](44-pr-hygiene.md) — PR template + PR-title lint workflow + merge-commit-only / delete-branch-on-merge repo settings; codifies the Summary / Test plan shape PRs #1-#4 already use.
+- [45 — Vitest pool tuning + one-retry policy](45-vitest-pool-tuning.md) — Caps the server-suite forks pool at 4 and turns on `retry: 1` on both Vitest configs so transient tinypool "Worker exited unexpectedly" failures no longer force a full pre-push re-run.
 
 ### L. Book state persistence
 - [27 — Book state persistence](27-book-state-persistence.md) — `.audiobook/state.json` hydration + slice PUT patches.
