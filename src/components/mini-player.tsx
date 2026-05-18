@@ -37,14 +37,32 @@ export function MiniPlayer({
   const [playing, setPlaying] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  /* Plan 47 — resume seek + debounced save state.
+     pendingSeekRef carries the resume point from the on-mount
+     api.getListenProgress fetch into the onLoadedMetadata handler,
+     where the seek can actually stick (setting el.currentTime before
+     metadata loads is unreliable across browsers).
+     currentSecRef mirrors currentSec for the flush-on-unmount cleanup
+     so the cleanup closure doesn't capture a stale value.
+     lastSavedAtRef gates the onTimeUpdate save to once-per-5 s so a
+     debounced PUT doesn't fire 60× per minute. */
+  const pendingSeekRef = useRef<number | null>(null);
+  const currentSecRef = useRef(0);
+  const lastSavedAtRef = useRef(0);
 
   /* Fetch the audio meta (url, durationSec, segments) whenever the chapter
      changes. We don't store the chapter id on the audio element because the
      <audio> src swap is driven separately — this effect just owns the
-     metadata for the scrubber + duration display. */
+     metadata for the scrubber + duration display.
+     Also (plan 47) fetches the resume bookmark in parallel and stashes
+     it in pendingSeekRef for onLoadedMetadata to apply; flushes one
+     final save on cleanup if currentSecRef > 5 s. */
   useEffect(() => {
     if (!chapter) return;
     setCurrentSec(0);
+    currentSecRef.current = 0;
+    pendingSeekRef.current = null;
+    lastSavedAtRef.current = 0;
     setError(null);
     /* Drop the previous chapter's URL synchronously so the <audio> element
        stops its current playback immediately. Without this reset, src
@@ -53,16 +71,47 @@ export function MiniPlayer({
        fails (the old chapter just keeps playing under the new chapter's UI). */
     setAudio({ durationSec: 0, peaks: [], url: null });
     let cancelled = false;
+    const chapterId = chapter.id;
     api
-      .getChapterAudio({ bookId, chapterId: chapter.id, duration: chapter.duration })
+      .getChapterAudio({ bookId, chapterId, duration: chapter.duration })
       .then((meta) => {
         if (!cancelled) setAudio(meta);
       })
       .catch((e) => {
         if (!cancelled) setError((e as Error).message);
       });
+    /* Resume bookmark fetch fires in parallel with the audio meta
+       fetch. Stash in a ref instead of calling setCurrentSec right
+       now — the audio element's currentTime would just snap back to
+       0 inside the audio.url effect below until the metadata lands.
+       The actual seek happens in onLoadedMetadata. */
+    api
+      .getListenProgress(bookId)
+      .then((progress) => {
+        if (cancelled) return;
+        if (progress && progress.chapterId === chapterId) {
+          pendingSeekRef.current = progress.currentSec;
+        }
+      })
+      .catch((e) => {
+        /* Non-fatal — playback still works without a resume point. */
+        console.warn('[mini-player] listen-progress GET failed', (e as Error).message);
+      });
     return () => {
       cancelled = true;
+      /* Flush-on-unmount: persist the latest position if the user got
+         past the first 5 s. Skipping when <= 5 s avoids polluting the
+         resume point with accidental click-and-close noise. */
+      if (currentSecRef.current > 5) {
+        void api
+          .putListenProgress(bookId, {
+            chapterId,
+            currentSec: currentSecRef.current,
+          })
+          .catch((e) => {
+            console.warn('[mini-player] listen-progress flush failed', (e as Error).message);
+          });
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, chapter?.id, chapter?.duration]);
@@ -192,10 +241,46 @@ export function MiniPlayer({
         <audio
           ref={audioRef}
           preload="metadata"
-          onTimeUpdate={(e) => setCurrentSec(e.currentTarget.currentTime)}
+          onTimeUpdate={(e) => {
+            const t = e.currentTarget.currentTime;
+            setCurrentSec(t);
+            currentSecRef.current = t;
+            /* Plan 47 — debounced save. Once per 5 s of wall-clock,
+               post the position so a refresh / close / app crash
+               loses at most ~5 s of resume accuracy. Don't dispatch
+               through Redux for this — slice churn on every tick
+               would re-render too much; the listen-progress slice
+               hydrates on book load + on chapter mount, both of
+               which already cover the read path. */
+            if (!chapter) return;
+            const now = Date.now();
+            if (now - lastSavedAtRef.current < 5000) return;
+            if (t <= 5) return;
+            lastSavedAtRef.current = now;
+            const chapterId = chapter.id;
+            void api
+              .putListenProgress(bookId, { chapterId, currentSec: t })
+              .catch((err) => {
+                console.warn('[mini-player] listen-progress save failed', (err as Error).message);
+              });
+          }}
           onLoadedMetadata={(e) => {
-            const d = e.currentTarget.duration;
-            if (Number.isFinite(d) && d > 0) setAudio((a) => ({ ...a, durationSec: d }));
+            const target = e.currentTarget;
+            const d = target.duration;
+            if (Number.isFinite(d) && d > 0) {
+              setAudio((a) => ({ ...a, durationSec: d }));
+              /* Plan 47 — apply the resume bookmark now that the
+                 audio element knows its duration. Cap at d - 1 so a
+                 resume point parked near the end of the chapter
+                 doesn't immediately trigger onEnded. */
+              const pending = pendingSeekRef.current;
+              if (pending != null && pending > 0 && pending < d - 1) {
+                target.currentTime = pending;
+                setCurrentSec(pending);
+                currentSecRef.current = pending;
+              }
+              pendingSeekRef.current = null;
+            }
           }}
           onEnded={() => setPlaying(false)}
           onError={() => setError('Audio failed to load.')}

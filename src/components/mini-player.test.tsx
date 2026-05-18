@@ -18,6 +18,17 @@ import type { Chapter, ChapterAudio } from '../lib/types';
 type Resolver = (meta: ChapterAudio) => void;
 const pendingByChapter = new Map<number, Resolver>();
 const getChapterAudioMock = vi.fn();
+/* Plan 47 — listen-progress mocks. Default: getListenProgress
+   returns null (no prior session); putListenProgress is a resolved
+   promise that the per-test cases assert was/wasn't called. */
+const getListenProgressMock = vi.fn(async (_bookId: string) => null);
+const putListenProgressMock = vi.fn(
+  async (_bookId: string, args: { chapterId: number; currentSec: number }) => ({
+    chapterId: args.chapterId,
+    currentSec: args.currentSec,
+    updatedAt: new Date().toISOString(),
+  }),
+);
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -27,12 +38,31 @@ vi.mock('../lib/api', () => ({
         pendingByChapter.set(chapterId, resolve);
       });
     },
+    /* Plan 47 — listen-progress hooks. Defaults to "no resume point"
+       so the existing test cases see the legacy seek-to-0 behaviour.
+       Per-test overrides via getListenProgressMock.mockImplementation
+       drive the resume-seek + save-flush specs below. */
+    getListenProgress: (bookId: string) => getListenProgressMock(bookId),
+    putListenProgress: (
+      bookId: string,
+      args: { chapterId: number; currentSec: number },
+    ) => putListenProgressMock(bookId, args),
   },
 }));
 
 beforeEach(() => {
   pendingByChapter.clear();
   getChapterAudioMock.mockReset();
+  getListenProgressMock.mockReset();
+  /* Default — no resume point. Per-test cases override via
+     mockResolvedValueOnce / mockImplementationOnce. */
+  getListenProgressMock.mockResolvedValue(null);
+  putListenProgressMock.mockReset();
+  putListenProgressMock.mockImplementation(async (_bookId, args) => ({
+    chapterId: args.chapterId,
+    currentSec: args.currentSec,
+    updatedAt: new Date().toISOString(),
+  }));
   /* jsdom only stubs HTMLMediaElement minimally — load is a no-op and play
      returns undefined synchronously. Replace play with a resolved-promise
      stub so the component's `void el.play().catch(...)` doesn't trip
