@@ -86,7 +86,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           # Need the tag annotation reachable as the release body.
+          # `fetch-depth: 0` alone fetches all commits but actions/checkout@v4
+          # leaves `fetch-tags: false` by default, so the tag *object* (with
+          # its annotation) is never pulled — `git tag -l --format='%(contents)'`
+          # then falls back to the commit subject and the GitHub Release body
+          # ends up as just "chore: bump version to X.Y.Z". v1.2.2 shipped
+          # with an empty body for exactly this reason.
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Node
         uses: actions/setup-node@v4
