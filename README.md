@@ -160,7 +160,7 @@ Packaged downloads of tagged releases are published to
 Each release is a single platform-independent `audiobook-generator-vX.Y.Z.zip`
 plus a `.sha256` checksum. Follow [`INSTALL.md`](INSTALL.md) for the
 extract-and-run walkthrough (Windows, macOS, Linux). The release pipeline
-is documented in [`docs/features/49-release-package.md`](docs/features/49-release-package.md).
+is documented in [`docs/features/archive/49-release-package.md`](docs/features/archive/49-release-package.md).
 
 ## Testing
 
