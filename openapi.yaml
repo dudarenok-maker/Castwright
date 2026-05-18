@@ -1494,7 +1494,7 @@ components:
       type: object
       required: [format, title, sourceText, wordCount, byteSize, chapters]
       properties:
-        format: { type: string, enum: [markdown, plaintext, epub, pdf] }
+        format: { type: string, enum: [markdown, plaintext, epub, pdf, mobi] }
         title: { type: string }
         author: { type: string, nullable: true }
         series: { type: string, nullable: true }
@@ -1572,7 +1572,7 @@ components:
       required: [manuscriptId, format, title, wordCount, byteSize, uploadedAt, sourceText]
       properties:
         manuscriptId: { type: string, example: 'mns_abc123' }
-        format: { type: string, enum: [markdown, plaintext, epub, pdf] }
+        format: { type: string, enum: [markdown, plaintext, epub, pdf, mobi] }
         title: { type: string }
         wordCount: { type: integer }
         byteSize: { type: integer }

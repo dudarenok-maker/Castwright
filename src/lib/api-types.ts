@@ -1124,7 +1124,7 @@ export interface components {
         };
         ImportCandidate: {
             /** @enum {string} */
-            format: "markdown" | "plaintext" | "epub" | "pdf";
+            format: "markdown" | "plaintext" | "epub" | "pdf" | "mobi";
             title: string;
             author?: string | null;
             series?: string | null;
@@ -1173,7 +1173,7 @@ export interface components {
             /** @example mns_abc123 */
             manuscriptId: string;
             /** @enum {string} */
-            format: "markdown" | "plaintext" | "epub" | "pdf";
+            format: "markdown" | "plaintext" | "epub" | "pdf" | "mobi";
             title: string;
             wordCount: number;
             byteSize: number;

@@ -7,12 +7,16 @@
 
 ## What this covers
 
-The upload screen accepts either inline pasted text or a binary file drop (`.md/.markdown/.txt/.text/.epub/.pdf`). Format is inferred from filename extension; word count and byte size are computed locally for previewing. On submit, the server stores the manuscript and the app transitions to the analysing stage.
+The upload screen accepts either inline pasted text or a binary file drop (`.md/.markdown/.txt/.text/.epub/.pdf/.mobi/.azw3`). Format is inferred from filename extension; word count and byte size are computed locally for previewing. On submit, the server stores the manuscript and the app transitions to the analysing stage.
+
+MOBI / AZW3 parsing is owned by [`52-mobi-parsing.md`](archive/52-mobi-parsing.md) — that
+plan covers the parser module, DRM detection, and the extension-preserving
+persist path. This plan owns the upload UI surface only.
 
 ## Invariants to preserve
 
 - `UploadArgs` requires `text` OR `file`; both real and mock throw "requires either `text` or `file`" if neither is supplied (`src/lib/api.ts:336, 394`).
-- `inferFormat` recognises extensions `md|markdown|txt|text|epub|pdf` only (`src/lib/api.ts:30-39`). Unknown extensions return `null` and fall through to `'markdown'` default.
+- `inferFormat` recognises extensions `md|markdown|txt|text|epub|pdf|mobi|azw3` only (`src/lib/api.ts:65-78`). Unknown extensions return `null` and fall through to `'markdown'` default. `.azw3` maps to format `'mobi'` (shared parser identity); the original extension is preserved on persist by `server/src/routes/import.ts`, not by `inferFormat`.
 - Word count = `text.trim().split(/\s+/).filter(Boolean).length`. Byte size = `file.size` for files, `new Blob([text]).size` for paste. These are computed client-side for preview; the server may recompute its own canonical value.
 - The view never imports `mockXxx`/`realXxx` directly — it goes through `api.uploadManuscript` only (see `23-mock-toggle.md`).
 - On successful upload, dispatches `manuscriptUploaded({ bookId, manuscriptId })` which transitions stage `'upload' → 'analysing'` (guarded by `ui-slice.ts:61-64`).

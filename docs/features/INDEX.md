@@ -41,7 +41,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 ### B. Upload & import
 
-- [02 — Upload (paste or file)](02-upload-paste-or-file.md) — `.md/.txt/.epub/.pdf` upload + paste flow.
+- [02 — Upload (paste or file)](02-upload-paste-or-file.md) — `.md/.txt/.epub/.pdf/.mobi/.azw3` upload + paste flow.
 - [03 — Import & confirm metadata](03-import-confirm-metadata.md) — Parse-only import then confirm-write to disk.
 
 ### C. Analysis pipeline
@@ -149,3 +149,4 @@ breadcrumb so cross-references still resolve.
 - [20 — Revisions & drift](archive/20-revisions-and-drift.md) — Pending drafts + drift events + a/b audio audition (rollback-preserved previous audio) + stale-audio banner on voice edits. Close-out adds startup fsck for half-preserved rollback pairs + mid-flight Reject toast. Shipped 2026-05-18.
 - [18 — Listen view](archive/18-listen-view.md) — Cover, chapter list, mini-player, metadata editor, listener-app tiles (5 of 7 live via export modal), export queue, cover Replace/Regenerate. Plan 18a slice + 18b correction shipped 2026-05-18; remaining gaps tracked as BACKLOG Could #31/#32/#33/#34/#35.
 - [51 — Chapter restructure panel](archive/51-restructure-chapters.md) — Three-way structural edit surface (merge / split / drag-reorder) at ready-stage `view: 'restructure'`. Pure-remap semantics preserve sentence text + characterId + voice assignment; content-changed chapters' audio is deleted, renumbered-only chapters' audio is renamed in place (two-pass via temp + segments.json metadata rewrite). Shipped 2026-05-18.
+- [52 — MOBI / AZW3 parsing](archive/52-mobi-parsing.md) — `.mobi` + `.azw3` upload via `@lingo-reader/mobi-parser`; KF8 routes through `initKf8File`, legacy MOBI through `initMobiFile`; DRM-protected files rejected up-front with HTTP 415 by reading the PalmDOC encryption byte; original `.azw3` extension preserved on persist; `stripHtml` / `extractFirstHeading` / `GENERIC_NCX_RE` hoisted from `epub.ts` into shared `html-utils.ts`. Shipped 2026-05-18.
