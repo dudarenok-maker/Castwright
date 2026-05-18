@@ -150,3 +150,192 @@ describe('MiniPlayer — chapter switch', () => {
     await waitFor(() => expect(audioEl!.getAttribute('src')).toMatch(/\/chapters\/2\/audio\.mp3$/));
   });
 });
+
+describe('MiniPlayer — plan 47 resume + flush', () => {
+  /* Fire onLoadedMetadata against the <audio> element with a given
+     duration. We can't trigger the real DOM event because jsdom never
+     fetches the URL — synthesise a load event with a stubbed currentTime
+     setter so the component's handler can see the duration value. */
+  async function fireLoadedMetadata(audioEl: HTMLAudioElement, durationSec: number) {
+    /* duration is read-only on the prototype but a per-element setter
+       lets us seed the value the component reads inside onLoadedMetadata. */
+    Object.defineProperty(audioEl, 'duration', { configurable: true, value: durationSec });
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('loadedmetadata'));
+    });
+  }
+
+  /* Fire onTimeUpdate against the <audio> element. The component reads
+     currentTime off the event target — we set the value first, then
+     dispatch the event. */
+  async function fireTimeUpdate(audioEl: HTMLAudioElement, currentTimeSec: number) {
+    Object.defineProperty(audioEl, 'currentTime', {
+      configurable: true,
+      writable: true,
+      value: currentTimeSec,
+    });
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('timeupdate'));
+    });
+  }
+
+  it('seeks the audio element to the resume point on onLoadedMetadata when listen-progress matches the chapter', async () => {
+    getListenProgressMock.mockResolvedValueOnce({
+      chapterId: 1,
+      currentSec: 42,
+      updatedAt: '2026-05-18T01:00:00.000Z',
+    });
+    const { container } = render(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    expect(audioEl).not.toBeNull();
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    /* Wait for the listen-progress GET to resolve before metadata fires;
+       otherwise the seek-into-pendingSeekRef race-loses. */
+    await waitFor(() => expect(getListenProgressMock).toHaveBeenCalled());
+    await fireLoadedMetadata(audioEl, 600);
+    expect(audioEl.currentTime).toBeCloseTo(42, 5);
+  });
+
+  it('does NOT seek when listen-progress is for a different chapter', async () => {
+    getListenProgressMock.mockResolvedValueOnce({
+      chapterId: 99,
+      currentSec: 42,
+      updatedAt: '2026-05-18T01:00:00.000Z',
+    });
+    const { container } = render(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await waitFor(() => expect(getListenProgressMock).toHaveBeenCalled());
+    await fireLoadedMetadata(audioEl, 600);
+    expect(audioEl.currentTime).toBe(0);
+  });
+
+  it('does NOT seek when the resume point sits within the last second of the chapter', async () => {
+    /* Cap at d-1 — a resume parked at 599.5 in a 600 s chapter would
+       trip onEnded immediately, which is worse than starting over. */
+    getListenProgressMock.mockResolvedValueOnce({
+      chapterId: 1,
+      currentSec: 599.5,
+      updatedAt: '2026-05-18T01:00:00.000Z',
+    });
+    const { container } = render(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await waitFor(() => expect(getListenProgressMock).toHaveBeenCalled());
+    await fireLoadedMetadata(audioEl, 600);
+    expect(audioEl.currentTime).toBe(0);
+  });
+
+  it('debounced save fires at the first onTimeUpdate past the 5 s threshold and not before', async () => {
+    const { container } = render(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl, 600);
+    /* Tick at 3 s — below threshold, no save. */
+    await fireTimeUpdate(audioEl, 3);
+    expect(putListenProgressMock).not.toHaveBeenCalled();
+    /* Tick at 7 s — past threshold, save fires. */
+    await fireTimeUpdate(audioEl, 7);
+    expect(putListenProgressMock).toHaveBeenCalledWith('book-1', { chapterId: 1, currentSec: 7 });
+  });
+
+  it('flushes a final save on chapter switch when currentSec is past 5 s', async () => {
+    const { container, rerender } = render(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl, 600);
+    await fireTimeUpdate(audioEl, 17);
+    putListenProgressMock.mockClear();
+    /* Switch chapters → the chapter-mount effect's cleanup fires for
+       chapter 1 with the latest currentSec (17). */
+    await act(async () => {
+      rerender(
+        <MiniPlayer
+          chapter={chapter2}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={true}
+          nextAvailable={false}
+        />,
+      );
+    });
+    expect(putListenProgressMock).toHaveBeenCalledWith('book-1', { chapterId: 1, currentSec: 17 });
+  });
+
+  it('does NOT flush on unmount when playback stayed under the 5 s noise floor', async () => {
+    const { container, unmount } = render(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl, 600);
+    /* Single tick at 2 s — never crosses the threshold, debounce save
+       skips, and the cleanup must NOT fire either. */
+    await fireTimeUpdate(audioEl, 2);
+    putListenProgressMock.mockClear();
+    await act(async () => {
+      unmount();
+    });
+    expect(putListenProgressMock).not.toHaveBeenCalled();
+  });
+});
