@@ -62,17 +62,21 @@ function wait(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function inferFormat(fileName?: string): 'markdown' | 'plaintext' | 'epub' | 'pdf' | null {
+function inferFormat(
+  fileName?: string,
+): 'markdown' | 'plaintext' | 'epub' | 'pdf' | 'mobi' | null {
   if (!fileName) return null;
   const m = fileName.toLowerCase().match(/\.([a-z0-9]+)$/);
   if (!m) return null;
-  const map: Record<string, 'markdown' | 'plaintext' | 'epub' | 'pdf'> = {
+  const map: Record<string, 'markdown' | 'plaintext' | 'epub' | 'pdf' | 'mobi'> = {
     md: 'markdown',
     markdown: 'markdown',
     txt: 'plaintext',
     text: 'plaintext',
     epub: 'epub',
     pdf: 'pdf',
+    mobi: 'mobi',
+    azw3: 'mobi',
   };
   return map[m[1]] ?? null;
 }
@@ -85,7 +89,7 @@ export interface UploadArgs {
   /** Raw file (used for binary formats like PDF/EPUB). */
   file?: File;
   fileName?: string;
-  format?: 'markdown' | 'plaintext' | 'epub' | 'pdf';
+  format?: 'markdown' | 'plaintext' | 'epub' | 'pdf' | 'mobi';
 }
 /** Realtime "what's running right now" payload piggybacked on phase ticks.
     Server emits one of these every 500ms while any stage-2 chapter is in

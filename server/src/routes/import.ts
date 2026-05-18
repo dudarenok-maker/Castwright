@@ -20,7 +20,7 @@ import { nanoid } from 'nanoid';
 import { existsSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { parseManuscript, UnsupportedFormatError } from '../parsers/index.js';
+import { parseManuscript, UnsupportedFormatError, DrmProtectedError } from '../parsers/index.js';
 import { putManuscript, type ManuscriptRecord, type ChapterHint } from '../store/manuscripts.js';
 import { getStaging, putStaging, dropStaging, type StagedImport } from '../store/import-staging.js';
 import {
@@ -46,6 +46,7 @@ const EXT_BY_FORMAT: Record<ManuscriptRecord['format'], string> = {
   plaintext: 'txt',
   epub: 'epub',
   pdf: 'pdf',
+  mobi: 'mobi',
 };
 
 function deterministicGradient(seed: string): [string, string] {
@@ -141,6 +142,9 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
       },
     });
   } catch (e) {
+    if (e instanceof DrmProtectedError) {
+      return res.status(415).json({ error: 'drm_protected', message: e.message });
+    }
     if (e instanceof UnsupportedFormatError) {
       return res.status(415).json({ error: e.message });
     }
@@ -201,7 +205,14 @@ importRouter.post('/books', async (req: Request, res: Response) => {
 
     const manuscriptId = 'mns_' + nanoid(10);
     const bookId = makeBookId(author, series, title);
-    const manuscriptFile = `manuscript.${EXT_BY_FORMAT[entry.format]}`;
+    /* MOBI and AZW3 share the same ManuscriptFormat ('mobi') but the file
+       extension matters at re-parse time: .azw3 routes to initKf8File,
+       .mobi routes to initMobiFile. Preserve the original extension when
+       it is .azw3; otherwise fall back to the format → ext map. */
+    const originalExt = entry.originalFileName?.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
+    const manuscriptExt =
+      entry.format === 'mobi' && originalExt === 'azw3' ? 'azw3' : EXT_BY_FORMAT[entry.format];
+    const manuscriptFile = `manuscript.${manuscriptExt}`;
     const manuscriptPath = join(bookDir, manuscriptFile);
 
     await mkdir(bookDir, { recursive: true });

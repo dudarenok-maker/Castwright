@@ -11,7 +11,7 @@ import { manuscriptActions } from '../store/manuscript-slice';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 
 const TEXT_EXT_RE = /\.(md|markdown|txt|text)$/i;
-const BINARY_EXT_RE = /\.(pdf|epub)$/i;
+const BINARY_EXT_RE = /\.(pdf|epub|mobi|azw3)$/i;
 
 export function UploadView() {
   const dispatch = useAppDispatch();
@@ -61,7 +61,7 @@ export function UploadView() {
       return;
     }
     setError(
-      `${file.name.split('.').pop()?.toUpperCase()} files aren't supported. Try .md, .txt, .pdf, or .epub.`,
+      `${file.name.split('.').pop()?.toUpperCase()} files aren't supported. Try .md, .txt, .pdf, .epub, .mobi, or .azw3.`,
     );
   }
 
@@ -131,7 +131,7 @@ export function UploadView() {
             ref={fileInputRef}
             type="file"
             hidden
-            accept=".md,.markdown,.txt,.text,.pdf,.epub"
+            accept=".md,.markdown,.txt,.text,.pdf,.epub,.mobi,.azw3"
             onChange={(e) => handleFile(e.target.files?.[0])}
           />
           <div className="w-16 h-16 mx-auto rounded-full bg-canvas grid place-items-center mb-5">
@@ -148,7 +148,8 @@ export function UploadView() {
             {busy ? 'Hashing and registering with the server.' : 'or click to browse files'}
           </p>
           <div className="mt-6 flex items-center justify-center gap-4 text-xs text-ink/50">
-            <span>Markdown</span>·<span>Plain text</span>·<span>EPUB</span>·<span>PDF</span>
+            <span>Markdown</span>·<span>Plain text</span>·<span>EPUB</span>·<span>PDF</span>·
+            <span>MOBI</span>·<span>AZW3</span>
           </div>
         </div>
 
