@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
 
+/* Plan 58 — file-level serial mode. The auto-dismiss 6s window
+   timing intermittently raced under parallel-worker contention. */
+test.describe.configure({ mode: 'serial' });
+
 /**
  * Browser-level coverage for the global toast surface (plan 48).
  *

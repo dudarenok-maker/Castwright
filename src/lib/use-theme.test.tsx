@@ -35,6 +35,7 @@ function makeStore({
     batchRegenIds: null,
     staleAudio: null,
     showRevisionPlayer: false,
+    revisionHistoryFor: null,
     showDriftReport: false,
     previewMode: false,
     selectedModel: DEFAULT_MODEL,

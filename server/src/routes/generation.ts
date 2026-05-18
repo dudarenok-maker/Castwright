@@ -35,7 +35,7 @@ import {
   selectTtsProvider,
   type TtsModelKey,
 } from '../tts/index.js';
-import { encodePcmToMp3 } from '../tts/mp3.js';
+import { encodePcmToMp3, writeChapterPeaksFile } from '../tts/mp3.js';
 import {
   synthesiseChapter,
   type CastCharacter,
@@ -461,6 +461,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       const mp3Buffer = await encodePcmToMp3(result.pcm, result.sampleRate, { quality: 2 });
       const mp3Path = join(audioRoot, `${chapter.slug}.mp3`);
       const segPath = join(audioRoot, `${chapter.slug}.segments.json`);
+      const peaksPath = join(audioRoot, `${chapter.slug}.peaks.json`);
 
       /* Atomic write: temp-then-rename so a crash mid-write doesn't leave a
          half-MP3 that scan.ts would mistake for a completed chapter. */
@@ -510,6 +511,19 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       await preserveExistingAsPrevious(audioRoot, chapter.slug);
       await writeJsonAtomic(segPath, segmentsFile);
       await rename(tmpMp3, mp3Path);
+      /* Plan 56: emit the waveform-envelope sibling alongside the MP3.
+         Failure is non-fatal — peaks are a visualization aid, not load-
+         bearing for playback — so we log + continue rather than abort the
+         render. The chapter-audio meta endpoint's missing-file fallback
+         returns `peaks: []` and the Listen view degrades gracefully. */
+      try {
+        await writeChapterPeaksFile(result.pcm, result.sampleRate, peaksPath);
+      } catch (err) {
+        /* eslint-disable-next-line no-console */
+        console.warn(
+          `[generation] failed to write peaks for ${chapter.slug}: ${(err as Error).message}`,
+        );
+      }
 
       /* Update state.json with the freshly-measured duration so the library
          + future playback slice can render it without re-reading the audio.
