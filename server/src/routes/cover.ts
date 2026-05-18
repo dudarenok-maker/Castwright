@@ -79,7 +79,9 @@ coverRouter.post('/:bookId/cover', async (req: Request, res: Response) => {
 
     const candidate = await findCandidateById(state.title, state.author, openLibraryId);
     if (!candidate) {
-      return res.status(404).json({ error: 'Selected cover is no longer available — try a fresh search.' });
+      return res
+        .status(404)
+        .json({ error: 'Selected cover is no longer available — try a fresh search.' });
     }
 
     await downloadCover(candidate.coverUrl, coverImagePath(bookDir));
@@ -129,7 +131,9 @@ coverRouter.delete('/:bookId/cover', async (req: Request, res: Response) => {
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir } = located;
     const path = coverImagePath(bookDir);
-    await rm(path, { force: true }).catch(() => { /* best-effort */ });
+    await rm(path, { force: true }).catch(() => {
+      /* best-effort */
+    });
     await clearStateCover(bookDir);
     res.status(204).end();
   } catch (e) {
@@ -210,11 +214,14 @@ coverRouter.patch('/:bookId/cover/framing', async (req: Request, res: Response) 
     const offsetY = Number(body?.offsetY);
     const zoom = Number(body?.zoom);
     if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY) || !Number.isFinite(zoom)) {
-      return res.status(400).json({ error: '`offsetX`, `offsetY`, `zoom` are required and must be numbers.' });
+      return res
+        .status(400)
+        .json({ error: '`offsetX`, `offsetY`, `zoom` are required and must be numbers.' });
     }
 
     const ok = await patchStateFraming(bookDir, { offsetX, offsetY, zoom });
-    if (!ok) return res.status(404).json({ error: 'No cover pinned for this book — set a cover first.' });
+    if (!ok)
+      return res.status(404).json({ error: 'No cover pinned for this book — set a cover first.' });
 
     res.status(204).end();
   } catch (e) {

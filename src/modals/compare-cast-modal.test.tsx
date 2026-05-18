@@ -18,7 +18,10 @@ const playbackState = {
   isPlaying: false as boolean,
   currentUrl: null as string | null,
   play: vi.fn(async () => {}),
-  stop: vi.fn(() => { playbackState.isPlaying = false; playbackState.currentUrl = null; }),
+  stop: vi.fn(() => {
+    playbackState.isPlaying = false;
+    playbackState.currentUrl = null;
+  }),
   playUntilEnded: vi.fn(async () => ({ cancelled: false })),
 };
 vi.mock('../lib/use-sample-playback', () => ({
@@ -143,10 +146,12 @@ describe('CompareCastModal dirty / save flow', () => {
 
     fireEvent.click(saveA);
     expect(props.onSaveSide).toHaveBeenCalledTimes(1);
-    expect(props.onSaveSide).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'halloran',
-      gender: 'female',
-    }));
+    expect(props.onSaveSide).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'halloran',
+        gender: 'female',
+      }),
+    );
   });
 });
 
@@ -184,12 +189,7 @@ describe('CompareCastModal Auto A→B', () => {
     fireEvent.click(screen.getByRole('button', { name: /Auto A → B/ }));
 
     await waitFor(() => expect(trace.length).toBe(4));
-    expect(trace).toEqual([
-      'synth:char-halloran',
-      'ended',
-      'synth:char-marcus',
-      'ended',
-    ]);
+    expect(trace).toEqual(['synth:char-halloran', 'ended', 'synth:char-marcus', 'ended']);
   });
 
   it('stops the sequence when playUntilEnded reports cancelled', async () => {

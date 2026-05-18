@@ -49,12 +49,12 @@ manuscriptsRouter.post('/', upload.single('file'), async (req: Request, res: Res
 
     return res.json({
       manuscriptId: record.manuscriptId,
-      format:       record.format,
-      title:        record.title,
-      wordCount:    record.wordCount,
-      byteSize:     record.byteSize,
-      uploadedAt:   record.uploadedAt,
-      sourceText:   record.sourceText,
+      format: record.format,
+      title: record.title,
+      wordCount: record.wordCount,
+      byteSize: record.byteSize,
+      uploadedAt: record.uploadedAt,
+      sourceText: record.sourceText,
     });
   } catch (e) {
     if (e instanceof UnsupportedFormatError) {

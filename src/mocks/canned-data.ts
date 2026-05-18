@@ -57,7 +57,12 @@ She crossed her arms. "What did you suspect?"
 
 /** Phase timings carry an extra `detail` field used by the AnalysingView —
    not in the OpenAPI spec but the prototype renders it. */
-export interface AnalysisPhaseTiming { id: number; label: string; detail: string; durationMs: number; }
+export interface AnalysisPhaseTiming {
+  id: number;
+  label: string;
+  detail: string;
+  durationMs: number;
+}
 
 export interface AnalysisFixture extends Omit<AnalyseResponse, 'phaseTimings'> {
   phaseTimings: AnalysisPhaseTiming[];
@@ -69,15 +74,33 @@ export const ANALYSIS_NORTHERN_STAR: AnalysisFixture = {
   manuscriptId: '',
   title: 'The Northern Star',
   phaseTimings: [
-    { id: 0, label: 'Reading manuscript',   detail: 'Parsing markdown, mapping chapters and scenes.',                              durationMs: 1500 },
-    { id: 1, label: 'Detecting characters', detail: 'Named-entity extraction, dialogue attribution, speaker resolution.',          durationMs: 2200 },
-    { id: 2, label: 'Profiling voices',     detail: 'Inferring age, register, regional cues, sentence rhythm from each speaker.',  durationMs: 2400 },
-    { id: 3, label: 'Matching library',     detail: 'Reconciling against voices from your previous books.',                        durationMs: 1500 },
+    {
+      id: 0,
+      label: 'Reading manuscript',
+      detail: 'Parsing markdown, mapping chapters and scenes.',
+      durationMs: 1500,
+    },
+    {
+      id: 1,
+      label: 'Detecting characters',
+      detail: 'Named-entity extraction, dialogue attribution, speaker resolution.',
+      durationMs: 2200,
+    },
+    {
+      id: 2,
+      label: 'Profiling voices',
+      detail: 'Inferring age, register, regional cues, sentence rhythm from each speaker.',
+      durationMs: 2400,
+    },
+    {
+      id: 3,
+      label: 'Matching library',
+      detail: 'Reconciling against voices from your previous books.',
+      durationMs: 1500,
+    },
   ],
   characters: initialCharacters,
-  chapters:   initialChapters,
-  sentences:  initialSentences,
-  libraryMatches: [
-    { characterId: 'narrator', voiceId: 'v_anders', confidence: 0.94 },
-  ],
+  chapters: initialChapters,
+  sentences: initialSentences,
+  libraryMatches: [{ characterId: 'narrator', voiceId: 'v_anders', confidence: 0.94 }],
 };

@@ -30,32 +30,32 @@ export const COVER_PICKER_TAB_VALUES = ['search', 'upload'] as const;
 export const THEME_PREFERENCE_VALUES = ['light', 'dark', 'system'] as const;
 
 export const userSettingsSchema = z.object({
-  displayName:          z.string().max(120),
+  displayName: z.string().max(120),
   defaultAnalysisModel: z.string().min(1).max(120),
-  defaultTtsEngine:     z.enum(TTS_ENGINE_VALUES),
-  defaultTtsModelKey:   z.enum(TTS_MODEL_KEY_VALUES),
-  sidecarUrl:           z.string().min(1).max(2000),
+  defaultTtsEngine: z.enum(TTS_ENGINE_VALUES),
+  defaultTtsModelKey: z.enum(TTS_MODEL_KEY_VALUES),
+  sidecarUrl: z.string().min(1).max(2000),
   /* Analyzer dispatch. `local` routes through OllamaAnalyzer (with Gemini
      as automatic fallback iff GEMINI_API_KEY is set and the local daemon
      is unreachable — see selectAnalyzer). `gemini` always goes direct. */
-  analysisEngine:       z.enum(ANALYSIS_ENGINE_VALUES),
+  analysisEngine: z.enum(ANALYSIS_ENGINE_VALUES),
   /* Base URL of the local Ollama daemon. Falls through to OLLAMA_URL env
      and then http://localhost:11434 in getResolvedOllamaUrl. */
-  ollamaUrl:            z.string().min(1).max(2000),
+  ollamaUrl: z.string().min(1).max(2000),
   workspaceDirOverride: z.string().max(2000).nullable(),
   /* Optional folder the export pipeline copies finished audiobooks into,
      e.g. a OneDrive / Syncthing watch path so the file lands on the user's
      phone automatically. Null = "save-to-folder" tab is disabled in the
      export modal until the user picks one. Path is not validated for
      existence here — the writer mkdirs on demand. */
-  exportSyncFolder:     z.string().max(2000).nullable(),
+  exportSyncFolder: z.string().max(2000).nullable(),
   /* Threshold for the minor-cast fold pass — see
      server/src/analyzer/fold-minor-cast.ts. A character with FEWER than
      this many attributed sentences gets folded into Unknown male /
      female. 0 disables the line-count trigger (Unknown-named characters
      still fold). Cap at 50 since beyond that the bucket would swallow
      genuine cast members and the UI loses meaning. */
-  minorCastMinLines:    z.number().int().min(0).max(50),
+  minorCastMinLines: z.number().int().min(0).max(50),
   /* Plan 40 — which tab the CoverPicker modal opens on by default.
      `search` preserves the pre-plan-40 behaviour (OpenLibrary
      candidates first); `upload` is for users who routinely bring
@@ -83,7 +83,7 @@ export const userSettingsSchema = z.object({
 export type UserSettings = z.infer<typeof userSettingsSchema>;
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
-  displayName:          'Mike Dudarenok',
+  displayName: 'Mike Dudarenok',
   /* Default to Gemini 3.1 Flash Lite over a Google API key — the free
      tier (15 RPM, 250K TPM, 500/day) comfortably parses a full novel,
      dispatch is async-friendly so it doesn't tax the local GPU, and
@@ -92,23 +92,23 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      run analysis on-device. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   defaultAnalysisModel: 'gemini-3.1-flash-lite',
-  defaultTtsEngine:     'local',
+  defaultTtsEngine: 'local',
   /* Kokoro v1 is the new default — TTS-Arena #1 for its size, ~1 GB
      VRAM (vs ~3 GB for XTTS), and small enough to be eagerly preloaded
      by the sidecar so the Load/Stop pill stops being a daily friction
      point. XTTS stays available as an alternate in the picker for the
      30-voice catalog and zero-shot cloning. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
-  defaultTtsModelKey:   'kokoro-v1',
-  sidecarUrl:           'http://localhost:9000',
+  defaultTtsModelKey: 'kokoro-v1',
+  sidecarUrl: 'http://localhost:9000',
   /* Gemini matches the analysis-model default. Picking 'local' falls
      through to the Ollama daemon — kept as an opt-in for users who
      want analysis on-device. */
-  analysisEngine:       'gemini',
-  ollamaUrl:            'http://localhost:11434',
+  analysisEngine: 'gemini',
+  ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
-  exportSyncFolder:     null,
-  minorCastMinLines:    3,
+  exportSyncFolder: null,
+  minorCastMinLines: 3,
   coverPickerDefaultTab: 'search',
   /* 'system' follows the OS's prefers-color-scheme at runtime so a
      fresh install paints the way the device does after sundown.
@@ -175,8 +175,13 @@ export async function writeUserSettings(patch: unknown): Promise<UserSettings> {
    The frontend should never need to send these, but defending against a
    malformed/abusive client keeps the .env-only invariant honest. */
 const FORBIDDEN_KEYS = new Set([
-  'apiKeyStatus', 'workspaceRoot', 'workspaceSource',
-  'geminiApiKey', 'apiKey', 'gemini_api_key', 'GEMINI_API_KEY',
+  'apiKeyStatus',
+  'workspaceRoot',
+  'workspaceSource',
+  'geminiApiKey',
+  'apiKey',
+  'gemini_api_key',
+  'GEMINI_API_KEY',
 ]);
 
 function stripForbiddenKeys(value: unknown): Record<string, unknown> {

@@ -22,18 +22,18 @@ vi.mock('../lib/api', () => ({
 import { api } from '../lib/api';
 
 const SERVER_FIXTURE: UserSettings = {
-  displayName:          'Test User',
+  displayName: 'Test User',
   defaultAnalysisModel: 'gemini-2.5-flash',
-  defaultTtsEngine:     'gemini',
-  defaultTtsModelKey:   'gemini-2.5-flash',
-  sidecarUrl:           'http://localhost:9001',
-  analysisEngine:       'local',
-  ollamaUrl:            'http://localhost:11434',
+  defaultTtsEngine: 'gemini',
+  defaultTtsModelKey: 'gemini-2.5-flash',
+  sidecarUrl: 'http://localhost:9001',
+  analysisEngine: 'local',
+  ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
-  minorCastMinLines:    3,
-  apiKeyStatus:         'set',
-  workspaceRoot:        '/some/path',
-  workspaceSource:      'env',
+  minorCastMinLines: 3,
+  apiKeyStatus: 'set',
+  workspaceRoot: '/some/path',
+  workspaceSource: 'env',
 };
 
 function makeStore() {
@@ -104,7 +104,9 @@ describe('accountSlice — fetch lifecycle', () => {
   });
 
   it('captures error text when the fetch rejects', async () => {
-    (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
+    (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('boom'),
+    );
     const store = makeStore();
     await store.dispatch(fetchAccountSettings());
     const s = store.getState().account;
@@ -130,7 +132,9 @@ describe('accountSlice — save lifecycle', () => {
 
   it('surfaces save errors without clobbering the hydrated flag', async () => {
     (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(SERVER_FIXTURE);
-    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('disk full'));
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('disk full'),
+    );
     const store = makeStore();
     await store.dispatch(fetchAccountSettings());
     expect(store.getState().account.hydrated).toBe(true);

@@ -13,7 +13,7 @@ The default analyzer mode for this project: the server writes a markdown prompt 
 
 - Handoff root is `server/handoff/` with subdirs `inbox/` and `outbox/` (`server/src/handoff/protocol.ts:19-21`). Both are created on first use; do not move.
 - Inbox filename: `{manuscriptId}-stage{key}.md`. Outbox filename: `{manuscriptId}-stage{key}.json`. Error file: `{manuscriptId}-stage{key}.errors.json`. Filenames must match exactly — the watcher targets a single file (`protocol.ts:32-42`).
-- Handoff key union: `'1' | '2' | \`2-ch${number}\`` (`protocol.ts:25`). `'2'` is the legacy whole-manuscript path; current default is per-chapter `2-ch1`, `2-ch2`, … (see `server/src/routes/analysis.ts`).
+- Handoff key union: `'1' | '2' | \`2-ch${number}\`` (`protocol.ts:25`). `'2'`is the legacy whole-manuscript path; current default is per-chapter`2-ch1`, `2-ch2`, … (see `server/src/routes/analysis.ts`).
 - `writeInbox` clears any stale outbox + error files before writing the new prompt (`protocol.ts:48-50`). This guarantees `awaitOutbox` only resolves on a fresh drop.
 - `awaitOutbox` validates the JSON against a Zod schema; on invalid JSON it writes a `kind: 'invalid-json'` error file; on schema mismatch it writes a `kind: 'schema-validation'` error file with `issues[]` and deletes the bad outbox so the next correct drop fires a fresh `add` event (`protocol.ts:86-107`).
 - Default timeout is 30 minutes; configurable via `AwaitOptions.timeoutMs` (`protocol.ts:69`). On timeout, the promise rejects with `Handoff timeout waiting for outbox <path> after <ms>ms`.

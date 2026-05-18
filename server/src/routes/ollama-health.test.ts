@@ -30,13 +30,15 @@ afterEach(() => {
 /* /api/ollama/health now fans out across /api/tags AND /api/ps so the
    probe can tell "pulled" from "resident in VRAM". The mock routes match
    on URL substring so the order of Promise.all resolution doesn't matter. */
-function mockOllamaProbes(opts: { tags: Array<{ name: string }>, ps?: Array<{ name: string }> }) {
+function mockOllamaProbes(opts: { tags: Array<{ name: string }>; ps?: Array<{ name: string }> }) {
   fetchMock.mockImplementation((url: string) => {
     if (url.endsWith('/api/tags')) {
       return Promise.resolve(new Response(JSON.stringify({ models: opts.tags }), { status: 200 }));
     }
     if (url.endsWith('/api/ps')) {
-      return Promise.resolve(new Response(JSON.stringify({ models: opts.ps ?? [] }), { status: 200 }));
+      return Promise.resolve(
+        new Response(JSON.stringify({ models: opts.ps ?? [] }), { status: 200 }),
+      );
     }
     return Promise.resolve(new Response('', { status: 404 }));
   });
@@ -91,16 +93,20 @@ describe('GET /api/ollama/health', () => {
   });
 
   it('returns unreachable when the daemon responds non-2xx', async () => {
-    fetchMock.mockResolvedValue(new Response('nope', { status: 503, statusText: 'Service Unavailable' }));
+    fetchMock.mockResolvedValue(
+      new Response('nope', { status: 503, statusText: 'Service Unavailable' }),
+    );
     const res = await request(makeApp()).get('/api/ollama/health');
     expect(res.body.status).toBe('unreachable');
     expect(res.body.error).toMatch(/503/);
   });
 
   it('returns unreachable when fetch rejects (ECONNREFUSED)', async () => {
-    fetchMock.mockRejectedValue(Object.assign(new TypeError('fetch failed'), {
-      cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
-    }));
+    fetchMock.mockRejectedValue(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      }),
+    );
     const res = await request(makeApp()).get('/api/ollama/health');
     expect(res.body.status).toBe('unreachable');
   });
@@ -153,7 +159,9 @@ describe('POST /api/ollama/load', () => {
   });
 
   it('surfaces the upstream error envelope when Ollama returns non-2xx', async () => {
-    fetchMock.mockResolvedValue(new Response('model not found', { status: 404, statusText: 'Not Found' }));
+    fetchMock.mockResolvedValue(
+      new Response('model not found', { status: 404, statusText: 'Not Found' }),
+    );
     const res = await request(makeApp()).post('/api/ollama/load');
     expect(res.status).toBe(404);
     expect(res.body.status).toBe('error');
@@ -180,9 +188,11 @@ describe('POST /api/ollama/unload', () => {
   });
 
   it('returns 503 when Ollama is unreachable', async () => {
-    fetchMock.mockRejectedValue(Object.assign(new TypeError('fetch failed'), {
-      cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
-    }));
+    fetchMock.mockRejectedValue(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      }),
+    );
     const res = await request(makeApp()).post('/api/ollama/unload');
     expect(res.status).toBe(503);
     expect(res.body.status).toBe('error');

@@ -50,16 +50,14 @@ export interface BuildM4bResult {
 export async function buildM4b(opts: BuildM4bOptions): Promise<BuildM4bResult> {
   const { bookDir, state, outPath, onProgress, signal } = opts;
 
-  const chapters = [...state.chapters]
-    .filter(c => !c.excluded)
-    .sort((a, b) => a.id - b.id);
+  const chapters = [...state.chapters].filter((c) => !c.excluded).sort((a, b) => a.id - b.id);
 
   /* Same precheck as buildMp3Zip — both formats require a current MP3
      for every non-excluded chapter. Surface ALL missing slugs in one
      shot. */
   const root = audioDir(bookDir);
   const missing: string[] = [];
-  const resolved: Array<{ chapter: typeof chapters[number]; mp3Path: string }> = [];
+  const resolved: Array<{ chapter: (typeof chapters)[number]; mp3Path: string }> = [];
   for (const chapter of chapters) {
     const audio = findChapterAudio(root, chapter.slug);
     if (!audio) {
@@ -90,8 +88,16 @@ export async function buildM4b(opts: BuildM4bOptions): Promise<BuildM4bResult> {
     const ffmetadataPath = join(stagingDir, 'FFMETADATA.txt');
     const concatPath = join(stagingDir, 'concat.txt');
 
-    await writeFile(ffmetadataPath, buildFfmetadata(state, resolved.map(r => r.chapter), durationsSec), 'utf8');
-    await writeFile(concatPath, buildConcatList(resolved.map(r => r.mp3Path)), 'utf8');
+    await writeFile(
+      ffmetadataPath,
+      buildFfmetadata(
+        state,
+        resolved.map((r) => r.chapter),
+        durationsSec,
+      ),
+      'utf8',
+    );
+    await writeFile(concatPath, buildConcatList(resolved.map((r) => r.mp3Path)), 'utf8');
 
     /* Plan 36 A2: pipe the cached OpenLibrary cover into the M4B as the
        iTunes `covr` atom when one exists for this book. The cover-art
@@ -132,9 +138,9 @@ export async function buildM4b(opts: BuildM4bOptions): Promise<BuildM4bResult> {
 function escapeFfmetadata(value: string): string {
   return value
     .replace(/\\/g, '\\\\')
-    .replace(/=/g,  '\\=')
-    .replace(/;/g,  '\\;')
-    .replace(/#/g,  '\\#')
+    .replace(/=/g, '\\=')
+    .replace(/;/g, '\\;')
+    .replace(/#/g, '\\#')
     .replace(/\r?\n/g, '\\n');
 }
 
@@ -150,7 +156,7 @@ function buildFfmetadata(
   lines.push(`artist=${escapeFfmetadata(artist)}`);
   lines.push(`album=${escapeFfmetadata(state.title)}`);
   lines.push(`album_artist=${escapeFfmetadata(state.author)}`);
-  if (state.genre)           lines.push(`genre=${escapeFfmetadata(state.genre)}`);
+  if (state.genre) lines.push(`genre=${escapeFfmetadata(state.genre)}`);
   if (state.publicationDate) lines.push(`date=${escapeFfmetadata(state.publicationDate)}`);
   /* iTunes audiobook media kind — flips Apple/QuickTime players from
      'Music' to 'Audiobook'. Harmless on players that ignore it. */
@@ -178,7 +184,7 @@ function buildFfmetadata(
    are the only delimiter that survives backslashes on Windows; embedded
    single-quotes escape as `'\''`. */
 function buildConcatList(paths: string[]): string {
-  return paths.map(p => `file '${p.replace(/'/g, `'\\''`)}'`).join('\n') + '\n';
+  return paths.map((p) => `file '${p.replace(/'/g, `'\\''`)}'`).join('\n') + '\n';
 }
 
 /* ---- ffprobe / ffmpeg child-process helpers ------------------------ */
@@ -186,24 +192,33 @@ function buildConcatList(paths: string[]): string {
 function probeDurationSec(mp3Path: string): Promise<number> {
   return new Promise<number>((resolve, reject) => {
     const args = [
-      '-v', 'error',
-      '-show_entries', 'format=duration',
-      '-of', 'default=nw=1:nk=1',
+      '-v',
+      'error',
+      '-show_entries',
+      'format=duration',
+      '-of',
+      'default=nw=1:nk=1',
       mp3Path,
     ];
     const child = spawn('ffprobe', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
-    child.stdout.on('data', c => stdoutChunks.push(c));
-    child.stderr.on('data', c => stderrChunks.push(c));
-    child.on('error', err => reject(new Error(
-      `Failed to spawn ffprobe: ${err.message}. ` +
-      `Install ffmpeg and ensure ffprobe is on PATH (winget install Gyan.FFmpeg).`,
-    )));
-    child.on('close', code => {
+    child.stdout.on('data', (c) => stdoutChunks.push(c));
+    child.stderr.on('data', (c) => stderrChunks.push(c));
+    child.on('error', (err) =>
+      reject(
+        new Error(
+          `Failed to spawn ffprobe: ${err.message}. ` +
+            `Install ffmpeg and ensure ffprobe is on PATH (winget install Gyan.FFmpeg).`,
+        ),
+      ),
+    );
+    child.on('close', (code) => {
       if (code !== 0) {
         const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
-        return reject(new Error(`ffprobe exited with code ${code} for ${mp3Path}: ${stderr || '(no stderr)'}`));
+        return reject(
+          new Error(`ffprobe exited with code ${code} for ${mp3Path}: ${stderr || '(no stderr)'}`),
+        );
       }
       const raw = Buffer.concat(stdoutChunks).toString('utf8').trim();
       const num = Number(raw);
@@ -229,12 +244,15 @@ interface RunFfmpegMuxOptions {
 }
 
 function runFfmpegMux(opts: RunFfmpegMuxOptions): Promise<void> {
-  const { concatPath, ffmetadataPath, coverPath, outPath, totalDurationSec, onProgress, signal } = opts;
+  const { concatPath, ffmetadataPath, coverPath, outPath, totalDurationSec, onProgress, signal } =
+    opts;
   const totalUs = Math.max(1, Math.round(totalDurationSec * 1_000_000));
 
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
-      reject(signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'));
+      reject(
+        signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'),
+      );
       return;
     }
     /* Inputs: concat-demuxed MP3s [0], FFMETADATA sidecar [1], and
@@ -245,21 +263,37 @@ function runFfmpegMux(opts: RunFfmpegMuxOptions): Promise<void> {
        JPEG bytes are preserved verbatim. */
     const args = [
       '-y',
-      '-loglevel', 'error',
-      '-progress', 'pipe:1',
+      '-loglevel',
+      'error',
+      '-progress',
+      'pipe:1',
       '-nostats',
-      '-f', 'concat', '-safe', '0', '-i', concatPath,
-      '-i', ffmetadataPath,
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      concatPath,
+      '-i',
+      ffmetadataPath,
       ...(coverPath ? ['-i', coverPath] : []),
-      '-map', '0:a',
+      '-map',
+      '0:a',
       ...(coverPath ? ['-map', '2:v', '-c:v', 'copy', '-disposition:v:0', 'attached_pic'] : []),
-      '-map_metadata', '1',
-      '-c:a', 'aac',
-      '-b:a', '96k',
-      '-ar', '44100',
-      '-ac', '1',
-      '-movflags', '+faststart',
-      '-f', 'mp4',
+      '-map_metadata',
+      '1',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '96k',
+      '-ar',
+      '44100',
+      '-ac',
+      '1',
+      '-movflags',
+      '+faststart',
+      '-f',
+      'mp4',
       outPath,
     ];
     const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -272,7 +306,11 @@ function runFfmpegMux(opts: RunFfmpegMuxOptions): Promise<void> {
     let cancelledByAbort = false;
     const onAbort = () => {
       cancelledByAbort = true;
-      try { child.kill('SIGTERM'); } catch { /* already exited */ }
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        /* already exited */
+      }
     };
     signal?.addEventListener('abort', onAbort);
 
@@ -301,19 +339,25 @@ function runFfmpegMux(opts: RunFfmpegMuxOptions): Promise<void> {
         }
       }
     });
-    child.stderr.on('data', c => stderrChunks.push(c));
+    child.stderr.on('data', (c) => stderrChunks.push(c));
 
-    child.on('error', err => {
+    child.on('error', (err) => {
       signal?.removeEventListener('abort', onAbort);
-      reject(new Error(
-        `Failed to spawn ffmpeg: ${err.message}. ` +
-        `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
-      ));
+      reject(
+        new Error(
+          `Failed to spawn ffmpeg: ${err.message}. ` +
+            `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
+        ),
+      );
     });
-    child.on('close', code => {
+    child.on('close', (code) => {
       signal?.removeEventListener('abort', onAbort);
       if (cancelledByAbort) {
-        return reject(signal?.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'));
+        return reject(
+          signal?.reason instanceof Error
+            ? signal.reason
+            : new DOMException('Aborted', 'AbortError'),
+        );
       }
       if (code === 0) return resolve();
       const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();

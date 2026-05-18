@@ -18,24 +18,32 @@ import type { Stage } from './types';
 export function stageToHash(stage: Stage | null | undefined): string {
   if (!stage) return '#/';
   switch (stage.kind) {
-    case 'books':     return '#/';
-    case 'upload':    return '#/new';
-    case 'voices':    return '#/voices';
-    case 'changelog': return '#/log';
-    case 'account':   return '#/account';
-    case 'analysing': return stage.bookId ? `#/books/${stage.bookId}/analysing` : '#/new';
+    case 'books':
+      return '#/';
+    case 'upload':
+      return '#/new';
+    case 'voices':
+      return '#/voices';
+    case 'changelog':
+      return '#/log';
+    case 'account':
+      return '#/account';
+    case 'analysing':
+      return stage.bookId ? `#/books/${stage.bookId}/analysing` : '#/new';
     case 'confirm': {
       const qs = stage.openProfileId ? `?profile=${stage.openProfileId}` : '';
       return `#/books/${stage.bookId}/confirm${qs}`;
     }
     case 'ready': {
       const q = new URLSearchParams();
-      if (stage.currentChapterId != null && stage.currentChapterId !== 3) q.set('chapter', String(stage.currentChapterId));
+      if (stage.currentChapterId != null && stage.currentChapterId !== 3)
+        q.set('chapter', String(stage.currentChapterId));
       if (stage.openProfileId) q.set('profile', stage.openProfileId);
       const qs = q.toString();
       return `#/books/${stage.bookId}/${stage.view}${qs ? '?' + qs : ''}`;
     }
-    default: return '#/';
+    default:
+      return '#/';
   }
 }
 
@@ -44,9 +52,11 @@ export function stageEqual(a: Stage | null | undefined, b: Stage | null | undefi
   if (a.kind !== b.kind) return false;
   if ((a as { bookId?: string }).bookId !== (b as { bookId?: string }).bookId) return false;
   if (a.kind === 'ready' && b.kind === 'ready') {
-    return a.view === b.view
-        && a.currentChapterId === b.currentChapterId
-        && a.openProfileId === b.openProfileId;
+    return (
+      a.view === b.view &&
+      a.currentChapterId === b.currentChapterId &&
+      a.openProfileId === b.openProfileId
+    );
   }
   if (a.kind === 'confirm' && b.kind === 'confirm') {
     return a.openProfileId === b.openProfileId;

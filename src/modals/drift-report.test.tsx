@@ -18,8 +18,8 @@ const characters: Character[] = [
      Drift-report does `CHAR_COLORS[char.color].hex`, so a fixture using
      unmapped names like 'magenta' would crash before the test assertions
      ran. */
-  { id: 'eliza', name: 'Eliza',  role: 'Lead',   color: 'slot-4' } as Character,
-  { id: 'sten',  name: 'Sten',   role: 'Friend', color: 'slot-5' } as Character,
+  { id: 'eliza', name: 'Eliza', role: 'Lead', color: 'slot-4' } as Character,
+  { id: 'sten', name: 'Sten', role: 'Friend', color: 'slot-5' } as Character,
 ];
 
 function makeEvent(over: Partial<DriftEvent>): DriftEvent {
@@ -70,13 +70,15 @@ describe('DriftReportModal — auto-queueable severe drift (C1+C2)', () => {
     const onRegenerateChapter = vi.fn();
     render(
       <DriftReportModal
-        events={[makeEvent({
-          id: 'drift:1:eliza:pace',
-          factor: 'pace',
-          factorLabel: 'Pace',
-          severity: 'moderate',
-          autoQueueable: undefined,
-        })]}
+        events={[
+          makeEvent({
+            id: 'drift:1:eliza:pace',
+            factor: 'pace',
+            factorLabel: 'Pace',
+            severity: 'moderate',
+            autoQueueable: undefined,
+          }),
+        ]}
         characters={characters}
         onClose={vi.fn()}
         onRegenerateChapter={onRegenerateChapter}

@@ -21,10 +21,20 @@ const HANDOFF_ROOT = resolve(__dirname, '..', '..', 'handoff');
    per-chapter shape forbids chapters via .strict()). */
 const VALID_RESPONSE = JSON.stringify({
   characters: [
-    { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator',
-      evidence: [{ quote: 'a' }, { quote: 'bb' }, { quote: 'ccc' }] },
-    { id: 'sophie', name: 'Sophie', role: 'protagonist', color: 'orange',
-      evidence: [{ quote: 'dd' }, { quote: 'eee' }, { quote: 'ffff' }] },
+    {
+      id: 'narrator',
+      name: 'Narrator',
+      role: 'narrator',
+      color: 'narrator',
+      evidence: [{ quote: 'a' }, { quote: 'bb' }, { quote: 'ccc' }],
+    },
+    {
+      id: 'sophie',
+      name: 'Sophie',
+      role: 'protagonist',
+      color: 'orange',
+      evidence: [{ quote: 'dd' }, { quote: 'eee' }, { quote: 'ffff' }],
+    },
   ],
 });
 
@@ -36,7 +46,10 @@ function ndjsonStream(chunks: string[]): ReadableStream<Uint8Array> {
   return new ReadableStream({
     pull(controller) {
       if (i < chunks.length) {
-        const line = JSON.stringify({ message: { role: 'assistant', content: chunks[i] }, done: false });
+        const line = JSON.stringify({
+          message: { role: 'assistant', content: chunks[i] },
+          done: false,
+        });
         controller.enqueue(encoder.encode(line + '\n'));
         i += 1;
       } else if (i === chunks.length) {
@@ -83,7 +96,9 @@ describe('OllamaAnalyzer — happy path streaming', () => {
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
 
     const onChunk = vi.fn();
-    const result = await analyzer.runStage1Chapter('m_ollama_ok', 1, '# stage1 prompt', { onChunk });
+    const result = await analyzer.runStage1Chapter('m_ollama_ok', 1, '# stage1 prompt', {
+      onChunk,
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
@@ -123,7 +138,7 @@ describe('OllamaAnalyzer — happy path streaming', () => {
 
     /* Buffer reassembled, monotonic, terminal value matches input. */
     expect(onChunk).toHaveBeenCalledTimes(pieces.length);
-    const lengths = onChunk.mock.calls.map(args => args[0].receivedBytes);
+    const lengths = onChunk.mock.calls.map((args) => args[0].receivedBytes);
     for (let i = 1; i < lengths.length; i += 1) {
       expect(lengths[i]).toBeGreaterThanOrEqual(lengths[i - 1]);
     }
@@ -131,7 +146,7 @@ describe('OllamaAnalyzer — happy path streaming', () => {
 
     /* Parsed payload comes through. */
     expect(result.characters).toHaveLength(2);
-    expect(result.characters.map(c => c.id)).toEqual(['narrator', 'sophie']);
+    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'sophie']);
   });
 });
 
@@ -244,8 +259,9 @@ describe('OllamaAnalyzer — LocalUnreachableError classification', () => {
     const { OllamaAnalyzer, LocalUnreachableError } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
 
-    await expect(analyzer.runStage1Chapter('m_ollama_down', 1, '# prompt', {}))
-      .rejects.toBeInstanceOf(LocalUnreachableError);
+    await expect(
+      analyzer.runStage1Chapter('m_ollama_down', 1, '# prompt', {}),
+    ).rejects.toBeInstanceOf(LocalUnreachableError);
   });
 
   it('throws LocalUnreachableError on bare TypeError: fetch failed with no cause code', async () => {
@@ -253,8 +269,9 @@ describe('OllamaAnalyzer — LocalUnreachableError classification', () => {
     const { OllamaAnalyzer, LocalUnreachableError } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
 
-    await expect(analyzer.runStage1Chapter('m_ollama_bare_fetchfail', 1, '# prompt', {}))
-      .rejects.toBeInstanceOf(LocalUnreachableError);
+    await expect(
+      analyzer.runStage1Chapter('m_ollama_bare_fetchfail', 1, '# prompt', {}),
+    ).rejects.toBeInstanceOf(LocalUnreachableError);
   });
 
   it('throws LocalUnreachableError on AbortError before first byte', async () => {
@@ -264,34 +281,42 @@ describe('OllamaAnalyzer — LocalUnreachableError classification', () => {
     const { OllamaAnalyzer, LocalUnreachableError } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
 
-    await expect(analyzer.runStage1Chapter('m_ollama_abort', 1, '# prompt', {}))
-      .rejects.toBeInstanceOf(LocalUnreachableError);
+    await expect(
+      analyzer.runStage1Chapter('m_ollama_abort', 1, '# prompt', {}),
+    ).rejects.toBeInstanceOf(LocalUnreachableError);
   });
 
   it('does NOT classify a 404 "model not found" response as unreachable — it hard-fails as a plain Error', async () => {
-    fetchMock.mockResolvedValue(new Response(
-      JSON.stringify({ error: 'model "qwen3.5:9b" not found, try pulling it first' }),
-      { status: 404, statusText: 'Not Found' },
-    ));
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: 'model "qwen3.5:9b" not found, try pulling it first' }),
+        { status: 404, statusText: 'Not Found' },
+      ),
+    );
     const { OllamaAnalyzer, LocalUnreachableError } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
 
     /* This is the load-bearing assertion: a *reachable* daemon returning a
        hard error must NOT trigger Gemini fallback. The decorator above
        this layer only acts on LocalUnreachableError. */
-    await expect(analyzer.runStage1Chapter('m_ollama_404', 1, '# prompt', {}))
-      .rejects.not.toBeInstanceOf(LocalUnreachableError);
-    await expect(analyzer.runStage1Chapter('m_ollama_404_again', 1, '# prompt', {}))
-      .rejects.toThrow(/404/);
+    await expect(
+      analyzer.runStage1Chapter('m_ollama_404', 1, '# prompt', {}),
+    ).rejects.not.toBeInstanceOf(LocalUnreachableError);
+    await expect(
+      analyzer.runStage1Chapter('m_ollama_404_again', 1, '# prompt', {}),
+    ).rejects.toThrow(/404/);
   });
 
   it('throws plain Error (not LocalUnreachableError) when the daemon returns 500', async () => {
-    fetchMock.mockResolvedValue(new Response('upstream blew up', { status: 500, statusText: 'Internal Server Error' }));
+    fetchMock.mockResolvedValue(
+      new Response('upstream blew up', { status: 500, statusText: 'Internal Server Error' }),
+    );
     const { OllamaAnalyzer, LocalUnreachableError } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
 
-    await expect(analyzer.runStage1Chapter('m_ollama_500', 1, '# prompt', {}))
-      .rejects.not.toBeInstanceOf(LocalUnreachableError);
+    await expect(
+      analyzer.runStage1Chapter('m_ollama_500', 1, '# prompt', {}),
+    ).rejects.not.toBeInstanceOf(LocalUnreachableError);
   });
 
   it('throws plain Error on empty body', async () => {
@@ -313,7 +338,9 @@ describe('OllamaAnalyzer — LocalUnreachableError classification', () => {
 
 describe('OllamaAnalyzer — validation-retry', () => {
   it('retries once when the first response fails schema validation, then accepts the corrected JSON', async () => {
-    const invalid = JSON.stringify({ characters: [] /* missing required field on shape — empty arr is fine actually */ });
+    const invalid = JSON.stringify({
+      characters: [] /* missing required field on shape — empty arr is fine actually */,
+    });
     /* Use a stronger violation: extra field that .strict() forbids. */
     const strictlyInvalid = JSON.stringify({ characters: [], stowaways: ['nope'] });
 
@@ -350,7 +377,7 @@ describe('OllamaAnalyzer — validation-retry', () => {
      the same byte position. Fix: invalid-json retries drop the assistant
      turn and bump temperature, giving the sampler real room to escape. */
   it('on an invalid-json first attempt, retries WITHOUT replaying the assistant turn and at INVALID_JSON_RETRY_TEMPERATURE', async () => {
-    const malformed = '{ "characters": [ { "id": "narrator"';  // truncated → JSON.parse fails
+    const malformed = '{ "characters": [ { "id": "narrator"'; // truncated → JSON.parse fails
     fetchMock
       .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(malformed, 16))))
       .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
@@ -358,7 +385,12 @@ describe('OllamaAnalyzer — validation-retry', () => {
     const { OllamaAnalyzer, INVALID_JSON_RETRY_TEMPERATURE } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
 
-    const result = await analyzer.runStage1Chapter('m_ollama_invalid_json_retry', 1, '# prompt', {});
+    const result = await analyzer.runStage1Chapter(
+      'm_ollama_invalid_json_retry',
+      1,
+      '# prompt',
+      {},
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.characters).toHaveLength(2);
 
@@ -375,7 +407,9 @@ describe('OllamaAnalyzer — validation-retry', () => {
     expect(secondBody.messages).toHaveLength(2);
     expect(secondBody.messages[0].role).toBe('system');
     expect(secondBody.messages[1].role).toBe('user');
-    expect(secondBody.messages.find((m: { role: string }) => m.role === 'assistant')).toBeUndefined();
+    expect(
+      secondBody.messages.find((m: { role: string }) => m.role === 'assistant'),
+    ).toBeUndefined();
 
     /* Bumped temperature so the sampler can drift away from the broken path. */
     expect(secondBody.options.temperature).toBe(INVALID_JSON_RETRY_TEMPERATURE);
@@ -387,7 +421,9 @@ describe('OllamaAnalyzer — validation-retry', () => {
     /* Fresh Response per call — a streamed body can only be consumed once,
        so a shared `mockResolvedValue(...)` would feed the second attempt
        an already-drained stream and trip the "empty response" branch. */
-    fetchMock.mockImplementation(() => Promise.resolve(okResponse(ndjsonStream(chunksOf(bad, 32)))));
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(okResponse(ndjsonStream(chunksOf(bad, 32)))),
+    );
 
     const { OllamaAnalyzer, LocalUnreachableError } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
@@ -412,7 +448,7 @@ describe('OllamaAnalyzer — forensic raw-response persistence on failure', () =
      parser. Both attempts get their own .raw.txt; on a partial-success run
      the first attempt's text is preserved for comparison. */
   it('writes attempt1.raw.txt when the first attempt fails (even when the retry succeeds)', async () => {
-    const malformed = '{ "characters": [ { "id": "narrator", "name": "Nar';  // truncated
+    const malformed = '{ "characters": [ { "id": "narrator", "name": "Nar'; // truncated
     fetchMock
       .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(malformed, 16))))
       .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
@@ -423,7 +459,11 @@ describe('OllamaAnalyzer — forensic raw-response persistence on failure', () =
 
     await analyzer.runStage1Chapter('m_ollama_raw_attempt1', 1, '# prompt', {});
 
-    const rawPath = resolve(HANDOFF_ROOT, 'outbox', 'm_ollama_raw_attempt1-stage1-ch1.attempt1.raw.txt');
+    const rawPath = resolve(
+      HANDOFF_ROOT,
+      'outbox',
+      'm_ollama_raw_attempt1-stage1-ch1.attempt1.raw.txt',
+    );
     const raw = await readFile(rawPath, 'utf8');
     expect(raw).toBe(malformed);
   });
@@ -439,8 +479,9 @@ describe('OllamaAnalyzer — forensic raw-response persistence on failure', () =
     const { readFile } = await import('node:fs/promises');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
 
-    await expect(analyzer.runStage1Chapter('m_ollama_raw_both', 1, '# prompt', {}))
-      .rejects.toThrow(/validation after retry/);
+    await expect(analyzer.runStage1Chapter('m_ollama_raw_both', 1, '# prompt', {})).rejects.toThrow(
+      /validation after retry/,
+    );
 
     const raw1 = await readFile(
       resolve(HANDOFF_ROOT, 'outbox', 'm_ollama_raw_both-stage1-ch1.attempt1.raw.txt'),
@@ -458,20 +499,31 @@ describe('OllamaAnalyzer — forensic raw-response persistence on failure', () =
 afterAll(async () => {
   /* Tidy test inbox/outbox files. */
   for (const id of [
-    'm_ollama_ok', 'm_ollama_down', 'm_ollama_bare_fetchfail', 'm_ollama_abort',
-    'm_ollama_404', 'm_ollama_404_again', 'm_ollama_500', 'm_ollama_empty',
-    'm_ollama_retry', 'm_ollama_retry_fail', 'm_ollama_invalid_json_retry',
-    'm_ollama_keepalive_4b', 'm_ollama_keepalive_llama',
-    'm_ollama_format_shape_s1c', 'm_ollama_format_shape_diff',
-    'm_ollama_raw_attempt1', 'm_ollama_raw_both',
+    'm_ollama_ok',
+    'm_ollama_down',
+    'm_ollama_bare_fetchfail',
+    'm_ollama_abort',
+    'm_ollama_404',
+    'm_ollama_404_again',
+    'm_ollama_500',
+    'm_ollama_empty',
+    'm_ollama_retry',
+    'm_ollama_retry_fail',
+    'm_ollama_invalid_json_retry',
+    'm_ollama_keepalive_4b',
+    'm_ollama_keepalive_llama',
+    'm_ollama_format_shape_s1c',
+    'm_ollama_format_shape_diff',
+    'm_ollama_raw_attempt1',
+    'm_ollama_raw_both',
   ]) {
-    await rm(resolve(HANDOFF_ROOT, 'inbox',  `${id}-stage1-ch1.md`),    { force: true });
-    await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.json`),   { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-stage1-ch1.md`), { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.json`), { force: true });
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.errors.json`), { force: true });
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.attempt1.raw.txt`), { force: true });
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.attempt2.raw.txt`), { force: true });
-    await rm(resolve(HANDOFF_ROOT, 'inbox',  `${id}-stage2-ch1.md`),    { force: true });
-    await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage2-ch1.json`),   { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-stage2-ch1.md`), { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage2-ch1.json`), { force: true });
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage2-ch1.errors.json`), { force: true });
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage2-ch1.attempt1.raw.txt`), { force: true });
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage2-ch1.attempt2.raw.txt`), { force: true });

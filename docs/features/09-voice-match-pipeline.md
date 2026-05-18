@@ -14,13 +14,13 @@ After stage-1 analysis finishes, the server scores each newly-extracted characte
 Five factors. `nameScore = max(name_exact, name_tokens)`. The overall score
 is `clamp01(0.65 * nameScore + 0.15 * gender + 0.10 * age_range + 0.10 * attributes)`.
 
-| Factor       | Weight | Score 1.0 when…                                                                  | Score 0.0 when…                                  |
-|--------------|:------:|----------------------------------------------------------------------------------|--------------------------------------------------|
-| `name_exact` | 0.65   | normalized full name OR alias on either side hits the other side's normalized name/alias | not exact                                   |
-| `name_tokens`| 0.65   | Jaccard of primary-name tokens (length ≥ 2) — aliases excluded from the bag      | no shared tokens                                 |
-| `gender`     | 0.15   | both sides present and equal                                                     | both present and differ                          |
-| `age_range`  | 0.10   | both sides present and equal                                                     | both present and differ                          |
-| `attributes` | 0.10   | Jaccard of lowercased attribute sets ('narrator' filtered out)                    | disjoint or both empty                           |
+| Factor        | Weight | Score 1.0 when…                                                                          | Score 0.0 when…         |
+| ------------- | :----: | ---------------------------------------------------------------------------------------- | ----------------------- |
+| `name_exact`  |  0.65  | normalized full name OR alias on either side hits the other side's normalized name/alias | not exact               |
+| `name_tokens` |  0.65  | Jaccard of primary-name tokens (length ≥ 2) — aliases excluded from the bag              | no shared tokens        |
+| `gender`      |  0.15  | both sides present and equal                                                             | both present and differ |
+| `age_range`   |  0.10  | both sides present and equal                                                             | both present and differ |
+| `attributes`  |  0.10  | Jaccard of lowercased attribute sets ('narrator' filtered out)                           | disjoint or both empty  |
 
 `gender` and `age_range` score 0.5 when either side is absent (no contribution but no penalty); those rows are omitted from the response's `factors` list so the MatchDetail modal stays readable.
 
@@ -41,7 +41,7 @@ is `clamp01(0.65 * nameScore + 0.15 * gender + 0.10 * age_range + 0.10 * attribu
 
 ## Library-cast override (reverse of "Reuse")
 
-When the current book contains a richer profile of a recurring character than the library record it matched against (e.g. the current book is a full novel; the library record came from a novella that met the character only briefly), the user can push the current profile back onto the library record. This runs *in addition to* the normal Reuse decision — the source book still uses the library voice for continuity; the library record itself inherits the source's richer description/attributes/aliases.
+When the current book contains a richer profile of a recurring character than the library record it matched against (e.g. the current book is a full novel; the library record came from a novella that met the character only briefly), the user can push the current profile back onto the library record. This runs _in addition to_ the normal Reuse decision — the source book still uses the library voice for continuity; the library record itself inherits the source's richer description/attributes/aliases.
 
 - **Endpoint:** `POST /api/library-cast/override`. Body: `{ sourceBookId, sourceCharacterId, targetBookId, targetCharacterId }`. Response: `{ character: CharacterOutput }`. Route at `server/src/routes/library-cast-override.ts`.
 - **Preserved on target:** `id`, `voiceId`, `name`, `color`, `voiceState`, `lines`, `scenes`, `evidence`. Audio identity must not move (chapter audio in the target book is bound to `voiceId`); per-book metrics + per-book quotes are not portable across manuscripts.

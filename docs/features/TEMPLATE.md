@@ -42,6 +42,7 @@ hasn't drifted. Example:
 ## Test plan
 
 ### Automated coverage
+
 List the tests that lock this behavior in. Cite the file + the assertion. New plans MUST land paired tests in the same PR. Forms:
 
 - Vitest unit (`src/foo/bar.test.ts`) — asserts X.
@@ -53,6 +54,7 @@ List the tests that lock this behavior in. Cite the file + the assertion. New pl
 If a surface area is untested, state that explicitly with a follow-up plan item — do not silently omit.
 
 ### Manual acceptance walkthrough
+
 Numbered click-through with expected URL hash, redux state, and visible UI after each step. Run in mock mode (`VITE_USE_MOCKS=true`) unless the plan needs the real backend or sidecar.
 
 1. **Cold boot at `#/`** → expected stage = `{ kind: 'books' }`, expected UI = library cards.

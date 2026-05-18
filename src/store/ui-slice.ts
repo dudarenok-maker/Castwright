@@ -88,16 +88,31 @@ export const uiSlice = createSlice({
   initialState,
   reducers: {
     /* ── Stage transitions ──────────────────────────────────────────── */
-    goHome: (s) => { s.stage = { kind: 'books' }; },
-    openVoices: (s) => { s.stage = { kind: 'voices' }; },
-    openChangelog: (s) => { s.stage = { kind: 'changelog' }; },
-    openAccount: (s) => { s.stage = { kind: 'account' }; },
+    goHome: (s) => {
+      s.stage = { kind: 'books' };
+    },
+    openVoices: (s) => {
+      s.stage = { kind: 'voices' };
+    },
+    openChangelog: (s) => {
+      s.stage = { kind: 'changelog' };
+    },
+    openAccount: (s) => {
+      s.stage = { kind: 'account' };
+    },
     startNewBook: (s) => {
       s.stage = { kind: 'upload' };
     },
-    manuscriptUploaded: (s, a: PayloadAction<{ bookId?: string; manuscriptId?: string | null }>) => {
+    manuscriptUploaded: (
+      s,
+      a: PayloadAction<{ bookId?: string; manuscriptId?: string | null }>,
+    ) => {
       if (s.stage.kind !== 'upload') return;
-      s.stage = { kind: 'analysing', bookId: a.payload?.bookId, manuscriptId: a.payload?.manuscriptId ?? null };
+      s.stage = {
+        kind: 'analysing',
+        bookId: a.payload?.bookId,
+        manuscriptId: a.payload?.manuscriptId ?? null,
+      };
     },
     analysisComplete: (s, a: PayloadAction<{ bookId?: string }>) => {
       if (s.stage.kind !== 'analysing') return;
@@ -110,16 +125,24 @@ export const uiSlice = createSlice({
     },
     reanalyse: (s, a: PayloadAction<{ manuscriptId?: string | null } | undefined>) => {
       if (s.stage.kind !== 'confirm') return;
-      s.stage = { kind: 'analysing', bookId: s.stage.bookId, manuscriptId: a.payload?.manuscriptId ?? null };
+      s.stage = {
+        kind: 'analysing',
+        bookId: s.stage.bookId,
+        manuscriptId: a.payload?.manuscriptId ?? null,
+      };
     },
-    openBook: (s, a: PayloadAction<{ id: string; status: string; manuscriptId?: string | null }>) => {
+    openBook: (
+      s,
+      a: PayloadAction<{ id: string; status: string; manuscriptId?: string | null }>,
+    ) => {
       const { id, status, manuscriptId } = a.payload;
-      if (status === 'analysing')         s.stage = { kind: 'analysing', bookId: id, manuscriptId: manuscriptId ?? null };
-      else if (status === 'cast_pending') s.stage = { kind: 'confirm',   bookId: id, openProfileId: null };
+      if (status === 'analysing')
+        s.stage = { kind: 'analysing', bookId: id, manuscriptId: manuscriptId ?? null };
+      else if (status === 'cast_pending')
+        s.stage = { kind: 'confirm', bookId: id, openProfileId: null };
       else {
-        const view: View = status === 'complete' ? 'listen'
-                         : status === 'generating' ? 'generate'
-                         : 'cast';
+        const view: View =
+          status === 'complete' ? 'listen' : status === 'generating' ? 'generate' : 'cast';
         s.stage = { kind: 'ready', bookId: id, view, ...READY_DEFAULTS };
       }
     },
@@ -147,27 +170,59 @@ export const uiSlice = createSlice({
     },
 
     /* ── Cross-cutting overlays ─────────────────────────────────────── */
-    setCurrentTrack:       (s, a: PayloadAction<number | null>) => { s.currentTrack = a.payload; },
-    setMatchDetailFor:     (s, a: PayloadAction<string | null>) => { s.matchDetailFor = a.payload; },
-    setHandoffApp:         (s, a: PayloadAction<ListenerApp | null>) => { s.handoffApp = a.payload; },
-    setRegenChapter:       (s, a: PayloadAction<Chapter | null>) => {
+    setCurrentTrack: (s, a: PayloadAction<number | null>) => {
+      s.currentTrack = a.payload;
+    },
+    setMatchDetailFor: (s, a: PayloadAction<string | null>) => {
+      s.matchDetailFor = a.payload;
+    },
+    setHandoffApp: (s, a: PayloadAction<ListenerApp | null>) => {
+      s.handoffApp = a.payload;
+    },
+    setRegenChapter: (s, a: PayloadAction<Chapter | null>) => {
       s.regenChapter = a.payload;
       /* Closing the modal (payload=null) clears any per-open scope override so
          the next per-chapter Regenerate falls back to the modal's default. */
       if (a.payload == null) s.regenInitialScope = null;
     },
-    setRegenInitialScope:  (s, a: PayloadAction<RegenScope | null>) => { s.regenInitialScope = a.payload; },
-    setRegenCharacterCtx:  (s, a: PayloadAction<RegenCharacterCtx | null>) => { s.regenCharacterCtx = a.payload; },
-    setBatchRegenIds:      (s, a: PayloadAction<string[] | null>) => { s.batchRegenIds = a.payload; },
-    setStaleAudio:         (s, a: PayloadAction<UiState['staleAudio']>) => { s.staleAudio = a.payload; },
-    clearStaleAudio:       (s) => { s.staleAudio = null; },
-    setShowRevisionPlayer: (s, a: PayloadAction<boolean>) => { s.showRevisionPlayer = a.payload; },
-    setShowDriftReport:    (s, a: PayloadAction<boolean>) => { s.showDriftReport = a.payload; },
-    setPreviewMode:        (s, a: PayloadAction<boolean>) => { s.previewMode = a.payload; },
-    setSelectedModel:      (s, a: PayloadAction<string>) => { s.selectedModel = a.payload; s.selectedModelExplicit = true; },
-    setTtsModelKey:        (s, a: PayloadAction<TtsModelKey>) => { s.ttsModelKey = a.payload; s.ttsModelKeyExplicit = true; },
-    setThemeOverride:      (s, a: PayloadAction<'light' | 'dark' | 'system'>) => { s.themeOverride = a.payload; },
-    clearThemeOverride:    (s) => { s.themeOverride = null; },
+    setRegenInitialScope: (s, a: PayloadAction<RegenScope | null>) => {
+      s.regenInitialScope = a.payload;
+    },
+    setRegenCharacterCtx: (s, a: PayloadAction<RegenCharacterCtx | null>) => {
+      s.regenCharacterCtx = a.payload;
+    },
+    setBatchRegenIds: (s, a: PayloadAction<string[] | null>) => {
+      s.batchRegenIds = a.payload;
+    },
+    setStaleAudio: (s, a: PayloadAction<UiState['staleAudio']>) => {
+      s.staleAudio = a.payload;
+    },
+    clearStaleAudio: (s) => {
+      s.staleAudio = null;
+    },
+    setShowRevisionPlayer: (s, a: PayloadAction<boolean>) => {
+      s.showRevisionPlayer = a.payload;
+    },
+    setShowDriftReport: (s, a: PayloadAction<boolean>) => {
+      s.showDriftReport = a.payload;
+    },
+    setPreviewMode: (s, a: PayloadAction<boolean>) => {
+      s.previewMode = a.payload;
+    },
+    setSelectedModel: (s, a: PayloadAction<string>) => {
+      s.selectedModel = a.payload;
+      s.selectedModelExplicit = true;
+    },
+    setTtsModelKey: (s, a: PayloadAction<TtsModelKey>) => {
+      s.ttsModelKey = a.payload;
+      s.ttsModelKeyExplicit = true;
+    },
+    setThemeOverride: (s, a: PayloadAction<'light' | 'dark' | 'system'>) => {
+      s.themeOverride = a.payload;
+    },
+    clearThemeOverride: (s) => {
+      s.themeOverride = null;
+    },
   },
   extraReducers: (builder) => {
     /* Seed-on-new-book: when the account settings hydrate (boot or save),
@@ -175,11 +230,14 @@ export const uiSlice = createSlice({
        the UI's model selectors from the account defaults. Once the user
        changes a picker, the `…Explicit` flag flips and these reducers
        leave the value alone for the rest of the session. */
-    const applyAccountDefaults = (s: UiState, payload: { defaultAnalysisModel: string; defaultTtsModelKey: TtsModelKey }) => {
+    const applyAccountDefaults = (
+      s: UiState,
+      payload: { defaultAnalysisModel: string; defaultTtsModelKey: TtsModelKey },
+    ) => {
       if (!s.selectedModelExplicit && payload.defaultAnalysisModel) {
         s.selectedModel = payload.defaultAnalysisModel;
       }
-      const validKey = TTS_MODEL_OPTIONS.some(m => m.id === payload.defaultTtsModelKey);
+      const validKey = TTS_MODEL_OPTIONS.some((m) => m.id === payload.defaultTtsModelKey);
       if (!s.ttsModelKeyExplicit && validKey) {
         s.ttsModelKey = payload.defaultTtsModelKey;
       }
@@ -198,9 +256,9 @@ export const uiActions = uiSlice.actions;
 
 export const uiSelectors = {
   stageKind: (s: RootState) => s.ui.stage.kind,
-  bookId:    (s: RootState) => (s.ui.stage as { bookId?: string }).bookId ?? null,
-  view:      (s: RootState) => s.ui.stage.kind === 'ready' ? s.ui.stage.view : null,
-  chapterId: (s: RootState) => s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null,
+  bookId: (s: RootState) => (s.ui.stage as { bookId?: string }).bookId ?? null,
+  view: (s: RootState) => (s.ui.stage.kind === 'ready' ? s.ui.stage.view : null),
+  chapterId: (s: RootState) => (s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null),
   profileId: (s: RootState) =>
-    (s.ui.stage.kind === 'ready' || s.ui.stage.kind === 'confirm') ? s.ui.stage.openProfileId : null,
+    s.ui.stage.kind === 'ready' || s.ui.stage.kind === 'confirm' ? s.ui.stage.openProfileId : null,
 };

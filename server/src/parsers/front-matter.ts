@@ -7,7 +7,8 @@
    like front/back-matter (Title page, Copyright, Acknowledgements, …)
    before aligning the remaining entries to parseText chapter splits. */
 
-const FRONT_MATTER_RX = /^(dedication|copyright|preface|foreword|acknowledg|about the author|about the publisher|table of contents|contents|epigraph|introduction(?!\s*\(|\s+to\b)|by the same author|also by|praise for|colophon|afterword|appendix|notes\b|bibliograph|index\b|glossary|halftitle|half[- ]title|frontispiece|imprint|publisher's note|publisher’s note|author's note|author’s note|translator's note|translator’s note)/i;
+const FRONT_MATTER_RX =
+  /^(dedication|copyright|preface|foreword|acknowledg|about the author|about the publisher|table of contents|contents|epigraph|introduction(?!\s*\(|\s+to\b)|by the same author|also by|praise for|colophon|afterword|appendix|notes\b|bibliograph|index\b|glossary|halftitle|half[- ]title|frontispiece|imprint|publisher's note|publisher’s note|author's note|author’s note|translator's note|translator’s note)/i;
 
 export function isLikelyFrontMatterTitle(title: string): boolean {
   const t = (title ?? '').trim();

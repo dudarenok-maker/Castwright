@@ -15,7 +15,14 @@ import { formatDuration } from '../lib/time';
    book — a confusing flash of wrong content. Start empty; hydration is the
    only legitimate source of chapter rows for a real book. The fixture still
    exists for the drift-report modal and the mock API. */
-import type { Chapter, Character, GenerationTick, AnalyseResponse, BookStateJson, TtsModelKey } from '../lib/types';
+import type {
+  Chapter,
+  Character,
+  GenerationTick,
+  AnalyseResponse,
+  BookStateJson,
+  TtsModelKey,
+} from '../lib/types';
 
 /* When the SSE has produced no tick for this long while a chapter is
    in_progress, the Generate view flips that chapter to a "Stalled" amber
@@ -96,9 +103,15 @@ export const chaptersSlice = createSlice({
   name: 'chapters',
   initialState,
   reducers: {
-    setChapters: (s, a: PayloadAction<Chapter[]>) => { s.chapters = a.payload; },
-    setPaused:   (s, a: PayloadAction<boolean>)   => { s.paused = a.payload; },
-    clearLastError: (s) => { s.lastError = null; },
+    setChapters: (s, a: PayloadAction<Chapter[]>) => {
+      s.chapters = a.payload;
+    },
+    setPaused: (s, a: PayloadAction<boolean>) => {
+      s.paused = a.payload;
+    },
+    clearLastError: (s) => {
+      s.lastError = null;
+    },
 
     /** Records which book's rows `chapters` currently reflects. Dispatched
         by Layout's per-book hydration effect (immediately after
@@ -119,7 +132,9 @@ export const chaptersSlice = createSlice({
     /** Middleware → slice handshake: cleared on closeHandle (pause,
         queue drain, store teardown). The header pill hides entirely when
         this is null. */
-    clearActiveStream: (s) => { s.activeStream = null; },
+    clearActiveStream: (s) => {
+      s.activeStream = null;
+    },
 
     /* Called by the Generate view the instant it opens an SSE with a regen
        spec, so a subsequent Pause → Resume cycle re-resumes "naturally"
@@ -128,7 +143,9 @@ export const chaptersSlice = createSlice({
        the server's `idle` tick — but an aborted SSE never delivers that
        tick, so the spec sticks around forever and every Resume kicks off
        a fresh force-regen of the whole target set. */
-    consumePendingRegen: (s) => { s.pendingRegen = null; },
+    consumePendingRegen: (s) => {
+      s.pendingRegen = null;
+    },
 
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
       const { chapters, sentences, bookId } = a.payload;
@@ -146,35 +163,38 @@ export const chaptersSlice = createSlice({
       for (const sent of sentences ?? []) {
         (speakersByChapter[sent.chapterId] ??= new Set()).add(sent.characterId);
       }
-      s.chapters = chapters.map(c => {
+      s.chapters = chapters.map((c) => {
         const known = Object.keys(c.characters ?? {});
         if (known.length > 0) return c;
         const speakers = speakersByChapter[c.id];
         if (!speakers || speakers.size === 0) return c;
         return {
           ...c,
-          characters: Object.fromEntries([...speakers].map(id => [id, 'queued' as const])),
+          characters: Object.fromEntries([...speakers].map((id) => [id, 'queued' as const])),
         };
       });
     },
 
     /* Rebuild chapters from a disk-resident state.json + the set of completed
        audio slugs. Used when opening a previously-analysed book. */
-    hydrateFromBookState: (s, a: PayloadAction<{
-      /** Atomically claims the slice for this bookId so the cross-book
+    hydrateFromBookState: (
+      s,
+      a: PayloadAction<{
+        /** Atomically claims the slice for this bookId so the cross-book
           tick guard has a truthful frame of reference the instant chapters
           land. Optional only because legacy test fixtures predate the
           field; production callers always pass it. */
-      bookId?: string;
-      chapters: BookStateJson['chapters'];
-      completedSlugs: string[];
-      characters: Character[];
-      /** Per-chapter analysed speaker ids (chapterId → character id list).
+        bookId?: string;
+        chapters: BookStateJson['chapters'];
+        completedSlugs: string[];
+        characters: Character[];
+        /** Per-chapter analysed speaker ids (chapterId → character id list).
           When present, each chapter row is seeded with ONLY the characters
           that actually speak in it. Absent (older server, or no analysis
           cache yet) — fall back to seeding every cast member as queued. */
-      chapterCharacters?: Record<number, string[]>;
-    }>) => {
+        chapterCharacters?: Record<number, string[]>;
+      }>,
+    ) => {
       const { bookId, chapters, completedSlugs, characters, chapterCharacters } = a.payload;
       if (bookId) s.currentBookId = bookId;
       const done = new Set(completedSlugs);
@@ -189,30 +209,33 @@ export const chaptersSlice = createSlice({
       };
       const seedDone = (chapterId: number): Record<string, 'done'> => {
         const ids = chapterCharacters?.[chapterId];
-        const source = ids && ids.length > 0 ? ids : characters.map(ch => ch.id);
+        const source = ids && ids.length > 0 ? ids : characters.map((ch) => ch.id);
         const out: Record<string, 'done'> = {};
         for (const id of source) out[id] = 'done';
         return out;
       };
-      s.chapters = chapters.map(c => ({
-        id: c.id,
-        title: c.title,
-        duration: c.duration ?? '00:00',
-        state: done.has(c.slug) ? 'done' : 'queued',
-        progress: done.has(c.slug) ? 1 : 0,
-        characters: done.has(c.slug) ? seedDone(c.id) : seedQueued(c.id),
-        /* Persist the user's per-chapter exclude choice across hydrate so
+      s.chapters = chapters.map(
+        (c) =>
+          ({
+            id: c.id,
+            title: c.title,
+            duration: c.duration ?? '00:00',
+            state: done.has(c.slug) ? 'done' : 'queued',
+            progress: done.has(c.slug) ? 1 : 0,
+            characters: done.has(c.slug) ? seedDone(c.id) : seedQueued(c.id),
+            /* Persist the user's per-chapter exclude choice across hydrate so
            the Generate view greys excluded chapters out without waiting
            on a separate fetch. */
-        excluded: c.excluded || undefined,
-        /* Engine-drift tracking (plan 35). Carry the TTS model key that
+            excluded: c.excluded || undefined,
+            /* Engine-drift tracking (plan 35). Carry the TTS model key that
            rendered this chapter's existing audio so the chapter row can
            render a drift badge when it differs from the project's
            current ui.ttsModelKey. Absent on unrendered chapters; the
            server backfills it from segments.json for legacy chapters. */
-        audioModelKey: c.audioModelKey,
-        audioRenderedAt: c.audioRenderedAt,
-      } as Chapter));
+            audioModelKey: c.audioModelKey,
+            audioRenderedAt: c.audioRenderedAt,
+          }) as Chapter,
+      );
       s.lastError = null;
       s.generationStartedAt = null;
       s.pendingRegen = null;
@@ -241,14 +264,13 @@ export const chaptersSlice = createSlice({
          book, but its ticks must NOT mutate the now-irrelevant slice — the
          cross-book progress snapshot (activeStream) keeps the header pill
          alive instead. The middleware updates activeStream out-of-band. */
-      if (
-        s.activeStream &&
-        s.currentBookId &&
-        s.activeStream.bookId !== s.currentBookId
-      ) return;
+      if (s.activeStream && s.currentBookId && s.activeStream.bookId !== s.currentBookId) return;
 
       /* Start the ETA clock on the first real progress signal of a run. */
-      if (s.generationStartedAt == null && (ev.type === 'progress' || ev.type === 'chapter_assembling')) {
+      if (
+        s.generationStartedAt == null &&
+        (ev.type === 'progress' || ev.type === 'chapter_assembling')
+      ) {
         s.generationStartedAt = Date.now();
       }
 
@@ -262,7 +284,7 @@ export const chaptersSlice = createSlice({
         /* End-of-run: drop the regen spec so it doesn't auto-replay, and clear
            the elapsed clock so the next run starts a fresh ETA. */
         s.pendingRegen = null;
-        const stillBusy = s.chapters.some(c => c.state === 'in_progress' || c.state === 'queued');
+        const stillBusy = s.chapters.some((c) => c.state === 'in_progress' || c.state === 'queued');
         if (!stillBusy) {
           s.generationStartedAt = null;
           s.lastTickAt = null;
@@ -276,7 +298,7 @@ export const chaptersSlice = createSlice({
              queue is now blocked — surface as a banner AND flip the
              currently in-flight chapter to failed so the spinner stops. */
           s.lastError = ev.errorReason ?? 'Generation halted.';
-          const live = s.chapters.find(c => c.state === 'in_progress');
+          const live = s.chapters.find((c) => c.state === 'in_progress');
           if (live) {
             live.state = 'failed';
             live.phase = null;
@@ -284,7 +306,7 @@ export const chaptersSlice = createSlice({
           }
           return;
         }
-        const ch = s.chapters.find(c => c.id === ev.chapterId);
+        const ch = s.chapters.find((c) => c.id === ev.chapterId);
         if (ch) {
           ch.state = 'failed';
           ch.phase = null;
@@ -294,7 +316,7 @@ export const chaptersSlice = createSlice({
       }
 
       if (ev.chapterId == null) return;
-      const ch = s.chapters.find(c => c.id === ev.chapterId);
+      const ch = s.chapters.find((c) => c.id === ev.chapterId);
       if (!ch) return;
 
       if (ev.type === 'chapter_assembling') {
@@ -375,15 +397,15 @@ export const chaptersSlice = createSlice({
     regenerateChapter: (s, a: PayloadAction<{ chapterId: number; scope: 'this' | 'forward' }>) => {
       const { chapterId, scope } = a.payload;
       const targetIds: number[] = [];
-      s.chapters = s.chapters.map(c => {
+      s.chapters = s.chapters.map((c) => {
         const inScope = c.id === chapterId || (scope === 'forward' && c.id > chapterId);
         if (!inScope) return c;
         targetIds.push(c.id);
         return {
           ...c,
-          state:    c.id === chapterId ? 'in_progress' : 'queued',
+          state: c.id === chapterId ? 'in_progress' : 'queued',
           progress: c.id === chapterId ? 0.05 : 0,
-          phase:    null,
+          phase: null,
           errorReason: undefined,
           /* Reset line counters so the expanded row's derived per-character
              progress (which counts manuscript line positions ≤ currentLine)
@@ -391,7 +413,7 @@ export const chaptersSlice = createSlice({
              firing and the first fresh `progress` tick landing. */
           currentLine: 0,
           characters: Object.fromEntries(
-            Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v])
+            Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v]),
           ) as Chapter['characters'],
         };
       });
@@ -416,19 +438,19 @@ export const chaptersSlice = createSlice({
     regenerateChapterIds: (s, a: PayloadAction<{ chapterIds: number[] }>) => {
       const targetSet = new Set(a.payload.chapterIds);
       const targetIds: number[] = [];
-      s.chapters = s.chapters.map(c => {
+      s.chapters = s.chapters.map((c) => {
         if (!targetSet.has(c.id) || c.excluded) return c;
         targetIds.push(c.id);
         const isHead = targetIds.length === 1;
         return {
           ...c,
-          state:    isHead ? 'in_progress' : 'queued',
+          state: isHead ? 'in_progress' : 'queued',
           progress: isHead ? 0.05 : 0,
-          phase:    null,
+          phase: null,
           errorReason: undefined,
           currentLine: 0,
           characters: Object.fromEntries(
-            Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v])
+            Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v]),
           ) as Chapter['characters'],
         };
       });
@@ -443,7 +465,7 @@ export const chaptersSlice = createSlice({
     regenerateCharacter: (s, a: PayloadAction<{ characterId: string; chapterIds: number[] }>) => {
       const { characterId, chapterIds } = a.payload;
       const targetIds: number[] = [];
-      s.chapters = s.chapters.map(ch => {
+      s.chapters = s.chapters.map((ch) => {
         if (!chapterIds.includes(ch.id)) return ch;
         const cur = ch.characters[characterId];
         if (cur === 'skipped' || !cur) return ch;
@@ -452,9 +474,9 @@ export const chaptersSlice = createSlice({
         return {
           ...ch,
           characters: { ...ch.characters, [characterId]: 'queued' },
-          state:    wasDone ? 'in_progress' : ch.state,
+          state: wasDone ? 'in_progress' : ch.state,
           progress: wasDone ? 0.05 : ch.progress,
-          phase:    null,
+          phase: null,
           errorReason: undefined,
           /* Same currentLine reset as regenerateChapter — see comment there. */
           currentLine: wasDone ? 0 : ch.currentLine,
@@ -475,7 +497,10 @@ export const chaptersSlice = createSlice({
        have meaningful character maps. We update characters for chapters
        in `chapterIds` and leave the rest of the row (state/progress/
        phase/etc.) untouched. */
-    mergeSubsetAnalysis: (s, a: PayloadAction<{ response: AnalyseResponse; chapterIds: number[] }>) => {
+    mergeSubsetAnalysis: (
+      s,
+      a: PayloadAction<{ response: AnalyseResponse; chapterIds: number[] }>,
+    ) => {
       const { response, chapterIds } = a.payload;
       const idSet = new Set(chapterIds);
       const speakersByChapter: Record<number, Set<string>> = {};
@@ -487,9 +512,7 @@ export const chaptersSlice = createSlice({
         if (!idSet.has(ch.id)) continue;
         const speakers = speakersByChapter[ch.id];
         if (!speakers) continue;
-        ch.characters = Object.fromEntries(
-          [...speakers].map(id => [id, 'queued' as const]),
-        );
+        ch.characters = Object.fromEntries([...speakers].map((id) => [id, 'queued' as const]));
       }
     },
 
@@ -500,7 +523,7 @@ export const chaptersSlice = createSlice({
        off subset analysis if the chapter has no cached attribution. */
     setChapterExcluded: (s, a: PayloadAction<{ chapterId: number; excluded: boolean }>) => {
       const { chapterId, excluded } = a.payload;
-      const ch = s.chapters.find(c => c.id === chapterId);
+      const ch = s.chapters.find((c) => c.id === chapterId);
       if (!ch) return;
       ch.excluded = excluded ? true : undefined;
       /* When newly excluded, reset transient generation state so the
@@ -516,14 +539,17 @@ export const chaptersSlice = createSlice({
       }
     },
 
-    batchRegenerateCharacters: (s, a: PayloadAction<{ characterIds: string[]; chapterIds: number[] }>) => {
+    batchRegenerateCharacters: (
+      s,
+      a: PayloadAction<{ characterIds: string[]; chapterIds: number[] }>,
+    ) => {
       const { characterIds, chapterIds } = a.payload;
       const targetIds: number[] = [];
-      s.chapters = s.chapters.map(ch => {
+      s.chapters = s.chapters.map((ch) => {
         if (!chapterIds.includes(ch.id)) return ch;
         const newChars: Chapter['characters'] = { ...ch.characters };
         let touched = false;
-        characterIds.forEach(cid => {
+        characterIds.forEach((cid) => {
           if (newChars[cid] && newChars[cid] !== 'skipped') {
             newChars[cid] = 'queued';
             touched = true;
@@ -535,9 +561,9 @@ export const chaptersSlice = createSlice({
         return {
           ...ch,
           characters: newChars,
-          state:    wasDone ? 'in_progress' : ch.state,
+          state: wasDone ? 'in_progress' : ch.state,
           progress: wasDone ? 0.05 : ch.progress,
-          phase:    null,
+          phase: null,
           errorReason: undefined,
           currentLine: wasDone ? 0 : ch.currentLine,
         };

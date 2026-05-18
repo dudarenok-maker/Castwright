@@ -60,7 +60,11 @@ function ensureAudio(): HTMLAudioElement {
   audio.addEventListener('error', () => {
     const mediaErr = audio?.error;
     // eslint-disable-next-line no-console
-    console.error('[sample-playback] audio element errored', { url: state.currentUrl, code: mediaErr?.code, message: mediaErr?.message });
+    console.error('[sample-playback] audio element errored', {
+      url: state.currentUrl,
+      code: mediaErr?.code,
+      message: mediaErr?.message,
+    });
     state.isPlaying = false;
     state.currentUrl = null;
     notify();
@@ -75,12 +79,14 @@ export function useSamplePlayback() {
   useEffect(() => {
     listeners.add(setSnap);
     setSnap({ ...state });
-    return () => { listeners.delete(setSnap); };
+    return () => {
+      listeners.delete(setSnap);
+    };
   }, []);
 
   return {
     currentUrl: snap.currentUrl,
-    isPlaying:  snap.isPlaying,
+    isPlaying: snap.isPlaying,
     /* Returns a promise so callers can surface playback failures (e.g.
        browser autoplay policy, decode errors, 404 on the URL). The audio
        element's `error` listener also resets state in case the failure
@@ -133,7 +139,7 @@ export function useSamplePlayback() {
          the caller's play() and its await. Returning cancelled:true here
          lets sequences bail cleanly. */
       if (!state.isPlaying) return Promise.resolve({ cancelled: true });
-      return new Promise<PlayEndedResult>(resolve => {
+      return new Promise<PlayEndedResult>((resolve) => {
         endedAwaiters.add(resolve);
       });
     },

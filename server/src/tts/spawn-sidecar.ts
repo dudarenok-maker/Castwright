@@ -153,15 +153,15 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
 
   let child: ChildProcess;
   try {
-    child = spawnFn('powershell.exe', [
-      '-ExecutionPolicy', 'Bypass',
-      '-NoProfile',
-      '-File', startScript,
-    ], {
-      env,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    child = spawnFn(
+      'powershell.exe',
+      ['-ExecutionPolicy', 'Bypass', '-NoProfile', '-File', startScript],
+      {
+        env,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
   } catch (err) {
     warn('[sidecar] spawn failed:', err);
     return null;

@@ -3,10 +3,15 @@
    the duplication. */
 
 export const AUDIO_TAGS = [
-  'emphatic', 'shouting', 'whispers', 'laughs', 'sighs',
-  'excited', 'hesitant',
+  'emphatic',
+  'shouting',
+  'whispers',
+  'laughs',
+  'sighs',
+  'excited',
+  'hesitant',
 ] as const;
-export type AudioTag = typeof AUDIO_TAGS[number];
+export type AudioTag = (typeof AUDIO_TAGS)[number];
 
 const AUDIO_TAG_SET: ReadonlySet<string> = new Set(AUDIO_TAGS);
 

@@ -72,9 +72,7 @@ describe('voice-sample router', () => {
         text: 'Hello world. This is a voice sample.',
       };
 
-      const res1 = await request(app)
-        .post('/api/voices/v_keefe/sample')
-        .send(body);
+      const res1 = await request(app).post('/api/voices/v_keefe/sample').send(body);
 
       expect(res1.status).toBe(200);
       expect(res1.body.modelKey).toBe('coqui-xtts-v2');
@@ -91,9 +89,7 @@ describe('voice-sample router', () => {
       expect(synthesize).toHaveBeenCalledTimes(1);
 
       /* Second identical request — disk cache hit, no re-synth. */
-      const res2 = await request(app)
-        .post('/api/voices/v_keefe/sample')
-        .send(body);
+      const res2 = await request(app).post('/api/voices/v_keefe/sample').send(body);
 
       expect(res2.status).toBe(200);
       expect(res2.body.cached).toBe(true);
@@ -106,8 +102,12 @@ describe('voice-sample router', () => {
         modelKey: 'coqui-xtts-v2',
         voice: { id: 'v_elwin', character: 'Elwin', attributes: ['Male'] },
       };
-      const a = await request(app).post('/api/voices/v_elwin/sample').send({ ...base, text: 'First line.' });
-      const b = await request(app).post('/api/voices/v_elwin/sample').send({ ...base, text: 'Second different line.' });
+      const a = await request(app)
+        .post('/api/voices/v_elwin/sample')
+        .send({ ...base, text: 'First line.' });
+      const b = await request(app)
+        .post('/api/voices/v_elwin/sample')
+        .send({ ...base, text: 'Second different line.' });
 
       expect(a.status).toBe(200);
       expect(b.status).toBe(200);
@@ -129,9 +129,7 @@ describe('voice-sample router', () => {
     });
 
     it('400 invalid_model when modelKey is missing', async () => {
-      const res = await request(app)
-        .post('/api/voices/v_keefe/sample')
-        .send({ text: 'x' });
+      const res = await request(app).post('/api/voices/v_keefe/sample').send({ text: 'x' });
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('invalid_model');
       expect(synthesize).not.toHaveBeenCalled();
@@ -143,9 +141,11 @@ describe('voice-sample router', () => {
        behaviour through synthesize's call arguments — the route hands
        the selected text straight to the provider. */
     it('picks the longest evidence quote when ≥1 quote is long enough', async () => {
-      const short  = 'Cold supper it is, then.'; // 24 chars
-      const medium = '“Hard to starboard,” he said, not loudly, because Halloran had never had to be loud to be obeyed.'; // ~95 chars
-      const long   = '“Mr. Vance, you will reef the topsails before the next bell. You will do it without comment, and you will report back to me when it is done — and not, sir, a moment before.”'; // ~180 chars
+      const short = 'Cold supper it is, then.'; // 24 chars
+      const medium =
+        '“Hard to starboard,” he said, not loudly, because Halloran had never had to be loud to be obeyed.'; // ~95 chars
+      const long =
+        '“Mr. Vance, you will reef the topsails before the next bell. You will do it without comment, and you will report back to me when it is done — and not, sir, a moment before.”'; // ~180 chars
 
       const res = await request(app)
         .post('/api/voices/v_halloran/sample')
@@ -175,10 +175,7 @@ describe('voice-sample router', () => {
           modelKey: 'coqui-xtts-v2',
           voice: { id: 'v_marcus', character: 'Marcus', attributes: ['Male'] },
           characterHint: {
-            evidence: [
-              shortReal,
-              '“Aye.”',
-            ],
+            evidence: [shortReal, '“Aye.”'],
           },
         });
 
@@ -259,7 +256,11 @@ describe('voice-sample router', () => {
           modelKey: 'coqui-xtts-v2',
           /* Voice profile attributes that would normally land on a male-deep
              pick — we want to confirm the override wins regardless. */
-          voice: { id: 'v_anything', character: 'Fitz', attributes: ['Male', 'Deep', 'Authoritative'] },
+          voice: {
+            id: 'v_anything',
+            character: 'Fitz',
+            attributes: ['Male', 'Deep', 'Authoritative'],
+          },
           characterHint: { gender: 'male' },
           rawEngine: 'coqui',
           rawSpeaker: 'Asya Anara',
@@ -277,20 +278,16 @@ describe('voice-sample router', () => {
       /* Same raw speaker on two different voiceId paths should resolve to
          the same on-disk file so unused base voices don't get re-synthesised
          once per voiceId they happen to ride along. */
-      const a = await request(app)
-        .post('/api/voices/v_one/sample')
-        .send({
-          modelKey: 'coqui-xtts-v2',
-          rawEngine: 'coqui',
-          rawSpeaker: 'Asya Anara',
-        });
-      const b = await request(app)
-        .post('/api/voices/v_two/sample')
-        .send({
-          modelKey: 'coqui-xtts-v2',
-          rawEngine: 'coqui',
-          rawSpeaker: 'Asya Anara',
-        });
+      const a = await request(app).post('/api/voices/v_one/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: 'Asya Anara',
+      });
+      const b = await request(app).post('/api/voices/v_two/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: 'Asya Anara',
+      });
 
       expect(a.status).toBe(200);
       expect(b.status).toBe(200);
@@ -307,13 +304,11 @@ describe('voice-sample router', () => {
          modelKey is coqui-xtts-v2 must still route to a Gemini provider —
          otherwise the synth would send "Charon" to the Coqui sidecar and
          500 mid-synth. */
-      const res = await request(app)
-        .post('/api/voices/v_x/sample')
-        .send({
-          modelKey: 'coqui-xtts-v2',
-          rawEngine: 'gemini',
-          rawSpeaker: 'Charon',
-        });
+      const res = await request(app).post('/api/voices/v_x/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'gemini',
+        rawSpeaker: 'Charon',
+      });
       expect(res.status).toBe(200);
       /* Cache filename should reflect the effective modelKey (gemini-2.5-flash)
          so a later Coqui-routed request for the same character doesn't

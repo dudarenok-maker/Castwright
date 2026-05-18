@@ -36,9 +36,7 @@ export const MAX_QUOTE_CHARS = 2000;
     Two logical branches collapse into the else:
     - `empty_after_normalisation`: norm.length === 0
     - `not_in_source`:             norm not a substring of the source */
-export type DropReason =
-  | 'not_in_source'
-  | 'empty_after_normalisation';
+export type DropReason = 'not_in_source' | 'empty_after_normalisation';
 
 export interface DroppedQuoteEntry {
   characterId: string;
@@ -83,10 +81,7 @@ export function truncateQuote(quote: string): { text: string; truncated: boolean
 
 /** Immutably append a batch to the envelope. Returns the new envelope;
     callers must persist via saveDroppedQuotes. */
-export function appendBatch(
-  file: DroppedQuotesFile,
-  batch: DroppedQuotesBatch,
-): DroppedQuotesFile {
+export function appendBatch(file: DroppedQuotesFile, batch: DroppedQuotesBatch): DroppedQuotesFile {
   return { ...file, batches: [...file.batches, batch] };
 }
 
@@ -104,9 +99,6 @@ export async function loadDroppedQuotes(
 
 /** Persist the envelope atomically. Same OneDrive-EPERM retry contract
     as every other .audiobook/*.json write — see state-io.ts. */
-export async function saveDroppedQuotes(
-  bookDir: string,
-  file: DroppedQuotesFile,
-): Promise<void> {
+export async function saveDroppedQuotes(bookDir: string, file: DroppedQuotesFile): Promise<void> {
   await writeJsonAtomic(droppedQuotesJsonPath(bookDir), file);
 }

@@ -21,7 +21,7 @@ with the analyzer Ollama meant explicit launch kept the tradeoff visible.
 
 Plan 14a flipped the calculus by making **Kokoro v1** the default engine:
 ~1 GB VRAM, ~1 s eager-load, eagerly preloaded inside the sidecar. With
-Kokoro as the default, the *only* reason TTS isn't ready when the server is
+Kokoro as the default, the _only_ reason TTS isn't ready when the server is
 is that the sidecar process hasn't been launched. So this plan flips the
 "Won't" to a per-user preference.
 
@@ -34,7 +34,7 @@ is that the sidecar process hasn't been launched. So this plan flips the
   process tree). `.run/tts.pid` is written so the existing
   `scripts/stop-app.ps1` reaps the same PID it always did.
 - **Architectural:** the existing `defaultTtsModelKey` preference now
-  controls *both* picker-default AND server-side eager-load gating
+  controls _both_ picker-default AND server-side eager-load gating
   (PRELOAD_COQUI=1 iff modelKey === 'coqui-xtts-v2'). Boolean × existing
   enum = effective 3-state outcome without a new schema field.
 
@@ -42,7 +42,7 @@ is that the sidecar process hasn't been launched. So this plan flips the
 
 - **New seams:**
   - `server/src/workspace/user-settings.ts` adds `autoStartSidecar?:
-    boolean` (optional with `true` default) and
+boolean` (optional with `true` default) and
     `getResolvedAutoStartSidecar(): boolean` resolver that honours
     `DISABLE_AUTOSTART_SIDECAR=1` env override (for CI / tests / debugging).
   - `server/src/tts/spawn-sidecar.ts` new module: port probe + child
@@ -129,28 +129,28 @@ process lifecycle, not UI.
 
 1. **Cold boot — default install.** From a clean state (`stop-app.bat`,
    verify `.run/` is empty and `:9000` is free), run `start-app.bat`.
-   *Expect:* `logs/tts.log` shows the `start.ps1` banner within ~1 s,
+   _Expect:_ `logs/tts.log` shows the `start.ps1` banner within ~1 s,
    then Kokoro eager-load. `/api/sidecar/health` returns green.
    `.run/tts.pid` exists.
 2. **Toggle off, restart.** Navigate to `#/account`, untick "Auto-start
-   with server", click Save. *Expect:* "Saved." pill flashes; restart-
+   with server", click Save. _Expect:_ "Saved." pill flashes; restart-
    required pill is visible. Ctrl+C the Node terminal, `cd server && npm
-   run dev` again. *Expect:* `logs/server.log` says
+run dev` again. _Expect:_ `logs/server.log` says
    `[sidecar] auto-start disabled`. No python process running.
    `/api/sidecar/health` returns red (sidecar unreachable).
 3. **Toggle back on, switch default to Coqui.** In `#/account` re-check
    the box, change TTS model to `coqui-xtts-v2`, Save, restart server.
-   *Expect:* `logs/tts.log` shows `PRELOAD_COQUI=1` in env; XTTS load
+   _Expect:_ `logs/tts.log` shows `PRELOAD_COQUI=1` in env; XTTS load
    begins; the in-app Ollama-eviction notice fires.
 4. **Pre-existing manual sidecar.** Stop everything, then run `npm run
-   tts:sidecar` first. While it's listening on :9000, `cd server && npm
-   run dev`. *Expect:* `logs/server.log` says `[sidecar] already
-   listening on :9000, skipping spawn`. The manual sidecar keeps
+tts:sidecar` first. While it's listening on :9000, `cd server && npm
+run dev`. _Expect:_ `logs/server.log` says `[sidecar] already
+listening on :9000, skipping spawn`. The manual sidecar keeps
    serving; Node doesn't spawn a duplicate.
-5. **Clean teardown.** Run `stop-app.bat`. *Expect:* port 9000 is free,
+5. **Clean teardown.** Run `stop-app.bat`. _Expect:_ port 9000 is free,
    no python/uvicorn lingerers in Task Manager, `.run/tts.pid` is gone.
 6. **Ctrl+C teardown.** Spawn from `cd server && npm run dev`, hit Ctrl+C.
-   *Expect:* `[server] SIGINT received, tearing down sidecar...` in
+   _Expect:_ `[server] SIGINT received, tearing down sidecar...` in
    stdout, then the python child dies before Node exits. Port 9000 free.
 
 ## Out of scope

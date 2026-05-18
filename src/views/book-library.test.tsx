@@ -19,23 +19,23 @@ vi.mock('../lib/api', () => ({
 }));
 
 const oneBook: LibraryBook = {
-  bookId:            'b1',
-  title:             'Keeper of the Lost Cities',
-  author:            'Shannon Messenger',
-  series:            'Keeper of the Lost Cities',
-  seriesPosition:    1,
-  isStandalone:      false,
-  status:            'complete',
-  chapterCount:      59,
+  bookId: 'b1',
+  title: 'Keeper of the Lost Cities',
+  author: 'Shannon Messenger',
+  series: 'Keeper of the Lost Cities',
+  seriesPosition: 1,
+  isStandalone: false,
+  status: 'complete',
+  chapterCount: 59,
   completedChapters: 59,
-  characterCount:    20,
-  voiceCount:        20,
-  lastWorkedOn:      'today',
-  coverGradient:     ['#000', '#fff'],
+  characterCount: 20,
+  voiceCount: 20,
+  lastWorkedOn: 'today',
+  coverGradient: ['#000', '#fff'],
 };
 
 const oneAuthor: LibraryAuthor = {
-  name:   'Shannon Messenger',
+  name: 'Shannon Messenger',
   series: [{ name: 'Keeper of the Lost Cities', books: [oneBook] }],
 };
 
@@ -46,7 +46,12 @@ function renderView({ loaded, authors }: { loaded: boolean; authors: LibraryAuth
       library: librarySlice.reducer,
     },
     preloadedState: {
-      library: { loaded, authors, books: authors.flatMap(a => a.series.flatMap(s => s.books)), pausedSnapshots: {} },
+      library: {
+        loaded,
+        authors,
+        books: authors.flatMap((a) => a.series.flatMap((s) => s.books)),
+        pausedSnapshots: {},
+      },
     },
   });
   return {
@@ -91,7 +96,9 @@ describe('BookLibraryView — loading affordance', () => {
     /* Author name only appears as the h2 above the series row — unique
        anchor for the populated branch. (The series + book titles repeat
        in multiple cells, so we can't key off them.) */
-    expect(screen.getByRole('heading', { level: 2, name: 'Shannon Messenger' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Shannon Messenger' }),
+    ).toBeInTheDocument();
     expect(screen.queryByTestId('library-skeleton')).not.toBeInTheDocument();
     expect(screen.queryByText(/your library is empty/i)).not.toBeInTheDocument();
   });
@@ -269,20 +276,31 @@ describe('BookLibraryView — loading affordance', () => {
 
   it('reducer hydratePausedSnapshots replaces the map (entries dropped from the response are cleared)', () => {
     const snapA: ActiveAnalysisSummary = {
-      bookId: 'a', bookTitle: 'A', manuscriptId: 'm', phaseId: 0, phaseLabel: 'p',
-      phaseProgress: 0, state: 'paused', lastTickAt: 0, writtenAt: 0,
+      bookId: 'a',
+      bookTitle: 'A',
+      manuscriptId: 'm',
+      phaseId: 0,
+      phaseLabel: 'p',
+      phaseProgress: 0,
+      state: 'paused',
+      lastTickAt: 0,
+      writtenAt: 0,
     };
     const snapB: ActiveAnalysisSummary = { ...snapA, bookId: 'b', bookTitle: 'B' };
     const store = configureStore({
       reducer: { library: librarySlice.reducer },
       preloadedState: {
         library: {
-          loaded: true, authors: [], books: [],
+          loaded: true,
+          authors: [],
+          books: [],
           pausedSnapshots: { a: snapA, b: snapB },
         },
       },
     });
-    act(() => { store.dispatch(libraryActions.hydratePausedSnapshots([snapA])); });
+    act(() => {
+      store.dispatch(libraryActions.hydratePausedSnapshots([snapA]));
+    });
     expect(store.getState().library.pausedSnapshots).toEqual({ a: snapA });
   });
 
@@ -297,12 +315,15 @@ describe('BookLibraryView — loading affordance', () => {
       preloadedState: { library: { loaded: false, authors: [], books: [], pausedSnapshots: {} } },
     });
     const handlers = {
-      onOpenBook: vi.fn(), onDeleteBook: vi.fn(), onReparseBook: vi.fn(),
-      onEditBook: vi.fn(), onStartNew: vi.fn(),
+      onOpenBook: vi.fn(),
+      onDeleteBook: vi.fn(),
+      onReparseBook: vi.fn(),
+      onEditBook: vi.fn(),
+      onStartNew: vi.fn(),
     };
     const { rerender } = render(
       <Provider store={store}>
-        <BookLibraryView authors={[]} activeBookId={null} {...handlers}/>
+        <BookLibraryView authors={[]} activeBookId={null} {...handlers} />
       </Provider>,
     );
     expect(screen.getByTestId('library-skeleton')).toBeInTheDocument();
@@ -311,10 +332,12 @@ describe('BookLibraryView — loading affordance', () => {
     });
     rerender(
       <Provider store={store}>
-        <BookLibraryView authors={[oneAuthor]} activeBookId={null} {...handlers}/>
+        <BookLibraryView authors={[oneAuthor]} activeBookId={null} {...handlers} />
       </Provider>,
     );
     expect(screen.queryByTestId('library-skeleton')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 2, name: 'Shannon Messenger' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Shannon Messenger' }),
+    ).toBeInTheDocument();
   });
 });

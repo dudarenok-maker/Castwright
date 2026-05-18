@@ -29,7 +29,12 @@ import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
-import { engineForModelKey, isTtsModelKey, selectTtsProvider, type TtsModelKey } from '../tts/index.js';
+import {
+  engineForModelKey,
+  isTtsModelKey,
+  selectTtsProvider,
+  type TtsModelKey,
+} from '../tts/index.js';
 import { encodePcmToMp3 } from '../tts/mp3.js';
 import {
   synthesiseChapter,
@@ -105,9 +110,17 @@ function broadcast(job: RunningJob, ev: unknown): void {
 function endAllSubscribers(job: RunningJob, finalEv?: unknown): void {
   for (const sub of job.subscribers) {
     if (finalEv) {
-      try { sub.send(finalEv); } catch { /* see broadcast() */ }
+      try {
+        sub.send(finalEv);
+      } catch {
+        /* see broadcast() */
+      }
     }
-    try { sub.res.end(); } catch { /* socket already closed */ }
+    try {
+      sub.res.end();
+    } catch {
+      /* socket already closed */
+    }
   }
   job.subscribers.clear();
 }
@@ -170,14 +183,18 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   };
 
   if (!isTtsModelKey(body.modelKey)) {
-    send({ type: 'chapter_failed', errorReason: 'modelKey must be a supported TTS model id (e.g. coqui-xtts-v2, gemini-2.5-flash).' });
+    send({
+      type: 'chapter_failed',
+      errorReason:
+        'modelKey must be a supported TTS model id (e.g. coqui-xtts-v2, gemini-2.5-flash).',
+    });
     return res.end();
   }
   const modelKey: TtsModelKey = body.modelKey;
   const engine = engineForModelKey(modelKey);
   const force = body.force === true;
   const requestedIds = Array.isArray(body.chapterIds)
-    ? (body.chapterIds.filter(n => typeof n === 'number' && Number.isInteger(n)) as number[])
+    ? (body.chapterIds.filter((n) => typeof n === 'number' && Number.isInteger(n)) as number[])
     : null;
 
   let provider;
@@ -200,13 +217,19 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      we double-check server-side so a stale URL doesn't kick off a bad run. */
   const cast = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
   if (!cast?.characters?.length) {
-    send({ type: 'chapter_failed', errorReason: 'Cast not confirmed yet — open the cast view first.' });
+    send({
+      type: 'chapter_failed',
+      errorReason: 'Cast not confirmed yet — open the cast view first.',
+    });
     return res.end();
   }
 
   const analysis = await loadAnalysisCache(state.manuscriptId);
   if (!analysis.chapters || Object.keys(analysis.chapters).length === 0) {
-    send({ type: 'chapter_failed', errorReason: 'No analysed sentences cached for this book. Re-run analysis first.' });
+    send({
+      type: 'chapter_failed',
+      errorReason: 'No analysed sentences cached for this book. Re-run analysis first.',
+    });
     return res.end();
   }
 
@@ -248,7 +271,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      are always skipped — even an explicit requestedIds=[...] that lists an
      excluded chapter is filtered out, since generating audio for an
      excluded chapter would silently undo the user's choice. */
-  const targetChapters = state.chapters.filter(c => {
+  const targetChapters = state.chapters.filter((c) => {
     if (c.excluded) return false;
     if (requestedIds && !requestedIds.includes(c.id)) return false;
     if (force) return true;
@@ -387,7 +410,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            silent for the entire duration of each call. */
         onGroupStart: ({ group, totalGroups }) => {
           const firstSentenceId = group.sentenceIds[0];
-          const positional = sentences.findIndex(s => s.id === firstSentenceId);
+          const positional = sentences.findIndex((s) => s.id === firstSentenceId);
           /* progress reports the lower bound for this group — group.index/totalGroups
              rather than (index+1)/total — so the bar doesn't visibly snap forward
              at start and then sit still while the call runs. */
@@ -407,7 +430,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           const lastSentenceId = group.sentenceIds[group.sentenceIds.length - 1];
           /* currentLine is positional; clamp to sentences.length so the UI's
              "line N of M" reads naturally even when sentence ids aren't 1..N. */
-          const positional = sentences.findIndex(s => s.id === lastSentenceId);
+          const positional = sentences.findIndex((s) => s.id === lastSentenceId);
           const tick = {
             chapterId: chapter.id,
             characterId: group.characterId,
@@ -447,7 +470,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          actually spoke in this chapter — narrows the snapshot to the
          characters the drift detector cares about and avoids bloating the
          segments file with the full cast on tiny chapters. */
-      const speakingIds = new Set(result.segments.map(s => s.characterId));
+      const speakingIds = new Set(result.segments.map((s) => s.characterId));
       const characterSnapshots: Record<string, CharacterSnapshot> = {};
       for (const c of cast.characters) {
         if (!speakingIds.has(c.id)) continue;
@@ -460,9 +483,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           /* Sorted for stable comparison — the analyzer's attribute order
              isn't deterministic across runs, so without the sort an
              order-only change would look like drift to the detector. */
-          attributes: Array.isArray(c.attributes) && c.attributes.length
-            ? [...c.attributes].sort((a, b) => a.localeCompare(b))
-            : undefined,
+          attributes:
+            Array.isArray(c.attributes) && c.attributes.length
+              ? [...c.attributes].sort((a, b) => a.localeCompare(b))
+              : undefined,
         };
       }
 
@@ -498,7 +522,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         const formatted = formatDuration(result.durationSec);
         const next: BookStateJson = {
           ...prev,
-          chapters: prev.chapters.map(c =>
+          chapters: prev.chapters.map((c) =>
             c.id === chapter.id
               ? {
                   ...c,
@@ -597,4 +621,3 @@ function formatDuration(totalSec: number): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
-

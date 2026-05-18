@@ -17,9 +17,9 @@ import { useLocalAnalyzerGuard } from './use-local-analyzer-guard';
 function makeStore(opts: { selectedModel: string; activeStream: ActiveStreamSnapshot | null }) {
   const store = configureStore({
     reducer: {
-      ui:       uiSlice.reducer,
+      ui: uiSlice.reducer,
       chapters: chaptersSlice.reducer,
-      library:  librarySlice.reducer,
+      library: librarySlice.reducer,
     },
   });
   store.dispatch(uiSlice.actions.setSelectedModel(opts.selectedModel));
@@ -53,7 +53,11 @@ describe('useLocalAnalyzerGuard', () => {
   it('passes through immediately when the user has a Gemini engine selected', () => {
     const store = makeStore({ selectedModel: 'gemini-2.5-flash', activeStream: liveSnapshot });
     const proceed = vi.fn();
-    render(<Provider store={store}><Harness onProceed={proceed}/></Provider>);
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} />
+      </Provider>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
 
@@ -65,7 +69,11 @@ describe('useLocalAnalyzerGuard', () => {
   it('passes through immediately when a local engine is selected but no generation is active', () => {
     const store = makeStore({ selectedModel: 'qwen3.5:4b', activeStream: null });
     const proceed = vi.fn();
-    render(<Provider store={store}><Harness onProceed={proceed}/></Provider>);
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} />
+      </Provider>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
 
@@ -76,7 +84,11 @@ describe('useLocalAnalyzerGuard', () => {
   it('opens the confirm modal when local engine is selected AND a stream is active; Confirm pauses then proceeds', () => {
     const store = makeStore({ selectedModel: 'qwen3.5:4b', activeStream: liveSnapshot });
     const proceed = vi.fn();
-    render(<Provider store={store}><Harness onProceed={proceed}/></Provider>);
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} />
+      </Provider>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
 
@@ -100,7 +112,11 @@ describe('useLocalAnalyzerGuard', () => {
   it('opens the modal and Cancel closes it without dispatching setPaused or running proceed', () => {
     const store = makeStore({ selectedModel: 'qwen3.5:9b', activeStream: liveSnapshot });
     const proceed = vi.fn();
-    render(<Provider store={store}><Harness onProceed={proceed}/></Provider>);
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} />
+      </Provider>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
     expect(screen.getByText('Pause audio generation to analyse?')).toBeInTheDocument();
@@ -114,7 +130,11 @@ describe('useLocalAnalyzerGuard', () => {
 
   it('falls back to the bookId in the body when the library has no matching entry', () => {
     const store = makeStore({ selectedModel: 'llama3.1:8b', activeStream: liveSnapshot });
-    render(<Provider store={store}><Harness onProceed={vi.fn()}/></Provider>);
+    render(
+      <Provider store={store}>
+        <Harness onProceed={vi.fn()} />
+      </Provider>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
     /* The bookId 'keefe_book' is rendered as the fallback identifier

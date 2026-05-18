@@ -37,14 +37,15 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { BookStateJson } from '../workspace/scan.js';
-import {
-  resolveVoiceAssignment,
-  type TtsVoiceAssignment,
-} from '../tts/voice-mapping.js';
+import { resolveVoiceAssignment, type TtsVoiceAssignment } from '../tts/voice-mapping.js';
 import { gradientForTtsVoice } from '../tts/voice-palette.js';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine } from '../tts/index.js';
-import { listBaseVoices, invalidateBaseVoiceCache, type BaseVoiceEntry } from '../tts/base-voices.js';
+import {
+  listBaseVoices,
+  invalidateBaseVoiceCache,
+  type BaseVoiceEntry,
+} from '../tts/base-voices.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 
 export const voicesRouter = Router();
@@ -115,9 +116,11 @@ function listDirs(path: string): string[] {
   if (!existsSync(path)) return [];
   try {
     return readdirSync(path, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => d.name);
-  } catch { return []; }
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
 }
 
 async function loadVoicesMeta(): Promise<VoicesMetaJson> {
@@ -127,7 +130,8 @@ async function loadVoicesMeta(): Promise<VoicesMetaJson> {
 }
 
 function parseEngine(value: unknown): TtsEngine {
-  if (value === 'gemini' || value === 'coqui' || value === 'piper' || value === 'kokoro') return value;
+  if (value === 'gemini' || value === 'coqui' || value === 'piper' || value === 'kokoro')
+    return value;
   return 'coqui';
 }
 
@@ -140,7 +144,10 @@ function normaliseSeries(name: string): string | null {
   return name;
 }
 
-async function aggregateVoices(currentBookId: string | undefined, engine: TtsEngine): Promise<DerivedVoice[]> {
+async function aggregateVoices(
+  currentBookId: string | undefined,
+  engine: TtsEngine,
+): Promise<DerivedVoice[]> {
   ensureWorkspace();
   const meta = await loadVoicesMeta();
   const pinned = new Set(meta.pinned);
@@ -166,9 +173,7 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
           if (!id) continue;
           const overrideMap = c.overrideTtsVoices ?? null;
           const overrideForEngine = overrideMap?.[engine] ?? null;
-          const legacyShape = overrideForEngine
-            ? { engine, name: overrideForEngine.name }
-            : null;
+          const legacyShape = overrideForEngine ? { engine, name: overrideForEngine.name } : null;
           const existing = acc.get(id);
           if (existing) {
             existing.books.add(state.bookId);
@@ -186,8 +191,9 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
                cast.json), but if they happen, first-seen wins per
                engine slot. */
             if (overrideMap) {
-              const merged: Partial<Record<TtsEngine, { name: string }>> =
-                { ...(existing.overrideTtsVoices ?? {}) };
+              const merged: Partial<Record<TtsEngine, { name: string }>> = {
+                ...(existing.overrideTtsVoices ?? {}),
+              };
               for (const [eng, val] of Object.entries(overrideMap)) {
                 const e = eng as TtsEngine;
                 if (val?.name && !merged[e]?.name) merged[e] = { name: val.name };
@@ -247,7 +253,8 @@ async function aggregateVoices(currentBookId: string | undefined, engine: TtsEng
 
 voicesRouter.get('/', async (req: Request, res: Response) => {
   try {
-    const currentBookId = typeof req.query.currentBookId === 'string' ? req.query.currentBookId : undefined;
+    const currentBookId =
+      typeof req.query.currentBookId === 'string' ? req.query.currentBookId : undefined;
     const engine = parseEngine(req.query.engine);
     const voices = await aggregateVoices(currentBookId, engine);
     res.json({ voices });
@@ -318,7 +325,9 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
     ensureWorkspace();
     const updates = await applyOverrideToCastFiles(voiceId, parsed);
     if (updates === 0) {
-      return res.status(404).json({ error: `No character with voiceId "${voiceId}" found in any confirmed cast.` });
+      return res
+        .status(404)
+        .json({ error: `No character with voiceId "${voiceId}" found in any confirmed cast.` });
     }
     res.status(204).end();
   } catch (e) {
@@ -327,12 +336,20 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
   }
 });
 
-function parseOverrideField(value: unknown): { engine: TtsEngine; name: string } | null | 'invalid' {
+function parseOverrideField(
+  value: unknown,
+): { engine: TtsEngine; name: string } | null | 'invalid' {
   if (value === null) return null;
   if (typeof value !== 'object' || value === null) return 'invalid';
   const v = value as { engine?: unknown; name?: unknown };
   if (typeof v.engine !== 'string' || typeof v.name !== 'string') return 'invalid';
-  if (v.engine !== 'coqui' && v.engine !== 'gemini' && v.engine !== 'piper' && v.engine !== 'kokoro') return 'invalid';
+  if (
+    v.engine !== 'coqui' &&
+    v.engine !== 'gemini' &&
+    v.engine !== 'piper' &&
+    v.engine !== 'kokoro'
+  )
+    return 'invalid';
   if (v.name.trim().length === 0) return 'invalid';
   return { engine: v.engine, name: v.name.trim() };
 }

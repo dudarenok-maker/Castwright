@@ -57,25 +57,34 @@ vi.mock('../lib/api', () => ({
        resident" — that satisfies AnalysingView's isAnalyzerReady gate
        so the analysis useEffect actually fires (analyseMock gets called),
        which is what these assertions key off. */
-    getOllamaHealth:   () => Promise.resolve({ status: 'reachable', url: '(test)', models: ['qwen3.5:4b'], expectedModel: 'qwen3.5:4b', modelPulled: true, resident: ['qwen3.5:4b'], modelResident: true }),
-    getSidecarHealth:  () => Promise.resolve({ status: 'unreachable', url: '(test)' }),
-    loadSidecar:       () => Promise.resolve({ status: 'idle' }),
-    unloadSidecar:     () => Promise.resolve({ status: 'idle' }),
-    loadAnalyzer:      () => Promise.resolve({ status: 'ready' }),
-    unloadAnalyzer:    () => Promise.resolve({ status: 'unloaded' }),
+    getOllamaHealth: () =>
+      Promise.resolve({
+        status: 'reachable',
+        url: '(test)',
+        models: ['qwen3.5:4b'],
+        expectedModel: 'qwen3.5:4b',
+        modelPulled: true,
+        resident: ['qwen3.5:4b'],
+        modelResident: true,
+      }),
+    getSidecarHealth: () => Promise.resolve({ status: 'unreachable', url: '(test)' }),
+    loadSidecar: () => Promise.resolve({ status: 'idle' }),
+    unloadSidecar: () => Promise.resolve({ status: 'idle' }),
+    loadAnalyzer: () => Promise.resolve({ status: 'ready' }),
+    unloadAnalyzer: () => Promise.resolve({ status: 'unloaded' }),
     /* AnalysingView fetches book-state on mount to hydrate the
        per-chapter failed list. These tests don't exercise that surface;
        reject so the catch path silently skips hydration. */
-    getBookState:      () => Promise.reject(new Error('not mocked')),
+    getBookState: () => Promise.reject(new Error('not mocked')),
     /* Same idea for the dropped-quotes panel — it fetches on mount.
        Resolve with an empty envelope so the panel renders nothing
        and these route tests stay focused on manuscriptId derivation. */
-    getDroppedQuotes:  () => Promise.resolve({ manuscriptId: 'm1', batches: [] }),
+    getDroppedQuotes: () => Promise.resolve({ manuscriptId: 'm1', batches: [] }),
     /* GenerationView's ChapterSegmentStrip lazy-fetches segments for
        done chapters when their row is expanded. Never resolve so the
        state update doesn't flush outside React's `act()` after a test
        asserts. */
-    getChapterAudio:   () => new Promise(() => {}),
+    getChapterAudio: () => new Promise(() => {}),
   },
   AnalysisError: class extends Error {
     code = 'unknown';
@@ -90,16 +99,16 @@ void appRouter;
 function makeStore() {
   return configureStore({
     reducer: {
-      ui:         uiSlice.reducer,
-      cast:       castSlice.reducer,
-      chapters:   chaptersSlice.reducer,
-      revisions:  revisionsSlice.reducer,
+      ui: uiSlice.reducer,
+      cast: castSlice.reducer,
+      chapters: chaptersSlice.reducer,
+      revisions: revisionsSlice.reducer,
       manuscript: manuscriptSlice.reducer,
-      library:    librarySlice.reducer,
-      voices:     voicesSlice.reducer,
-      changeLog:  changeLogSlice.reducer,
-      account:    accountSlice.reducer,
-      bookMeta:   bookMetaSlice.reducer,
+      library: librarySlice.reducer,
+      voices: voicesSlice.reducer,
+      changeLog: changeLogSlice.reducer,
+      account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
     },
   });
 }
@@ -130,7 +139,7 @@ function renderAtAnalysing(store: ReturnType<typeof makeStore>) {
     <Provider store={store}>
       <MemoryRouter initialEntries={['/books/b1/analysing']}>
         <Routes>
-          <Route path="/books/:bookId/analysing" element={<AnalysingRoute/>}/>
+          <Route path="/books/:bookId/analysing" element={<AnalysingRoute />} />
         </Routes>
       </MemoryRouter>
     </Provider>,
@@ -153,13 +162,15 @@ describe('AnalysingRoute manuscriptId derivation', () => {
        resets stage.manuscriptId to null; Layout's book-state hydration
        later seeds the manuscript slice from state.json. */
     const store = makeStore();
-    store.dispatch(manuscriptActions.hydrateFromBookState({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      state: { bookId: 'b1', manuscriptId: 'mns-real', title: 'Bonus Keefe Story' } as any,
-      sentences: null,
-      wordCount: 2440,
-      format: 'plaintext',
-    }));
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        state: { bookId: 'b1', manuscriptId: 'mns-real', title: 'Bonus Keefe Story' } as any,
+        sentences: null,
+        wordCount: 2440,
+        format: 'plaintext',
+      }),
+    );
 
     renderAtAnalysing(store);
 
@@ -179,19 +190,27 @@ describe('AnalysingRoute manuscriptId derivation', () => {
        per-book hydration GET hasn't landed yet. library.books[i].manuscriptId
        is the only id in flight; AnalysingRoute should still feed it through. */
     const store = makeStore();
-    store.dispatch(libraryActions.hydrate({
-      authors: [{
-        name: 'Shannon Messenger',
-        series: [{ name: 'Standalones', books: [makeBook({ manuscriptId: 'mns-from-library' })] }],
-      }],
-    }));
+    store.dispatch(
+      libraryActions.hydrate({
+        authors: [
+          {
+            name: 'Shannon Messenger',
+            series: [
+              { name: 'Standalones', books: [makeBook({ manuscriptId: 'mns-from-library' })] },
+            ],
+          },
+        ],
+      }),
+    );
 
     renderAtAnalysing(store);
 
     expect(screen.queryByText(/No manuscript loaded/i)).toBeNull();
     const startBtn = await screen.findByRole('button', { name: /start analysis/i });
     fireEvent.click(startBtn);
-    await waitFor(() => expect(analyseMock).toHaveBeenCalledWith('mns-from-library', expect.any(Object)));
+    await waitFor(() =>
+      expect(analyseMock).toHaveBeenCalledWith('mns-from-library', expect.any(Object)),
+    );
   });
 
   it('uses the upload-provided manuscriptId after manuscriptUploaded fires', async () => {
@@ -214,20 +233,24 @@ describe('AnalysingRoute manuscriptId derivation', () => {
     const store = makeStore();
     store.dispatch(uiActions.startNewBook());
     store.dispatch(uiActions.manuscriptUploaded({ bookId: 'b1', manuscriptId: 'mns-from-upload' }));
-    store.dispatch(manuscriptActions.hydrateFromBookState({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      state: { bookId: 'b1', manuscriptId: 'mns-from-upload', title: 'Bonus Keefe Story' } as any,
-      sentences: null,
-      wordCount: 2440,
-      format: 'plaintext',
-    }));
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        state: { bookId: 'b1', manuscriptId: 'mns-from-upload', title: 'Bonus Keefe Story' } as any,
+        sentences: null,
+        wordCount: 2440,
+        format: 'plaintext',
+      }),
+    );
 
     renderAtAnalysing(store);
 
     expect(screen.queryByText(/No manuscript loaded/i)).toBeNull();
     const startBtn = await screen.findByRole('button', { name: /start analysis/i });
     fireEvent.click(startBtn);
-    await waitFor(() => expect(analyseMock).toHaveBeenCalledWith('mns-from-upload', expect.any(Object)));
+    await waitFor(() =>
+      expect(analyseMock).toHaveBeenCalledWith('mns-from-upload', expect.any(Object)),
+    );
   });
 
   it('still surfaces the "No manuscript loaded" banner when every source is empty', () => {
@@ -261,15 +284,21 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     const store = makeStore();
     /* Seed the library with one cast_pending book so the BooksRoute has
        a card to render and a target for the re-parse menu. */
-    store.dispatch(libraryActions.hydrate({
-      authors: [{
-        name: 'Shannon Messenger',
-        series: [{
-          name: 'Standalones',
-          books: [makeBook({ status: 'cast_pending', manuscriptId: 'mns-real' })],
-        }],
-      }],
-    }));
+    store.dispatch(
+      libraryActions.hydrate({
+        authors: [
+          {
+            name: 'Shannon Messenger',
+            series: [
+              {
+                name: 'Standalones',
+                books: [makeBook({ status: 'cast_pending', manuscriptId: 'mns-real' })],
+              },
+            ],
+          },
+        ],
+      }),
+    );
     /* Stale state from a prior open: cast has 24 characters, manuscript
        slice still pins its manuscriptId+title. This is exactly the state
        layout.tsx leaves behind after the user navigates back to the books
@@ -280,13 +309,15 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
       voiceState: 'generated',
     })) as Character[];
     store.dispatch(castActions.setCharacters(staleChars));
-    store.dispatch(manuscriptActions.hydrateFromBookState({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      state: { bookId: 'b1', manuscriptId: 'mns-real', title: 'Bonus Keefe Story' } as any,
-      sentences: null,
-      wordCount: 100000,
-      format: 'plaintext',
-    }));
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        state: { bookId: 'b1', manuscriptId: 'mns-real', title: 'Bonus Keefe Story' } as any,
+        sentences: null,
+        wordCount: 100000,
+        format: 'plaintext',
+      }),
+    );
     return store;
   }
 
@@ -312,13 +343,15 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
         dismissNotices: vi.fn(),
       },
     };
-    function OutletShim() { return <Outlet context={ctx}/>; }
+    function OutletShim() {
+      return <Outlet context={ctx} />;
+    }
     const utils = render(
       <Provider store={store}>
         <MemoryRouter initialEntries={['/']}>
           <Routes>
-            <Route element={<OutletShim/>}>
-              <Route path="/" element={<BooksRoute/>}/>
+            <Route element={<OutletShim />}>
+              <Route path="/" element={<BooksRoute />} />
             </Route>
           </Routes>
         </MemoryRouter>
@@ -343,10 +376,17 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
       chapters: [],
     });
     getLibraryMock.mockResolvedValue({
-      authors: [{
-        name: 'Shannon Messenger',
-        series: [{ name: 'Standalones', books: [makeBook({ status: 'cast_pending', manuscriptId: 'mns-real' })] }],
-      }],
+      authors: [
+        {
+          name: 'Shannon Messenger',
+          series: [
+            {
+              name: 'Standalones',
+              books: [makeBook({ status: 'cast_pending', manuscriptId: 'mns-real' })],
+            },
+          ],
+        },
+      ],
     });
     getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
 
@@ -385,15 +425,21 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
 
   function makeLibStore(bookOver: Partial<LibraryBook> = {}) {
     const store = makeStore();
-    store.dispatch(libraryActions.hydrate({
-      authors: [{
-        name: 'Shannon Messenger',
-        series: [{
-          name: 'Standalones',
-          books: [makeBook({ status: 'complete', manuscriptId: 'mns-real', ...bookOver })],
-        }],
-      }],
-    }));
+    store.dispatch(
+      libraryActions.hydrate({
+        authors: [
+          {
+            name: 'Shannon Messenger',
+            series: [
+              {
+                name: 'Standalones',
+                books: [makeBook({ status: 'complete', manuscriptId: 'mns-real', ...bookOver })],
+              },
+            ],
+          },
+        ],
+      }),
+    );
     return store;
   }
 
@@ -415,13 +461,15 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
         dismissNotices: vi.fn(),
       },
     };
-    function OutletShim() { return <Outlet context={ctx}/>; }
+    function OutletShim() {
+      return <Outlet context={ctx} />;
+    }
     const utils = render(
       <Provider store={store}>
         <MemoryRouter initialEntries={['/']}>
           <Routes>
-            <Route element={<OutletShim/>}>
-              <Route path="/" element={<BooksRoute/>}/>
+            <Route element={<OutletShim />}>
+              <Route path="/" element={<BooksRoute />} />
             </Route>
           </Routes>
         </MemoryRouter>
@@ -430,18 +478,22 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
     return { ...utils, showInfo, showError };
   }
 
-  it('opens the modal seeded with the book\'s current title, then saves through api.putBookState and refreshes the library', async () => {
+  it("opens the modal seeded with the book's current title, then saves through api.putBookState and refreshes the library", async () => {
     const store = makeLibStore();
     getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
     putBookStateMock.mockResolvedValue(undefined);
     getLibraryMock.mockResolvedValue({
-      authors: [{
-        name: 'Shannon Messenger',
-        series: [{
-          name: 'Standalones',
-          books: [makeBook({ status: 'complete', manuscriptId: 'mns-real', title: 'Renamed' })],
-        }],
-      }],
+      authors: [
+        {
+          name: 'Shannon Messenger',
+          series: [
+            {
+              name: 'Standalones',
+              books: [makeBook({ status: 'complete', manuscriptId: 'mns-real', title: 'Renamed' })],
+            },
+          ],
+        },
+      ],
     });
 
     renderBooks(store);
@@ -450,13 +502,13 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
     fireEvent.click(screen.getByRole('button', { name: /Edit details/i }));
 
     /* Modal seeded with the existing title. */
-    const titleInput = await screen.findByLabelText('Title') as HTMLInputElement;
+    const titleInput = (await screen.findByLabelText('Title')) as HTMLInputElement;
     expect(titleInput.value).toBe('Bonus Keefe Story');
 
     /* Edit the title. The Standalone checkbox is already checked
        (the seed sets isStandalone: true), so series/position stay
        disabled — we exercise only the title rename path here. */
-    fireEvent.change(titleInput, { target: { value: 'Bonus Keefe Story (Director\'s Cut)' } });
+    fireEvent.change(titleInput, { target: { value: "Bonus Keefe Story (Director's Cut)" } });
     fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
 
     await waitFor(() => {
@@ -465,7 +517,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
     expect(putBookStateMock).toHaveBeenCalledWith('b1', {
       slice: 'state',
       patch: expect.objectContaining({
-        title: 'Bonus Keefe Story (Director\'s Cut)',
+        title: "Bonus Keefe Story (Director's Cut)",
         author: 'Shannon Messenger',
         isStandalone: true,
         seriesPosition: null,
@@ -522,7 +574,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
     fireEvent.click(screen.getByLabelText('Book options'));
     fireEvent.click(screen.getByRole('button', { name: /Edit details/i }));
 
-    const titleInput = await screen.findByLabelText('Title') as HTMLInputElement;
+    const titleInput = (await screen.findByLabelText('Title')) as HTMLInputElement;
     fireEvent.change(titleInput, { target: { value: 'Renamed' } });
     fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
 
@@ -543,17 +595,32 @@ describe('ChangelogRoute', () => {
   it('fetches workspace events and renders them with their book subtitle', async () => {
     const events: ChangeLogEvent[] = [
       {
-        id: 1, at: '2026-05-13T15:00:00.000Z', ts: 'Just now', date: 'today',
-        type: 'regenerate', title: 'Regenerated Chapter 3',
-        note: 'Reason: voice tuning updated.', actor: 'you',
-        chapterId: 3, revertible: true,
-        bookId: 'sb', bookTitle: 'Solway Bay', author: 'Demo',
+        id: 1,
+        at: '2026-05-13T15:00:00.000Z',
+        ts: 'Just now',
+        date: 'today',
+        type: 'regenerate',
+        title: 'Regenerated Chapter 3',
+        note: 'Reason: voice tuning updated.',
+        actor: 'you',
+        chapterId: 3,
+        revertible: true,
+        bookId: 'sb',
+        bookTitle: 'Solway Bay',
+        author: 'Demo',
       },
       {
-        id: 2, at: '2026-05-13T12:00:00.000Z', ts: 'earlier', date: 'today',
-        type: 'cast_confirm', title: 'Confirmed the cast',
-        note: '6 characters.', actor: 'you',
-        bookId: 'ns', bookTitle: 'Northern Star', author: 'Demo',
+        id: 2,
+        at: '2026-05-13T12:00:00.000Z',
+        ts: 'earlier',
+        date: 'today',
+        type: 'cast_confirm',
+        title: 'Confirmed the cast',
+        note: '6 characters.',
+        actor: 'you',
+        bookId: 'ns',
+        bookTitle: 'Northern Star',
+        author: 'Demo',
       },
     ];
     workspaceChangelogMock.mockResolvedValue({
@@ -568,7 +635,7 @@ describe('ChangelogRoute', () => {
       <Provider store={store}>
         <MemoryRouter initialEntries={['/log']}>
           <Routes>
-            <Route path="/log" element={<ChangelogRoute/>}/>
+            <Route path="/log" element={<ChangelogRoute />} />
           </Routes>
         </MemoryRouter>
       </Provider>,
@@ -601,36 +668,58 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
      was already populated). Fix: anchor the manuscript slice to a
      bookId and prefer the library entry's title whenever the slice
      points at a different book. */
-  it('renders Book B\'s title on Book B\'s /generate even when the manuscript slice is still pinned to Book A', () => {
+  it("renders Book B's title on Book B's /generate even when the manuscript slice is still pinned to Book A", () => {
     const store = makeStore();
     /* Library has both books — the user is meant to see Book B's title. */
-    store.dispatch(libraryActions.hydrate({
-      authors: [{
-        name: 'Demo Author',
-        series: [{
-          name: 'Standalones',
-          books: [
-            makeBook({ bookId: 'b1', title: 'Bonus Keefe Story', manuscriptId: 'mns-a', status: 'analysing' }),
-            makeBook({ bookId: 'b2', title: 'Mystery Novel',     manuscriptId: 'mns-b', status: 'generating' }),
-          ],
-        }],
-      }],
-    }));
+    store.dispatch(
+      libraryActions.hydrate({
+        authors: [
+          {
+            name: 'Demo Author',
+            series: [
+              {
+                name: 'Standalones',
+                books: [
+                  makeBook({
+                    bookId: 'b1',
+                    title: 'Bonus Keefe Story',
+                    manuscriptId: 'mns-a',
+                    status: 'analysing',
+                  }),
+                  makeBook({
+                    bookId: 'b2',
+                    title: 'Mystery Novel',
+                    manuscriptId: 'mns-b',
+                    status: 'generating',
+                  }),
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
     /* Manuscript slice still holds Book A's data because the user just
        came from the analysing view for Book A. */
-    store.dispatch(manuscriptActions.hydrateFromBookState({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      state: { bookId: 'b1', manuscriptId: 'mns-a', title: 'Bonus Keefe Story' } as any,
-      sentences: null,
-      wordCount: 1000,
-      format: 'plaintext',
-    }));
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        state: { bookId: 'b1', manuscriptId: 'mns-a', title: 'Bonus Keefe Story' } as any,
+        sentences: null,
+        wordCount: 1000,
+        format: 'plaintext',
+      }),
+    );
     /* Need at least one chapter row in the chapters slice or
        GenerationView's allComplete math + "X of Y complete" header
        wouldn't have anything to render. */
     const chapter: Chapter = {
-      id: 1, title: 'Chapter 1', duration: '00:30',
-      state: 'queued', progress: 0, characters: {},
+      id: 1,
+      title: 'Chapter 1',
+      duration: '00:30',
+      state: 'queued',
+      progress: 0,
+      characters: {},
     };
     store.dispatch(chaptersActions.setChapters([chapter]));
 
@@ -638,7 +727,7 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
       <Provider store={store}>
         <MemoryRouter initialEntries={['/books/b2/generate']}>
           <Routes>
-            <Route path="/books/:bookId/:view" element={<ReadyRoute/>}/>
+            <Route path="/books/:bookId/:view" element={<ReadyRoute />} />
           </Routes>
         </MemoryRouter>
       </Provider>,

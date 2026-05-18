@@ -50,7 +50,13 @@ describe('uiSlice — openBook status→stage routing', () => {
       baseState({ kind: 'books' }),
       uiActions.openBook({ id: 'ns', status: 'complete' }),
     );
-    expect(next.stage).toMatchObject({ kind: 'ready', bookId: 'ns', view: 'listen', currentChapterId: 3, openProfileId: null });
+    expect(next.stage).toMatchObject({
+      kind: 'ready',
+      bookId: 'ns',
+      view: 'listen',
+      currentChapterId: 3,
+      openProfileId: null,
+    });
   });
 
   it('generating → ready stage on generate view', () => {
@@ -72,12 +78,16 @@ describe('uiSlice — openBook status→stage routing', () => {
 
 describe('uiSlice — stage transition guards', () => {
   it('manuscriptUploaded only fires from upload stage', () => {
-    const fromUpload = uiSlice.reducer(baseState({ kind: 'upload' }),
-      uiActions.manuscriptUploaded({ bookId: 'ns', manuscriptId: 'm1' }));
+    const fromUpload = uiSlice.reducer(
+      baseState({ kind: 'upload' }),
+      uiActions.manuscriptUploaded({ bookId: 'ns', manuscriptId: 'm1' }),
+    );
     expect(fromUpload.stage).toEqual({ kind: 'analysing', bookId: 'ns', manuscriptId: 'm1' });
 
-    const fromBooks = uiSlice.reducer(baseState({ kind: 'books' }),
-      uiActions.manuscriptUploaded({ bookId: 'ns', manuscriptId: 'm1' }));
+    const fromBooks = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.manuscriptUploaded({ bookId: 'ns', manuscriptId: 'm1' }),
+    );
     expect(fromBooks.stage).toEqual({ kind: 'books' });
   });
 
@@ -88,8 +98,10 @@ describe('uiSlice — stage transition guards', () => {
     );
     expect(fromAnalysing.stage).toEqual({ kind: 'confirm', bookId: 'ns', openProfileId: null });
 
-    const fromUpload = uiSlice.reducer(baseState({ kind: 'upload' }),
-      uiActions.analysisComplete({ bookId: 'ns' }));
+    const fromUpload = uiSlice.reducer(
+      baseState({ kind: 'upload' }),
+      uiActions.analysisComplete({ bookId: 'ns' }),
+    );
     expect(fromUpload.stage).toEqual({ kind: 'upload' });
   });
 
@@ -98,7 +110,12 @@ describe('uiSlice — stage transition guards', () => {
       baseState({ kind: 'confirm', bookId: 'ns', openProfileId: null }),
       uiActions.confirmCast(),
     );
-    expect(fromConfirm.stage).toMatchObject({ kind: 'ready', bookId: 'ns', view: 'manuscript', currentChapterId: 3 });
+    expect(fromConfirm.stage).toMatchObject({
+      kind: 'ready',
+      bookId: 'ns',
+      view: 'manuscript',
+      currentChapterId: 3,
+    });
 
     const fromAnalysing = uiSlice.reducer(
       baseState({ kind: 'analysing', bookId: 'ns', manuscriptId: 'm1' }),
@@ -147,7 +164,13 @@ describe('uiSlice — setOpenProfileId across stages', () => {
   });
 
   it('writes openProfileId on the ready stage', () => {
-    const start = baseState({ kind: 'ready', bookId: 'ns', view: 'cast', currentChapterId: 3, openProfileId: null });
+    const start = baseState({
+      kind: 'ready',
+      bookId: 'ns',
+      view: 'cast',
+      currentChapterId: 3,
+      openProfileId: null,
+    });
     const next = uiSlice.reducer(start, uiActions.setOpenProfileId('halloran'));
     expect(next.stage).toMatchObject({ kind: 'ready', openProfileId: 'halloran' });
   });
@@ -168,7 +191,7 @@ describe('uiSlice — seed defaults from account settings', () => {
       type: 'account/fetch/fulfilled',
       payload: {
         defaultAnalysisModel: 'gemini-3-flash-preview',
-        defaultTtsModelKey:   'gemini-2.5-flash',
+        defaultTtsModelKey: 'gemini-2.5-flash',
       },
     });
     expect(next.selectedModel).toBe('gemini-3-flash-preview');
@@ -183,7 +206,7 @@ describe('uiSlice — seed defaults from account settings', () => {
       type: 'account/fetch/fulfilled',
       payload: {
         defaultAnalysisModel: 'gemma-4-31b-it',
-        defaultTtsModelKey:   'coqui-xtts-v2',
+        defaultTtsModelKey: 'coqui-xtts-v2',
       },
     });
     expect(next.selectedModel).toBe('gemini-2.5-flash');
@@ -196,7 +219,7 @@ describe('uiSlice — seed defaults from account settings', () => {
       type: 'account/save/fulfilled',
       payload: {
         defaultAnalysisModel: 'gemini-3.1-flash-lite',
-        defaultTtsModelKey:   'gemini-3.1-flash',
+        defaultTtsModelKey: 'gemini-3.1-flash',
       },
     });
     expect(next.selectedModel).toBe('gemini-3.1-flash-lite');
@@ -206,7 +229,13 @@ describe('uiSlice — seed defaults from account settings', () => {
 
 describe('uiSlice — overlays do not perturb the stage', () => {
   it('setCurrentTrack updates currentTrack and leaves stage alone', () => {
-    const start = baseState({ kind: 'ready', bookId: 'ns', view: 'listen', currentChapterId: 3, openProfileId: null });
+    const start = baseState({
+      kind: 'ready',
+      bookId: 'ns',
+      view: 'listen',
+      currentChapterId: 3,
+      openProfileId: null,
+    });
     const next = uiSlice.reducer(start, uiActions.setCurrentTrack(5));
     expect(next.currentTrack).toBe(5);
     expect(next.stage).toEqual(start.stage);

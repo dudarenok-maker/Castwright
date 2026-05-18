@@ -87,14 +87,20 @@ const TONES: Record<ModelControlState, Tone> = {
   },
 };
 
-function labelFor(kind: ModelKind, state: ModelControlState, detail?: StreamingDetail, unreachableLabel?: string): ReactNode {
-  if (state === 'idle')        return `${kindNoun(kind)} idle`;
-  if (state === 'loading')     return `Loading ${kindNoun(kind).toLowerCase()}…`;
-  if (state === 'ready')       return `${kindNoun(kind)} ready`;
+function labelFor(
+  kind: ModelKind,
+  state: ModelControlState,
+  detail?: StreamingDetail,
+  unreachableLabel?: string,
+): ReactNode {
+  if (state === 'idle') return `${kindNoun(kind)} idle`;
+  if (state === 'loading') return `Loading ${kindNoun(kind).toLowerCase()}…`;
+  if (state === 'ready') return `${kindNoun(kind)} ready`;
   if (state === 'unreachable') return unreachableLabel ?? `${kindNoun(kind)} unavailable`;
   /* state === 'streaming' */
   if (!detail) return 'Streaming live';
-  const sinceText = detail.sinceLastSec > 8 ? `stalled · last chunk ${detail.sinceLastSec}s ago` : 'streaming live';
+  const sinceText =
+    detail.sinceLastSec > 8 ? `stalled · last chunk ${detail.sinceLastSec}s ago` : 'streaming live';
   const parts = [sinceText, detail.sizeText];
   if (detail.charsPerSec > 0) parts.push(`${detail.charsPerSec.toLocaleString()} chars/s`);
   return parts.join(' · ');
@@ -104,24 +110,42 @@ function kindNoun(kind: ModelKind): string {
   return kind === 'tts' ? 'TTS model' : 'Analyzer';
 }
 
-function actionFor(state: ModelControlState): { label: string; handler: 'load' | 'stop'; disabled: boolean } {
+function actionFor(state: ModelControlState): {
+  label: string;
+  handler: 'load' | 'stop';
+  disabled: boolean;
+} {
   switch (state) {
-    case 'idle':        return { label: 'Load model', handler: 'load', disabled: false };
-    case 'loading':     return { label: 'Loading…',   handler: 'load', disabled: true };
-    case 'ready':       return { label: 'Stop',       handler: 'stop', disabled: false };
-    case 'streaming':   return { label: 'Stop',       handler: 'stop', disabled: true };
-    case 'unreachable': return { label: 'Retry',      handler: 'load', disabled: false };
+    case 'idle':
+      return { label: 'Load model', handler: 'load', disabled: false };
+    case 'loading':
+      return { label: 'Loading…', handler: 'load', disabled: true };
+    case 'ready':
+      return { label: 'Stop', handler: 'stop', disabled: false };
+    case 'streaming':
+      return { label: 'Stop', handler: 'stop', disabled: true };
+    case 'unreachable':
+      return { label: 'Retry', handler: 'load', disabled: false };
   }
 }
 
-export function ModelControlPill({ kind, state, streamingDetail, onLoad, onStop, unreachableLabel }: Props) {
+export function ModelControlPill({
+  kind,
+  state,
+  streamingDetail,
+  onLoad,
+  onStop,
+  unreachableLabel,
+}: Props) {
   const tone = TONES[state];
   const action = actionFor(state);
   const ariaLabel = `${kindNoun(kind)} ${state}`;
   const dotStyle: CSSProperties | undefined = tone.pulse ? undefined : undefined;
   return (
     <span className="inline-flex items-center gap-2 flex-wrap" role="group" aria-label={ariaLabel}>
-      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold tabular-nums ${tone.pill}`}>
+      <span
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold tabular-nums ${tone.pill}`}
+      >
         <span
           className={`w-1.5 h-1.5 rounded-full ${tone.dot} ${tone.pulse ? 'animate-pulse' : ''}`}
           style={dotStyle}

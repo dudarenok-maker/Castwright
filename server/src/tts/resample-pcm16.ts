@@ -47,9 +47,8 @@ export function resamplePcm16(buf: Buffer, fromHz: number, toHz: number): Buffer
        belt-and-braces — for in-range input the interpolation can't exceed
        int16 limits — but defends against future callers passing data that
        was already saturated. */
-    const rounded = interpolated >= 0
-      ? Math.floor(interpolated + 0.5)
-      : Math.ceil(interpolated - 0.5);
+    const rounded =
+      interpolated >= 0 ? Math.floor(interpolated + 0.5) : Math.ceil(interpolated - 0.5);
     const clamped = Math.max(-32768, Math.min(32767, rounded));
     out.writeInt16LE(clamped, i * 2);
   }
