@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18 (post plan 51 ship):** Must 0 · Should 2 · Could 32 · Won't 9
+**Counts as of 2026-05-18 (post plan 52 commit):** Must 0 · Should 2 · Could 33 · Won't 9
 
 ---
 
@@ -381,6 +381,16 @@ Source: net-new (2026-05-18). Plan 49 (release packaging) ships with a Kokoro-on
 - _Key files:_ `src/views/account.tsx` (extend with Models section), new `src/components/ollama-install.tsx`, new `src/components/model-pull-status.tsx`, `server/src/routes/ollama-health.ts` (extend with `POST /pull`), new `server/src/ollama/install-bootstrap.ts`, new `server/tts-sidecar/scripts/install-coqui.{sh,ps1}`.
 - _Depends on:_ none structural — the Account UX seam exists from plan 49. Unparks the install-and-pull-from-UI subset of Won't #1 ("Auto-install Ollama / auto-pull models"); the headless-CI variant of Won't #1 stays parked.
 - _Benefit (user):_ closes the gap that plan 49's Kokoro-only install leaves. Today a deployer who wants Ollama or Coqui XTTS must drop to a terminal; this UX keeps the install + model-management flow entirely in-app, matching the deployer-first promise of plan 49.
+
+### 38. E2E coverage for the binary-upload flow (EPUB / PDF / MOBI / AZW3)
+
+Source: [`52-mobi-parsing.md`](features/52-mobi-parsing.md) Out-of-scope follow-up (2026-05-18). Plan 52 explicitly deferred this — EPUB and PDF have never had dedicated Playwright coverage either, and MOBI shouldn't be the exception that sets a new bar in the same PR that ships it.
+
+- _What:_ Add a single Playwright spec under `e2e/binary-upload.spec.ts` that drops each of the four binary fixtures (EPUB / PDF / MOBI / AZW3) onto `#/new` in mock mode and asserts the confirm-metadata screen renders with the expected title / chapter count. Wire it into `npm run test:e2e`. Fixtures: reuse `server/src/parsers/__fixtures__/sample.epub` for the EPUB case; generate a tiny MOBI/AZW3 either by checking in a small Project Gutenberg-derived file or by extending `scripts/gen-parser-fixtures.mjs` to call out to Calibre's `ebook-convert` (Calibre is a prerequisite, not bundled).
+- _Acceptance:_ `npm run test:e2e` includes the new spec; CI run in `verify` passes with the spec exercising all four formats. A regression like "MOBI parser threw on real-world files" gets caught browser-side, not just at the unit level.
+- _Key files:_ new `e2e/binary-upload.spec.ts`; possibly extend `scripts/gen-parser-fixtures.mjs` for MOBI/AZW3 generation (Calibre-dependent); `docs/features/52-mobi-parsing.md` "Test plan" section updates to cite the new spec.
+- _Depends on:_ plan 52 shipped (the parser must already accept MOBI/AZW3). Independent of the existing flaky e2e items (Could #20).
+- _Benefit (technical):_ binary parsers are the highest-risk seam in the upload flow — third-party libs (epub2 / pdf-parse / @lingo-reader/mobi-parser) have real-world quirks that unit tests with mocked libraries can't catch. Browser-level coverage locks the integration contract.
 
 ---
 
