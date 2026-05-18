@@ -19,6 +19,7 @@ installTimestamps();
 import express from 'express';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { mountFrontendStatic } from './frontend-static.js';
 import { fileURLToPath } from 'node:url';
 import { manuscriptsRouter } from './routes/manuscripts.js';
 import { analysisRouter } from './routes/analysis.js';
@@ -140,6 +141,23 @@ app.use('/api/voices', voicesRouter); // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter); // mounts POST /:voiceId/sample
 app.use('/api/sidecar', sidecarHealthRouter); // mounts GET /health
 app.use('/api/ollama', ollamaHealthRouter); // mounts GET /health (local LLM analyzer)
+
+/* Production-mode frontend serving. Helper resolves whether to mount based
+   on NODE_ENV=production OR the existence of dist/index.html. Mounted AFTER
+   every /api/* and /audio/* and /workspace/* route so the API can never be
+   shadowed by a static file. Hash-router SPA, so no `*` → index.html
+   fallback is needed. */
+{
+  const distDir = resolve(__dirname, '..', '..', 'dist');
+  const result = mountFrontendStatic(app, distDir);
+  if (result.mounted) {
+    // eslint-disable-next-line no-console
+    console.log(`[server] serving frontend bundle from ${result.distDir} (${result.reason})`);
+  } else if (process.env.NODE_ENV === 'production') {
+    // eslint-disable-next-line no-console
+    console.warn(`[server] frontend NOT mounted: ${result.reason}`);
+  }
+}
 
 const PORT = Number(process.env.PORT ?? 8080);
 

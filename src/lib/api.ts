@@ -2249,8 +2249,39 @@ async function realPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
   return res.json();
 }
 
+/* Plan 49 — dedicated endpoint for the Gemini API key. Kept off the general
+   PUT so a misaddressed payload can't leak the secret into an unrelated
+   field. The response is the same shape as GET /api/user/settings — the
+   slice swaps it in without a follow-up GET. */
+async function realPutGeminiKey(key: string | null): Promise<UserSettings> {
+  const res = await fetch('/api/user/settings/gemini-key', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key }),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Gemini key save failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
 async function mockGetUserSettings(): Promise<UserSettings> {
   await wait(50);
+  return { ...MOCK_USER_SETTINGS };
+}
+
+async function mockPutGeminiKey(key: string | null): Promise<UserSettings> {
+  await wait(50);
+  /* apiKeyStatus is marked readonly in the generated type, but the mock
+     needs to flip it from save to save. Rebuild the cached fixture via a
+     fresh object literal — the next mockGetUserSettings clones from this
+     reseeded value. */
+  const next: UserSettings = {
+    ...MOCK_USER_SETTINGS,
+    apiKeyStatus: key && key.trim().length > 0 ? 'set' : 'unset',
+  };
+  Object.assign(MOCK_USER_SETTINGS, next);
   return { ...MOCK_USER_SETTINGS };
 }
 
@@ -2553,6 +2584,7 @@ async function mockGetOllamaHealth(): Promise<OllamaHealth> {
 const real = {
   getUserSettings: realGetUserSettings,
   putUserSettings: realPutUserSettings,
+  putGeminiKey: realPutGeminiKey,
   getLibrary: realGetLibrary,
   getVoices: realGetVoices,
   setVoicePin: realSetVoicePin,
@@ -2673,6 +2705,7 @@ const real = {
 const mock = {
   getUserSettings: mockGetUserSettings,
   putUserSettings: mockPutUserSettings,
+  putGeminiKey: mockPutGeminiKey,
   getLibrary: mockGetLibrary,
   getVoices: mockGetVoices,
   setVoicePin: mockSetVoicePin,

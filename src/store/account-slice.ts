@@ -43,6 +43,16 @@ export const saveAccountSettings = createAsyncThunk<UserSettings, UserSettingsPa
   },
 );
 
+/* Plan 49 — dedicated save thunk for the Gemini API key. Pass `null` to
+   clear. Re-hydrates the slice from the server response so apiKeyStatus
+   flips immediately in the UI. */
+export const saveGeminiApiKey = createAsyncThunk<UserSettings, string | null>(
+  'account/saveGeminiKey',
+  async (key) => {
+    return api.putGeminiKey(key);
+  },
+);
+
 export const accountSlice = createSlice({
   name: 'account',
   initialState,
@@ -102,6 +112,20 @@ export const accountSlice = createSlice({
       .addCase(saveAccountSettings.rejected, (s, a) => {
         s.status = 'error';
         s.error = a.error.message ?? 'Failed to save account settings.';
+      })
+      .addCase(saveGeminiApiKey.pending, (s) => {
+        s.status = 'saving';
+        s.error = null;
+      })
+      .addCase(saveGeminiApiKey.fulfilled, (s, a) => {
+        Object.assign(s, a.payload);
+        s.status = 'idle';
+        s.error = null;
+        s.hydrated = true;
+      })
+      .addCase(saveGeminiApiKey.rejected, (s, a) => {
+        s.status = 'error';
+        s.error = a.error.message ?? 'Failed to save Gemini API key.';
       });
   },
 });

@@ -78,6 +78,15 @@ export const userSettingsSchema = z.object({
      Optional with a `true` default so legacy user-settings.json
      files load unchanged and a fresh install gets TTS-on-boot. */
   autoStartSidecar: z.boolean().optional(),
+  /* Plan 49 — UI-managed Gemini API key. Stored plaintext (same trust
+     model as server/.env, which is gitignored and single-user). The
+     env var GEMINI_API_KEY still wins when present (for CI / power
+     users); this field is the "I set it from the Account view" slot.
+     The general PUT /api/user/settings still strips this field (see
+     FORBIDDEN_KEYS) — the only sanctioned write path is
+     `writeGeminiApiKey()` invoked from the dedicated
+     PUT /api/user/settings/gemini-key endpoint. */
+  geminiApiKey: z.string().nullable().optional(),
 });
 
 export type UserSettings = z.infer<typeof userSettingsSchema>;
@@ -123,6 +132,9 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      defaultTtsModelKey. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   autoStartSidecar: true,
+  /* Plan 49 — null = no UI-saved key. Resolver falls through to env
+     (process.env.GEMINI_API_KEY) and then null. */
+  geminiApiKey: null,
 };
 
 let cached: UserSettings | null = null;
@@ -258,6 +270,46 @@ export function getResolvedAnalysisEngine(): 'local' | 'gemini' {
   const c = cached;
   const raw = c?.analysisEngine ?? process.env.ANALYZER ?? 'local';
   return raw === 'gemini' ? 'gemini' : 'local';
+}
+
+/** Plan 49 — dedicated write path for the Gemini API key. The general
+    `writeUserSettings()` strips `geminiApiKey` (it sits in FORBIDDEN_KEYS)
+    so a normal Account-view PUT never mutates the secret. This entry
+    point is wired ONLY by the PUT /api/user/settings/gemini-key route,
+    which doesn't accept any other field — minimising the attack surface
+    of "frontend includes secret in an unrelated payload."
+
+    Pass `null` to clear the saved key (e.g. user clicks "Clear" in the UI).
+    Returns the new merged settings (same shape as writeUserSettings, so
+    the route handler can pipe it through envDerived without conditional
+    branches). */
+export async function writeGeminiApiKey(key: string | null): Promise<UserSettings> {
+  const normalised = typeof key === 'string' && key.trim().length > 0 ? key.trim() : null;
+  const next = writeChain.then(async () => {
+    const current = await readUserSettings();
+    const merged: UserSettings = { ...current, geminiApiKey: normalised };
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    cached = merged;
+    return merged;
+  });
+  writeChain = next.catch(() => undefined);
+  return next;
+}
+
+/** Plan 49 — resolve the Gemini API key from the canonical fallback chain:
+      1. process.env.GEMINI_API_KEY (wins for CI / power users)
+      2. cached user-settings.geminiApiKey (UI-saved via Account view)
+      3. null (no key configured)
+    Trims whitespace on both sources so a stray trailing newline in `.env`
+    doesn't masquerade as a real key. Returns null instead of throwing —
+    callers (selectAnalyzer, selectTtsProvider) own the "but you asked for
+    Gemini" error message. */
+export function getResolvedGeminiApiKey(): string | null {
+  const fromEnv = process.env.GEMINI_API_KEY?.trim();
+  if (fromEnv && fromEnv.length > 0) return fromEnv;
+  const fromSettings = cached?.geminiApiKey?.trim();
+  if (fromSettings && fromSettings.length > 0) return fromSettings;
+  return null;
 }
 
 /** Test-only: drop the in-process cache so the next read re-parses disk. */
