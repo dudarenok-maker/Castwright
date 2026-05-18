@@ -68,8 +68,8 @@ Run in mock mode (`npm run dev` + `VITE_USE_MOCKS=true`).
 
 ## Out of scope
 
-- Cross-device resume sync. Single-workspace assumption holds (BACKLOG Could #12 covers cross-tab `BroadcastChannel`).
-- Resume-from-position e2e against real audio playback. The harness fires the resume seek + assertion through the slice, not by polling `audio.currentTime` — Playwright + Chrome's audio-decode pipeline + Windows host load isn't reliable enough for clock-dependent assertions (see the quarantined `listen-playback.spec.ts` flake under BACKLOG Could #15).
+- Cross-device resume sync. Single-workspace assumption holds (BACKLOG Could #26 covers cross-tab `BroadcastChannel`).
+- Resume-from-position e2e against real audio playback. The harness fires the resume seek + assertion through the slice, not by polling `audio.currentTime` — Playwright + Chrome's audio-decode pipeline + Windows host load isn't reliable enough for clock-dependent assertions (see the quarantined `listen-playback.spec.ts` flake under BACKLOG Could #20).
 - Per-chapter resume points (one bookmark covers many chapters within the book). The plan persists one record per book; switching chapters flushes the prior bookmark before saving the new one.
 
 ## Ship notes
