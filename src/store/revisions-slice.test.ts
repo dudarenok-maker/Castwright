@@ -28,6 +28,7 @@ describe('revisionsSlice — initial state', () => {
       drift: [],
       dismissed: [],
       acceptedSelections: {},
+      timeline: {},
       loaded: false,
     });
   });
@@ -284,6 +285,135 @@ describe('revisionsSlice — hydrateFromBookState', () => {
     );
     expect(next.dismissed).toEqual([]);
     expect(next.acceptedSelections).toEqual({});
+  });
+});
+
+describe('revisionsSlice — plan 55 timeline', () => {
+  it('acceptRevision appends an `accepted` timeline entry keyed by chapterId', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        pending: [rev('r1', { chapterId: 3, characterId: 'halloran' })],
+        drift: [],
+      }),
+    );
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.acceptRevision({ revisionId: 'r1', selection: { 1: 'B' } }),
+    );
+    expect(s.timeline[3]).toHaveLength(1);
+    expect(s.timeline[3][0]).toMatchObject({
+      id: 'r1',
+      chapterId: 3,
+      characterId: 'halloran',
+      eventKind: 'accepted',
+      status: 'active',
+    });
+    expect(typeof s.timeline[3][0].timestamp).toBe('string');
+  });
+
+  it('rejectRevision appends a `rejected` timeline entry', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        pending: [rev('r2', { chapterId: 5, characterId: 'Wren' })],
+        drift: [],
+      }),
+    );
+    s = revisionsSlice.reducer(s, revisionsActions.rejectRevision('r2'));
+    expect(s.timeline[5]).toHaveLength(1);
+    expect(s.timeline[5][0]).toMatchObject({
+      id: 'r2',
+      chapterId: 5,
+      characterId: 'Wren',
+      eventKind: 'rejected',
+      status: 'active',
+    });
+  });
+
+  it('subsequent accept on the same chapter flips the prior reversible entry off', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        pending: [
+          rev('r1', { chapterId: 3, characterId: 'a' }),
+          rev('r2', { chapterId: 3, characterId: 'b' }),
+        ],
+        drift: [],
+      }),
+    );
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.acceptRevision({ revisionId: 'r1', selection: {} }),
+    );
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.acceptRevision({ revisionId: 'r2', selection: {} }),
+    );
+    expect(s.timeline[3]).toHaveLength(2);
+    expect(s.timeline[3][0].reversible).toBe(false);
+    expect(s.timeline[3][1].reversible).toBe(true);
+  });
+
+  it('accept on an unknown revisionId is a no-op for timeline (no pending to read chapter from)', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.acceptRevision({ revisionId: 'never-existed', selection: {} }),
+    );
+    expect(s.timeline).toEqual({});
+  });
+
+  it('rolledBack flips the targeted entry to `rolled-back-from` and appends a new `rolled-back` entry', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        pending: [rev('r1', { chapterId: 2 })],
+        drift: [],
+      }),
+    );
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.acceptRevision({ revisionId: 'r1', selection: {} }),
+    );
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.rolledBack({
+        chapterId: 2,
+        timelineEntryId: 'r1',
+        rolledBackId: 'rb-1',
+      }),
+    );
+    expect(s.timeline[2]).toHaveLength(2);
+    expect(s.timeline[2][0].status).toBe('rolled-back-from');
+    expect(s.timeline[2][1]).toMatchObject({
+      id: 'rb-1',
+      eventKind: 'rolled-back',
+      status: 'active',
+      reversible: false,
+    });
+  });
+
+  it('hydrateFromBookState normalises string-keyed timeline (JSON serialisation)', () => {
+    /* On-disk JSON keys are strings; the slice carries numeric chapterIds.
+       Defensive normalisation preserves both shapes on hydrate. */
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.hydrateFromBookState({
+        timeline: {
+          '7': [
+            {
+              id: 'r99',
+              chapterId: 7,
+              eventKind: 'accepted',
+              timestamp: '2026-05-19T10:00:00.000Z',
+              status: 'active',
+            },
+          ],
+        },
+      }),
+    );
+    expect(s.timeline[7]).toHaveLength(1);
+    expect(s.timeline[7][0].id).toBe('r99');
   });
 });
 
