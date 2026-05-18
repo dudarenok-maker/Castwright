@@ -16,6 +16,10 @@
 
 import { test, expect } from '@playwright/test';
 
+/* Plan 58 — file-level serial mode. The localStorage-driven theme
+   override + reload assertions intermittently raced under contention. */
+test.describe.configure({ mode: 'serial' });
+
 test.describe('plan 41 — theme toggle', () => {
   test('cycles system → light → dark and persists across a reload', async ({ page }) => {
     await page.goto('/');
