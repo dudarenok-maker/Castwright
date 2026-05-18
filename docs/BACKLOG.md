@@ -27,21 +27,13 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18:** Must 1 · Should 1 · Could 14 · Won't 9
+**Counts as of 2026-05-18:** Must 0 · Should 2 · Could 14 · Won't 9
 
 ---
 
 ## Must — blocks v1 ship or hurts existing users
 
-### 1. Verify-cache for cheap retries after flake
-
-Source: net-new (2026-05-18). Follow-up to plan 45 (Vitest pool tuning + one-retry policy). Plan 45 lowers the _probability_ of `npm run verify` flaking; this lever drops the _cost_ of any remaining flake to near-zero.
-
-- _What:_ Add a `.verify-cache.json` (gitignored) that records, per pipeline step (`typecheck`, `test:hooks`, `test` (frontend), `test:server`, `test:scripts`, `test:sidecar`, `test:e2e`, `build`), the input hash that produced the last green result. The input hash is the SHA-256 of every file the step reads (resolvable from `tsconfig.json` includes for typecheck, the Vitest `include` globs for each Vitest config, etc.) plus the lockfile hash. On `npm run verify`, each step computes its current input hash; if it matches the cached green hash, the step is skipped with a `[cached]` marker. On a green completion, the cache is updated. Cache invalidates automatically when any input changes. Manual override: `npm run verify -- --no-cache` re-runs everything.
-- _Acceptance:_ (1) Run `npm run verify` on a clean tree → all steps run, cache populated. (2) Re-run immediately, no changes → every step prints `[cached] (input hash unchanged)` and exits in under 5 s total. (3) Touch one file in `src/lib/` → the frontend `test` step re-runs, every other step stays cached. (4) Touch `server/src/foo.ts` → server `test` and `typecheck` re-run, frontend test stays cached. (5) Force a flake on the server suite, retry without touching anything → cached typecheck + frontend + sidecar + Pester + e2e + build skip; only the server suite re-runs. (6) `npm run verify -- --no-cache` runs everything regardless of cache. (7) New Vitest spec covers the input-hash computation + cache hit/miss decision; manual: walk steps 1-6 once.
-- _Key files:_ new `scripts/verify-cache.mjs` (the cache + step-runner); `package.json` `scripts.verify` (delegate to the new script); new `scripts/tests/verify-cache.test.mjs`; `.gitignore` (add `.verify-cache.json`).
-- _Depends on:_ plan 45 shipped (already on this branch — the retry policy means the cache doesn't have to worry about transient-pass-then-fail; one retry stabilises before the green hash is written).
-- _Benefit (user / developer):_ the user explicitly flagged "commits don't waste too much time doing double takes." Today a transient worker death at step 5 of 6 re-runs all 6 steps from scratch on the next push, even though steps 1–4 produced identical output. This cache makes the _recovery_ cost of a flake = the cost of one re-run of the step that actually failed (typically ~60 s for the server suite) instead of ~6 min for the whole pipeline. Even on clean re-pushes after editing one file, the developer feedback loop drops from ~6 min to ~30–60 s. Compounds with plan 45: plan 45 makes flakes rarer, this lever makes them cheap when they do happen.
+(empty — Must #1 verify-cache shipped in plan 50 on 2026-05-18.)
 
 ---
 
@@ -56,6 +48,16 @@ Source: net-new (2026-05-18) — user-requested ahead of handing the app to a de
 - _Key files:_ new `.github/workflows/release.yml`, `scripts/bump-version.ps1`, `scripts/build-release-zip.mjs`, `scripts/tests/bump-version.Tests.ps1`, `scripts/tests/release-manifest.test.mjs`, `INSTALL.md`, `docs/features/49-release-package.md`; edited `docs/features/INDEX.md`, `README.md` (Releases link), `CONTRIBUTING.md` (Releasing section), `.gitignore`.
 - _Depends on:_ none. Pairs naturally with Could #1 (CI integration for the test suite) — both add GitHub Actions workflows; if shipped together the same caching infrastructure is reusable.
 - _Benefit (user / technical):_ user can hand a downloadable artefact to a deployer instead of walking them through a git-clone + dev-from-source flow. Cutting a release becomes one command instead of a 4-file edit. Establishes the release seam that Could #16 (Windows installer) and Could #17 (Docker image) hang off — both extend `release.yml` rather than spawn parallel pipelines.
+
+### 2. Extend verify-cache to `verify:fast` (pre-commit gate)
+
+Source: net-new (2026-05-18). Follow-up to plan 50 (Verify-cache for cheap retries after flake).
+
+- _What:_ Reuse the runner in `scripts/verify-cache.mjs` for `scripts.verify:fast` (the pre-commit gate, today `test:hooks && test && test:server`). Parameterise the runner so it accepts a `--steps lint,typecheck,test:hooks,test,test:server` style flag, then change `scripts.verify` to `node scripts/verify-cache.mjs` (no flag = all steps) and `scripts.verify:fast` to `node scripts/verify-cache.mjs --steps test:hooks,test,test:server`. Cache file is shared — a `test:server` cache entry written by `verify:fast` skips correctly in a subsequent `verify` and vice-versa.
+- _Acceptance:_ pre-commit on a small follow-up commit (no source changes) prints `[cached]` for all three fast steps and exits in under 1 s; same when the prior `npm run verify` already populated the cache. Existing pre-commit semantics (refuse commit on first failure) preserved. Vitest spec covers the `--steps` filter parsing.
+- _Key files:_ `scripts/verify-cache.mjs` (extend `parseFlags` + `runPipeline` to filter `STEPS` by a `--steps` list); `package.json` `scripts.verify:fast`; `scripts/tests/verify-cache.test.mjs` (add filter-parsing case).
+- _Depends on:_ plan 50 shipped.
+- _Benefit (user / developer):_ pre-commit is the most-frequently-run gate in the day. Even though it's sub-5s warm today, caching brings it under 1 s for the no-source-change case (e.g. doc-only commits, regenerated lockfile-only commits), making the gate effectively free for those.
 
 ---
 
