@@ -199,7 +199,7 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   all tests + e2e + build. Refuses the push if any step fails.
 
 `npm run verify` is cache-aware (see
-[docs/features/50-verify-cache.md](docs/features/50-verify-cache.md)):
+[docs/features/archive/50-verify-cache.md](docs/features/archive/50-verify-cache.md)):
 each step skips with `[cached]` when its input hash matches the last
 green run. Pass `npm run verify -- --no-cache` to force a full re-run.
 

@@ -3,7 +3,7 @@
 // computes a SHA-256 of its inputs (filtered from `git ls-files`) + lockfile
 // hashes + an optional tool fingerprint; matches against `.verify-cache.json`
 // to skip steps whose inputs haven't changed since the last green run. See
-// docs/features/50-verify-cache.md for the design.
+// docs/features/archive/50-verify-cache.md for the design.
 
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
