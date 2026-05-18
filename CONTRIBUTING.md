@@ -270,6 +270,54 @@ The compact version:
 4. Run `npm run verify` locally.
 5. Surface the user-visible delta in the end-of-turn summary.
 
+## Releasing
+
+Cutting a public release is one command (after the notes file is ready):
+
+```sh
+# 1. Clean main.
+git switch main
+git pull --ff-only
+
+# 2. Author release notes (markdown file, sections per "Release notes" below).
+$EDITOR ~/Desktop/vX.Y.Z-notes.md   # or notepad on Windows
+
+# 3. Bump versions + create the chore commit + create the annotated tag.
+#    Same command on Windows, macOS, Linux.
+node scripts/bump-version.mjs --level minor --notes-file ~/Desktop/vX.Y.Z-notes.md
+
+# 4. Push the bump, then the tag. The tag push fires .github/workflows/release.yml.
+git push origin main
+git push origin vX.Y.Z
+
+# 5. Watch:  gh run watch   (or the Actions tab in the browser)
+```
+
+The workflow runs `verify:quick` on Ubuntu + macOS + Windows runners, then
+builds the platform-independent zip + SHA-256 on Ubuntu and publishes the
+GitHub Release using the tag annotation as the body. Full spec:
+[`docs/features/49-release-package.md`](docs/features/49-release-package.md).
+
+**Invariants the bumper enforces** — read these before you bypass it:
+
+- `package.json` and `server/package.json` versions MUST stay in lockstep
+  (the bumper refuses to run if they've drifted).
+- Every `vX.Y.Z` tag is an annotated tag pointing at a `chore: bump version
+  to X.Y.Z` commit. Lightweight tags do NOT fire the workflow.
+- Release notes live in the tag annotation, not the GitHub Release UI. The
+  workflow reads `git tag -l --format='%(contents)' vX.Y.Z` and uses that
+  verbatim as the body.
+
+If the artefact is broken after publish, delete the release + tag and bump
+again — never amend or force-push a published tag:
+
+```sh
+gh release delete vX.Y.Z --yes
+git push origin :vX.Y.Z
+git tag -d vX.Y.Z
+# Fix forward; bump to vX.Y.Z+1.
+```
+
 ## Release notes
 
 Release notes live in the annotated git tag message (`git tag -a vX.Y.Z`).
