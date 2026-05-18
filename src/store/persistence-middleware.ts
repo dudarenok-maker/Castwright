@@ -72,6 +72,7 @@ const PERSIST_RULES: Record<
       pending: s.revisions.pending,
       drift: s.revisions.drift,
       dismissed: s.revisions.dismissed,
+      timeline: s.revisions.timeline,
     }),
   },
   'revisions/rejectAllPending': {
@@ -80,6 +81,7 @@ const PERSIST_RULES: Record<
       pending: s.revisions.pending,
       drift: s.revisions.drift,
       dismissed: s.revisions.dismissed,
+      timeline: s.revisions.timeline,
     }),
   },
   'revisions/dismissDrift': {
@@ -88,6 +90,7 @@ const PERSIST_RULES: Record<
       pending: s.revisions.pending,
       drift: s.revisions.drift,
       dismissed: s.revisions.dismissed,
+      timeline: s.revisions.timeline,
     }),
   },
   /* Per-item accept also persists acceptedSelections — the slice records
@@ -102,6 +105,7 @@ const PERSIST_RULES: Record<
       drift: s.revisions.drift,
       dismissed: s.revisions.dismissed,
       acceptedSelections: s.revisions.acceptedSelections,
+      timeline: s.revisions.timeline,
     }),
   },
   'revisions/rejectRevision': {
@@ -110,6 +114,22 @@ const PERSIST_RULES: Record<
       pending: s.revisions.pending,
       drift: s.revisions.drift,
       dismissed: s.revisions.dismissed,
+      timeline: s.revisions.timeline,
+    }),
+  },
+  /* Plan 55 rollback. Reducer flips status + appends a `rolled-back` entry;
+     this rule fans the timeline back out to revisions.json so a reload
+     reflects the rollback. (The matching server-side audio restore is
+     dispatched separately by the timeline view's click handler — plan 20's
+     POST /audio/previous/restore endpoint.) */
+  'revisions/rolledBack': {
+    slice: 'revisions',
+    build: (s) => ({
+      pending: s.revisions.pending,
+      drift: s.revisions.drift,
+      dismissed: s.revisions.dismissed,
+      acceptedSelections: s.revisions.acceptedSelections,
+      timeline: s.revisions.timeline,
     }),
   },
   /* enqueuePending is fired by the generation-stream middleware on every
@@ -123,6 +143,7 @@ const PERSIST_RULES: Record<
       pending: s.revisions.pending,
       drift: s.revisions.drift,
       dismissed: s.revisions.dismissed,
+      timeline: s.revisions.timeline,
     }),
   },
   'revisions/markRevisionPlayable': {
@@ -131,6 +152,7 @@ const PERSIST_RULES: Record<
       pending: s.revisions.pending,
       drift: s.revisions.drift,
       dismissed: s.revisions.dismissed,
+      timeline: s.revisions.timeline,
     }),
   },
 
