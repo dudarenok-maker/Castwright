@@ -33,7 +33,12 @@ import { EXPORT_QUEUE } from '../data/export-queue';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
-import { selectListenProgress } from '../store/listen-progress-slice';
+import {
+  listenProgressActions,
+  selectListenProgress,
+  type ListenMarker,
+} from '../store/listen-progress-slice';
+import { api } from '../lib/api';
 import { exportsActions } from '../store/exports-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import type { Chapter, Character, Voice, ListenerApp, ExportQueueItem } from '../lib/types';
@@ -248,6 +253,57 @@ export function ListenView({
           </div>
         </div>
       </section>
+
+      <MarkersPanel
+        bookId={bookId}
+        chapters={chapters}
+        onSeek={(marker) => {
+          /* Plan 53 — click a marker → reload that chapter into the
+             mini-player AND stamp the per-book resume bookmark to
+             marker.sec so the mini-player's onLoadedMetadata seek
+             lands at the marker position. Persist as well so a
+             reload arrives at the same spot.
+
+             Two paths the mini-player needs covered:
+             (a) marker chapter != currently-playing chapter → setCurrentTrack
+                 triggers the chapter-mount effect, which reads
+                 pendingSeekRef → onLoadedMetadata applies it.
+             (b) marker chapter == currently-playing chapter → no
+                 remount fires; the requestSeek dispatch below feeds
+                 the mini-player's seek effect via the pendingSeek
+                 selector. */
+          dispatch(
+            listenProgressActions.update({
+              bookId,
+              chapterId: marker.chapterId,
+              currentSec: marker.sec,
+            }),
+          );
+          /* Fire-and-forget — listen-view marker clicks are
+             non-blocking. The mini-player's hydrate effect will
+             re-fetch this on the next mount, so even a transient
+             network failure isn't fatal. */
+          void api
+            .putListenProgress(bookId, {
+              chapterId: marker.chapterId,
+              currentSec: marker.sec,
+            })
+            .catch(() => {
+              /* swallow — slice already optimistically updated */
+            });
+          dispatch(
+            listenProgressActions.requestSeek({
+              bookId,
+              chapterId: marker.chapterId,
+              sec: marker.sec,
+            }),
+          );
+          setCurrentTrack(marker.chapterId);
+        }}
+        onDelete={(markerId) => {
+          dispatch(listenProgressActions.deleteMarker({ bookId, markerId }));
+        }}
+      />
 
       <section className="mb-12">
         <div className="flex items-center justify-between mb-3">
@@ -582,6 +638,91 @@ function ChapterListenRow({
         </button>
       </span>
     </div>
+  );
+}
+
+/* Plan 53 — markers sidebar panel. Reads the per-book bookmarks
+   from the listen-progress slice, groups by chapter, and renders
+   click-to-seek + delete affordances. Null-renders when the book has
+   no markers so the listen view stays uncluttered for fresh books. */
+interface MarkersPanelProps {
+  bookId: string;
+  chapters: Chapter[];
+  onSeek: (marker: ListenMarker) => void;
+  onDelete: (markerId: string) => void;
+}
+function MarkersPanel({ bookId, chapters, onSeek, onDelete }: MarkersPanelProps) {
+  const progress = useAppSelector(selectListenProgress(bookId));
+  const markers = progress?.markers ?? [];
+  if (markers.length === 0) return null;
+  /* Group markers by chapter for the sidebar; chapter order matches
+     the chapters prop so a re-ordered restructure (plan 51) keeps the
+     panel coherent. */
+  const byChapter = new Map<number, ListenMarker[]>();
+  for (const m of markers) {
+    const list = byChapter.get(m.chapterId) ?? [];
+    list.push(m);
+    byChapter.set(m.chapterId, list);
+  }
+  /* Sort each chapter's markers by position so the UI reads top-to-
+     bottom by play order. */
+  for (const list of byChapter.values()) list.sort((a, b) => a.sec - b.sec);
+  const groups: Array<{ chapter: Chapter; markers: ListenMarker[] }> = [];
+  for (const ch of chapters) {
+    const list = byChapter.get(ch.id);
+    if (list && list.length > 0) groups.push({ chapter: ch, markers: list });
+  }
+  return (
+    <section data-testid="listen-markers-panel" className="mb-12">
+      <div className="flex items-center justify-between mb-3">
+        <SectionLabel>Markers</SectionLabel>
+        <span className="text-xs text-ink/50">
+          {markers.length} bookmark{markers.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden divide-y divide-ink/5">
+        {groups.map((g) => (
+          <div key={g.chapter.id} className="px-5 py-4">
+            <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/50 mb-2">
+              CH {String(g.chapter.id).padStart(2, '0')} · {stripChapterPrefix(g.chapter.title)}
+            </p>
+            <ul className="space-y-1">
+              {g.markers.map((m) => (
+                <li
+                  key={m.id}
+                  data-testid={`listen-marker-${m.id}`}
+                  className="flex items-center gap-3 text-sm text-ink/80"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onSeek(m)}
+                    data-testid={`listen-marker-seek-${m.id}`}
+                    className="flex-1 flex items-center gap-3 text-left hover:text-ink"
+                  >
+                    <span className="tabular-nums text-xs text-ink/50 w-12">
+                      {formatTime(m.sec)}
+                    </span>
+                    <span className="truncate">{m.label || <em className="text-ink/40">No label</em>}</span>
+                    {m.kind === 'rerecord' && (
+                      <Pill color="library">re-record</Pill>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDelete(m.id)}
+                    aria-label="Delete marker"
+                    data-testid={`listen-marker-delete-${m.id}`}
+                    className="text-ink/40 hover:text-rose-500 text-xs px-2"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
