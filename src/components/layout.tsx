@@ -41,6 +41,7 @@ import { ProfileDrawer } from '../modals/profile-drawer';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { ToastStack } from './toast-stack';
 import { RevisionDiffPlayer } from '../views/revision-diff';
+import { RevisionTimelineModal } from './revision-timeline-modal';
 import { IconRefresh, IconWarning } from '../lib/icons';
 
 /* Lifted from App.tsx's resultDialog state. Routes that need to surface a
@@ -1008,6 +1009,9 @@ export function Layout() {
           bookId={bookId}
           chapter={chapters.find((c) => c.id === pending[0].chapterId)}
           character={characters.find((c) => c.id === pending[0].characterId)}
+          onOpenHistory={() =>
+            dispatch(uiActions.setRevisionHistoryFor({ chapterId: pending[0].chapterId }))
+          }
           onClose={() => dispatch(uiActions.setShowRevisionPlayer(false))}
           onAccept={(selection) => {
             /* Accept = the new (B) render wins. Persist the user's
@@ -1054,6 +1058,18 @@ export function Layout() {
               );
             });
           }}
+        />
+      )}
+      {ui.revisionHistoryFor && (
+        <RevisionTimelineModal
+          chapterId={ui.revisionHistoryFor.chapterId}
+          chapterTitle={
+            ui.revisionHistoryFor.chapterId != null
+              ? chapters.find((c) => c.id === ui.revisionHistoryFor!.chapterId)?.title
+              : undefined
+          }
+          characters={characters}
+          onClose={() => dispatch(uiActions.setRevisionHistoryFor(null))}
         />
       )}
       {resultDialog && (
