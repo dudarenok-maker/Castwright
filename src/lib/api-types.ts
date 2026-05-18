@@ -1542,6 +1542,36 @@ export interface components {
         RevisionsResponse: {
             pending?: components["schemas"]["Revision"][];
             drift?: components["schemas"]["DriftEvent"][];
+            /** @description Per-chapter chronological log of accept / reject / rollback events written by the frontend at user-action time. Read-back by the Revision History view (plan 55). Keyed by chapterId; each chapter's value is an append-only list in insertion order (oldest first). Optional — older books without timeline entries omit it. */
+            timeline?: {
+                [key: string]: components["schemas"]["TimelineEntry"][];
+            };
+        };
+        TimelineEntry: {
+            /** @description Stable unique id (the revision id for accept/reject; a generated id for rollback events). */
+            id: string;
+            chapterId: number;
+            /** @description Optional — set on accept/reject (the character whose revision was processed); absent on rollback events. */
+            characterId?: string;
+            /**
+             * @description `accepted` / `rejected` mark the moment the user committed to or discarded a pending revision. `rolled-back` marks a rollback action that promoted a prior chapter render back to live.
+             * @enum {string}
+             */
+            eventKind: "accepted" | "rejected" | "rolled-back";
+            /**
+             * Format: date-time
+             * @description ISO 8601 timestamp the event was recorded.
+             */
+            timestamp: string;
+            /** @description For rollback entries — the timeline entry id being rolled back to/from. Absent on accept/reject. */
+            revisionId?: string;
+            /**
+             * @description `active` for the entry that represents the current chapter state on disk. `rolled-back-from` for entries whose effects were undone by a subsequent rollback (the entry is preserved for history but no longer represents live state).
+             * @enum {string}
+             */
+            status: "active" | "rolled-back-from";
+            /** @description True when this entry's prior audio is still on disk (i.e. plan 20's `.previous.<slug>.mp3` exists for the chapter and this is the most recent reversible accept/reject). The frontend only enables the Rollback button when this is true. Multi-step rollback (snapshot-per-entry) is parked for v1.4.0. */
+            reversible?: boolean;
         };
         Revision: {
             id: string;

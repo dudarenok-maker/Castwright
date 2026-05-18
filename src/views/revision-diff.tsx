@@ -29,6 +29,10 @@ interface Props {
   onClose: () => void;
   onAccept: (selection: Record<number, 'A' | 'B'>) => void;
   onReject: () => void;
+  /** Plan 55 — opens the revision-history modal scoped to this chapter.
+      Optional so existing callers / tests don't need to pass it (the button
+      simply doesn't render when undefined). */
+  onOpenHistory?: () => void;
 }
 
 export function RevisionDiffPlayer({
@@ -39,6 +43,7 @@ export function RevisionDiffPlayer({
   onClose,
   onAccept,
   onReject,
+  onOpenHistory,
 }: Props) {
   const [selected, setSelected] = useState<Record<number, 'A' | 'B'>>(() => {
     const m: Record<number, 'A' | 'B'> = {};
@@ -205,6 +210,17 @@ export function RevisionDiffPlayer({
             <IconClock className="w-3.5 h-3.5" />
             Triggered {revision.triggeredAgo}
           </span>
+          {onOpenHistory && (
+            <button
+              type="button"
+              onClick={onOpenHistory}
+              className="px-3 py-1.5 rounded-full text-xs font-semibold border border-ink/15 text-ink/70 hover:bg-ink/5"
+              data-testid="revision-diff-open-history"
+              aria-label="View revision history"
+            >
+              History
+            </button>
+          )}
           <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60">
             <IconClose className="w-4 h-4" />
           </button>

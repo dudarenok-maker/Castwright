@@ -11,13 +11,15 @@
 
 import { test, expect } from '@playwright/test';
 
+/* Plan 58 — un-quarantined 2026-05-19. The earlier quarantine was a
+   parallel-worker contention problem: the audio.currentTime poll
+   raced other workers' SSE traffic on Windows. file-level serial mode
+   keeps this spec's tests in one worker while other spec files still
+   parallelise, recovering most throughput without the flake. */
+test.describe.configure({ mode: 'serial' });
+
 test.describe('listen view + mini-player', () => {
-  /* Quarantined 2026-05-18 (plan 46): the audio.currentTime poll at
-     line ~69 fails under Playwright parallel-worker contention on
-     Windows but passes consistently in isolation. Two retries don't
-     clear it. Not a real regression — see BACKLOG Could "e2e
-     parallel-worker contention" for the follow-up. */
-  test.fixme('opens Solway Bay listen view, clicks play, audio src + paused flip', async ({ page }) => {
+  test('opens Solway Bay listen view, clicks play, audio src + paused flip', async ({ page }) => {
     /* Direct navigation rather than clicking through the library so this
        spec stays orthogonal to the library-card click path covered by
        revision-diff.spec.ts. The mock seed populates state for 'sb'

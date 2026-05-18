@@ -28,14 +28,15 @@ async function getStageKind(page: Page): Promise<string> {
   });
 }
 
+/* Plan 58 — un-quarantined 2026-05-19. Earlier quarantine was a
+   parallel-worker contention problem: SSE phase transitions in this
+   long cold-boot walk could miss their event window when other
+   workers' Vite/SSE traffic backed up. file-level serial mode keeps
+   this spec in one worker while other spec files still parallelise. */
+test.describe.configure({ mode: 'serial' });
+
 test.describe('new book flow', () => {
-  /* Quarantined 2026-05-18 (plan 46): the full cold-boot →
-     upload → analysing → confirm → ready walk races on SSE phase
-     transitions under Playwright parallel-worker contention. Passes
-     in isolation; two retries don't clear it under load. Not a real
-     regression — see BACKLOG Could "e2e parallel-worker contention"
-     for the follow-up. */
-  test.fixme('cold boot → upload → analysing → confirm → ready', async ({ page }) => {
+  test('cold boot → upload → analysing → confirm → ready', async ({ page }) => {
     /* Step 1: cold boot lands on the library. */
     await page.goto('/');
     await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
