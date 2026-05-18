@@ -1,12 +1,12 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-05-18
 owner: null
 ---
 
 # Chapter restructure panel (merge / split / reorder)
 
-> Status: draft
+> Status: stable
 > Key files: `server/src/workspace/restructure.ts`, `server/src/routes/chapters-restructure.ts`, `server/src/audio/rewrite-chapter-slugs.ts`, `src/components/restructure-chapters-panel.tsx`, `src/views/restructure.tsx`
 > URL surface: `#/books/<id>/restructure`
 > OpenAPI ops: `POST /api/books/{bookId}/chapters/merge`, `POST .../chapters/split`, `POST .../chapters/reorder`
@@ -75,4 +75,9 @@ Against the real backend, the same walkthrough works on the canonical `C:\Users\
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+- **Shipped:** 2026-05-18 via PR #23 (merge commit `024af60`), feature commit `6ad7af0`, visual-baseline refresh `19e6fe8`.
+- **Delta vs spec:**
+  - Confirm-cast modal entry deferred to a follow-up — single entry point shipped: listen-view header button (`src/views/listen.tsx`). Restructuring still works pre-generation; the user just navigates listen → restructure → back rather than confirm → modal → confirm.
+  - Per-book write lock implemented as a `Map<bookId, Promise<void>>` chain in `server/src/routes/chapters-restructure.ts:54-74`.
+  - The split-locator paragraph-bisection fallback logs via `console.warn`; the test in `server/src/workspace/restructure.test.ts` asserts the structural shape via `vi.spyOn(console, 'warn')`.
+- **Test footprint:** 53 new tests (16 pure-transform + 8 audio-helper + 17 route end-to-end + 3 reducer + 9 panel component), all green in `npm run verify`. Visual baselines for the listen view (light + dark) re-captured in commit `19e6fe8` to account for the new header button.

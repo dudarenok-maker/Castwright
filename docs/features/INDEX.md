@@ -63,7 +63,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [12 — Manuscript view](12-manuscript-view.md) — Sentence list, low-confidence flagging, speaker reassignment.
 - [12a — Fix: sentence reassignment scoped by (chapterId, id)](12a-fix-reassign-cross-chapter-id.md) — Reassign reducers + inspector prop scope by both chapter and sentence id; pre-fix, clicks on chapter 2+ silently mutated chapter 1. Shipped 2026-05-18.
-- [51 — Chapter restructure panel (merge / split / reorder)](51-restructure-chapters.md) — Three-way structural edit surface mounted at ready-stage `view: 'restructure'`. Pure-remap semantics preserve sentence text + characterId + voice assignment; audio for content-changed chapters is deleted, renumbered-only chapters keep their audio (two-pass rename + segments.json metadata rewrite).
 
 ### F. TTS
 
@@ -149,3 +148,4 @@ breadcrumb so cross-references still resolve.
 - [33 — Voice export](archive/33-voice-export.md) — Live Voice (Android audiobook player) tile on the Listen tab; M4B-standards conformance (`stik = 2` + `desc` / `ldes`) regression-guarded; defaults to M4B + sync-folder. Long-form description field shipped alongside. Shipped 2026-05-18.
 - [20 — Revisions & drift](archive/20-revisions-and-drift.md) — Pending drafts + drift events + a/b audio audition (rollback-preserved previous audio) + stale-audio banner on voice edits. Close-out adds startup fsck for half-preserved rollback pairs + mid-flight Reject toast. Shipped 2026-05-18.
 - [18 — Listen view](archive/18-listen-view.md) — Cover, chapter list, mini-player, metadata editor, listener-app tiles (5 of 7 live via export modal), export queue, cover Replace/Regenerate. Plan 18a slice + 18b correction shipped 2026-05-18; remaining gaps tracked as BACKLOG Could #31/#32/#33/#34/#35.
+- [51 — Chapter restructure panel](archive/51-restructure-chapters.md) — Three-way structural edit surface (merge / split / drag-reorder) at ready-stage `view: 'restructure'`. Pure-remap semantics preserve sentence text + characterId + voice assignment; content-changed chapters' audio is deleted, renumbered-only chapters' audio is renamed in place (two-pass via temp + segments.json metadata rewrite). Shipped 2026-05-18.
