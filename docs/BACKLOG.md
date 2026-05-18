@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18 (post plan 49 ship):** Must 0 · Should 2 · Could 33 · Won't 9
+**Counts as of 2026-05-18 (post plan 51 ship):** Must 0 · Should 2 · Could 32 · Won't 9
 
 ---
 
@@ -144,16 +144,6 @@ Source: net-new (2026-05-18).
 - _Key files:_ new `src/components/manuscript-diff.tsx`; new `src/lib/manuscript-diff.ts` (diff algorithm — leverage `diff` npm package); `src/views/upload.tsx`; new server endpoint for diff-friendly fetch of the previous manuscript.
 - _Depends on:_ none.
 - _Benefit (user):_ re-uploading a manuscript today shows no indication of what changed — the user must manually re-read or trust external version control. Diff view closes that gap.
-
-### 9. Chapter reorder / restructure panel
-
-Source: net-new (2026-05-18).
-
-- _What:_ Add a "Restructure chapters" affordance in the confirm view (and re-accessible from the ready view). Operations: renumber, merge two adjacent chapters, split a chapter at a sentence boundary, reorder via drag. Operations are applied to `state.json` and any existing per-chapter audio is invalidated with a regen prompt.
-- _Acceptance:_ Merge chapters 3+4 → chapter 3 contains both bodies, chapter 4 is gone, original chapter 5 becomes chapter 4. Split chapter 5 at sentence index 12 → chapters 5a (sentences 0-11) and 5b (sentences 12-end). Reorder chapter 7 before chapter 4 → renumbering follows. Existing audio invalidated. Vitest covers the slice ops; e2e covers merge + split + reorder.
-- _Key files:_ new `src/components/restructure-chapters.tsx`; `src/store/chapters-slice.ts` (reducers); `server/src/workspace/scan.ts` (persistence); `server/src/routes/chapter-audio.ts` (invalidation on restructure).
-- _Depends on:_ none.
-- _Benefit (user):_ post-analysis restructuring without re-uploading the whole manuscript. Common need when the analyzer's chapter boundaries don't match the author's intent.
 
 ### 10. Portable book export with embedded state
 
