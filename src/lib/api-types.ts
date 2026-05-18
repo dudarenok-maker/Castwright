@@ -258,6 +258,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/chapters/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge two or more contiguous chapters into one
+         * @description Concatenates the chapter bodies (joined by `\n\n`), preserves all
+         *     sentence attribution (text + characterId + voice assignment) by
+         *     rewriting `chapterId` pointers and renumbering per-chapter
+         *     sentence ids, and deletes audio for the merged chapter (content
+         *     changed → must regenerate). Chapters below the merge are
+         *     renumbered down; their audio files are renamed to match the new
+         *     slugs (content unchanged, no regen needed).
+         *
+         *     Pure remap — no Phase 1 re-analysis is triggered. See
+         *     `docs/features/51-restructure-chapters.md`.
+         */
+        post: operations["mergeChapters"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/chapters/split": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Split a chapter into two at a sentence boundary
+         * @description Sentence `afterSentenceId` and everything before it stays in the
+         *     original chapter; the remainder moves to a new chapter inserted
+         *     immediately after. Chapter body is split at the byte offset
+         *     matching the end of sentence `afterSentenceId`, snapped to the
+         *     next paragraph break.
+         *
+         *     Audio for the source chapter is deleted (content changed →
+         *     regenerate); the new chapter has no prior audio; chapters below
+         *     the split are renumbered up by 1 and their audio renamed.
+         */
+        post: operations["splitChapter"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/chapters/reorder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reorder all chapters into a new sequence
+         * @description Reassigns chapter ids 1..N in the requested order. Chapter bodies
+         *     and per-chapter sentence ids are unchanged; sentence `chapterId`
+         *     pointers are remapped to match the new positions. Audio files
+         *     are renamed to the new slugs (two-pass via temp name to avoid
+         *     collisions on permutations). No audio is deleted.
+         */
+        post: operations["reorderChapters"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/cover/candidates": {
         parameters: {
             query?: never;
@@ -1561,6 +1642,38 @@ export interface components {
             startMs?: number;
             endMs?: number;
         };
+        /**
+         * @description Response envelope shared by `mergeChapters`, `splitChapter`, and
+         *     `reorderChapters`. `chapters` is the new state.json chapter list
+         *     (ids re-issued 1..N); `sentenceRemap` is the translation table
+         *     the frontend applies to its sentence cache so it can rewrite
+         *     `chapterId` + per-chapter `id` without re-fetching the full
+         *     sentence list. See `docs/features/51-restructure-chapters.md`.
+         */
+        ChapterRestructureResponse: {
+            chapters: {
+                id: number;
+                title: string;
+                slug: string;
+                duration?: string;
+                excluded?: boolean;
+                /** @enum {string} */
+                audioModelKey?: "kokoro-v1" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                /** Format: date-time */
+                audioRenderedAt?: string;
+            }[];
+            /**
+             * @description Per-sentence translation entries. Entries whose `oldChapterId`
+             *     doesn't appear in this list are unchanged (mostly chapters
+             *     before the affected range).
+             */
+            sentenceRemap: {
+                oldChapterId: number;
+                oldSentenceId: number;
+                newChapterId: number;
+                newSentenceId: number;
+            }[];
+        };
         BookExportRequest: {
             /**
              * @description Container format. `mp3-zip` packages per-chapter MP3s into
@@ -2004,6 +2117,140 @@ export interface operations {
                 };
             };
             /** @description Book or chapter not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    mergeChapters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description IDs of contiguous chapters to merge (≥ 2). Server rejects non-contiguous selections with 400. */
+                    chapterIds: number[];
+                    /** @description Optional override for the merged chapter title. Defaults to the first member's title. */
+                    mergedTitle?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description New chapter list + sentence remap table */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChapterRestructureResponse"];
+                };
+            };
+            /** @description Bad request (e.g. non-contiguous ids, fewer than 2 ids) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or chapter not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    splitChapter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    chapterId: number;
+                    /** @description Sentence id (per-chapter) after which to split. Cannot be the last sentence — second half would be empty. */
+                    afterSentenceId: number;
+                    /** @description Optional title for the new (second-half) chapter. Defaults to `"<original> (cont.)"`. */
+                    newTitle?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description New chapter list + sentence remap table */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChapterRestructureResponse"];
+                };
+            };
+            /** @description Bad request (e.g. split after last sentence) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reorderChapters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Permutation of current chapter ids in new desired order. */
+                    order: number[];
+                };
+            };
+        };
+        responses: {
+            /** @description New chapter list + sentence remap table */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChapterRestructureResponse"];
+                };
+            };
+            /** @description Bad request (e.g. order length mismatch, duplicate or unknown ids) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
             404: {
                 headers: {
                     [name: string]: unknown;

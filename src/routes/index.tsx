@@ -38,11 +38,20 @@ import { BookLibraryView } from '../views/book-library';
 import { ConfirmMetadataView } from '../views/confirm-metadata';
 import { ChangeLogView } from '../views/change-log';
 import { AccountView } from '../views/account';
+import { RestructureView } from '../views/restructure';
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 import type { Character, Stage, View } from '../lib/types';
 
-const VALID_VIEWS: View[] = ['manuscript', 'cast', 'library', 'generate', 'listen', 'log'];
+const VALID_VIEWS: View[] = [
+  'manuscript',
+  'cast',
+  'library',
+  'generate',
+  'listen',
+  'log',
+  'restructure',
+];
 
 /* Per-route URL → Redux sync. Reads the live redux stage via
    store.getState() (not useAppSelector) so we don't add the stage as an
@@ -551,6 +560,8 @@ function ReadyViewSwitch({
       return <ListenRoute bookId={bookId} />;
     case 'log':
       return <ChangeLogView events={changeLogEvents} title={projectTitle} />;
+    case 'restructure':
+      return <RestructureView bookId={bookId} />;
   }
 }
 
