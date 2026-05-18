@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
 
+/* Plan 58 — file-level serial mode. The revisions poll cycle's SSE-
+   like timing intermittently raced under parallel-worker contention. */
+test.describe.configure({ mode: 'serial' });
+
 /**
  * Revision-diff a/b audition pill — plan 20 follow-on (backlog Must #2).
  *
