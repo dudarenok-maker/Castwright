@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-18
 owner: null
 ---
 
 # 50 — Verify-cache for cheap retries after flake
 
-> Status: active
+> Status: stable
 > Key files: `scripts/verify-cache.mjs`, `scripts/tests/verify-cache.test.mjs`, `package.json`
 > URL surface: none (developer tooling)
 > OpenAPI ops: none
@@ -69,4 +69,8 @@ Numbered against the BACKLOG acceptance criteria. Run on a clean working tree.
 
 ## Ship notes
 
-(Filled when status flips to `stable`.)
+- **Shipped:** 2026-05-18
+- **Merge commit:** `89a267b` (PR [#12](https://github.com/dudarenok-maker/AudioBook-Generator/pull/12))
+- **Behaviour delta vs. spec:** none. All seven BACKLOG acceptance criteria met as written, with one wording refinement to #3 — the original "frontend `test` re-runs, every other step stays cached" became "every step that legitimately consumes `src/**` re-runs" (lint, typecheck, test, test:e2e, build), reflecting the conservative-over-invalidation rule that's safer than per-step glob narrowing. Documented in the Manual acceptance walkthrough above.
+- **Measured:** cold verify ~120s (full 9 steps); warm verify ~1.0s (all `[cached]`). 21 new node:test cases run alongside the 38 commit-msg cases under the widened `test:hooks` glob.
+- **Follow-up:** BACKLOG Should #2 — extend the cache to `verify:fast` (pre-commit gate). Not load-bearing; opportunistic.
