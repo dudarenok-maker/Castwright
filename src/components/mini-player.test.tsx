@@ -20,8 +20,18 @@ const pendingByChapter = new Map<number, Resolver>();
 const getChapterAudioMock = vi.fn();
 /* Plan 47 — listen-progress mocks. Default: getListenProgress
    returns null (no prior session); putListenProgress is a resolved
-   promise that the per-test cases assert was/wasn't called. */
-const getListenProgressMock = vi.fn(async (_bookId: string) => null);
+   promise that the per-test cases assert was/wasn't called. The
+   explicit return type widens to `record | null` so per-test
+   mockResolvedValueOnce({ chapterId, ... }) doesn't trip on the
+   default's narrowed-to-null inference. */
+interface ListenProgressRecord {
+  chapterId: number;
+  currentSec: number;
+  updatedAt: string;
+}
+const getListenProgressMock = vi.fn<(bookId: string) => Promise<ListenProgressRecord | null>>(
+  async () => null,
+);
 const putListenProgressMock = vi.fn(
   async (_bookId: string, args: { chapterId: number; currentSec: number }) => ({
     chapterId: args.chapterId,
