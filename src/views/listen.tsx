@@ -672,6 +672,21 @@ function MetadataEditor({
           type="date"
         />
         <div className="md:col-span-2">
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
+              Description
+            </span>
+            <textarea
+              value={bookMeta.description ?? ''}
+              onChange={(e) => onEditField('description', e.target.value || null)}
+              placeholder="About this audiobook — travels into M4B desc/ldes atoms on export."
+              rows={4}
+              data-testid="meta-description"
+              className="mt-1.5 w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-magenta/30 resize-y"
+            />
+          </label>
+        </div>
+        <div className="md:col-span-2">
           <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">
             Cover art
           </p>

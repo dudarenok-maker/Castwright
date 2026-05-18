@@ -163,6 +163,10 @@ export interface BookStateJson {
   genre?: string | null;
   /** ISO 'YYYY-MM-DD' (no time component — pure calendar date). */
   publicationDate?: string | null;
+  /** Long-form "about this audiobook" copy. Surfaced in the listen-view
+      metadata editor and piped into the M4B `desc` / `ldes` atoms during
+      Voice export (plan 33). */
+  description?: string | null;
 }
 
 export interface BookStateResponse {
