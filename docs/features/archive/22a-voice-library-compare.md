@@ -107,4 +107,4 @@ Run `VITE_USE_MOCKS=true`.
 - **Tests landed:**
   - `src/components/voice-library-panel.test.tsx` — pins checkbox-only-with-both-props, click-fires-onToggleSelect-not-onSelect, peach-tint-when-selected.
   - `src/views/voices.test.tsx` — pins zero/one/two/three+ selection states, same/different-base-voice badge selection, Compare gating on cross-book / global / missing-character / wrong-count, modal mounts at 2-same-book.
-  - `e2e/voices-compare.spec.ts` — browser-level walk of per-book tab (selection + pill + amber badge + disabled-with-tooltip) and global tab (Compare disabled with "Open a book to compare its voices"). Dialog-open assertion deferred until `mockGetBookState` (BACKLOG Must #2) populates the cast slice.
+  - `e2e/voices-compare.spec.ts` — browser-level walk of per-book tab (selection + pill + amber badge + disabled-with-tooltip) and global tab (Compare disabled with "Open a book to compare its voices"). Dialog-open assertion deferred until `mockGetBookState` (BACKLOG Could #16, same-book compare from global tab) populates the cast slice.
