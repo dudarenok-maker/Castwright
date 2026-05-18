@@ -833,10 +833,63 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
    null on first read for a book; PUT body is `{ chapterId, currentSec }`
    and the server stamps `updatedAt` on write. */
 
+/* Plan 53 — marker kind enum. Server keeps its own copy (rather
+   than reaching into the frontend slice) so the route boundary is
+   self-contained. Frontend mirror lives in
+   src/store/listen-progress-slice.ts (LISTEN_MARKER_KINDS). */
+const LISTEN_MARKER_KINDS = ['note', 'rerecord'] as const;
+type ListenMarkerKind = (typeof LISTEN_MARKER_KINDS)[number];
+
+interface ListenMarker {
+  id: string;
+  chapterId: number;
+  sec: number;
+  label: string;
+  kind: ListenMarkerKind;
+  createdAt: string;
+}
+
 interface ListenProgressFile {
   chapterId: number;
   currentSec: number;
   updatedAt: string;
+  /* Plan 53 — per-book playback rate
+     (`HTMLMediaElement.playbackRate`). Optional; absent on
+     pre-plan-53 records, in which case clients default to 1.0. */
+  playbackRate?: number;
+  /* Plan 53 — user-placed bookmarks. Optional; absent on pre-plan-53
+     records. */
+  markers?: ListenMarker[];
+}
+
+/* Plan 53 — bounds on playback rate. Mirrors the openapi.yaml
+   schema (0.25 - 4.0). The bottom matches HTMLMediaElement's
+   browser-supported floor; the top is well past what any audiobook
+   listener would realistically pick but generous enough to allow
+   user experimentation without 400s. */
+const PLAYBACK_RATE_MIN = 0.25;
+const PLAYBACK_RATE_MAX = 4.0;
+
+/* Plan 53 — server-side validator for an individual marker payload.
+   Returns null when valid, or a short reason string for the 400. */
+function validateMarker(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'object') return 'marker must be an object';
+  const m = raw as Record<string, unknown>;
+  if (typeof m.id !== 'string' || m.id.length === 0) return 'marker.id must be a non-empty string';
+  if (typeof m.chapterId !== 'number' || !Number.isFinite(m.chapterId) || m.chapterId < 0) {
+    return 'marker.chapterId must be a finite number >= 0';
+  }
+  if (typeof m.sec !== 'number' || !Number.isFinite(m.sec) || m.sec < 0) {
+    return 'marker.sec must be a finite number >= 0';
+  }
+  if (typeof m.label !== 'string') return 'marker.label must be a string';
+  if (typeof m.kind !== 'string' || !(LISTEN_MARKER_KINDS as readonly string[]).includes(m.kind)) {
+    return `marker.kind must be one of: ${LISTEN_MARKER_KINDS.join(', ')}`;
+  }
+  if (typeof m.createdAt !== 'string' || m.createdAt.length === 0) {
+    return 'marker.createdAt must be a non-empty string';
+  }
+  return null;
 }
 
 bookStateRouter.get('/:bookId/listen-progress', async (req: Request, res: Response) => {
@@ -855,17 +908,57 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
   try {
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const body = req.body as Partial<{ chapterId: unknown; currentSec: unknown }> | undefined;
+    const body = req.body as
+      | Partial<{
+          chapterId: unknown;
+          currentSec: unknown;
+          playbackRate: unknown;
+          markers: unknown;
+        }>
+      | undefined;
     if (!body || typeof body.chapterId !== 'number' || !Number.isFinite(body.chapterId)) {
       return res.status(400).json({ error: 'chapterId must be a finite number.' });
     }
     if (typeof body.currentSec !== 'number' || !Number.isFinite(body.currentSec) || body.currentSec < 0) {
       return res.status(400).json({ error: 'currentSec must be a finite number >= 0.' });
     }
+    /* Plan 53 — optional playbackRate. Absent / undefined is fine
+       (legacy callers); when present, must be a finite number in the
+       documented browser-supported range. NaN/Infinity rejected. */
+    let playbackRate: number | undefined;
+    if (body.playbackRate !== undefined) {
+      if (
+        typeof body.playbackRate !== 'number' ||
+        !Number.isFinite(body.playbackRate) ||
+        body.playbackRate < PLAYBACK_RATE_MIN ||
+        body.playbackRate > PLAYBACK_RATE_MAX
+      ) {
+        return res.status(400).json({
+          error: `playbackRate must be a finite number between ${PLAYBACK_RATE_MIN} and ${PLAYBACK_RATE_MAX}.`,
+        });
+      }
+      playbackRate = body.playbackRate;
+    }
+    /* Plan 53 — optional markers. Each entry validated through
+       validateMarker; first failure short-circuits with 400 so the
+       on-disk record never contains a partially-valid list. */
+    let markers: ListenMarker[] | undefined;
+    if (body.markers !== undefined) {
+      if (!Array.isArray(body.markers)) {
+        return res.status(400).json({ error: 'markers must be an array.' });
+      }
+      for (let i = 0; i < body.markers.length; i++) {
+        const reason = validateMarker(body.markers[i]);
+        if (reason) return res.status(400).json({ error: `markers[${i}]: ${reason}` });
+      }
+      markers = body.markers as ListenMarker[];
+    }
     const record: ListenProgressFile = {
       chapterId: body.chapterId,
       currentSec: body.currentSec,
       updatedAt: new Date().toISOString(),
+      ...(playbackRate !== undefined ? { playbackRate } : {}),
+      ...(markers !== undefined ? { markers } : {}),
     };
     await writeJsonAtomic(listenProgressJsonPath(located.bookDir), record);
     res.json(record);

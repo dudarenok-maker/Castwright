@@ -10,10 +10,28 @@
    The fix resets audio={url:null,...} synchronously inside Effect 1 so
    Effect 2 immediately strips the element's src and stops playback. */
 
+import type React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, waitFor, act } from '@testing-library/react';
+import { configureStore } from '@reduxjs/toolkit';
+import { Provider } from 'react-redux';
 import { MiniPlayer } from './mini-player';
 import type { Chapter, ChapterAudio } from '../lib/types';
+import { listenProgressSlice } from '../store/listen-progress-slice';
+
+/* Plan 53 — every MiniPlayer render now needs a Redux store
+   because the component reads/writes the listen-progress slice for
+   per-book playbackRate + markers. A fresh store per render keeps
+   the existing chapter-switch + plan-47 specs hermetic. */
+function makeStore() {
+  return configureStore({
+    reducer: { listenProgress: listenProgressSlice.reducer },
+  });
+}
+
+function renderPlayer(ui: React.ReactElement) {
+  return render(<Provider store={makeStore()}>{ui}</Provider>);
+}
 
 type Resolver = (meta: ChapterAudio) => void;
 const pendingByChapter = new Map<number, Resolver>();
@@ -118,16 +136,22 @@ async function resolveChapter(id: number, url: string) {
 
 describe('MiniPlayer — chapter switch', () => {
   it('clears the audio element src when the chapter prop changes, then loads the new URL once metadata arrives', async () => {
+    /* Use a single shared store across the rerender so the slice
+       state survives the prop swap (matches production where the
+       MiniPlayer sits inside one Provider across the whole session). */
+    const store = makeStore();
     const { container, rerender } = render(
-      <MiniPlayer
-        chapter={chapter1}
-        bookId="book-1"
-        onClose={noop}
-        onPrev={noop}
-        onNext={noop}
-        prevAvailable={false}
-        nextAvailable={true}
-      />,
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+        />
+      </Provider>,
     );
 
     const audioEl = container.querySelector('audio');
@@ -141,15 +165,17 @@ describe('MiniPlayer — chapter switch', () => {
        regression: src used to stay pinned to chapter 1 here, so chapter 1
        kept playing under the chapter 2 UI. */
     rerender(
-      <MiniPlayer
-        chapter={chapter2}
-        bookId="book-1"
-        onClose={noop}
-        onPrev={noop}
-        onNext={noop}
-        prevAvailable={true}
-        nextAvailable={false}
-      />,
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter2}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={true}
+          nextAvailable={false}
+        />
+      </Provider>,
     );
 
     await waitFor(() => expect(audioEl!.getAttribute('src')).toBeNull());
@@ -195,7 +221,7 @@ describe('MiniPlayer — plan 47 resume + flush', () => {
       currentSec: 42,
       updatedAt: '2026-05-18T01:00:00.000Z',
     });
-    const { container } = render(
+    const { container } = renderPlayer(
       <MiniPlayer
         chapter={chapter1}
         bookId="book-1"
@@ -222,7 +248,7 @@ describe('MiniPlayer — plan 47 resume + flush', () => {
       currentSec: 42,
       updatedAt: '2026-05-18T01:00:00.000Z',
     });
-    const { container } = render(
+    const { container } = renderPlayer(
       <MiniPlayer
         chapter={chapter1}
         bookId="book-1"
@@ -248,7 +274,7 @@ describe('MiniPlayer — plan 47 resume + flush', () => {
       currentSec: 599.5,
       updatedAt: '2026-05-18T01:00:00.000Z',
     });
-    const { container } = render(
+    const { container } = renderPlayer(
       <MiniPlayer
         chapter={chapter1}
         bookId="book-1"
@@ -267,7 +293,7 @@ describe('MiniPlayer — plan 47 resume + flush', () => {
   });
 
   it('debounced save fires at the first onTimeUpdate past the 5 s threshold and not before', async () => {
-    const { container } = render(
+    const { container } = renderPlayer(
       <MiniPlayer
         chapter={chapter1}
         bookId="book-1"
@@ -290,16 +316,19 @@ describe('MiniPlayer — plan 47 resume + flush', () => {
   });
 
   it('flushes a final save on chapter switch when currentSec is past 5 s', async () => {
+    const store = makeStore();
     const { container, rerender } = render(
-      <MiniPlayer
-        chapter={chapter1}
-        bookId="book-1"
-        onClose={noop}
-        onPrev={noop}
-        onNext={noop}
-        prevAvailable={false}
-        nextAvailable={true}
-      />,
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+        />
+      </Provider>,
     );
     const audioEl = container.querySelector('audio') as HTMLAudioElement;
     await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
@@ -310,22 +339,24 @@ describe('MiniPlayer — plan 47 resume + flush', () => {
        chapter 1 with the latest currentSec (17). */
     await act(async () => {
       rerender(
-        <MiniPlayer
-          chapter={chapter2}
-          bookId="book-1"
-          onClose={noop}
-          onPrev={noop}
-          onNext={noop}
-          prevAvailable={true}
-          nextAvailable={false}
-        />,
+        <Provider store={store}>
+          <MiniPlayer
+            chapter={chapter2}
+            bookId="book-1"
+            onClose={noop}
+            onPrev={noop}
+            onNext={noop}
+            prevAvailable={true}
+            nextAvailable={false}
+          />
+        </Provider>,
       );
     });
     expect(putListenProgressMock).toHaveBeenCalledWith('book-1', { chapterId: 1, currentSec: 17 });
   });
 
   it('does NOT flush on unmount when playback stayed under the 5 s noise floor', async () => {
-    const { container, unmount } = render(
+    const { container, unmount } = renderPlayer(
       <MiniPlayer
         chapter={chapter1}
         bookId="book-1"

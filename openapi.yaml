@@ -703,13 +703,30 @@ paths:
               properties:
                 chapterId: { type: integer, minimum: 0 }
                 currentSec: { type: number, minimum: 0 }
+                playbackRate:
+                  type: number
+                  minimum: 0.25
+                  maximum: 4.0
+                  description: |
+                    Plan 53 — per-book playback rate
+                    (`HTMLMediaElement.playbackRate`). Optional; absent on
+                    pre-plan-53 records. Server validates 0.25 <= rate <= 4.0
+                    so a malformed PUT can't poison the on-disk JSON.
+                markers:
+                  type: array
+                  description: |
+                    Plan 53 — user-placed bookmarks. Optional; absent on
+                    pre-plan-53 records. Each marker carries a label + kind
+                    so the listen-view sidebar can group "general notes"
+                    from "re-record" flags.
+                  items: { $ref: '#/components/schemas/ListenMarker' }
       responses:
         '200':
           description: The just-saved record, including the server-stamped updatedAt
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListenProgress' }
-        '400': { description: Body missing chapterId or currentSec, or contains non-numeric values }
+        '400': { description: Body missing chapterId or currentSec, or contains non-numeric values, or contains a marker with an unrecognised kind }
         '404': { description: Book not found }
 
   /api/voices/base:
@@ -1383,7 +1400,9 @@ components:
         to seek the audio element. Persisted as a sibling
         `listen-progress.json` next to `state.json` so the
         schema-versioning shape from plan 27 stays stable. Plan
-        [47](docs/features/47-listen-progress.md).
+        [47](docs/features/47-listen-progress.md); extended by plan
+        [53](docs/features/53-mini-player-feature-pack.md) with
+        `playbackRate` + `markers`.
       properties:
         chapterId:
           type: integer
@@ -1397,6 +1416,52 @@ components:
           type: string
           format: date-time
           description: 'Server-stamped ISO timestamp. Clients only read this; PUT body omits it.'
+        playbackRate:
+          type: number
+          minimum: 0.25
+          maximum: 4.0
+          description: |
+            Plan 53 — per-book playback rate
+            (`HTMLMediaElement.playbackRate`). Optional / absent on
+            pre-plan-53 records; clients default to 1.0.
+        markers:
+          type: array
+          description: |
+            Plan 53 — user-placed bookmarks. Optional / absent on
+            pre-plan-53 records.
+          items: { $ref: '#/components/schemas/ListenMarker' }
+
+    ListenMarker:
+      type: object
+      required: [id, chapterId, sec, label, kind, createdAt]
+      description: |
+        Plan 53 — user-placed bookmark inside a book. The listen-view
+        sidebar lists these per chapter; click → seek to `sec`.
+      properties:
+        id:
+          type: string
+          description: 'Client-minted UUID. Server treats as opaque.'
+        chapterId:
+          type: integer
+          minimum: 0
+          description: 'Chapter the marker was dropped in.'
+        sec:
+          type: number
+          minimum: 0
+          description: 'Playback position within the chapter, in seconds.'
+        label:
+          type: string
+          description: 'User-editable short label. Empty string is allowed.'
+        kind:
+          type: string
+          enum: [note, rerecord]
+          description: |
+            `note` = general bookmark; `rerecord` = flag for another voice
+            take. Server rejects any other value with 400.
+        createdAt:
+          type: string
+          format: date-time
+          description: 'Client-stamped ISO timestamp at marker creation.'
 
     CoverFraming:
       type: object

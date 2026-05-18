@@ -1119,4 +1119,111 @@ describe('book-state router — listen-progress slice (plan 47)', () => {
       .send({ chapterId: 1, currentSec: 5 });
     expect(res.status).toBe(404);
   });
+
+  /* Plan 53 — validator accepts + persists the optional playbackRate
+     and markers fields. */
+  it('PUT round-trips an optional playbackRate field', async () => {
+    const put = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 1, currentSec: 10, playbackRate: 1.5 });
+    expect(put.status).toBe(200);
+    expect(put.body.playbackRate).toBe(1.5);
+
+    const get = await request(app).get(`/api/books/${lpBookId}/listen-progress`);
+    expect(get.body.playbackRate).toBe(1.5);
+  });
+
+  it('PUT 400s when playbackRate is below 0.25 or above 4.0', async () => {
+    const low = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 1, currentSec: 10, playbackRate: 0.1 });
+    expect(low.status).toBe(400);
+
+    const high = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 1, currentSec: 10, playbackRate: 10 });
+    expect(high.status).toBe(400);
+
+    const nonNumeric = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 1, currentSec: 10, playbackRate: 'fast' });
+    expect(nonNumeric.status).toBe(400);
+  });
+
+  it('PUT round-trips an optional markers array', async () => {
+    const markers = [
+      {
+        id: 'mk_1',
+        chapterId: 2,
+        sec: 83.5,
+        label: 're-record this',
+        kind: 'rerecord',
+        createdAt: '2026-05-19T10:00:00.000Z',
+      },
+      {
+        id: 'mk_2',
+        chapterId: 1,
+        sec: 10,
+        label: '',
+        kind: 'note',
+        createdAt: '2026-05-19T10:01:00.000Z',
+      },
+    ];
+    const put = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 1, currentSec: 5, markers });
+    expect(put.status).toBe(200);
+    expect(put.body.markers).toEqual(markers);
+
+    const get = await request(app).get(`/api/books/${lpBookId}/listen-progress`);
+    expect(get.body.markers).toEqual(markers);
+  });
+
+  it('PUT 400s when a marker carries an unknown kind', async () => {
+    const res = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({
+        chapterId: 1,
+        currentSec: 5,
+        markers: [
+          {
+            id: 'mk_bad',
+            chapterId: 1,
+            sec: 5,
+            label: 'huh',
+            kind: 'mystery',
+            createdAt: '2026-05-19T10:00:00.000Z',
+          },
+        ],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/kind/i);
+  });
+
+  it('PUT 400s when markers is not an array', async () => {
+    const res = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 1, currentSec: 5, markers: { not: 'an array' } });
+    expect(res.status).toBe(400);
+  });
+
+  it('PUT 400s when a marker is missing required fields', async () => {
+    const res = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({
+        chapterId: 1,
+        currentSec: 5,
+        markers: [{ id: 'mk_partial', chapterId: 1, sec: 5, label: 'x', kind: 'note' }],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/createdAt/);
+  });
 });
