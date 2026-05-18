@@ -31,8 +31,10 @@ import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { SUPPORTED_APPS } from '../data/listener-apps';
 import { EXPORT_QUEUE } from '../data/export-queue';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
-import { useAppSelector } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
 import { selectListenProgress } from '../store/listen-progress-slice';
+import { exportsActions } from '../store/exports-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import type { Chapter, Character, Voice, ListenerApp, ExportQueueItem } from '../lib/types';
 import type { EditableBookMeta, EditableBookMetaField } from '../store/book-meta-slice';
 
@@ -91,7 +93,17 @@ export function ListenView({
      on the next library hydrate). Empty string = the user just removed
      the cover; ignore the prop until the slice refresh resolves. Same
      pattern as BookCard in book-library.tsx. */
+  const dispatch = useAppDispatch();
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  /* Per-open tab override. Reset when the modal closes so the next
+     cover-tile click defaults back to the account preference. */
+  const [coverPickerInitialTab, setCoverPickerInitialTab] = useState<
+    'search' | 'upload' | undefined
+  >(undefined);
+  const openCoverPicker = (tab?: 'search' | 'upload') => {
+    setCoverPickerInitialTab(tab);
+    setCoverPickerOpen(true);
+  };
   const [coverOverride, setCoverOverride] = useState<string | null>(null);
   /* Local framing override mirrors coverOverride for instant feedback
      between the picker's debounced PATCH and the slice rehydrate. */
@@ -156,7 +168,7 @@ export function ListenView({
           onImageError={() => setCoverLoadFailed(true)}
           runtime={formatTime(totalSec)}
           narrator={narratorName}
-          onChangeCover={() => setCoverPickerOpen(true)}
+          onChangeCover={() => openCoverPicker()}
         />
         <div>
           <SectionLabel>Audiobook · ready to listen</SectionLabel>
@@ -276,7 +288,33 @@ export function ListenView({
           setExportModal({ tab: 'sync-folder', appHint: 'audiobookshelf' })
         }
       />
-      <ExportQueue items={queueItems} />
+      <ExportQueue
+        items={queueItems}
+        onCopyLink={async (item) => {
+          if (!item.url) return;
+          try {
+            await navigator.clipboard.writeText(item.url);
+            dispatch(
+              notificationsActions.pushToast({
+                kind: 'info',
+                message: 'Link copied to clipboard',
+                dedupeKey: 'export-link-copied',
+              }),
+            );
+          } catch {
+            dispatch(
+              notificationsActions.pushToast({
+                kind: 'warn',
+                message: 'Could not copy — clipboard permission denied',
+                dedupeKey: 'export-link-copy-failed',
+              }),
+            );
+          }
+        }}
+        onRemove={(item) => {
+          dispatch(exportsActions.exportDismissed({ bookId, exportId: item.id }));
+        }}
+      />
 
       <section className="mb-12">
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -306,6 +344,8 @@ export function ListenView({
           onCommit={onCommitMeta}
           onCancel={onCancelMeta}
           isDirty={isMetaDirty}
+          onReplaceCover={() => openCoverPicker('upload')}
+          onRegenerateCover={() => openCoverPicker('search')}
         />
       </section>
 
@@ -334,7 +374,11 @@ export function ListenView({
         bookAuthor={author}
         currentCoverUrl={effectiveCoverUrl ?? undefined}
         currentFraming={effectiveFraming}
-        onClose={() => setCoverPickerOpen(false)}
+        initialTab={coverPickerInitialTab}
+        onClose={() => {
+          setCoverPickerOpen(false);
+          setCoverPickerInitialTab(undefined);
+        }}
         onPicked={(newUrl) => {
           setCoverLoadFailed(false);
           /* Empty string from a "Remove cover" pick — shadow the slice
@@ -572,6 +616,8 @@ interface MetadataEditorProps {
   onCommit: () => void;
   onCancel: () => void;
   isDirty: boolean;
+  onReplaceCover: () => void;
+  onRegenerateCover: () => void;
 }
 
 function MetadataEditor({
@@ -580,6 +626,8 @@ function MetadataEditor({
   onCommit,
   onCancel,
   isDirty,
+  onReplaceCover,
+  onRegenerateCover,
 }: MetadataEditorProps) {
   if (!bookMeta) {
     return (
@@ -631,18 +679,22 @@ function MetadataEditor({
             <div className="w-16 h-16 rounded-xl bg-gradient-cta shadow-card" />
             <div className="flex items-center gap-2">
               <button
-                disabled
-                title="Replace cover — coming soon"
-                className="px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/40 inline-flex items-center gap-1.5 cursor-not-allowed"
+                type="button"
+                onClick={onReplaceCover}
+                title="Upload a new cover from disk"
+                data-testid="meta-cover-replace"
+                className="px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/80 hover:text-ink hover:bg-ink/[0.04] inline-flex items-center gap-1.5 transition-colors"
               >
-                <IconUpload className="w-3.5 h-3.5" /> Replace <ComingSoonBadge />
+                <IconUpload className="w-3.5 h-3.5" /> Replace
               </button>
               <button
-                disabled
-                title="Regenerate cover — coming soon"
-                className="px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/40 inline-flex items-center gap-1.5 cursor-not-allowed"
+                type="button"
+                onClick={onRegenerateCover}
+                title="Search OpenLibrary for a fresh cover candidate"
+                data-testid="meta-cover-regenerate"
+                className="px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/80 hover:text-ink hover:bg-ink/[0.04] inline-flex items-center gap-1.5 transition-colors"
               >
-                <IconRefresh className="w-3.5 h-3.5" /> Regenerate <ComingSoonBadge />
+                <IconRefresh className="w-3.5 h-3.5" /> Regenerate
               </button>
             </div>
           </div>
@@ -820,7 +872,15 @@ function ListenerAppCard({ app, onSend: _onSend, onOpenLiveExport }: ListenerApp
 
 type QueueFilter = 'all' | 'done' | 'in_progress' | 'failed';
 
-function ExportQueue({ items }: { items: ExportQueueItem[] }) {
+function ExportQueue({
+  items,
+  onCopyLink,
+  onRemove,
+}: {
+  items: ExportQueueItem[];
+  onCopyLink?: (item: ExportQueueItem) => void;
+  onRemove?: (item: ExportQueueItem) => void;
+}) {
   const [filter, setFilter] = useState<QueueFilter>('all');
   const visible = items.filter((it) => filter === 'all' || it.status === filter);
   const counts = {
@@ -866,6 +926,8 @@ function ExportQueue({ items }: { items: ExportQueueItem[] }) {
                   }
                 : undefined
             }
+            onCopyLink={onCopyLink}
+            onRemove={onRemove}
           />
         ))}
       </div>
