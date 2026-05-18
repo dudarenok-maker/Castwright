@@ -19,6 +19,7 @@ import {
   bookDirByDisplay,
   castJsonPath,
   changeLogJsonPath,
+  listenProgressJsonPath,
   manuscriptEditsJsonPath,
   revisionsJsonPath,
   slug,
@@ -822,5 +823,53 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
   } catch (e) {
     console.error('[book-state] DELETE failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to delete book.' });
+  }
+});
+
+/* GET / PUT /:bookId/listen-progress — per-book resume bookmark
+   (plan 47). Sibling JSON to state.json (`.audiobook/listen-progress.json`)
+   so it stays out of plan 27's rotating-backup contract. GET returns
+   null on first read for a book; PUT body is `{ chapterId, currentSec }`
+   and the server stamps `updatedAt` on write. */
+
+interface ListenProgressFile {
+  chapterId: number;
+  currentSec: number;
+  updatedAt: string;
+}
+
+bookStateRouter.get('/:bookId/listen-progress', async (req: Request, res: Response) => {
+  try {
+    const located = await findBookByBookId(req.params.bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const progress = await readJson<ListenProgressFile>(listenProgressJsonPath(located.bookDir));
+    res.json(progress);
+  } catch (e) {
+    console.error('[book-state] GET listen-progress failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Failed to read listen-progress.' });
+  }
+});
+
+bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Response) => {
+  try {
+    const located = await findBookByBookId(req.params.bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const body = req.body as Partial<{ chapterId: unknown; currentSec: unknown }> | undefined;
+    if (!body || typeof body.chapterId !== 'number' || !Number.isFinite(body.chapterId)) {
+      return res.status(400).json({ error: 'chapterId must be a finite number.' });
+    }
+    if (typeof body.currentSec !== 'number' || !Number.isFinite(body.currentSec) || body.currentSec < 0) {
+      return res.status(400).json({ error: 'currentSec must be a finite number >= 0.' });
+    }
+    const record: ListenProgressFile = {
+      chapterId: body.chapterId,
+      currentSec: body.currentSec,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeJsonAtomic(listenProgressJsonPath(located.bookDir), record);
+    res.json(record);
+  } catch (e) {
+    console.error('[book-state] PUT listen-progress failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Failed to write listen-progress.' });
   }
 });

@@ -989,3 +989,134 @@ describe('book-state router — GET /:bookId/analysis/state', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('book-state router — listen-progress slice (plan 47)', () => {
+  /* Earlier state-slice tests rename the shared bookId's on-disk
+     folder via PUT slice=state, after which the rename block's
+     afterEach wipes anything outside `Test Author`. Seed a fresh
+     book here so we don't depend on the shared-bookId disk state. */
+  const LP_AUTHOR = 'Listen Progress Author';
+  const LP_SERIES = 'Standalones';
+  const LP_TITLE = 'Listen Progress Book';
+  let lpBookId: string;
+  let lpBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    lpBookId = makeBookId(LP_AUTHOR, LP_SERIES, LP_TITLE);
+    lpBookDir = join(workspaceRoot, 'books', LP_AUTHOR, LP_SERIES, LP_TITLE);
+    mkdirSync(join(lpBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(lpBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: lpBookId,
+        manuscriptId: 'm_listen_progress',
+        title: LP_TITLE,
+        author: LP_AUTHOR,
+        series: LP_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: 'chapter-one' },
+          { id: 2, title: 'Chapter 2', slug: 'chapter-two' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(lpBookDir, 'manuscript.txt'), 'placeholder');
+  });
+
+  it('GET returns null when no listen-progress.json has been written yet', async () => {
+    const res = await request(app).get(`/api/books/${lpBookId}/listen-progress`);
+    expect(res.status).toBe(200);
+    expect(res.body).toBeNull();
+  });
+
+  it('PUT then GET round-trips chapterId + currentSec with a server-stamped updatedAt', async () => {
+    const before = Date.now();
+    const put = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 3, currentSec: 83.5 });
+    const after = Date.now();
+    expect(put.status).toBe(200);
+    expect(put.body.chapterId).toBe(3);
+    expect(put.body.currentSec).toBe(83.5);
+    expect(typeof put.body.updatedAt).toBe('string');
+    const stamped = Date.parse(put.body.updatedAt);
+    expect(stamped).toBeGreaterThanOrEqual(before);
+    expect(stamped).toBeLessThanOrEqual(after);
+
+    const onDisk = join(lpBookDir, '.audiobook', 'listen-progress.json');
+    expect(existsSync(onDisk)).toBe(true);
+    const parsed = JSON.parse(readFileSync(onDisk, 'utf8'));
+    expect(parsed).toEqual(put.body);
+
+    const get = await request(app).get(`/api/books/${lpBookId}/listen-progress`);
+    expect(get.status).toBe(200);
+    expect(get.body).toEqual(put.body);
+  });
+
+  it('PUT overwrites the previous record on a fresh save', async () => {
+    const put = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 4, currentSec: 12 });
+    expect(put.status).toBe(200);
+    expect(put.body.chapterId).toBe(4);
+    expect(put.body.currentSec).toBe(12);
+
+    const get = await request(app).get(`/api/books/${lpBookId}/listen-progress`);
+    expect(get.body.chapterId).toBe(4);
+    expect(get.body.currentSec).toBe(12);
+  });
+
+  it('PUT 400s when chapterId is missing', async () => {
+    const res = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ currentSec: 5 });
+    expect(res.status).toBe(400);
+  });
+
+  it('PUT 400s when chapterId is not a number', async () => {
+    const res = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 'not-a-number', currentSec: 5 });
+    expect(res.status).toBe(400);
+  });
+
+  it('PUT 400s when currentSec is negative', async () => {
+    const res = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 1, currentSec: -1 });
+    expect(res.status).toBe(400);
+  });
+
+  it('PUT 400s when currentSec is not a finite number', async () => {
+    const res = await request(app)
+      .put(`/api/books/${lpBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 1, currentSec: 'fifteen' });
+    expect(res.status).toBe(400);
+  });
+
+  it('GET 404s when the book does not exist', async () => {
+    const res = await request(app).get('/api/books/missing__book__id/listen-progress');
+    expect(res.status).toBe(404);
+  });
+
+  it('PUT 404s when the book does not exist', async () => {
+    const res = await request(app)
+      .put('/api/books/missing__book__id/listen-progress')
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 1, currentSec: 5 });
+    expect(res.status).toBe(404);
+  });
+});

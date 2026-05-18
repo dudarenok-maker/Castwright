@@ -85,6 +85,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [18 — Listen view](18-listen-view.md) — Cover, chapter list, mini-player, handoff queue.
 - [19 — Listener preview](19-preview-listener.md) — Listener-POV full-screen preview.
+- [47 — Listening progress / resume bookmarks](archive/47-listen-progress.md) — Per-book sibling `listen-progress.json`; mini-player seeks to the saved point on chapter mount; Listen view "Resume at MM:SS" pill. Shipped 2026-05-18.
 - [32 — Audiobook export](32-audiobook-export.md) — Sideload to PocketBook Reader (Phase A: MP3.ZIP) via LAN download or sync folder; per-chapter ID3v2.4 tags, no re-encode, atomic writes.
 - [33 — Voice export](33-voice-export.md) — Live Voice (Android audiobook player) tile on the Listen tab; M4B-standards conformance (`stik = 2`) regression-guarded; defaults to M4B + sync-folder.
 - [34 — MP3-folder export](34-mp3-folder-export.md) — Per-chapter MP3s in a sub-folder for folder-scanning audiobook apps (Smart AudioBook Player, BookPlayer, Audiobookshelf). Sync-folder destination only; APIC cover travels with each chapter.
@@ -144,3 +145,4 @@ breadcrumb so cross-references still resolve.
 - [46 — Lint, format, a11y baseline](archive/46-lint-format-a11y.md) — ESLint 8 + Prettier 3 + axe-core on the four core views; `npm run lint` (max-warnings 0) prepended to `verify`. Shipped 2026-05-18.
 - [41 — Bulk-apply library sync on confirm-cast](archive/41-bulk-library-sync.md) — Top-of-view pill that ticks every eligible "Sync profile" checkbox in one click; per-card untick still handles exceptions; existing `handleConfirm` batch fans out the per-character library-cast-override POSTs unchanged. Shipped 2026-05-18.
 - [48 — Global toast surface](archive/48-toast-surface.md) — `notifications` slice + `<ToastStack/>`; stream-middleware halts + export 5xx dispatch through it; dedupe-by-key collapses repeats; auto-dismiss 6 s. Shipped 2026-05-18.
+- [47 — Listening progress / resume bookmarks](archive/47-listen-progress.md) — Per-book sibling `listen-progress.json`; mini-player seeks to the saved position on chapter mount via debounced PUT + onLoadedMetadata; Listen view "Resume at MM:SS" pill. Shipped 2026-05-18.
