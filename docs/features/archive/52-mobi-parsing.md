@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-18
 owner: null
 ---
 
 # MOBI / AZW3 manuscript upload support
 
-> Status: active
+> Status: stable
 > Key files: `server/src/parsers/mobi.ts`, `server/src/parsers/html-utils.ts`,
 > `server/src/parsers/index.ts`, `server/src/routes/import.ts`,
 > `src/views/upload.tsx`, `src/lib/api.ts`, `openapi.yaml`
@@ -161,4 +161,21 @@ Run with the real server (`cd server && npm run dev`) and frontend
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+**Shipped 2026-05-18** in commit `64c42e4` (`feat(server,frontend,docs): plan 52 — MOBI/AZW3 upload support`), branch `feat/server+frontend-plan-52-mobi-support`, PR [#26](https://github.com/dudarenok-maker/AudioBook-Generator/pull/26).
+
+**Spec deltas vs. the original plan write-up:**
+
+- **Binary fixtures dropped.** The original plan called for a `sample.mobi` / `sample.azw3` / `sample-drm.mobi` checked into `server/src/parsers/__fixtures__/`. Mirrored the `pdf.test.ts` pattern instead — mock `@lingo-reader/mobi-parser` so the wrapper logic is exercised in isolation, and hand-craft DRM-flagged buffers inline. End-to-end MOBI parsing against a real Project Gutenberg file is the manual verification step + the deferred [BACKLOG #38 e2e item](../BACKLOG.md), not unit-test scope.
+- **Original-extension preservation moved into the route layer.** `server/src/routes/import.ts:208-216` now switches `manuscript.<ext>` on `entry.originalFileName` when `format === 'mobi'`, so `.azw3` files round-trip as `manuscript.azw3` and re-parse correctly through `initKf8File`. The plan had flagged this as a parser concern; landed it in the route instead because the parser is extension-agnostic by design.
+- **OpenAPI `format` enum extended in both `ImportCandidate` and `UploadResponse`.** The original plan only mentioned `ImportCandidate`; `UploadResponse` needed the same enum extension for `inferFormat`'s typed return to flow through `UploadResponse['format']`.
+
+**Follow-ups landed as BACKLOG entries:**
+
+- [Could #38 — E2E coverage for the binary-upload flow](../BACKLOG.md). Covers EPUB / PDF / MOBI / AZW3 in a single Playwright spec; depends on this plan shipping.
+
+**Out-of-scope items NOT promoted to backlog** (documented for future-you so a hallway question doesn't re-litigate):
+
+- `.azw` / `.azw1` (pre-KF8 Kindle): rare in real-world libraries; one-line `EXT_TO_FORMAT` extension if a user surfaces a need.
+- `.kfx` (Kindle's newest format): no Node library exists. Permanently parked.
+- DRM removal: illegal under DMCA.
+- MOBI cover-image extraction: post-import cover-fetch already uses Open Library / Google Books.
