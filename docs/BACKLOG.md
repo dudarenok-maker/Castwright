@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-18:** Must 1 · Should 0 · Could 13 · Won't 9
+**Counts as of 2026-05-18:** Must 1 · Should 0 · Could 12 · Won't 9
 
 ---
 
@@ -61,16 +61,6 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - _Acceptance:_ PRs that break tests are blocked from merge. Workflow runs in under 10 min cold, under 5 min warm.
 - _Key files:_ new `.github/workflows/verify.yml`.
 - _Benefit (technical):_ eliminates the "works on my machine" gap. Pairs with the visual baselines shipped 2026-05-17 (`e2e/visual.spec.ts`) — without CI, the baselines are a tree-falling-in-a-forest.
-
-### 3. Listening progress / resume bookmarks
-
-Source: net-new (2026-05-17). Validated absent in `src/views/listen.tsx` + `src/components/mini-player.tsx` (in-memory `currentSec` only).
-
-- _What:_ Persist `{ chapterId, currentSec, updatedAt }` per book to a sibling `listen-progress.json` (NOT extending `state.json`, to keep that file's shape stable now that the schema-versioning seam — plan 27 — is in place). Mini-player resumes from the saved point when a chapter reopens. Show a "Resume at MM:SS" pill next to the chapter title on the Listen view.
-- _Acceptance:_ Play chapter 3 to 1:23, navigate away, refresh, reopen → resume point is 1:23 ±1s. Server Vitest covers the read/write; frontend Vitest covers the mini-player resume effect.
-- _Key files:_ `src/views/listen.tsx`; `src/components/mini-player.tsx`; new `src/store/listen-progress-slice.ts`; new server endpoint under `server/src/routes/`.
-- _Depends on:_ persistence-model decision (recommendation: sibling file).
-- _Benefit (user):_ the single feature audiobook users assume exists. Today's behaviour (reset to 0) actively trains the user not to refresh. Also unblocks Should #4's resume-from-position e2e case.
 
 ### 5. Audio loudness normalization (ffmpeg `loudnorm`)
 
