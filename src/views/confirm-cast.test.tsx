@@ -291,3 +291,147 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
     expect(onOpenProfile).toHaveBeenCalledWith('keefe');
   });
 });
+
+/* Plan 41 — bulk-sync pill above the cast-card grid.
+   The pill toggles every eligible character's "Sync profile" checkbox in
+   one click; eligibility mirrors `canOverrideLibrary` per card. The label
+   reflects the target state (Sync N / Clear all), and N updates as the
+   user unticks exceptions after a bulk tick. */
+describe('ConfirmCastView — bulk sync pill', () => {
+  /* Three matched characters with full library handles (bookId + characterId)
+     and two unmatched characters. Mirrors what hydrateFromAnalysis +
+     applyVoiceMatches feeds the view in mock mode after the plan 41
+     fixture seed in src/data/characters.ts + match-factors.ts. */
+  const makeMatched = (
+    id: string,
+    name: string,
+    bookId: string,
+    characterId: string,
+  ): Character => ({
+    id,
+    name,
+    role: 'cast member',
+    color: 'eliza',
+    lines: 50,
+    scenes: 5,
+    attributes: [],
+    voiceId: `v_${id}`,
+    voiceState: 'reused',
+    matchedFrom: {
+      bookTitle: 'Solway Bay',
+      bookId,
+      characterId,
+      confidence: 0.9,
+    },
+  });
+  const makeUnmatched = (id: string, name: string): Character => ({
+    id,
+    name,
+    role: 'cast member',
+    color: 'eliza',
+    lines: 20,
+    scenes: 3,
+    attributes: [],
+    voiceState: 'generated',
+  });
+  const matched3 = [
+    makeMatched('alpha', 'Alpha', 'sb', 'alpha_sb'),
+    makeMatched('beta', 'Beta', 'sb', 'beta_sb'),
+    makeMatched('gamma', 'Gamma', 'sb', 'gamma_sb'),
+  ];
+  const unmatched2 = [makeUnmatched('delta', 'Delta'), makeUnmatched('epsilon', 'Epsilon')];
+
+  function renderBulkView(characters: Character[], handler = vi.fn(async () => {})) {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+    return render(
+      <Provider store={store}>
+        <ConfirmCastView
+          characters={characters}
+          library={library}
+          title="Book Two"
+          onOpenProfile={() => {}}
+          onConfirm={() => {}}
+          onOverrideLibrary={handler}
+          onReanalyse={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('renders the pill with the eligible-character count when at least one card carries the full library handle', () => {
+    renderBulkView([...matched3, ...unmatched2]);
+    expect(
+      screen.getByRole('button', { name: 'Sync 3 profiles from library' }),
+    ).toBeInTheDocument();
+  });
+
+  it('singularises the label when exactly one character is eligible', () => {
+    renderBulkView([makeMatched('solo', 'Solo', 'sb', 'solo_sb'), ...unmatched2]);
+    expect(screen.getByRole('button', { name: 'Sync 1 profile from library' })).toBeInTheDocument();
+  });
+
+  it('clicking the pill ticks every matched checkbox; unmatched characters are unaffected', () => {
+    renderBulkView([...matched3, ...unmatched2]);
+    const allCheckboxesBefore = screen.getAllByRole('checkbox', { name: /Sync profile/i });
+    expect(allCheckboxesBefore).toHaveLength(3);
+    for (const cb of allCheckboxesBefore) expect((cb as HTMLInputElement).checked).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: /Sync 3 profiles from library/ }));
+
+    const allCheckboxesAfter = screen.getAllByRole('checkbox', { name: /Sync profile/i });
+    for (const cb of allCheckboxesAfter) expect((cb as HTMLInputElement).checked).toBe(true);
+    /* Unmatched cards still have no checkbox at all. */
+    expect(screen.getAllByRole('checkbox', { name: /Sync profile/i })).toHaveLength(3);
+  });
+
+  it('clicking the pill again clears every previously-ticked checkbox (label inverts to Clear all syncs)', () => {
+    renderBulkView([...matched3, ...unmatched2]);
+    /* First click — tick all. */
+    fireEvent.click(screen.getByRole('button', { name: /Sync 3 profiles from library/ }));
+    expect(screen.getByRole('button', { name: 'Clear all syncs' })).toBeInTheDocument();
+
+    /* Second click — clear all. */
+    fireEvent.click(screen.getByRole('button', { name: /Clear all syncs/ }));
+    for (const cb of screen.getAllByRole('checkbox', { name: /Sync profile/i })) {
+      expect((cb as HTMLInputElement).checked).toBe(false);
+    }
+    /* Label is back to "Sync 3 …". */
+    expect(
+      screen.getByRole('button', { name: 'Sync 3 profiles from library' }),
+    ).toBeInTheDocument();
+  });
+
+  it('after bulk-tick, per-card untick flips the label back to "Sync 1 profile from library"', () => {
+    renderBulkView([...matched3, ...unmatched2]);
+    fireEvent.click(screen.getByRole('button', { name: /Sync 3 profiles from library/ }));
+    /* Untick the first matched character. */
+    const checkboxes = screen.getAllByRole('checkbox', { name: /Sync profile/i });
+    fireEvent.click(checkboxes[0]);
+    /* Plan 41 invariant 3 + 4: label N is the number of currently-unticked
+       eligible characters when not all are ticked. After unticking one, N=1. */
+    expect(screen.getByRole('button', { name: 'Sync 1 profile from library' })).toBeInTheDocument();
+  });
+
+  it('pill is absent when no character is eligible (no matchedFrom with bookId+characterId)', () => {
+    renderBulkView([...unmatched2]);
+    expect(screen.queryByRole('button', { name: /Sync .* from library/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Clear all syncs/ })).toBeNull();
+  });
+
+  it('pill is absent when onOverrideLibrary is not provided (mock environments)', () => {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+    render(
+      <Provider store={store}>
+        <ConfirmCastView
+          characters={matched3}
+          library={library}
+          title="Book Two"
+          onOpenProfile={() => {}}
+          onConfirm={() => {}}
+          onReanalyse={() => {}}
+        />
+      </Provider>,
+    );
+    expect(screen.queryByRole('button', { name: /Sync .* from library/ })).toBeNull();
+  });
+});

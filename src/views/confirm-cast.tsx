@@ -62,6 +62,32 @@ export function ConfirmCastView({
   const matchedCount = characters.filter((c) => c.matchedFrom).length;
   const generatedCount = characters.length - matchedCount;
 
+  /* Plan 41 — bulk-apply library sync. Mirrors the per-card `canOverrideLibrary`
+     predicate (the `!!onOverrideLibrary` guard hides the pill in mock
+     environments where the per-card checkbox is itself hidden). The pill
+     toggles every eligible character's `overrides[id]` in one click — the
+     existing `handleConfirm` batch (above) is still the only POST path. */
+  const eligibleIds = characters
+    .filter((c) => !!onOverrideLibrary && !!c.matchedFrom?.bookId && !!c.matchedFrom?.characterId)
+    .map((c) => c.id);
+  const allTicked = eligibleIds.length > 0 && eligibleIds.every((id) => overrides[id]);
+  /* N is the count of currently-unticked eligible characters — the size of
+     the bulk action's effect. After bulk-tick + per-card untick of one,
+     the pill flips to "Sync 1 profile from library" (plan 41 invariant 4). */
+  const uncheckedCount = eligibleIds.filter((id) => !overrides[id]).length;
+  const bulkSyncLabel = allTicked
+    ? 'Clear all syncs'
+    : `Sync ${uncheckedCount} ${uncheckedCount === 1 ? 'profile' : 'profiles'} from library`;
+  /* Functional update so a near-simultaneous per-card click (which still
+     reads from a stale closure at line 136) can't clobber the bulk set. */
+  const handleBulkSync = () => {
+    setOverrides((prev) => {
+      const next = { ...prev };
+      for (const id of eligibleIds) next[id] = !allTicked;
+      return next;
+    });
+  };
+
   /* Fire any opted-in library-cast overrides before navigating off the
      confirm view. allSettled so a single failing override (network blip,
      library record renamed mid-flight) doesn't strand the user — the
@@ -117,6 +143,14 @@ export function ConfirmCastView({
             generate
           </p>
         </div>
+
+        {eligibleIds.length > 0 && (
+          <div className="mb-3 flex justify-end">
+            <PrimaryButton variant="dark" size="sm" icon={false} onClick={handleBulkSync}>
+              {bulkSyncLabel}
+            </PrimaryButton>
+          </div>
+        )}
 
         <div className="space-y-3">
           {characters.map((c) => (
