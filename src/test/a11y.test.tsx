@@ -149,6 +149,7 @@ const meta: EditableBookMeta = {
   narratorCredit: 'Anders Vale',
   genre: 'Fantasy',
   publicationDate: '2026-05-09',
+  description: null,
 };
 
 describe('a11y — book library view', () => {

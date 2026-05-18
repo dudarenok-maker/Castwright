@@ -32,7 +32,7 @@ const toolsPresent = (() => {
 })();
 const describeIfTools = toolsPresent ? describe : describe.skip;
 
-function makeState(): BookStateJson {
+function makeState(overrides: Partial<BookStateJson> = {}): BookStateJson {
   return {
     bookId: 'demo__standalones__test-book',
     manuscriptId: 'mns_test',
@@ -55,6 +55,7 @@ function makeState(): BookStateJson {
     narratorCredit: 'Jane Narrator',
     genre: 'Audiobook',
     publicationDate: '2025',
+    ...overrides,
   };
 }
 
@@ -300,6 +301,54 @@ describeIfTools('buildM4b', () => {
     const probe = ffprobeJson(outPathNoCover);
     expect(probe.streams.find((s) => s.codec_type === 'video')).toBeUndefined();
     expect(probe.streams.find((s) => s.codec_type === 'audio')?.codec_name).toBe('aac');
+  }, 30_000);
+
+  it('embeds the description into the M4B desc / ldes atoms when state.description is set (plan 33)', async () => {
+    /* The Listen view's metadata editor now carries a free-form
+       description field. FFMETADATA's `description` → mp4 `desc` atom
+       (short description) and `synopsis` → `ldes` atom (long description);
+       both populated with the same value so Voice, Apple Books, Plex,
+       BookPlayer all surface the rich text regardless of which atom
+       each prefers. ffprobe demuxes the atoms back to format tags. */
+    const longDesc =
+      'A short summary of the audiobook with multi-line meta — ' +
+      'comma, semicolon; equals=sign, hash# — all FFMETADATA control ' +
+      'chars survive escaping. Travels into the desc + ldes atoms.';
+    const descPath = join(tmpRoot, 'with-desc.m4b');
+    await buildM4b({
+      bookDir,
+      state: makeState({ description: longDesc }),
+      outPath: descPath,
+    });
+
+    const probe = ffprobeJson(descPath);
+    const tags = probe.format.tags ?? {};
+    /* Most ffmpeg builds map both atoms back to lowercase keys. */
+    const seen = Object.keys(tags).map((k) => k.toLowerCase());
+    /* At minimum the description key MUST be present and equal to the
+       original (modulo the literal-newline collapsing, which we didn't
+       use here). Surface every key on failure so a future ffmpeg
+       upgrade that renames the key surfaces clearly. */
+    const descKey = seen.find((k) => k === 'description' || k === 'desc');
+    expect(descKey, `expected description/desc in format tags; got: ${seen.join(', ')}`).toBeDefined();
+    const descValue = tags[descKey as keyof typeof tags] as string;
+    expect(descValue).toBe(longDesc);
+  }, 30_000);
+
+  it('omits desc / ldes atoms when state.description is null or blank (plan 33)', async () => {
+    const blankPath = join(tmpRoot, 'no-desc.m4b');
+    await buildM4b({
+      bookDir,
+      state: makeState({ description: '   ' }),
+      outPath: blankPath,
+    });
+    const probe = ffprobeJson(blankPath);
+    const tags = probe.format.tags ?? {};
+    const seen = Object.keys(tags).map((k) => k.toLowerCase());
+    expect(seen).not.toContain('description');
+    expect(seen).not.toContain('desc');
+    expect(seen).not.toContain('synopsis');
+    expect(seen).not.toContain('ldes');
   }, 30_000);
 
   it('writes the iTunes audiobook media-kind atom (stik = 2) so cross-app players treat it as an audiobook', async () => {
