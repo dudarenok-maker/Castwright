@@ -41,6 +41,12 @@ interface Props {
       update its local LibraryBook.coverFraming for instant feedback in
       other surfaces (BookCard, CoverArt) without re-fetching. */
   onFramingChanged?: (framing: CoverFraming) => void;
+  /** Optional one-shot tab override applied each time `open` flips true.
+      Beats the account-default for that opening only; the user can still
+      switch tabs once the modal is mounted. Used by the Listen view to
+      route the metadata-editor "Replace" button → Upload tab and
+      "Regenerate" button → Search tab. */
+  initialTab?: 'search' | 'upload';
 }
 
 type TabKey = 'search' | 'upload' | 'frame';
@@ -67,10 +73,25 @@ export function CoverPicker(props: Props) {
     onClose,
     onPicked,
     onFramingChanged,
+    initialTab,
   } = props;
 
   const accountDefaultTab = useAppSelector((s) => s.account.coverPickerDefaultTab ?? 'search');
-  const [tab, setTab] = useState<TabKey>(accountDefaultTab === 'upload' ? 'upload' : 'search');
+  const [tab, setTab] = useState<TabKey>(
+    initialTab ?? (accountDefaultTab === 'upload' ? 'upload' : 'search'),
+  );
+
+  /* When the modal re-opens with a different initialTab override (e.g.
+     Replace vs Regenerate buttons in the metadata editor), honour the
+     fresh override on each open. Once the modal is mounted the user can
+     still switch tabs freely. */
+  const prevOpen = useRef(open);
+  useEffect(() => {
+    if (open && !prevOpen.current && initialTab) {
+      setTab(initialTab);
+    }
+    prevOpen.current = open;
+  }, [open, initialTab]);
 
   /* Search-tab state */
   const [state, setState] = useState<LoadState>({ kind: 'idle' });

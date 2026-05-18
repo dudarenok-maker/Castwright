@@ -95,12 +95,18 @@ Run against the canonical e2e manuscript (`~/Downloads/Bonus Keefe Story.txt`, s
 
 ## KNOWN: scaffolded
 
+What's still scaffolded after plan 18a (cover + queue-action wiring slice, shipped 2026-05-18):
+
 - `mockGetChapterAudio` returns `url: null`; no audio plays in mock mode by design.
-- Listen-view waveform card still derives from the mock `peaks: float[240]`; the real chapter-audio meta endpoint returns `peaks: []` because the mini-player doesn't draw a waveform. Wiring real peaks into the Listen-view waveform is a follow-up that ships only when the visual is worth the extra disk write.
-- Export queue is hardcoded fixture; row actions are explicitly disabled with "Coming soon" affordances.
-- Listener-app "Send to …" buttons are disabled; the `AppHandoffModal` walkthrough is unreachable from this view until per-app handoff (likely PocketBook first) lands.
-- Download tiles and header Download/Share buttons are non-functional stubs marked "Coming soon".
-- Cover-art Replace and Regenerate in the metadata editor are also non-functional stubs.
+- Listen-view waveform card still derives from the mock `peaks: float[240]`; the real chapter-audio meta endpoint returns `peaks: []`. Tracked as `[BACKLOG Could #35]`.
+- Listener-app "Send to …" buttons (BookPlayer / Smart AudioBook Player / Apple Books / Plex) are disabled; the `AppHandoffModal` walkthrough is unreachable from those tiles. Plan 18b wires PocketBook + Audiobookshelf; the other four are tracked as `[BACKLOG Could #29-32]` per-app.
+- Download tiles (m4b chaptered, MP3 ZIP, streaming link) and the header Download/Share buttons remain non-functional stubs. Tracked as `[BACKLOG Could #33]`.
+- Export queue Retry + Download row actions remain disabled. Tracked as `[BACKLOG Could #34]`. Copy link + Remove are wired (plan 18a).
+
+Shipped in plan 18a (2026-05-18):
+
+- Metadata-editor cover Replace + Regenerate buttons. Replace opens `CoverPicker` on Upload tab; Regenerate opens it on Search tab. The existing per-card cover-tile click was already wired; the editor buttons now route through the same modal via a new `initialTab` prop on `CoverPicker`.
+- Export-queue row actions: **Copy link** writes the row's URL to `navigator.clipboard` + pushes an `info` toast via the plan 48 notification surface; **Remove** dispatches `exportsActions.exportDismissed({ bookId, exportId })`. Mock-fallback fixture rows (synthetic IDs) accept the dispatch as a no-op since they don't live in `byBookId` — acceptable mock-mode degradation. Pinned by `src/views/listen.test.tsx` "metadata-editor cover buttons" + "export-queue per-row actions" describes.
 
 ## Out of scope
 
