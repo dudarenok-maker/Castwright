@@ -334,13 +334,20 @@ describe('ListenView — coming-soon affordances', () => {
     expect(within(appleBooksCard).getByTestId('coming-soon-badge')).toBeInTheDocument();
   });
 
-  it('disables the two remaining "Or download a file" tiles and tags them with Soon', () => {
+  it('enables M4B + MP3 ZIP download tiles, keeps streaming link as Coming soon (plan 57)', () => {
     renderView();
-    /* Phase A removed the per-chapter MP3 zip tile — the modal supersedes it.
-       Two future-affordance tiles remain (M4B + streaming link). */
+    /* Plan 57 wired the M4B + MP3 ZIP tiles to the export modal via
+       `prefill`. The streaming-link tile stays Coming soon pending a
+       slugged URL endpoint. */
     const downloads = screen.getAllByRole('button', { name: /^Download$/ });
-    expect(downloads.length).toBe(2);
-    for (const btn of downloads) expect(btn).toBeDisabled();
+    expect(downloads.length).toBe(3);
+    /* The two live tiles are enabled. */
+    expect(screen.getByTestId('download-tile-m4b').querySelector('button')).toBeEnabled();
+    expect(screen.getByTestId('download-tile-mp3-zip').querySelector('button')).toBeEnabled();
+    /* The streaming-link tile (no testid by design — it's not live) is
+       the only remaining disabled tile. */
+    const disabled = downloads.filter((b) => b.hasAttribute('disabled'));
+    expect(disabled.length).toBe(1);
   });
 
   it('shows the one remaining mocked-preview banner (listener apps)', () => {

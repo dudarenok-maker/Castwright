@@ -87,6 +87,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [53 — Mini-player feature pack (playback speed + markers + sleep timer)](53-mini-player-feature-pack.md) — Speed picker (0.75× — 2×) persisted per book; user-placed markers (note / rerecord kinds) with a listen-view sidebar; sleep timer with countdown presets + end-of-chapter mode (per-session, not persisted). Extends plan 47's persistence seam.
 - [32 — Audiobook export](32-audiobook-export.md) — Sideload to PocketBook Reader (Phase A: MP3.ZIP) via LAN download or sync folder; per-chapter ID3v2.4 tags, no re-encode, atomic writes.
 - [34 — MP3-folder export](34-mp3-folder-export.md) — Per-chapter MP3s in a sub-folder for folder-scanning audiobook apps (Smart AudioBook Player, BookPlayer, Audiobookshelf). Sync-folder destination only; APIC cover travels with each chapter.
+- [57 — Listen-view download tiles](57-download-tiles.md) — Wires the M4B chaptered + MP3 ZIP tiles on the listen view to open the existing `ExportAudiobookModal` with the format pre-filled; streaming-link tile remains "Coming soon" pending a slugged URL endpoint.
 
 ### I. Revisions & drift
 

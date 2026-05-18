@@ -129,6 +129,11 @@ export function ListenView({
   const [exportModal, setExportModal] = useState<{
     tab: 'download' | 'sync-folder';
     appHint?: 'voice' | 'smart_audiobook' | 'bookplayer' | 'audiobookshelf';
+    /* Plan 57 — direct-format prefill from the download tiles (M4B,
+       MP3 ZIP). Distinct from `appHint` which collapses the modal to a
+       tile-specific UX; `format` keeps the generic two-tab UX with the
+       picker pre-set. */
+    format?: 'm4b' | 'mp3-zip' | 'mp3-folder';
   } | null>(null);
 
   /* Live job list from the store, with the visual fixtures as a fallback
@@ -385,18 +390,28 @@ export function ListenView({
           <SectionLabel>Or download a file</SectionLabel>
           <span className="text-xs text-ink/50">For sideloading or archival</span>
         </div>
-        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4">
           <DownloadCard
             title="Full audiobook"
             format="m4b chaptered"
             size="—"
-            description="Single file with embedded chapter markers. Coming in Phase B."
+            description="Single file with embedded chapter markers. Universal across audiobook apps."
+            testid="download-tile-m4b"
+            onDownload={() => setExportModal({ tab: 'download', format: 'm4b' })}
+          />
+          <DownloadCard
+            title="MP3 ZIP"
+            format="zipped per-chapter mp3s"
+            size="—"
+            description="One zip with every chapter as an MP3 inside. Good for folder-scanning players."
+            testid="download-tile-mp3-zip"
+            onDownload={() => setExportModal({ tab: 'download', format: 'mp3-zip' })}
           />
           <DownloadCard
             title="Streaming link"
             format="Shareable URL"
-            size="Hosted"
-            description="Send a link to listeners. Optional password protection."
+            size="—"
+            description="Hosted link a listener can open in a browser. Available in a later release."
           />
         </div>
       </section>
@@ -426,7 +441,9 @@ export function ListenView({
                 ? { format: 'mp3-folder', destination: 'sync-folder', appHint: 'bookplayer' }
                 : exportModal?.appHint === 'audiobookshelf'
                   ? { format: 'mp3-folder', destination: 'sync-folder', appHint: 'audiobookshelf' }
-                  : undefined
+                  : exportModal?.format
+                    ? { format: exportModal.format, destination: exportModal.tab }
+                    : undefined
         }
         onClose={() => setExportModal(null)}
       />
@@ -731,17 +748,29 @@ function DownloadCard({
   format,
   size,
   description,
+  onDownload,
+  testid,
 }: {
   title: string;
   format: string;
   size: string;
   description: string;
+  /** Plan 57 — when present, the tile is live: the button is enabled
+      and clicking it invokes the handler (typically opens the export
+      modal with the right format/destination pre-filled). Tiles without
+      a handler retain the "Coming soon" affordance. */
+  onDownload?: () => void;
+  testid?: string;
 }) {
+  const live = onDownload != null;
   return (
-    <div className="rounded-3xl border p-6 transition-all bg-white border-ink/10 shadow-card relative">
+    <div
+      className="rounded-3xl border p-6 transition-all bg-white border-ink/10 shadow-card relative"
+      data-testid={testid}
+    >
       <div className="flex items-start justify-between mb-3">
         <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/50">{format}</p>
-        <ComingSoonBadge />
+        {!live && <ComingSoonBadge />}
       </div>
       <div className="flex items-baseline justify-between gap-3 mb-2">
         <h3 className="text-lg font-bold text-ink">{title}</h3>
@@ -749,9 +778,15 @@ function DownloadCard({
       </div>
       <p className="text-xs leading-relaxed mb-5 text-ink/60">{description}</p>
       <button
-        disabled
-        title="Download — coming soon"
-        className="w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-ink/[0.03] text-ink/40 cursor-not-allowed"
+        type="button"
+        onClick={live ? onDownload : undefined}
+        disabled={!live}
+        title={live ? 'Download' : 'Download — coming soon'}
+        className={
+          live
+            ? 'w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-ink text-canvas hover:bg-ink/90'
+            : 'w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-ink/[0.03] text-ink/40 cursor-not-allowed'
+        }
       >
         <IconDownload className="w-4 h-4" /> Download
       </button>
