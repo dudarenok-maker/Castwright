@@ -41,6 +41,34 @@ import { isGenerationActive } from './generation.js';
 
 const MP3_MIME = 'audio/mpeg';
 
+/** Disk shape mirror of `ChapterPeaksFile` in `server/src/tts/mp3.ts`.
+ *  Kept narrow + local so this route doesn't reach across the TTS module
+ *  boundary just to import a type. */
+interface ChapterPeaksFile {
+  peaks: number[];
+}
+
+/** Read `<bookDir>/audio/<slug>.peaks.json` (or `.previous.peaks.json`)
+ *  when present, returning the 240-bin envelope. Missing file → empty
+ *  array; this is the graceful fallback contract that lets chapters
+ *  generated before plan 56 keep loading. A corrupt / malformed file is
+ *  also treated as missing (logged then absorbed) so a one-off bad write
+ *  doesn't 500 the whole meta endpoint. */
+async function readPeaksOrEmpty(peaksPath: string): Promise<number[]> {
+  if (!existsSync(peaksPath)) return [];
+  try {
+    const file = await readJson<ChapterPeaksFile>(peaksPath);
+    if (!file || !Array.isArray(file.peaks)) return [];
+    return file.peaks;
+  } catch (err) {
+    /* eslint-disable-next-line no-console */
+    console.warn(
+      `[chapter-audio] failed to read peaks file at ${peaksPath}: ${(err as Error).message}`,
+    );
+    return [];
+  }
+}
+
 interface ChapterSegmentsFile {
   bookId: string;
   chapterId: number;
@@ -85,6 +113,14 @@ async function locateChapterAudio(
 ): Promise<{
   audio: ChapterAudioFile;
   segPath: string;
+  /** Sibling `<slug>.peaks.json` (current) or `<slug>.previous.peaks.json`
+   *  (preserved) location. The file is optional — `readPeaksOrEmpty`
+   *  treats absence as `peaks: []`. Plan 56's render path emits the
+   *  current variant; the preserved variant has no writer today (rollback
+   *  preservation in `preserveExistingAsPrevious` does not move peaks),
+   *  so the preserved endpoint reliably returns `[]` for now — a
+   *  deliberately graceful trade-off rather than a missing feature. */
+  peaksPath: string;
   chapterId: number;
   chapterTitle: string;
 } | null> {
@@ -104,7 +140,11 @@ async function locateChapterAudio(
     variant === 'current'
       ? `${root}/${chapter.slug}.segments.json`
       : `${root}/${chapter.slug}.previous.segments.json`;
-  return { audio, segPath, chapterId, chapterTitle: chapter.title };
+  const peaksPath =
+    variant === 'current'
+      ? join(root, `${chapter.slug}.peaks.json`)
+      : join(root, `${chapter.slug}.previous.peaks.json`);
+  return { audio, segPath, peaksPath, chapterId, chapterTitle: chapter.title };
 }
 
 /** Mirror of findChapterAudio but for the `.previous.mp3` sibling. */
@@ -123,18 +163,22 @@ chapterAudioRouter.get(
     /* On-disk segments use `startSec/endSec/sentenceIds[]` (per-group). The
      ChapterAudio contract publishes `start/end/sentenceId` (singular) — map
      each group to one outward segment, using the group's first sentence id
-     as the representative. Peaks: [] for now (MiniPlayer doesn't draw them;
-     Listen's waveform is out of scope here). */
+     as the representative. */
     const segments = (meta?.segments ?? []).map((s) => ({
       start: s.startSec,
       end: s.endSec,
       characterId: s.characterId,
       sentenceId: s.sentenceIds[0],
     }));
+    /* Plan 56: surface the real 240-bin RMS peaks emitted at encode time.
+       Missing file → `[]`, preserving the pre-plan-56 contract so chapters
+       generated before this plan keep loading and the Listen view falls
+       back gracefully. */
+    const peaks = await readPeaksOrEmpty(found.peaksPath);
     res.json({
       url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/${found.audio.urlSuffix}`,
       durationSec: meta?.durationSec ?? 0,
-      peaks: [],
+      peaks,
       sampleRate: meta?.sampleRate ?? 24000,
       segments,
     });
@@ -157,10 +201,17 @@ chapterAudioRouter.get(
       characterId: s.characterId,
       sentenceId: s.sentenceIds[0],
     }));
+    /* Plan 56: the preserved audition variant has no peaks writer today
+       (rollback preservation does not move peaks alongside the audio +
+       segments pair). `readPeaksOrEmpty` therefore typically returns `[]`
+       for this path, which the Listen / revision-diff player handles
+       gracefully. Wiring is symmetrical with /audio so a future preserve
+       extension can light up the A/B waveform without a route change. */
+    const peaks = await readPeaksOrEmpty(found.peaksPath);
     res.json({
       url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/audio/previous.mp3`,
       durationSec: meta?.durationSec ?? 0,
-      peaks: [],
+      peaks,
       sampleRate: meta?.sampleRate ?? 24000,
       segments,
     });
