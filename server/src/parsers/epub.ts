@@ -8,58 +8,8 @@ import { join } from 'node:path';
 import type { ChapterHint } from '../store/manuscripts.js';
 import type { ParsedManuscript } from './text.js';
 import { parseFilenameMetadata } from './text.js';
-import {
-  tagExcitedDialog,
-  tagHesitantDialog,
-  tagHtmlEmphasis,
-  tagShoutingDialog,
-} from './audio-tags.js';
-
-function stripHtml(html: string): string {
-  return tagHtmlEmphasis(html)
-    .replace(/<\s*br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-/* Pull the first h1/h2/h3 text from chapter HTML so we have a fallback
-   when the NCX entry's title is missing or generic. Strips inline tags
-   (`<em>`, `<strong>`, `<span>`) from the heading text and collapses
-   whitespace. Returns null when no heading is present in the first ~8 KB
-   of the document. */
-const FIRST_HEADING_RE = /<h[1-3][^>]*>([\s\S]{0,400}?)<\/h[1-3]>/i;
-function extractFirstHeading(html: string): string | null {
-  const m = FIRST_HEADING_RE.exec(html);
-  if (!m) return null;
-  const raw = m[1]
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (raw.length === 0 || raw.length > 200) return null;
-  return raw;
-}
-
-/* "Chapter 1" / "Chapter IV" / "Chapter Twelve" with nothing else.
-   Used to detect generic NCX titles that should be augmented with the
-   body's <h1>. Mirrors the bare-numbered-heading test in text.ts but
-   self-contained here to keep the parsers loosely coupled. */
-const GENERIC_NCX_RE =
-  /^chapter\s+(?:[ivxlcdm\d]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?\s*$/i;
+import { tagExcitedDialog, tagHesitantDialog, tagShoutingDialog } from './audio-tags.js';
+import { stripHtml, extractFirstHeading, GENERIC_NCX_RE } from './html-utils.js';
 
 export async function parseEpub(
   buffer: Buffer,
