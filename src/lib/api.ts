@@ -549,6 +549,35 @@ export function _resetMockBookStates(): void {
   seedDefaultMockBookStates();
 }
 
+/* Plan 47 — listen-progress mocks. Module-scope Map so a PUT-then-GET
+   round-trips inside a single mock-mode session. Reset for tests via
+   _resetMockListenProgress (api.mock-state.test.ts can call this when
+   it wants a clean slate). */
+const MOCK_LISTEN_PROGRESS = new Map<string, ListenProgress>();
+
+export async function mockGetListenProgress(bookId: string): Promise<ListenProgress | null> {
+  await wait(15);
+  return MOCK_LISTEN_PROGRESS.get(bookId) ?? null;
+}
+
+export async function mockPutListenProgress(
+  bookId: string,
+  args: { chapterId: number; currentSec: number },
+): Promise<ListenProgress> {
+  await wait(15);
+  const record: ListenProgress = {
+    chapterId: args.chapterId,
+    currentSec: args.currentSec,
+    updatedAt: new Date().toISOString(),
+  };
+  MOCK_LISTEN_PROGRESS.set(bookId, record);
+  return record;
+}
+
+export function _resetMockListenProgress(): void {
+  MOCK_LISTEN_PROGRESS.clear();
+}
+
 async function mockConfirmBook(body: ConfirmBookRequest): Promise<ConfirmBookResponse> {
   await wait(180);
   const bookId = `${body.author.toLowerCase().replace(/[^a-z0-9]+/g, '-')}__${body.isStandalone ? 'standalones' : body.series.toLowerCase().replace(/[^a-z0-9]+/g, '-')}__${body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
@@ -967,6 +996,44 @@ async function realPutBookState(bookId: string, req: PutStateRequest): Promise<v
     throw new Error(
       `Book state PUT failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
+}
+
+/* Plan 47 — per-book resume bookmark.
+   GET returns null when no session has been recorded yet (file
+   absent). PUT body is `{ chapterId, currentSec }`; server stamps
+   updatedAt and returns the saved record. The mini-player calls PUT
+   debounced (~once per 5 s) during playback, plus a final flush on
+   chapter switch / close. The Listen view reads GET on book hydrate
+   for the "Resume at MM:SS" pill. */
+export interface ListenProgress {
+  chapterId: number;
+  currentSec: number;
+  updatedAt: string;
+}
+
+async function realGetListenProgress(bookId: string): Promise<ListenProgress | null> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/listen-progress`);
+  if (!res.ok)
+    throw new Error(
+      `Listen-progress GET failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realPutListenProgress(
+  bookId: string,
+  args: { chapterId: number; currentSec: number },
+): Promise<ListenProgress> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/listen-progress`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Listen-progress PUT failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
 }
 
 /* OpenLibrary cover endpoints. The picker modal calls findCoverCandidates
@@ -2493,6 +2560,8 @@ const real = {
   setVoiceOverride: realSetVoiceOverride,
   getBookState: realGetBookState,
   putBookState: realPutBookState,
+  getListenProgress: realGetListenProgress,
+  putListenProgress: realPutListenProgress,
   findCoverCandidates: realFindCoverCandidates,
   setCover: realSetCover,
   removeCover: realRemoveCover,
@@ -2611,6 +2680,8 @@ const mock = {
   setVoiceOverride: mockSetVoiceOverride,
   getBookState: mockGetBookState,
   putBookState: mockPutBookState,
+  getListenProgress: mockGetListenProgress,
+  putListenProgress: mockPutListenProgress,
   findCoverCandidates: mockFindCoverCandidates,
   setCover: mockSetCover,
   removeCover: mockRemoveCover,
