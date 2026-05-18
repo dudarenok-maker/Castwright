@@ -300,6 +300,103 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
     expect(generateContentStream).toHaveBeenCalledTimes(1);
   }, 10_000);
 
+  /* Idle-chunk watchdog + abort wiring — fix for the "Paused: Parsing and
+     attribution" stall where a slow Gemini stream blocked the per-chapter
+     pipeline indefinitely (see fix/server-gemini-stream-watchdog). The
+     watchdog converts a wedged stream into a retryable error; the caller
+     signal aborts an in-flight stream immediately. */
+  describe('stream watchdog + abort', () => {
+    /* Async generator that yields one chunk and then hangs forever. Models
+       the pathological case (Google's stream goes silent mid-response). */
+    async function* hangAfterFirstChunk(first: { text: string }): AsyncGenerator<{
+      text: string;
+    }> {
+      yield first;
+      await new Promise<never>(() => {
+        /* never resolves — the watchdog or caller-abort must tear this
+           down, not the iterator itself */
+      });
+    }
+
+    it('throws GeminiStreamIdleError when the stream goes silent for STREAM_IDLE_TIMEOUT_MS', async () => {
+      vi.useFakeTimers();
+      try {
+        const { GeminiAnalyzer, GeminiStreamIdleError, STREAM_IDLE_TIMEOUT_MS } = await import(
+          './gemini.js'
+        );
+
+        /* All three attempts hang after the first chunk. The retry loop
+           catches the idle error and retries; after MAX_ATTEMPTS the last
+           idle error propagates. */
+        generateContentStream
+          .mockResolvedValueOnce(hangAfterFirstChunk({ text: '{' }))
+          .mockResolvedValueOnce(hangAfterFirstChunk({ text: '{' }))
+          .mockResolvedValueOnce(hangAfterFirstChunk({ text: '{' }));
+
+        const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+        const runP = analyzer.runStage1('m_idle_stall', '# prompt', {}).catch((e) => e);
+
+        /* Three idle-timeouts back-to-back, plus the inter-attempt
+           backoff sleeps (up to ~6s each, jittered). Advance generously. */
+        for (let i = 0; i < 3; i += 1) {
+          await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS + 10);
+          await vi.advanceTimersByTimeAsync(10_000);
+        }
+
+        const err = await runP;
+        expect(err).toBeInstanceOf(GeminiStreamIdleError);
+        /* Three upstream attempts before giving up — same as the 5xx
+           exhaustion path. */
+        expect(generateContentStream).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    }, 30_000);
+
+    it('aborts in-flight stream and throws AnalysisAbortedError when caller signal fires', async () => {
+      const { GeminiAnalyzer } = await import('./gemini.js');
+      const { AnalysisAbortedError } = await import('./ollama.js');
+
+      generateContentStream.mockResolvedValueOnce(hangAfterFirstChunk({ text: '{' }));
+
+      const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+      const controller = new AbortController();
+
+      const runP = analyzer
+        .runStage1('m_abort_mid_stream', '# prompt', { signal: controller.signal })
+        .catch((e) => e);
+
+      /* Wait one tick so the analyzer starts the stream and consumes the
+         first chunk, then trip the caller's abort. */
+      await new Promise((r) => setTimeout(r, 10));
+      controller.abort();
+
+      const err = await runP;
+      expect(err).toBeInstanceOf(AnalysisAbortedError);
+      /* Caller abort is NOT retried — exactly one upstream call. */
+      expect(generateContentStream).toHaveBeenCalledTimes(1);
+    }, 5_000);
+
+    it('passes config.abortSignal to generateContentStream so the SDK can tear down the HTTP request', async () => {
+      const slices = chunksOf(STAGE1_RESPONSE, 256);
+      generateContentStream.mockResolvedValueOnce(asyncFromArray(slices.map((text) => ({ text }))));
+
+      const { GeminiAnalyzer } = await import('./gemini.js');
+      const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+      const controller = new AbortController();
+      await analyzer.runStage1('m_signal_wired', '# prompt', { signal: controller.signal });
+
+      const args = generateContentStream.mock.calls[0][0];
+      expect(args.config).toBeDefined();
+      /* AbortSignal.any-composed signal is itself an AbortSignal — the
+         load-bearing assertion is that ANY signal is wired through, since
+         pre-fix the field was unset (undefined). */
+      expect(args.config.abortSignal).toBeInstanceOf(AbortSignal);
+    });
+  });
+
   it('parseRetryDelayMs handles "Ns", "N.Ns", and "Nms" forms', async () => {
     const { parseRetryDelayMs } = await import('./gemini.js');
     function build(delay: string): Error {
