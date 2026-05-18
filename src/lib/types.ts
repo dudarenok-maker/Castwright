@@ -495,7 +495,14 @@ export type ExportLanInfo = components['schemas']['ExportLanInfo'];
 
 /* ── UI stage discriminated union ─────────────────────────────────────── */
 
-export type View = 'manuscript' | 'cast' | 'library' | 'generate' | 'listen' | 'log';
+export type View =
+  | 'manuscript'
+  | 'cast'
+  | 'library'
+  | 'generate'
+  | 'listen'
+  | 'log'
+  | 'restructure';
 
 export type Stage =
   | { kind: 'books' }

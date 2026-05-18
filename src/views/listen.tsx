@@ -32,6 +32,7 @@ import { SUPPORTED_APPS } from '../data/listener-apps';
 import { EXPORT_QUEUE } from '../data/export-queue';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
 import { useAppDispatch, useAppSelector } from '../store';
+import { uiActions } from '../store/ui-slice';
 import { selectListenProgress } from '../store/listen-progress-slice';
 import { exportsActions } from '../store/exports-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -229,6 +230,13 @@ export function ListenView({
               className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
             >
               <IconEye className="w-4 h-4" /> Preview as listener
+            </button>
+            <button
+              onClick={() => dispatch(uiActions.changeView('restructure'))}
+              data-testid="open-restructure"
+              className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
+            >
+              <IconWaveform className="w-4 h-4" /> Restructure chapters
             </button>
             <button
               disabled
