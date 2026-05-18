@@ -116,7 +116,29 @@ export const STEPS = [
 ];
 
 export function parseFlags(argv) {
-  return { noCache: argv.includes('--no-cache') };
+  let steps = null;
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--steps') {
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) {
+        steps = parseStepsCsv(next);
+        i += 1;
+      } else {
+        steps = [];
+      }
+    } else if (a.startsWith('--steps=')) {
+      steps = parseStepsCsv(a.slice('--steps='.length));
+    }
+  }
+  return { noCache: argv.includes('--no-cache'), steps };
+}
+
+function parseStepsCsv(csv) {
+  return csv
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 // Pure decision function — no I/O. Returns 'run' | 'skip'.
@@ -359,6 +381,20 @@ function formatSecs(ms) {
 // Top-level orchestrator. Returns process exit code.
 export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env } = {}) {
   const flags = parseFlags(argv);
+  const validNames = STEPS.map((s) => s.name);
+  let activeSteps = STEPS;
+  if (flags.steps && flags.steps.length > 0) {
+    const unknown = flags.steps.filter((n) => !validNames.includes(n));
+    if (unknown.length > 0) {
+      console.error(
+        `[verify-cache] unknown step name(s): ${unknown.join(', ')}\n` +
+          `[verify-cache] valid steps: ${validNames.join(', ')}`,
+      );
+      return 2;
+    }
+    const selected = new Set(flags.steps);
+    activeSteps = STEPS.filter((s) => selected.has(s.name));
+  }
   const cachePath = join(cwd, CACHE_FILENAME);
   const fileList = gitFileList(cwd);
   const nodeVer = process.version;
@@ -377,7 +413,7 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
     console.log('[verify-cache] git ls-files failed; running uncached');
   }
 
-  for (const step of STEPS) {
+  for (const step of activeSteps) {
     const files = fileList ? selectStepFiles({ fileList, step }) : [];
     const entries = files.map((rel) => {
       let h = fileHashes.get(rel);
