@@ -128,7 +128,13 @@ describe('user-settings router', () => {
     expect((res.body as Record<string, unknown>).apiKey).toBeUndefined();
 
     const onDisk = JSON.parse(readFileSync(userSettingsPath, 'utf8'));
-    expect(onDisk.geminiApiKey).toBeUndefined();
+    /* The general PUT MUST NOT promote any of the secret-shaped payload
+       fields to a saved value. The on-disk shape carries `geminiApiKey: null`
+       by default (the dedicated /gemini-key endpoint owns that field), so
+       we assert "still null", not "absent". The other two payload shapes
+       (`apiKey`, `GEMINI_API_KEY`) aren't in the schema at all and must
+       NEVER appear on disk. */
+    expect(onDisk.geminiApiKey).toBeNull();
     expect(onDisk.apiKey).toBeUndefined();
     expect(onDisk.GEMINI_API_KEY).toBeUndefined();
   });
@@ -174,5 +180,78 @@ describe('user-settings router', () => {
       .send({ defaultTtsEngine: 'definitely-not-an-engine' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid/i);
+  });
+
+  /* Plan 49 — dedicated Gemini-key PUT endpoint. The general PUT still
+     strips secret-shaped fields (asserted above); this endpoint is the
+     only sanctioned write path for the API key. */
+  describe('PUT /gemini-key', () => {
+    it('persists the key, flips apiKeyStatus to set, and never leaks the plaintext', async () => {
+      const before = await request(app).get('/api/user/settings');
+      expect(before.body.apiKeyStatus).toBe('unset');
+
+      const save = await request(app)
+        .put('/api/user/settings/gemini-key')
+        .send({ key: 'my-real-key-12345' });
+      expect(save.status).toBe(200);
+      expect(save.body.apiKeyStatus).toBe('set');
+      expect((save.body as Record<string, unknown>).geminiApiKey).toBeUndefined();
+
+      /* Subsequent GET still reports `set` and still does NOT echo the key. */
+      const after = await request(app).get('/api/user/settings');
+      expect(after.body.apiKeyStatus).toBe('set');
+      expect((after.body as Record<string, unknown>).geminiApiKey).toBeUndefined();
+
+      /* On disk, the key IS stored (plaintext, same trust model as .env). */
+      const onDisk = JSON.parse(readFileSync(userSettingsPath, 'utf8'));
+      expect(onDisk.geminiApiKey).toBe('my-real-key-12345');
+    });
+
+    it('clears the key when the body sends null', async () => {
+      /* Seed a saved key first. */
+      await request(app)
+        .put('/api/user/settings/gemini-key')
+        .send({ key: 'temporary-key' });
+      const set = await request(app).get('/api/user/settings');
+      expect(set.body.apiKeyStatus).toBe('set');
+
+      /* Clear it. */
+      const cleared = await request(app)
+        .put('/api/user/settings/gemini-key')
+        .send({ key: null });
+      expect(cleared.status).toBe(200);
+      expect(cleared.body.apiKeyStatus).toBe('unset');
+
+      const onDisk = JSON.parse(readFileSync(userSettingsPath, 'utf8'));
+      expect(onDisk.geminiApiKey).toBeNull();
+    });
+
+    it('env GEMINI_API_KEY wins over the UI-saved value (apiKeyStatus stays set)', async () => {
+      /* Save a UI key, then set env to a DIFFERENT value. The status pill
+         must reflect env first — that's the documented precedence. */
+      await request(app)
+        .put('/api/user/settings/gemini-key')
+        .send({ key: 'ui-saved-key' });
+      process.env.GEMINI_API_KEY = 'env-key-wins';
+
+      const res = await request(app).get('/api/user/settings');
+      expect(res.body.apiKeyStatus).toBe('set');
+    });
+
+    it('empty / whitespace-only strings coerce to null on save', async () => {
+      const res = await request(app)
+        .put('/api/user/settings/gemini-key')
+        .send({ key: '   ' });
+      expect(res.status).toBe(200);
+      expect(res.body.apiKeyStatus).toBe('unset');
+
+      const onDisk = JSON.parse(readFileSync(userSettingsPath, 'utf8'));
+      expect(onDisk.geminiApiKey).toBeNull();
+    });
+
+    it('rejects a payload missing the key field with 400', async () => {
+      const res = await request(app).put('/api/user/settings/gemini-key').send({});
+      expect(res.status).toBe(400);
+    });
   });
 });

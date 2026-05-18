@@ -5,31 +5,38 @@
    (apiKeyStatus, workspaceRoot, workspaceSource). PUT validates a partial
    patch, strips secret-shaped keys, persists, and returns the new shape.
 
-   Secrets stay in server/.env — the API key value never crosses this
-   boundary, only the binary "is it set" flag. */
+   Plan 49 — the Gemini API key is now UI-managed via a dedicated
+   PUT /api/user/settings/gemini-key endpoint (kept off the general PUT
+   so a misaddressed payload can't leak the secret into an unrelated
+   field). The general GET still surfaces only apiKeyStatus 'set'|'unset',
+   never the plaintext. Env-var GEMINI_API_KEY still wins when set. */
 
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import {
   readUserSettings,
   writeUserSettings,
+  writeGeminiApiKey,
+  getResolvedGeminiApiKey,
   type UserSettings,
 } from '../workspace/user-settings.js';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from '../workspace/paths.js';
 
 export const userSettingsRouter = Router();
 
-interface UserSettingsResponse extends UserSettings {
+interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey'> {
   apiKeyStatus: 'set' | 'unset';
   workspaceRoot: string;
   workspaceSource: 'env' | 'default' | 'override';
 }
 
 function envDerived(settings: UserSettings): UserSettingsResponse {
-  const key = process.env.GEMINI_API_KEY?.trim();
+  /* Drop the plaintext key — frontend only ever sees apiKeyStatus. */
+  const rest = { ...settings } as Partial<UserSettings>;
+  delete rest.geminiApiKey;
   return {
-    ...settings,
-    apiKeyStatus: key && key.length > 0 ? 'set' : 'unset',
+    ...(rest as Omit<UserSettings, 'geminiApiKey'>),
+    apiKeyStatus: getResolvedGeminiApiKey() ? 'set' : 'unset',
     workspaceRoot: WORKSPACE_ROOT,
     workspaceSource: WORKSPACE_SOURCE,
   };
@@ -55,5 +62,30 @@ userSettingsRouter.put('/', async (req: Request, res: Response) => {
     }
     console.error('[user-settings] PUT failed', err);
     res.status(500).json({ error: 'Failed to write user settings.' });
+  }
+});
+
+const geminiKeyPayloadSchema = z.object({
+  key: z.string().nullable(),
+});
+
+/* PUT /api/user/settings/gemini-key { key: string | null }
+   - Sets the UI-managed Gemini API key (Account view → Server configuration).
+   - Pass `null` to clear it.
+   - Response is the same shape as GET /api/user/settings — caller can swap
+     it into local state without a follow-up GET.
+   - Env GEMINI_API_KEY still wins; setting the key here is a no-op visually
+     when env is already present (apiKeyStatus stays 'set' either way). */
+userSettingsRouter.put('/gemini-key', async (req: Request, res: Response) => {
+  try {
+    const { key } = geminiKeyPayloadSchema.parse(req.body);
+    const updated = await writeGeminiApiKey(key);
+    res.json(envDerived(updated));
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Invalid payload.', issues: err.issues });
+    }
+    console.error('[user-settings] PUT /gemini-key failed', err);
+    res.status(500).json({ error: 'Failed to save Gemini API key.' });
   }
 });
