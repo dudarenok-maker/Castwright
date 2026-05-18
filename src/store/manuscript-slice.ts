@@ -216,6 +216,44 @@ export const manuscriptSlice = createSlice({
       if (pieces.length === 0) return;
       s.sentences.splice(idx, 1, ...pieces);
     },
+
+    /* Apply a chapter restructure remap (plan 51). Rewrites each
+       sentence's (chapterId, id) pair according to the table the
+       server returned from POST /chapters/{merge,split,reorder}.
+       Sentences whose (chapterId, id) doesn't appear in the table
+       are dropped — content-changed merge / split chapters return no
+       remap entries for the dropped halves, and any other sentence
+       missing a remap entry is structurally orphan. The reducer is
+       pure (no I/O); the route's response already reflects the new
+       on-disk reality, so the slice just mirrors it.
+
+       Re-sorted into (chapterId, id) order so the manuscript view
+       renders in narrative sequence — the remap entries may arrive
+       in any order. */
+    applyChapterRestructure: (
+      s,
+      a: PayloadAction<{
+        sentenceRemap: Array<{
+          oldChapterId: number;
+          oldSentenceId: number;
+          newChapterId: number;
+          newSentenceId: number;
+        }>;
+      }>,
+    ) => {
+      const key = (chapterId: number, id: number) => `${chapterId}:${id}`;
+      const remapByOld = new Map(
+        a.payload.sentenceRemap.map((r) => [key(r.oldChapterId, r.oldSentenceId), r]),
+      );
+      const next: Sentence[] = [];
+      for (const sent of s.sentences) {
+        const mapped = remapByOld.get(key(sent.chapterId, sent.id));
+        if (!mapped) continue; // orphan — dropped
+        next.push({ ...sent, chapterId: mapped.newChapterId, id: mapped.newSentenceId });
+      }
+      next.sort((x, y) => x.chapterId - y.chapterId || x.id - y.id);
+      s.sentences = next;
+    },
   },
 });
 

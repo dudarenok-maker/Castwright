@@ -1730,6 +1730,150 @@ async function mockSetChapterExcluded(
   };
 }
 
+/* Chapter restructure — merge/split/reorder (plan 51).
+   Pure-remap semantics: sentences keep their text + characterId +
+   voice assignment; only chapterId pointers and per-chapter sentence
+   ids are rewritten. Audio for content-changed chapters is deleted on
+   disk (chapter unplayable until regen); audio for renumbered-only
+   chapters is renamed in place. See docs/features/51-restructure-chapters.md. */
+export interface ChapterRestructureResponse {
+  chapters: Array<{
+    id: number;
+    title: string;
+    slug: string;
+    duration?: string;
+    excluded?: boolean;
+    audioModelKey?: string;
+    audioRenderedAt?: string;
+  }>;
+  sentenceRemap: Array<{
+    oldChapterId: number;
+    oldSentenceId: number;
+    newChapterId: number;
+    newSentenceId: number;
+  }>;
+}
+
+async function postRestructure(
+  bookId: string,
+  endpoint: 'merge' | 'split' | 'reorder',
+  body: unknown,
+): Promise<ChapterRestructureResponse> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/chapters/${endpoint}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Chapter ${endpoint} failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function realMergeChapters(
+  bookId: string,
+  chapterIds: number[],
+  mergedTitle?: string,
+): Promise<ChapterRestructureResponse> {
+  return postRestructure(bookId, 'merge', {
+    chapterIds,
+    ...(mergedTitle ? { mergedTitle } : {}),
+  });
+}
+
+async function realSplitChapter(
+  bookId: string,
+  chapterId: number,
+  afterSentenceId: number,
+  newTitle?: string,
+): Promise<ChapterRestructureResponse> {
+  return postRestructure(bookId, 'split', {
+    chapterId,
+    afterSentenceId,
+    ...(newTitle ? { newTitle } : {}),
+  });
+}
+
+async function realReorderChapters(
+  bookId: string,
+  order: number[],
+): Promise<ChapterRestructureResponse> {
+  return postRestructure(bookId, 'reorder', { order });
+}
+
+/* Mock implementations return deterministic shapes good enough for
+   Vitest / Playwright. They don't model the slug-rewrite or audio-delete
+   side effects; consumers should treat the response as authoritative for
+   the new chapter list + sentence remap and re-fetch book-state if they
+   need disk-level confirmation. */
+async function mockMergeChapters(
+  _bookId: string,
+  chapterIds: number[],
+  mergedTitle?: string,
+): Promise<ChapterRestructureResponse> {
+  await wait(80);
+  const ids = [...chapterIds].sort((a, b) => a - b);
+  return {
+    chapters: [
+      {
+        id: 1,
+        title: 'Chapter 1',
+        slug: '01-chapter-1',
+      },
+      {
+        id: ids[0],
+        title: mergedTitle ?? `Merged ${ids.join('+')}`,
+        slug: `${String(ids[0]).padStart(2, '0')}-merged`,
+      },
+    ],
+    sentenceRemap: [],
+  };
+}
+
+async function mockSplitChapter(
+  _bookId: string,
+  chapterId: number,
+  _afterSentenceId: number,
+  newTitle?: string,
+): Promise<ChapterRestructureResponse> {
+  await wait(80);
+  return {
+    chapters: [
+      { id: chapterId, title: `Chapter ${chapterId}`, slug: `${String(chapterId).padStart(2, '0')}-mock` },
+      {
+        id: chapterId + 1,
+        title: newTitle ?? `Chapter ${chapterId} (cont.)`,
+        slug: `${String(chapterId + 1).padStart(2, '0')}-mock-cont`,
+      },
+    ],
+    sentenceRemap: [],
+  };
+}
+
+async function mockReorderChapters(
+  _bookId: string,
+  order: number[],
+): Promise<ChapterRestructureResponse> {
+  await wait(80);
+  return {
+    chapters: order.map((_oldId, i) => ({
+      id: i + 1,
+      title: `Chapter ${i + 1}`,
+      slug: `${String(i + 1).padStart(2, '0')}-mock`,
+    })),
+    sentenceRemap: [],
+  };
+}
+
 /* Subset re-analysis. Re-runs Phase 0a + Phase 1 for just the requested
    chapters and merges into the existing cache. Used by the un-exclude
    flow in the Generate view: a chapter that was excluded at confirm
@@ -2614,6 +2758,9 @@ const real = {
   deleteBook: realDeleteBook,
   reparseBook: realReparseBook,
   setChapterExcluded: realSetChapterExcluded,
+  mergeChapters: realMergeChapters,
+  splitChapter: realSplitChapter,
+  reorderChapters: realReorderChapters,
   runAnalysisForChapters: realRunAnalysisForChapters,
   getVoiceSample: realGetVoiceSample,
   getBaseVoiceSample: realGetBaseVoiceSample,
@@ -2735,6 +2882,9 @@ const mock = {
   deleteBook: mockDeleteBook,
   reparseBook: mockReparseBook,
   setChapterExcluded: mockSetChapterExcluded,
+  mergeChapters: mockMergeChapters,
+  splitChapter: mockSplitChapter,
+  reorderChapters: mockReorderChapters,
   runAnalysisForChapters: mockRunAnalysisForChapters,
   getVoiceSample: mockGetVoiceSample,
   getBaseVoiceSample: mockGetBaseVoiceSample,

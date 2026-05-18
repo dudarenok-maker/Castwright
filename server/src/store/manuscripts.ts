@@ -55,6 +55,15 @@ export function listManuscripts(): ManuscriptRecord[] {
   return Array.from(store.values());
 }
 
+/** Drop a manuscript record from the in-memory store. The next
+    `getOrHydrateManuscript` call will re-hydrate from disk. Used by
+    tests to reset between cases, and by routes that have applied a
+    structural change and need to force fresh re-parse on the next
+    analysis run. */
+export function removeManuscript(id: string): void {
+  store.delete(id);
+}
+
 /* In-memory lookup, with a workspace fallback that re-parses the manuscript
    file on disk if the in-memory record is missing (server restart, etc.).
    Returns undefined if the manuscript can't be located by either route. */

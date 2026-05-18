@@ -63,6 +63,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [12 — Manuscript view](12-manuscript-view.md) — Sentence list, low-confidence flagging, speaker reassignment.
 - [12a — Fix: sentence reassignment scoped by (chapterId, id)](12a-fix-reassign-cross-chapter-id.md) — Reassign reducers + inspector prop scope by both chapter and sentence id; pre-fix, clicks on chapter 2+ silently mutated chapter 1. Shipped 2026-05-18.
+- [51 — Chapter restructure panel (merge / split / reorder)](51-restructure-chapters.md) — Three-way structural edit surface mounted at ready-stage `view: 'restructure'`. Pure-remap semantics preserve sentence text + characterId + voice assignment; audio for content-changed chapters is deleted, renumbered-only chapters keep their audio (two-pass rename + segments.json metadata rewrite).
 
 ### F. TTS
 
