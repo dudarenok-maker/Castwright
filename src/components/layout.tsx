@@ -378,7 +378,9 @@ export function Layout() {
             chapterCharacters: res.chapterCharacters,
           }),
         );
-        dispatch(revisionsActions.hydrateFromBookState(res.revisions ?? null));
+        dispatch(
+          revisionsActions.hydrateFromBookState(res.revisions ? { bookId, ...res.revisions } : null),
+        );
         dispatch(changeLogActions.hydrateFromBookState(res.changeLog ?? null));
         /* Editable Listen-view metadata: seed from state.json's editorial
            fields, falling back to the cast narrator's name when the book
@@ -527,7 +529,7 @@ export function Layout() {
     let cancelled = false;
     const fetchOnce = () =>
       api.pollRevisions({ bookId }).then((res) => {
-        if (!cancelled) dispatch(revisionsActions.applyPoll(res));
+        if (!cancelled) dispatch(revisionsActions.applyPoll({ ...res, bookId }));
       });
     fetchOnce();
     const t = setInterval(fetchOnce, 30000);
