@@ -502,6 +502,10 @@ export interface ExportQueueItem {
 export type BookExportRequest = components['schemas']['BookExportRequest'];
 export type BookExportJob = components['schemas']['BookExportJob'];
 export type ExportLanInfo = components['schemas']['ExportLanInfo'];
+/* Plan 67 — shareable streaming-link payload returned by
+   POST /api/books/{bookId}/share. The frontend opens a copy-to-clipboard
+   modal with this URL. */
+export type BookShareLink = components['schemas']['BookShareLink'];
 
 /* ── UI stage discriminated union ─────────────────────────────────────── */
 

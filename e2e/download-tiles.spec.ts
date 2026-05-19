@@ -1,19 +1,20 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Plan 57 — Listen-view download tiles e2e.
+ * Plan 57 + plan 67 — Listen-view download tiles e2e.
  *
  * Three "Or download a file" tiles on the listen view:
- *  - Full audiobook (m4b chaptered) — LIVE
- *  - MP3 ZIP — LIVE
- *  - Streaming link — Coming soon
+ *  - Full audiobook (m4b chaptered) — LIVE (plan 57)
+ *  - MP3 ZIP — LIVE (plan 57)
+ *  - Streaming link — LIVE (plan 67)
  *
- * Each live tile opens the ExportAudiobookModal pre-set to the right
- * format + destination via the `prefill` prop. This spec walks the
- * click-through for the two live tiles and confirms the modal mounts
- * with the right format selected.
+ * The M4B + MP3 ZIP tiles open the ExportAudiobookModal pre-set to the
+ * right format + destination via the `prefill` prop. The Streaming link
+ * tile mints a slugged share URL (POST /api/books/:bookId/share) and
+ * opens the ShareLinkModal with a copyable URL.
  *
- * Pairs with docs/features/57-download-tiles.md.
+ * Pairs with docs/features/archive/57-download-tiles.md (M4B + MP3 ZIP)
+ * and docs/features/archive/67-streaming-link-tile.md (Streaming link).
  */
 test.describe.configure({ mode: 'serial' });
 
@@ -50,10 +51,23 @@ test.describe('plan 57 — download tiles', () => {
     await expect(page.getByTestId('export-format-mp3-zip')).toBeVisible();
   });
 
-  test('Streaming link tile remains "Coming soon" in v1.3.0', async ({ page }) => {
+  test('Streaming link tile mints a share URL and opens a copyable modal (plan 67)', async ({
+    page,
+  }) => {
     const tile = page.getByTestId('download-tile-streaming');
     await expect(tile).toBeVisible();
     const button = tile.getByRole('button', { name: /Download/i });
-    await expect(button).toBeDisabled();
+    await expect(button).toBeEnabled();
+    await button.click();
+
+    // Share-link modal mounts with the slugged URL in a copyable input.
+    await expect(page.getByTestId('share-link-modal')).toBeVisible({ timeout: 3_000 });
+    const urlInput = page.getByTestId('share-link-url');
+    // Mock createBookShareLink resolves to `${origin}/share/<12-char slug>`.
+    await expect(urlInput).toHaveValue(/\/share\/[0-9ABCDEFGHJKMNPQRSTVWXYZ]{12}$/, {
+      timeout: 3_000,
+    });
+    const copyButton = page.getByTestId('share-link-copy');
+    await expect(copyButton).toBeEnabled();
   });
 });
