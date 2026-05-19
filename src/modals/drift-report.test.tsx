@@ -26,12 +26,14 @@ vi.mock('../lib/use-sample-playback', () => ({
   }),
 }));
 
-const getVoiceSampleSpy = vi.fn(async () => ({
-  url: '/audio/voices/voice-eliza-kokoro-v1-cafe.mp3',
-  durationSec: 12,
-  cached: true,
-  modelKey: 'kokoro-v1' as const,
-}));
+const getVoiceSampleSpy = vi.fn((_args: unknown) =>
+  Promise.resolve({
+    url: '/audio/voices/voice-eliza-kokoro-v1-cafe.mp3',
+    durationSec: 12,
+    cached: true,
+    modelKey: 'kokoro-v1' as const,
+  }),
+);
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -187,23 +189,28 @@ describe('DriftReportModal — auto-queueable severe drift (C1+C2)', () => {
    resolved via api.getVoiceSample). Mutex via component state — only one
    plays at a time. */
 describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
+  /* Single prototype-level spy serves both A + B elements. The Bs are
+     aliases purely for test-name readability — there's only one method
+     on HTMLMediaElement.prototype to spy on. */
+  let playSpy: ReturnType<typeof vi.spyOn>;
+  let pauseSpy: ReturnType<typeof vi.spyOn>;
   let playASpy: ReturnType<typeof vi.spyOn>;
   let pauseASpy: ReturnType<typeof vi.spyOn>;
   let playBSpy: ReturnType<typeof vi.spyOn>;
-  let pauseBSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     /* Stub HTMLMediaElement.play / pause so audio elements don't actually
        fire decode + autoplay errors in jsdom. Vitest's jsdom doesn't ship
        a real media pipeline. Each test gets a fresh spy. */
-    playASpy = vi
+    playSpy = vi
       .spyOn(window.HTMLMediaElement.prototype, 'play')
       .mockImplementation(() => Promise.resolve());
-    pauseASpy = vi
+    pauseSpy = vi
       .spyOn(window.HTMLMediaElement.prototype, 'pause')
       .mockImplementation(() => {});
-    playBSpy = playASpy;
-    pauseBSpy = pauseASpy;
+    playASpy = playSpy;
+    pauseASpy = pauseSpy;
+    playBSpy = playSpy;
     getVoiceSampleSpy.mockClear();
   });
 
