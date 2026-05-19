@@ -39,6 +39,7 @@ import { chapterAudioRouter } from './routes/chapter-audio.js';
 import { chaptersRestructureRouter } from './routes/chapters-restructure.js';
 import { exportRouter } from './routes/export.js';
 import { exportLanRouter, enumerateLanUrls } from './routes/export-lan.js';
+import { shareRouter, sharePublicRouter } from './routes/share.js';
 import { revisionsRouter } from './routes/revisions.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
 import { ollamaHealthRouter } from './routes/ollama-health.js';
@@ -138,6 +139,8 @@ app.use('/api/books', chapterAudioRouter); // mounts /:bookId/chapters/:chapterI
 app.use('/api/books', chaptersRestructureRouter); // mounts /:bookId/chapters/{merge,split,reorder} (plan 51)
 app.use('/api/books', exportRouter); // mounts /:bookId/exports (POST + GET status + GET download)
 app.use('/api/export', exportLanRouter); // mounts /lan (LAN URL enumeration for the export modal)
+app.use('/api/books', shareRouter); // mounts /:bookId/share (POST — mint a slugged share URL — plan 67)
+app.use('/', sharePublicRouter); // mounts /share/:slug (public-facing M4B proxy — plan 67)
 app.use('/api/books', revisionsRouter); // mounts /:bookId/revisions (drift diff over segments snapshots)
 app.use('/api/voices', voicesRouter); // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter); // mounts POST /:voiceId/sample
