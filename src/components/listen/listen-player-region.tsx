@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react';
 import {
   IconPlay,
   IconPause,
-  IconDownload,
+  IconShare,
   IconRefresh,
 } from '../../lib/icons';
 import { SectionLabel, Pill } from '../primitives';
@@ -23,6 +23,7 @@ import { parseDuration, formatTime } from '../../lib/time';
 import { stripChapterPrefix } from '../../lib/format-chapter-title';
 import { useAppSelector } from '../../store';
 import { selectListenProgress, type ListenMarker } from '../../store/listen-progress-slice';
+import { ShareClipModal } from '../../modals/share-clip';
 import type { Chapter, Character } from '../../lib/types';
 
 interface ListenPlayerRegionProps {
@@ -49,6 +50,18 @@ export function ListenPlayerRegion({
   onDeleteMarker,
 }: ListenPlayerRegionProps) {
   const findChar = (id: string) => characters.find((c) => c.id === id);
+  /* Plan 69 — share-clip modal is hoisted to the region level so it can
+     read the listen-progress slice for the current playhead without each
+     row carrying its own copy. The button lives per-row though, alongside
+     the chapter's play affordance. */
+  const [shareClipChapter, setShareClipChapter] = useState<Chapter | null>(null);
+  const progress = useAppSelector(selectListenProgress(bookId));
+  /* When the chapter we're sharing is the same one currently playing,
+     centre the default ±15 s window on the resume bookmark (which the
+     mini-player keeps updating). Otherwise fall back to null and the
+     modal centres on chapter midpoint. */
+  const sharePlayhead =
+    shareClipChapter && progress?.chapterId === shareClipChapter.id ? progress.currentSec : null;
   return (
     <>
       <MarkersPanel
@@ -86,12 +99,22 @@ export function ListenPlayerRegion({
                   isPlaying={currentTrack === ch.id}
                   onPlay={() => onPlayChapter(currentTrack === ch.id ? null : ch.id)}
                   onRegenerate={onRegenerate}
+                  onShareClip={() => setShareClipChapter(ch)}
                 />
               );
             })}
           </div>
         </div>
       </section>
+
+      <ShareClipModal
+        open={shareClipChapter !== null}
+        bookId={bookId}
+        chapter={shareClipChapter}
+        playheadSec={sharePlayhead}
+        durationSec={shareClipChapter ? parseDuration(shareClipChapter.duration) : 0}
+        onClose={() => setShareClipChapter(null)}
+      />
     </>
   );
 }
@@ -103,6 +126,10 @@ interface ChapterListenRowProps {
   isPlaying: boolean;
   onPlay: () => void;
   onRegenerate: (ch: Chapter) => void;
+  /** Plan 69 — opens the Share-clip modal for this chapter. The
+      region-level component owns the modal state so it can read the
+      cross-row playhead from the listen-progress slice. */
+  onShareClip: () => void;
 }
 
 function ChapterListenRow({
@@ -112,6 +139,7 @@ function ChapterListenRow({
   isPlaying,
   onPlay,
   onRegenerate,
+  onShareClip,
 }: ChapterListenRowProps) {
   /* Plan 47 — read the per-book resume bookmark. The pill renders
      only when it points at THIS chapter and the user got past the
@@ -182,11 +210,13 @@ function ChapterListenRow({
           <IconRefresh className="w-4 h-4" />
         </button>
         <button
-          disabled
-          title="Download — coming soon"
-          className="text-ink/30 grid place-items-center w-8 h-8 rounded-full cursor-not-allowed"
+          onClick={onShareClip}
+          title="Share a 30-second clip"
+          aria-label={`Share clip of chapter ${chapter.id}`}
+          data-testid={`chapter-row-${chapter.id}-share-clip`}
+          className="text-ink/40 hover:text-magenta grid place-items-center w-8 h-8 rounded-full hover:bg-ink/[0.04]"
         >
-          <IconDownload className="w-4 h-4" />
+          <IconShare className="w-4 h-4" />
         </button>
       </span>
     </div>

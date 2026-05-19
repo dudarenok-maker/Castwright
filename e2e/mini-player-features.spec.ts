@@ -210,3 +210,59 @@ test.describe('plan 53 — sleep timer', () => {
     await expect(page.getByTestId('mini-player-sleep-pill')).toBeHidden();
   });
 });
+
+test.describe('plan 69 — Share clip', () => {
+  test('opens the modal next to the play affordance, drags handles, confirms download URL', async ({
+    page,
+  }) => {
+    /* Patch the anchor-click flow inside `defaultDownload` BEFORE
+       navigation. The modal's confirm path creates a transient
+       `<a download>` and clicks it; rewiring `HTMLAnchorElement.click`
+       at init time captures the URL without fighting the browser's
+       real download dialog. */
+    await page.addInitScript(() => {
+      (window as unknown as { __lastClipUrl: string }).__lastClipUrl = '';
+      const origClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function () {
+        if (this.href.includes('/clip?')) {
+          (window as unknown as { __lastClipUrl: string }).__lastClipUrl = this.href;
+          return;
+        }
+        return origClick.call(this);
+      };
+    });
+
+    await openSolwayBay(page);
+
+    /* Share-clip button lives in the chapter row (next to play). Use
+       chapter 2 to match the BACKLOG acceptance walkthrough. */
+    const shareButton = page.getByTestId('chapter-row-2-share-clip');
+    await expect(shareButton).toBeVisible({ timeout: 5_000 });
+
+    await shareButton.click();
+    const modal = page.getByTestId('share-clip-modal');
+    await expect(modal).toBeVisible({ timeout: 3_000 });
+
+    /* Default values render. */
+    await expect(page.getByTestId('share-clip-start-input')).toBeVisible();
+    await expect(page.getByTestId('share-clip-end-input')).toBeVisible();
+
+    /* Drag the start slider to 80 s (= 1:20) and end to 110 s (= 1:50)
+       — matches the BACKLOG #6 acceptance criterion. */
+    await page.getByTestId('share-clip-start-range').fill('80');
+    await page.getByTestId('share-clip-end-range').fill('110');
+    await expect(page.getByTestId('share-clip-start-input')).toHaveValue('1:20');
+    await expect(page.getByTestId('share-clip-end-input')).toHaveValue('1:50');
+
+    await page.getByTestId('share-clip-confirm').click();
+    /* Modal closes on confirm. */
+    await expect(modal).toBeHidden({ timeout: 2_000 });
+    /* The download anchor click was intercepted; assert the URL shape. */
+    const captured = await page.evaluate(
+      () => (window as unknown as { __lastClipUrl?: string }).__lastClipUrl,
+    );
+    expect(captured ?? '').toMatch(/\/api\/books\/.+?\/chapters\/2\/clip\?/);
+    expect(captured ?? '').toMatch(/start=80\.00/);
+    expect(captured ?? '').toMatch(/duration=30\.00/);
+  });
+});
