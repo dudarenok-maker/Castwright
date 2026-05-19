@@ -28,9 +28,12 @@ import {
   applyMerge,
   applySplit,
   applyReorder,
+  applyExclude,
+  applyRefreshTitles,
   type MergeOp,
   type SplitOp,
   type ReorderOp,
+  type ExcludeOp,
   type RestructureResult,
   type RestructureSentence,
 } from '../workspace/restructure.js';
@@ -45,6 +48,11 @@ import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { clearAnalysisCache } from '../store/analysis-cache.js';
 import { rewriteChapterSlugs } from '../audio/rewrite-chapter-slugs.js';
+import { parseManuscript } from '../parsers/index.js';
+import { looksLikeTitle, MAX_SUBTITLE_LEN } from '../parsers/text.js';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 export const chaptersRestructureRouter = Router();
 
@@ -223,6 +231,89 @@ chaptersRestructureRouter.post(
     } catch (e) {
       console.error('[chapters-restructure] split failed', e);
       res.status(500).json({ error: (e as Error).message || 'Split failed.' });
+    }
+  },
+);
+
+chaptersRestructureRouter.post(
+  '/:bookId/chapters/refresh-titles',
+  async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as { useFirstLine?: boolean };
+    const useFirstLine = body.useFirstLine !== false; // default true
+    try {
+      const located = await findBookByBookId(req.params.bookId);
+      if (!located) return res.status(404).json({ error: 'Book not found.' });
+      const { bookDir, state } = located;
+
+      // Re-parse the manuscript from disk so we have authoritative titles
+      // for the parser-aligned pass. Failure modes (missing file, parse
+      // error) downgrade gracefully — we still run the first-line
+      // promotion pass on the in-memory state.
+      let parsedTitles: string[] = [];
+      const manuscriptPath = join(bookDir, state.manuscriptFile);
+      if (existsSync(manuscriptPath)) {
+        try {
+          const buffer = await readFile(manuscriptPath);
+          const parsed = await parseManuscript({
+            buffer,
+            fileName: state.manuscriptFile,
+            sourcePath: manuscriptPath,
+          });
+          parsedTitles = parsed.chapters.map((c) => c.title);
+        } catch (parseErr) {
+          console.warn(
+            `[chapters-restructure] refresh-titles: manuscript parse failed for ${state.bookId}:`,
+            (parseErr as Error).message,
+          );
+        }
+      }
+
+      const result = await withBookLock(req.params.bookId, () =>
+        applyRestructure(req.params.bookId, (s, hints, sentences) =>
+          applyRefreshTitles(s, hints, sentences, {
+            parsedTitles,
+            useFirstLine,
+            looksLikeTitle,
+            maxLen: MAX_SUBTITLE_LEN,
+          }),
+        ),
+      );
+      res.status(result.status).json(result.body);
+    } catch (e) {
+      console.error('[chapters-restructure] refresh-titles failed', e);
+      res.status(500).json({
+        error: (e as Error).message || 'Refresh chapter titles failed.',
+      });
+    }
+  },
+);
+
+chaptersRestructureRouter.post(
+  '/:bookId/chapters/exclude',
+  async (req: Request, res: Response) => {
+    const body = req.body as Partial<ExcludeOp>;
+    if (!Array.isArray(body?.chapterIds) || body.chapterIds.length === 0) {
+      return res
+        .status(400)
+        .json({ error: 'chapterIds (non-empty array) is required.' });
+    }
+    if (typeof body.excluded !== 'boolean') {
+      return res.status(400).json({ error: '`excluded` (boolean) is required.' });
+    }
+    const op: ExcludeOp = {
+      chapterIds: body.chapterIds,
+      excluded: body.excluded,
+    };
+    try {
+      const result = await withBookLock(req.params.bookId, () =>
+        applyRestructure(req.params.bookId, (state, hints, sentences) =>
+          applyExclude(state, hints, sentences, op),
+        ),
+      );
+      res.status(result.status).json(result.body);
+    } catch (e) {
+      console.error('[chapters-restructure] exclude failed', e);
+      res.status(500).json({ error: (e as Error).message || 'Exclude failed.' });
     }
   },
 );
