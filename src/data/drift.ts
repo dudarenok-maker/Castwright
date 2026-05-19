@@ -2,8 +2,8 @@ import type { DriftEvent } from '../lib/types';
 
 /* Mock drift events used by `api.pollRevisions` in VITE_USE_MOCKS mode.
    Two books are seeded so the modal's multi-book grouping renders in
-   dev: `bk-active-design` (the design fixture's current book) and
-   `bk-keefe-bonus` (a second book to exercise the cross-book header).
+   dev: `sb` (the design fixture's current book) and
+   `cc` (a second book to exercise the cross-book header).
 
    Each event now embeds the structured comparison payload the Drift
    Report relies on: `chapterTitle` (so the row label doesn't need to
@@ -12,8 +12,8 @@ import type { DriftEvent } from '../lib/types';
    server/src/routes/revisions.ts. */
 export const VOICE_DRIFT_EVENTS: DriftEvent[] = [
   {
-    id: 'drift:bk-active-design:7:eliza:register',
-    bookId: 'bk-active-design',
+    id: 'drift:sb:7:eliza:register',
+    bookId: 'sb',
     characterId: 'eliza',
     chapterId: 7,
     chapterTitle: 'An Unexpected Reading',
@@ -42,8 +42,8 @@ export const VOICE_DRIFT_EVENTS: DriftEvent[] = [
     suggestedAction: 'regenerate_chapter',
   },
   {
-    id: 'drift:bk-active-design:5:halloran:pace',
-    bookId: 'bk-active-design',
+    id: 'drift:sb:5:halloran:pace',
+    bookId: 'sb',
     characterId: 'halloran',
     chapterId: 5,
     chapterTitle: "What the Captain Knew",
@@ -72,8 +72,8 @@ export const VOICE_DRIFT_EVENTS: DriftEvent[] = [
     suggestedAction: 'regenerate_chapter',
   },
   {
-    id: 'drift:bk-active-design:4:marcus:warmth',
-    bookId: 'bk-active-design',
+    id: 'drift:sb:4:marcus:warmth',
+    bookId: 'sb',
     characterId: 'marcus',
     chapterId: 4,
     chapterTitle: "The Cook's Particular Soup",
@@ -103,8 +103,8 @@ export const VOICE_DRIFT_EVENTS: DriftEvent[] = [
   },
   /* Second book — exercises the multi-book group header in dev. */
   {
-    id: 'drift:bk-keefe-bonus:3:sophie:attributes',
-    bookId: 'bk-keefe-bonus',
+    id: 'drift:cc:3:sophie:attributes',
+    bookId: 'cc',
     characterId: 'sophie',
     chapterId: 3,
     chapterTitle: 'A Letter From Elwin',
