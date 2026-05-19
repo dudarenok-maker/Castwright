@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-19
 owner: null
 ---
 
 # Dark mode + theme management
 
-> Status: active
+> Status: stable
 > Key files: `src/styles.css`, `src/lib/use-theme.ts`,
 > `src/components/theme-toggle.tsx`, `src/views/account.tsx`,
 > `src/store/ui-slice.ts`, `src/store/index.ts`,
@@ -257,6 +257,29 @@ Skipped: bug 5 (bulk-sync flips decisions) and bug 6 generation side — both la
 
 ## Ship notes
 
-(Filled in when status flips to `stable`. Append: shipped date,
-commit SHA, any behaviour delta vs. the original spec. Once filled,
-move to `docs/features/archive/` per `archive/README.md`.)
+Shipped 2026-05-19 across a multi-commit arc:
+
+- **Initial ship** (`19210dc`, 2026-05-17): `feat(frontend,server,docs): plan 42 — dark mode + account-managed default theme`. `useTheme()` hook, three-state top-bar toggle, Account view Appearance section, `defaultThemePreference` field in `UserSettings`, six light + six dark visual baselines under `e2e/visual.spec.ts`.
+- **Contrast pass A** (`2d33bd4`, 2026-05-18): `fix(frontend,docs): dark-mode contrast — lift brand tokens, hover overrides, status gaps`. Lifted `--magenta` and `--purple-deep` in dark, added the first round of `*-rgb` shifts so `rgba(var(--…-rgb), …)` overlays stay tonally aligned.
+- **Contrast pass B** (`5fac605`, 2026-05-18): `fix(frontend): dark-mode contrast for bg-white/{60,70} surfaces`. Translucent base-surface overrides — covered the Analysing ConnPill regression where `text-emerald-700` painted on a ~70% white wash.
+- **Red/rose ladder** (`2a03476`, 2026-05-18): `fix(frontend,docs): plan-42 follow-up — dark-mode contrast for red/rose ladder`. Halted-pill / Analysis-halted-panel regression — full text-{600..900} + `/N` alpha + hover variants + `bg-red-100` + `bg-rose-50/30…/80` + matching borders.
+- **Confirm inputs** (`bb55711`, 2026-05-19): `fix(frontend): readable confirm-metadata inputs in dark mode`.
+- **Pre-ship bug bundle** (`3a93d52` + `a7f3fc2` + `e344a03` + `07d8aac`, 2026-05-19, all on PR #43): `bg-white/40` + `bg-white/95` overrides (drawer engine-tab + sticky header); `bg-amber-50/60` + `hover:bg-amber-50` (voice-drift banner); `floating-pill-inverse` utility (cast-view selection bar); follow-up notes recorded in plan body.
+
+**Behaviour deltas vs original spec:**
+
+1. The brand-token contrast policy expanded from "two `bg-white` overrides" to a full per-utility override block in `src/styles.css` covering the white / amber / red / rose ladders and their `/N` alpha + hover variants. The cascade route is unchanged (Tailwind utilities pick up the token-keyed values).
+2. Added `floating-pill-inverse` as a bespoke utility (not Tailwind) for the cast-view selection bar — the project doesn't use Tailwind's `dark:` prefix anywhere else, so introducing it for one site would be inconsistent. The utility pins colours per mode literally.
+3. Added the `match-detail` z-index bump (`z-[60]` / `z-[70]`) and the book-card always-visible metadata strip — both surfaced in the same bug-bundle testing pass and ship under plan 42's umbrella because they were dark-mode-discovered regressions, not net-new features.
+
+**Regression coverage at ship:**
+
+- `src/lib/use-theme.test.tsx` (resolveTheme precedence, useTheme DOM write, mid-session reactivity, matchMedia mock)
+- `src/components/theme-toggle.test.tsx` (3-state cycle, aria-label rotation)
+- `src/views/account.test.tsx` (Appearance section round-trip)
+- `server/src/workspace/user-settings.test.ts` (Zod optional field, legacy file roundtrip)
+- `src/test/dark-mode-css.test.ts` (every utility override selector pinned)
+- `src/modals/match-detail.test.tsx` (z-index over profile-drawer)
+- `src/views/book-library.test.tsx` (book-card metadata strip — cover-loads / no-cover / in-series / standalone)
+- `e2e/theme-toggle.spec.ts` (Playwright cold boot + cycle + persistence + Account "Use account default" clear)
+- `e2e/visual.spec.ts` (six dark baselines: `library-dark`, `upload-dark`, `analysing-dark`, `confirm-dark`, `ready-dark`, `listen-dark`)
