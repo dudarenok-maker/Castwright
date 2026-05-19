@@ -93,6 +93,62 @@ When N parallel agent branches finish:
 If a merge breaks `verify` and the fix isn't obvious, drop the offending branch
 from the batch and ship the rest — re-cut the branch later off the new `main`.
 
+### Running multiple Claude Code conversations
+
+The worktree pattern above keeps the working tree isolated; the helper
+`scripts/wt-new.mjs` collapses the manual setup (branch + worktree + port
+assignment) into one command so spinning up a second/third/fourth parallel
+`claude` session is a one-liner.
+
+**Spawn a new parallel session:**
+
+```powershell
+node scripts/wt-new.mjs feat/server-batch-retry
+```
+
+The helper creates `../wt-batch-retry` on the new branch, writes a
+`.env.local` with this worktree's port assignments (so its `npm run dev`
+doesn't fight the main tree's `:5173` / `:8080` / `:9000` / `:5174`), and
+prints a copy-pasteable block with `cd …` + `npm install` + `npm run dev` +
+`claude` for the new terminal. Slot N gets ports offset by `N * 10`.
+
+**List active worktrees + their port assignments:**
+
+```powershell
+node scripts/wt-list.mjs
+```
+
+**Coordinate scopes the same way as parallel agents.** The
+[scope-discipline table](#scope-discipline--merge-magic) above applies
+equally to top-level Claude sessions: two sessions in the same scope (both
+in `frontend`, both in `server`) will produce overlapping diffs and merge
+conflicts at integration time — serialize them or accept the reconciliation
+work. Two sessions in disjoint scopes (`frontend` + `sidecar`) merge clean.
+
+**Within-session Agent fan-out** is a separate axis: inside a single
+`claude` session you can spawn multiple `Agent(...)` tool calls with
+`isolation: "worktree"` to parallelize sub-tasks on disjoint scopes. That
+uses the same git-worktree mechanism under the hood but is managed by
+Claude Code, not by `wt-new.mjs`. Use `wt-new.mjs` when you want **multiple
+top-level conversations**; use Agent-tool fan-out when you want **one
+conversation that delegates**.
+
+**GPU + shared-resource caveats** (not solved by `wt-new.mjs`, queue
+manually):
+
+- The analyzer Ollama and the TTS sidecar share one GPU. Two sessions both
+  triggering real `/analyse` calls, or one running analysis while another
+  loads Coqui XTTS, will fight over VRAM (an 8 GB GPU holds Kokoro +
+  analyzer OR Kokoro + XTTS, not all three at once). Coordinate manually —
+  let one session finish its run before another starts a heavy GPU task.
+- The TTS sidecar's Python venv at `server/tts-sidecar/.venv/` is shared
+  across worktrees. Fine for read-only use; if you're upgrading
+  dependencies, do it once from one worktree and let the others pick it up.
+- The local `WORKSPACE_DIR` (where book state + cast.json live) is also
+  shared by default. If two sessions write to the same book at the same
+  time they will race on `state.json`. Set `WORKSPACE_DIR=…` in each
+  worktree's `.env.local` if you need fully isolated book stores.
+
 ## Commit convention
 
 Format:
