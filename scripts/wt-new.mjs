@@ -23,7 +23,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
-import { resolve, join, basename } from 'node:path';
+import { resolve, join } from 'node:path';
 import { parseBranchName } from './lib/branch-name.mjs';
 
 const BASE_PORTS = {
