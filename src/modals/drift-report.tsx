@@ -1,9 +1,12 @@
+import { useEffect, useRef, useState } from 'react';
 import { IconAlertTri, IconClose, IconRefresh, IconWaveform } from '../lib/icons';
 import { Avatar, Pill } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { initialChapters } from '../data/chapters';
-import type { DriftEvent, Character, CharColor } from '../lib/types';
+import { api } from '../lib/api';
+import { useAppSelector } from '../store';
+import type { DriftEvent, Character, CharColor, Voice } from '../lib/types';
 
 interface Props {
   events: DriftEvent[];
@@ -18,6 +21,12 @@ interface Props {
       Plan 20 C1+C2. */
   onAutoQueueRegenerate?: (characterId: string, chapterId: number) => void;
   onDismiss: (eventId: string) => void;
+  /** Plan-8 — Listen A/B player. Optional so legacy / mock callers that
+      haven't opted in still render the modal without the per-row inline
+      player. When omitted the Listen button stays hidden (callers without
+      audio context can't usefully expose it). */
+  bookId?: string;
+  voices?: Voice[];
 }
 
 const severityOrder: Array<DriftEvent['severity']> = ['severe', 'moderate', 'mild'];
@@ -39,6 +48,8 @@ export function DriftReportModal({
   onRegenerateChapter,
   onAutoQueueRegenerate,
   onDismiss,
+  bookId,
+  voices,
 }: Props) {
   if (events.length === 0) return null;
 
@@ -161,9 +172,24 @@ export function DriftReportModal({
                                     <IconRefresh className="w-3.5 h-3.5" /> Regenerate this chapter
                                   </button>
                                 )}
-                                <button className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-canvas border border-ink/10 text-ink/70 hover:text-ink text-xs font-medium">
-                                  <IconWaveform className="w-3.5 h-3.5" /> Listen
-                                </button>
+                                {(() => {
+                                  const rowVoice = voices?.find((v) => v.id === char?.voiceId);
+                                  /* Mount the A/B widget only when the caller plumbed
+                                     both bookId and a resolvable voice. Pre-fix the
+                                     Listen button was a stub regardless — callers
+                                     that haven't opted in (legacy / unit-test mocks)
+                                     get the original "no Listen" surface. */
+                                  if (!bookId || !rowVoice) return null;
+                                  return (
+                                    <DriftListenWidget
+                                      event={e}
+                                      bookId={bookId}
+                                      voice={rowVoice}
+                                      character={char}
+                                    />
+                                  );
+                                })()}
+                                {/* Dismiss handled below as the modal-action sibling. */}
                                 <button
                                   onClick={() => onDismiss(e.id)}
                                   className="ml-auto text-xs font-medium text-ink/50 hover:text-ink/80"
@@ -189,5 +215,166 @@ export function DriftReportModal({
         </div>
       </div>
     </>
+  );
+}
+
+/* Inline A/B compare player rendered per drift row when the user clicks
+   Listen. A = the chapter audio as currently rendered (what the drift
+   detector flagged); B = a sample synthesised against the established
+   voice profile. Lets the user decide between Regenerate / Dismiss by
+   ear, not just the attribute-diff summary.
+
+   Two refs + a single playing-state lets us implement mutex without
+   importing the revision-diff useAbPlayback hook — A's URL is static
+   (just the chapter audio path) but B's URL needs an async resolve via
+   api.getVoiceSample, which is awkward to feed into a useEffect-driven
+   src sync. Cleanup useEffect pauses both elements on unmount so the
+   browser releases the decode buffers when the modal closes. */
+function DriftListenWidget({
+  event,
+  bookId,
+  voice,
+  character,
+}: {
+  event: DriftEvent;
+  bookId: string;
+  voice: Voice;
+  character?: Character;
+}) {
+  const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
+  const [open, setOpen] = useState(false);
+  const [playing, setPlaying] = useState<'A' | 'B' | null>(null);
+  const [voiceSampleUrl, setVoiceSampleUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const chapterRef = useRef<HTMLAudioElement | null>(null);
+  const voiceRef = useRef<HTMLAudioElement | null>(null);
+
+  /* Cleanup on unmount — modal close, parent re-render that drops the
+     row, etc. Pause both elements and detach src so the browser doesn't
+     hold decode buffers for a now-invisible widget. The audio elements
+     are rendered at all times (hidden when !open) so their refs survive
+     until React tears down the widget itself; if they were nested inside
+     the `open && <audio />` branch, React 18 detaches them BEFORE
+     running this cleanup and the refs would be null here. */
+  useEffect(() => {
+    const a = chapterRef.current;
+    const b = voiceRef.current;
+    return () => {
+      if (a) {
+        a.pause();
+        a.removeAttribute('src');
+      }
+      if (b) {
+        b.pause();
+        b.removeAttribute('src');
+      }
+    };
+  }, []);
+
+  const chapterUrl = `/api/books/${encodeURIComponent(bookId)}/chapters/${event.chapterId}/audio`;
+
+  function pauseAll() {
+    chapterRef.current?.pause();
+    voiceRef.current?.pause();
+    setPlaying(null);
+  }
+
+  async function playChapter() {
+    voiceRef.current?.pause();
+    const el = chapterRef.current;
+    if (!el) return;
+    /* Set src lazily on first play so a row whose Listen button is never
+       clicked doesn't trigger a chapter audio fetch. */
+    if (el.src !== window.location.origin + chapterUrl && !el.src.endsWith(chapterUrl)) {
+      el.src = chapterUrl;
+    }
+    try {
+      await el.play();
+      setPlaying('A');
+    } catch {
+      setPlaying(null);
+    }
+  }
+
+  async function playVoice() {
+    chapterRef.current?.pause();
+    let url = voiceSampleUrl;
+    if (!url) {
+      setBusy(true);
+      try {
+        const sample = await api.getVoiceSample({
+          voiceId: voice.id,
+          voice,
+          modelKey: ttsModelKey,
+          characterHint: character
+            ? {
+                description: character.description,
+                gender: character.gender as 'male' | 'female' | 'neutral' | undefined,
+                ageRange: character.ageRange as
+                  | 'child'
+                  | 'teen'
+                  | 'adult'
+                  | 'elderly'
+                  | undefined,
+              }
+            : undefined,
+        });
+        url = sample.url;
+        setVoiceSampleUrl(url);
+      } catch {
+        setBusy(false);
+        return;
+      }
+      setBusy(false);
+    }
+    const el = voiceRef.current;
+    if (!el || !url) return;
+    if (el.src !== url && !el.src.endsWith(url)) {
+      el.src = url;
+    }
+    try {
+      await el.play();
+      setPlaying('B');
+    } catch {
+      setPlaying(null);
+    }
+  }
+
+  return (
+    <span className="inline-flex items-center gap-2">
+      {!open ? (
+        <button
+          data-testid={`drift-listen-${event.id}`}
+          onClick={() => setOpen(true)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-canvas border border-ink/10 text-ink/70 hover:text-ink text-xs font-medium"
+        >
+          <IconWaveform className="w-3.5 h-3.5" /> Listen
+        </button>
+      ) : (
+        <>
+          <button
+            data-testid={`drift-play-chapter-${event.id}`}
+            onClick={() => (playing === 'A' ? pauseAll() : void playChapter())}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium ${playing === 'A' ? 'bg-ink text-canvas border-ink' : 'bg-canvas border-ink/10 text-ink/70 hover:text-ink'}`}
+          >
+            <IconWaveform className="w-3.5 h-3.5" />
+            {playing === 'A' ? 'Pause chapter' : 'Chapter'}
+          </button>
+          <button
+            data-testid={`drift-play-voice-${event.id}`}
+            onClick={() => (playing === 'B' ? pauseAll() : void playVoice())}
+            disabled={busy}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium disabled:opacity-50 disabled:cursor-wait ${playing === 'B' ? 'bg-ink text-canvas border-ink' : 'bg-canvas border-ink/10 text-ink/70 hover:text-ink'}`}
+          >
+            <IconWaveform className="w-3.5 h-3.5" />
+            {busy ? 'Loading…' : playing === 'B' ? 'Pause voice' : 'Voice profile'}
+          </button>
+        </>
+      )}
+      {/* Audio elements always mounted so their refs survive until the
+          widget itself unmounts (cleanup useEffect above relies on this). */}
+      <audio ref={chapterRef} onEnded={() => setPlaying((p) => (p === 'A' ? null : p))} />
+      <audio ref={voiceRef} onEnded={() => setPlaying((p) => (p === 'B' ? null : p))} />
+    </span>
   );
 }
