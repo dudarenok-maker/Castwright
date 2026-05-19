@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-19 (post plans 53–58 merge):** Must 0 · Should 0 · Could 32 · Won't 9
+**Counts as of 2026-05-19 (post plan 61 ship):** Must 0 · Should 0 · Could 31 · Won't 9
 
 ---
 
@@ -313,16 +313,6 @@ Source: plan 20 close-out (2026-05-18). The `revisions.acceptedSelections` map i
 - _Key files:_ new `server/src/routes/revisions-commit-segments.ts`; `server/src/tts/synthesise-chapter.ts` (extend for per-segment paths); `src/views/revision-diff.tsx` (dispatch through the new endpoint); `src/store/revisions-slice.ts` (mark the revision as committed once the segment-level synth completes).
 - _Depends on:_ plan 20 shipped (acceptedSelections persistence is already on disk). Pairs with Could #12 (revision history timeline) — the timeline becomes meaningful once per-segment commits land separately from full regens.
 - _Benefit (user):_ true segment-level revision control. Today accept/reject is whole-revision swap — if the user likes 9 of 10 segments in the new take but wants segment 7 from the original, they have to regenerate the whole chapter under different prompts to recover that one segment. This closes the loop the slice has been quietly capturing since plan 20 v1.
-
-### 37. In-app multi-model management UX
-
-Source: net-new (2026-05-18). Plan 49 (release packaging) ships with a Kokoro-only install bundle and an in-app Gemini API key field; the rest of the multi-model story still needs the deployer to drop to a terminal. This item closes that gap.
-
-- _What:_ Add to the Account view (or a sibling Models tab): (a) "Install Ollama" affordance that detects the platform, downloads the vendor installer, and walks the user through setup; (b) "Pull model" UI on the analyzer section — lists models present on disk, exposes a Pull button for the configured-default that doesn't shell to a terminal; (c) "Refresh available models" button that re-hits `/api/ollama/health` and updates the dropdown without a page reload; (d) optional Coqui XTTS pre-install script (POSIX `.sh` + PowerShell `.ps1` parallels to `install-kokoro.*`) that fetches weights ahead of first generation.
-- _Acceptance:_ Fresh deployer install (Kokoro only) → Account → Models → Install Ollama → Pull qwen3.5:4b → analyze a book, all without leaving the app. Coqui XTTS users can pre-fetch weights similarly. New Vitest specs cover the per-step state machine; one Playwright spec covers the install → pull → analyze loop end-to-end (mock the actual download).
-- _Key files:_ `src/views/account.tsx` (extend with Models section), new `src/components/ollama-install.tsx`, new `src/components/model-pull-status.tsx`, `server/src/routes/ollama-health.ts` (extend with `POST /pull`), new `server/src/ollama/install-bootstrap.ts`, new `server/tts-sidecar/scripts/install-coqui.{sh,ps1}`.
-- _Depends on:_ none structural — the Account UX seam exists from plan 49. Unparks the install-and-pull-from-UI subset of Won't #1 ("Auto-install Ollama / auto-pull models"); the headless-CI variant of Won't #1 stays parked.
-- _Benefit (user):_ closes the gap that plan 49's Kokoro-only install leaves. Today a deployer who wants Ollama or Coqui XTTS must drop to a terminal; this UX keeps the install + model-management flow entirely in-app, matching the deployer-first promise of plan 49.
 
 ### 38. Real-binary MOBI / AZW3 fixtures for the binary-upload e2e
 

@@ -10,8 +10,35 @@
 import { Router, type Request, type Response } from 'express';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../workspace/user-settings.js';
 import { ANALYZER_NUM_CTX, ANALYZER_NUM_GPU } from '../analyzer/ollama.js';
+import {
+  installBootstrap as defaultInstallBootstrap,
+  type InstallBootstrap,
+} from '../ollama/install-bootstrap.js';
+import {
+  pullBootstrap as defaultPullBootstrap,
+  type PullBootstrap,
+} from '../ollama/pull-bootstrap.js';
 
 export const ollamaHealthRouter = Router();
+
+/* Plan 61 — injectable bootstraps. The default exports are the
+   module-level singletons; tests swap them via setOllamaBootstraps() so
+   the entire install/pull surface can run offline. */
+let installBootstrap: InstallBootstrap = defaultInstallBootstrap;
+let pullBootstrap: PullBootstrap = defaultPullBootstrap;
+
+export function setOllamaBootstraps(opts: {
+  install?: InstallBootstrap;
+  pull?: PullBootstrap;
+}): void {
+  if (opts.install) installBootstrap = opts.install;
+  if (opts.pull) pullBootstrap = opts.pull;
+}
+
+export function _resetOllamaBootstraps(): void {
+  installBootstrap = defaultInstallBootstrap;
+  pullBootstrap = defaultPullBootstrap;
+}
 
 /* Same 2s budget as the sidecar probe: a hung daemon mustn't pin a UI
    polling request. Ollama's /api/tags is a list of pulled models — trivial
@@ -211,4 +238,146 @@ ollamaHealthRouter.post('/unload', async (_req: Request, res: Response) => {
     return res.status(result.status).json({ status: 'error', error: result.error });
   }
   return res.json({ status: 'unloaded' });
+});
+
+/* ============================================================
+ * Plan 61 — in-app multi-model management UX
+ * ============================================================
+ *
+ * GET  /api/ollama/detect       — is `ollama` already on PATH?
+ * POST /api/ollama/install      — kick off the vendor installer download
+ * GET  /api/ollama/install/:id  — poll install-job progress
+ * POST /api/ollama/install/:id/recheck — re-probe (used after Windows GUI install)
+ * POST /api/ollama/pull         — start `ollama pull <model>`
+ * GET  /api/ollama/pull/:id     — poll pull-job progress
+ * POST /api/ollama/refresh      — re-probe daemon + return /health envelope
+ *
+ * Endpoints are designed so the UI never has to drop to a terminal.
+ * Test injection: setOllamaBootstraps({...}) above swaps in mocked
+ * InstallBootstrap / PullBootstrap so tests run offline. */
+
+ollamaHealthRouter.get('/detect', async (_req: Request, res: Response) => {
+  const result = await installBootstrap.detect();
+  return res.json(result);
+});
+
+ollamaHealthRouter.post('/install', (_req: Request, res: Response) => {
+  const job = installBootstrap.start();
+  return res.status(202).json(job);
+});
+
+ollamaHealthRouter.get('/install/:id', (req: Request, res: Response) => {
+  const job = installBootstrap.getJob(req.params.id);
+  if (!job) {
+    return res.status(404).json({ error: `No install job '${req.params.id}'` });
+  }
+  return res.json(job);
+});
+
+ollamaHealthRouter.post('/install/:id/recheck', async (req: Request, res: Response) => {
+  const job = await installBootstrap.recheck(req.params.id);
+  if (!job) {
+    return res.status(404).json({ error: `No install job '${req.params.id}'` });
+  }
+  return res.json(job);
+});
+
+ollamaHealthRouter.post('/pull', (req: Request, res: Response) => {
+  const model = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
+  if (!model) {
+    return res.status(400).json({ error: 'Body must include { model: <tag> }' });
+  }
+  if (!pullBootstrap.isAllowed(model)) {
+    return res.status(400).json({
+      error: `Model '${model}' is not in the in-app pull allowlist. Pull it via the terminal if needed.`,
+    });
+  }
+  const job = pullBootstrap.start(getResolvedOllamaUrl(), model);
+  return res.status(202).json(job);
+});
+
+ollamaHealthRouter.get('/pull/:id', (req: Request, res: Response) => {
+  const job = pullBootstrap.getJob(req.params.id);
+  if (!job) {
+    return res.status(404).json({ error: `No pull job '${req.params.id}'` });
+  }
+  return res.json(job);
+});
+
+/* POST /api/ollama/refresh — a thin alias for the existing GET /health.
+   The UI uses POST semantically ("re-probe now") and we re-export the
+   same envelope so the dropdown updates without a page reload. */
+ollamaHealthRouter.post('/refresh', async (_req: Request, res: Response) => {
+  /* Inline-dispatch into the existing GET handler by re-invoking the
+     same probe. We can't just `res.redirect()` because the caller wants
+     the body now, and the GET handler isn't memoised. Easiest: build a
+     fake req+res chain. Instead we just re-implement the small probe
+     here — it's already a one-liner that returns the JSON. */
+  const url = getResolvedOllamaUrl();
+  const expectedModel = getResolvedOllamaModel();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const [tagsResp, psResp] = await Promise.all([
+      fetch(`${url}/api/tags`, { method: 'GET', signal: controller.signal }),
+      fetch(`${url}/api/ps`, { method: 'GET', signal: controller.signal }),
+    ]);
+    clearTimeout(timer);
+    if (!tagsResp.ok) {
+      return res.json({
+        status: 'unreachable',
+        url,
+        error: `Ollama returned ${tagsResp.status} ${tagsResp.statusText}`,
+      });
+    }
+    const tagsBody = (await tagsResp.json().catch(() => ({}))) as {
+      models?: Array<{ name?: string; model?: string }>;
+    };
+    const models = Array.isArray(tagsBody.models)
+      ? tagsBody.models.map((m) => m.name ?? m.model ?? '').filter(Boolean)
+      : [];
+    const expectedRoot = expectedModel.split(':')[0];
+    const hasExpected = models.some(
+      (m) =>
+        m === expectedModel ||
+        m.startsWith(`${expectedModel}-`) ||
+        (m.split(':')[0] === expectedRoot && m.startsWith(`${expectedRoot}:`)),
+    );
+    let resident: string[] = [];
+    let expectedResident = false;
+    if (psResp.ok) {
+      const psBody = (await psResp.json().catch(() => ({}))) as {
+        models?: Array<{ name?: string; model?: string }>;
+      };
+      resident = Array.isArray(psBody.models)
+        ? psBody.models.map((m) => m.name ?? m.model ?? '').filter(Boolean)
+        : [];
+      expectedResident = resident.some(
+        (m) =>
+          m === expectedModel ||
+          m.startsWith(`${expectedModel}-`) ||
+          (m.split(':')[0] === expectedRoot && m.startsWith(`${expectedRoot}:`)),
+      );
+    }
+    return res.json({
+      status: 'reachable',
+      url,
+      models,
+      expectedModel,
+      modelPulled: hasExpected,
+      resident,
+      modelResident: expectedResident,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    const err = e as { name?: string; message?: string };
+    const isTimeout = err.name === 'AbortError';
+    return res.json({
+      status: 'unreachable',
+      url,
+      error: isTimeout
+        ? `No response from ${url} within ${PROBE_TIMEOUT_MS}ms`
+        : err.message || 'Ollama fetch failed.',
+    });
+  }
 });

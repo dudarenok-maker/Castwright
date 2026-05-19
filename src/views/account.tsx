@@ -18,6 +18,13 @@ import {
   saveAccountSettings,
   saveGeminiApiKey,
 } from '../store/account-slice';
+import { OllamaInstall } from '../components/ollama-install';
+import { ModelPullStatus } from '../components/model-pull-status';
+
+/* Plan 61 — mirror server/src/ollama/pull-bootstrap.ts DEFAULT_ALLOWED_MODELS.
+   Centralised here so the Models card can render rows without re-fetching
+   the allowlist from the backend (it's static per release). */
+const PULLABLE_MODELS = ['qwen3.5:4b', 'qwen3.5:9b', 'llama3.1:8b', 'llama3.2:3b', 'gemma3:4b'] as const;
 
 export function AccountView() {
   const dispatch = useAppDispatch();
@@ -477,6 +484,8 @@ export function AccountView() {
           />
         </FormCard>
 
+        <ModelsCard />
+
         <div className="flex items-center gap-4">
           <PrimaryButton variant={dirty ? 'dark' : 'ghost'} onClick={onSave} icon={false}>
             {saving ? 'Saving…' : 'Save changes'}
@@ -659,5 +668,94 @@ function GeminiKeyField({
         {flash && <span className="text-xs text-magenta font-semibold">{flash}</span>}
       </div>
     </div>
+  );
+}
+
+/* Plan 61 — Models card. Hosts the in-app Install Ollama affordance +
+   per-model Pull controls. The card sits below the server-config card
+   so the user lands on it after seeing their analyzer-engine + Ollama
+   URL choices.
+
+   On mount, GETs /api/ollama/health directly (bypassing the mock
+   layer) so the ModelPullStatus row list reflects current on-disk
+   state. The "Refresh available models" button inside ModelPullStatus
+   re-probes via POST /refresh without going through this card.
+
+   Direct-fetch is deliberate: in mock mode the api.getOllamaHealth
+   mock returns the model as already pulled, which would make the
+   Pull buttons permanently disabled. The Models card needs the real
+   health envelope from the server (or whatever the e2e route-mock
+   provides). */
+function ModelsCard() {
+  const [health, setHealth] = useState<import('../components/model-pull-status').OllamaHealthEnvelope | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/ollama/health');
+        if (!res.ok) return;
+        const body = await res.json();
+        if (!cancelled) setHealth(body);
+      } catch {
+        /* Best-effort probe — leave health null and let ModelPullStatus
+           render the "daemon unreachable" banner. */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <section
+      data-testid="account-models-card"
+      className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card"
+    >
+      <h2 className="text-base font-semibold text-ink">Models</h2>
+      <p className="mt-1 text-xs text-ink/55">
+        Install Ollama, pull analyzer model weights, and pre-fetch Coqui XTTS — all without
+        dropping to a terminal. Kokoro v1 ships pre-installed via the release bundle, so
+        nothing on this page applies to it.
+      </p>
+
+      <div className="mt-4 space-y-6">
+        <div>
+          <h3 className="text-sm font-medium text-ink">Local analyzer (Ollama)</h3>
+          <p className="mt-1 mb-3 text-xs text-ink/55">
+            Required when "Analyzer engine" above is set to Local.
+          </p>
+          <OllamaInstall />
+        </div>
+
+        <div>
+          <h3 className="text-sm font-medium text-ink">Analyzer models</h3>
+          <p className="mt-1 mb-3 text-xs text-ink/55">
+            Pulled tags appear in the Analysis-model dropdown above. The configured default is
+            highlighted.
+          </p>
+          <ModelPullStatus health={health} pullableModels={PULLABLE_MODELS} />
+        </div>
+
+        <div>
+          <h3 className="text-sm font-medium text-ink">Coqui XTTS v2 (optional TTS engine)</h3>
+          <p className="mt-1 text-xs text-ink/55">
+            XTTS v2 is downloaded on first synth (~1.8 GB), or pre-fetched via{' '}
+            <code className="font-mono">install-coqui</code> in the release bundle:
+          </p>
+          <pre
+            data-testid="account-coqui-install-cmd"
+            className="mt-2 rounded-xl bg-ink/[0.04] p-3 text-xs font-mono text-ink/80 overflow-x-auto"
+          >{`# Windows
+pwsh server/tts-sidecar/scripts/install-coqui.ps1
+
+# macOS / Linux
+bash server/tts-sidecar/scripts/install-coqui.sh`}</pre>
+          <p className="mt-2 text-xs text-ink/55">
+            One-shot pre-fetch is optional; the sidecar auto-downloads on first synth call.
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
