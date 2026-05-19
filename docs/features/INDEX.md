@@ -58,6 +58,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [09 — Voice match pipeline](09-voice-match-pipeline.md) — Post-analysis library matching.
 - [10 — Profile drawer](10-profile-drawer.md) — Character edit drawer + sample preview + evidence toggle.
 - [11 — Batch character regenerate](11-batch-character-regenerate.md) — Multi-select character → chapter-range regen.
+- [60 — Voices global-tab same-book compare](60-voices-global-tab-compare.md) — Lifts plan 22a's "Open a book to compare" gate for global-tab pairs that share a `bookId`: `api.getBookState(bookId)` resolves the foreign cast on demand, cached for the modal session. Cross-book pairs remain disabled (BACKLOG #17). Shipped 2026-05-19.
 
 ### E. Manuscript editing
 

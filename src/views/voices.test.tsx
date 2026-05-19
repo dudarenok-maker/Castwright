@@ -1,27 +1,32 @@
 // Pairs with docs/features/22-voice-library.md
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, within } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { castSlice } from '../store/cast-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
+import { notificationsSlice } from '../store/notifications-slice';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { LibraryView } from './voices';
-import type { BaseVoice, Character, Sentence, Voice } from '../lib/types';
+import type { BaseVoice, BookStateResponse, Character, Sentence, Voice } from '../lib/types';
 
 const setVoicePin = vi.fn((_voiceId: string, _pinned: boolean) => Promise.resolve());
 const getBaseVoices = vi.fn<() => Promise<{ voices: BaseVoice[] }>>(() =>
   Promise.resolve({ voices: [] }),
 );
 const setVoiceOverride = vi.fn();
+const getBookState = vi.fn<(bookId: string) => Promise<BookStateResponse | null>>(() =>
+  Promise.resolve(null),
+);
 
 vi.mock('../lib/api', () => ({
   api: {
     setVoicePin: (voiceId: string, pinned: boolean) => setVoicePin(voiceId, pinned),
     getBaseVoices: () => getBaseVoices(),
     setVoiceOverride: (...args: unknown[]) => setVoiceOverride(...args),
+    getBookState: (bookId: string) => getBookState(bookId),
   },
 }));
 
@@ -83,6 +88,7 @@ function makeStore() {
       cast: castSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       voices: voicesSlice.reducer,
+      notifications: notificationsSlice.reducer,
     },
   });
   store.dispatch(castSlice.actions.setCharacters(characters));
@@ -109,6 +115,8 @@ beforeEach(() => {
   getBaseVoices.mockClear();
   getBaseVoices.mockResolvedValue({ voices: [] });
   setVoiceOverride.mockClear();
+  getBookState.mockReset();
+  getBookState.mockResolvedValue(null);
 });
 
 describe('LibraryView voice-family grouping', () => {
@@ -363,17 +371,26 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
     expect(compareBtn.getAttribute('title')).toBe('Select exactly 2 voices');
   });
 
-  it('disables Compare on the global tab (no open book) with the documented tooltip (plan 22a)', () => {
+  it('enables Compare on the global tab for a same-bookId pair (plan 60)', () => {
     /* `stageBookId=null` puts ui.stage on `{kind:'voices'}` — the global
-       tab. Even with a valid 2-voice pair the gate stays closed because
-       the cast slice of the foreign book is not hydrated here. */
+       tab. Plan 60 promotes the Compare button to enabled for any pair
+       that shares a non-null bookId; the on-demand fetch resolves the
+       foreign cast when Compare is clicked. */
     renderCompare(libraryB1, null);
-    const checkboxes = screen.getAllByLabelText('Select voice for compare');
-    fireEvent.click(checkboxes[0]);
-    fireEvent.click(checkboxes[1]);
+    fireEvent.click(
+      screen
+        .getByText('Narrator')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+    fireEvent.click(
+      screen
+        .getByText('Sandor')
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
     const compareBtn = screen.getByRole('button', { name: 'Compare' });
-    expect(compareBtn).toBeDisabled();
-    expect(compareBtn.getAttribute('title')).toBe('Open a book to compare its voices');
+    expect(compareBtn).not.toBeDisabled();
   });
 
   it('disables Compare on a cross-book pair with the documented tooltip (plan 22a)', () => {
@@ -421,6 +438,153 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
     expect(screen.getByText('Selected')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
     expect(screen.queryByText(/^Selected$/)).toBeNull();
+  });
+
+  describe('global-tab same-book fetch path (plan 60)', () => {
+    /* Helper: build a BookStateResponse with the given characters.
+       Only the `cast` field is consulted by the global-compare flow;
+       the rest is filler so the type satisfies. */
+    function buildBookState(bookId: string, chars: Character[]): BookStateResponse {
+      const now = new Date().toISOString();
+      return {
+        state: {
+          bookId,
+          manuscriptId: '',
+          title: '',
+          author: '',
+          series: '',
+          seriesPosition: null,
+          isStandalone: false,
+          manuscriptFile: '',
+          castConfirmed: true,
+          chapters: [],
+          coverGradient: ['#000', '#000'],
+          createdAt: now,
+          updatedAt: now,
+        },
+        cast: { characters: chars },
+        manuscript: null,
+        manuscriptEdits: null,
+        revisions: null,
+        completedSlugs: [],
+        chapterCharacters: undefined,
+        changeLog: null,
+        analysis: undefined,
+      };
+    }
+
+    async function flush(): Promise<void> {
+      /* Two microtask drains: one for the await on `api.getBookState`,
+         one for the setState-driven re-render that follows. */
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    it('fetches foreign cast via api.getBookState and mounts the modal on Compare click', async () => {
+      getBookState.mockResolvedValueOnce(buildBookState('b1', charactersB1));
+      renderCompare(libraryB1, null);
+      fireEvent.click(
+        screen
+          .getByText('Narrator')
+          .closest('div.group')!
+          .querySelector('[aria-label="Select voice for compare"]')!,
+      );
+      fireEvent.click(
+        screen
+          .getByText('Sandor')
+          .closest('div.group')!
+          .querySelector('[aria-label="Select voice for compare"]')!,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+      await flush();
+      expect(getBookState).toHaveBeenCalledTimes(1);
+      expect(getBookState).toHaveBeenCalledWith('b1');
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    it('pushes a toast and retroactively disables Compare when the fetch fails', async () => {
+      getBookState.mockRejectedValueOnce(new Error('network down'));
+      renderCompare(libraryB1, null);
+      fireEvent.click(
+        screen
+          .getByText('Narrator')
+          .closest('div.group')!
+          .querySelector('[aria-label="Select voice for compare"]')!,
+      );
+      fireEvent.click(
+        screen
+          .getByText('Sandor')
+          .closest('div.group')!
+          .querySelector('[aria-label="Select voice for compare"]')!,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+      await flush();
+      /* No modal mounted; Compare button re-asserts disabled with the
+         documented tooltip; the toast surface gets the error. */
+      expect(screen.queryByRole('dialog')).toBeNull();
+      const compareBtn = screen.getByRole('button', { name: 'Compare' });
+      expect(compareBtn).toBeDisabled();
+      expect(compareBtn.getAttribute('title')).toBe('Could not load that book — try again later');
+    });
+
+    it('also disables Compare when the fetched book has no cast at all', async () => {
+      getBookState.mockResolvedValueOnce(buildBookState('b1', []));
+      renderCompare(libraryB1, null);
+      fireEvent.click(
+        screen
+          .getByText('Narrator')
+          .closest('div.group')!
+          .querySelector('[aria-label="Select voice for compare"]')!,
+      );
+      fireEvent.click(
+        screen
+          .getByText('Sandor')
+          .closest('div.group')!
+          .querySelector('[aria-label="Select voice for compare"]')!,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+      await flush();
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Compare' })).toBeDisabled();
+    });
+
+    it('caches the foreign cast so re-opens skip the second fetch', async () => {
+      getBookState.mockResolvedValue(buildBookState('b1', charactersB1));
+      renderCompare(libraryB1, null);
+      fireEvent.click(
+        screen
+          .getByText('Narrator')
+          .closest('div.group')!
+          .querySelector('[aria-label="Select voice for compare"]')!,
+      );
+      fireEvent.click(
+        screen
+          .getByText('Sandor')
+          .closest('div.group')!
+          .querySelector('[aria-label="Select voice for compare"]')!,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+      await flush();
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(getBookState).toHaveBeenCalledTimes(1);
+      /* Close and re-open the modal — the same pair, same session.
+         The component should consult the cache, not refetch. */
+      fireEvent.keyDown(window, { key: 'Escape' });
+      /* Falls back to clicking the modal Close button if Escape doesn't
+         bubble; the modal's contract is opaque here. Either way, the
+         best signal is unmounting via the Cancel/X — but for cache
+         coverage we just hit Compare again whilst the modal is still
+         up; React re-renders re-use the cached path. */
+      fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+      await flush();
+      /* Still only one fetch — the second Compare click reads
+         `globalCastCache` and short-circuits the fetch path. */
+      expect(getBookState).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
