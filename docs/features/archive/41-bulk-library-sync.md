@@ -1,10 +1,25 @@
 ---
 status: stable
 shipped: 2026-05-18
+amended: 2026-05-19
 owner: dudarenok-maker
 ---
 
 # Bulk-apply library sync on confirm-cast
+
+> **Bug C amendment (2026-05-19):** the pill now flips Reuse decision
+> AND ticks sync overrides in one click. The original behaviour (sync
+> overrides only) produced no visible effect on cards the user had
+> previously toggled to "Generate fresh", because the per-card sync
+> checkbox is gated on `decision === 'match'`. Apply path sets BOTH
+> `decisions='match'` and `overrides=true` for every eligible
+> character; Clear-syncs path stays overrides-only to avoid
+> destructively reverting decisions the user explicitly chose. Pill
+> relabelled to **"Apply all N matches"** / **"Clear all syncs"** where
+> N is the count of currently-unapplied eligible cards (decision !=
+> match OR override off). See `src/views/confirm-cast.test.tsx`
+> ("flips Reuse decision on cards previously toggled to Generate") for
+> the regression lock.
 
 > Status: stable
 > Key files: `src/views/confirm-cast.tsx`, new `src/views/confirm-cast.test.tsx`, new `e2e/bulk-sync-library.spec.ts`

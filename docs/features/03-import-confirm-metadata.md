@@ -16,6 +16,20 @@ Two-step write to the workspace: `POST /api/import` parses a manuscript in memor
 - Filename heuristic regex: `/^(?<author>.+?)\s+-\s+(?<series>.+?)\s+(?<pos>\d+)\s+-\s+(?<title>.+)$/` against the filename stem (`src/lib/api.ts:131-133`). H1 from sourceText takes precedence over filename for `title`.
 - `isStandalone: true` → server stores under `Standalones` directory regardless of `series` field (`mockConfirmBook` mirrors this at `src/lib/api.ts:160`).
 - `ConfirmBookResponse.paths` carries the on-disk paths (`bookDir`, `manuscript`, `dotAudiobook`) the user may need to see for troubleshooting.
+- **Series extraction priority** (`server/src/parsers/text.ts` `parseSeriesFromTitle`):
+  Authoritative metadata wins, then filename pattern, then a
+  title-parenthetical heuristic as a last resort. When the heuristic
+  fires the parser sets `seriesFromTitle: true` on the candidate; the
+  confirm-metadata view surfaces this as an "Auto-extracted from
+  title — verify" chip next to the SERIES field, and clears the chip
+  on edit. Heuristic matches `(Series Book N)` / `(Series #N)` at the
+  end of the title only — won't false-positive on `(Revised Edition)`
+  or `(A Novel)`.
+- **Input theme classes**: AUTHOR / SERIES / BOOK # / TITLE inputs
+  must carry `bg-white text-ink` so they read correctly in both
+  themes (`src/styles.css:131-133` redirects `bg-white` to elevated
+  canvas under `[data-theme='dark']` and the `--ink` token flips to
+  near-white). Stripping `text-ink` regresses dark mode.
 
 ## Acceptance walkthrough
 
