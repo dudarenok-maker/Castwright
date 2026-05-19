@@ -150,6 +150,16 @@ describe('ConfirmCastView — library override toggle', () => {
     expect(screen.queryByRole('checkbox', { name: /Sync profile/i })).toBeNull();
   });
 
+  it('discloses that the matched book will surface drift events after the merge', () => {
+    /* The reassurance "Voices and already-generated chapter audio don't
+       change" is true but incomplete — the merge mutates the matched
+       book's attributes/gender/ageRange, which the drift detector then
+       surfaces as drift events on that book. The disclosure copy must
+       carry this consequence so users see it before ticking. */
+    renderView({ onOverrideLibrary: vi.fn(async () => {}) });
+    expect(screen.getByText(/will surface drift events/i)).toBeInTheDocument();
+  });
+
   it('omits the override checkbox when matchedFrom lacks the cross-book identifiers', () => {
     /* Older voice-match cache that predates fromBookId / fromCharacterId
        lands here. The checkbox should not render because we have no way
