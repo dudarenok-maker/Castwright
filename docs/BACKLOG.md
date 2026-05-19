@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-19 (mid-reconciliation):** Must 0 · Should 0 · Could 27 · Won't 9
+**Counts as of 2026-05-19 (post v1.4.0 pre-cutover slate ship):** Must 0 · Should 0 · Could 26 · Won't 9
 
 ---
 
@@ -326,16 +326,6 @@ Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — CO
 - _Key files:_ new `scripts/wt-merge.mjs`; new `scripts/tests/wt-merge.test.mjs`; CONTRIBUTING.md "Reconciliation pattern" section (cross-link the helper).
 - _Depends on:_ the parallel-sessions tooling already shipped (the worktrees are the input). The verify-cache plan 50 makes the between-merge verify fast enough that this becomes practical.
 - _Benefit (user):_ collapses the 6-step manual reconciliation into one command. Today the friction of "merge, verify, merge, verify, ..." discourages users from running > 2 parallel agents.
-
-### 42. Decompose `src/views/listen.tsx` into region sub-components (behaviour-neutral refactor)
-
-Source: net-new (2026-05-19). Spun off from the pre-cutover slate — `listen.tsx` is the slate's hot file (three v1.4.0 features all target it: streaming-link tile, editorial notes, share-clip button) AND a long-standing accretion point — every plan from 18 onward has bolted onto it. Without this decomposition, Wave-3 of the pre-cutover slate must serialise three branches on the same file.
-
-- _What:_ Lift three regions of `listen.tsx` into dedicated sub-components — no behaviour change. The view becomes an orchestrator that wires the slices + composes the regions. **Header region** → new `src/components/listen/listen-header.tsx` (cover + title + book-meta + cover Replace/Regenerate). **Mini-player / play affordance region** → new `src/components/listen/listen-player-region.tsx` (mini-player + sleep timer + speed picker + markers — plan 53 surface). **Download tiles section** → new `src/components/listen/listen-download-section.tsx` (download cards + export modal entry + export queue).
-- _Acceptance:_ `git diff main -- src/views/listen.tsx` shows pure deletions (lifted into sub-components); each new sub-component is mounted by exactly one parent; `npm run verify` green; **no spec files modified in the same commit** (`listen.test.tsx`, `listen.spec.ts`, `listen-playback.spec.ts`, `download-tiles.spec.ts`, `revision-history-timeline.spec.ts`, `mini-player-features.spec.ts`, `cover-framing.spec.ts`, `audiobook-export.spec.ts` all stay green WITHOUT modification — if any spec needs changes to keep passing, the refactor changed behaviour and the diff needs another pass).
-- _Key files:_ `src/views/listen.tsx` (becomes orchestrator); new `src/components/listen/listen-header.tsx`, `listen-player-region.tsx`, `listen-download-section.tsx`.
-- _Depends on:_ none. Sequence-gate for Wave-3 of the pre-cutover slate; the three downstream features (BACKLOG #6, #11, #33) rebase off the decomposed shape.
-- _Benefit (architectural):_ keeps the multi-feature wave parallelisable AND prevents the next round's slate from hitting the same bottleneck. User direction (2026-05-19): "rather have it finalised now rather than later as things become heavier." A hot file is a tax on every future round until decomposed.
 
 ---
 
