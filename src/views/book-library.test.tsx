@@ -119,6 +119,60 @@ describe('BookLibraryView — loading affordance', () => {
     expect(screen.queryByTestId('book-cover-b1')).not.toBeInTheDocument();
   });
 
+  /* Bug 9 regression — title + seriesLine were previously gated on
+     `!effectiveCoverUrl || coverLoadFailed`, so once a cover image loaded
+     both pieces disappeared from the card entirely. Now an always-visible
+     metadata strip below the cover surfaces them in every case. */
+  it('shows the book title in a metadata strip even when a cover image loads', () => {
+    const bookWithCover: LibraryBook = { ...oneBook, coverImageUrl: '/api/books/b1/cover' };
+    const authorWithCover: LibraryAuthor = {
+      ...oneAuthor,
+      series: [{ name: 'Keeper of the Lost Cities', books: [bookWithCover] }],
+    };
+    renderView({ loaded: true, authors: [authorWithCover] });
+    const strip = screen.getByTestId('book-meta-strip-b1');
+    expect(strip).toBeInTheDocument();
+    expect(strip).toHaveTextContent('Keeper of the Lost Cities');
+  });
+
+  it('shows the series line + position in the metadata strip when a cover image loads', () => {
+    const bookWithCover: LibraryBook = { ...oneBook, coverImageUrl: '/api/books/b1/cover' };
+    const authorWithCover: LibraryAuthor = {
+      ...oneAuthor,
+      series: [{ name: 'Keeper of the Lost Cities', books: [bookWithCover] }],
+    };
+    renderView({ loaded: true, authors: [authorWithCover] });
+    const strip = screen.getByTestId('book-meta-strip-b1');
+    expect(strip).toHaveTextContent(/Keeper of the Lost Cities.*Book 1/);
+  });
+
+  it('shows the metadata strip even when no cover image is set', () => {
+    renderView({ loaded: true, authors: [oneAuthor] });
+    const strip = screen.getByTestId('book-meta-strip-b1');
+    expect(strip).toBeInTheDocument();
+    expect(strip).toHaveTextContent('Keeper of the Lost Cities');
+    expect(strip).toHaveTextContent(/Book 1/);
+  });
+
+  it('renders "Standalone" in the metadata strip for standalone books', () => {
+    const bonus: LibraryBook = {
+      ...oneBook,
+      bookId: 'b2',
+      title: 'Bonus Keefe Story',
+      seriesPosition: null,
+      isStandalone: true,
+      coverImageUrl: '/api/books/b2/cover',
+    };
+    const authorWithBonus: LibraryAuthor = {
+      ...oneAuthor,
+      series: [{ name: 'Keeper of the Lost Cities', books: [bonus] }],
+    };
+    renderView({ loaded: true, authors: [authorWithBonus] });
+    const strip = screen.getByTestId('book-meta-strip-b2');
+    expect(strip).toHaveTextContent('Bonus Keefe Story');
+    expect(strip).toHaveTextContent('Standalone');
+  });
+
   it('applies coverFraming via object-position + transform when set (plan 40)', () => {
     const bookWithFraming: LibraryBook = {
       ...oneBook,

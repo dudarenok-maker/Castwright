@@ -465,6 +465,17 @@ function BookCard({
       </div>
 
       <div className="p-5">
+        {/* Bug 9 — always-visible metadata strip. Cover art alone can't
+            convey the series position ("Book 7"), and even when the title
+            is baked into the artwork (Keeper of the Lost Cities) it's
+            useful to have a labelled fallback for screen readers and any
+            book whose cover is title-less. The old gating on
+            `!effectiveCoverUrl || coverLoadFailed` (lines 387–392) hid
+            both pieces the moment a cover image rendered. */}
+        <div data-testid={`book-meta-strip-${book.bookId}`} className="mb-3">
+          <p className="text-sm font-semibold text-ink leading-snug truncate">{book.title}</p>
+          <p className="text-xs text-ink/55 leading-snug truncate">{seriesLine}</p>
+        </div>
         <div className="flex items-center justify-between gap-2 mb-3">
           <Pill color={meta.color}>
             <span className="inline-flex items-center gap-1.5">
