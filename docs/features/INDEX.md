@@ -88,6 +88,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [32 — Audiobook export](32-audiobook-export.md) — Sideload to PocketBook Reader (Phase A: MP3.ZIP) via LAN download or sync folder; per-chapter ID3v2.4 tags, no re-encode, atomic writes.
 - [34 — MP3-folder export](34-mp3-folder-export.md) — Per-chapter MP3s in a sub-folder for folder-scanning audiobook apps (Smart AudioBook Player, BookPlayer, Audiobookshelf). Sync-folder destination only; APIC cover travels with each chapter.
 - [56 — Real chapter-audio peaks at encode time](56-real-chapter-peaks.md) — Compute a 240-bin RMS envelope alongside the MP3 encode, persist as `<bookDir>/audio/<slug>.peaks.json`, surface from the chapter-audio meta endpoint. Missing-file fallback returns `peaks: []` so legacy chapters keep working. **Status: active.**
+- [57 — Listen-view download tiles](57-download-tiles.md) — Wires the M4B chaptered + MP3 ZIP tiles on the listen view to open the existing `ExportAudiobookModal` with the format pre-filled; streaming-link tile remains "Coming soon" pending a slugged URL endpoint.
 
 ### I. Revisions & drift
 
