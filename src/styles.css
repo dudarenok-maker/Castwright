@@ -366,6 +366,26 @@
   border-color: rgba(239, 68, 68, 0.35);
 }
 
+/* Floating-pill-inverse — bespoke utility for surfaces that want to read
+   as a dark capsule in BOTH light AND dark mode (e.g. the cast-view
+   selection bar at `src/views/cast.tsx:439`). The original implementation
+   reached for "dark in both modes" via `bg-ink text-canvas`, which was
+   only a light-mode coincidence: in dark mode `--ink` inverts to cream
+   and `--canvas` inverts to dark, so the pill flipped to cream and all
+   the `bg-canvas/15` elevation overlays inside it (count pill, Compare
+   button enabled-state fill, divider) painted dark-on-cream and washed
+   out — making the Compare button's enabled state visually identical to
+   its `disabled:opacity-40` state. This class pins the intended look
+   under both themes so the inner overlays stay readable in both. */
+.floating-pill-inverse {
+  background-color: var(--ink);
+  color: var(--canvas);
+}
+[data-theme='dark'] .floating-pill-inverse {
+  background-color: #14110f; /* canvas literal — stays dark when --canvas flips */
+  color: #f4efec; /* ink literal — stays cream when --ink flips */
+}
+
 /* Page chrome -------------------------------------------------------------- */
 html,
 body {
