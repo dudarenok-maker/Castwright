@@ -10,10 +10,12 @@
    hand-crafting a PDF that pdfjs's strict xref parser will accept.
    End-to-end PDF coverage comes from the canonical e2e manuscript run. */
 
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
+import { platform } from 'node:os';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = resolve(here, '../server/src/parsers/__fixtures__');
@@ -276,3 +278,84 @@ function buildSeriesFromTitleEpub() {
 const seriesFromTitlePath = resolve(fixturesDir, 'sample-title-no-calibre.epub');
 writeFileSync(seriesFromTitlePath, buildSeriesFromTitleEpub());
 console.log(`wrote ${seriesFromTitlePath}`);
+
+/* MOBI + AZW3 fixtures (plan 60 — real-binary parser fixtures).
+ *
+ * Calibre's `ebook-convert` is the canonical tool for producing real
+ * Mobipocket / KF8 binaries from an EPUB source. We use the
+ * already-generated `sample.epub` (Jane Doe / "The Solway Light", with
+ * Calibre series meta) as the input so the resulting MOBI/AZW3 carry
+ * the same dc:title/dc:creator the EPUB tests assert on.
+ *
+ * Calibre is a per-developer install, not bundled with this repo. When
+ * it's missing from PATH we print a clear warning and exit success —
+ * fresh-clone dev environments still pass `npm run verify` because the
+ * MOBI/AZW3 e2e cases + the server's real-fixture integration test
+ * both detect the missing files and skip with a "Calibre required"
+ * message. EPUB + PDF fixtures (above) stay generated unconditionally.
+ *
+ * Pairs with docs/features/60-real-binary-parser-fixtures.md.
+ */
+
+function findCalibre() {
+  /* `where.exe` on Windows / `which` elsewhere. spawnSync returns
+     status 0 + the path on stdout when found, non-zero otherwise. */
+  const cmd = platform() === 'win32' ? 'where.exe' : 'which';
+  const result = spawnSync(cmd, ['ebook-convert'], { encoding: 'utf8' });
+  if (result.status === 0 && result.stdout.trim()) {
+    /* `where.exe` may return multiple paths (one per line); take the
+       first. POSIX `which` returns just one. */
+    return result.stdout.trim().split(/\r?\n/)[0];
+  }
+  return null;
+}
+
+function generateMobiFixture(epubInput, calibrePath) {
+  const out = resolve(fixturesDir, 'sample.mobi');
+  /* `--mobi-file-type=old` produces a legacy Mobipocket (initMobiFile)
+     binary rather than dual-format. Keeps the file small (~5 KB) and
+     exercises the parser's legacy path explicitly. */
+  const result = spawnSync(
+    calibrePath,
+    [epubInput, out, '--mobi-file-type=old'],
+    { stdio: 'inherit' },
+  );
+  if (result.status !== 0) {
+    console.warn(`[gen-parser-fixtures] ebook-convert failed for MOBI (status ${result.status})`);
+    return null;
+  }
+  return out;
+}
+
+function generateAzw3Fixture(epubInput, calibrePath) {
+  const out = resolve(fixturesDir, 'sample.azw3');
+  /* AZW3 is KF8 — ebook-convert dispatches on the output extension. */
+  const result = spawnSync(calibrePath, [epubInput, out], { stdio: 'inherit' });
+  if (result.status !== 0) {
+    console.warn(`[gen-parser-fixtures] ebook-convert failed for AZW3 (status ${result.status})`);
+    return null;
+  }
+  return out;
+}
+
+const calibrePath = findCalibre();
+if (!calibrePath) {
+  console.warn(
+    '[gen-parser-fixtures] Calibre (ebook-convert) not found on PATH — ' +
+      'skipping MOBI + AZW3 fixtures.\n' +
+      '  Install Calibre from https://calibre-ebook.com/download to enable ' +
+      'real-binary integration tests for @lingo-reader/mobi-parser.\n' +
+      '  Without Calibre, the MOBI/AZW3 e2e cases skip cleanly and EPUB + PDF ' +
+      'paths still run.',
+  );
+} else {
+  if (!existsSync(epubPath)) {
+    console.warn(`[gen-parser-fixtures] EPUB source missing at ${epubPath}; cannot derive MOBI/AZW3`);
+  } else {
+    console.log(`[gen-parser-fixtures] using Calibre at ${calibrePath}`);
+    const mobiOut = generateMobiFixture(epubPath, calibrePath);
+    if (mobiOut) console.log(`wrote ${mobiOut}`);
+    const azw3Out = generateAzw3Fixture(epubPath, calibrePath);
+    if (azw3Out) console.log(`wrote ${azw3Out}`);
+  }
+}

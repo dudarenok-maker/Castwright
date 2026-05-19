@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-19 (post plans 53–58 merge):** Must 0 · Should 0 · Could 32 · Won't 9
+**Counts as of 2026-05-19 (post plans 53–58 merge, plan 60 ship):** Must 0 · Should 0 · Could 31 · Won't 9
 
 ---
 
@@ -323,16 +323,6 @@ Source: net-new (2026-05-18). Plan 49 (release packaging) ships with a Kokoro-on
 - _Key files:_ `src/views/account.tsx` (extend with Models section), new `src/components/ollama-install.tsx`, new `src/components/model-pull-status.tsx`, `server/src/routes/ollama-health.ts` (extend with `POST /pull`), new `server/src/ollama/install-bootstrap.ts`, new `server/tts-sidecar/scripts/install-coqui.{sh,ps1}`.
 - _Depends on:_ none structural — the Account UX seam exists from plan 49. Unparks the install-and-pull-from-UI subset of Won't #1 ("Auto-install Ollama / auto-pull models"); the headless-CI variant of Won't #1 stays parked.
 - _Benefit (user):_ closes the gap that plan 49's Kokoro-only install leaves. Today a deployer who wants Ollama or Coqui XTTS must drop to a terminal; this UX keeps the install + model-management flow entirely in-app, matching the deployer-first promise of plan 49.
-
-### 38. Real-binary MOBI / AZW3 fixtures for the binary-upload e2e
-
-Source: net-new (2026-05-19). Spun off from plan 58 ship — the new `e2e/binary-upload.spec.ts` covers the routing seam with dummy buffers (mock api doesn't parse content), but real-binary integration with `@lingo-reader/mobi-parser` is still untested at the browser level.
-
-- _What:_ Extend `scripts/gen-parser-fixtures.mjs` to call Calibre's `ebook-convert` (a per-developer install, not bundled) to produce tiny `sample.mobi` + `sample.azw3` from a Project Gutenberg-derived `.epub` source. Wire these into `e2e/binary-upload.spec.ts` so the MOBI/AZW3 cases load real binaries through the real (not mock) parser path. Skip the test cleanly when Calibre isn't on PATH so a fresh-clone dev environment still passes verify.
-- _Acceptance:_ With Calibre installed, `npm run test:e2e` runs all 4 binary cases through the real parser path and asserts the confirm-metadata view renders. Without Calibre, the MOBI/AZW3 cases skip with a clear "Calibre required" message; EPUB + PDF still run against the existing real fixtures.
-- _Key files:_ `scripts/gen-parser-fixtures.mjs`; `e2e/binary-upload.spec.ts`; `server/src/parsers/__fixtures__/sample.mobi` + `sample.azw3` (generated, possibly gitignored).
-- _Depends on:_ plan 58 shipped (routing-seam coverage already in place). Calibre install is the developer prerequisite.
-- _Benefit (technical):_ binary parsers are the highest-risk seam in the upload flow — third-party libs have real-world quirks that the mock-api path doesn't catch. Real fixtures lock the integration contract.
 
 ### 39. GPU-arbitration semaphore for parallel Claude Code sessions
 
