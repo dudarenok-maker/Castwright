@@ -30,11 +30,28 @@
    point used by `synthesiseChapter`. Each transform is exported so a future
    refactor can pin which half regressed.
 
-   All transforms are idempotent and order-independent. Audio tags like
-   `[shouting]` are lowercase inside the brackets and are not touched. */
+   All transforms are idempotent and order-independent.
+
+   Audio tags (plan 70d). Inline bracketed tags like `[empathic]` /
+   `[shouting]` ride along inside sentence.text from the analyzer. No
+   current TTS engine in this app (Kokoro v1, Coqui XTTS v2, Gemini TTS)
+   interprets bracket markup as prosody — they all read it literally
+   ("open bracket empathic close bracket"). Strip the known-vocabulary
+   tag tokens at the TTS boundary so the audio never contains the
+   bracket characters. The original `sentence.text` is untouched so the
+   UI caption / manuscript diff still sees the tag for analyst review. */
+
+import { AUDIO_TAGS } from '../parsers/audio-tags.js';
 
 const ALL_CAPS_RUN = /([A-Z])([A-Z']{2,})/g;
 const DASH_RUN = /\s*[–—]\s*/g;
+/* `[empathic]` / `[shouting]` / etc — only the analyzer-vocabulary tags.
+   Matching the closed set keeps proper-noun-in-brackets ("[Citation Needed]")
+   from being silently swallowed. Case-insensitive because the analyzer
+   has emitted mixed casing in some fixtures. The trailing whitespace is
+   collapsed so "She said [emphatic] hello." → "She said hello." rather
+   than "She said  hello." (note doubled space). */
+const AUDIO_TAG_RUN = new RegExp(`\\s*\\[(?:${AUDIO_TAGS.join('|')})\\]\\s*`, 'gi');
 
 /* Zero-width + bidi format chars. Codepoints (all written as \u escapes so
    the source is auditable — these glyphs are invisible in a normal editor):
@@ -97,11 +114,24 @@ export function stripUnsafeForTts(text: string): string {
     .replace(UNPAIRED_SURROGATE, '');
 }
 
+/** Strip the analyzer's bracketed audio-tag vocabulary so the TTS engine
+    doesn't read "open bracket empathic close bracket" aloud. Plan 70d.
+    Only the closed vocabulary in AUDIO_TAGS is removed — arbitrary
+    bracketed prose is preserved. Trailing whitespace is collapsed so we
+    don't leave a doubled space where the tag used to sit. */
+export function stripAudioTags(text: string): string {
+  return text.replace(AUDIO_TAG_RUN, ' ').replace(/\s+/g, ' ').trim();
+}
+
 /** Compose the TTS-bound transforms. Apply this immediately before handing
     text to a TTS provider — do NOT mutate the underlying SentenceOutput,
     since the original text still drives UI segment captions, manuscript
     diffing, and quote audit. Order matters: strip first (so all-caps + dash
-    transforms operate on clean ASCII), then humanise the casing/dashes. */
+    transforms operate on clean ASCII), then humanise the casing/dashes,
+    then drop audio tags (last so the bracket characters are still present
+    while the all-caps detector runs — `[SHOUTING]` is excluded from the
+    all-caps fold by the closed-vocabulary check, so order is academic,
+    but keeping the strip last keeps the contract obvious). */
 export function normaliseForTts(text: string): string {
-  return softenDashes(denormaliseAllCaps(stripUnsafeForTts(text)));
+  return stripAudioTags(softenDashes(denormaliseAllCaps(stripUnsafeForTts(text))));
 }
