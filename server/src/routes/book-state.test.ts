@@ -255,6 +255,52 @@ describe('book-state router — state slice editable metadata', () => {
     expect(onDisk.manuscriptId).toBe('m_test');
   });
 
+  /* Plan 67 — per-book editorial notes round-trip via the state slice.
+     Free-form text with markdown line breaks preserved verbatim. Empty /
+     whitespace-only strings collapse to null on the server side so the
+     editor's "clear" gesture has a clean cleared-value signal. */
+  it('PUT slice=state round-trips notes with markdown line breaks preserved verbatim (plan 67)', async () => {
+    const notesText = 'Source: public-domain edition.\nLicense: CC-BY-SA.\n\nNarration intent: warm.';
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { notes: notesText } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.notes).toBe(notesText);
+  });
+
+  it('PUT slice=state preserves notes when patch omits it', async () => {
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { genre: 'Mystery' } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    /* Carried forward from the previous test in the file. */
+    expect(onDisk.notes).toContain('Source: public-domain edition.');
+  });
+
+  it('PUT slice=state stores explicit null for cleared notes', async () => {
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { notes: null } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.notes).toBeNull();
+  });
+
+  it('PUT slice=state coerces whitespace-only notes to null', async () => {
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { notes: '   \n   ' } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.notes).toBeNull();
+  });
+
   it('PUT slice=state stamps schema=1 on the on-disk file (plan 27 versioning seam)', async () => {
     /* End-to-end check that the migration seam wires through every
        writer hot path. The seed file in beforeAll has no schema field

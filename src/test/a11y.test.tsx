@@ -150,6 +150,7 @@ const meta: EditableBookMeta = {
   genre: 'Fantasy',
   publicationDate: '2026-05-09',
   description: null,
+  notes: null,
 };
 
 describe('a11y — book library view', () => {
