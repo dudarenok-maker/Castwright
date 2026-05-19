@@ -113,9 +113,27 @@ export const analysisStreamMiddleware: Middleware = (store) => {
       onSeriesPrior: ({ count, names }: { count: number; names: string[] }) => {
         dispatch(analysisActions.setSeriesPrior({ manuscriptId, count, names }));
       },
+      /* Throttled (~1 / 2s) LLM heartbeat. The middleware consumes it
+         solely to bump `activeStream.lastTickAt` so the global
+         AnalysisPill's stall heuristic stays honest while the user is on
+         a different view — without it, quiet phases (slow ML inference
+         between onPhase / onEta ticks) age the snapshot past
+         STALL_THRESHOLD_MS and trip 'stalled' even though the run is
+         fine. Mirrors the generation-stream heartbeat fix in commit
+         06444ee. Does NOT update the in-view heartbeat text — that's
+         still rendered by the analysing view via its own onHeartbeat
+         subscription on the streamAnalysis call. */
+      onHeartbeat: () => {
+        dispatch(
+          analysisActions.bumpActiveStreamHeartbeat({
+            manuscriptId,
+            lastTickAt: Date.now(),
+          }),
+        );
+      },
       /* Intentionally NOT consumed by the middleware (view-only):
          onLog, onCastUpdate, onChapterFailed, onChapterResolved,
-         onHeartbeat, onThrottle. */
+         onThrottle. */
     };
 
     /* Subscribe-only POST: no model / fresh / allowStage1Shrink. The

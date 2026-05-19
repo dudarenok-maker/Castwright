@@ -128,6 +128,24 @@ export const analysisSlice = createSlice({
         snap.lastTickAt = action.payload.lastTickAt;
     },
 
+    /* Thin lastTickAt-only refresh dispatched from the middleware on
+       every analyzer heartbeat event. Mirrors the chapters-slice
+       updateActiveStreamProgress reducer added in commit 06444ee — keeps
+       `activeStream.lastTickAt` fresh while the user is on a different
+       view, so the global AnalysisPill's stall heuristic doesn't trip on
+       quiet phases (slow ML inference between phase transitions) when
+       no onPhase / onEta ticks are arriving. Manuscript guard prevents a
+       tab-B analysis from clobbering a tab-A snapshot. */
+    bumpActiveStreamHeartbeat(
+      state,
+      action: PayloadAction<{ manuscriptId: string; lastTickAt: number }>,
+    ) {
+      const snap = state.activeStream;
+      if (!snap) return;
+      if (snap.manuscriptId !== action.payload.manuscriptId) return;
+      snap.lastTickAt = action.payload.lastTickAt;
+    },
+
     /* Flip to halted state with an error code + message. Used for
        attribution_drift / stage1_shrink_refused / cast_incomplete /
        aborted / unknown error events. */

@@ -113,6 +113,42 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     expect(s1.activeStream).toBeNull();
   });
 
+  /* Heartbeat-only refresh — mirror of the chapters-slice
+     updateActiveStreamProgress lastTickAt-only bump from commit 06444ee.
+     Keeps the AnalysisPill's stall heuristic honest during quiet phases
+     when no onPhase / onEta ticks are arriving and the user is on a
+     different view. */
+  it('bumpActiveStreamHeartbeat refreshes only lastTickAt; everything else preserved', () => {
+    const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
+    const s2 = analysisSlice.reducer(
+      s1,
+      analysisActions.bumpActiveStreamHeartbeat({ manuscriptId: 'm1', lastTickAt: 9999 }),
+    );
+    expect(s2.activeStream?.lastTickAt).toBe(9999);
+    /* All other fields untouched. */
+    expect(s2.activeStream).toMatchObject({
+      ...baseSnapshot,
+      lastTickAt: 9999,
+    });
+  });
+
+  it('cross-book guard: bumpActiveStreamHeartbeat for a different manuscriptId is a no-op', () => {
+    const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
+    const s2 = analysisSlice.reducer(
+      s1,
+      analysisActions.bumpActiveStreamHeartbeat({ manuscriptId: 'm_OTHER', lastTickAt: 9999 }),
+    );
+    expect(s2.activeStream).toEqual(baseSnapshot);
+  });
+
+  it('bumpActiveStreamHeartbeat is a no-op when activeStream is null', () => {
+    const s1 = analysisSlice.reducer(
+      undefined,
+      analysisActions.bumpActiveStreamHeartbeat({ manuscriptId: 'm1', lastTickAt: 1234 }),
+    );
+    expect(s1.activeStream).toBeNull();
+  });
+
   it('setHalted flips state + carries the code + message; cross-book guarded', () => {
     const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
     const s2 = analysisSlice.reducer(
