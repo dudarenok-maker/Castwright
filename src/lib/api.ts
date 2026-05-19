@@ -1856,11 +1856,16 @@ export interface ChapterRestructureResponse {
     newChapterId: number;
     newSentenceId: number;
   }>;
+  /** Non-fatal advisories from the post-process passes (plan 70a):
+      orphan recovery counts, empty-chapter prune counts, generic-title
+      renumber counts. Empty / absent when the operation was clean.
+      Consumed by the Restructure view to surface a toast. */
+  warnings?: string[];
 }
 
 async function postRestructure(
   bookId: string,
-  endpoint: 'merge' | 'split' | 'reorder',
+  endpoint: 'merge' | 'split' | 'reorder' | 'exclude' | 'refresh-titles',
   body: unknown,
 ): Promise<ChapterRestructureResponse> {
   const res = await fetch(
@@ -1912,6 +1917,28 @@ async function realReorderChapters(
   order: number[],
 ): Promise<ChapterRestructureResponse> {
   return postRestructure(bookId, 'reorder', { order });
+}
+
+/* Plan 70b — soft-hide / un-hide a set of chapters via Chapter.excluded.
+   Sentence remap is identity; audio files are left on disk. */
+async function realExcludeChapters(
+  bookId: string,
+  chapterIds: number[],
+  excluded: boolean,
+): Promise<ChapterRestructureResponse> {
+  return postRestructure(bookId, 'exclude', { chapterIds, excluded });
+}
+
+/* Plan 70b — re-derive chapter titles by re-parsing the source manuscript
+   AND opportunistically promoting the first non-dialogue sentence of any
+   chapter still carrying a generic "Chapter N" title. */
+async function realRefreshChapterTitles(
+  bookId: string,
+  options: { useFirstLine?: boolean } = {},
+): Promise<ChapterRestructureResponse> {
+  return postRestructure(bookId, 'refresh-titles', {
+    useFirstLine: options.useFirstLine !== false,
+  });
 }
 
 /* Mock implementations return deterministic shapes good enough for
@@ -1975,6 +2002,39 @@ async function mockReorderChapters(
       slug: `${String(i + 1).padStart(2, '0')}-mock`,
     })),
     sentenceRemap: [],
+  };
+}
+
+async function mockExcludeChapters(
+  _bookId: string,
+  chapterIds: number[],
+  excluded: boolean,
+): Promise<ChapterRestructureResponse> {
+  await wait(40);
+  return {
+    chapters: chapterIds.map((id) => ({
+      id,
+      title: `Chapter ${id}`,
+      slug: `${String(id).padStart(2, '0')}-mock`,
+      ...(excluded ? { excluded: true } : {}),
+    })),
+    sentenceRemap: [],
+    warnings: [],
+  };
+}
+
+async function mockRefreshChapterTitles(
+  _bookId: string,
+  _options: { useFirstLine?: boolean } = {},
+): Promise<ChapterRestructureResponse> {
+  await wait(80);
+  return {
+    chapters: [
+      { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+      { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+    ],
+    sentenceRemap: [],
+    warnings: ['Re-derived 2 chapter titles from the source manuscript.'],
   };
 }
 
@@ -2906,6 +2966,8 @@ const real = {
   mergeChapters: realMergeChapters,
   splitChapter: realSplitChapter,
   reorderChapters: realReorderChapters,
+  excludeChapters: realExcludeChapters,
+  refreshChapterTitles: realRefreshChapterTitles,
   runAnalysisForChapters: realRunAnalysisForChapters,
   getVoiceSample: realGetVoiceSample,
   getBaseVoiceSample: realGetBaseVoiceSample,
@@ -3031,6 +3093,8 @@ const mock = {
   mergeChapters: mockMergeChapters,
   splitChapter: mockSplitChapter,
   reorderChapters: mockReorderChapters,
+  excludeChapters: mockExcludeChapters,
+  refreshChapterTitles: mockRefreshChapterTitles,
   runAnalysisForChapters: mockRunAnalysisForChapters,
   getVoiceSample: mockGetVoiceSample,
   getBaseVoiceSample: mockGetBaseVoiceSample,

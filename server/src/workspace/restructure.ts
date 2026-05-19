@@ -74,6 +74,11 @@ export interface ReorderOp {
   order: number[];
 }
 
+export interface ExcludeOp {
+  chapterIds: number[];
+  excluded: boolean;
+}
+
 /* -- helpers -------------------------------------------------------- */
 
 function chapterSlug(id: number, title: string): string {
@@ -762,6 +767,249 @@ export function applySplit(
     audioOps,
     warnings,
   };
+}
+
+/* -- refresh titles ------------------------------------------------- */
+
+/* Dialogue-opener detector for first-line promotion (plan 70b). Returns
+   true when the candidate sentence begins with a quotation mark or
+   speech dash, signalling that the line is dialogue rather than a
+   chapter title. Covers straight + curly quotes + em / en dashes. */
+function looksLikeDialogue(text: string): boolean {
+  if (text.length === 0) return false;
+  const first = text[0];
+  return (
+    first === '"' ||
+    first === "'" ||
+    first === '“' ||
+    first === '”' ||
+    first === '‘' ||
+    first === '’' ||
+    first === '—' ||
+    first === '–'
+  );
+}
+
+export interface RefreshTitlesOptions {
+  /** Pre-parsed titles from the source manuscript, indexed by parser-
+      order. When the parsed chapter count matches the current state
+      chapter count, the route handler passes the parsed list; the
+      transform replaces titles by index. Empty array (or mismatched
+      length) → skip the parser-aligned rewrite and only run the
+      first-line promotion pass below. */
+  parsedTitles: readonly string[];
+  /** When true, opportunistically promote a chapter's first non-dialogue
+      sentence to its title if the chapter's current title still matches
+      the generic auto-generated pattern. Skipped per-chapter when the
+      first sentence looks like dialogue, exceeds MAX_SUBTITLE_LEN, or
+      doesn't pass looksLikeTitle. */
+  useFirstLine: boolean;
+  /** Predicate the route handler supplies (imported from text.ts so the
+      pure transform stays I/O-free). Returns true when the candidate
+      passes the title-case + stopword heuristic. */
+  looksLikeTitle: (s: string) => boolean;
+  /** Length cap for first-line candidates. Aligned with MAX_SUBTITLE_LEN
+      so a candidate that would have been accepted as a parser subtitle
+      is also accepted here. */
+  maxLen: number;
+}
+
+export function applyRefreshTitles(
+  state: BookStateJson,
+  hints: readonly ChapterHint[],
+  sentences: readonly RestructureSentence[],
+  opts: RefreshTitlesOptions,
+): RestructureResult {
+  const warnings: string[] = [];
+  const parsedAligned = opts.parsedTitles.length === state.chapters.length;
+  if (!parsedAligned && opts.parsedTitles.length > 0) {
+    warnings.push(
+      `Manuscript parses to ${opts.parsedTitles.length} chapters but state has ${state.chapters.length} — parser-aligned title refresh skipped (chapters have been restructured since import).`,
+    );
+  }
+
+  // First pass: parser-aligned rewrite (when chapter counts match).
+  // Only fires for chapters whose current title still matches the
+  // generic auto-generated pattern OR equals the parsed title for the
+  // same parser order — user-customised titles ("The Verdict") are
+  // never clobbered by re-parsing.
+  let parserAligned = 0;
+  let stagedChapters = state.chapters.map((c, i) => {
+    if (!parsedAligned) return c;
+    const candidate = opts.parsedTitles[i];
+    if (!candidate || candidate === c.title) return c;
+    if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;
+    parserAligned++;
+    return { ...c, title: candidate, slug: chapterSlug(c.id, candidate) };
+  });
+  if (parserAligned > 0) {
+    warnings.push(
+      `Re-derived ${parserAligned} chapter title${parserAligned === 1 ? '' : 's'} from the source manuscript.`,
+    );
+  }
+
+  // Second pass: first-line promotion for any chapter whose title still
+  // matches the generic pattern. Uses the GENERIC_TITLE_RE detector to
+  // gate "is this title auto-generated and therefore eligible for
+  // replacement?" — user-customised titles are skipped.
+  let firstLinePromoted = 0;
+  if (opts.useFirstLine) {
+    // Build per-chapter sentence map once.
+    const sentencesByChapter = new Map<number, RestructureSentence[]>();
+    for (const s of sentences) {
+      let bucket = sentencesByChapter.get(s.chapterId);
+      if (!bucket) {
+        bucket = [];
+        sentencesByChapter.set(s.chapterId, bucket);
+      }
+      bucket.push(s);
+    }
+    for (const bucket of sentencesByChapter.values()) bucket.sort((a, b) => a.id - b.id);
+
+    stagedChapters = stagedChapters.map((c) => {
+      if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;
+      const chapterSentences = sentencesByChapter.get(c.id);
+      const firstSentence = chapterSentences?.[0]?.text?.trim();
+      if (!firstSentence) return c;
+      if (looksLikeDialogue(firstSentence)) return c;
+      if (firstSentence.length > opts.maxLen) return c;
+      if (/[.!]$/.test(firstSentence)) return c;
+      if (!opts.looksLikeTitle(firstSentence)) return c;
+      firstLinePromoted++;
+      return {
+        ...c,
+        title: firstSentence,
+        slug: chapterSlug(c.id, firstSentence),
+      };
+    });
+  }
+  if (firstLinePromoted > 0) {
+    warnings.push(
+      `Promoted ${firstLinePromoted} first-sentence candidate${firstLinePromoted === 1 ? '' : 's'} to chapter titles.`,
+    );
+  }
+
+  // Build audio ops: any chapter whose slug changed needs a rename op
+  // (audio file follows the new slug; content unchanged).
+  const audioOps: AudioOp[] = [];
+  for (let i = 0; i < state.chapters.length; i++) {
+    const oldChapter = state.chapters[i];
+    const newChapter = stagedChapters[i];
+    if (oldChapter.slug !== newChapter.slug && oldChapter.audioRenderedAt) {
+      audioOps.push({
+        kind: 'rename',
+        from: oldChapter.slug,
+        to: newChapter.slug,
+        newChapterId: newChapter.id,
+        newChapterTitle: newChapter.title,
+      });
+    }
+  }
+
+  // Hints get the new titles too so subsequent generation calls see them.
+  const newHints: ChapterHint[] = hints.map((h) => {
+    const sc = stagedChapters.find((c) => c.id === h.id);
+    return sc ? { ...h, title: sc.title } : h;
+  });
+
+  return {
+    state: {
+      ...state,
+      chapters: stagedChapters,
+      updatedAt:
+        parserAligned + firstLinePromoted > 0
+          ? new Date().toISOString()
+          : state.updatedAt,
+    },
+    hints: newHints,
+    sentences: sentences.slice(),
+    remap: sentences.map((s) => ({
+      oldChapterId: s.chapterId,
+      oldSentenceId: s.id,
+      newChapterId: s.chapterId,
+      newSentenceId: s.id,
+    })),
+    audioOps,
+    warnings,
+  };
+}
+
+/* -- exclude -------------------------------------------------------- */
+
+/* Soft-hide a set of chapters by flipping `Chapter.excluded` to true or
+   undefined. Mirrors the existing Generate-view treatment (chapters with
+   excluded=true are skipped by the generation queue at
+   src/views/generation.tsx:360 and by the chapters-slice reducer at
+   src/store/chapters-slice.ts:545-549).
+
+   No structural change — ids and slugs are preserved, audio files stay
+   on disk, and the sentence remap is identity. The shared
+   postProcessRestructure pipeline still runs so any pre-existing empty
+   chapters / stale generic titles get cleaned up by the same operation,
+   matching the user expectation that "any restructure tidies up the
+   list as a side effect." */
+export function applyExclude(
+  state: BookStateJson,
+  hints: readonly ChapterHint[],
+  sentences: readonly RestructureSentence[],
+  op: ExcludeOp,
+): RestructureResult {
+  if (!Array.isArray(op.chapterIds) || op.chapterIds.length === 0) {
+    throw new Error('Exclude requires at least 1 chapter id.');
+  }
+  if (typeof op.excluded !== 'boolean') {
+    throw new Error('Exclude requires a boolean `excluded` flag.');
+  }
+  const targetIds = new Set(op.chapterIds);
+  for (const id of targetIds) {
+    if (!hints.some((h) => h.id === id) && !state.chapters.some((c) => c.id === id)) {
+      throw new Error(`Chapter ${id} not found.`);
+    }
+  }
+
+  const newStateChapters: BookStateJson['chapters'] = state.chapters.map((c) => {
+    if (!targetIds.has(c.id)) return c;
+    if (op.excluded) {
+      // Set excluded: true.
+      if (c.excluded === true) return c;
+      return { ...c, excluded: true };
+    }
+    // Clear excluded — strip the field entirely to match the reducer
+    // convention (truthy → true, falsy → undefined/absent).
+    if (!c.excluded) return c;
+    const { excluded: _, ...rest } = c;
+    return rest;
+  });
+
+  const newHints: ChapterHint[] = hints.map((h) => {
+    if (!targetIds.has(h.id)) return h;
+    return { ...h, excluded: op.excluded ? true : undefined };
+  });
+
+  // Sentence remap is identity — no chapter id changes.
+  const { sentences: newSentences, remap, warnings } = remapSentences(
+    sentences,
+    new Map(
+      newStateChapters.map((c) => [
+        c.id,
+        { oldId: c.id, newId: c.id, contentChanged: false } as OldChapterFate,
+      ]),
+    ),
+    state.chapters.map((c) => c.id),
+  );
+
+  return postProcessRestructure({
+    state: {
+      ...state,
+      chapters: newStateChapters,
+      updatedAt: new Date().toISOString(),
+    },
+    hints: newHints,
+    sentences: newSentences,
+    remap,
+    audioOps: [],
+    warnings,
+  });
 }
 
 /* -- reorder -------------------------------------------------------- */
