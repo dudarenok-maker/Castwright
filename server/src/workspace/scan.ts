@@ -112,6 +112,10 @@ export interface BookStateJson {
      `ldes` atoms during Voice export (plan 33). Free-form text (markdown
      line breaks are preserved in the editor; M4B atoms carry plain text). */
   description?: string | null;
+  /* Per-book editorial notes — source attribution, license, narration
+     intent, in-progress thoughts. Workspace-internal (never exported).
+     Plain text with markdown line breaks preserved verbatim. Plan 67. */
+  notes?: string | null;
 }
 
 export interface LibraryBook {

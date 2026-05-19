@@ -11,6 +11,7 @@
    listen.tsx, so per-region behaviour testing doesn't fan out across
    files. */
 
+import { useState } from 'react';
 import {
   IconPlay,
   IconHeadphones,
@@ -21,6 +22,8 @@ import {
   IconRefresh,
   IconUpload,
   IconImage,
+  IconChevD,
+  IconChevR,
 } from '../../lib/icons';
 import { type CoverFraming, computeCoverStyle } from '../../lib/cover-framing';
 import {
@@ -137,6 +140,10 @@ interface ListenHeaderProps {
   onOpenExportModal: () => void;
   onEnterPreview: () => void;
   onOpenRestructure: () => void;
+  /** Plan 67 — per-book editorial notes (markdown plain text). null /
+      empty string suppresses the collapsible card. Markdown line breaks
+      render via whitespace-pre-wrap (no markdown parsing). */
+  notes: string | null;
 }
 
 export function ListenHeader({
@@ -159,8 +166,17 @@ export function ListenHeader({
   onOpenExportModal,
   onEnterPreview,
   onOpenRestructure,
+  notes,
 }: ListenHeaderProps) {
+  /* Plan 67 — collapsible Notes card. Default collapsed so the header
+     stays compact; expands inline when the user clicks the affordance.
+     Local-only state — Notes is read-only here; edits flow through the
+     metadata editor at the bottom of the view. */
+  const [notesExpanded, setNotesExpanded] = useState(false);
+  const trimmedNotes = (notes ?? '').trim();
+  const hasNotes = trimmedNotes.length > 0;
   return (
+    <>
     <section className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-10 items-end mb-12">
       <CoverArt
         title={title}
@@ -251,6 +267,47 @@ export function ListenHeader({
         </div>
       </div>
     </section>
+    {hasNotes && (
+      <section className="mb-12" data-testid="listen-notes-card">
+        <button
+          type="button"
+          onClick={() => setNotesExpanded((v) => !v)}
+          aria-expanded={notesExpanded}
+          aria-controls="listen-notes-body"
+          data-testid="listen-notes-toggle"
+          className="w-full bg-white rounded-3xl border border-ink/10 px-6 py-4 shadow-card flex items-center gap-3 text-left hover:border-ink/20 transition-colors"
+        >
+          {notesExpanded ? (
+            <IconChevD className="w-4 h-4 text-ink/60" />
+          ) : (
+            <IconChevR className="w-4 h-4 text-ink/60" />
+          )}
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
+              Notes
+            </p>
+            <p className="text-sm text-ink/70 truncate">
+              {notesExpanded ? 'Editorial notes for this book' : trimmedNotes.split('\n')[0]}
+            </p>
+          </div>
+        </button>
+        {notesExpanded && (
+          <div
+            id="listen-notes-body"
+            data-testid="listen-notes-body"
+            className="mt-2 bg-white rounded-3xl border border-ink/10 p-6 shadow-card"
+          >
+            {/* whitespace-pre-wrap preserves the user's markdown line
+                breaks verbatim without a markdown renderer (full markdown
+                parsing is a follow-up). */}
+            <p className="text-sm text-ink/80 whitespace-pre-wrap leading-relaxed">
+              {trimmedNotes}
+            </p>
+          </div>
+        )}
+      </section>
+    )}
+    </>
   );
 }
 
@@ -332,6 +389,28 @@ export function ListenMetadataEditor({
                 placeholder="About this audiobook — travels into M4B desc/ldes atoms on export."
                 rows={4}
                 data-testid="meta-description"
+                className="mt-1.5 w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-magenta/30 resize-y"
+              />
+            </label>
+          </div>
+          <div className="md:col-span-2">
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
+                Notes
+              </span>
+              {/* Plan 67 — workspace-internal editorial scratchpad
+                  (never exported). Preserves line breaks verbatim via
+                  whitespace-pre-wrap on the read side; no markdown
+                  toolbar / parsing in v1. Trim-empty round-trips to
+                  null so the cleared-value flow is unambiguous. */}
+              <textarea
+                value={bookMeta.notes ?? ''}
+                onChange={(e) =>
+                  onEditField('notes', e.target.value.trim() === '' ? null : e.target.value)
+                }
+                placeholder="Editorial notes — source attribution, license, narration intent. Workspace-internal (never exported)."
+                rows={4}
+                data-testid="meta-notes"
                 className="mt-1.5 w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-magenta/30 resize-y"
               />
             </label>

@@ -30,6 +30,11 @@ export interface EditableBookMeta {
   /** Long-form "about this audiobook" copy. Travels into the M4B
       `desc` / `ldes` atoms during Voice export (plan 33). */
   description: string | null;
+  /** Per-book editorial notes — source attribution, license, narration
+      intent, in-progress thoughts. Workspace-internal (never exported).
+      Markdown line breaks preserved via `whitespace-pre-wrap` at render time.
+      See plan 67. */
+  notes: string | null;
 }
 
 export type EditableBookMetaField = keyof EditableBookMeta;
@@ -53,6 +58,7 @@ interface HydratePayload {
     genre?: string | null;
     publicationDate?: string | null;
     description?: string | null;
+    notes?: string | null;
   };
   /** Used as the narratorCredit fallback when state.narratorCredit is missing. */
   narratorFallback?: string | null;
@@ -74,6 +80,7 @@ export const bookMetaSlice = createSlice({
         genre: state.genre ?? null,
         publicationDate: state.publicationDate ?? null,
         description: state.description ?? null,
+        notes: state.notes ?? null,
       };
       s.draft = null;
     },
