@@ -29,6 +29,13 @@ export function ConfirmMetadataView() {
     candidate?.seriesPosition != null ? String(candidate.seriesPosition) : '',
   );
   const [title, setTitle] = useState(candidate?.title ?? '');
+  /* Bug B: server marks series/seriesPosition as title-extracted when it
+     fell back to the parenthetical heuristic. Surface a small chip so the
+     user knows the value is a guess; clear the flag on any edit so the
+     chip disappears once the user confirms or corrects the value. */
+  const [seriesFromTitle, setSeriesFromTitle] = useState<boolean>(
+    candidate?.seriesFromTitle ?? false,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -194,33 +201,46 @@ export function ConfirmMetadataView() {
           </div>
 
           {!isStandalone && (
-            <div className="grid grid-cols-[1fr_120px] gap-3">
-              <Field label="Series" required>
-                <input
-                  value={series}
-                  disabled={busy}
-                  onChange={(e) => setSeries(e.target.value)}
-                  placeholder="e.g. Earthsea"
-                  className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
-                />
-              </Field>
-              <Field label="Book #" required>
-                <input
-                  value={seriesPosition}
-                  disabled={busy}
-                  inputMode="decimal"
-                  onChange={(e) => {
-                    /* Keep digits + the first dot only — supports novella positions like 1.5. */
-                    let v = e.target.value.replace(/[^0-9.]/g, '');
-                    const dot = v.indexOf('.');
-                    if (dot !== -1) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
-                    setSeriesPosition(v);
-                  }}
-                  placeholder="1"
-                  className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50 tabular-nums"
-                />
-              </Field>
-            </div>
+            <>
+              <div className="grid grid-cols-[1fr_120px] gap-3">
+                <Field label="Series" required>
+                  <input
+                    value={series}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setSeries(e.target.value);
+                      setSeriesFromTitle(false);
+                    }}
+                    placeholder="e.g. Earthsea"
+                    className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+                  />
+                </Field>
+                <Field label="Book #" required>
+                  <input
+                    value={seriesPosition}
+                    disabled={busy}
+                    inputMode="decimal"
+                    onChange={(e) => {
+                      /* Keep digits + the first dot only — supports novella positions like 1.5. */
+                      let v = e.target.value.replace(/[^0-9.]/g, '');
+                      const dot = v.indexOf('.');
+                      if (dot !== -1) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
+                      setSeriesPosition(v);
+                      setSeriesFromTitle(false);
+                    }}
+                    placeholder="1"
+                    className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50 tabular-nums"
+                  />
+                </Field>
+              </div>
+              {seriesFromTitle && (
+                <p className="-mt-2">
+                  <span className="inline-block text-[10px] uppercase tracking-[0.10em] font-semibold text-magenta bg-magenta/10 border border-magenta/20 rounded-full px-2.5 py-0.5">
+                    Auto-extracted from title — verify
+                  </span>
+                </p>
+              )}
+            </>
           )}
 
           {duplicatePositionBook && (
