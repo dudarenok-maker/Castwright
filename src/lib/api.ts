@@ -354,12 +354,30 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
   const h1 = effectiveText.match(/^#\s+(.+)$/m);
   const stem = effectiveName?.replace(/\.[^.]+$/, '') ?? '';
   const m = /^(?<author>.+?)\s+-\s+(?<series>.+?)\s+(?<pos>\d+)\s+-\s+(?<title>.+)$/.exec(stem);
+  let title = (h1 && h1[1].trim()) || m?.groups?.title || stem || 'Untitled manuscript';
+  let series: string | null = m?.groups?.series ?? null;
+  let seriesPosition: number | null = m?.groups?.pos ? parseInt(m.groups.pos, 10) : null;
+  /* Bug B: mirror server-side parseSeriesFromTitle so e2e specs can
+     exercise the "EPUB title carries the series in a parenthetical"
+     path without a live server. Conservative parenthetical only. */
+  let seriesFromTitle = false;
+  if (!series && title) {
+    const titleMatch =
+      /^(?<title>.+?)\s*\((?<series>.+?)\s+(?:Book|#)\s*(?<pos>\d+(?:\.\d+)?)\)\s*$/i.exec(title);
+    if (titleMatch?.groups) {
+      title = titleMatch.groups.title!.trim();
+      series = titleMatch.groups.series!.trim();
+      seriesPosition = parseFloat(titleMatch.groups.pos!);
+      seriesFromTitle = true;
+    }
+  }
   const candidate = {
     format: (inferFormat(effectiveName ?? undefined) ?? 'markdown') as UploadResponse['format'],
-    title: (h1 && h1[1].trim()) || m?.groups?.title || stem || 'Untitled manuscript',
+    title,
     author: m?.groups?.author ?? null,
-    series: m?.groups?.series ?? null,
-    seriesPosition: m?.groups?.pos ? parseInt(m.groups.pos, 10) : null,
+    series,
+    seriesPosition,
+    seriesFromTitle,
     sourceText: effectiveText,
     wordCount: effectiveText.trim().split(/\s+/).filter(Boolean).length,
     byteSize: file ? file.size : new Blob([effectiveText]).size,
