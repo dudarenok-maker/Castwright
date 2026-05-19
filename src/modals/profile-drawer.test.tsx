@@ -7,11 +7,15 @@ import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice, voicesActions } from '../store/voices-slice';
 import { ProfileDrawer, type PriorMergeCandidate } from './profile-drawer';
-import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
+import {
+  playSampleWithAutoLoad,
+  playBaseVoiceSampleWithAutoLoad,
+} from '../lib/play-sample-with-auto-load';
 import type { BaseVoice, Character, Voice } from '../lib/types';
 
 vi.mock('../lib/play-sample-with-auto-load', () => ({
   playSampleWithAutoLoad: vi.fn().mockResolvedValue({ analyzerEvicted: false }),
+  playBaseVoiceSampleWithAutoLoad: vi.fn().mockResolvedValue({ analyzerEvicted: false }),
 }));
 
 vi.mock('../lib/use-sample-playback', () => ({
@@ -630,5 +634,116 @@ describe('ProfileDrawer model-voice override picker', () => {
     });
     expect(within(geminiPicker).getByRole('option', { name: 'Charon' })).toBeTruthy();
     expect(within(geminiPicker).queryByRole('option', { name: 'Asya Anara' })).toBeNull();
+  });
+});
+
+describe('ProfileDrawer voice-preview while editing', () => {
+  const Brann: Character = {
+    id: 'Brann',
+    name: 'Brann',
+    role: 'protagonist',
+    color: 'eliza',
+    lines: 50,
+    scenes: 5,
+    gender: 'male',
+    ageRange: 'teen',
+  };
+  const BrannVoice: Voice = {
+    id: 'v_Brann',
+    character: 'Brann',
+    bookTitle: 'Book One',
+    bookId: 'b1',
+    attributes: ['Male', 'Teen'],
+    gradient: ['#3C194F', '#0F0E0D'],
+    usedIn: 1,
+    source: 'current',
+    ttsVoice: { provider: 'coqui', name: 'Aaron Dreschner', description: 'Mid · Male' },
+  };
+  const baseCatalog: BaseVoice[] = [
+    { engine: 'coqui', name: 'Asya Anara' },
+    { engine: 'coqui', name: 'Damien Black' },
+    { engine: 'gemini', name: 'Charon' },
+  ];
+
+  it('keeps the candidate-preview list collapsed by default; toggle expands it', async () => {
+    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    /* List + textarea are hidden until the user opens the section — keeps
+       the drawer tidy on first open. */
+    expect(screen.queryByTestId('voice-preview-candidates')).toBeNull();
+    expect(screen.queryByTestId('voice-preview-sample-text')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('voice-preview-toggle'));
+    expect(screen.getByTestId('voice-preview-candidates')).toBeTruthy();
+    /* Default sample text is the pangram + follow-on. */
+    expect(
+      (screen.getByTestId('voice-preview-sample-text') as HTMLTextAreaElement).value,
+    ).toMatch(/quick brown fox/i);
+  });
+
+  it('clicking Play on a candidate row routes through playBaseVoiceSampleWithAutoLoad with the user-edited text', async () => {
+    vi.mocked(playBaseVoiceSampleWithAutoLoad).mockClear();
+    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    fireEvent.click(screen.getByTestId('voice-preview-toggle'));
+    /* User edits the sample line before auditioning. */
+    fireEvent.change(screen.getByTestId('voice-preview-sample-text'), {
+      target: { value: 'Halloran takes the bridge.' },
+    });
+    fireEvent.click(screen.getByTestId('voice-preview-play-Asya Anara'));
+    await waitFor(() => expect(playBaseVoiceSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(playBaseVoiceSampleWithAutoLoad).mock.calls[0][0].args).toMatchObject({
+      engine: 'coqui',
+      speakerName: 'Asya Anara',
+      text: 'Halloran takes the bridge.',
+    });
+  });
+
+  it('clicking Play on a SECOND candidate forwards the new voice (read-only audition, no commit)', async () => {
+    vi.mocked(playBaseVoiceSampleWithAutoLoad).mockClear();
+    const onSave = vi.fn();
+    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    fireEvent.click(screen.getByTestId('voice-preview-toggle'));
+
+    fireEvent.click(screen.getByTestId('voice-preview-play-Asya Anara'));
+    await waitFor(() => expect(playBaseVoiceSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(playBaseVoiceSampleWithAutoLoad).mock.calls[0][0].args.speakerName).toBe(
+      'Asya Anara',
+    );
+
+    /* Audition a second candidate — both calls fire, both with their own
+       speakerName. The override-picker select is untouched, so onSave is
+       never called: preview is strictly read-only. */
+    fireEvent.click(screen.getByTestId('voice-preview-play-Damien Black'));
+    await waitFor(() => expect(playBaseVoiceSampleWithAutoLoad).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(playBaseVoiceSampleWithAutoLoad).mock.calls[1][0].args.speakerName).toBe(
+      'Damien Black',
+    );
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('switching the engine tab swaps which catalog the preview list shows', async () => {
+    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    fireEvent.click(screen.getByTestId('voice-preview-toggle'));
+    /* Default tab (Coqui) lists Asya + Damien but not Charon. */
+    expect(screen.getByTestId('voice-preview-row-Asya Anara')).toBeTruthy();
+    expect(screen.getByTestId('voice-preview-row-Damien Black')).toBeTruthy();
+    expect(screen.queryByTestId('voice-preview-row-Charon')).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Gemini/i }));
+    expect(screen.getByTestId('voice-preview-row-Charon')).toBeTruthy();
+    expect(screen.queryByTestId('voice-preview-row-Asya Anara')).toBeNull();
+  });
+
+  it('persists the sample text to localStorage so it survives drawer re-opens', async () => {
+    /* The drawer is the only consumer; jsdom backs localStorage with an
+       in-memory map so the assertion is deterministic. */
+    window.localStorage.removeItem('voice-preview-sample-text');
+    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    fireEvent.click(screen.getByTestId('voice-preview-toggle'));
+    fireEvent.change(screen.getByTestId('voice-preview-sample-text'), {
+      target: { value: 'Bespoke preview line.' },
+    });
+    expect(window.localStorage.getItem('voice-preview-sample-text')).toBe(
+      'Bespoke preview line.',
+    );
   });
 });

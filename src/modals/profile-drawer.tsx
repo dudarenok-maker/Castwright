@@ -22,6 +22,26 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { voicesActions } from '../store/voices-slice';
 import { api } from '../lib/api';
 import { buildCharacterHint } from '../lib/build-character-hint';
+import { VoicePreviewButton } from '../components/voice-preview-button';
+
+/* Default preview line. Pangram + a short follow-on so the user can
+   hear consonant + vowel coverage AND a held sentence at typical
+   reading pace. Persisted across drawer opens via localStorage so the
+   user only customises it once per session. */
+const DEFAULT_PREVIEW_TEXT =
+  'The quick brown fox jumps over the lazy dog. The sun shone over the field.';
+const PREVIEW_TEXT_STORAGE_KEY = 'voice-preview-sample-text';
+
+function loadInitialPreviewText(): string {
+  if (typeof window === 'undefined') return DEFAULT_PREVIEW_TEXT;
+  try {
+    const stored = window.localStorage.getItem(PREVIEW_TEXT_STORAGE_KEY);
+    if (stored && stored.trim()) return stored;
+  } catch {
+    /* Private-browsing / storage-disabled — fall through to default. */
+  }
+  return DEFAULT_PREVIEW_TEXT;
+}
 
 interface Props {
   character: Character;
@@ -143,6 +163,22 @@ export function ProfileDrawer({
      3 and is hidden when there's nothing extra. */
   const [showAllEvidence, setShowAllEvidence] = useState(false);
   const EVIDENCE_PREVIEW_LIMIT = 3;
+  /* Preview-sample text — persists across drawer opens via localStorage
+     so the user customises the line once and re-uses it across every
+     character they audition. Default is a pangram + a short follow-on
+     (see DEFAULT_PREVIEW_TEXT). The list of per-candidate preview rows
+     is collapsed by default to keep the drawer tidy on first open. */
+  const [previewText, setPreviewText] = useState<string>(loadInitialPreviewText);
+  const [showPreviewCandidates, setShowPreviewCandidates] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(PREVIEW_TEXT_STORAGE_KEY, previewText);
+    } catch {
+      /* Private-browsing / storage-disabled — drop the persist silently;
+         in-memory state still drives the rest of this session. */
+    }
+  }, [previewText]);
   /* Merge UI state. The picker is collapsed by default — opening it reveals
      the list of candidates; selecting one shows a confirm row. The same
      busy/error pair backs the direct downgrade buttons below so two clicks
@@ -426,6 +462,11 @@ export function ProfileDrawer({
               baseVoices={baseVoices}
               baseVoicesLoaded={baseVoicesLoaded}
               error={overrideError}
+              previewText={previewText}
+              onPreviewTextChange={setPreviewText}
+              previewExpanded={showPreviewCandidates}
+              onPreviewExpandedChange={setShowPreviewCandidates}
+              previewModelKey={ttsModelKey}
               onChange={async (next) => {
                 setOverrideError(null);
                 const voiceIdForApi = voice?.id ?? character.voiceId ?? character.id;
@@ -996,6 +1037,20 @@ interface OverridePickerProps {
   baseVoicesLoaded: boolean;
   error: string | null;
   onChange: (next: BaseVoice | null) => Promise<void> | void;
+  /** Sample line each preview button speaks. Hoisted into the parent
+      drawer so the textarea + every candidate row read from the same
+      source of truth. */
+  previewText: string;
+  onPreviewTextChange: (next: string) => void;
+  /** Collapsed-by-default candidate-preview list. Toggled by the
+      "Preview candidate voices" button so the drawer stays tidy on
+      first open. */
+  previewExpanded: boolean;
+  onPreviewExpandedChange: (next: boolean) => void;
+  /** Project-active model key forwarded to each preview button. The
+      sidecar re-maps to a compatible model when the candidate's engine
+      doesn't match. */
+  previewModelKey: TtsModelKey;
 }
 function ModelVoiceOverridePicker({
   voiceId,
@@ -1007,6 +1062,11 @@ function ModelVoiceOverridePicker({
   baseVoicesLoaded,
   error,
   onChange,
+  previewText,
+  onPreviewTextChange,
+  previewExpanded,
+  onPreviewExpandedChange,
+  previewModelKey,
 }: OverridePickerProps) {
   /* Group base voices by engine. Order tabs deterministically so the UI
      doesn't reshuffle between renders — Coqui first (longest-running),
@@ -1123,6 +1183,84 @@ function ModelVoiceOverridePicker({
         Each engine has its own voice slot — switching the project's engine picks up the
         corresponding slot, so you don't need to re-cast when toggling Coqui ↔ Kokoro.
       </p>
+      {/* Candidate-preview affordance — lets the user audition each base
+          voice in the current engine's catalog against a custom sample
+          line WITHOUT committing the assignment. Pairs with plan 60. */}
+      <div className="mt-3 pt-3 border-t border-ink/10">
+        <button
+          type="button"
+          onClick={() => onPreviewExpandedChange(!previewExpanded)}
+          aria-expanded={previewExpanded}
+          data-testid="voice-preview-toggle"
+          className="text-[11px] font-medium text-ink/70 hover:text-ink underline-offset-4 hover:underline"
+        >
+          {previewExpanded
+            ? '− Hide candidate previews'
+            : `+ Preview ${capitalise(engineTab)} candidates`}
+        </button>
+        {previewExpanded && (
+          <div className="mt-3 space-y-3">
+            <label className="block">
+              <span className="block text-[11px] text-ink/60 font-medium mb-1">Sample line</span>
+              <textarea
+                aria-label="Voice preview sample text"
+                data-testid="voice-preview-sample-text"
+                value={previewText}
+                onChange={(e) => onPreviewTextChange(e.target.value)}
+                rows={2}
+                className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 resize-y"
+              />
+              <span className="block text-[10px] text-ink/40 mt-1">
+                Saved across drawer opens. Edit once, audition many.
+              </span>
+            </label>
+            {voicesForTab.length === 0 ? (
+              <p className="text-[11px] text-ink/50">
+                No {capitalise(engineTab)} voices in the catalog yet.
+              </p>
+            ) : (
+              <ul
+                aria-label={`${capitalise(engineTab)} candidate voices`}
+                data-testid="voice-preview-candidates"
+                className="space-y-1.5 max-h-64 overflow-y-auto pr-1"
+              >
+                {voicesForTab.map((bv) => {
+                  const key = `${bv.engine}|${bv.name}`;
+                  const isCurrent = currentForTab?.name === bv.name;
+                  return (
+                    <li
+                      key={key}
+                      data-testid={`voice-preview-row-${bv.name}`}
+                      className={`flex items-center justify-between gap-3 px-2.5 py-1.5 rounded-xl ${
+                        isCurrent ? 'bg-magenta/5 border border-magenta/30' : 'border border-transparent'
+                      }`}
+                    >
+                      <span className="text-xs text-ink/75 truncate">
+                        {bv.name}
+                        {isCurrent && (
+                          <span className="ml-2 text-[10px] uppercase tracking-wider text-magenta">
+                            Selected
+                          </span>
+                        )}
+                      </span>
+                      <VoicePreviewButton
+                        voice={bv}
+                        modelKey={previewModelKey}
+                        text={previewText}
+                        testId={`voice-preview-play-${bv.name}`}
+                      />
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            <p className="text-[10px] text-ink/40 leading-relaxed">
+              Previews are read-only. The selection above only changes when you pick from the
+              dropdown — auditioning a row does NOT commit the assignment.
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
