@@ -53,6 +53,10 @@ export interface RestructureResult {
   sentences: RestructureSentence[];
   remap: SentenceRemap[];
   audioOps: AudioOp[];
+  /** Non-fatal advisories surfaced to the caller: orphan-sentence
+      recovery counts, empty-chapter prune counts, generic-title
+      renumber counts. Empty when the operation was clean. */
+  warnings: string[];
 }
 
 export interface MergeOp {
@@ -101,7 +105,15 @@ interface OldChapterFate {
     Per-chapter sentence ids are renumbered 1..N within each new chapter,
     in the same order they appeared within the old chapter. Merge folds
     multiple old chapters' sentences into one new chapter, with sentence
-    ids assigned in the order the merged chapters appeared. */
+    ids assigned in the order the merged chapters appeared.
+
+    Orphan handling: sentences whose `chapterId` is not present in
+    `oldChapterIdOrder` (stale data from a prior corrupt restructure)
+    are recovered by re-attaching to the nearest preceding surviving
+    chapter (lowest known id ≤ orphan's chapterId; falls back to the
+    smallest known id when no preceding survivor exists). This replaces
+    the previous silent-skip behaviour that caused intermittent data
+    loss visible as empty end-of-list chapters after sequential merges. */
 function remapSentences(
   oldSentences: readonly RestructureSentence[],
   fates: Map<number, OldChapterFate>,
@@ -109,7 +121,48 @@ function remapSentences(
       merged new chapter. Merge wants them concatenated in original
       narrative order. */
   oldChapterIdOrder: readonly number[],
-): { sentences: RestructureSentence[]; remap: SentenceRemap[] } {
+): { sentences: RestructureSentence[]; remap: SentenceRemap[]; warnings: string[] } {
+  const warnings: string[] = [];
+  const knownIds = new Set(oldChapterIdOrder);
+  const sortedKnownIds = [...knownIds].sort((a, b) => a - b);
+
+  // First pass: re-attach orphans (sentences whose chapterId is not in
+  // oldChapterIdOrder) onto the nearest preceding surviving chapter.
+  // The original chapter id is tracked separately so the emitted remap
+  // can still answer the frontend's `(originalOldChapterId, oldSentenceId)`
+  // lookup — otherwise the frontend reducer would itself drop the orphan
+  // a second time.
+  const recoveredSentences: RestructureSentence[] = [];
+  const originalChapterIdOf = new Map<RestructureSentence, number>();
+  let orphanCount = 0;
+  for (const s of oldSentences) {
+    if (knownIds.has(s.chapterId)) {
+      recoveredSentences.push(s);
+      continue;
+    }
+    if (sortedKnownIds.length === 0) {
+      // No chapters at all to attach to — drop with warning. Should be
+      // unreachable in practice (a book without chapters has no sentences
+      // either) but defensive.
+      orphanCount++;
+      continue;
+    }
+    let attachToOldId = sortedKnownIds[0];
+    for (const knownId of sortedKnownIds) {
+      if (knownId <= s.chapterId) attachToOldId = knownId;
+      else break;
+    }
+    const reattached: RestructureSentence = { ...s, chapterId: attachToOldId };
+    recoveredSentences.push(reattached);
+    originalChapterIdOf.set(reattached, s.chapterId);
+    orphanCount++;
+  }
+  if (orphanCount > 0) {
+    const msg = `Recovered ${orphanCount} orphaned sentence${orphanCount === 1 ? '' : 's'} attached to chapters not present in the current structure.`;
+    warnings.push(msg);
+    console.warn(`[restructure] ${msg}`);
+  }
+
   // Group sentences by newChapterId, in the right order.
   const groupedByNewId = new Map<number, RestructureSentence[]>();
 
@@ -117,7 +170,7 @@ function remapSentences(
     const fate = fates.get(oldChapterId);
     if (!fate) continue;
     const oldChapterSentences = sortById(
-      oldSentences.filter((s) => s.chapterId === oldChapterId),
+      recoveredSentences.filter((s) => s.chapterId === oldChapterId),
     );
 
     for (const s of oldChapterSentences) {
@@ -154,8 +207,12 @@ function remapSentences(
         id: newSentenceId,
       };
       newSentences.push(remapped);
+      // For recovered orphans, surface the ORIGINAL stale chapter id in
+      // the remap so the frontend's `(oldChapterId, oldSentenceId)` lookup
+      // resolves. For non-orphans, the original equals s.chapterId.
+      const originalOldChapterId = originalChapterIdOf.get(s) ?? s.chapterId;
       remap.push({
-        oldChapterId: s.chapterId,
+        oldChapterId: originalOldChapterId,
         oldSentenceId: s.id,
         newChapterId,
         newSentenceId,
@@ -164,7 +221,7 @@ function remapSentences(
     }
   }
 
-  return { sentences: newSentences, remap };
+  return { sentences: newSentences, remap, warnings };
 }
 
 /** Build the new state.chapters from the new hints + the old state, with
@@ -258,6 +315,191 @@ function buildAudioOps(
   return audioOps;
 }
 
+/* -- post-process passes ------------------------------------------ */
+
+/* Detector for auto-generated "Chapter N" titles (bare or with subtitle).
+   These were assigned by the parser when no real heading was present; they
+   must re-derive against the chapter's new id after structural changes so
+   the visible list doesn't drift from the underlying sequence. Captures
+   the optional subtitle in group 2 for round-tripping. User-customised
+   titles (anything not matching this shape) are preserved verbatim. */
+const GENERIC_TITLE_RE = /^Chapter\s+\d+(\s*[—\-:]\s*(.+))?$/;
+
+function renumberGenericTitlesInChapters(
+  chapters: BookStateJson['chapters'],
+): { chapters: BookStateJson['chapters']; renumbered: number } {
+  let renumbered = 0;
+  const next = chapters.map((ch) => {
+    const match = GENERIC_TITLE_RE.exec(ch.title.trim());
+    if (!match) return ch; // user-custom title — preserve
+    const subtitle = match[2]?.trim();
+    const newTitle = subtitle ? `Chapter ${ch.id} — ${subtitle}` : `Chapter ${ch.id}`;
+    if (newTitle === ch.title) return ch;
+    renumbered++;
+    return { ...ch, title: newTitle, slug: chapterSlug(ch.id, newTitle) };
+  });
+  return { chapters: next, renumbered };
+}
+
+/* Drop chapters with zero attached sentences, renumber survivors 1..N,
+   and propagate the remap / audioOps / hints accordingly.
+
+   This is the structural cleanup pass that resolves the user-reported
+   "empty rows at the end of the list" symptom — those rows had stale
+   parser state from a previous import path or orphaned sentences that
+   were dropped silently by the pre-fix remapSentences. Now that orphan
+   recovery preserves content, empty chapters truly mean "no content";
+   pruning is safe.
+
+   Excluded chapters are not pruned even when empty — preserving the
+   soft-hide invariant. Excluded chapters with sentences attached are
+   kept as well. */
+function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResult {
+  // Pre-analysis books have NO sentences at all — every chapter would
+  // look "empty" by our metric. Skip the pass entirely in that case so
+  // we don't collapse a freshly imported book down to zero chapters.
+  // The empty-chapter symptom only matters post-analysis when SOME
+  // chapters have content and others don't.
+  if (result.sentences.length === 0) return result;
+
+  const sentenceCountByChapter = new Map<number, number>();
+  for (const s of result.sentences) {
+    sentenceCountByChapter.set(s.chapterId, (sentenceCountByChapter.get(s.chapterId) ?? 0) + 1);
+  }
+
+  const pruned = result.state.chapters.filter(
+    (c) => !c.excluded && (sentenceCountByChapter.get(c.id) ?? 0) === 0,
+  );
+  if (pruned.length === 0) return result;
+
+  const survivors = result.state.chapters.filter((c) => !pruned.includes(c));
+
+  // oldId → newId across the prune renumber
+  const idRemap = new Map<number, number>();
+  survivors.forEach((c, i) => idRemap.set(c.id, i + 1));
+
+  const renumberedChapters: BookStateJson['chapters'] = survivors.map((c, i) => {
+    const newId = i + 1;
+    if (c.id === newId) return c;
+    return { ...c, id: newId, slug: chapterSlug(newId, c.title) };
+  });
+
+  const renumberedHints: ChapterHint[] = result.hints
+    .filter((h) => idRemap.has(h.id))
+    .map((h) => ({ ...h, id: idRemap.get(h.id)! }));
+
+  const renumberedSentences: RestructureSentence[] = result.sentences.map((s) => {
+    const newChapterId = idRemap.get(s.chapterId);
+    if (newChapterId === undefined) {
+      // Survivor sentence whose chapter was pruned — impossible because
+      // we only prune chapters with zero sentences. Defensive throw.
+      throw new Error(
+        `[restructure] prune-pass invariant violated: sentence in chapter ${s.chapterId} but chapter was pruned.`,
+      );
+    }
+    return { ...s, chapterId: newChapterId };
+  });
+
+  // Update the remap's newChapterId for every entry. Survivor entries
+  // get the new id; any entry pointing to a pruned chapter is unreachable
+  // because pruned chapters have no sentences (and therefore no remap
+  // entries).
+  const updatedRemap: SentenceRemap[] = result.remap.map((r) => {
+    const newChapterId = idRemap.get(r.newChapterId);
+    if (newChapterId === undefined) {
+      // Defensive: should not happen — see invariant above.
+      return r;
+    }
+    return { ...r, newChapterId };
+  });
+
+  // Audio ops: keep deletes for pruned chapters that had audio (they'll
+  // be cleaned up); rewrite rename ops that target a renumbered survivor.
+  const additionalDeletes: AudioOp[] = pruned
+    .filter((c) => c.audioRenderedAt)
+    .map((c) => ({ kind: 'delete' as const, from: c.slug }));
+
+  const adjustedAudioOps: AudioOp[] = [
+    ...result.audioOps.map((op) => {
+      if (op.kind === 'rename') {
+        const newId = idRemap.get(op.newChapterId);
+        if (newId === undefined) {
+          // Rename target was pruned — degrade to delete
+          return { kind: 'delete' as const, from: op.from };
+        }
+        const newChapter = renumberedChapters.find((c) => c.id === newId);
+        return {
+          ...op,
+          newChapterId: newId,
+          to: newChapter?.slug ?? op.to,
+        };
+      }
+      return op;
+    }),
+    ...additionalDeletes,
+  ];
+
+  const msg = `Removed ${pruned.length} empty chapter${pruned.length === 1 ? '' : 's'} (${pruned
+    .map((c) => c.title)
+    .slice(0, 3)
+    .join(', ')}${pruned.length > 3 ? ', …' : ''}).`;
+  console.warn(`[restructure] ${msg}`);
+
+  return {
+    state: { ...result.state, chapters: renumberedChapters },
+    hints: renumberedHints,
+    sentences: renumberedSentences,
+    remap: updatedRemap,
+    audioOps: adjustedAudioOps,
+    warnings: [...result.warnings, msg],
+  };
+}
+
+/* Combined post-process: prune empties → renumber generic titles.
+   Order matters: pruning may shift ids, after which generic titles must
+   re-derive against the new ids. Renumbering also recomputes slugs for
+   any title that changed.
+
+   Audio ops referencing a chapter whose generic title got rewritten
+   would technically need their `to` slug updated too — but in practice,
+   when a chapter is auto-titled "Chapter N", its audio file is keyed off
+   the same generic title, so the rename op's `to` already matches. The
+   one edge case is a chapter that was auto-titled at parse time, then
+   manually renamed by the user, then auto-titled-again here — but the
+   regex detector intentionally excludes manually-renamed titles, so this
+   case can't arise. */
+function postProcessRestructure(result: RestructureResult): RestructureResult {
+  const pruned = pruneEmptyChaptersInResult(result);
+  const titled = renumberGenericTitlesInChapters(pruned.state.chapters);
+  if (titled.renumbered === 0) return pruned;
+
+  // Re-key audio ops whose rename target slug shifted along with the
+  // title change. The chapter id is unchanged, but the slug now reflects
+  // the new title — update the `to` field.
+  const renumberedById = new Map(titled.chapters.map((c) => [c.id, c]));
+  const adjustedAudioOps: AudioOp[] = pruned.audioOps.map((op) => {
+    if (op.kind === 'rename') {
+      const ch = renumberedById.get(op.newChapterId);
+      if (ch && ch.slug !== op.to) {
+        return { ...op, to: ch.slug, newChapterTitle: ch.title };
+      }
+    }
+    return op;
+  });
+
+  const msg = `Renumbered ${titled.renumbered} auto-generated chapter title${titled.renumbered === 1 ? '' : 's'} against new positions.`;
+  console.warn(`[restructure] ${msg}`);
+
+  return {
+    state: { ...pruned.state, chapters: titled.chapters },
+    hints: pruned.hints,
+    sentences: pruned.sentences,
+    remap: pruned.remap,
+    audioOps: adjustedAudioOps,
+    warnings: [...pruned.warnings, msg],
+  };
+}
+
 /* -- merge ---------------------------------------------------------- */
 
 export function applyMerge(
@@ -343,14 +585,14 @@ export function applyMerge(
   const oldChapterIdOrder = sortedHintsIds;
 
   const newStateChapters = buildNewStateChapters(state, newHints, fates);
-  const { sentences: newSentences, remap } = remapSentences(
+  const { sentences: newSentences, remap, warnings } = remapSentences(
     sentences,
     fates,
     oldChapterIdOrder,
   );
   const audioOps = buildAudioOps(state.chapters, newStateChapters, fates);
 
-  return {
+  return postProcessRestructure({
     state: {
       ...state,
       chapters: newStateChapters,
@@ -360,7 +602,8 @@ export function applyMerge(
     sentences: newSentences,
     remap,
     audioOps,
-  };
+    warnings,
+  });
 }
 
 /* -- split ---------------------------------------------------------- */
@@ -495,13 +738,18 @@ export function applySplit(
   });
 
   const newStateChapters = buildNewStateChapters(state, newHints, fates);
-  const { sentences: newSentences, remap } = remapSentences(
+  const { sentences: newSentences, remap, warnings } = remapSentences(
     sentences,
     fates,
     sortedHintsIds,
   );
   const audioOps = buildAudioOps(state.chapters, newStateChapters, fates);
 
+  // Split does NOT run the prune/renumber post-pass — split's invariant
+  // is "both halves non-empty" (validated above), and the new chapter
+  // gets a user-supplied or "(cont.)" title that intentionally diverges
+  // from the generic pattern. Running the post-pass here would rewrite
+  // the user's split title in a renumber and would never prune anything.
   return {
     state: {
       ...state,
@@ -512,6 +760,7 @@ export function applySplit(
     sentences: newSentences,
     remap,
     audioOps,
+    warnings,
   };
 }
 
@@ -555,14 +804,14 @@ export function applyReorder(
   });
 
   const newStateChapters = buildNewStateChapters(state, newHints, fates);
-  const { sentences: newSentences, remap } = remapSentences(
+  const { sentences: newSentences, remap, warnings } = remapSentences(
     sentences,
     fates,
     currentIds,
   );
   const audioOps = buildAudioOps(state.chapters, newStateChapters, fates);
 
-  return {
+  return postProcessRestructure({
     state: {
       ...state,
       chapters: newStateChapters,
@@ -572,5 +821,6 @@ export function applyReorder(
     sentences: newSentences,
     remap,
     audioOps,
-  };
+    warnings,
+  });
 }
