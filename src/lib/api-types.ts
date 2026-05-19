@@ -1322,6 +1322,24 @@ export interface components {
             progress?: number;
             currentLine?: number;
             totalLines?: number;
+            /**
+             * @description Aggregate run progress — number of non-excluded chapters in
+             *     this book that are currently "done" (audio on disk). Sourced
+             *     from server state, NOT computed from the slice, so the global
+             *     header pill keeps an accurate readout when the user has
+             *     navigated to a different book (the slice no longer carries
+             *     this book's chapter rows, but the SSE keeps streaming).
+             *     Optional for backward compat — older servers don't emit it
+             *     and the frontend falls back to the last-snapshot value.
+             */
+            runDone?: number;
+            /** @description Total non-excluded chapters in this book. Stable for the run. */
+            runTotal?: number;
+            /**
+             * @description Number of chapters currently between first synthesise tick
+             *     and chapter_complete / chapter_failed in this run.
+             */
+            runInProgress?: number;
             /** @description Only on `chapter_assembling` — number of synthesised same-speaker groups about to land on disk. */
             totalGroups?: number;
             /** @description Only on `chapter_assembling` — measured audio length about to be written. */
