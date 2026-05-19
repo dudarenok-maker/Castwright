@@ -175,7 +175,7 @@ export function ConfirmMetadataView() {
               disabled={busy}
               onChange={(e) => setAuthor(e.target.value)}
               placeholder="e.g. Ursula K. Le Guin"
-              className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+              className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
             />
           </Field>
 
@@ -201,7 +201,7 @@ export function ConfirmMetadataView() {
                   disabled={busy}
                   onChange={(e) => setSeries(e.target.value)}
                   placeholder="e.g. Earthsea"
-                  className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+                  className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
                 />
               </Field>
               <Field label="Book #" required>
@@ -217,7 +217,7 @@ export function ConfirmMetadataView() {
                     setSeriesPosition(v);
                   }}
                   placeholder="1"
-                  className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50 tabular-nums"
+                  className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50 tabular-nums"
                 />
               </Field>
             </div>
@@ -238,7 +238,7 @@ export function ConfirmMetadataView() {
               disabled={busy}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. A Wizard of Earthsea"
-              className="w-full rounded-xl border border-ink/15 px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+              className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
             />
           </Field>
 
