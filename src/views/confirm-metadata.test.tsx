@@ -134,6 +134,76 @@ describe('ConfirmMetadataView — duplicate position warning', () => {
   });
 });
 
+describe('ConfirmMetadataView — seriesFromTitle chip (Bug B)', () => {
+  /* The chip appears when the server marks the candidate's series as
+     heuristically extracted from the title parenthetical. The user sees
+     it next to the SERIES field as a heads-up that the value is a guess.
+     Editing the SERIES or BOOK # field clears the flag (and the chip),
+     because the user has explicitly verified or corrected the value. */
+  function renderWithCandidate(c: Partial<ImportCandidate>) {
+    const candidateOverride: ImportCandidate = { ...candidate, ...c };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        library: librarySlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          importCandidate: candidateOverride,
+        },
+        library: { loaded: true, authors: [], books: [], pausedSnapshots: {} },
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ConfirmMetadataView />
+      </Provider>,
+    );
+  }
+
+  it('renders the chip next to SERIES when seriesFromTitle is true', () => {
+    renderWithCandidate({
+      seriesFromTitle: true,
+      series: 'Keeper of the Lost Cities',
+      seriesPosition: 3,
+      title: 'Everblaze',
+    });
+    expect(screen.getByText(/auto-extracted from title/i)).toBeInTheDocument();
+  });
+
+  it('omits the chip when seriesFromTitle is false', () => {
+    renderWithCandidate({
+      seriesFromTitle: false,
+      series: 'Keeper of the Lost Cities',
+      seriesPosition: 3,
+    });
+    expect(screen.queryByText(/auto-extracted from title/i)).not.toBeInTheDocument();
+  });
+
+  it('omits the chip when seriesFromTitle is undefined (older server build)', () => {
+    /* Forward-compat: if the server hasn't been upgraded to emit the
+       flag yet, the field is absent — chip stays hidden, no crash. */
+    renderWithCandidate({ series: 'Keeper of the Lost Cities', seriesPosition: 3 });
+    expect(screen.queryByText(/auto-extracted from title/i)).not.toBeInTheDocument();
+  });
+
+  it('clears the chip when the user edits the SERIES field', async () => {
+    const user = userEvent.setup();
+    renderWithCandidate({
+      seriesFromTitle: true,
+      series: 'Keeper of the Lost Cities',
+      seriesPosition: 3,
+    });
+    expect(screen.getByText(/auto-extracted from title/i)).toBeInTheDocument();
+
+    const seriesInput = screen.getByPlaceholderText('e.g. Earthsea');
+    await user.type(seriesInput, '!');
+    expect(screen.queryByText(/auto-extracted from title/i)).not.toBeInTheDocument();
+  });
+});
+
 describe('ConfirmMetadataView — input theme classes', () => {
   /* Regression: in dark mode `--ink` flips near-white, so an input without
      an explicit `bg-white text-ink` pair gets a browser-default white

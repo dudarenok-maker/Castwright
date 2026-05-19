@@ -1168,6 +1168,14 @@ export interface components {
             series?: string | null;
             /** @description Series position. Allows decimals for novellas (e.g. 1.5). */
             seriesPosition?: number | null;
+            /**
+             * @description True when series/seriesPosition were extracted from a parenthetical
+             *     in the title rather than authoritative metadata (Calibre OPF tags or
+             *     filename pattern). UI surfaces this as a small "auto-extracted from
+             *     title — verify" chip near the series field so the user knows the
+             *     value is a guess and can override.
+             */
+            seriesFromTitle?: boolean;
             sourceText: string;
             wordCount: number;
             byteSize: number;
