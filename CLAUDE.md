@@ -6,6 +6,7 @@ without changing component code.
 
 ## Commands
 
+- `npm start` — frontend + server + TTS sidecar in one shot (plan 43). Server owns the sidecar child-process lifecycle (per-user `autoStartSidecar` preference, default on); Ctrl+C tears the sidecar down via `taskkill /T /F` on Windows.
 - `npm run dev` — Vite dev server (HMR) on `http://localhost:5173`.
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
@@ -48,10 +49,10 @@ without changing component code.
 - `src/lib/` — `icons.tsx`, `time.ts`, `colors.ts`, `router.ts`, `api.ts`,
   `types.ts`, generated `api-types.ts`.
 - `src/data/` — design fixtures (characters, chapters, voices, books, etc.).
-- `src/store/` — RTK slices (`ui`, `cast`, `chapters`, `revisions`, `manuscript`)
+- `src/store/` — RTK slices (`ui`, `cast`, `chapters`, `revisions`, `manuscript`, `book-meta`, `notifications`) + `broadcast-middleware.ts` (cross-tab `BroadcastChannel` sync since plan 63)
   - `index.ts` (configureStore, typed `useAppDispatch`/`useAppSelector`, router
     install).
-- `src/components/`, `src/modals/`, `src/views/` — UI.
+- `src/components/`, `src/modals/`, `src/views/` — UI. Since plan 60, `src/views/listen.tsx` is a thin orchestrator (~319 lines) over three region sub-components under `src/components/listen/` — `listen-header.tsx` (cover + title + book-meta + Notes card), `listen-player-region.tsx` (markers + chapter list + Share-clip button), `listen-download-section.tsx` (download tiles + export queue). New listen-view features should land in the relevant sub-component, not the orchestrator.
 - `src/mocks/canned-data.ts` + `src/mocks/manuscripts/` — mock API payloads.
 - `openapi.yaml` (root) — **API contract**, source of truth for backend shapes.
 
