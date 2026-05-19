@@ -3,29 +3,39 @@ import { IconAlertTri, IconClose, IconRefresh, IconWaveform } from '../lib/icons
 import { Avatar, Pill } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
-import { initialChapters } from '../data/chapters';
 import { api } from '../lib/api';
 import { useAppSelector } from '../store';
 import type { DriftEvent, Character, CharColor, Voice } from '../lib/types';
 
-interface Props {
-  events: DriftEvent[];
+/* The modal now renders drift events grouped by book — the user's
+   concurrent-multibook workflow means a single open modal can be
+   showing drift from Book A AND Book B at the same time. Each event
+   carries `bookId`, `chapterTitle`, `snapshot` and `current` from the
+   server so the modal is a pure projection of the event payload (no
+   joins against the chapters / cast slice, both of which are scoped
+   to the active book). */
+export interface DriftBookGroup {
+  bookId: string;
+  bookTitle: string;
+  /** Cast for the book the events belong to. Used for avatar colour /
+      display name resolution; missing entries fall back to the event's
+      embedded `current.name` so cross-book events still render. */
   characters: Character[];
+  events: DriftEvent[];
+}
+
+interface Props {
+  eventsByBook: DriftBookGroup[];
   onClose: () => void;
-  onRegenerateChapter: (characterId: string, chapterId: number) => void;
+  onRegenerateChapter: (bookId: string, characterId: string, chapterId: number) => void;
   /** Optional one-click shortcut for events flagged `autoQueueable` by
       the server (severe drift). When provided, the per-event button on
       autoQueueable rows switches from "Regenerate this chapter" (which
       opens the regen-modal confirmation) to "Auto-regen now" (which
       dispatches regenerateCharacter directly with sensible defaults).
       Plan 20 C1+C2. */
-  onAutoQueueRegenerate?: (characterId: string, chapterId: number) => void;
+  onAutoQueueRegenerate?: (bookId: string, characterId: string, chapterId: number) => void;
   onDismiss: (eventId: string) => void;
-  /** Plan-8 — Listen A/B player. Optional so legacy / mock callers that
-      haven't opted in still render the modal without the per-row inline
-      player. When omitted the Listen button stays hidden (callers without
-      audio context can't usefully expose it). */
-  bookId?: string;
   voices?: Voice[];
 }
 
@@ -42,24 +52,16 @@ const severityColor: Record<DriftEvent['severity'], 'danger' | 'warning' | 'neut
 };
 
 export function DriftReportModal({
-  events,
-  characters,
+  eventsByBook,
   onClose,
   onRegenerateChapter,
   onAutoQueueRegenerate,
   onDismiss,
-  bookId,
   voices,
 }: Props) {
-  if (events.length === 0) return null;
-
-  const findChar = (id: string) => characters.find((c) => c.id === id);
-  const findChapter = (id: number) =>
-    initialChapters.find((c) => c.id === id) || { id, title: `Chapter ${id}` };
-  const grouped = events.reduce<Record<string, DriftEvent[]>>((acc, e) => {
-    (acc[e.severity] ??= []).push(e);
-    return acc;
-  }, {});
+  const totalCount = eventsByBook.reduce((acc, g) => acc + g.events.length, 0);
+  if (totalCount === 0) return null;
+  const bookCount = eventsByBook.length;
 
   return (
     <>
@@ -75,7 +77,8 @@ export function DriftReportModal({
                 Voice drift detector
               </p>
               <h3 className="text-base font-bold text-ink leading-tight">
-                {events.length} chapter{events.length === 1 ? '' : 's'} flagged
+                {totalCount} chapter{totalCount === 1 ? '' : 's'} flagged
+                {bookCount > 1 && ` across ${bookCount} books`}
               </h3>
             </div>
             <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60">
@@ -83,129 +86,25 @@ export function DriftReportModal({
             </button>
           </div>
 
-          <div className="p-6 space-y-6 overflow-y-auto scrollbar-thin">
+          <div className="p-6 space-y-8 overflow-y-auto scrollbar-thin">
             <p className="text-sm text-ink/70 leading-relaxed">
-              We compared each chapter against the character's established voice profile. Severe and
-              moderate findings are worth a listen — mild ones are usually within tolerance.
+              We compared each chapter against the character's established voice profile. The "When
+              rendered" column shows the snapshot captured at synthesis time; "Now" shows the live
+              profile. Severe and moderate findings are worth a listen — mild ones are usually
+              within tolerance.
             </p>
 
-            {severityOrder.map((sev) => {
-              const items = grouped[sev];
-              if (!items || items.length === 0) return null;
-              return (
-                <section key={sev}>
-                  <div className="flex items-center gap-3 mb-3">
-                    <Pill color={severityColor[sev]}>{severityLabel[sev]}</Pill>
-                    <span className="flex-1 h-px bg-ink/10" />
-                    <span className="text-xs text-ink/50 tabular-nums">{items.length}</span>
-                  </div>
-                  <div className="space-y-2">
-                    {items.map((e) => {
-                      const char = findChar(e.characterId);
-                      const chap = findChapter(e.chapterId);
-                      return (
-                        <article
-                          key={e.id}
-                          className="p-4 rounded-2xl border border-ink/10 bg-white"
-                        >
-                          <div className="flex items-start gap-3">
-                            {char && (
-                              <Avatar name={char.name} color={char.color as CharColor} size={36} />
-                            )}
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap mb-1">
-                                <h4 className="text-sm font-bold text-ink">
-                                  {char?.name || e.characterId}
-                                </h4>
-                                <span className="text-xs text-ink/50">in</span>
-                                <span className="text-xs font-semibold text-ink">
-                                  CH {String(e.chapterId).padStart(2, '0')} ·{' '}
-                                  {stripChapterPrefix(chap.title)}
-                                </span>
-                              </div>
-                              <p
-                                className="text-[11px] uppercase tracking-wider font-bold mb-2"
-                                style={{
-                                  color: CHAR_COLORS[(char?.color as CharColor) || 'narrator'].hex,
-                                }}
-                              >
-                                {e.factorLabel}
-                              </p>
-                              <p className="text-xs text-ink/70 leading-relaxed mb-3">
-                                {e.description}
-                              </p>
-                              {e.metrics && (
-                                <div className="flex items-center gap-3 mb-3 text-xs">
-                                  <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-canvas border border-ink/10">
-                                    <span className="text-ink/50">Now:</span>
-                                    <span className="font-bold text-ink tabular-nums">
-                                      {e.metrics.current}
-                                    </span>
-                                  </span>
-                                  <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-canvas border border-ink/10">
-                                    <span className="text-ink/50">Profile:</span>
-                                    <span className="font-bold text-ink tabular-nums">
-                                      {e.metrics.expected}
-                                    </span>
-                                  </span>
-                                  <span className="text-ink/45">{e.metrics.unit}</span>
-                                </div>
-                              )}
-                              <div className="flex items-center gap-2">
-                                {e.autoQueueable && onAutoQueueRegenerate ? (
-                                  <button
-                                    onClick={() =>
-                                      onAutoQueueRegenerate(e.characterId, e.chapterId)
-                                    }
-                                    data-testid={`drift-auto-regen-${e.id}`}
-                                    title="Skip the confirmation modal — auto-queue this regeneration"
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-peach text-ink text-xs font-semibold hover:bg-peach/85"
-                                  >
-                                    <IconRefresh className="w-3.5 h-3.5" /> Auto-regen now
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => onRegenerateChapter(e.characterId, e.chapterId)}
-                                    data-testid={`drift-regen-${e.id}`}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink-soft"
-                                  >
-                                    <IconRefresh className="w-3.5 h-3.5" /> Regenerate this chapter
-                                  </button>
-                                )}
-                                {(() => {
-                                  const rowVoice = voices?.find((v) => v.id === char?.voiceId);
-                                  /* Mount the A/B widget only when the caller plumbed
-                                     both bookId and a resolvable voice. Pre-fix the
-                                     Listen button was a stub regardless — callers
-                                     that haven't opted in (legacy / unit-test mocks)
-                                     get the original "no Listen" surface. */
-                                  if (!bookId || !rowVoice) return null;
-                                  return (
-                                    <DriftListenWidget
-                                      event={e}
-                                      bookId={bookId}
-                                      voice={rowVoice}
-                                      character={char}
-                                    />
-                                  );
-                                })()}
-                                {/* Dismiss handled below as the modal-action sibling. */}
-                                <button
-                                  onClick={() => onDismiss(e.id)}
-                                  className="ml-auto text-xs font-medium text-ink/50 hover:text-ink/80"
-                                >
-                                  Dismiss
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </section>
-              );
-            })}
+            {eventsByBook.map((group) => (
+              <DriftBookSection
+                key={group.bookId}
+                group={group}
+                showBookHeader={bookCount > 1}
+                voices={voices}
+                onRegenerateChapter={onRegenerateChapter}
+                onAutoQueueRegenerate={onAutoQueueRegenerate}
+                onDismiss={onDismiss}
+              />
+            ))}
           </div>
 
           <div className="px-6 py-3 border-t border-ink/10 flex items-center justify-between text-xs text-ink/50">
@@ -215,6 +114,382 @@ export function DriftReportModal({
         </div>
       </div>
     </>
+  );
+}
+
+function DriftBookSection({
+  group,
+  showBookHeader,
+  voices,
+  onRegenerateChapter,
+  onAutoQueueRegenerate,
+  onDismiss,
+}: {
+  group: DriftBookGroup;
+  showBookHeader: boolean;
+  voices?: Voice[];
+  onRegenerateChapter: (bookId: string, characterId: string, chapterId: number) => void;
+  onAutoQueueRegenerate?: (bookId: string, characterId: string, chapterId: number) => void;
+  onDismiss: (eventId: string) => void;
+}) {
+  const grouped = group.events.reduce<Record<string, DriftEvent[]>>((acc, e) => {
+    (acc[e.severity] ??= []).push(e);
+    return acc;
+  }, {});
+  const findChar = (id: string) => group.characters.find((c) => c.id === id);
+
+  return (
+    <section className="space-y-4">
+      {showBookHeader && (
+        <header className="flex items-center gap-3 pb-2 border-b border-ink/10">
+          <span className="text-[10px] uppercase tracking-widest text-ink/45 font-semibold">
+            Book
+          </span>
+          <h4 className="text-sm font-bold text-ink leading-tight flex-1 truncate">
+            {group.bookTitle}
+          </h4>
+          <span className="text-xs text-ink/50 tabular-nums">
+            {group.events.length} flagged
+          </span>
+        </header>
+      )}
+      {severityOrder.map((sev) => {
+        const items = grouped[sev];
+        if (!items || items.length === 0) return null;
+        return (
+          <section key={sev}>
+            <div className="flex items-center gap-3 mb-3">
+              <Pill color={severityColor[sev]}>{severityLabel[sev]}</Pill>
+              <span className="flex-1 h-px bg-ink/10" />
+              <span className="text-xs text-ink/50 tabular-nums">{items.length}</span>
+            </div>
+            <div className="space-y-2">
+              {items.map((e) => {
+                const char = findChar(e.characterId);
+                /* `e.current.name` is always present from the server emit; the
+                   cast lookup adds color + the up-to-date display name when
+                   the cast slice happens to hold this book. */
+                const displayName = char?.name || e.current?.name || e.characterId;
+                const colorKey = (char?.color as CharColor | undefined) || 'narrator';
+                return (
+                  <article
+                    key={e.id}
+                    className="p-4 rounded-2xl border border-ink/10 bg-white"
+                    data-testid={`drift-event-${e.id}`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <Avatar name={displayName} color={colorKey} size={36} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <h4 className="text-sm font-bold text-ink">{displayName}</h4>
+                          <span className="text-xs text-ink/50">in</span>
+                          <span className="text-xs font-semibold text-ink">
+                            CH {String(e.chapterId).padStart(2, '0')} ·{' '}
+                            {stripChapterPrefix(e.chapterTitle)}
+                          </span>
+                        </div>
+                        <p
+                          className="text-[11px] uppercase tracking-wider font-bold mb-2"
+                          style={{ color: CHAR_COLORS[colorKey].hex }}
+                        >
+                          {e.factorLabel}
+                        </p>
+                        <p className="text-xs text-ink/70 leading-relaxed mb-3">{e.description}</p>
+                        <ProfileCompareCard event={e} />
+                        <div className="flex items-center gap-2 mt-3">
+                          {e.autoQueueable && onAutoQueueRegenerate ? (
+                            <button
+                              onClick={() =>
+                                onAutoQueueRegenerate(group.bookId, e.characterId, e.chapterId)
+                              }
+                              data-testid={`drift-auto-regen-${e.id}`}
+                              title="Skip the confirmation modal — auto-queue this regeneration"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-peach text-ink text-xs font-semibold hover:bg-peach/85"
+                            >
+                              <IconRefresh className="w-3.5 h-3.5" /> Auto-regen now
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() =>
+                                onRegenerateChapter(group.bookId, e.characterId, e.chapterId)
+                              }
+                              data-testid={`drift-regen-${e.id}`}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink-soft"
+                            >
+                              <IconRefresh className="w-3.5 h-3.5" /> Regenerate this chapter
+                            </button>
+                          )}
+                          {(() => {
+                            const rowVoice = voices?.find((v) => v.id === char?.voiceId);
+                            /* Listen widget mounts only when the caller plumbed
+                               a resolvable voice. Cross-book events whose cast
+                               isn't loaded won't have a voice match — gracefully
+                               omit the widget in that case. */
+                            if (!rowVoice) return null;
+                            return (
+                              <DriftListenWidget
+                                event={e}
+                                bookId={group.bookId}
+                                voice={rowVoice}
+                                character={char}
+                              />
+                            );
+                          })()}
+                          <button
+                            onClick={() => onDismiss(e.id)}
+                            className="ml-auto text-xs font-medium text-ink/50 hover:text-ink/80"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+    </section>
+  );
+}
+
+/* Side-by-side "When rendered" vs "Now" profile comparison. Reads the
+   structured `snapshot` (pre-render) and `current` (live cast) payloads
+   the server attaches to every drift event. Fields that didn't change
+   render in muted ink; the changed field (matching `event.factor`) is
+   highlighted on the right column. */
+function ProfileCompareCard({ event }: { event: DriftEvent }) {
+  const snap = event.snapshot ?? {};
+  const cur = event.current ?? {};
+  const factor = event.factor;
+  type Row = {
+    label: string;
+    factor: string;
+    /** Display the pair as text (voice ids, gender, age) or as tone-bar pairs. */
+    kind: 'text' | 'tone' | 'attributes';
+    before?: string | number;
+    after?: string | number;
+    beforeAttrs?: string[];
+    afterAttrs?: string[];
+  };
+  const rows: Row[] = [
+    {
+      label: 'Voice',
+      factor: 'voice',
+      kind: 'text',
+      before: snap.voiceId ?? '—',
+      after: cur.voiceId ?? '—',
+    },
+    {
+      label: 'Gender',
+      factor: 'gender',
+      kind: 'text',
+      before: snap.gender ?? '—',
+      after: cur.gender ?? '—',
+    },
+    {
+      label: 'Age range',
+      factor: 'ageRange',
+      kind: 'text',
+      before: snap.ageRange ?? '—',
+      after: cur.ageRange ?? '—',
+    },
+    {
+      label: 'Warmth',
+      factor: 'warmth',
+      kind: 'tone',
+      before: snap.tone?.warmth,
+      after: cur.tone?.warmth,
+    },
+    {
+      label: 'Pace',
+      factor: 'pace',
+      kind: 'tone',
+      before: snap.tone?.pace,
+      after: cur.tone?.pace,
+    },
+    {
+      label: 'Authority',
+      factor: 'authority',
+      kind: 'tone',
+      before: snap.tone?.authority,
+      after: cur.tone?.authority,
+    },
+    {
+      label: 'Emotion',
+      factor: 'emotion',
+      kind: 'tone',
+      before: snap.tone?.emotion,
+      after: cur.tone?.emotion,
+    },
+    {
+      label: 'Attributes',
+      factor: 'attributes',
+      kind: 'attributes',
+      beforeAttrs: snap.attributes ?? [],
+      afterAttrs: cur.attributes ?? [],
+    },
+  ];
+
+  return (
+    <div className="rounded-xl border border-ink/10 bg-canvas/50 overflow-hidden text-xs">
+      <div className="grid grid-cols-[6.5rem_1fr_1fr] gap-x-3 py-2 px-3 bg-ink/5 text-[10px] uppercase tracking-wider font-semibold text-ink/55">
+        <span></span>
+        <span>When rendered</span>
+        <span>Now</span>
+      </div>
+      <div className="divide-y divide-ink/5">
+        {rows.map((row) => (
+          <ProfileCompareRow key={row.factor} row={row} changed={row.factor === factor} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProfileCompareRow({
+  row,
+  changed,
+}: {
+  row: {
+    label: string;
+    factor: string;
+    kind: 'text' | 'tone' | 'attributes';
+    before?: string | number;
+    after?: string | number;
+    beforeAttrs?: string[];
+    afterAttrs?: string[];
+  };
+  changed: boolean;
+}) {
+  return (
+    <div
+      className="grid grid-cols-[6.5rem_1fr_1fr] gap-x-3 py-2 px-3 items-center"
+      data-testid={`drift-compare-row-${row.factor}`}
+      data-changed={changed ? 'true' : 'false'}
+    >
+      <span className="text-ink/55 font-medium">{row.label}</span>
+      {row.kind === 'tone' ? (
+        <>
+          <ToneBar value={row.before} muted />
+          <ToneBar value={row.after} highlight={changed} />
+        </>
+      ) : row.kind === 'attributes' ? (
+        <>
+          <AttributeList values={row.beforeAttrs ?? []} muted />
+          <AttributeList
+            values={row.afterAttrs ?? []}
+            highlight={changed}
+            diffAgainst={row.beforeAttrs}
+          />
+        </>
+      ) : (
+        <>
+          <span className="text-ink/65 tabular-nums truncate">{row.before}</span>
+          <span
+            className={`tabular-nums truncate ${
+              changed ? 'font-semibold text-ink' : 'text-ink/65'
+            }`}
+          >
+            {row.after}
+            {changed && <span className="ml-1 text-magenta">←</span>}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ToneBar({
+  value,
+  muted,
+  highlight,
+}: {
+  value: number | string | undefined;
+  muted?: boolean;
+  highlight?: boolean;
+}) {
+  if (typeof value !== 'number') {
+    return <span className="text-ink/40">—</span>;
+  }
+  const pct = Math.max(0, Math.min(100, value));
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-1.5 rounded-full bg-ink/10 overflow-hidden">
+        <div
+          className={`h-full rounded-full ${
+            highlight ? 'bg-magenta' : muted ? 'bg-ink/30' : 'bg-ink/60'
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span
+        className={`tabular-nums w-7 text-right ${
+          highlight ? 'font-semibold text-ink' : muted ? 'text-ink/55' : 'text-ink/70'
+        }`}
+      >
+        {pct}
+      </span>
+      {highlight && <span className="text-magenta">←</span>}
+    </div>
+  );
+}
+
+function AttributeList({
+  values,
+  diffAgainst,
+  muted,
+  highlight,
+}: {
+  values: string[];
+  /** If provided, items not in this list render with the "added" badge,
+      and any item in this list missing from `values` renders strikethrough. */
+  diffAgainst?: string[];
+  muted?: boolean;
+  highlight?: boolean;
+}) {
+  if (values.length === 0 && (!diffAgainst || diffAgainst.length === 0)) {
+    return <span className="text-ink/40">—</span>;
+  }
+  if (!diffAgainst) {
+    /* Plain "before" rendering — comma-separated. */
+    return (
+      <span className={`${muted ? 'text-ink/55' : 'text-ink/70'} truncate`}>
+        {values.join(', ')}
+      </span>
+    );
+  }
+  const before = new Set(diffAgainst);
+  const after = new Set(values);
+  const added = values.filter((v) => !before.has(v));
+  const removed = diffAgainst.filter((v) => !after.has(v));
+  const kept = values.filter((v) => before.has(v));
+  return (
+    <div className="flex flex-wrap gap-1 items-center">
+      {kept.map((v) => (
+        <span key={`k-${v}`} className="text-ink/65">
+          {v}
+        </span>
+      ))}
+      {added.map((v) => (
+        <span
+          key={`a-${v}`}
+          className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+            highlight ? 'bg-magenta/15 text-magenta' : 'bg-ink/10 text-ink'
+          }`}
+        >
+          + {v}
+        </span>
+      ))}
+      {removed.map((v) => (
+        <span key={`r-${v}`} className="text-ink/40 line-through">
+          {v}
+        </span>
+      ))}
+      {highlight && <span className="text-magenta">←</span>}
+    </div>
   );
 }
 
@@ -249,13 +524,6 @@ function DriftListenWidget({
   const chapterRef = useRef<HTMLAudioElement | null>(null);
   const voiceRef = useRef<HTMLAudioElement | null>(null);
 
-  /* Cleanup on unmount — modal close, parent re-render that drops the
-     row, etc. Pause both elements and detach src so the browser doesn't
-     hold decode buffers for a now-invisible widget. The audio elements
-     are rendered at all times (hidden when !open) so their refs survive
-     until React tears down the widget itself; if they were nested inside
-     the `open && <audio />` branch, React 18 detaches them BEFORE
-     running this cleanup and the refs would be null here. */
   useEffect(() => {
     const a = chapterRef.current;
     const b = voiceRef.current;
@@ -283,8 +551,6 @@ function DriftListenWidget({
     voiceRef.current?.pause();
     const el = chapterRef.current;
     if (!el) return;
-    /* Set src lazily on first play so a row whose Listen button is never
-       clicked doesn't trigger a chapter audio fetch. */
     if (el.src !== window.location.origin + chapterUrl && !el.src.endsWith(chapterUrl)) {
       el.src = chapterUrl;
     }
@@ -371,8 +637,6 @@ function DriftListenWidget({
           </button>
         </>
       )}
-      {/* Audio elements always mounted so their refs survive until the
-          widget itself unmounts (cleanup useEffect above relies on this). */}
       <audio ref={chapterRef} onEnded={() => setPlaying((p) => (p === 'A' ? null : p))} />
       <audio ref={voiceRef} onEnded={() => setPlaying((p) => (p === 'B' ? null : p))} />
     </span>
