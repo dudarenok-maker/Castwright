@@ -62,28 +62,55 @@ export function ConfirmCastView({
   const matchedCount = characters.filter((c) => c.matchedFrom).length;
   const generatedCount = characters.length - matchedCount;
 
-  /* Plan 41 — bulk-apply library sync. Mirrors the per-card `canOverrideLibrary`
-     predicate (the `!!onOverrideLibrary` guard hides the pill in mock
-     environments where the per-card checkbox is itself hidden). The pill
-     toggles every eligible character's `overrides[id]` in one click — the
-     existing `handleConfirm` batch (above) is still the only POST path. */
+  /* Plan 41 — bulk-apply matches + library sync. Mirrors the per-card
+     `canOverrideLibrary` predicate (the `!!onOverrideLibrary` guard hides
+     the pill in mock environments where the per-card checkbox is itself
+     hidden). The apply path flips both the Reuse decision AND the
+     sync-from-library override in one click — the per-card sync checkbox
+     only renders when `decision === 'match'`, so without the decision
+     flip the pill produces no visible effect on cards the user had
+     toggled to "Generate". The existing `handleConfirm` batch is still
+     the only POST path. */
   const eligibleIds = characters
     .filter((c) => !!onOverrideLibrary && !!c.matchedFrom?.bookId && !!c.matchedFrom?.characterId)
     .map((c) => c.id);
-  const allTicked = eligibleIds.length > 0 && eligibleIds.every((id) => overrides[id]);
-  /* N is the count of currently-unticked eligible characters — the size of
-     the bulk action's effect. After bulk-tick + per-card untick of one,
-     the pill flips to "Sync 1 profile from library" (plan 41 invariant 4). */
-  const uncheckedCount = eligibleIds.filter((id) => !overrides[id]).length;
-  const bulkSyncLabel = allTicked
+  const allApplied =
+    eligibleIds.length > 0 &&
+    eligibleIds.every((id) => decisions[id] === 'match' && overrides[id]);
+  /* N is the count of currently-unapplied eligible characters — the size
+     of the apply action's effect. After bulk-apply + per-card untick of
+     one sync, the pill flips back to "Apply 1 match" (the user is one
+     click away from fully applied again). */
+  const unappliedCount = eligibleIds.filter(
+    (id) => decisions[id] !== 'match' || !overrides[id],
+  ).length;
+  const bulkApplyLabel = allApplied
     ? 'Clear all syncs'
-    : `Sync ${uncheckedCount} ${uncheckedCount === 1 ? 'profile' : 'profiles'} from library`;
-  /* Functional update so a near-simultaneous per-card click (which still
-     reads from a stale closure at line 136) can't clobber the bulk set. */
-  const handleBulkSync = () => {
+    : `Apply all ${unappliedCount} ${unappliedCount === 1 ? 'match' : 'matches'}`;
+  /* Functional updates so a near-simultaneous per-card click can't
+     clobber the bulk set. */
+  const handleBulkApply = () => {
+    if (allApplied) {
+      // Clear-syncs path: only untick overrides; do NOT revert decisions
+      // (would be destructive — user explicitly picked Reuse).
+      setOverrides((prev) => {
+        const next = { ...prev };
+        for (const id of eligibleIds) next[id] = false;
+        return next;
+      });
+      return;
+    }
+    // Apply-all path: flip decision to Reuse AND tick override for every
+    // eligible character. Single button covers the whole "use the
+    // matched library voices and sync profiles" intent.
+    setDecisions((prev) => {
+      const next = { ...prev };
+      for (const id of eligibleIds) next[id] = 'match';
+      return next;
+    });
     setOverrides((prev) => {
       const next = { ...prev };
-      for (const id of eligibleIds) next[id] = !allTicked;
+      for (const id of eligibleIds) next[id] = true;
       return next;
     });
   };
@@ -146,8 +173,8 @@ export function ConfirmCastView({
 
         {eligibleIds.length > 0 && (
           <div className="mb-3 flex justify-end">
-            <PrimaryButton variant="dark" size="sm" icon={false} onClick={handleBulkSync}>
-              {bulkSyncLabel}
+            <PrimaryButton variant="dark" size="sm" icon={false} onClick={handleBulkApply}>
+              {bulkApplyLabel}
             </PrimaryButton>
           </div>
         )}
