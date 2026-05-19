@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-17
 owner: dudarenok-maker
 ---
 
 # Auto-start TTS sidecar (user preference)
 
-> Status: active
+> Status: stable
 > Key files: `server/src/workspace/user-settings.ts`, `server/src/tts/spawn-sidecar.ts`, `server/src/index.ts`, `scripts/start-app.ps1`, `src/views/account.tsx`
 > URL surface: `#/account` (toggle)
 > OpenAPI ops: `GET /api/user/settings`, `PUT /api/user/settings`
@@ -172,6 +172,22 @@ listening on :9000, skipping spawn`. The manual sidecar keeps
 
 ## Ship notes
 
-(Filled in when status flips to `stable`. Append: shipped date, commit SHA,
-any behaviour delta vs. the original spec. Move to
-`docs/features/archive/` in the same PR as the ship.)
+Shipped 2026-05-17 in `bf1444c` (`feat(server,frontend,docs): plan 43 — auto-start TTS sidecar via user preference`).
+
+**Files at ship:** all six cited Key files landed under that single commit:
+
+- `server/src/workspace/user-settings.ts` — `autoStartSidecar?: boolean` field (optional, defaults `true`), `getResolvedAutoStartSidecar()` resolver with `DISABLE_AUTOSTART_SIDECAR=1` env override.
+- `server/src/tts/spawn-sidecar.ts` — child-process spawn module with port-9000 probe, PID file write to `.run/tts.pid`, and `win32` `taskkill /T /F /PID` tree-kill handle. Injectable `spawnFn` / `probeFn` for testability.
+- `server/src/tts/spawn-sidecar.test.ts` — 6 Vitest cases pinning the spawn / probe / `PRELOAD_COQUI` / tree-kill contract.
+- `server/src/index.ts` — wires `spawnSidecar()` at `app.listen()` and tears it down on `SIGINT` / `SIGTERM`.
+- `scripts/start-app.ps1` — `$services` array no longer includes `tts`; Node owns the spawn now.
+- `src/views/account.tsx` — Account view toggle for `autoStartSidecar`, restart-required pill on dirty state.
+
+**Touch-ups after ship (no behaviour delta):**
+
+- `5e16f0c` (2026-05-18, plan 49): `server/src/workspace/user-settings.ts` extended with `geminiApiKey` field (plan 49 scope, not plan 43) — no functional impact on the auto-start spawn lifecycle.
+- `0b08e37` (2026-05-18): `eslint --fix` + `prettier --write` baseline pass — formatting only.
+
+**No behaviour deltas vs the original spec.** The plan body's eight invariants and the Vitest + frontend test suite all match what landed. The `Out of scope` items (engine-switch hot-swap, venv auto-install, Ollama auto-pull) remain out of scope.
+
+The frontmatter `status: active` flag stayed unflipped between ship (2026-05-17) and this close-out (2026-05-19) — pure bookkeeping lag, not a functional gap.
