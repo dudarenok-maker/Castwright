@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChapterHint } from '../store/manuscripts.js';
 import type { ParsedManuscript } from './text.js';
-import { parseFilenameMetadata } from './text.js';
+import { parseFilenameMetadata, parseSeriesFromTitle } from './text.js';
 import { tagExcitedDialog, tagHesitantDialog, tagShoutingDialog } from './audio-tags.js';
 import { stripHtml, extractFirstHeading, GENERIC_NCX_RE } from './html-utils.js';
 
@@ -170,15 +170,32 @@ export async function parseMobi(
 
     const sourceText = chapters.map((c) => c.body).join('\n\n');
     const fileMeta = parseFilenameMetadata(opts.fileName);
+    let resolvedTitle =
+      headerTitle || fileMeta.title || opts.fileName?.replace(/\.[^.]+$/, '') || 'Untitled MOBI';
+    let resolvedSeries = fileMeta.series;
+    let resolvedSeriesPosition = fileMeta.seriesPosition;
+    let seriesFromTitle = false;
+    /* Bug B: MOBI metadata doesn't surface series fields, so when the
+       filename pattern doesn't match either, fall back to splitting
+       a `(Series Book N)` suffix off the title. */
+    if (!resolvedSeries) {
+      const fromTitle = parseSeriesFromTitle(resolvedTitle);
+      if (fromTitle.series) {
+        resolvedTitle = fromTitle.title;
+        resolvedSeries = fromTitle.series;
+        resolvedSeriesPosition = fromTitle.seriesPosition;
+        seriesFromTitle = true;
+      }
+    }
     return {
       format: 'mobi',
-      title:
-        headerTitle || fileMeta.title || opts.fileName?.replace(/\.[^.]+$/, '') || 'Untitled MOBI',
+      title: resolvedTitle,
       sourceText,
       chapters,
       author: headerAuthor || fileMeta.author,
-      series: fileMeta.series,
-      seriesPosition: fileMeta.seriesPosition,
+      series: resolvedSeries,
+      seriesPosition: resolvedSeriesPosition,
+      seriesFromTitle,
     };
   } finally {
     /* Always destroy the parser instance (frees in-memory blob caches)

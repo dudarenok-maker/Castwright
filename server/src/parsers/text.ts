@@ -147,6 +147,12 @@ export interface ParsedManuscript {
   author: string | null;
   series: string | null;
   seriesPosition: number | null;
+  /** True when series / seriesPosition came from a title-parenthetical
+      heuristic (parseSeriesFromTitle) rather than authoritative metadata
+      (Calibre OPF tags or filename). The frontend surfaces this as a
+      "auto-extracted from title — verify" chip on the confirm screen so
+      the user knows the value is a guess and can override. */
+  seriesFromTitle: boolean;
 }
 
 /** Pull `Author - Series N - Title` out of a filename. Returns nulls when the
@@ -166,6 +172,32 @@ export function parseFilenameMetadata(fileName?: string): {
     series: m.groups.series?.trim() || null,
     seriesPosition: m.groups.pos ? parseInt(m.groups.pos, 10) : null,
     title: m.groups.title?.trim() || null,
+  };
+}
+
+/* Conservative title-parenthetical heuristic for series extraction.
+   Matches `(<series> Book N)` or `(<series> #N)` at the end of a title,
+   case-insensitive, decimal positions allowed for novellas (e.g. 1.5).
+   Anything else passes through untouched — keeps false-positives low on
+   ordinary subtitles like "(Revised Edition)" or "(A Novel)". */
+const SERIES_FROM_TITLE_RE =
+  /^(?<title>.+?)\s*\((?<series>.+?)\s+(?:Book|#)\s*(?<pos>\d+(?:\.\d+)?)\)\s*$/i;
+
+/** Try to split a `(Series Book N)` / `(Series #N)` suffix off the title.
+    Returns the cleaned title and the extracted series/seriesPosition on
+    a hit; otherwise the input title passes through and series is null. */
+export function parseSeriesFromTitle(rawTitle: string): {
+  title: string;
+  series: string | null;
+  seriesPosition: number | null;
+} {
+  const trimmed = rawTitle.trim();
+  const m = SERIES_FROM_TITLE_RE.exec(trimmed);
+  if (!m?.groups) return { title: trimmed, series: null, seriesPosition: null };
+  return {
+    title: m.groups.title!.trim(),
+    series: m.groups.series!.trim(),
+    seriesPosition: parseFloat(m.groups.pos!),
   };
 }
 
@@ -290,6 +322,24 @@ export function parseText(
     title = fileMeta.title || opts.fileName?.replace(/\.[^.]+$/, '') || 'Untitled manuscript';
   }
 
+  /* Series-extraction priority (Bug B): authoritative filename metadata
+     wins; otherwise try the title-parenthetical heuristic so a markdown
+     H1 like "Everblaze (Keeper of the Lost Cities Book 3)" still yields
+     series + seriesPosition. Strips the parenthetical off the title on
+     a hit so the saved manuscript title is clean. */
+  let resolvedSeries = fileMeta.series;
+  let resolvedSeriesPosition = fileMeta.seriesPosition;
+  let seriesFromTitle = false;
+  if (!resolvedSeries) {
+    const fromTitle = parseSeriesFromTitle(title);
+    if (fromTitle.series) {
+      title = fromTitle.title;
+      resolvedSeries = fromTitle.series;
+      resolvedSeriesPosition = fromTitle.seriesPosition;
+      seriesFromTitle = true;
+    }
+  }
+
   const sourceText = chapters.map((c) => c.body).join('\n\n');
   return {
     format: opts.format,
@@ -297,7 +347,8 @@ export function parseText(
     sourceText,
     chapters,
     author: fileMeta.author,
-    series: fileMeta.series,
-    seriesPosition: fileMeta.seriesPosition,
+    series: resolvedSeries,
+    seriesPosition: resolvedSeriesPosition,
+    seriesFromTitle,
   };
 }

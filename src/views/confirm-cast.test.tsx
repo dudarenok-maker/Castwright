@@ -302,12 +302,14 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
   });
 });
 
-/* Plan 41 — bulk-sync pill above the cast-card grid.
-   The pill toggles every eligible character's "Sync profile" checkbox in
-   one click; eligibility mirrors `canOverrideLibrary` per card. The label
-   reflects the target state (Sync N / Clear all), and N updates as the
-   user unticks exceptions after a bulk tick. */
-describe('ConfirmCastView — bulk sync pill', () => {
+/* Plan 41 + Bug C — bulk-apply pill above the cast-card grid.
+   The apply path flips both the Reuse decision AND the "Sync profile from
+   library" override in one click; eligibility mirrors `canOverrideLibrary`
+   per card. The clear-syncs path only unchecks the syncs (does not revert
+   Reuse → Generate; that would be destructive when the user explicitly
+   picked Reuse). The label reflects the unapplied count, where unapplied
+   means "decision !== 'match' OR override is off". */
+describe('ConfirmCastView — bulk apply pill', () => {
   /* Three matched characters with full library handles (bookId + characterId)
      and two unmatched characters. Mirrors what hydrateFromAnalysis +
      applyVoiceMatches feeds the view in mock mode after the plan 41
@@ -370,14 +372,14 @@ describe('ConfirmCastView — bulk sync pill', () => {
 
   it('renders the pill with the eligible-character count when at least one card carries the full library handle', () => {
     renderBulkView([...matched3, ...unmatched2]);
-    expect(
-      screen.getByRole('button', { name: 'Sync 3 profiles from library' }),
-    ).toBeInTheDocument();
+    /* All three matched cards start with decision='match' but override=false,
+       so all three are "unapplied". */
+    expect(screen.getByRole('button', { name: 'Apply all 3 matches' })).toBeInTheDocument();
   });
 
-  it('singularises the label when exactly one character is eligible', () => {
+  it('singularises the label when exactly one character is unapplied', () => {
     renderBulkView([makeMatched('solo', 'Solo', 'sb', 'solo_sb'), ...unmatched2]);
-    expect(screen.getByRole('button', { name: 'Sync 1 profile from library' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply all 1 match' })).toBeInTheDocument();
   });
 
   it('clicking the pill ticks every matched checkbox; unmatched characters are unaffected', () => {
@@ -386,7 +388,7 @@ describe('ConfirmCastView — bulk sync pill', () => {
     expect(allCheckboxesBefore).toHaveLength(3);
     for (const cb of allCheckboxesBefore) expect((cb as HTMLInputElement).checked).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: /Sync 3 profiles from library/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Apply all 3 matches/ }));
 
     const allCheckboxesAfter = screen.getAllByRole('checkbox', { name: /Sync profile/i });
     for (const cb of allCheckboxesAfter) expect((cb as HTMLInputElement).checked).toBe(true);
@@ -394,37 +396,69 @@ describe('ConfirmCastView — bulk sync pill', () => {
     expect(screen.getAllByRole('checkbox', { name: /Sync profile/i })).toHaveLength(3);
   });
 
-  it('clicking the pill again clears every previously-ticked checkbox (label inverts to Clear all syncs)', () => {
+  /* Bug C regression: when a matched card's decision is "Generate fresh",
+     the per-card sync checkbox doesn't render at all (gated on
+     `decision === 'match'`). The apply-all pill must ALSO flip the decision
+     back to Reuse so the user gets visible effect across every matched card
+     in one click. */
+  it('flips Reuse decision on cards previously toggled to Generate, then ticks their sync override', () => {
     renderBulkView([...matched3, ...unmatched2]);
-    /* First click — tick all. */
-    fireEvent.click(screen.getByRole('button', { name: /Sync 3 profiles from library/ }));
-    expect(screen.getByRole('button', { name: 'Clear all syncs' })).toBeInTheDocument();
+    /* Pre-condition: only the matched cards expose decision tiles; flip
+       Alpha to "Generate fresh". Alpha now has decision='generate' and the
+       continuity footer + sync checkbox vanish from that card. */
+    const generateTiles = screen.getAllByRole('button', { name: /Generate fresh/ });
+    fireEvent.click(generateTiles[0]);
+    /* Only 2 sync checkboxes left now (beta + gamma), since alpha's
+       continuity footer is gone with decision='generate'. */
+    expect(screen.getAllByRole('checkbox', { name: /Sync profile/i })).toHaveLength(2);
+    /* Unapplied count: alpha is unapplied (decision !== match), beta and
+       gamma are unapplied (override !== true). N=3. */
+    expect(screen.getByRole('button', { name: 'Apply all 3 matches' })).toBeInTheDocument();
 
-    /* Second click — clear all. */
-    fireEvent.click(screen.getByRole('button', { name: /Clear all syncs/ }));
-    for (const cb of screen.getAllByRole('checkbox', { name: /Sync profile/i })) {
-      expect((cb as HTMLInputElement).checked).toBe(false);
-    }
-    /* Label is back to "Sync 3 …". */
-    expect(
-      screen.getByRole('button', { name: 'Sync 3 profiles from library' }),
-    ).toBeInTheDocument();
+    /* Apply all. */
+    fireEvent.click(screen.getByRole('button', { name: /Apply all 3 matches/ }));
+
+    /* All three matched cards now have decision='match' (continuity footer
+       back) AND override=true. */
+    const checkboxes = screen.getAllByRole('checkbox', { name: /Sync profile/i });
+    expect(checkboxes).toHaveLength(3);
+    for (const cb of checkboxes) expect((cb as HTMLInputElement).checked).toBe(true);
+    /* Pill flips to "Clear all syncs". */
+    expect(screen.getByRole('button', { name: 'Clear all syncs' })).toBeInTheDocument();
   });
 
-  it('after bulk-tick, per-card untick flips the label back to "Sync 1 profile from library"', () => {
+  it('clicking Clear all syncs unchecks every override but leaves Reuse decisions intact', () => {
     renderBulkView([...matched3, ...unmatched2]);
-    fireEvent.click(screen.getByRole('button', { name: /Sync 3 profiles from library/ }));
-    /* Untick the first matched character. */
+    /* First click — apply all. */
+    fireEvent.click(screen.getByRole('button', { name: /Apply all 3 matches/ }));
+    expect(screen.getByRole('button', { name: 'Clear all syncs' })).toBeInTheDocument();
+
+    /* Second click — clear syncs only. */
+    fireEvent.click(screen.getByRole('button', { name: /Clear all syncs/ }));
+    /* All three sync checkboxes are unchecked. */
+    const checkboxes = screen.getAllByRole('checkbox', { name: /Sync profile/i });
+    expect(checkboxes).toHaveLength(3);
+    for (const cb of checkboxes) expect((cb as HTMLInputElement).checked).toBe(false);
+    /* Continuity footer still renders on all three (decisions stayed at
+       'match'), proving Clear-all-syncs did NOT revert the decision. */
+    expect(screen.getAllByText(/Continuity preserved/)).toHaveLength(3);
+    /* Label is back to "Apply all 3 matches". */
+    expect(screen.getByRole('button', { name: 'Apply all 3 matches' })).toBeInTheDocument();
+  });
+
+  it('after bulk-apply, per-card untick flips the label back to "Apply all 1 match"', () => {
+    renderBulkView([...matched3, ...unmatched2]);
+    fireEvent.click(screen.getByRole('button', { name: /Apply all 3 matches/ }));
+    /* Untick the first matched character's sync. Decision stays 'match'. */
     const checkboxes = screen.getAllByRole('checkbox', { name: /Sync profile/i });
     fireEvent.click(checkboxes[0]);
-    /* Plan 41 invariant 3 + 4: label N is the number of currently-unticked
-       eligible characters when not all are ticked. After unticking one, N=1. */
-    expect(screen.getByRole('button', { name: 'Sync 1 profile from library' })).toBeInTheDocument();
+    /* Unapplied count is now 1 (alpha lost its override). */
+    expect(screen.getByRole('button', { name: 'Apply all 1 match' })).toBeInTheDocument();
   });
 
   it('pill is absent when no character is eligible (no matchedFrom with bookId+characterId)', () => {
     renderBulkView([...unmatched2]);
-    expect(screen.queryByRole('button', { name: /Sync .* from library/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Apply all .* match/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Clear all syncs/ })).toBeNull();
   });
 
@@ -442,6 +476,6 @@ describe('ConfirmCastView — bulk sync pill', () => {
         />
       </Provider>,
     );
-    expect(screen.queryByRole('button', { name: /Sync .* from library/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Apply all .* match/ })).toBeNull();
   });
 });

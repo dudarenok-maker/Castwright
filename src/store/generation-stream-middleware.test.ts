@@ -617,3 +617,137 @@ describe('generationStreamMiddleware — reverse-local-analyzer guard (plan 32 D
     expect(store.getState().chapters.paused).toBe(false);
   });
 });
+
+/* Bug E — cross-book heartbeat + counter refresh. When the user navigates
+   from the generating book to a different book, the per-chapter tick
+   reducer's cross-book guard (chapters-slice.ts) drops the per-row
+   mutation but the middleware must still refresh the activeStream
+   snapshot's lastTickAt + counters from the tick payload. Without this
+   the pill freezes at the open-time snapshot and the stall check flips
+   to "Stalled" after 30 s even though the SSE is still ticking. */
+describe('generationStreamMiddleware — Bug E cross-book heartbeat + counters', () => {
+  beforeEach(() => {
+    streamGenerationMock.mockClear();
+    cancelMock.mockClear();
+    pauseGenerationMock.mockClear();
+  });
+
+  it('refreshes activeStream counters AND lastTickAt from tick payload when slice is on a different book', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [
+      ch(1, { state: 'in_progress', progress: 0.1 }),
+      ch(2),
+      ch(3),
+    ]);
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    const openTickAt = store.getState().chapters.activeStream?.lastTickAt;
+
+    /* User navigates to a different book. Layout would dispatch
+       setCurrentBookId('b2') + setChapters(b2's chapters). */
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'generating' }));
+    seedBook(store, 'b2', [ch(7, { state: 'queued' })]);
+    /* Hold the clock so the next dispatch's `Date.now()` is strictly
+       greater than openTickAt — Vitest's default fake timers aren't
+       active here, so use real time and just wait a millisecond. */
+    const before = Date.now();
+
+    /* The original generation SSE for b1 fires a progress tick carrying
+       the server's run aggregates. The slice's cross-book guard drops the
+       per-chapter mutation, but the middleware's cross-book branch
+       should refresh activeStream from the payload. */
+    const tick = {
+      type: 'progress',
+      chapterId: 33,
+      characterId: null,
+      progress: 0.5,
+      currentLine: 100,
+      totalLines: 200,
+      runDone: 32,
+      runTotal: 63,
+      runInProgress: 1,
+    } as unknown as GenerationTick;
+    store.dispatch(chaptersSlice.actions.applyGenerationTick(tick));
+
+    const snap = store.getState().chapters.activeStream;
+    expect(snap?.bookId).toBe('b1'); /* still describes the generating book */
+    expect(snap?.done).toBe(32);
+    expect(snap?.total).toBe(63);
+    expect(snap?.inProgress).toBe(1);
+    expect(snap?.lastTickAt).not.toBeNull();
+    expect(snap!.lastTickAt!).toBeGreaterThanOrEqual(before);
+    if (openTickAt != null) {
+      expect(snap!.lastTickAt!).toBeGreaterThanOrEqual(openTickAt);
+    }
+  });
+
+  it('still bumps lastTickAt across cross-book navigation even when the tick payload omits run* fields (older server fallback)', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [
+      ch(1, { state: 'in_progress', progress: 0.1 }),
+      ch(2),
+    ]);
+    const openSnap = store.getState().chapters.activeStream;
+    expect(openSnap).not.toBeNull();
+    const openDone = openSnap!.done;
+    const openTotal = openSnap!.total;
+    const openInProgress = openSnap!.inProgress;
+    const openTickAt = openSnap!.lastTickAt;
+
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'generating' }));
+    seedBook(store, 'b2', [ch(7, { state: 'queued' })]);
+    const before = Date.now();
+
+    /* Older-server tick — no runDone/runTotal/runInProgress. */
+    const tick = {
+      type: 'progress',
+      chapterId: 1,
+      characterId: null,
+      progress: 0.5,
+      currentLine: 100,
+      totalLines: 200,
+    } as unknown as GenerationTick;
+    store.dispatch(chaptersSlice.actions.applyGenerationTick(tick));
+
+    const snap = store.getState().chapters.activeStream;
+    /* Counters stay at their open-time values (the slice didn't have b1's
+       rows to recompute, and the payload didn't carry server aggregates). */
+    expect(snap?.done).toBe(openDone);
+    expect(snap?.total).toBe(openTotal);
+    expect(snap?.inProgress).toBe(openInProgress);
+    /* But lastTickAt advanced — the pill won't go spuriously stalled. */
+    expect(snap!.lastTickAt!).toBeGreaterThanOrEqual(before);
+    if (openTickAt != null) {
+      expect(snap!.lastTickAt!).toBeGreaterThanOrEqual(openTickAt);
+    }
+  });
+
+  it('idle tick does NOT trigger the cross-book refresh (idle is queue-drain, not a heartbeat)', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [ch(1, { state: 'in_progress', progress: 0.1 })]);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'generating' }));
+    seedBook(store, 'b2', [ch(7, { state: 'queued' })]);
+
+    const beforeIdle = store.getState().chapters.activeStream?.lastTickAt;
+    /* Sleep a moment so a misfiring refresh would show a higher number. */
+    const wallBefore = Date.now() + 1;
+    while (Date.now() < wallBefore) {
+      /* tight loop ~1ms — adequate without timers */
+    }
+    const idleTick = {
+      type: 'idle',
+      chapterId: 0,
+      characterId: null,
+      progress: 0,
+      currentLine: 0,
+      totalLines: 0,
+    } as unknown as GenerationTick;
+    store.dispatch(chaptersSlice.actions.applyGenerationTick(idleTick));
+
+    const snap = store.getState().chapters.activeStream;
+    /* Idle skipped both the slice mutation AND the cross-book refresh. */
+    expect(snap?.lastTickAt).toBe(beforeIdle);
+  });
+});
