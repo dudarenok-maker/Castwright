@@ -33,8 +33,10 @@ describe('dark-mode CSS overrides (styles.css)', () => {
        documented in docs/features/42-dark-mode.md "Contrast
        invariants". */
     { selector: '.bg-white', label: 'solid white surface' },
+    { selector: '.bg-white\\/40', label: 'translucent /40 surface (drawer engine tabs)' },
     { selector: '.bg-white\\/60', label: 'translucent /60 surface' },
     { selector: '.bg-white\\/70', label: 'translucent /70 surface' },
+    { selector: '.bg-white\\/95', label: 'translucent /95 surface (drawer sticky header)' },
     { selector: '.hover\\:bg-white:hover', label: 'hover solid white' },
     { selector: '.hover\\:bg-white\\/60:hover', label: 'hover /60' },
     { selector: '.hover\\:bg-white\\/70:hover', label: 'hover /70' },
