@@ -32,6 +32,7 @@ import {
   PrimaryButton,
   ComingSoonBadge,
 } from '../primitives';
+import { RestructureChaptersButton } from '../restructure-chapters-button';
 import { formatTime } from '../../lib/time';
 import type { EditableBookMeta, EditableBookMetaField } from '../../store/book-meta-slice';
 
@@ -250,13 +251,7 @@ export function ListenHeader({
           >
             <IconEye className="w-4 h-4" /> Preview as listener
           </button>
-          <button
-            onClick={onOpenRestructure}
-            data-testid="open-restructure"
-            className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
-          >
-            <IconWaveform className="w-4 h-4" /> Restructure chapters
-          </button>
+          <RestructureChaptersButton onClick={onOpenRestructure} />
           <button
             disabled
             title="Share — coming soon"
