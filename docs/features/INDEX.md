@@ -57,6 +57,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [09 — Voice match pipeline](09-voice-match-pipeline.md) — Post-analysis library matching.
 - [10 — Profile drawer](10-profile-drawer.md) — Character edit drawer + sample preview + evidence toggle.
+- [60 — Voice preview while editing the character](60-voice-preview-while-editing.md) — Per-candidate "Play sample" affordance in the override picker; user-editable sample line persisted to `localStorage`; auditions are read-only (no cast commit). Shipped 2026-05-19.
 - [11 — Batch character regenerate](11-batch-character-regenerate.md) — Multi-select character → chapter-range regen.
 
 ### E. Manuscript editing
