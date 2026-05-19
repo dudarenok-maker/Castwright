@@ -141,11 +141,17 @@
    streaming. Drop these to subtle ink-overlays so the on-top text
    reads. Alpha sits one step below the hover variants below so the
    "base → hover" elevation ordering is preserved. */
+[data-theme='dark'] .bg-white\/40 {
+  background-color: rgba(244, 239, 236, 0.03);
+}
 [data-theme='dark'] .bg-white\/60 {
   background-color: rgba(244, 239, 236, 0.04);
 }
 [data-theme='dark'] .bg-white\/70 {
   background-color: rgba(244, 239, 236, 0.05);
+}
+[data-theme='dark'] .bg-white\/95 {
+  background-color: rgba(244, 239, 236, 0.08);
 }
 
 /* Hover variants of bg-white. Tailwind generates these as
