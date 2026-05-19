@@ -7,7 +7,7 @@ import { fetchAccountSettings } from '../store/account-slice';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
-import { revisionsActions } from '../store/revisions-slice';
+import { revisionsActions, selectDriftByBook } from '../store/revisions-slice';
 import { libraryActions } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
 import { changeLogActions } from '../store/change-log-slice';
@@ -83,7 +83,8 @@ export function Layout() {
   const chapters = useAppSelector((s) => s.chapters.chapters);
   const activeStream = useAppSelector((s) => s.chapters.activeStream);
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
-  const drift = useAppSelector((s) => s.revisions.drift);
+  const driftByBookId = useAppSelector(selectDriftByBook);
+  const bookMetaSaved = useAppSelector((s) => s.bookMeta.saved);
   const pending = useAppSelector((s) => s.revisions.pending);
   const manuscript = useAppSelector((s) => s.manuscript);
   const library = useAppSelector((s) => s.library);
@@ -378,7 +379,9 @@ export function Layout() {
             chapterCharacters: res.chapterCharacters,
           }),
         );
-        dispatch(revisionsActions.hydrateFromBookState(res.revisions ?? null));
+        dispatch(
+          revisionsActions.hydrateFromBookState(res.revisions ? { bookId, ...res.revisions } : null),
+        );
         dispatch(changeLogActions.hydrateFromBookState(res.changeLog ?? null));
         /* Editable Listen-view metadata: seed from state.json's editorial
            fields, falling back to the cast narrator's name when the book
@@ -527,7 +530,7 @@ export function Layout() {
     let cancelled = false;
     const fetchOnce = () =>
       api.pollRevisions({ bookId }).then((res) => {
-        if (!cancelled) dispatch(revisionsActions.applyPoll(res));
+        if (!cancelled) dispatch(revisionsActions.applyPoll({ ...res, bookId }));
       });
     fetchOnce();
     const t = setInterval(fetchOnce, 30000);
@@ -829,16 +832,19 @@ export function Layout() {
       )}
       {ui.showDriftReport && (
         <DriftReportModal
-          events={drift}
-          characters={characters}
-          /* Bug 8 — wire the inline A/B player. Both required for the
-             widget to mount; bookId routes the chapter audio URL, voices
-             resolves each character.voiceId to a playable Voice for the
-             sample side. */
-          bookId={bookId ?? undefined}
+          /* Multi-book grouping: each entry in driftByBookId becomes a
+             section under its book's title. Cast slice only carries the
+             active book's characters today — cross-book events fall back
+             to the embedded `event.current.name` for display. */
+          eventsByBook={driftByBookId.map((g) => ({
+            bookId: g.bookId,
+            bookTitle: bookMetaSaved[g.bookId]?.title || g.bookId,
+            characters: g.bookId === bookId ? characters : [],
+            events: g.events,
+          }))}
           voices={voices}
           onClose={() => dispatch(uiActions.setShowDriftReport(false))}
-          onRegenerateChapter={(charId, chapterId) => {
+          onRegenerateChapter={(_evBookId, charId, chapterId) => {
             dispatch(uiActions.setShowDriftReport(false));
             dispatch(
               uiActions.setRegenCharacterCtx({ characterId: charId, defaultChapterId: chapterId }),
@@ -849,7 +855,7 @@ export function Layout() {
              onConfirm would have fired, just without the intermediate click. The
              reverse local-analyzer guard still gates the action so a live local
              analysis prompts before TTS starts. */
-          onAutoQueueRegenerate={(charId, chapterId) => {
+          onAutoQueueRegenerate={(_evBookId, charId, chapterId) => {
             dispatch(uiActions.setShowDriftReport(false));
             const character = characters.find((c) => c.id === charId);
             reverseAnalyzerGuard(() => {

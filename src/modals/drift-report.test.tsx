@@ -1,18 +1,19 @@
-/* Pairs with docs/features/20-revisions-and-drift.md.
+/* Pairs with docs/features/35-engine-drift-detection.md and the
+   drift-report-fidelity plan.
 
-   Covers the C1+C2 split between auto-queueable (severe) and manual
-   (moderate / mild) drift events: severe events render the one-click
-   "Auto-regen now" pill that bypasses the regen-modal confirmation,
-   moderate / mild events keep the existing "Regenerate this chapter"
-   pill that opens the modal. When no autoQueueable handler is provided
-   the modal falls back to the manual flow for every event (regression
-   guard for surfaces that haven't opted into the shortcut). */
+   Covers:
+     - C1+C2 auto-queueable vs manual regen pill split.
+     - Chapter title is read from event.chapterTitle (no fixture join).
+     - Multi-book grouping: events from two books render under separate
+       book headers in a single modal.
+     - Side-by-side ProfileCompareCard renders both columns and highlights
+       the changed factor. */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
-import { DriftReportModal } from './drift-report';
+import { DriftReportModal, type DriftBookGroup } from './drift-report';
 import { uiSlice } from '../store/ui-slice';
 import type { DriftEvent, Character, Voice } from '../lib/types';
 
@@ -42,12 +43,6 @@ vi.mock('../lib/api', () => ({
 }));
 
 const characters: Character[] = [
-  /* color must be a CHAR_COLORS key (narrator or slot-N) — see colors.ts.
-     Drift-report does `CHAR_COLORS[char.color].hex`, so a fixture using
-     unmapped names like 'magenta' would crash before the test assertions
-     ran. voiceId added 2026-05-19 for the Listen A/B widget — the widget
-     only mounts when a matching Voice is plumbed in via the `voices`
-     prop, so character.voiceId has to resolve to an entry there. */
   { id: 'eliza', name: 'Eliza', role: 'Lead', color: 'slot-4', voiceId: 'voice-eliza' } as Character,
   { id: 'sten', name: 'Sten', role: 'Friend', color: 'slot-5' } as Character,
 ];
@@ -60,9 +55,11 @@ const elizaVoice: Voice = {
 
 function makeEvent(over: Partial<DriftEvent>): DriftEvent {
   return {
-    id: 'drift:1:eliza:voice',
+    id: 'drift:book-A:1:eliza:voice',
+    bookId: 'book-A',
     characterId: 'eliza',
     chapterId: 1,
+    chapterTitle: 'What the Captain Knew',
     severity: 'severe',
     factor: 'voice',
     factorLabel: 'Voice',
@@ -70,8 +67,20 @@ function makeEvent(over: Partial<DriftEvent>): DriftEvent {
     autoQueueable: true,
     detected: '2026-01-01T00:00:00Z',
     suggestedAction: 'regenerate_chapter',
+    snapshot: { voiceId: 'old-voice', tone: { warmth: 40, pace: 50 }, attributes: ['warm'] },
+    current: { voiceId: 'new-voice', tone: { warmth: 40, pace: 50 }, attributes: ['warm'] },
     ...over,
   } as DriftEvent;
+}
+
+function group(events: DriftEvent[], over: Partial<DriftBookGroup> = {}): DriftBookGroup {
+  return {
+    bookId: 'book-A',
+    bookTitle: 'Bonus Keefe Story',
+    characters,
+    events,
+    ...over,
+  };
 }
 
 describe('DriftReportModal — auto-queueable severe drift (C1+C2)', () => {
@@ -80,24 +89,20 @@ describe('DriftReportModal — auto-queueable severe drift (C1+C2)', () => {
     const onRegenerateChapter = vi.fn();
     render(
       <DriftReportModal
-        events={[makeEvent({})]}
-        characters={characters}
+        eventsByBook={[group([makeEvent({})])]}
         onClose={vi.fn()}
         onRegenerateChapter={onRegenerateChapter}
         onAutoQueueRegenerate={onAutoQueueRegenerate}
         onDismiss={vi.fn()}
       />,
     );
-    const autoBtn = screen.getByTestId('drift-auto-regen-drift:1:eliza:voice');
+    const autoBtn = screen.getByTestId('drift-auto-regen-drift:book-A:1:eliza:voice');
     expect(autoBtn).toBeInTheDocument();
     expect(autoBtn).toHaveTextContent(/Auto-regen now/i);
-    /* Manual pill is NOT rendered for this row — auto and manual are
-       mutually exclusive on a single drift card. */
-    expect(screen.queryByTestId('drift-regen-drift:1:eliza:voice')).toBeNull();
+    expect(screen.queryByTestId('drift-regen-drift:book-A:1:eliza:voice')).toBeNull();
 
     fireEvent.click(autoBtn);
-    expect(onAutoQueueRegenerate).toHaveBeenCalledWith('eliza', 1);
-    /* The modal-opening manual handler stays untouched for auto-queueable rows. */
+    expect(onAutoQueueRegenerate).toHaveBeenCalledWith('book-A', 'eliza', 1);
     expect(onRegenerateChapter).not.toHaveBeenCalled();
   });
 
@@ -106,92 +111,215 @@ describe('DriftReportModal — auto-queueable severe drift (C1+C2)', () => {
     const onRegenerateChapter = vi.fn();
     render(
       <DriftReportModal
-        events={[
-          makeEvent({
-            id: 'drift:1:eliza:pace',
-            factor: 'pace',
-            factorLabel: 'Pace',
-            severity: 'moderate',
-            autoQueueable: undefined,
-          }),
+        eventsByBook={[
+          group([
+            makeEvent({
+              id: 'drift:book-A:1:eliza:pace',
+              factor: 'pace',
+              factorLabel: 'Pace',
+              severity: 'moderate',
+              autoQueueable: undefined,
+            }),
+          ]),
         ]}
-        characters={characters}
         onClose={vi.fn()}
         onRegenerateChapter={onRegenerateChapter}
         onAutoQueueRegenerate={onAutoQueueRegenerate}
         onDismiss={vi.fn()}
       />,
     );
-    const manualBtn = screen.getByTestId('drift-regen-drift:1:eliza:pace');
+    const manualBtn = screen.getByTestId('drift-regen-drift:book-A:1:eliza:pace');
     expect(manualBtn).toBeInTheDocument();
     expect(manualBtn).toHaveTextContent(/Regenerate this chapter/i);
-    expect(screen.queryByTestId('drift-auto-regen-drift:1:eliza:pace')).toBeNull();
+    expect(screen.queryByTestId('drift-auto-regen-drift:book-A:1:eliza:pace')).toBeNull();
 
     fireEvent.click(manualBtn);
-    expect(onRegenerateChapter).toHaveBeenCalledWith('eliza', 1);
+    expect(onRegenerateChapter).toHaveBeenCalledWith('book-A', 'eliza', 1);
     expect(onAutoQueueRegenerate).not.toHaveBeenCalled();
   });
 
   it('falls back to the manual Regenerate pill on every event when no autoQueueable handler is provided', () => {
-    /* Regression guard: surfaces that haven't opted into the shortcut
-       (or are still mocking the modal under test) get the original UX
-       without lighting up the new affordance. */
     const onRegenerateChapter = vi.fn();
     render(
       <DriftReportModal
-        events={[makeEvent({})]}
-        characters={characters}
+        eventsByBook={[group([makeEvent({})])]}
         onClose={vi.fn()}
         onRegenerateChapter={onRegenerateChapter}
         onDismiss={vi.fn()}
       />,
     );
-    expect(screen.queryByTestId('drift-auto-regen-drift:1:eliza:voice')).toBeNull();
-    const manualBtn = screen.getByTestId('drift-regen-drift:1:eliza:voice');
+    expect(screen.queryByTestId('drift-auto-regen-drift:book-A:1:eliza:voice')).toBeNull();
+    const manualBtn = screen.getByTestId('drift-regen-drift:book-A:1:eliza:voice');
     fireEvent.click(manualBtn);
-    expect(onRegenerateChapter).toHaveBeenCalledWith('eliza', 1);
+    expect(onRegenerateChapter).toHaveBeenCalledWith('book-A', 'eliza', 1);
   });
 
   it('groups severe + moderate events under separate severity headings (regression for the existing layout)', () => {
-    /* Spot-check the existing grouping behavior survives the C1+C2
-       split — the severe row picks up the Auto-regen pill while the
-       moderate row keeps the manual pill, in the same modal. */
     const onAutoQueueRegenerate = vi.fn();
     render(
       <DriftReportModal
-        events={[
-          makeEvent({}),
-          makeEvent({
-            id: 'drift:1:sten:pace',
-            characterId: 'sten',
-            factor: 'pace',
-            factorLabel: 'Pace',
-            severity: 'moderate',
-            autoQueueable: undefined,
-          }),
+        eventsByBook={[
+          group([
+            makeEvent({}),
+            makeEvent({
+              id: 'drift:book-A:1:sten:pace',
+              characterId: 'sten',
+              factor: 'pace',
+              factorLabel: 'Pace',
+              severity: 'moderate',
+              autoQueueable: undefined,
+            }),
+          ]),
         ]}
-        characters={characters}
         onClose={vi.fn()}
         onRegenerateChapter={vi.fn()}
         onAutoQueueRegenerate={onAutoQueueRegenerate}
         onDismiss={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('drift-auto-regen-drift:1:eliza:voice')).toBeInTheDocument();
-    expect(screen.getByTestId('drift-regen-drift:1:sten:pace')).toBeInTheDocument();
+    expect(screen.getByTestId('drift-auto-regen-drift:book-A:1:eliza:voice')).toBeInTheDocument();
+    expect(screen.getByTestId('drift-regen-drift:book-A:1:sten:pace')).toBeInTheDocument();
   });
 });
 
-/* Bug 8 — Listen button A/B player. Pre-fix the button at drift-report.tsx:165
-   was a pure stub: no onClick, no callback, no caller wiring. Now it expands
-   inline into two-button A/B controls: A plays the chapter audio that drifted
-   (static URL), B plays a sample of the established voice profile (lazy
-   resolved via api.getVoiceSample). Mutex via component state — only one
-   plays at a time. */
+describe('DriftReportModal — fidelity contract (drift-report-fidelity plan)', () => {
+  it('renders the chapter title from event.chapterTitle, not a fixture', () => {
+    /* Pre-fix the modal joined against initialChapters from src/data/chapters.ts
+       so "What the Captain Knew" surfaced even when the live book had no such
+       chapter. Now the title comes off the event payload, server-emitted. */
+    render(
+      <DriftReportModal
+        eventsByBook={[
+          group([
+            makeEvent({
+              chapterTitle: 'A Real Chapter Title',
+              chapterId: 42,
+              id: 'drift:book-A:42:eliza:voice',
+            }),
+          ]),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    /* chapter title prefix-stripped in `stripChapterPrefix` — bare title remains. */
+    expect(screen.getByText(/A Real Chapter Title/)).toBeInTheDocument();
+    /* No fixture chapter title leaks through. */
+    expect(screen.queryByText(/What the Captain Knew/)).toBeNull();
+  });
+
+  it('renders a book header per group when more than one book has drift', () => {
+    render(
+      <DriftReportModal
+        eventsByBook={[
+          group([makeEvent({})], { bookId: 'book-A', bookTitle: 'Book Aleph' }),
+          group(
+            [
+              makeEvent({
+                id: 'drift:book-B:1:sten:voice',
+                bookId: 'book-B',
+                characterId: 'sten',
+              }),
+            ],
+            { bookId: 'book-B', bookTitle: 'Book Beth' },
+          ),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Book Aleph')).toBeInTheDocument();
+    expect(screen.getByText('Book Beth')).toBeInTheDocument();
+    /* Header summary counts across books. */
+    expect(screen.getByText(/2 chapters flagged across 2 books/)).toBeInTheDocument();
+  });
+
+  it('omits the book sub-header when only one book has drift', () => {
+    render(
+      <DriftReportModal
+        eventsByBook={[group([makeEvent({})], { bookTitle: 'Bonus Keefe Story' })]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    /* Header summary collapses to today's "{N} chapter(s) flagged" form when
+       only one book is involved. */
+    expect(screen.getByText(/1 chapter flagged/)).toBeInTheDocument();
+    /* The single-book optimisation hides the redundant sub-header — the modal
+       title bar already names the surface. */
+    expect(screen.queryByText('Bonus Keefe Story')).toBeNull();
+  });
+
+  it('renders the side-by-side comparison with both When rendered and Now columns', () => {
+    render(
+      <DriftReportModal
+        eventsByBook={[
+          group([
+            makeEvent({
+              snapshot: {
+                voiceId: 'af_sarah',
+                gender: 'female',
+                ageRange: 'adult',
+                tone: { warmth: 45, pace: 50, authority: 50, emotion: 50 },
+                attributes: ['warm', 'calm'],
+              },
+              current: {
+                voiceId: 'af_nova',
+                gender: 'female',
+                ageRange: 'adult',
+                tone: { warmth: 75, pace: 50, authority: 50, emotion: 50 },
+                attributes: ['warm', 'calm', 'enthusiastic'],
+              },
+            }),
+          ]),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('When rendered')).toBeInTheDocument();
+    expect(screen.getByText('Now')).toBeInTheDocument();
+    /* All major profile rows render — regression guard that the table
+       doesn't silently lose rows when one factor is undefined. */
+    expect(screen.getByTestId('drift-compare-row-voice')).toBeInTheDocument();
+    expect(screen.getByTestId('drift-compare-row-warmth')).toBeInTheDocument();
+    expect(screen.getByTestId('drift-compare-row-attributes')).toBeInTheDocument();
+  });
+
+  it('marks the changed-factor row with data-changed=true', () => {
+    render(
+      <DriftReportModal
+        eventsByBook={[
+          group([
+            makeEvent({
+              factor: 'warmth',
+              snapshot: { tone: { warmth: 30 } },
+              current: { tone: { warmth: 70 } },
+            }),
+          ]),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('drift-compare-row-warmth')).toHaveAttribute(
+      'data-changed',
+      'true',
+    );
+    expect(screen.getByTestId('drift-compare-row-pace')).toHaveAttribute(
+      'data-changed',
+      'false',
+    );
+  });
+});
+
+/* Bug 8 — Listen button A/B player. */
 describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
-  /* Single prototype-level spy serves both A + B elements. The Bs are
-     aliases purely for test-name readability — there's only one method
-     on HTMLMediaElement.prototype to spy on. */
   let playSpy: ReturnType<typeof vi.spyOn>;
   let pauseSpy: ReturnType<typeof vi.spyOn>;
   let playASpy: ReturnType<typeof vi.spyOn>;
@@ -199,9 +327,6 @@ describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
   let playBSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    /* Stub HTMLMediaElement.play / pause so audio elements don't actually
-       fire decode + autoplay errors in jsdom. Vitest's jsdom doesn't ship
-       a real media pipeline. Each test gets a fresh spy. */
     playSpy = vi
       .spyOn(window.HTMLMediaElement.prototype, 'play')
       .mockImplementation(() => Promise.resolve());
@@ -224,9 +349,7 @@ describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
     return render(
       <Provider store={store}>
         <DriftReportModal
-          events={events}
-          characters={characters}
-          bookId="b-keeper"
+          eventsByBook={[group(events, { bookId: 'b-keeper' })]}
           voices={[elizaVoice]}
           onClose={vi.fn()}
           onRegenerateChapter={vi.fn()}
@@ -238,51 +361,48 @@ describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
 
   it('Listen button toggles inline A/B controls visible', () => {
     renderModalWithVoices([makeEvent({})]);
-    const listenBtn = screen.getByTestId('drift-listen-drift:1:eliza:voice');
-    /* Pre-click: A/B controls hidden. */
-    expect(screen.queryByTestId('drift-play-chapter-drift:1:eliza:voice')).toBeNull();
-    expect(screen.queryByTestId('drift-play-voice-drift:1:eliza:voice')).toBeNull();
+    const listenBtn = screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice');
+    expect(screen.queryByTestId('drift-play-chapter-drift:book-A:1:eliza:voice')).toBeNull();
+    expect(screen.queryByTestId('drift-play-voice-drift:book-A:1:eliza:voice')).toBeNull();
     fireEvent.click(listenBtn);
-    /* Post-click: both buttons present. */
     expect(
-      screen.getByTestId('drift-play-chapter-drift:1:eliza:voice'),
+      screen.getByTestId('drift-play-chapter-drift:book-A:1:eliza:voice'),
     ).toBeInTheDocument();
-    expect(screen.getByTestId('drift-play-voice-drift:1:eliza:voice')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('drift-play-voice-drift:book-A:1:eliza:voice'),
+    ).toBeInTheDocument();
   });
 
   it('Play chapter calls .play() on the chapter audio element', () => {
     renderModalWithVoices([makeEvent({})]);
-    fireEvent.click(screen.getByTestId('drift-listen-drift:1:eliza:voice'));
-    fireEvent.click(screen.getByTestId('drift-play-chapter-drift:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-play-chapter-drift:book-A:1:eliza:voice'));
     expect(playASpy).toHaveBeenCalled();
   });
 
   it('Play voice fetches the sample URL on first click and plays it', async () => {
     renderModalWithVoices([makeEvent({})]);
-    fireEvent.click(screen.getByTestId('drift-listen-drift:1:eliza:voice'));
-    fireEvent.click(screen.getByTestId('drift-play-voice-drift:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-play-voice-drift:book-A:1:eliza:voice'));
     await waitFor(() => expect(getVoiceSampleSpy).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(playBSpy).toHaveBeenCalled());
   });
 
   it('starting B while A is playing pauses A first (mutex)', async () => {
     renderModalWithVoices([makeEvent({})]);
-    fireEvent.click(screen.getByTestId('drift-listen-drift:1:eliza:voice'));
-    fireEvent.click(screen.getByTestId('drift-play-chapter-drift:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-play-chapter-drift:book-A:1:eliza:voice'));
     expect(playASpy).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByTestId('drift-play-voice-drift:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-play-voice-drift:book-A:1:eliza:voice'));
     await waitFor(() => expect(playBSpy).toHaveBeenCalled());
-    /* pauseASpy === pauseBSpy in this fixture (same prototype spy) — assert
-       a pause fired at least once before the second play. */
     expect(pauseASpy).toHaveBeenCalled();
   });
 
   it('closing the modal pauses both audio elements (cleanup)', () => {
     const { unmount } = renderModalWithVoices([makeEvent({})]);
-    fireEvent.click(screen.getByTestId('drift-listen-drift:1:eliza:voice'));
-    fireEvent.click(screen.getByTestId('drift-play-chapter-drift:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-play-chapter-drift:book-A:1:eliza:voice'));
     expect(playASpy).toHaveBeenCalled();
-    /* Unmount mimics modal-close — useEffect cleanup must pause the audio. */
     pauseASpy.mockClear();
     unmount();
     expect(pauseASpy).toHaveBeenCalled();

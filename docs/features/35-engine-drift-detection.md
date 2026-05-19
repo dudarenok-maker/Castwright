@@ -175,6 +175,61 @@ read, and surface the mismatch in the Generation view.
     The drift detector then correctly flags it the next time the user
     looks at the chapter list.
 
+## Modal fidelity contract (drift-report-fidelity, 2026-05-19)
+
+The per-character Drift Report modal (`src/modals/drift-report.tsx`) was
+previously joining drift events against the static `initialChapters`
+fixture, scoped to one book, and rendering only a prose "what changed"
+description. Three follow-up bugs landed together:
+
+1. **Chapter title comes from the event, not a fixture.** Every drift
+   event carries `chapterTitle: string` (required) stamped server-side
+   in `revisions.ts` from `seg.chapterTitle` → scan title → "Chapter N"
+   fallback chain. The modal reads it directly — no chapters-slice
+   lookup, which would only ever hold the active book's titles.
+
+2. **Drift Report is multi-book.** Every drift event carries
+   `bookId: string`, and the slice's `drift` field is a flat list
+   across concurrently-active books. The modal groups events by
+   `bookId` for rendering (one section per book, book title pulled
+   from `selectEffectiveMeta(bookId)` in layout.tsx) and the header
+   summary reads "{N} chapter(s) flagged across {M} books" when M > 1.
+   See `selectDriftByBook` in `revisions-slice.ts`.
+
+3. **Side-by-side profile comparison.** Each event carries `snapshot`
+   (CharacterSnapshot at render time, from `<slug>.segments.json`) and
+   `current` (live cast profile at poll time). The modal renders a
+   `ProfileCompareCard` with rows for Voice, Gender, Age range,
+   Warmth, Pace, Authority, Emotion, Attributes — both columns visible,
+   the row matching `event.factor` highlighted with a `←` marker. Tone
+   rows render as inline bars (reusing the pattern from
+   `src/modals/profile-drawer.tsx`); attributes diff renders kept items
+   muted, added items badged `+`, removed items struck-through.
+
+### Multi-book invariants
+
+a. **Drift event ids include `bookId`** (`drift:<bookId>:<chapterId>:<characterId>:<factor>`)
+   so they stay globally unique across concurrently-active books.
+
+b. **`applyPoll({bookId, ...response})` only replaces that book's
+   events** — events from other books survive the poll. Same for
+   `hydrateFromBookState({bookId, ...})`. Stamps `bookId` defensively
+   onto incoming events that don't carry one (older deploys).
+
+c. **`persistence-middleware` filters drift by active bookId before
+   writing each book's revisions.json.** The flat slice list spans books,
+   but each on-disk file must carry only its own events — otherwise
+   re-hydration on book switch would replay another book's events.
+
+d. **Cast slice and chapters slice stay single-book scoped.** The modal
+   reads display-name + avatar color from the cast slice when the
+   event belongs to the active book; for cross-book events it falls
+   back to `event.current.name` and the narrator color slot.
+
+e. **Polling is active-book only today.** Background polling of
+   non-active books (so freshly-detected drift on Book B surfaces while
+   the user is in Book A) is a follow-up — see BACKLOG.
+
 ## Out of scope
 
 - **Per-character engine drift inside chapters**: the existing

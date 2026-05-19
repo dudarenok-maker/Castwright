@@ -1717,8 +1717,12 @@ export interface components {
         };
         DriftEvent: {
             id: string;
+            /** @description Book the event belongs to. Server stamps this at emit time from the request path; included in the event id for global uniqueness across concurrently-active books. Lets the Drift Report group events by book in a single modal even when the user has multiple books generating in parallel. */
+            bookId: string;
             characterId: string;
             chapterId: number;
+            /** @description Title of the chapter whose render produced this drift event, embedded server-side at emit time so the Drift Report modal can label each row without depending on the live chapters slice (which is single-book-scoped, but drift may span books). Falls back to the chapter-scan title and finally to "Chapter N" when no title is available. */
+            chapterTitle: string;
             /** @enum {string} */
             severity: "mild" | "moderate" | "severe";
             /** @example register */
@@ -1731,6 +1735,38 @@ export interface components {
                 current?: number;
                 expected?: number;
                 unit?: string;
+            };
+            /** @description The character profile as captured at chapter render time. Diffed against `current` by the modal to render a side-by-side "When rendered / Now" comparison so the user can judge whether the drift actually matters. Mirrors the on-disk CharacterSnapshot in <slug>.segments.json. */
+            snapshot?: {
+                voiceId?: string;
+                voiceEngine?: string;
+                /** @enum {string} */
+                gender?: "male" | "female" | "neutral";
+                /** @enum {string} */
+                ageRange?: "child" | "teen" | "adult" | "elderly";
+                tone?: {
+                    warmth?: number;
+                    pace?: number;
+                    authority?: number;
+                    emotion?: number;
+                };
+                attributes?: string[];
+            };
+            /** @description The live cast profile for this character at poll time. Embedded alongside `snapshot` so the comparison card is data-self-sufficient even when the event belongs to a non-active book whose cast isn't in the frontend's chapters / cast slice. */
+            current?: {
+                name?: string;
+                voiceId?: string;
+                /** @enum {string} */
+                gender?: "male" | "female" | "neutral";
+                /** @enum {string} */
+                ageRange?: "child" | "teen" | "adult" | "elderly";
+                tone?: {
+                    warmth?: number;
+                    pace?: number;
+                    authority?: number;
+                    emotion?: number;
+                };
+                attributes?: string[];
             };
             detected?: string;
             /** @example regenerate_chapter */
