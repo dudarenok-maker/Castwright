@@ -63,6 +63,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [12 — Manuscript view](12-manuscript-view.md) — Sentence list, low-confidence flagging, speaker reassignment.
 - [12a — Fix: sentence reassignment scoped by (chapterId, id)](12a-fix-reassign-cross-chapter-id.md) — Reassign reducers + inspector prop scope by both chapter and sentence id; pre-fix, clicks on chapter 2+ silently mutated chapter 1. Shipped 2026-05-18.
+- [70c — Restructure rebuilds the analysis cache](70c-merge-cache-rebuild.md) — Merge / split / reorder now rebuild `server/handoff/cache/{manuscriptId}.json` from `manuscript-edits.json` instead of deleting it. Generation auto-heals on the next POST if the cache is empty. Resolves post-merge halts citing "No analysed sentences cached for this book."
 
 ### F. TTS
 
