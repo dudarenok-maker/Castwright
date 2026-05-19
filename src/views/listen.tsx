@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { CoverPicker } from '../modals/cover-picker';
 import { type CoverFraming } from '../lib/cover-framing';
 import { ExportAudiobookModal } from '../modals/export-audiobook';
+import { ShareLinkModal } from '../modals/share-link';
 import { parseDuration } from '../lib/time';
 import { EXPORT_QUEUE } from '../data/export-queue';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
@@ -108,6 +109,11 @@ export function ListenView({
        picker pre-set. */
     format?: 'm4b' | 'mp3-zip' | 'mp3-folder';
   } | null>(null);
+  /* Plan 67 — share-link modal state. `null` is closed; an object
+     with a (possibly null) `url` lets us open the modal optimistically
+     while the mint POST is in flight, then fill in the URL once the
+     API resolves. */
+  const [shareLink, setShareLink] = useState<{ url: string | null } | null>(null);
 
   /* Live job list from the store, with the visual fixtures as a fallback
      so design-system mode (VITE_USE_MOCKS=true with no live exports) keeps
@@ -234,6 +240,26 @@ export function ListenView({
         }
         onOpenM4bExport={() => setExportModal({ tab: 'download', format: 'm4b' })}
         onOpenMp3ZipExport={() => setExportModal({ tab: 'download', format: 'mp3-zip' })}
+        onOpenStreamingLink={() => {
+          /* Open the modal optimistically so the user sees the
+             share-link UI immediately; the mint POST resolves into
+             the URL field a moment later. Failures surface as a
+             toast and re-close the modal. */
+          setShareLink({ url: null });
+          void api
+            .createBookShareLink(bookId)
+            .then((link) => setShareLink({ url: link.url }))
+            .catch((err) => {
+              setShareLink(null);
+              dispatch(
+                notificationsActions.pushToast({
+                  kind: 'warn',
+                  message: `Couldn't generate share link: ${err instanceof Error ? err.message : String(err)}`,
+                  dedupeKey: 'share-link-mint-failed',
+                }),
+              );
+            });
+        }}
         onCopyExportLink={async (item) => {
           if (!item.url) return;
           try {
@@ -268,6 +294,23 @@ export function ListenView({
         isDirty={isMetaDirty}
         onReplaceCover={() => openCoverPicker('upload')}
         onRegenerateCover={() => openCoverPicker('search')}
+      />
+
+      <ShareLinkModal
+        open={shareLink != null}
+        url={shareLink?.url ?? null}
+        onClose={() => setShareLink(null)}
+        onCopyFailed={(reason) =>
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'warn',
+              message: reason
+                ? `Couldn't copy link: ${reason}`
+                : "Couldn't copy link to clipboard.",
+              dedupeKey: 'share-link-copy-failed',
+            }),
+          )
+        }
       />
 
       <ExportAudiobookModal

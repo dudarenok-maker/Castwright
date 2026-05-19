@@ -1142,6 +1142,68 @@ paths:
         '404':
           description: Job id unknown or staging file missing
 
+  /api/books/{bookId}/share:
+    post:
+      summary: Mint (or look up) a slugged share URL for the book
+      operationId: createBookShareLink
+      description: |
+        Plan 67 — backs the Streaming-link tile on the Listen view.
+        Generates a 12-char Crockford-style base32 slug and persists
+        the slug → bookId mapping to
+        `<workspace>/.audiobook/share-links.json` so restarts don't
+        invalidate already-shared URLs. Idempotent: a second POST for
+        a book that already has a slug returns the same `{ slug, url }`
+        triple. The returned `url` is an absolute URL the caller can
+        paste into a chat without rebuilding it on the frontend
+        (honours `X-Forwarded-Proto` / `X-Forwarded-Host` when set by
+        a reverse proxy).
+
+        Casual share link, not a security token — slug entropy is
+        ~60 bits (enough that two simultaneous users won't collide,
+        not enough to resist a determined enumerator).
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '201':
+          description: Slug minted (or returned from cache)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookShareLink' }
+        '404':
+          description: Book not found
+
+  /share/{slug}:
+    get:
+      summary: Public-facing M4B proxy for a share slug
+      operationId: getBookShareDownload
+      description: |
+        Plan 67 — resolves the slug to the book's most-recent
+        successful M4B export and streams the bytes. Mounted at the
+        app root (not under `/api`) so the URL reads like a share link
+        in a chat paste. Responses:
+          - 200: streams `audio/mp4` (the M4B file) with a
+            `Content-Disposition: attachment` header so a browser
+            saves to Downloads/ on a click.
+          - 404 `slug_not_found`: slug doesn't match the persisted
+            table, or it doesn't match the strict regex.
+          - 404 `book_not_found`: slug resolved but the book has
+            been removed from the workspace.
+          - 409 `no_m4b_ready`: book is on file but no M4B export
+            has finished yet. Surfaces "Build an M4B first" rather
+            than a misleading 404.
+      parameters:
+        - { in: path, name: slug, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: M4B bytes
+          content:
+            audio/mp4:
+              schema: { type: string, format: binary }
+        '404':
+          description: Slug or book not found
+        '409':
+          description: No M4B export ready for this book
+
   /api/export/lan:
     get:
       summary: Enumerate the server's reachable LAN URLs
@@ -2511,6 +2573,28 @@ components:
             nullable: true,
             description: 'ISO timestamp once status leaves in_progress.',
           }
+
+    BookShareLink:
+      type: object
+      required: [slug, url]
+      properties:
+        slug:
+          type: string
+          description: |
+            12-char Crockford-style base32 slug (no vowels, no easily-
+            confused glyphs). Stable per book: a second POST returns
+            the same slug.
+        url:
+          type: string
+          description: |
+            Absolute URL the caller can paste into a chat. Resolves via
+            GET /share/{slug} to the book's most-recent M4B export.
+        expiresAt:
+          type: string
+          nullable: true
+          description: |
+            ISO timestamp at which the slug becomes a 404. Optional —
+            v1 mints non-expiring slugs (omitted from the response).
 
     ExportLanInfo:
       type: object

@@ -37,6 +37,10 @@ interface ListenDownloadSectionProps {
   onOpenAudiobookshelfExport: () => void;
   onOpenM4bExport: () => void;
   onOpenMp3ZipExport: () => void;
+  /** Plan 67 — streaming-link tile handler. Called when the user clicks
+      the Download button on the Streaming link tile. The orchestrator
+      mints the share URL + opens the share-link modal. */
+  onOpenStreamingLink: () => void;
   onCopyExportLink: (item: ExportQueueItem) => Promise<void> | void;
   onRemoveExport: (item: ExportQueueItem) => void;
 }
@@ -51,6 +55,7 @@ export function ListenDownloadSection({
   onOpenAudiobookshelfExport,
   onOpenM4bExport,
   onOpenMp3ZipExport,
+  onOpenStreamingLink,
   onCopyExportLink,
   onRemoveExport,
 }: ListenDownloadSectionProps) {
@@ -96,8 +101,9 @@ export function ListenDownloadSection({
             title="Streaming link"
             format="Shareable URL"
             size="—"
-            description="Hosted link a listener can open in a browser. Available in a later release."
+            description="Hosted link a listener can open in a browser. Resolves to the book's M4B."
             testid="download-tile-streaming"
+            onDownload={onOpenStreamingLink}
           />
         </div>
       </section>

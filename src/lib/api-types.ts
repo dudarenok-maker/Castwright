@@ -843,6 +843,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint (or look up) a slugged share URL for the book
+         * @description Plan 67 — backs the Streaming-link tile on the Listen view.
+         *     Generates a 12-char Crockford-style base32 slug and persists
+         *     the slug → bookId mapping to
+         *     `<workspace>/.audiobook/share-links.json` so restarts don't
+         *     invalidate already-shared URLs. Idempotent: a second POST for
+         *     a book that already has a slug returns the same `{ slug, url }`
+         *     triple. The returned `url` is an absolute URL the caller can
+         *     paste into a chat without rebuilding it on the frontend
+         *     (honours `X-Forwarded-Proto` / `X-Forwarded-Host` when set by
+         *     a reverse proxy).
+         *
+         *     Casual share link, not a security token — slug entropy is
+         *     ~60 bits (enough that two simultaneous users won't collide,
+         *     not enough to resist a determined enumerator).
+         */
+        post: operations["createBookShareLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/share/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public-facing M4B proxy for a share slug
+         * @description Plan 67 — resolves the slug to the book's most-recent
+         *     successful M4B export and streams the bytes. Mounted at the
+         *     app root (not under `/api`) so the URL reads like a share link
+         *     in a chat paste. Responses:
+         *       - 200: streams `audio/mp4` (the M4B file) with a
+         *         `Content-Disposition: attachment` header so a browser
+         *         saves to Downloads/ on a click.
+         *       - 404 `slug_not_found`: slug doesn't match the persisted
+         *         table, or it doesn't match the strict regex.
+         *       - 404 `book_not_found`: slug resolved but the book has
+         *         been removed from the workspace.
+         *       - 409 `no_m4b_ready`: book is on file but no M4B export
+         *         has finished yet. Surfaces "Build an M4B first" rather
+         *         than a misleading 404.
+         */
+        get: operations["getBookShareDownload"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/export/lan": {
         parameters: {
             query?: never;
@@ -1826,6 +1892,24 @@ export interface components {
             createdAt: string;
             /** @description ISO timestamp once status leaves in_progress. */
             completedAt?: string | null;
+        };
+        BookShareLink: {
+            /**
+             * @description 12-char Crockford-style base32 slug (no vowels, no easily-
+             *     confused glyphs). Stable per book: a second POST returns
+             *     the same slug.
+             */
+            slug: string;
+            /**
+             * @description Absolute URL the caller can paste into a chat. Resolves via
+             *     GET /share/{slug} to the book's most-recent M4B export.
+             */
+            url: string;
+            /**
+             * @description ISO timestamp at which the slug becomes a 404. Optional —
+             *     v1 mints non-expiring slugs (omitted from the response).
+             */
+            expiresAt?: string | null;
         };
         ExportLanInfo: {
             /** @description The Node server's listening port (8080 by default). */
@@ -3195,6 +3279,71 @@ export interface operations {
             };
             /** @description Job id unknown or staging file missing */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createBookShareLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Slug minted (or returned from cache) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookShareLink"];
+                };
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getBookShareDownload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description M4B bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/mp4": string;
+                };
+            };
+            /** @description Slug or book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No M4B export ready for this book */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
