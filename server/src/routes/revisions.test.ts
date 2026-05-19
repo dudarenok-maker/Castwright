@@ -200,7 +200,8 @@ describe('GET /api/books/:bookId/revisions — hard-signal drift (always severe)
     const drift = res.body.drift as DriftEventOut[];
     expect(drift).toHaveLength(1);
     expect(drift[0]).toMatchObject({
-      id: 'drift:1:eliza:voice',
+      id: `drift:${bookId}:1:eliza:voice`,
+      bookId,
       severity: 'severe',
       factor: 'voice',
       characterId: 'eliza',
@@ -294,7 +295,8 @@ describe('GET /api/books/:bookId/revisions — attribute drift (set-symmetric-di
     const drift = res.body.drift as DriftEventOut[];
     expect(drift).toHaveLength(1);
     expect(drift[0]).toMatchObject({
-      id: 'drift:1:elwin:attributes',
+      id: `drift:${bookId}:1:elwin:attributes`,
+      bookId,
       severity: 'moderate',
       factor: 'attributes',
       characterId: 'elwin',
@@ -358,7 +360,7 @@ describe('GET /api/books/:bookId/revisions — attribute drift (set-symmetric-di
     seed({
       snapshots: { elwin: { attributes: ['kind'] } },
       cast: [{ id: 'elwin', attributes: ['eccentric', 'kind'] }],
-      dismissed: ['drift:1:elwin:attributes'],
+      dismissed: [`drift:${bookId}:1:elwin:attributes`],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.body.drift).toEqual([]);
@@ -506,7 +508,7 @@ describe('GET /api/books/:bookId/revisions — dismissed filter', () => {
     seed({
       snapshots: { eliza: { voiceId: 'old' } },
       cast: [{ id: 'eliza', voiceId: 'new' }],
-      dismissed: ['drift:1:eliza:voice'],
+      dismissed: [`drift:${bookId}:1:eliza:voice`],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.body.drift).toEqual([]);
@@ -516,7 +518,7 @@ describe('GET /api/books/:bookId/revisions — dismissed filter', () => {
     seed({
       snapshots: { eliza: { voiceId: 'old', gender: 'female' } },
       cast: [{ id: 'eliza', voiceId: 'new', gender: 'male' }],
-      dismissed: ['drift:1:eliza:voice'],
+      dismissed: [`drift:${bookId}:1:eliza:voice`],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     const factors = (res.body.drift as DriftEventOut[]).map((d) => d.factor);

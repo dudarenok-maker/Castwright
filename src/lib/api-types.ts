@@ -1717,6 +1717,8 @@ export interface components {
         };
         DriftEvent: {
             id: string;
+            /** @description Book the event belongs to. Server stamps this at emit time from the request path; included in the event id for global uniqueness across concurrently-active books. Lets the Drift Report group events by book in a single modal even when the user has multiple books generating in parallel. */
+            bookId: string;
             characterId: string;
             chapterId: number;
             /** @description Title of the chapter whose render produced this drift event, embedded server-side at emit time so the Drift Report modal can label each row without depending on the live chapters slice (which is single-book-scoped, but drift may span books). Falls back to the chapter-scan title and finally to "Chapter N" when no title is available. */
