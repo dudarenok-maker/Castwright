@@ -1789,6 +1789,26 @@ components:
         progress: { type: number, minimum: 0, maximum: 1 }
         currentLine: { type: integer }
         totalLines: { type: integer }
+        runDone:
+          type: integer
+          description: |
+            Aggregate run progress — number of non-excluded chapters in
+            this book that are currently "done" (audio on disk). Sourced
+            from server state, NOT computed from the slice, so the global
+            header pill keeps an accurate readout when the user has
+            navigated to a different book (the slice no longer carries
+            this book's chapter rows, but the SSE keeps streaming).
+            Optional for backward compat — older servers don't emit it
+            and the frontend falls back to the last-snapshot value.
+        runTotal:
+          type: integer
+          description: |
+            Total non-excluded chapters in this book. Stable for the run.
+        runInProgress:
+          type: integer
+          description: |
+            Number of chapters currently between first synthesise tick
+            and chapter_complete / chapter_failed in this run.
         totalGroups:
           type: integer
           description: Only on `chapter_assembling` — number of synthesised same-speaker groups about to land on disk.
