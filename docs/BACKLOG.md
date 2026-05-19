@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-19 (post v1.4.0 pre-cutover slate ship):** Must 0 · Should 0 · Could 26 · Won't 9
+**Counts as of 2026-05-19 (post v1.4.0 pre-cutover slate ship + Wave-3 S3 streaming-link tile):** Must 0 · Should 0 · Could 25 · Won't 9
 
 ---
 
@@ -244,16 +244,6 @@ Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 - _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`; `src/views/settings.tsx` (Plex token field — see Could #24 power-user panel); new `server/src/export/plex.ts` for the optional upload path.
 - _Depends on:_ plan 18b shipped; ideally Could #24 (power-user panel) for the token storage.
 - _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
-
-### 33. Streaming-link download tile (slugged share URL)
-
-Source: net-new (2026-05-19). Spun off from plan 57 ship — v1.3.0 wired M4B + MP3 ZIP tiles; the third "Streaming link" tile remains Coming soon pending a server URL endpoint.
-
-- _What:_ Add `POST /api/books/:bookId/share` returning `{ slug, url, expiresAt? }` and `GET /share/:slug` proxying the book's M4B off disk. Wire the existing streaming-link `DownloadCard` (already carries `testid="download-tile-streaming"`) to call the POST → render a copyable URL on success. Optional: per-link password gate (header check on `GET /share/:slug`).
-- _Acceptance:_ Click Streaming-link tile → button enabled → a modal with a copyable share URL opens. Paste URL into an incognito tab → M4B downloads. New server Vitest covers the share-route mint + proxy. New e2e spec extends `e2e/download-tiles.spec.ts`.
-- _Key files:_ new `server/src/routes/share.ts`; `src/views/listen.tsx` (wire onDownload on the streaming tile); `src/modals/share-link.tsx` (new — modal with the copy-to-clipboard UI); `openapi.yaml` (`POST /api/books/:bookId/share` + `GET /share/:slug`).
-- _Depends on:_ plan 57 shipped (tile is in place).
-- _Benefit (user):_ closes the remaining "Coming soon" tile on the Listen view's download section. The viral-loop / share-with-a-friend path becomes a single click.
 
 ### 34. Export queue Retry + Download row actions
 
