@@ -31,9 +31,19 @@ interface DriftEventOut {
   id: string;
   characterId: string;
   chapterId: number;
+  chapterTitle: string;
   severity: 'mild' | 'moderate' | 'severe';
   factor: string;
   autoQueueable?: boolean;
+  snapshot?: CharacterSnapshot;
+  current?: {
+    name?: string;
+    voiceId?: string;
+    gender?: 'male' | 'female' | 'neutral';
+    ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+    tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
+    attributes?: string[];
+  };
 }
 
 interface CharacterSnapshot {
@@ -406,6 +416,88 @@ describe('GET /api/books/:bookId/revisions — autoQueueable flag (plan 20 C1+C2
     expect(drift).toHaveLength(1);
     expect(drift[0].severity).toBe('moderate');
     expect(drift[0].autoQueueable).toBeUndefined();
+  });
+});
+
+describe('GET /api/books/:bookId/revisions — comparison payload (plan: drift-report-fidelity)', () => {
+  it('embeds chapterTitle on every emitted drift event', async () => {
+    seed({
+      snapshots: { eliza: { voiceId: 'old' } },
+      cast: [{ id: 'eliza', voiceId: 'new' }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    /* Title pulled from segments.json#chapterTitle ("Chapter One"). The seed
+       writes that key, so we should NOT see the "Chapter N" fallback. */
+    expect(drift[0].chapterTitle).toBe('Chapter One');
+  });
+
+  it('falls back to the chapter-scan title when segments.json omits chapterTitle', async () => {
+    /* Simulate an older segments file that pre-dates the chapterTitle field.
+       Detector should fall back to state.chapters[].title, not "Chapter N". */
+    writeFileSync(
+      join(audioRoot, '01-chapter-one.segments.json'),
+      JSON.stringify({
+        bookId,
+        chapterId: 1,
+        durationSec: 12,
+        sampleRate: 24000,
+        modelKey: 'coqui-xtts-v2',
+        synthesizedAt: '2026-01-01T12:00:00.000Z',
+        segments: [
+          { groupIndex: 0, characterId: 'eliza', sentenceIds: [1], startSec: 0, endSec: 12 },
+        ],
+        characterSnapshots: { eliza: { voiceId: 'old' } },
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [{ id: 'eliza', voiceId: 'new' }] }),
+    );
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    expect(drift[0].chapterTitle).toBe('Chapter One');
+  });
+
+  it('embeds before-snapshot and current cast profile on each hard-drift event', async () => {
+    seed({
+      snapshots: { eliza: { voiceId: 'old', gender: 'female', tone: { warmth: 60 } } },
+      cast: [{ id: 'eliza', voiceId: 'new', gender: 'female', tone: { warmth: 60 } }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    /* `snapshot` mirrors the pre-render CharacterSnapshot; `current` mirrors
+       the live cast entry. Both are needed so the modal renders a self-
+       sufficient comparison card without re-querying the server. */
+    expect(drift[0].snapshot).toMatchObject({ voiceId: 'old', gender: 'female' });
+    expect(drift[0].current).toMatchObject({ voiceId: 'new', gender: 'female' });
+  });
+
+  it('embeds before-snapshot and current on tone-drift events', async () => {
+    seed({
+      snapshots: { eliza: { tone: { warmth: 30 } } },
+      cast: [{ id: 'eliza', tone: { warmth: 70 } }], // delta 40 → severe
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    expect(drift[0].snapshot?.tone?.warmth).toBe(30);
+    expect(drift[0].current?.tone?.warmth).toBe(70);
+  });
+
+  it('embeds before-snapshot and current on attribute-drift events', async () => {
+    seed({
+      snapshots: { Oduvan: { attributes: ['kind'] } },
+      cast: [{ id: 'Oduvan', attributes: ['eccentric', 'kind'] }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    expect(drift[0].snapshot?.attributes).toEqual(['kind']);
+    expect(drift[0].current?.attributes).toEqual(['eccentric', 'kind']);
   });
 });
 
