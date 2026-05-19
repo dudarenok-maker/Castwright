@@ -141,11 +141,17 @@
    streaming. Drop these to subtle ink-overlays so the on-top text
    reads. Alpha sits one step below the hover variants below so the
    "base → hover" elevation ordering is preserved. */
+[data-theme='dark'] .bg-white\/40 {
+  background-color: rgba(244, 239, 236, 0.03);
+}
 [data-theme='dark'] .bg-white\/60 {
   background-color: rgba(244, 239, 236, 0.04);
 }
 [data-theme='dark'] .bg-white\/70 {
   background-color: rgba(244, 239, 236, 0.05);
+}
+[data-theme='dark'] .bg-white\/95 {
+  background-color: rgba(244, 239, 236, 0.08);
 }
 
 /* Hover variants of bg-white. Tailwind generates these as
@@ -229,6 +235,18 @@
 }
 [data-theme='dark'] .bg-amber-50 {
   background-color: rgba(245, 158, 11, 0.1);
+}
+/* Translucent /60 variant + hover form used by the voice-drift banner
+   (`src/views/cast.tsx:206–228`). Same selector caveat as `.bg-white\/60`
+   above — Tailwind compiles them separately so the bare `.bg-amber-50`
+   redirect doesn't reach them. Without these the banner painted a pale
+   cream-amber wash and the hover state pushed it to a near-solid cream,
+   hiding the `text-ink` content rendered on top in dark mode. */
+[data-theme='dark'] .bg-amber-50\/60 {
+  background-color: rgba(245, 158, 11, 0.07);
+}
+[data-theme='dark'] .hover\:bg-amber-50:hover {
+  background-color: rgba(245, 158, 11, 0.14);
 }
 [data-theme='dark'] .bg-amber-100 {
   background-color: rgba(245, 158, 11, 0.18);
@@ -346,6 +364,26 @@
 [data-theme='dark'] .border-red-300,
 [data-theme='dark'] .border-red-300\/60 {
   border-color: rgba(239, 68, 68, 0.35);
+}
+
+/* Floating-pill-inverse — bespoke utility for surfaces that want to read
+   as a dark capsule in BOTH light AND dark mode (e.g. the cast-view
+   selection bar at `src/views/cast.tsx:439`). The original implementation
+   reached for "dark in both modes" via `bg-ink text-canvas`, which was
+   only a light-mode coincidence: in dark mode `--ink` inverts to cream
+   and `--canvas` inverts to dark, so the pill flipped to cream and all
+   the `bg-canvas/15` elevation overlays inside it (count pill, Compare
+   button enabled-state fill, divider) painted dark-on-cream and washed
+   out — making the Compare button's enabled state visually identical to
+   its `disabled:opacity-40` state. This class pins the intended look
+   under both themes so the inner overlays stay readable in both. */
+.floating-pill-inverse {
+  background-color: var(--ink);
+  color: var(--canvas);
+}
+[data-theme='dark'] .floating-pill-inverse {
+  background-color: #14110f; /* canvas literal — stays dark when --canvas flips */
+  color: #f4efec; /* ink literal — stays cream when --ink flips */
 }
 
 /* Page chrome -------------------------------------------------------------- */
