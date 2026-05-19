@@ -236,6 +236,18 @@
 [data-theme='dark'] .bg-amber-50 {
   background-color: rgba(245, 158, 11, 0.1);
 }
+/* Translucent /60 variant + hover form used by the voice-drift banner
+   (`src/views/cast.tsx:206–228`). Same selector caveat as `.bg-white\/60`
+   above — Tailwind compiles them separately so the bare `.bg-amber-50`
+   redirect doesn't reach them. Without these the banner painted a pale
+   cream-amber wash and the hover state pushed it to a near-solid cream,
+   hiding the `text-ink` content rendered on top in dark mode. */
+[data-theme='dark'] .bg-amber-50\/60 {
+  background-color: rgba(245, 158, 11, 0.07);
+}
+[data-theme='dark'] .hover\:bg-amber-50:hover {
+  background-color: rgba(245, 158, 11, 0.14);
+}
 [data-theme='dark'] .bg-amber-100 {
   background-color: rgba(245, 158, 11, 0.18);
 }
