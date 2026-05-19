@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-19
 owner: null
 ---
 
@@ -128,4 +128,4 @@ deterministically green.)
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Shipped 2026-05-19 — merged via PR #35 (`0078f26`). `test.fixme` dropped from `e2e/listen-playback.spec.ts` + `e2e/new-book-flow.spec.ts`; file-level `test.describe.configure({ mode: 'serial' })` applied to both plus `cover-framing`, `smoke`, `revision-diff`, `toast-surface`, `theme-toggle`. New `e2e/binary-upload.spec.ts` covers EPUB / PDF / MOBI / AZW3 routing through the mock api (4 specs). Test result before plan 58: 3-5 hard failures per `npm run verify` run. After: 33 passed, 1 flaky-passed-on-retry, 0 hard failures. Real-binary MOBI/AZW3 fixtures still need Calibre — kept open as BACKLOG Could #38.

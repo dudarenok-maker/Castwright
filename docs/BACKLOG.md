@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-19 (post plan 53 commit):** Must 0 · Should 1 · Could 31 · Won't 9
+**Counts as of 2026-05-19 (post plans 53–58 merge):** Must 0 · Should 0 · Could 29 · Won't 9
 
 ---
 
@@ -39,15 +39,7 @@ Ranking within each bucket = top is highest priority.
 
 ## Should — important, not blocking ship
 
-### 2. Extend verify-cache to `verify:fast` (pre-commit gate)
-
-Source: net-new (2026-05-18). Follow-up to plan 50 (Verify-cache for cheap retries after flake).
-
-- _What:_ Reuse the runner in `scripts/verify-cache.mjs` for `scripts.verify:fast` (the pre-commit gate, today `test:hooks && test && test:server`). Parameterise the runner so it accepts a `--steps lint,typecheck,test:hooks,test,test:server` style flag, then change `scripts.verify` to `node scripts/verify-cache.mjs` (no flag = all steps) and `scripts.verify:fast` to `node scripts/verify-cache.mjs --steps test:hooks,test,test:server`. Cache file is shared — a `test:server` cache entry written by `verify:fast` skips correctly in a subsequent `verify` and vice-versa.
-- _Acceptance:_ pre-commit on a small follow-up commit (no source changes) prints `[cached]` for all three fast steps and exits in under 1 s; same when the prior `npm run verify` already populated the cache. Existing pre-commit semantics (refuse commit on first failure) preserved. Vitest spec covers the `--steps` filter parsing.
-- _Key files:_ `scripts/verify-cache.mjs` (extend `parseFlags` + `runPipeline` to filter `STEPS` by a `--steps` list); `package.json` `scripts.verify:fast`; `scripts/tests/verify-cache.test.mjs` (add filter-parsing case).
-- _Depends on:_ plan 50 shipped.
-- _Benefit (user / developer):_ pre-commit is the most-frequently-run gate in the day. Even though it's sub-5s warm today, caching brings it under 1 s for the no-source-change case (e.g. doc-only commits, regenerated lockfile-only commits), making the gate effectively free for those.
+(empty — Should #2 verify-cache fast shipped in plan 54 on 2026-05-19.)
 
 ---
 
@@ -135,15 +127,15 @@ Source: net-new (2026-05-18).
 - _Depends on:_ none. Pairs with Could #15 (long-form `desc`/`ldes`) — both add a long-form text field, but `notes` is workspace-internal (never exported), `description` lands in the M4B atom.
 - _Benefit (user):_ workspace becomes a place for editorial context, not just audio + state. Lightweight scratchpad for "things to remember about this book."
 
-### 12. Revision history timeline (visual rollback)
+### 12. Multi-step rollback / snapshot-per-entry (revision history)
 
-Source: net-new (2026-05-18). Builds on plan 20's `acceptedSelections` persistence.
+Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ships the read-only history view; this entry covers the multi-step rollback that needs snapshot-per-entry storage.
 
-- _What:_ Add a "Revision history" view per chapter showing a chronological timeline of every regeneration / sentence-level edit / accept-revision event, with one-click rollback to any prior version. Each timeline entry carries the diff against the prior state (what changed) and the audio fingerprint (which voice/segment manifest produced it).
-- _Acceptance:_ Generate chapter, regenerate two sentences, accept revision, regenerate again → timeline shows 4 entries. Click rollback on entry 2 → chapter audio + state revert to that point; subsequent entries marked "rolled back from this point." Vitest covers the timeline state; server Vitest covers the rollback transaction.
-- _Key files:_ new `src/components/revision-timeline.tsx`; `src/store/revisions-slice.ts` (extend with timeline accessor); `server/src/routes/revisions.ts` (add /history endpoint); `server/src/audio/revisions-store.ts` (timeline persistence).
-- _Depends on:_ plan 20 (revisions-and-drift close-out) shipped — needs the `acceptedSelections` consumer wired so timeline entries are meaningful.
-- _Benefit (user):_ today rollback is binary (revert to previous via the a/b player). Timeline gives true non-linear undo per chapter; user can experiment with multiple takes without losing history.
+- _What:_ Extend plan 20's `preserveExistingAsPrevious` to write `.previous.<entryId>.<slug>.mp3` per timeline entry (not just one `.previous.<slug>.mp3` per chapter). Wire a server `POST /api/books/:bookId/revisions/:entryId/rollback` endpoint that restores a specific timeline entry's audio + flips subsequent entries to `rolled-back-from`. Add a GC pass that prunes oldest snapshots after the user commits (or when disk pressure exceeds a cap, e.g. 10 entries / chapter).
+- _Acceptance:_ Generate chapter, regenerate twice, accept both. Open History → 2 active entries each `reversible: true`. Click Rollback on entry 1 → chapter audio reverts to entry-1's state; entry 2 marked `rolled-back-from`. New rollback can target a still-reversible entry; double-rollback → 409.
+- _Key files:_ `server/src/workspace/preserve-previous-audio.ts` (extend filename pattern); new `server/src/routes/revisions-rollback.ts`; `src/components/revision-timeline-modal.tsx` (enable Rollback button on reversible entries); slice already plumbed (plan 55's `rolledBack` reducer + `reversible` field).
+- _Depends on:_ plan 55 shipped (slice plumbing already on disk).
+- _Benefit (user):_ closes the centerpiece feature from plan 55 — true non-linear undo per chapter. Today the timeline modal is read-only; the user has to walk through accept/reject in the A/B player.
 
 ### 13. Preview voice sample while editing the character
 
@@ -193,16 +185,6 @@ Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
 - _Acceptance:_ PRs that break tests are blocked from merge. Workflow runs in under 10 min cold, under 5 min warm.
 - _Key files:_ new `.github/workflows/verify.yml`.
 - _Benefit (technical):_ eliminates the "works on my machine" gap. Pairs with the visual baselines shipped 2026-05-17 (`e2e/visual.spec.ts`) — without CI, the baselines are a tree-falling-in-a-forest.
-
-### 20. Un-quarantine the two e2e flakes (`listen-playback`, `new-book-flow`) by fixing parallel-worker contention
-
-Source: plan 46 ship (2026-05-18). Two specs `test.fixme`'d when plan 46 landed.
-
-- _What:_ Both specs pass in isolation but fail consistently when Playwright runs workers in parallel on Windows under load. Root cause is unproven — candidates: (a) the mock MP3 fetch + decode racing two workers on the same Vite dev server, (b) SSE phase transitions firing faster than the mock-canned-data tick under contention, (c) a `setTimeout`/`requestAnimationFrame` interaction with the headless tab being throttled. Investigate via Playwright trace (`test-results/*/trace.zip`), narrow to one of (a)/(b)/(c), then either bump the per-test timeout, add a focused `waitFor` predicate, or carve out a `serial` workers config for these two specs.
-- _Acceptance:_ Drop the `.fixme` markers on both specs. `npm run verify` lands green at least 5 times in a row on a Windows host with default parallel workers. Add a regression test that pins the fix (e.g. a deterministic mock-tick or a docs note in `playwright.config.ts:25-26` explaining why the affected specs need `test.describe.serial`).
-- _Key files:_ `e2e/listen-playback.spec.ts:15`, `e2e/new-book-flow.spec.ts:32`, `playwright.config.ts:14-26`, `e2e/helpers.ts`, `src/mocks/canned-data.ts` (if mock-tick determinism turns out to be the fix).
-- _Depends on:_ none.
-- _Benefit (technical):_ restores the two e2e specs that cover the highest-blast-radius surfaces (mini-player play + full new-book cold-boot walk). Until then both code paths only have Vitest+jsdom coverage, which is known to lie about audio playback and SSE timing.
 
 ### 21. Windows installer (Inno Setup or NSIS) wrapping the release zip
 
@@ -302,15 +284,15 @@ Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 - _Depends on:_ plan 18b shipped; ideally Could #24 (power-user panel) for the token storage.
 - _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
 
-### 33. Listen-view download tiles wiring (m4b chaptered / MP3 zip / streaming link)
+### 33. Streaming-link download tile (slugged share URL)
 
-Source: plan 18 follow-up (2026-05-18). Deferred from plan 18a (Listen view wiring) — scope-cut because the download paths need new server endpoints (MP3 zip bundling + streaming-link minting), which is more than a single PR.
+Source: net-new (2026-05-19). Spun off from plan 57 ship — v1.3.0 wired M4B + MP3 ZIP tiles; the third "Streaming link" tile remains Coming soon pending a server URL endpoint.
 
-- _What:_ Replace the three "Coming soon" download tiles on the Listen view with live affordances. M4B chaptered already has a working pipeline (plan 33 voice export) — wire that tile to open the existing `ExportAudiobookModal` pre-filled to `format: 'm4b'`. MP3 ZIP needs a new `server/src/export/build-mp3-zip.ts` that walks the chapter MP3s and bundles them via Node's `node:stream` + a streaming zip writer. Streaming link needs a server-minted shareable URL (likely a slugged route under `/share/:slug` that proxies the M4B from disk).
-- _Acceptance:_ Each tile's Download button enabled; clicking M4B chaptered opens the export modal in M4B mode; MP3 ZIP triggers a `POST /api/books/:bookId/export` with `format: 'mp3-zip'` and the job appears in the rail; streaming link mints a URL the user can copy + share. Server Vitest covers the MP3-zip builder; new Playwright spec covers the three-tile flow.
-- _Key files:_ `src/views/listen.tsx` (DownloadCard wiring); new `server/src/export/build-mp3-zip.ts`; `server/src/routes/exports.ts` (extend to handle mp3-zip + streaming-link formats); `openapi.yaml` (extend `BookExportJob.format` enum if streaming-link is added).
-- _Depends on:_ none structural. Tile wiring is straightforward; the MP3-zip builder is the meatiest piece.
-- _Benefit (user):_ closes the second-largest "Coming soon" surface on the Listen view. Today the user can only export via the listener-app tiles (which gate on a target app); these download tiles offer direct artifact retrieval.
+- _What:_ Add `POST /api/books/:bookId/share` returning `{ slug, url, expiresAt? }` and `GET /share/:slug` proxying the book's M4B off disk. Wire the existing streaming-link `DownloadCard` (already carries `testid="download-tile-streaming"`) to call the POST → render a copyable URL on success. Optional: per-link password gate (header check on `GET /share/:slug`).
+- _Acceptance:_ Click Streaming-link tile → button enabled → a modal with a copyable share URL opens. Paste URL into an incognito tab → M4B downloads. New server Vitest covers the share-route mint + proxy. New e2e spec extends `e2e/download-tiles.spec.ts`.
+- _Key files:_ new `server/src/routes/share.ts`; `src/views/listen.tsx` (wire onDownload on the streaming tile); `src/modals/share-link.tsx` (new — modal with the copy-to-clipboard UI); `openapi.yaml` (`POST /api/books/:bookId/share` + `GET /share/:slug`).
+- _Depends on:_ plan 57 shipped (tile is in place).
+- _Benefit (user):_ closes the remaining "Coming soon" tile on the Listen view's download section. The viral-loop / share-with-a-friend path becomes a single click.
 
 ### 34. Export queue Retry + Download row actions
 
@@ -321,16 +303,6 @@ Source: plan 18 follow-up (2026-05-18). Deferred from plan 18a — needs middlew
 - _Key files:_ `src/views/listen.tsx` (ExportQueue handlers); `src/store/exports-middleware.ts` (extend with `retryExport` thunk); `server/src/routes/exports.ts` (add `/exports/:exportId/download` redirect if needed).
 - _Depends on:_ Could #33 (download tiles) for the underlying export endpoints to be live.
 - _Benefit (user):_ closes the remaining "Coming soon" stubs in the queue rail. Today copy + remove work (shipped in plan 18a); retry + download are the other two row actions promised by the design.
-
-### 35. Listen-view waveform card driven by real chapter peaks
-
-Source: plan 18 known gap (2026-05-18). The chapter-audio meta endpoint currently returns `peaks: []`; the Listen view's waveform card derives its bars from a mock `peaks: float[240]` array that doesn't reflect the actual chapter audio.
-
-- _What:_ Extend the chapter encode pipeline (`server/src/tts/synthesise-chapter.ts` or the MP3 step) to compute a fixed-length (240-bin) RMS-peaks summary alongside the MP3 and persist it under `<bookDir>/audio/<slug>.peaks.json`. The chapter-audio meta endpoint (`server/src/routes/chapter-audio.ts`) reads + returns it. Listen view consumes it via the existing `peaks` field — no frontend changes beyond removing the `peaks: []` fallback path.
-- _Acceptance:_ Generate a chapter from scratch → `<slug>.peaks.json` exists on disk with 240 floats. Open Listen view → the waveform card paints those peaks (not mock). Server Vitest covers the peak-compute + read paths.
-- _Key files:_ `server/src/tts/mp3.ts` (extend to emit peaks during encode); `server/src/routes/chapter-audio.ts` (read + return peaks); new `server/src/audio/compute-peaks.ts` (240-bin RMS reducer).
-- _Depends on:_ none structural. Pairs naturally with Could #3 (per-chapter loudness report) — both emit chapter-level audio metadata at encode time.
-- _Benefit (user):_ the Listen view's waveform card stops lying about chapter shape (loud passages, silences, fades all become visible). Spotting problem chapters at a glance.
 
 ### 36. Per-segment regen consumer for `revisions.acceptedSelections`
 
@@ -352,15 +324,15 @@ Source: net-new (2026-05-18). Plan 49 (release packaging) ships with a Kokoro-on
 - _Depends on:_ none structural — the Account UX seam exists from plan 49. Unparks the install-and-pull-from-UI subset of Won't #1 ("Auto-install Ollama / auto-pull models"); the headless-CI variant of Won't #1 stays parked.
 - _Benefit (user):_ closes the gap that plan 49's Kokoro-only install leaves. Today a deployer who wants Ollama or Coqui XTTS must drop to a terminal; this UX keeps the install + model-management flow entirely in-app, matching the deployer-first promise of plan 49.
 
-### 38. E2E coverage for the binary-upload flow (EPUB / PDF / MOBI / AZW3)
+### 38. Real-binary MOBI / AZW3 fixtures for the binary-upload e2e
 
-Source: [`52-mobi-parsing.md`](features/archive/52-mobi-parsing.md) Out-of-scope follow-up (2026-05-18). Plan 52 explicitly deferred this — EPUB and PDF have never had dedicated Playwright coverage either, and MOBI shouldn't be the exception that sets a new bar in the same PR that ships it.
+Source: net-new (2026-05-19). Spun off from plan 58 ship — the new `e2e/binary-upload.spec.ts` covers the routing seam with dummy buffers (mock api doesn't parse content), but real-binary integration with `@lingo-reader/mobi-parser` is still untested at the browser level.
 
-- _What:_ Add a single Playwright spec under `e2e/binary-upload.spec.ts` that drops each of the four binary fixtures (EPUB / PDF / MOBI / AZW3) onto `#/new` in mock mode and asserts the confirm-metadata screen renders with the expected title / chapter count. Wire it into `npm run test:e2e`. Fixtures: reuse `server/src/parsers/__fixtures__/sample.epub` for the EPUB case; generate a tiny MOBI/AZW3 either by checking in a small Project Gutenberg-derived file or by extending `scripts/gen-parser-fixtures.mjs` to call out to Calibre's `ebook-convert` (Calibre is a prerequisite, not bundled).
-- _Acceptance:_ `npm run test:e2e` includes the new spec; CI run in `verify` passes with the spec exercising all four formats. A regression like "MOBI parser threw on real-world files" gets caught browser-side, not just at the unit level.
-- _Key files:_ new `e2e/binary-upload.spec.ts`; possibly extend `scripts/gen-parser-fixtures.mjs` for MOBI/AZW3 generation (Calibre-dependent); `docs/features/archive/52-mobi-parsing.md` "Test plan" section updates to cite the new spec.
-- _Depends on:_ plan 52 shipped (the parser must already accept MOBI/AZW3). Independent of the existing flaky e2e items (Could #20).
-- _Benefit (technical):_ binary parsers are the highest-risk seam in the upload flow — third-party libs (epub2 / pdf-parse / @lingo-reader/mobi-parser) have real-world quirks that unit tests with mocked libraries can't catch. Browser-level coverage locks the integration contract.
+- _What:_ Extend `scripts/gen-parser-fixtures.mjs` to call Calibre's `ebook-convert` (a per-developer install, not bundled) to produce tiny `sample.mobi` + `sample.azw3` from a Project Gutenberg-derived `.epub` source. Wire these into `e2e/binary-upload.spec.ts` so the MOBI/AZW3 cases load real binaries through the real (not mock) parser path. Skip the test cleanly when Calibre isn't on PATH so a fresh-clone dev environment still passes verify.
+- _Acceptance:_ With Calibre installed, `npm run test:e2e` runs all 4 binary cases through the real parser path and asserts the confirm-metadata view renders. Without Calibre, the MOBI/AZW3 cases skip with a clear "Calibre required" message; EPUB + PDF still run against the existing real fixtures.
+- _Key files:_ `scripts/gen-parser-fixtures.mjs`; `e2e/binary-upload.spec.ts`; `server/src/parsers/__fixtures__/sample.mobi` + `sample.azw3` (generated, possibly gitignored).
+- _Depends on:_ plan 58 shipped (routing-seam coverage already in place). Calibre install is the developer prerequisite.
+- _Benefit (technical):_ binary parsers are the highest-risk seam in the upload flow — third-party libs have real-world quirks that the mock-api path doesn't catch. Real fixtures lock the integration contract.
 
 ---
 

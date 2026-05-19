@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-19
 owner: null
 ---
 
@@ -64,4 +64,4 @@ All 21 pre-existing tests continue passing — the only API change to `parseFlag
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Shipped 2026-05-19 — merged via PR #36 (`45aa993`). `--steps` flag accepts both `--steps a,b,c` and `--steps=a,b,c` forms; unknown step names exit 2 with the valid-step list. `package.json` `verify:fast` rewired to `node scripts/verify-cache.mjs --steps test:hooks,test,test:server`. Verified end-to-end: an empty-commit pre-commit prints three `[cached]` lines and exits sub-1s when the cache is warm. No spec deltas.
