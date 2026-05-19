@@ -14,6 +14,32 @@ Streams chapter audio generation via Server-Sent-Events. The client opens a long
 ## Invariants to preserve
 
 - `realStreamGeneration` returns a canceller function that calls `controller.abort()`; aborts surface as DOMException `AbortError` and are NOT mapped to a failure tick. Treat abort as "the canceller did its job."
+- **Every live broadcast tick carries run-level aggregates** (`runDone`,
+  `runTotal`, `runInProgress`) so the global header `GenerationPill`
+  keeps moving accurately even when the user has navigated away from
+  the generating book (Bug E). The server's `broadcast()` wrapper
+  (`server/src/routes/generation.ts:97`) injects them into every
+  emitted event from the job's own counters; `RunningJob` seeds
+  `runDoneBase` from chapters with audio on disk that aren't in this
+  run's scope, and the loop increments `completedThisRun` /
+  `runInProgress` as chapters advance. Catch-up replay ticks
+  (`chapter_complete` for chapters already on disk before the run
+  started) do NOT carry aggregates — they're emitted via the
+  subscriber's direct `send`, not through `broadcast`, because they
+  pre-date the job.
+- **Cross-book heartbeat is driven by the tick payload, not the slice**
+  (Bug E). The `chapters/applyGenerationTick` reducer's cross-book
+  guard (`src/store/chapters-slice.ts:267`) correctly skips per-row
+  mutation when `currentBookId !== activeStream.bookId`, but that
+  also skipped the `lastTickAt` update. The middleware's post-tick
+  block (`src/store/generation-stream-middleware.ts:385-410`) now
+  forks: slice-matches-handle takes `setActiveStream(snapshotFromChapters(...))`
+  as before; cross-book takes `updateActiveStreamProgress` reading
+  `runDone` / `runTotal` / `runInProgress` from the tick payload. The
+  reducer always bumps `lastTickAt`; counters are overwritten only
+  when the payload carries them, so an older-server SSE without
+  run* fields still keeps the pill alive (no spurious "Stalled"
+  after STALL_THRESHOLD_MS).
 - `GenerationTick` union: `'progress' | 'chapter_assembling' | 'chapter_complete' | 'chapter_failed' | 'idle'`. Payload fields per type:
   - `progress` → `chapterId, characterId, progress, currentLine, totalLines`. One emitted per same-speaker group; `characterId` is the live speaker.
   - `chapter_assembling` → `chapterId` (required); `totalGroups?`, `durationSec?` carry the run summary about to land on disk. Fired between the last group and the MP3 encode + write (encoder + atomic-rename detail in [plan 28](28-chapter-audio-format.md)).

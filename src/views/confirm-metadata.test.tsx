@@ -133,3 +133,93 @@ describe('ConfirmMetadataView — duplicate position warning', () => {
     expect(screen.getByText(/The Tidewatcher's Oath/)).toBeInTheDocument();
   });
 });
+
+describe('ConfirmMetadataView — seriesFromTitle chip (Bug B)', () => {
+  /* The chip appears when the server marks the candidate's series as
+     heuristically extracted from the title parenthetical. The user sees
+     it next to the SERIES field as a heads-up that the value is a guess.
+     Editing the SERIES or BOOK # field clears the flag (and the chip),
+     because the user has explicitly verified or corrected the value. */
+  function renderWithCandidate(c: Partial<ImportCandidate>) {
+    const candidateOverride: ImportCandidate = { ...candidate, ...c };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        library: librarySlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          importCandidate: candidateOverride,
+        },
+        library: { loaded: true, authors: [], books: [], pausedSnapshots: {} },
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ConfirmMetadataView />
+      </Provider>,
+    );
+  }
+
+  it('renders the chip next to SERIES when seriesFromTitle is true', () => {
+    renderWithCandidate({
+      seriesFromTitle: true,
+      series: 'The Hollow Tide',
+      seriesPosition: 3,
+      title: 'The Tidewatcher's Oath',
+    });
+    expect(screen.getByText(/auto-extracted from title/i)).toBeInTheDocument();
+  });
+
+  it('omits the chip when seriesFromTitle is false', () => {
+    renderWithCandidate({
+      seriesFromTitle: false,
+      series: 'The Hollow Tide',
+      seriesPosition: 3,
+    });
+    expect(screen.queryByText(/auto-extracted from title/i)).not.toBeInTheDocument();
+  });
+
+  it('omits the chip when seriesFromTitle is undefined (older server build)', () => {
+    /* Forward-compat: if the server hasn't been upgraded to emit the
+       flag yet, the field is absent — chip stays hidden, no crash. */
+    renderWithCandidate({ series: 'The Hollow Tide', seriesPosition: 3 });
+    expect(screen.queryByText(/auto-extracted from title/i)).not.toBeInTheDocument();
+  });
+
+  it('clears the chip when the user edits the SERIES field', async () => {
+    const user = userEvent.setup();
+    renderWithCandidate({
+      seriesFromTitle: true,
+      series: 'The Hollow Tide',
+      seriesPosition: 3,
+    });
+    expect(screen.getByText(/auto-extracted from title/i)).toBeInTheDocument();
+
+    const seriesInput = screen.getByPlaceholderText('e.g. Earthsea');
+    await user.type(seriesInput, '!');
+    expect(screen.queryByText(/auto-extracted from title/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('ConfirmMetadataView — input theme classes', () => {
+  /* Regression: in dark mode `--ink` flips near-white, so an input without
+     an explicit `bg-white text-ink` pair gets a browser-default white
+     background AND inherits white text — invisible. The codebase's canonical
+     pattern (mirrored in src/modals/*, src/views/account.tsx, etc.) is
+     `bg-white text-ink`; the styles.css dark-theme redirect flips both
+     tokens correctly. */
+  it('AUTHOR / SERIES / BOOK # / TITLE inputs carry bg-white + text-ink', () => {
+    renderView();
+    const author = screen.getByPlaceholderText('e.g. Ursula K. Le Guin');
+    const series = screen.getByPlaceholderText('e.g. Earthsea');
+    const bookNum = screen.getByPlaceholderText('1');
+    const title = screen.getByPlaceholderText('e.g. A Wizard of Earthsea');
+    for (const input of [author, series, bookNum, title]) {
+      expect(input).toHaveClass('bg-white');
+      expect(input).toHaveClass('text-ink');
+    }
+  });
+});

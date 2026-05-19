@@ -83,6 +83,24 @@ interface RunningJob {
     currentLine: number;
     totalLines: number;
   } | null;
+  /** Bug E — run-level aggregates injected into every broadcast tick so
+      the global header pill can keep moving (counters AND heartbeat)
+      even when the user has navigated to a different book. Without
+      these on the wire, the frontend's chapters-slice cross-book guard
+      drops per-chapter ticks and the pill freezes at its open-time
+      snapshot, eventually flipping to "Stalled" after 30 s. */
+  runTotal: number;
+  /** Stable for the life of the run — count of non-excluded chapters
+      that already had audio on disk at job start AND are NOT being
+      (re)generated in this run. The dynamic `done` count is
+      `runDoneBase + completedThisRun.size`. */
+  runDoneBase: number;
+  /** Chapter ids the loop has reported chapter_complete for in this
+      run. The frontend reads `runDone` as `runDoneBase + this.size`. */
+  completedThisRun: Set<number>;
+  /** Chapter ids currently between first synthesise tick and
+      chapter_complete / chapter_failed. */
+  runInProgress: Set<number>;
 }
 
 const inFlightByBook: Map<string, RunningJob> = new Map();
@@ -95,9 +113,23 @@ export function isGenerationActive(bookId: string): boolean {
 }
 
 function broadcast(job: RunningJob, ev: unknown): void {
+  /* Inject run-level aggregates into every outgoing tick (Bug E).
+     Done = chapters that were already on disk at job-start (not in
+     scope for this run) PLUS chapters this run has completed.
+     InProgress = chapters between first synthesise tick and
+     chapter_complete / chapter_failed. */
+  const enriched =
+    ev && typeof ev === 'object'
+      ? {
+          ...(ev as Record<string, unknown>),
+          runDone: job.runDoneBase + job.completedThisRun.size,
+          runTotal: job.runTotal,
+          runInProgress: job.runInProgress.size,
+        }
+      : ev;
   for (const sub of job.subscribers) {
     try {
-      sub.send(ev);
+      sub.send(enriched);
     } catch {
       /* A subscriber whose socket already died is harmless to skip — the
          cleanup hook on req.on('close') will drop it from the Set on its
@@ -335,12 +367,27 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
 
   if (existing) existing.controller.abort();
   const controller = new AbortController();
+  /* Bug E — seed run-level aggregates from disk state. runTotal = all
+     non-excluded chapters; runDoneBase = non-excluded chapters whose
+     audio exists on disk AND aren't in this run's scope (force-regen of
+     a chapter drops it from "done base" because it's about to be
+     overwritten — done count rebounds via completedThisRun as it
+     finishes). */
+  const nonExcluded = state.chapters.filter((c) => !c.excluded);
+  const targetIdSet = new Set(targetChapters.map((c) => c.id));
+  const runDoneBase = nonExcluded.filter(
+    (c) => !targetIdSet.has(c.id) && chapterAudioExists(audioRoot, c.slug),
+  ).length;
   const job: RunningJob = {
     controller,
     subscribers: new Set([{ send, res }]),
     bookId,
     currentChapterId: null,
     lastProgressTick: null,
+    runTotal: nonExcluded.length,
+    runDoneBase,
+    completedThisRun: new Set(),
+    runInProgress: new Set(),
   };
   inFlightByBook.set(bookId, job);
 
@@ -373,9 +420,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        Cleared on chapter_complete and on loop exit. */
     job.currentChapterId = chapter.id;
     job.lastProgressTick = null;
+    job.runInProgress.add(chapter.id);
 
     const sentences = analysis.chapters[chapter.id] ?? [];
     if (sentences.length === 0) {
+      /* Bug E: drop from in-flight before continuing so the aggregate
+         stays accurate when the next chapter is added. */
+      job.runInProgress.delete(chapter.id);
       broadcast(job, {
         type: 'chapter_failed',
         chapterId: chapter.id,
@@ -560,6 +611,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          navigates away and back). */
       job.currentChapterId = null;
       job.lastProgressTick = null;
+      /* Bug E: bump run-level aggregates BEFORE broadcast so the emitted
+         tick carries the post-completion state. */
+      job.runInProgress.delete(chapter.id);
+      job.completedThisRun.add(chapter.id);
       broadcast(job, {
         type: 'chapter_complete',
         chapterId: chapter.id,
@@ -573,7 +628,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       /* AbortError = our own controller fired (regen displacement or
          explicit /pause). Don't report it as a chapter failure — silently
          break the loop; the outer `idle` + cleanup below handles the rest. */
-      if ((e as { name?: string })?.name === 'AbortError') break;
+      if ((e as { name?: string })?.name === 'AbortError') {
+        /* Drop the in-flight marker before breaking — keeps cross-book
+           runInProgress accurate if the abort race left us mid-chapter. */
+        job.runInProgress.delete(chapter.id);
+        break;
+      }
       const initial = describeSynthesisError(e);
       let { errorReason, fatal } = initial;
       console.error(`[generation] chapter ${chapter.id} (${chapter.slug}) failed:`, e);
@@ -584,6 +644,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           errorReason = `${errorReason} (Stopping run — same failure repeated across chapters; fix the upstream cause before retrying.)`;
         }
       }
+      /* Bug E: failed chapter is no longer in progress (audio not on
+         disk so it doesn't count as done either — runDone stays put). */
+      job.runInProgress.delete(chapter.id);
       broadcast(job, {
         type: 'chapter_failed',
         chapterId: chapter.id,

@@ -211,3 +211,68 @@ function buildTitleFallbackEpub() {
 const titleFallbackPath = resolve(fixturesDir, 'sample-title-fallback.epub');
 writeFileSync(titleFallbackPath, buildTitleFallbackEpub());
 console.log(`wrote ${titleFallbackPath}`);
+
+/* Third fixture (Bug B): EPUB with series info baked into the dc:title
+   parenthetical and NO Calibre series metadata. Exercises the
+   parseSeriesFromTitle fallback in parseEpub. */
+function buildSeriesFromTitleEpub() {
+  const containerXml = `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`;
+
+  const contentOpf = `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>The Tidewatcher's Oath (The Hollow Tide Book 3)</dc:title>
+    <dc:creator opf:role="aut">Della Renwick</dc:creator>
+    <dc:identifier id="bookid">urn:uuid:fixture-sft-0001</dc:identifier>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="ch1"/>
+  </spine>
+</package>`;
+
+  const tocNcx = `<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head>
+    <meta name="dtb:uid" content="urn:uuid:fixture-sft-0001"/>
+    <meta name="dtb:depth" content="1"/>
+    <meta name="dtb:totalPageCount" content="0"/>
+    <meta name="dtb:maxPageNumber" content="0"/>
+  </head>
+  <docTitle><text>The Tidewatcher's Oath</text></docTitle>
+  <navMap>
+    <navPoint id="np1" playOrder="1"><navLabel><text>Prologue</text></navLabel><content src="chapter1.xhtml"/></navPoint>
+  </navMap>
+</ncx>`;
+
+  const chapter1 = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Prologue</title></head>
+<body>
+  <h1>Prologue</h1>
+  <p>The flame was tinged with blue.</p>
+</body>
+</html>`;
+
+  const zip = new AdmZip();
+  zip.addFile('mimetype', Buffer.from('application/epub+zip', 'utf8'), '', 0);
+  zip.addFile('META-INF/container.xml', Buffer.from(containerXml, 'utf8'));
+  zip.addFile('OEBPS/content.opf', Buffer.from(contentOpf, 'utf8'));
+  zip.addFile('OEBPS/toc.ncx', Buffer.from(tocNcx, 'utf8'));
+  zip.addFile('OEBPS/chapter1.xhtml', Buffer.from(chapter1, 'utf8'));
+  return zip.toBuffer();
+}
+
+const seriesFromTitlePath = resolve(fixturesDir, 'sample-title-no-calibre.epub');
+writeFileSync(seriesFromTitlePath, buildSeriesFromTitleEpub());
+console.log(`wrote ${seriesFromTitlePath}`);

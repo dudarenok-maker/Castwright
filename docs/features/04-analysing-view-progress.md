@@ -12,6 +12,16 @@ Server-sent-events stream rendering for the two-stage analysis pipeline. Phase t
 
 ## Invariants to preserve
 
+- **Overall-progress math is centralised** in `src/lib/analysis-progress.ts`
+  (`computeOverallProgress(phaseId, phaseProgress)`). The header
+  `AnalysisPill` (`src/components/layout.tsx`) AND the analysing view's
+  "Overall" bar (`src/views/analysing.tsx`) read from this one helper.
+  Phase weights are `[0.45, 0.5, 0.05]` — Phase 0 and Phase 1 carry
+  most of the cost, Phase 2 is a quick library reconciliation. A
+  module-load guard catches future drift between `PHASE_WEIGHTS` and
+  `ANALYSIS_PHASES`. Regression motivator: the bar previously used a
+  naive `(phase + phaseProgress) / 3` average that disagreed with the
+  pill by 15 percentage points (55% vs 40%) on the same stream state.
 - Stream event union: `{ kind: 'phase' | 'log' | 'result' | 'error' | 'chapter-failed' | 'chapter-resolved' | 'cast-update' | 'heartbeat' | 'eta', ... }` (`src/lib/api.ts`). Frontend handlers must accept each kind; unknown kinds are ignored, not thrown. `chapter-resolved` fires whenever the server clears a chapter id from `cache.failedChapterIds` — emitted by both the full route's Phase 0a re-queue success path and the subset retry route. The view drops the matching Retry row in response so the panel never lags behind the cache.
 - `live` payload shape: `{ totalChapters, chapters: AnalysisLiveChapter[] }` where each in-flight chapter is `{ chapterIndex, chapterTitle, elapsedMs, estMs }` (`src/lib/api.ts:55-70`). The server emits one entry per chapter currently in flight, sorted by `chapterIndex` ascending; the UI renders one row per chapter so a stuck chapter doesn't visually mask the others making progress.
 - Request body is omitted entirely when neither `model` nor `fresh` is set; included only when one is (`src/lib/api.ts:424-429`). Do not always send a body — manual-mode servers may not parse JSON.

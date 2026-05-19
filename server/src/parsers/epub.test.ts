@@ -9,6 +9,7 @@ import { parseEpub } from './epub.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturePath = resolve(here, '__fixtures__/sample.epub');
 const titleFallbackFixturePath = resolve(here, '__fixtures__/sample-title-fallback.epub');
+const seriesFromTitleFixturePath = resolve(here, '__fixtures__/sample-title-no-calibre.epub');
 
 describe('parseEpub', () => {
   it('returns format: "epub"', async () => {
@@ -34,6 +35,23 @@ describe('parseEpub', () => {
     const out = await parseEpub(buf, { fileName: 'sample.epub' });
     expect(out.series).toBe('Solway Bay');
     expect(out.seriesPosition).toBe(2);
+    /* Authoritative Calibre meta wins — heuristic flag stays false. */
+    expect(out.seriesFromTitle).toBe(false);
+  });
+
+  /* Bug B regression: EPUB with `dc:title` = "The Tidewatcher's Oath (Keeper of the
+     Lost Cities Book 3)" and NO Calibre series tags. The parser should
+     split the parenthetical off and populate series + seriesPosition
+     from the heuristic, and mark `seriesFromTitle: true`. */
+  describe('parseEpub — series-from-title fallback when Calibre meta absent', () => {
+    it('extracts series + position from the dc:title parenthetical', async () => {
+      const buf = await readFile(seriesFromTitleFixturePath);
+      const out = await parseEpub(buf, { fileName: 'sample-title-no-calibre.epub' });
+      expect(out.title).toBe('The Tidewatcher's Oath');
+      expect(out.series).toBe('The Hollow Tide');
+      expect(out.seriesPosition).toBe(3);
+      expect(out.seriesFromTitle).toBe(true);
+    });
   });
 
   it('turns each spine entry into a chapter', async () => {
