@@ -178,10 +178,10 @@ const PERSIST_RULES: Record<
 
   /* Listen-view metadata editor. Persists the full editable snapshot for the
      currently-open book in a single state-slice PUT, so any field the user
-     touched (title / author / series / narratorCredit / genre / publicationDate)
-     round-trips through state.json. The slice's commitDraft folds the draft
-     into saved[bookId] before we run, so this read sees the post-commit
-     values. */
+     touched (title / author / series / narratorCredit / genre /
+     publicationDate / description / notes) round-trips through state.json.
+     The slice's commitDraft folds the draft into saved[bookId] before we
+     run, so this read sees the post-commit values. */
   'bookMeta/commitDraft': {
     slice: 'state',
     build: (s) => {
@@ -195,6 +195,8 @@ const PERSIST_RULES: Record<
         narratorCredit: saved.narratorCredit,
         genre: saved.genre,
         publicationDate: saved.publicationDate,
+        description: saved.description,
+        notes: saved.notes,
       };
     },
   },

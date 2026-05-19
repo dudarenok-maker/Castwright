@@ -386,6 +386,19 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           const trimmed = incoming.trim();
           return trimmed ? trimmed : null;
         };
+        /* Notes preserve interior whitespace verbatim (markdown line breaks
+           matter), unlike pickNullable which trims. Empty / whitespace-only
+           strings still collapse to null so the editor "clear" flow has a
+           clean cleared-value signal. Plan 67. */
+        const pickNotes = (
+          incoming: unknown,
+          fallback: string | null | undefined,
+        ): string | null => {
+          if (incoming === undefined) return fallback ?? null;
+          if (incoming === null) return null;
+          if (typeof incoming !== 'string') return fallback ?? null;
+          return incoming.trim() === '' ? null : incoming;
+        };
         const pickSeriesPosition = (incoming: unknown, fallback: number | null): number | null => {
           if (incoming === undefined) return fallback;
           if (incoming === null) return null;
@@ -421,6 +434,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           genre: pickNullable(patch.genre, state.genre),
           publicationDate: pickNullable(patch.publicationDate, state.publicationDate),
           description: pickNullable(patch.description, state.description),
+          notes: pickNotes(patch.notes, state.notes),
           updatedAt: new Date().toISOString(),
         };
 

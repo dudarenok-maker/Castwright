@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-19 (post v1.4.0 pre-cutover slate ship):** Must 0 · Should 0 · Could 26 · Won't 9
+**Counts as of 2026-05-19 (post v1.4.0 pre-cutover slate ship):** Must 0 · Should 0 · Could 25 · Won't 9
 
 ---
 
@@ -116,16 +116,6 @@ Source: net-new (2026-05-18).
 - _Key files:_ new `server/src/export/build-portable-book.ts`; new `server/src/import/scan-import-folder.ts`; `src/views/listen.tsx` (export button).
 - _Depends on:_ none.
 - _Benefit (user):_ hand-off between machines without re-casting; backup-and-restore semantics for individual books.
-
-### 11. Per-book editorial notes / README field
-
-Source: net-new (2026-05-18).
-
-- _What:_ Add a `notes: string` field to `BookStateJson` (markdown, no formatting toolbar — plain textarea) for editorial notes: source attribution, license, narration intent, in-progress thoughts. Displayed in a collapsible "Notes" card on the ready/listen view.
-- _Acceptance:_ Edit notes → save → notes persist on disk; reload → notes show in the listen view. Markdown line breaks render. Vitest covers the field roundtrip.
-- _Key files:_ `openapi.yaml` (BookStateJson `notes`); `server/src/workspace/scan.ts` (read/write); `src/views/listen.tsx` (display + edit affordance); `src/modals/edit-book-meta.tsx` (edit form field).
-- _Depends on:_ none. Pairs with Could #15 (long-form `desc`/`ldes`) — both add a long-form text field, but `notes` is workspace-internal (never exported), `description` lands in the M4B atom.
-- _Benefit (user):_ workspace becomes a place for editorial context, not just audio + state. Lightweight scratchpad for "things to remember about this book."
 
 ### 12. Multi-step rollback / snapshot-per-entry (revision history)
 

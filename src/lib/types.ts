@@ -173,6 +173,10 @@ export interface BookStateJson {
       metadata editor and piped into the M4B `desc` / `ldes` atoms during
       Voice export (plan 33). */
   description?: string | null;
+  /** Per-book editorial notes — source attribution, license, narration
+      intent, in-progress thoughts. Workspace-internal (never exported).
+      Plain text with markdown line breaks preserved verbatim. See plan 67. */
+  notes?: string | null;
 }
 
 export interface BookStateResponse {

@@ -60,6 +60,7 @@ const baseMeta = (over: Partial<EditableBookMeta> = {}): EditableBookMeta => ({
   genre: 'Fantasy',
   publicationDate: '2026-05-09',
   description: null,
+  notes: null,
   ...over,
 });
 
@@ -237,6 +238,79 @@ describe('ListenView — metadata editor wiring', () => {
     expect(h.onCommitMeta).toHaveBeenCalledOnce();
     fireEvent.click(cancel);
     expect(h.onCancelMeta).toHaveBeenCalledOnce();
+  });
+
+  /* Plan 67 — Notes textarea in the metadata editor. Mirrors the
+     Description field: plain textarea, no markdown toolbar, trim-empty
+     dispatches null. */
+  it('typing into the Notes textarea dispatches setDraftField (plan 67)', () => {
+    const h = renderView();
+    const notesInput = screen.getByTestId('meta-notes') as HTMLTextAreaElement;
+    expect(notesInput.tagName).toBe('TEXTAREA');
+    fireEvent.change(notesInput, {
+      target: { value: 'Source: public-domain edition.\nNarration intent: warm, slow.' },
+    });
+    expect(h.onEditMetaField).toHaveBeenCalledWith(
+      'notes',
+      'Source: public-domain edition.\nNarration intent: warm, slow.',
+    );
+  });
+
+  it('clearing the Notes textarea dispatches null', () => {
+    const h = renderView({ meta: baseMeta({ notes: 'old notes' }) });
+    const notesInput = screen.getByTestId('meta-notes') as HTMLTextAreaElement;
+    expect(notesInput.value).toBe('old notes');
+    fireEvent.change(notesInput, { target: { value: '' } });
+    expect(h.onEditMetaField).toHaveBeenCalledWith('notes', null);
+  });
+
+  it('whitespace-only Notes input dispatches null (no empty-string round-trip)', () => {
+    const h = renderView();
+    const notesInput = screen.getByTestId('meta-notes') as HTMLTextAreaElement;
+    fireEvent.change(notesInput, { target: { value: '   \n  ' } });
+    expect(h.onEditMetaField).toHaveBeenCalledWith('notes', null);
+  });
+});
+
+describe('ListenView — collapsible Notes card (plan 67)', () => {
+  it('does not render the Notes card when notes is null', () => {
+    renderView({ meta: baseMeta({ notes: null }) });
+    expect(screen.queryByTestId('listen-notes-card')).not.toBeInTheDocument();
+  });
+
+  it('does not render the Notes card when notes is whitespace-only', () => {
+    renderView({ meta: baseMeta({ notes: '   \n\n  ' }) });
+    expect(screen.queryByTestId('listen-notes-card')).not.toBeInTheDocument();
+  });
+
+  it('renders the Notes card collapsed by default with the first line as preview', () => {
+    renderView({
+      meta: baseMeta({ notes: 'First line is the preview.\nSecond line is hidden.' }),
+    });
+    const card = screen.getByTestId('listen-notes-card');
+    expect(card).toBeInTheDocument();
+    /* Collapsed: preview shows first line only; body is absent. */
+    expect(within(card).getByText('First line is the preview.')).toBeInTheDocument();
+    expect(screen.queryByTestId('listen-notes-body')).not.toBeInTheDocument();
+    const toggle = screen.getByTestId('listen-notes-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('expands the Notes body when the toggle is clicked, preserving line breaks via whitespace-pre-wrap', () => {
+    const notesText = 'Line one.\nLine two.\n\nLine four.';
+    renderView({ meta: baseMeta({ notes: notesText }) });
+    fireEvent.click(screen.getByTestId('listen-notes-toggle'));
+    const body = screen.getByTestId('listen-notes-body');
+    expect(body).toBeInTheDocument();
+    /* The exact text (with embedded \n characters) lands in the DOM —
+       whitespace-pre-wrap renders them as visible line breaks. */
+    const para = body.querySelector('p');
+    expect(para).not.toBeNull();
+    expect(para!.textContent).toBe(notesText);
+    expect(para!.className).toContain('whitespace-pre-wrap');
+    expect(screen.getByTestId('listen-notes-toggle').getAttribute('aria-expanded')).toBe(
+      'true',
+    );
   });
 });
 
