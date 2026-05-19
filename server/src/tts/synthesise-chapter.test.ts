@@ -12,7 +12,11 @@
    on the voiceName argument the picker resolves for each speaker. */
 
 import { describe, it, expect } from 'vitest';
-import { synthesiseChapter, type CastCharacter } from './synthesise-chapter.js';
+import {
+  buildSentenceGroups,
+  synthesiseChapter,
+  type CastCharacter,
+} from './synthesise-chapter.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
 
@@ -317,14 +321,17 @@ describe('synthesiseChapter voice routing', () => {
       engine: 'gemini',
     });
 
-    expect(provider.calls).toHaveLength(1);
-    const sentText = provider.calls[0].text;
-    expect(sentText, `provider received: ${sentText}`).not.toMatch(/[A-Z]{3,}/);
-    expect(sentText, `provider received: ${sentText}`).not.toMatch(/[—–]/);
-    /* Sanity check that the actual content survived — we only meant to
-       scrub the hazards, not drop the sentence. */
-    expect(sentText).toContain('The Next Second Was A Blur.');
-    expect(sentText).toContain('Wren by inches, then');
+    /* Plan 70d: one provider call per sentence (no same-speaker folding).
+       The normalisation contract still applies to every group — assert
+       per-call so a future regression to either the folding or the
+       normaliser surfaces here. */
+    expect(provider.calls).toHaveLength(3);
+    for (const call of provider.calls) {
+      expect(call.text, `provider received: ${call.text}`).not.toMatch(/[A-Z]{3,}/);
+      expect(call.text, `provider received: ${call.text}`).not.toMatch(/[—–]/);
+    }
+    expect(provider.calls[0].text).toBe('The Next Second Was A Blur.');
+    expect(provider.calls[1].text).toContain('Wren by inches, then');
   });
 
   it('resamples mid-chapter sample-rate mismatches to the first-group anchor (Kokoro/Coqui co-cast regression)', async () => {
@@ -598,5 +605,65 @@ describe('synthesiseChapter auto-retry on transient TTS failures', () => {
        primary + jitter) would fail it. */
     expect(attemptIndex).toBe(1);
     expect(elapsed).toBeLessThan(200);
+  });
+});
+
+/* ── plan 70d — buildSentenceGroups emits one group per sentence ─────
+   Earlier code folded consecutive same-speaker sentences into one
+   synth call to cut HTTP roundtrips. That folding produced a 207-
+   sentence narrator group on the canonical Keeper book that ran past
+   the 30 s "Worker has gone quiet" watchdog and either timed out or
+   hung at very large context sizes. Per-sentence groups: continuous
+   progress ticks (one per sentence), bounded synth duration, no voice
+   drift from large-context prosody pressure. */
+describe('buildSentenceGroups (plan 70d — per-sentence)', () => {
+  function s(id: number, characterId: string, text: string): SentenceOutput {
+    return { id, chapterId: 1, characterId, text };
+  }
+
+  it('emits one group per sentence even when consecutive sentences share a speaker', () => {
+    const groups = buildSentenceGroups([
+      s(1, 'narrator', 'A.'),
+      s(2, 'narrator', 'B.'),
+      s(3, 'narrator', 'C.'),
+    ]);
+    expect(groups).toHaveLength(3);
+    expect(groups.map((g) => g.text)).toEqual(['A.', 'B.', 'C.']);
+    expect(groups.map((g) => g.sentenceIds)).toEqual([[1], [2], [3]]);
+    expect(groups.map((g) => g.index)).toEqual([0, 1, 2]);
+  });
+
+  it('preserves order across mixed speakers', () => {
+    const groups = buildSentenceGroups([
+      s(1, 'narrator', 'Open.'),
+      s(2, 'Wren', 'Hi.'),
+      s(3, 'Wren', 'Are you there?'),
+      s(4, 'narrator', 'Close.'),
+    ]);
+    expect(groups.map((g) => g.characterId)).toEqual([
+      'narrator',
+      'Wren',
+      'Wren',
+      'narrator',
+    ]);
+    expect(groups.map((g) => g.text)).toEqual([
+      'Open.',
+      'Hi.',
+      'Are you there?',
+      'Close.',
+    ]);
+  });
+
+  it('scales to a 207-sentence all-narrator chapter (the regression case)', () => {
+    /* Chapter 4 of the canonical Keeper book is a structured registry
+       file — 207 narrator-only sentences. Pre-fix this collapsed to 1
+       giant group; post-fix each becomes its own bounded synth call. */
+    const sentences = Array.from({ length: 207 }, (_, i) =>
+      s(i + 1, 'narrator', `Sentence ${i + 1}.`),
+    );
+    const groups = buildSentenceGroups(sentences);
+    expect(groups).toHaveLength(207);
+    expect(groups[0].text).toBe('Sentence 1.');
+    expect(groups[206].text).toBe('Sentence 207.');
   });
 });

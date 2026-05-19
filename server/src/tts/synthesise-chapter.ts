@@ -121,24 +121,27 @@ export interface SynthesiseChapterOpts {
   signal?: AbortSignal;
 }
 
-/** Fold sentences into consecutive same-speaker groups. Order preserved. */
+/** One group per sentence. Plan 70d — earlier code folded consecutive
+    same-speaker sentences into one synth call to cut HTTP roundtrips.
+    Two production failures pushed us to per-sentence:
+      1. A 207-sentence narrator block on the canonical Keeper book
+         folded into one Kokoro call that ran longer than the 30 s
+         "Worker has gone quiet" client watchdog, then either timed out
+         on the model side or hung at very large context sizes — never
+         emitting a chapter_complete.
+      2. Voice drift inside a long same-speaker group as Kokoro / XTTS
+         context-position pressure shifts prosody mid-chunk.
+    Per-sentence also gives the SSE stream a progress tick per sentence
+    so the UI's "line N of M" caption advances continuously instead of
+    sitting on `1 of 207` for the whole call.
+    Order preserved. */
 export function buildSentenceGroups(sentences: SentenceOutput[]): SentenceGroup[] {
-  const groups: SentenceGroup[] = [];
-  for (const s of sentences) {
-    const last = groups[groups.length - 1];
-    if (last && last.characterId === s.characterId) {
-      last.sentenceIds.push(s.id);
-      last.text = `${last.text} ${s.text}`.trim();
-    } else {
-      groups.push({
-        index: groups.length,
-        characterId: s.characterId,
-        sentenceIds: [s.id],
-        text: s.text,
-      });
-    }
-  }
-  return groups;
+  return sentences.map((s, i) => ({
+    index: i,
+    characterId: s.characterId,
+    sentenceIds: [s.id],
+    text: s.text,
+  }));
 }
 
 /** Build the VoiceLike payload that pickVoiceForEngine consumes from a

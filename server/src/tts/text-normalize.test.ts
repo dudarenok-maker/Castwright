@@ -164,4 +164,39 @@ describe('normaliseForTts (composed)', () => {
     const input = 'HE​LLO—world.';
     expect(normaliseForTts(input)).toBe('Hello, world.');
   });
+
+  /* ── plan 70d — audio-tag stripping ─────────────────────────────── */
+
+  it('strips the analyzer vocabulary tags so Kokoro / Coqui do not read them aloud', () => {
+    /* No current engine in this app interprets bracket markup as prosody.
+       The user reported "[emphatic] is being read not being used in voice"
+       on the canonical Keeper book — this is the regression. */
+    expect(normaliseForTts('She said [emphatic] hello.')).toBe('She said hello.');
+    expect(normaliseForTts('[shouting] HELP!')).toBe('Help!');
+    expect(normaliseForTts('Stay still, [whispers] he murmured.')).toBe(
+      'Stay still, he murmured.',
+    );
+  });
+
+  it('preserves arbitrary bracketed prose that is NOT in the audio-tag vocabulary', () => {
+    /* Closed-vocabulary stripping is load-bearing — naive `\[[^\]]+\]`
+       removal would swallow proper nouns, footnotes, stage directions. */
+    expect(normaliseForTts('See [Citation Needed] for sources.')).toBe(
+      'See [Citation Needed] for sources.',
+    );
+    expect(normaliseForTts('Enter [stage left] cautiously.')).toBe(
+      'Enter [stage left] cautiously.',
+    );
+  });
+
+  it('collapses the whitespace where a tag used to sit', () => {
+    expect(normaliseForTts('A [laughs] B')).toBe('A B');
+    expect(normaliseForTts('[sighs] Then she spoke.')).toBe('Then she spoke.');
+  });
+
+  it('is idempotent on tag stripping (no leftover brackets on second pass)', () => {
+    const once = normaliseForTts('I am [hesitant] about this.');
+    expect(normaliseForTts(once)).toBe(once);
+    expect(once).toBe('I am about this.');
+  });
 });

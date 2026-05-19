@@ -67,6 +67,8 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 ### F. TTS
 
+- [70d — Per-sentence synth + audio-tag stripping](70d-per-sentence-synth-and-tag-strip.md) — `buildSentenceGroups` emits one group per sentence (was: fold consecutive same-speaker), and `normaliseForTts` strips the closed `[empathic]` / `[whispers]` / etc. vocabulary at the TTS boundary. Fixes long all-narrator chapters that ran past the 30 s stall watchdog, audio tags being read aloud, and same-speaker voice drift at large context sizes.
+
 - [13 — TTS engine picker](13-tts-engine-picker.md) — Two-tier engine + model selector.
 - [14a — Kokoro v1 TTS engine](14a-tts-sidecar-kokoro.md) — Local sidecar default, English-only, per-engine cast voice profiles.
 - [15 — Gemini cloud TTS](15-tts-gemini-cloud.md) — Cloud opt-in.
