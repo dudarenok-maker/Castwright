@@ -28,9 +28,25 @@
  * Pairs with docs/features/37-e2e-playwright.md "Visual baselines". */
 
 import { test, expect } from '@playwright/test';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { goToAnalysing, goToConfirm } from './helpers';
 
+/* Per-platform baselines (snapshotPathTemplate in playwright.config.ts)
+   only exist for the OS that blessed them. PR CI runs on Ubuntu but
+   only Windows baselines are committed today, so the bare specs would
+   fail every PR with "snapshot doesn't exist, writing actual". Skip
+   the whole describe when no baseline directory exists for the
+   running platform — auto-enables the moment someone commits
+   baselines for that platform (e.g. `e2e/linux/visual.spec.ts/`).
+   Linux baselines are tracked as a BACKLOG follow-up. */
+const BASELINE_DIR = resolve(process.cwd(), 'e2e', process.platform, 'visual.spec.ts');
+const SKIP_REASON =
+  `No visual baselines committed for ${process.platform}. ` +
+  `Run \`npm run test:e2e -- --update-snapshots visual.spec.ts\` to bless on this platform.`;
+
 test.describe('visual baselines', () => {
+  test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
   test('library', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
@@ -106,6 +122,8 @@ test.describe('visual baselines', () => {
  *   npm run test:e2e -- --update-snapshots visual.spec.ts
  */
 test.describe('visual baselines (dark theme)', () => {
+  test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
+
   test.beforeEach(async ({ context }) => {
     /* Seed the redux-persist 'persist:ui' blob before any page in this
        context loads. Each key inside the wrapper is JSON-encoded
