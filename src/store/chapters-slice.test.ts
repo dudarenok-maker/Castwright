@@ -895,3 +895,57 @@ describe('chaptersSlice — initial state (mock-leak regression)', () => {
     expect(initial.chapters).toEqual([]);
   });
 });
+
+describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, plan 63)', () => {
+  /* Plan 63 hydrate: the broadcast middleware translates inbound
+     BroadcastChannel `sync:chapters` messages into this reducer.
+     The reducer is intentionally narrow — only `activeStream` is
+     mirrored. Per-chapter rows / pendingRegen / regenEpoch must
+     stay untouched (broadcasting them would fan out regen side-
+     effects across tabs, which is the racing-writes case parked
+     as Won't #3). */
+  it('replaces activeStream verbatim with the inbound snapshot', () => {
+    const sibling = {
+      bookId: 'book-sibling',
+      modelKey: 'kokoro-v1' as const,
+      done: 3,
+      total: 10,
+      inProgress: 1,
+      lastTickAt: 12345,
+      halted: false,
+    };
+    const start = baseState([makeChapter(1, { state: 'in_progress' })]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.applyExternalChaptersSnapshot(sibling),
+    );
+    expect(next.activeStream).toEqual(sibling);
+    /* Per-chapter rows / pendingRegen / regenEpoch UNCHANGED — proves
+       the cross-tab message doesn't contaminate per-tab UI state.
+       This is the cross-bookId-isolation invariant the plan locks in. */
+    expect(next.chapters).toEqual(start.chapters);
+    expect(next.pendingRegen).toBe(start.pendingRegen);
+    expect(next.regenEpoch).toBe(start.regenEpoch);
+    expect(next.currentBookId).toBe(start.currentBookId);
+  });
+
+  it('accepts null to mirror a sibling clearActiveStream', () => {
+    const start: ChaptersState = {
+      ...baseState([]),
+      activeStream: {
+        bookId: 'book-x',
+        modelKey: 'kokoro-v1',
+        done: 5,
+        total: 10,
+        inProgress: 0,
+        lastTickAt: 1000,
+        halted: false,
+      },
+    };
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.applyExternalChaptersSnapshot(null),
+    );
+    expect(next.activeStream).toBeNull();
+  });
+});

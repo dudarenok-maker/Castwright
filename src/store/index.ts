@@ -41,6 +41,7 @@ import { listenProgressSlice } from './listen-progress-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
+import { broadcastMiddleware } from './broadcast-middleware';
 
 /** Persisted ui-slice keys. Stage so refresh restores the same view +
  *  chapter + drawer; model selectors so the user's per-session picks
@@ -126,7 +127,12 @@ export const store = configureStore({
       serializableCheck: {
         ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
       },
-    }).concat(persistenceMiddleware, generationStreamMiddleware, analysisStreamMiddleware),
+    }).concat(
+      persistenceMiddleware,
+      generationStreamMiddleware,
+      analysisStreamMiddleware,
+      broadcastMiddleware,
+    ),
 });
 
 /** Persistor for the store. Wrap the app in `<PersistGate>` from
