@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-19
 owner: null
 ---
 
@@ -88,4 +88,4 @@ Run in mock mode (`VITE_USE_MOCKS=true`).
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Shipped 2026-05-19 — merged via PR #37 (`0d9aef4`) plus follow-up `71d7bc1` adding file-level serial mode to the new e2e spec. Spec scope matches the design exactly: speed picker 0.75×–2× persisted per book, marker affordance + sidebar with click-to-seek + `note|rerecord` kinds, sleep timer with countdown presets + end-of-chapter mode (per-session). No spec deltas. Pre-existing scripts/tests/bump-version env-leak surfaced during the work (`GIT_DIR` / `GIT_INDEX_FILE` leak into temp-repo setup) — out of plan 53's scope; lives in BACKLOG as a `fix(scripts)` follow-up.

@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-19
 owner: null
 ---
 
@@ -65,4 +65,4 @@ owner: null
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Shipped 2026-05-19 — merged via PR #34 (`f64ff42`). Server-only change. `server/src/audio/compute-peaks.ts` (240-bin RMS reducer, normalized 0..1) called from `server/src/tts/mp3.ts` writes `<bookDir>/audio/<slug>.peaks.json` sibling on every encode. `server/src/routes/chapter-audio.ts` meta endpoint reads it back; missing-file fallback returns `peaks: []` (legacy chapters unchanged). Front-end already consumed `peaks: float[]`; no FE work needed. 22 new Vitest cases. No spec deltas.

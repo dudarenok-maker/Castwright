@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-19
 owner: null
 ---
 
@@ -150,4 +150,4 @@ snapshot mechanism + the rollback endpoint, not the slice.
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Shipped 2026-05-19 — merged via PR #38 (`24fe356`). v1.3.0 ships **read-only** history view as planned: timeline entries appended on accept/reject, persisted on `revisions.json` via the persistence middleware, surfaced via a modal opened from the revision-diff player header. No rollback button in v1.3.0 — plan 20's accept/reject paths consume the `.previous.<slug>.mp3` chain, so multi-step rollback needs snapshot-per-entry (separate v1.4.0 BACKLOG item). Slice plumbing for rollback (`rolledBack` reducer + `reversible` + `rolled-back-from`) is in place and forward-compatible. No spec deltas.
