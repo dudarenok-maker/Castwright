@@ -43,7 +43,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [02 — Upload (paste or file)](02-upload-paste-or-file.md) — `.md/.txt/.epub/.pdf/.mobi/.azw3` upload + paste flow.
 - [03 — Import & confirm metadata](03-import-confirm-metadata.md) — Parse-only import then confirm-write to disk.
-- [60 — Real-binary MOBI / AZW3 parser fixtures](archive/60-real-binary-parser-fixtures.md) — Calibre-derived `sample.mobi` + `sample.azw3` lock the integration contract against `@lingo-reader/mobi-parser`; skip-when-Calibre-missing keeps fresh-clone `npm run verify` green. Shipped 2026-05-19.
 
 ### C. Analysis pipeline
 
@@ -51,7 +50,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [05 — Manual handoff analyzer](05-analyzer-manual-handoff.md) — `ANALYZER=manual` file-drop cowork loop.
 - [06 — Gemini analyzer](06-analyzer-gemini.md) — `ANALYZER=gemini` direct-API mode (also the fallback when local is unreachable).
 - [29 — Local Ollama analyzer + fallback](29-analyzer-ollama-local.md) — `ANALYZER=local` default; auto-fallback to Gemini only when daemon is unreachable.
-- [61 — In-app multi-model management UX](61-in-app-model-management.md) — Account → Models card; install Ollama, pull analyzer model weights, pre-fetch Coqui XTTS without dropping to a terminal. Closes plan 49's deployer-first gap for non-Kokoro engines. **Status: stable.**
 - [07 — Audio tag vocabulary](07-audio-tag-vocabulary.md) — `[tag]` vocabulary UI ↔ parser sync.
 - [08 — Audio tag auto-detection](08-audio-tag-auto-detection.md) — Server-side auto-tagging from punctuation/markdown/HTML.
 
@@ -59,9 +57,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [09 — Voice match pipeline](09-voice-match-pipeline.md) — Post-analysis library matching.
 - [10 — Profile drawer](10-profile-drawer.md) — Character edit drawer + sample preview + evidence toggle.
-- [60 — Voice preview while editing the character](60-voice-preview-while-editing.md) — Per-candidate "Play sample" affordance in the override picker; user-editable sample line persisted to `localStorage`; auditions are read-only (no cast commit). Shipped 2026-05-19.
 - [11 — Batch character regenerate](11-batch-character-regenerate.md) — Multi-select character → chapter-range regen.
-- [60 — Voices global-tab same-book compare](60-voices-global-tab-compare.md) — Lifts plan 22a's "Open a book to compare" gate for global-tab pairs that share a `bookId`: `api.getBookState(bookId)` resolves the foreign cast on demand, cached for the modal session. Cross-book pairs remain disabled (BACKLOG #17). Shipped 2026-05-19.
 
 ### E. Manuscript editing
 
@@ -89,7 +85,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [47 — Listening progress / resume bookmarks](archive/47-listen-progress.md) — Per-book sibling `listen-progress.json`; mini-player seeks to the saved point on chapter mount; Listen view "Resume at MM:SS" pill. Shipped 2026-05-18.
 - [32 — Audiobook export](32-audiobook-export.md) — Sideload to PocketBook Reader (Phase A: MP3.ZIP) via LAN download or sync folder; per-chapter ID3v2.4 tags, no re-encode, atomic writes.
 - [34 — MP3-folder export](34-mp3-folder-export.md) — Per-chapter MP3s in a sub-folder for folder-scanning audiobook apps (Smart AudioBook Player, BookPlayer, Audiobookshelf). Sync-folder destination only; APIC cover travels with each chapter.
-- [60 — Listen view decomposition](archive/60-listen-view-decompose.md) — Behaviour-neutral lift: `src/views/listen.tsx` (1136 → 319 lines) becomes a slice-wiring orchestrator that composes three new region sub-components under `src/components/listen/` (header, player+markers, downloads+queue). Zero spec modifications. Shipped 2026-05-19.
 
 ### I. Revisions & drift
 
@@ -111,7 +106,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [45 — Vitest pool tuning + one-retry policy](45-vitest-pool-tuning.md) — Caps the server-suite forks pool at 4 and turns on `retry: 1` on both Vitest configs so transient tinypool "Worker exited unexpectedly" failures no longer force a full pre-push re-run.
 - [46 — Lint, format, a11y baseline](archive/46-lint-format-a11y.md) — ESLint 8 + Prettier 3 + axe-core on four core views; lint prepended to `verify`. Shipped 2026-05-18.
 - [48 — Global toast surface](archive/48-toast-surface.md) — `notifications` slice + `<ToastStack/>`; stream-middleware halts + export 5xx dispatch through it; dedupe-by-key collapses repeats; auto-dismiss 6 s. Shipped 2026-05-18.
-- [60 — CI verify-on-PR](60-ci-verify-on-pr.md) — GitHub Actions workflow runs `npm run verify` on every PR targeting `main`; ffmpeg + Node + Playwright chromium provisioned, npm + browser caches keyed on lockfile hash; pairs with the visual baselines (`e2e/visual.spec.ts`) so the same gate the pre-push hook runs locally is the gate every PR must clear before merge.
 
 ### L. Book state persistence
 
@@ -165,4 +159,8 @@ breadcrumb so cross-references still resolve.
 - [43 — Auto-start TTS sidecar](archive/43-auto-start-sidecar.md) — Per-user `autoStartSidecar` preference (default ON); Node owns the sidecar child-process lifecycle (port-9000 probe → spawn → `.run/tts.pid` → `win32` `taskkill /T /F` tree-kill on SIGINT/SIGTERM). `start-app.bat` brings up frontend + server + sidecar in one shot. `PRELOAD_COQUI` env propagation gated on `defaultTtsModelKey === 'coqui-xtts-v2'` (Kokoro's eager-load is unconditional inside the sidecar). 6-case Vitest covers the spawn/probe/tree-kill contract. Shipped 2026-05-17.
 - [60 — Listen view decomposition](archive/60-listen-view-decompose.md) — Behaviour-neutral lift of `src/views/listen.tsx` (1136 → 319 lines) into a slice-wiring orchestrator that composes three region sub-components under `src/components/listen/` (header, player+markers, downloads+queue). Pure-deletion diff (52 ins / 869 del); zero spec modifications. Gates Wave 3 of the v1.4.0 slate. Shipped 2026-05-19.
 - [63 — Cross-tab `BroadcastChannel` state sync](archive/63-cross-tab-broadcast-sync.md) — `broadcastMiddleware` sends post-mutation snapshots of analysis + chapters `activeStream` on `BroadcastChannel('audiobook-state')` so a sibling tab on the same workspace updates its top-bar pill without a `/api/library/active-analyses` round-trip. Two-layer echo suppression (per-tab `instanceId` tag + inbound-action allowlist); narrow scope (only `activeStream` slots — never per-chapter rows / cast / manuscript) preserves the single-user-per-workspace contract and keeps Won't #3 parked. Shipped 2026-05-19.
-- [60 — Real-binary MOBI / AZW3 parser fixtures](archive/60-real-binary-parser-fixtures.md) — `scripts/gen-parser-fixtures.mjs` probes for Calibre's `ebook-convert` and derives gitignored `sample.mobi` + `sample.azw3` from the existing EPUB fixture; new server Vitest suite + the binary-upload e2e MOBI/AZW3 cases run the real `@lingo-reader/mobi-parser` path against those binaries, skipping cleanly via `describe.skipIf` + `test.skip` when Calibre isn't installed. Shipped 2026-05-19.
+- [61 — In-app multi-model management UX](archive/61-in-app-model-management.md) — Account → Models card: detect-Ollama + install (platform-aware), pull-model (NDJSON-streamed progress), refresh-available-models, plus `install-coqui.{sh,ps1}` parallels to `install-kokoro.*`. Two state machines (install: idle → detecting → downloading → installing → installed; pull: idle → pulling → pulled). Dependency-injectable bootstraps so tests run offline. Closes plan 49's deployer-first gap for non-Kokoro engines. Shipped 2026-05-19.
+- [62 — CI verify-on-PR](archive/62-ci-verify-on-pr.md) — GitHub Actions workflow runs `npm run verify` on every PR targeting `main`; ffmpeg + Node + Playwright chromium provisioned, npm + browser caches keyed on lockfile hash; concurrency `cancel-in-progress` supersedes redundant runs on rapid pushes; pairs with the visual baselines (`e2e/visual.spec.ts`) so the same gate the pre-push hook runs locally is the gate every PR must clear before merge. Shipped 2026-05-19.
+- [64 — Voice preview while editing the character](archive/64-voice-preview-while-editing.md) — Per-candidate "Play sample" affordance in the profile-drawer override picker; user-editable sample line persisted to `localStorage` (key `voice-preview-sample-text`); auditions are read-only (no cast commit until Save). Reuses existing `playBaseVoiceSampleWithAutoLoad` orchestrator + `useTtsLifecycle()` (no new slice). Shipped 2026-05-19.
+- [65 — Voices global-tab same-book compare](archive/65-voices-global-tab-compare.md) — Lifts plan 22a's "Open a book to compare" gate for global-tab pairs that share a `bookId`: `api.getBookState(bookId)` resolves the foreign cast on demand, cached for the modal session via a component-local `Map<bookId, Character[]>` (no new redux slice). Fetch-fails surface a deduped error toast and retroactively disable the Compare button for that bookId. Cross-book pairs remain disabled (BACKLOG #17). Shipped 2026-05-19.
+- [66 — Real-binary MOBI / AZW3 parser fixtures](archive/66-real-binary-parser-fixtures.md) — `scripts/gen-parser-fixtures.mjs` probes for Calibre's `ebook-convert` and derives gitignored `sample.mobi` + `sample.azw3` from the existing EPUB fixture; new server Vitest suite + the binary-upload e2e MOBI/AZW3 cases run the real `@lingo-reader/mobi-parser` path against those binaries, skipping cleanly via `describe.skipIf` + `test.skip` when Calibre isn't installed. Shipped 2026-05-19.
