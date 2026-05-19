@@ -150,19 +150,42 @@ export const revisionsSlice = createSlice({
     /* Runtime poll: refresh pending/drift but DON'T touch dismissed or
        acceptedSelections — the server response (RevisionsResponse) doesn't
        include either, and overwriting with empty would lose state until
-       the next disk hydrate. */
-    applyPoll: (s, a: PayloadAction<RevisionsResponse>) => {
-      s.pending = a.payload?.pending || [];
-      s.drift = a.payload?.drift || [];
+       the next disk hydrate.
+
+       Multi-book aware: when the caller stamps `bookId` onto the payload,
+       only that book's drift entries are replaced — events from other
+       concurrently-active books survive the poll. `pending` is still
+       replaced wholesale (the regen/diff flow operates on the active
+       book and the server response doesn't differentiate). */
+    applyPoll: (s, a: PayloadAction<(RevisionsResponse & { bookId?: string }) | undefined>) => {
+      const payload = a.payload || ({} as RevisionsResponse & { bookId?: string });
+      const bookId = payload.bookId;
+      s.pending = payload.pending || [];
+      if (bookId) {
+        const incoming = payload.drift || [];
+        s.drift = [
+          ...s.drift.filter((d) => d.bookId !== bookId),
+          ...incoming.map((d) => ({ ...d, bookId: d.bookId || bookId })),
+        ];
+      } else {
+        s.drift = payload.drift || [];
+      }
       s.loaded = true;
     },
     /* Disk hydrate on book open. Carries dismissed + acceptedSelections so
        subsequent edits union with prior persisted state rather than
-       overwriting it in revisions.json. Plan 55 adds `timeline`. */
+       overwriting it in revisions.json. Plan 55 adds `timeline`.
+
+       Multi-book aware: when `bookId` is provided, drift events for that
+       book are merged in (replacing any prior events with that bookId),
+       while other books' events are preserved. Without bookId the slice
+       falls back to the legacy whole-slice replace for callers that
+       haven't migrated. */
     hydrateFromBookState: (
       s,
       a: PayloadAction<
         | {
+            bookId?: string;
             pending?: Revision[];
             drift?: DriftEvent[];
             dismissed?: string[];
@@ -179,7 +202,16 @@ export const revisionsSlice = createSlice({
         return;
       }
       s.pending = payload.pending ?? [];
-      s.drift = payload.drift ?? [];
+      if (payload.bookId) {
+        const bid = payload.bookId;
+        const incoming = payload.drift ?? [];
+        s.drift = [
+          ...s.drift.filter((d) => d.bookId !== bid),
+          ...incoming.map((d) => ({ ...d, bookId: d.bookId || bid })),
+        ];
+      } else {
+        s.drift = payload.drift ?? [];
+      }
       s.dismissed = payload.dismissed ?? [];
       s.acceptedSelections = payload.acceptedSelections ?? {};
       s.timeline = normaliseTimelineKeys(payload.timeline);
@@ -219,3 +251,26 @@ function nowIso(): string {
 }
 
 export const revisionsActions = revisionsSlice.actions;
+
+/* Selector: group drift events by `bookId` for the multi-book Drift
+   Report. Returns an ordered array so the modal can render one section
+   per book. Books with no events are absent. The order preserves the
+   first appearance of each bookId in the flat `drift` list — a tiny
+   stability detail that keeps the modal from re-shuffling when a poll
+   completes for a different book mid-render. */
+export function selectDriftByBook(state: { revisions: RevisionsState }): Array<{
+  bookId: string;
+  events: DriftEvent[];
+}> {
+  const seen = new Map<string, DriftEvent[]>();
+  for (const event of state.revisions.drift) {
+    const bid = event.bookId ?? '';
+    let bucket = seen.get(bid);
+    if (!bucket) {
+      bucket = [];
+      seen.set(bid, bucket);
+    }
+    bucket.push(event);
+  }
+  return Array.from(seen.entries()).map(([bookId, events]) => ({ bookId, events }));
+}
