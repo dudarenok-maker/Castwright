@@ -85,15 +85,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Need the tag annotation reachable as the release body.
           # `fetch-depth: 0` alone fetches all commits but actions/checkout@v4
           # leaves `fetch-tags: false` by default, so the tag *object* (with
-          # its annotation) is never pulled — `git tag -l --format='%(contents)'`
-          # then falls back to the commit subject and the GitHub Release body
-          # ends up as just "chore: bump version to X.Y.Z". v1.2.2 shipped
-          # with an empty body for exactly this reason.
+          # its annotation) is never pulled. With `fetch-tags: true` the FIRST
+          # fetch pulls the annotated tag — but actions/checkout then runs a
+          # second `git fetch --no-tags origin +<SHA>:refs/tags/<tag>` that
+          # silently overwrites it with a lightweight tag pointing at the same
+          # commit. From that point on `git tag -l --format='%(contents)'`
+          # returns the commit subject and the GitHub Release body ends up as
+          # just "chore: bump version to X.Y.Z". v1.2.2 and v1.3.0 both shipped
+          # with empty bodies for exactly this reason; the explicit re-fetch
+          # below restores the annotated tag object.
           fetch-depth: 0
           fetch-tags: true
+
+      - name: Restore annotated tag (actions/checkout strips the annotation)
+        run: |
+          git tag -d "${{ github.ref_name }}" || true
+          git fetch --tags --force origin \
+            "refs/tags/${{ github.ref_name }}:refs/tags/${{ github.ref_name }}"
+          # Sanity-check: cat-file should now report `tag` (annotated), not
+          # `commit` (lightweight). Fail loudly if the restore didn't take.
+          type="$(git cat-file -t "refs/tags/${{ github.ref_name }}")"
+          if [ "$type" != "tag" ]; then
+            echo "::error::Expected annotated tag, got $type. Release body will be wrong."
+            exit 1
+          fi
+          echo "tag type: $type — annotation restored"
 
       - name: Set up Node
         uses: actions/setup-node@v4
