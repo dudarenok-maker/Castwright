@@ -46,8 +46,8 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
   }
   return (
     <>
-      <div onClick={onClose} className="fixed inset-0 bg-ink/30 z-40 fade-in" />
-      <aside className="fixed top-0 right-0 bottom-0 w-full max-w-[560px] bg-white shadow-drawer z-50 overflow-y-auto slide-in-right">
+      <div onClick={onClose} className="fixed inset-0 bg-ink/30 z-[60] fade-in" />
+      <aside className="fixed top-0 right-0 bottom-0 w-full max-w-[560px] bg-white shadow-drawer z-[70] overflow-y-auto slide-in-right">
         <div className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-ink/10 px-6 py-4 flex items-center gap-3">
           <span className="w-9 h-9 rounded-full bg-purple-deep/[0.06] grid place-items-center text-purple-deep">
             <IconCheckCircle className="w-5 h-5" />
