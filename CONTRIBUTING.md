@@ -388,7 +388,16 @@ and not an inventory of parked work.
 ### Sections, in order
 
 1. **Features.** User-visible additions or expansions since the previous
-   release. One bullet per shipped capability.
+   release. **One bullet per shipped capability, written from the user's
+   perspective** — describe what a listener / deployer / operator can now
+   do that they couldn't before. Lead with the affordance ("A new Models
+   card on Account…", "The character profile drawer now has…"), name the
+   benefit ("…without opening a terminal", "…remembers the choice per
+   book"), and leave architecture out. State machines, middleware names,
+   slice names, SSE channel mechanics, redux action shapes, regex
+   patterns, and library / dependency choices belong in the commit
+   message and the regression plan, not the release body. Reference the
+   regression plan number in parens at the end of the bullet.
 2. **Fixes.** Bugs that escaped the previous release and that users
    actually hit. Omit this section entirely on an initial release.
    **One bullet per bug, written from the user's perspective** — describe
@@ -434,13 +443,20 @@ and not an inventory of parked work.
    leave it out.
 4. Write the tag message with the four sections (omit any that are
    empty). Reference plan numbers in parens.
-5. **Fixes bullets get a second pass for user vocabulary.** Re-read each
-   one and ask: would a deployer who has never seen the codebase know
-   what was broken? Replace `bg-white/60`, `book-meta-slice`,
-   `persistence-middleware`, `floating-pill-inverse`, `z-[60]`, etc. with
-   the symptom: "the connection pill rendered light-on-light", "the
-   book description silently failed to save", "the match-detail drawer
-   opened underneath the profile drawer". Internal vocabulary in a Fix
-   bullet is a signal it was written from the diff, not from the user's
-   chair.
+5. **Features AND Fixes bullets both get a second pass for user
+   vocabulary.** Re-read each one and ask: would a deployer who has never
+   seen the codebase know what shipped / what was broken? Replace
+   `bg-white/60`, `book-meta-slice`, `persistence-middleware`,
+   `floating-pill-inverse`, `z-[60]`, `BroadcastChannel('audiobook-state')`,
+   `instanceId tag + inbound-action allowlist`, `state machine (idle →
+   detecting → downloading → installed)`, `NDJSON progress stream`,
+   `ffmpeg -ss / -t / -c copy`, `acceptedSelections map`, etc. with the
+   user-facing capability or symptom: "install Ollama and pull a model
+   without opening a terminal", "open the same book in two tabs and both
+   stay in sync", "audio is sliced from the existing recording, no
+   re-encode, no quality loss". Internal vocabulary in a Features or
+   Fixes bullet is a signal it was written from the diff, not from the
+   user's chair. **Engineering** bullets are exempt — that section is
+   explicitly for contributors / operators, so test-harness names, CI
+   step names, and refactor mechanics are fine there.
 6. `git tag -a vX.Y.Z` and `git push --tags` once the user approves.
