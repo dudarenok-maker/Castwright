@@ -9,10 +9,11 @@
    4. Apply the audio op plan via rewriteChapterSlugs (delete content-
       changed chapter audio; rename renumbered-only chapter audio +
       rewrite the embedded chapterId/chapterTitle in segments.json).
-   5. Clear the analysis cache for the manuscript (the cache's outer
-      chapter-id keying is now stale and would surface phantom entries
-      on the next book-state GET reconciliation). The cache is rebuilt
-      from manuscript-edits.json + state.json on next access.
+   5. Rebuild the analysis cache from the freshly-written manuscript-edits
+      .json so its outer chapter-id keying tracks the new structure.
+      Plan 70c — earlier behaviour wiped the cache outright, which broke
+      post-restructure generation (generation reads the cache, not
+      manuscript-edits.json, and halted on the empty file).
 
    A per-book write lock chain serialises concurrent restructure calls
    so the three persistence writes can't interleave. Without the lock,
@@ -46,7 +47,7 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
-import { clearAnalysisCache } from '../store/analysis-cache.js';
+import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { rewriteChapterSlugs } from '../audio/rewrite-chapter-slugs.js';
 import { parseManuscript } from '../parsers/index.js';
 import { looksLikeTitle, MAX_SUBTITLE_LEN } from '../parsers/text.js';
@@ -161,12 +162,13 @@ async function applyRestructure(
   // Apply audio ops (best-effort — errors are surfaced in the response).
   const audioSummary = await rewriteChapterSlugs(audioDir(bookDir), result.audioOps);
 
-  // Wipe the analysis cache so the next book-state GET re-derives sentences
-  // from the freshly-written manuscript-edits.json. The cache's outer
-  // chapter-id keying is now stale and would surface zombie entries via
-  // the GET handler's reconciliation logic.
-  await clearAnalysisCache(state.manuscriptId).catch(() => {
-    /* best effort */
+  // Plan 70c — re-derive the analysis cache from the freshly-written
+  // manuscript-edits.json so subsequent generation runs still find
+  // sentences keyed by the new chapter ids. Earlier code wiped the
+  // cache outright, which made every post-restructure Generate halt
+  // with "No analysed sentences cached for this book."
+  await rebuildCacheFromEdits(state.manuscriptId, editsPath).catch((e) => {
+    console.error('[chapters-restructure] cache rebuild failed', e);
   });
 
   return {
