@@ -176,6 +176,7 @@ function readState(): {
     slug: string;
     audioModelKey?: string;
     audioRenderedAt?: string;
+    excluded?: boolean;
   }>;
 } {
   return JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
@@ -799,6 +800,60 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
     ]);
   });
 
+  it('does not run the renumber post-pass on split', async () => {
+    /* Split intentionally bypasses postProcessRestructure — see
+       applySplit comment in restructure.ts. This regression test pins
+       that contract: split a generic-titled chapter and assert the
+       split (cont.) title is preserved verbatim. */
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter 1\n\nFirst body sentence here.\nMore content.\n\n# Chapter 2\n\nSecond body sentence here.\nMore content.\n',
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'First.' },
+          { id: 2, chapterId: 1, characterId: 'narr', text: 'Second.' },
+          { id: 1, chapterId: 2, characterId: 'narr', text: 'Beta.' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/split`)
+      .send({ chapterId: 1, afterSentenceId: 1 });
+    expect(res.status).toBe(200);
+    const state = readState();
+    // Three chapters: split produced "(cont.)" for the second half;
+    // post-pass was NOT run so "Chapter 2" stays as id 3 unchanged
+    // by the renumber-generic-titles pass.
+    expect(state.chapters[0].title).toBe('Chapter 1');
+    expect(state.chapters[1].title).toBe('Chapter 1 (cont.)');
+    expect(state.chapters[2].title).toBe('Chapter 2');
+  });
+
   it('preserves subtitled generic titles round-trip', async () => {
     writeFileSync(
       join(bookDir, 'manuscript.md'),
@@ -848,5 +903,298 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
     expect(state.chapters[0].title).toBe('Chapter 1 — The End');
     expect(state.chapters[1].title).toBe('Chapter 2 — The Beginning');
     expect(state.chapters[2].title).toBe('Chapter 3 — The Middle');
+  });
+});
+
+/* -- plan 70b: exclude + refresh-titles ----------------------------- */
+
+describe('POST /:bookId/chapters/exclude (plan 70b)', () => {
+  it('flips Chapter.excluded for the requested ids; sentences untouched', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [2], excluded: true });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    expect(state.chapters).toHaveLength(3);
+    expect(state.chapters.find((c) => c.id === 2)?.excluded).toBe(true);
+    expect(state.chapters.find((c) => c.id === 1)?.excluded).toBeUndefined();
+    expect(state.chapters.find((c) => c.id === 3)?.excluded).toBeUndefined();
+
+    const edits = readEdits();
+    expect(edits.sentences).toHaveLength(6); // all original sentences preserved
+  });
+
+  it('un-excludes when excluded: false (truthy → undefined, matches reducer convention)', async () => {
+    // First exclude chapter 2
+    await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [2], excluded: true });
+    // Then un-exclude
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [2], excluded: false });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    expect(state.chapters.find((c) => c.id === 2)?.excluded).toBeUndefined();
+  });
+
+  it('preserves audio files on disk when excluding', async () => {
+    expect(existsSync(join(audioRoot, '02-chapter-two.mp3'))).toBe(true);
+    await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [2], excluded: true });
+    expect(existsSync(join(audioRoot, '02-chapter-two.mp3'))).toBe(true);
+  });
+
+  it('400 when chapterIds is missing or empty', async () => {
+    const a = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ excluded: true });
+    expect(a.status).toBe(400);
+    const b = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [], excluded: true });
+    expect(b.status).toBe(400);
+  });
+
+  it('400 when excluded is not a boolean', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [2], excluded: 'yes' });
+    expect(res.status).toBe(400);
+  });
+
+  it('400 when chapter id does not exist', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [99], excluded: true });
+    expect(res.status).toBe(400);
+  });
+
+  it('runs the post-process pass — generic titles still re-derive against new positions', async () => {
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter 1\n\nFirst body sentence here.\nMore content.\n\n# Chapter 2\n\nSecond body sentence here.\nMore content.\n\n# Chapter 3\n\nThird body sentence here.\nMore content.\n',
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [
+          // Chapter 1 has a non-generic title — should be preserved.
+          { id: 1, title: 'The Verdict', slug: '01-the-verdict' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'A.' },
+          { id: 1, chapterId: 2, characterId: 'narr', text: 'B.' },
+          { id: 1, chapterId: 3, characterId: 'narr', text: 'C.' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [3], excluded: true });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    // Exclude is soft-hide; ids unchanged. Generic titles still re-derive
+    // against THEIR id (no shift since no renumber on exclude). Custom
+    // "The Verdict" preserved.
+    expect(state.chapters[0].title).toBe('The Verdict');
+    expect(state.chapters[1].title).toBe('Chapter 2');
+    expect(state.chapters[2].title).toBe('Chapter 3');
+    expect(state.chapters[2].excluded).toBe(true);
+  });
+});
+
+describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
+  it('promotes first-sentence candidate when title is generic and candidate passes heuristics', async () => {
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter 1\n\nFirst body sentence here.\nMore content.\n\n# Chapter 2\n\nSecond body sentence here.\nMore content.\n\n# Chapter 3\n\nThird body sentence here.\nMore content.\n',
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          // Title-cased name-like first sentence — should promote.
+          {
+            id: 1,
+            chapterId: 1,
+            characterId: 'narr',
+            text: 'Registry File For Sophie Foster',
+          },
+          // Dialogue — should be rejected.
+          {
+            id: 1,
+            chapterId: 2,
+            characterId: 'narr',
+            text: '"Hello," she said softly.',
+          },
+          // Long body sentence — should be rejected by length cap.
+          {
+            id: 1,
+            chapterId: 3,
+            characterId: 'narr',
+            text: 'A very long opening sentence that runs well past the eighty character limit chapter titles allow for, almost certainly body text not a title.',
+          },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: true });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    expect(state.chapters[0].title).toBe('Registry File For Sophie Foster');
+    expect(state.chapters[1].title).toBe('Chapter 2'); // dialogue rejected
+    expect(state.chapters[2].title).toBe('Chapter 3'); // too long, rejected
+  });
+
+  it('preserves user-customized chapter titles (non-generic pattern)', async () => {
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter 1\n\nFirst body sentence here.\nMore content.\n\n# Chapter 2\n\nSecond body sentence here.\nMore content.\n\n# Chapter 3\n\nThird body sentence here.\nMore content.\n',
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'The Verdict', slug: '01-the-verdict' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          // Title-cased candidate for chapter 1 — but title isn't generic.
+          {
+            id: 1,
+            chapterId: 1,
+            characterId: 'narr',
+            text: 'Some Tempting Candidate',
+          },
+          { id: 1, chapterId: 2, characterId: 'narr', text: 'Another One' },
+          { id: 1, chapterId: 3, characterId: 'narr', text: 'Third Title Here' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: true });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    expect(state.chapters[0].title).toBe('The Verdict'); // non-generic, preserved
+    expect(state.chapters[1].title).toBe('Another One'); // promoted
+    expect(state.chapters[2].title).toBe('Third Title Here'); // promoted
+  });
+
+  it('skips first-line promotion when useFirstLine: false', async () => {
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter 1\n\nFirst body sentence here.\nMore content.\n',
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: '01-chapter-1' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'Some Name' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: false });
+    expect(res.status).toBe(200);
+    const state = readState();
+    expect(state.chapters[0].title).toBe('Chapter 1'); // not promoted
+  });
+
+  it('404 when book does not exist', async () => {
+    const res = await request(app)
+      .post(`/api/books/no-such-book/chapters/refresh-titles`)
+      .send({});
+    expect(res.status).toBe(404);
   });
 });

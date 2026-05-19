@@ -49,6 +49,14 @@ export interface RestructurePanelProps {
   /** Called when the user confirms a reorder. `order` is the array of
       CURRENT chapter ids in their new desired order. */
   onReorder: (order: number[]) => Promise<void> | void;
+  /** Called when the user toggles a single chapter's excluded flag
+      (plan 70b). One-row at a time — bulk-exclude-via-selection lives
+      in the toolbar separately. */
+  onExclude?: (chapterId: number, excluded: boolean) => Promise<void> | void;
+  /** Called when the user clicks "Refresh chapter names" (plan 70b).
+      Triggers re-parse of the source manuscript + first-line promotion
+      pass for any chapter still carrying a generic auto-title. */
+  onRefreshTitles?: () => Promise<void> | void;
   /** Optional back action — when omitted the back button is hidden
       (e.g. when mounted in a modal that has its own close). */
   onBack?: () => void;
@@ -70,6 +78,9 @@ interface SortableChapterRowProps {
   onToggleExpand: () => void;
   chapterSentences: Sentence[];
   onSplitHere: (afterSentenceId: number) => void;
+  /** Plan 70b — per-row exclude toggle. Omitted when the consumer
+      didn't wire `onExclude` (back-compat with pre-70b mounts). */
+  onToggleExcluded?: () => void;
 }
 
 function SortableChapterRow({
@@ -86,6 +97,7 @@ function SortableChapterRow({
   onToggleExpand,
   chapterSentences,
   onSplitHere,
+  onToggleExcluded,
 }: SortableChapterRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: chapter.id });
@@ -96,12 +108,15 @@ function SortableChapterRow({
     opacity: isDragging ? 0.6 : 1,
   };
 
+  const isExcluded = chapter.excluded === true;
+
   return (
     <li
       ref={setNodeRef}
       style={style}
       data-testid={`restructure-row-${chapter.id}`}
-      className={`bg-white border border-ink/10 rounded-2xl px-4 py-3 flex flex-col gap-2 ${selected ? 'ring-2 ring-magenta/60' : ''}`}
+      data-excluded={isExcluded ? 'true' : 'false'}
+      className={`bg-white border border-ink/10 rounded-2xl px-4 py-3 flex flex-col gap-2 ${selected ? 'ring-2 ring-magenta/60' : ''} ${isExcluded ? 'opacity-60' : ''}`}
     >
       <div className="flex items-center gap-3">
         <button
@@ -124,16 +139,21 @@ function SortableChapterRow({
           type="checkbox"
           aria-label={`Select chapter ${chapter.title} for merge`}
           checked={selected}
-          disabled={busy || !selectable}
+          disabled={busy || !selectable || isExcluded}
           onChange={onToggleSelect}
           className="w-4 h-4 accent-magenta cursor-pointer disabled:cursor-not-allowed"
           data-testid={`restructure-check-${chapter.id}`}
         />
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-ink truncate">{chapter.title}</div>
+          <div
+            className={`text-sm font-semibold text-ink truncate ${isExcluded ? 'line-through' : ''}`}
+          >
+            {chapter.title}
+          </div>
           <div className="text-xs text-ink/55 truncate">
             {sentenceCount} sentence{sentenceCount === 1 ? '' : 's'}
             {chapter.duration ? ` · ${chapter.duration}` : ''}
+            {isExcluded ? ' · excluded' : ''}
           </div>
           {firstExcerpt && (
             <div className="text-xs text-ink/50 mt-1 line-clamp-1">
@@ -148,6 +168,18 @@ function SortableChapterRow({
             </div>
           )}
         </div>
+        {onToggleExcluded && (
+          <button
+            type="button"
+            onClick={onToggleExcluded}
+            disabled={busy}
+            className="px-2.5 py-1 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink/70 hover:text-ink hover:border-ink/30 disabled:opacity-40 disabled:cursor-not-allowed"
+            data-testid={`restructure-exclude-${chapter.id}`}
+            title={isExcluded ? 'Include this chapter in generation' : 'Exclude from generation'}
+          >
+            {isExcluded ? 'Include' : 'Exclude'}
+          </button>
+        )}
         <button
           type="button"
           onClick={onToggleExpand}
@@ -203,6 +235,8 @@ export function RestructureChaptersPanel({
   onMerge,
   onSplit,
   onReorder,
+  onExclude,
+  onRefreshTitles,
   onBack,
   busy = false,
 }: RestructurePanelProps) {
@@ -319,6 +353,30 @@ export function RestructureChaptersPanel({
     });
   }, [draftOrder, orderChanged, onReorder]);
 
+  const handleToggleExcluded = useCallback(
+    (chapterId: number) => {
+      if (!onExclude) return;
+      const ch = chapters.find((c) => c.id === chapterId);
+      if (!ch) return;
+      // No confirm modal — exclude is reversible (Include flips back),
+      // matches the soft-hide invariant from the Generate view.
+      void onExclude(chapterId, !ch.excluded);
+    },
+    [chapters, onExclude],
+  );
+
+  const handleRefreshTitlesClick = useCallback(() => {
+    if (!onRefreshTitles) return;
+    setPending({
+      kind: 'merge', // confirm UI is generic — reusing the modal
+      description:
+        'Refresh chapter names? Auto-generated "Chapter N" titles will be re-derived from the source manuscript, and chapters whose first line looks like a name will adopt it. User-customised titles are preserved.',
+      apply: async () => {
+        await onRefreshTitles();
+      },
+    });
+  }, [onRefreshTitles]);
+
   const handleSplit = useCallback(
     (chapterId: number, afterSentenceId: number) => {
       const ch = chapters.find((c) => c.id === chapterId);
@@ -359,7 +417,10 @@ export function RestructureChaptersPanel({
 
   return (
     <div className="flex flex-col gap-4" data-testid="restructure-panel">
-      <div className="flex items-center gap-2 flex-wrap" data-testid="restructure-toolbar">
+      <div
+        className="sticky top-16 z-30 -mx-4 px-4 py-2 bg-canvas/95 backdrop-blur-sm border-b border-ink/10 flex items-center gap-2 flex-wrap"
+        data-testid="restructure-toolbar"
+      >
         {onBack && (
           <button
             type="button"
@@ -394,6 +455,18 @@ export function RestructureChaptersPanel({
             data-testid="restructure-cancel-selection"
           >
             Cancel selection
+          </button>
+        )}
+        {onRefreshTitles && (
+          <button
+            type="button"
+            onClick={handleRefreshTitlesClick}
+            disabled={busy}
+            className="ml-auto px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink/70 hover:text-ink disabled:opacity-40"
+            data-testid="restructure-refresh-titles"
+            title="Re-derive chapter names from the source manuscript"
+          >
+            Refresh chapter names
           </button>
         )}
         {orderChanged && (
@@ -444,6 +517,9 @@ export function RestructureChaptersPanel({
                   onToggleExpand={() => toggleExpand(chapter.id)}
                   chapterSentences={chapterSentences}
                   onSplitHere={(sid) => handleSplit(chapter.id, sid)}
+                  onToggleExcluded={
+                    onExclude ? () => handleToggleExcluded(chapter.id) : undefined
+                  }
                 />
               );
             })}
