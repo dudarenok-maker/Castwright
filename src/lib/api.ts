@@ -901,11 +901,16 @@ async function mockRejectChapterRevision(_args: {
   await wait(100);
 }
 
-async function mockPollRevisions(_args: PollArgs): Promise<RevisionsResponse> {
+async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
   await wait(200);
+  /* Filter drift to the requested book so the mock mirrors the server's
+     per-book endpoint shape. The dev fixture seeds events for two
+     books — the modal's multi-book grouping only renders if the slice
+     accumulates entries from each book separately, which is what
+     happens when `applyPoll` is called once per book. */
   return {
     pending: PENDING_REVISIONS,
-    drift: VOICE_DRIFT_EVENTS,
+    drift: VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
   };
 }
 
