@@ -69,7 +69,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [13 — TTS engine picker](13-tts-engine-picker.md) — Two-tier engine + model selector.
 - [14a — Kokoro v1 TTS engine](14a-tts-sidecar-kokoro.md) — Local sidecar default, English-only, per-engine cast voice profiles.
 - [15 — Gemini cloud TTS](15-tts-gemini-cloud.md) — Cloud opt-in.
-- [43 — Auto-start TTS sidecar](43-auto-start-sidecar.md) — Per-user `autoStartSidecar` preference (default ON); Node owns the sidecar child-process lifecycle so `start-app.bat` brings up TTS in one shot. **Status: active.**
 
 ### G. Generation
 
@@ -157,3 +156,4 @@ breadcrumb so cross-references still resolve.
 - [57 — Listen-view download tiles](archive/57-download-tiles.md) — Wires the M4B chaptered + new MP3 ZIP tiles on the listen view to open `ExportAudiobookModal` with the format pre-filled; streaming-link tile remains "Coming soon" pending a slugged URL endpoint. Shipped 2026-05-19.
 - [58 — E2E coverage refresh](archive/58-e2e-coverage-refresh.md) — Un-quarantines `listen-playback` + `new-book-flow`; adds `binary-upload.spec.ts` covering EPUB / PDF / MOBI / AZW3 routing; applies file-level serial mode to five contention-flaky spec files. From 3-5 hard failures per `verify` run to 0. Shipped 2026-05-19.
 - [59 — Parallel Claude Code sessions](archive/59-parallel-claude-sessions.md) — `scripts/wt-new.mjs` spawns a git worktree on a new branch with non-colliding dev-server ports so multiple top-level `claude` sessions can run in parallel without fighting over `:5173` / `:8080` / `:9000` / `:5174`. Slot N → ports offset by `N*10`. `scripts/wt-list.mjs` lists active worktrees + their assignments. `vite.config.ts` + `playwright.config.ts` now env-driven; stock defaults preserved for the main worktree. Shipped 2026-05-19.
+- [43 — Auto-start TTS sidecar](archive/43-auto-start-sidecar.md) — Per-user `autoStartSidecar` preference (default ON); Node owns the sidecar child-process lifecycle (port-9000 probe → spawn → `.run/tts.pid` → `win32` `taskkill /T /F` tree-kill on SIGINT/SIGTERM). `start-app.bat` brings up frontend + server + sidecar in one shot. `PRELOAD_COQUI` env propagation gated on `defaultTtsModelKey === 'coqui-xtts-v2'` (Kokoro's eager-load is unconditional inside the sidecar). 6-case Vitest covers the spawn/probe/tree-kill contract. Shipped 2026-05-17.
