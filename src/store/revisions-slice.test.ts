@@ -1,7 +1,7 @@
 // Pairs with docs/features/12-revisions-pipeline.md
 
 import { describe, expect, it } from 'vitest';
-import { revisionsSlice, revisionsActions } from './revisions-slice';
+import { revisionsSlice, revisionsActions, selectDriftByBook } from './revisions-slice';
 import type { Revision, DriftEvent, RevisionsResponse } from '../lib/types';
 
 const rev = (id: string, overrides: Partial<Revision> = {}): Revision => ({
@@ -14,6 +14,8 @@ const rev = (id: string, overrides: Partial<Revision> = {}): Revision => ({
 
 const drift = (id: string, overrides: Partial<DriftEvent> = {}): DriftEvent => ({
   id,
+  bookId: 'book-A',
+  chapterTitle: 'Chapter One',
   characterId: 'halloran',
   chapterId: 1,
   severity: 'mild',
@@ -414,6 +416,104 @@ describe('revisionsSlice — plan 55 timeline', () => {
     );
     expect(s.timeline[7]).toHaveLength(1);
     expect(s.timeline[7][0].id).toBe('r99');
+  });
+});
+
+describe('revisionsSlice — multi-book drift (plan: drift-report-fidelity)', () => {
+  it('applyPoll with bookId replaces only that book\'s drift, preserving siblings', () => {
+    /* Two concurrent books — Book A polled first, then Book B. Both books'
+       drift events should coexist in the flat list. */
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        bookId: 'book-A',
+        drift: [drift('d-A1', { bookId: 'book-A' })],
+      }),
+    );
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.applyPoll({
+        bookId: 'book-B',
+        drift: [drift('d-B1', { bookId: 'book-B' })],
+      }),
+    );
+    expect(s.drift.map((d) => d.id).sort()).toEqual(['d-A1', 'd-B1']);
+  });
+
+  it('applyPoll with bookId stamps bookId on events that arrive without it', () => {
+    /* Defensive: if the server omits bookId (older deploy), stamp it from
+       the poll context so the slice's selectors stay coherent. */
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        bookId: 'book-A',
+        drift: [{ ...drift('d-A1'), bookId: undefined as unknown as string }],
+      }),
+    );
+    expect(s.drift[0].bookId).toBe('book-A');
+  });
+
+  it('re-polling Book A replaces only Book A\'s events', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        bookId: 'book-A',
+        drift: [drift('d-A-old', { bookId: 'book-A' })],
+      }),
+    );
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.applyPoll({
+        bookId: 'book-B',
+        drift: [drift('d-B1', { bookId: 'book-B' })],
+      }),
+    );
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.applyPoll({
+        bookId: 'book-A',
+        drift: [drift('d-A-new', { bookId: 'book-A' })],
+      }),
+    );
+    expect(s.drift.map((d) => d.id).sort()).toEqual(['d-A-new', 'd-B1']);
+  });
+
+  it('hydrateFromBookState with bookId merges into the flat drift list', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        bookId: 'book-A',
+        drift: [drift('d-A1', { bookId: 'book-A' })],
+      }),
+    );
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.hydrateFromBookState({
+        bookId: 'book-B',
+        drift: [drift('d-B1', { bookId: 'book-B' })],
+        dismissed: [],
+      }),
+    );
+    expect(s.drift.map((d) => d.id).sort()).toEqual(['d-A1', 'd-B1']);
+  });
+
+  it('selectDriftByBook groups flat drift events by bookId', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          drift('d-A1', { bookId: 'book-A' }),
+          drift('d-B1', { bookId: 'book-B' }),
+          drift('d-A2', { bookId: 'book-A' }),
+        ],
+      }),
+    );
+    const grouped = selectDriftByBook({ revisions: s });
+    /* First-appearance order is preserved so the modal doesn't reshuffle
+       sections when a single book's events trickle in mid-render. */
+    expect(grouped.map((g) => g.bookId)).toEqual(['book-A', 'book-B']);
+    expect(grouped[0].events.map((d) => d.id)).toEqual(['d-A1', 'd-A2']);
+    expect(grouped[1].events.map((d) => d.id)).toEqual(['d-B1']);
   });
 });
 

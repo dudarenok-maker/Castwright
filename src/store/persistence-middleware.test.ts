@@ -130,7 +130,12 @@ describe('persistenceMiddleware — payload shape', () => {
 
   it('sends both pending + drift for revisions actions', async () => {
     const next = vi.fn((x) => x);
-    const state = baseState({ revisions: { pending: [{ id: 'r1' }], drift: [{ id: 'd1' }] } });
+    /* Each drift event carries its own bookId so the persist filter can
+       send only THIS book's drift to revisions.json (cross-book entries
+       belong on their own books' files). */
+    const state = baseState({
+      revisions: { pending: [{ id: 'r1' }], drift: [{ id: 'd1', bookId: 'book-1' }] },
+    });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/dismissDrift' });
     await advance(500);
     /* Plan 55 — `timeline` rides along with every revisions persist so a
@@ -139,7 +144,30 @@ describe('persistenceMiddleware — payload shape', () => {
        so this assertion still pins the dismissed-drift case shape. */
     expect(putBookState).toHaveBeenCalledWith('book-1', {
       slice: 'revisions',
-      patch: { pending: [{ id: 'r1' }], drift: [{ id: 'd1' }] },
+      patch: { pending: [{ id: 'r1' }], drift: [{ id: 'd1', bookId: 'book-1' }] },
+    });
+  });
+
+  it('drops other books\' drift events from the per-book persist patch', async () => {
+    /* Cross-book invariant: the flat drift list spans concurrently-active
+       books, but each book's revisions.json must only carry its own
+       events. Otherwise re-hydration on Book A would replay Book B's
+       drift into Book A's slot. */
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      revisions: {
+        pending: [],
+        drift: [
+          { id: 'd-mine', bookId: 'book-1' },
+          { id: 'd-other', bookId: 'book-2' },
+        ],
+      },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/dismissDrift' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'revisions',
+      patch: { pending: [], drift: [{ id: 'd-mine', bookId: 'book-1' }] },
     });
   });
 
@@ -177,7 +205,7 @@ describe('persistenceMiddleware — payload shape', () => {
     const state = baseState({
       revisions: {
         pending: [{ id: 'r1' }],
-        drift: [{ id: 'd1' }],
+        drift: [{ id: 'd1', bookId: 'book-1' }],
         dismissed: ['d2'],
         acceptedSelections: { 'r-prev': { 4: 'B' } },
       },
@@ -188,7 +216,7 @@ describe('persistenceMiddleware — payload shape', () => {
       slice: 'revisions',
       patch: {
         pending: [{ id: 'r1' }],
-        drift: [{ id: 'd1' }],
+        drift: [{ id: 'd1', bookId: 'book-1' }],
         dismissed: ['d2'],
         acceptedSelections: { 'r-prev': { 4: 'B' } },
       },
@@ -247,7 +275,7 @@ describe('persistenceMiddleware — payload shape', () => {
     const state = baseState({
       revisions: {
         pending: [{ id: 'r1' }],
-        drift: [{ id: 'd1' }],
+        drift: [{ id: 'd1', bookId: 'book-1' }],
         dismissed: ['d2'],
         acceptedSelections: { 'r-prev': { 4: 'B' } },
       },
@@ -261,7 +289,7 @@ describe('persistenceMiddleware — payload shape', () => {
       slice: 'revisions',
       patch: {
         pending: [{ id: 'r1' }],
-        drift: [{ id: 'd1' }],
+        drift: [{ id: 'd1', bookId: 'book-1' }],
         dismissed: ['d2'],
       },
     });

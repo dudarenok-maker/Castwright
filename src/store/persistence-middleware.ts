@@ -40,7 +40,7 @@ const DEBOUNCE_MS = 500;
    and would create a write-loop if echoed back. */
 const PERSIST_RULES: Record<
   string,
-  { slice: StateSlice; build: (s: PersistableRootState) => unknown }
+  { slice: StateSlice; build: (s: PersistableRootState, bookId: string) => unknown }
 > = {
   'cast/setCharacters': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
   'cast/declineMatch': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
@@ -68,27 +68,27 @@ const PERSIST_RULES: Record<
      would resurface on the next poll. */
   'revisions/acceptAllPending': {
     slice: 'revisions',
-    build: (s) => ({
+    build: (s, bookId) => ({
       pending: s.revisions.pending,
-      drift: s.revisions.drift,
+      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
       dismissed: s.revisions.dismissed,
       timeline: s.revisions.timeline,
     }),
   },
   'revisions/rejectAllPending': {
     slice: 'revisions',
-    build: (s) => ({
+    build: (s, bookId) => ({
       pending: s.revisions.pending,
-      drift: s.revisions.drift,
+      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
       dismissed: s.revisions.dismissed,
       timeline: s.revisions.timeline,
     }),
   },
   'revisions/dismissDrift': {
     slice: 'revisions',
-    build: (s) => ({
+    build: (s, bookId) => ({
       pending: s.revisions.pending,
-      drift: s.revisions.drift,
+      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
       dismissed: s.revisions.dismissed,
       timeline: s.revisions.timeline,
     }),
@@ -100,9 +100,9 @@ const PERSIST_RULES: Record<
      bulk variants. */
   'revisions/acceptRevision': {
     slice: 'revisions',
-    build: (s) => ({
+    build: (s, bookId) => ({
       pending: s.revisions.pending,
-      drift: s.revisions.drift,
+      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
       dismissed: s.revisions.dismissed,
       acceptedSelections: s.revisions.acceptedSelections,
       timeline: s.revisions.timeline,
@@ -110,9 +110,9 @@ const PERSIST_RULES: Record<
   },
   'revisions/rejectRevision': {
     slice: 'revisions',
-    build: (s) => ({
+    build: (s, bookId) => ({
       pending: s.revisions.pending,
-      drift: s.revisions.drift,
+      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
       dismissed: s.revisions.dismissed,
       timeline: s.revisions.timeline,
     }),
@@ -124,9 +124,9 @@ const PERSIST_RULES: Record<
      POST /audio/previous/restore endpoint.) */
   'revisions/rolledBack': {
     slice: 'revisions',
-    build: (s) => ({
+    build: (s, bookId) => ({
       pending: s.revisions.pending,
-      drift: s.revisions.drift,
+      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
       dismissed: s.revisions.dismissed,
       acceptedSelections: s.revisions.acceptedSelections,
       timeline: s.revisions.timeline,
@@ -139,18 +139,18 @@ const PERSIST_RULES: Record<
      chapter completed but before the user opened the diff. */
   'revisions/enqueuePending': {
     slice: 'revisions',
-    build: (s) => ({
+    build: (s, bookId) => ({
       pending: s.revisions.pending,
-      drift: s.revisions.drift,
+      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
       dismissed: s.revisions.dismissed,
       timeline: s.revisions.timeline,
     }),
   },
   'revisions/markRevisionPlayable': {
     slice: 'revisions',
-    build: (s) => ({
+    build: (s, bookId) => ({
       pending: s.revisions.pending,
-      drift: s.revisions.drift,
+      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
       dismissed: s.revisions.dismissed,
       timeline: s.revisions.timeline,
     }),
@@ -233,7 +233,7 @@ export const persistenceMiddleware: Middleware = (store) => {
     const bookId = bookIdFromState(after);
     if (!bookId) return result;
 
-    pending.set(rule.slice, rule.build(after));
+    pending.set(rule.slice, rule.build(after, bookId));
     const prev = timers.get(rule.slice);
     if (prev) clearTimeout(prev);
     timers.set(
