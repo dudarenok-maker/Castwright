@@ -436,7 +436,7 @@ export function CastView({
 
         {selectedCharIds.length > 0 && (
           <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 fade-in">
-            <div className="bg-ink text-canvas rounded-full shadow-float px-4 py-2 flex items-center gap-3">
+            <div className="floating-pill-inverse rounded-full shadow-float px-4 py-2 flex items-center gap-3">
               <span className="text-xs text-canvas/60">Selected</span>
               <span className="px-2 py-0.5 rounded-full bg-canvas/15 text-canvas font-bold text-sm tabular-nums">
                 {selectedCharIds.length}
