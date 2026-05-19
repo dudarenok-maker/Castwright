@@ -376,7 +376,9 @@ function ConfirmCharacterCard({
                 <span className="text-ink/40">
                   {' '}
                   Description, attributes, and aliases get merged — both books inherit the richer
-                  profile. Voices and already-generated chapter audio don't change.
+                  profile. Voices and already-generated chapter audio don't change — but the
+                  matched book will surface drift events for any character whose audio is now out
+                  of step with the merged profile, to review at your own pace.
                 </span>
               </span>
             </label>
