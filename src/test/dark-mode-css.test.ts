@@ -60,6 +60,17 @@ describe('dark-mode CSS overrides (styles.css)', () => {
     { selector: '.hover\\:bg-red-50:hover', label: 'hover red-50' },
     { selector: '.border-red-200', label: 'red-200 panel border' },
     { selector: '.border-red-300\\/60', label: 'red-300 /60 select border' },
+    /* Voice-drift banner palette (cast view, `src/views/cast.tsx:206–228`).
+       Uses `bg-amber-50/60` as base + `hover:bg-amber-50` on hover, plus
+       `text-amber-700` / `bg-amber-100` / `border-amber-200`. The translucent
+       /60 variant and the hover form each need their own selector overrides
+       — Tailwind compiles them separately from the bare `.bg-amber-50` rule. */
+    { selector: '.bg-amber-50', label: 'amber-50 status fill' },
+    { selector: '.bg-amber-50\\/60', label: 'amber-50 /60 (drift banner base)' },
+    { selector: '.bg-amber-100', label: 'amber-100 icon bubble' },
+    { selector: '.hover\\:bg-amber-50:hover', label: 'amber-50 hover (drift banner)' },
+    { selector: '.text-amber-700', label: 'amber-700 status text' },
+    { selector: '.border-amber-200', label: 'amber-200 panel border' },
   ])('repaints $label ($selector) under [data-theme=\'dark\']', ({ selector }) => {
     const pattern = new RegExp(
       String.raw`\[data-theme='dark'\][^{]*` +
