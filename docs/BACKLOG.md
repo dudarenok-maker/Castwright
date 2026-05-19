@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-19 (post plans 53–58 merge):** Must 0 · Should 0 · Could 32 · Won't 9
+**Counts as of 2026-05-19 (post plan 60 ship):** Must 0 · Should 0 · Could 31 · Won't 9
 
 ---
 
@@ -176,15 +176,6 @@ Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-comp
 - _Key files:_ `src/views/voices.tsx`; `src/store/cast-slice.ts` (Save routing); `src/modals/compare-cast-modal.tsx` (if the viewing-only banner is needed).
 - _Depends on:_ Could #16 (the same on-demand fetch machinery).
 - _Benefit (user):_ enables A/B for users who reuse the same TTS voice across books — e.g. comparing the same narrator across two books in a series to spot drift.
-
-### 18. CI integration for the test suite
-
-Source: [`37-e2e-playwright.md`](features/37-e2e-playwright.md) follow-ups.
-
-- _What:_ Add a GitHub Actions (or equivalent) workflow that runs `npm run verify` on every PR. Cache `node_modules` and the Playwright browser. Budget for e2e being the slowest job (~60 s cold).
-- _Acceptance:_ PRs that break tests are blocked from merge. Workflow runs in under 10 min cold, under 5 min warm.
-- _Key files:_ new `.github/workflows/verify.yml`.
-- _Benefit (technical):_ eliminates the "works on my machine" gap. Pairs with the visual baselines shipped 2026-05-17 (`e2e/visual.spec.ts`) — without CI, the baselines are a tree-falling-in-a-forest.
 
 ### 21. Windows installer (Inno Setup or NSIS) wrapping the release zip
 

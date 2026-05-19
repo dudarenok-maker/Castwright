@@ -1,0 +1,86 @@
+name: Verify
+
+# Plan 60 — CI verify-on-PR.
+# Runs `npm run verify` on every PR targeting main so red tests block merge.
+# Mirrors the local pre-push gate (typecheck + lint + a11y + all tests + e2e
+# + build) on a clean Ubuntu runner. The release workflow (release.yml)
+# already covers cross-OS verify on tag push; keeping this workflow
+# Ubuntu-only keeps PR CI fast and cheap.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Cancel an in-flight run when the PR is updated; the new commit's run
+# supersedes any prior one for the same PR.
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: npm run verify
+    runs-on: ubuntu-latest
+    # Cold target: under 10 min (verify-cache plan 50 measures ~120 s cold
+    # locally; e2e is the slowest leg at ~60 s cold per BACKLOG #18). Warm
+    # target: under 5 min — but warm-cache savings only apply when
+    # `.verify-cache.json` survives across runs, which it does not here
+    # (each runner is ephemeral), so every CI run is effectively cold.
+    # We still benefit from npm + Playwright caches keyed on package-lock.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      # The server pretest hook (`scripts/preflight-ffmpeg.cjs`) refuses to
+      # run when ffmpeg isn't on PATH — the MP3 encoder in
+      # `server/src/tts/mp3.ts` shells out to it. Install ffmpeg before
+      # `npm run verify` so the server tests can spawn it.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install server deps
+        run: npm --prefix server ci
+
+      # Cache the Playwright chromium download (~100 MB) so warm runs skip
+      # the install. Key on the root lockfile hash — `@playwright/test`
+      # version lives there, so a lockfile change invalidates the cache.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      # `npm run verify` is the same battery the pre-push hook runs:
+      # lint + typecheck + test:hooks + test + test:server + test:scripts
+      # + test:sidecar + test:e2e + build. test:scripts (Pester) and
+      # test:sidecar (pytest) skip with a banner when their toolchains
+      # aren't bootstrapped — fresh runners don't have Pester 5 or the
+      # sidecar venv, so both legs no-op cleanly here. The cross-OS
+      # release.yml workflow is the source of truth for those harnesses
+      # on a fully-bootstrapped runner.
+      - name: Verify
+        run: npm run verify
