@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-19
 owner: null
 ---
 
@@ -105,4 +105,4 @@ owner: null
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Shipped 2026-05-19 — merged via PR #39 (`a859261`) including the e2e-testid fix (`7a623b3`) that pinned the spec to `data-testid="export-audiobook-modal"` + `export-format-m4b/mp3-zip` rather than the modal's non-existent `role="dialog"`. Streaming-link tile carries `testid="download-tile-streaming"` so the disabled-state assertion doesn't depend on an xpath-ancestor walk. Zero server changes — both formats already supported by the existing export route. Spec delta vs original BACKLOG entry: only two tiles were rendered pre-plan-57 (M4B + Streaming link); a third MP3 ZIP tile was added in this plan rather than wiring an existing one.
