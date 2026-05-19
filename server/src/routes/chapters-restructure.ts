@@ -167,6 +167,9 @@ async function applyRestructure(
       chapters: result.state.chapters,
       sentenceRemap: result.remap,
       audioSummary, // not part of OpenAPI envelope — debug aid only
+      // Non-fatal advisories: orphan recovery counts, prune-empty
+      // counts, generic-title renumber counts. Empty array on clean ops.
+      warnings: result.warnings,
     },
   };
 }
