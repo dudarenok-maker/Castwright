@@ -62,8 +62,17 @@ interface RevisionsPersisted {
 
 interface DriftEvent {
   id: string;
+  /** Book the event belongs to. Stamped at emit time from the route
+      param so the Drift Report modal can group events from multiple
+      concurrently-active books in a single flat list. */
+  bookId: string;
   characterId: string;
   chapterId: number;
+  /** Chapter title embedded at emit time. Lets the Drift Report modal
+      label rows without joining against the frontend's chapters slice
+      (single-book-scoped, but drift may span books). Falls back to the
+      chapter-scan title and finally to "Chapter N". */
+  chapterTitle: string;
   severity: 'mild' | 'moderate' | 'severe';
   factor: string;
   factorLabel: string;
@@ -74,6 +83,22 @@ interface DriftEvent {
       directly. Stays optional / absent on moderate + mild events. */
   autoQueueable?: boolean;
   metrics?: { current: number; expected: number; unit: string };
+  /** The CharacterSnapshot recorded at chapter-render time. Diffed by
+      the modal against `current` to render a side-by-side "When
+      rendered / Now" comparison. Mirrors the on-disk snapshot. */
+  snapshot: CharacterSnapshot;
+  /** The live cast profile for the character at poll time. Carried on
+      the event so the modal can render comparison cards even for
+      events belonging to non-active books (whose cast isn't in the
+      frontend's cast slice). */
+  current: {
+    name?: string;
+    voiceId?: string;
+    gender?: 'male' | 'female' | 'neutral';
+    ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+    tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
+    attributes?: string[];
+  };
   detected: string;
   suggestedAction: string;
 }
@@ -103,6 +128,7 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir, state } = located;
+    const bookId = req.params.bookId;
 
     const castFile = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
     const cast: CastCharacter[] = castFile?.characters ?? [];
@@ -116,15 +142,32 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
     const dismissed = new Set(Array.isArray(persisted?.dismissed) ? persisted!.dismissed! : []);
 
     const segmentsByChapter = await loadSegmentsFiles(bookDir, state.chapters);
+    /* Build a chapterId -> scan title fallback map once. `seg.chapterTitle`
+       wins when populated (older segments files may omit it); state.chapters
+       is the next-best source; "Chapter N" is the floor. */
+    const scanTitleById = new Map<number, string>();
+    for (const ch of state.chapters) scanTitleById.set(ch.id, ch.title);
     const drift: DriftEvent[] = [];
 
     for (const seg of segmentsByChapter) {
+      const chapterTitle =
+        seg.chapterTitle?.trim() ||
+        scanTitleById.get(seg.chapterId)?.trim() ||
+        `Chapter ${seg.chapterId}`;
       const snapshots = seg.characterSnapshots ?? {};
       for (const [characterId, snapshot] of Object.entries(snapshots)) {
         const current = castById.get(characterId);
         if (!current) continue; // character removed from cast — nothing actionable here
         const detectedAt = seg.synthesizedAt ?? new Date().toISOString();
-        const ctx = { chapterId: seg.chapterId, characterId, snapshot, current, detectedAt };
+        const ctx = {
+          bookId,
+          chapterId: seg.chapterId,
+          chapterTitle,
+          characterId,
+          snapshot,
+          current,
+          detectedAt,
+        };
         /* No engine-drift factor: engine isn't stored in cast.json (it's per-
            generation, set on the Generate view), so there's no current value
            to compare against. A voiceId swap covers the cross-engine case in
@@ -148,11 +191,34 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
 });
 
 interface DriftContext {
+  bookId: string;
   chapterId: number;
+  chapterTitle: string;
   characterId: string;
   snapshot: CharacterSnapshot;
   current: CastCharacter;
   detectedAt: string;
+}
+
+/* Projection of the comparison context shared by every emit site so the
+   modal renders a self-sufficient side-by-side card. Built once per
+   emit; helpers spread it into the event. */
+function comparisonFields(
+  ctx: DriftContext,
+): Pick<DriftEvent, 'bookId' | 'chapterTitle' | 'snapshot' | 'current'> {
+  return {
+    bookId: ctx.bookId,
+    chapterTitle: ctx.chapterTitle,
+    snapshot: ctx.snapshot,
+    current: {
+      name: ctx.current.name,
+      voiceId: ctx.current.voiceId,
+      gender: ctx.current.gender,
+      ageRange: ctx.current.ageRange,
+      tone: ctx.current.tone,
+      attributes: ctx.current.attributes,
+    },
+  };
 }
 
 /* Severe drift = the listener will hear "different person". The frontend
@@ -189,6 +255,7 @@ function pushHardDrift(
     autoQueueable: autoQueueableFor('severe'),
     detected: ctx.detectedAt,
     suggestedAction: 'regenerate_chapter',
+    ...comparisonFields(ctx),
   });
 }
 
@@ -226,6 +293,7 @@ function pushAttributesDrift(out: DriftEvent[], ctx: DriftContext): void {
     description: `Attributes ${parts.join('; ')} after this chapter rendered. Prebuilt-voice picker may now resolve to a different voice on regenerate.`,
     detected: ctx.detectedAt,
     suggestedAction: 'regenerate_chapter',
+    ...comparisonFields(ctx),
   });
 }
 
@@ -259,11 +327,19 @@ function pushToneDrift(out: DriftEvent[], ctx: DriftContext, key: ToneKey): void
     metrics: { current: after, expected: before, unit: 'points' },
     detected: ctx.detectedAt,
     suggestedAction: 'regenerate_chapter',
+    ...comparisonFields(ctx),
   });
 }
 
-function driftId(ctx: { chapterId: number; characterId: string }, factor: string): string {
-  return `drift:${ctx.chapterId}:${ctx.characterId}:${factor}`;
+function driftId(
+  ctx: { bookId: string; chapterId: number; characterId: string },
+  factor: string,
+): string {
+  /* bookId in the prefix keeps event ids globally unique across
+     concurrently-active books — chapterId+characterId+factor can
+     collide for different books with parallel-numbered chapters and
+     shared narrator id. */
+  return `drift:${ctx.bookId}:${ctx.chapterId}:${ctx.characterId}:${factor}`;
 }
 
 async function loadSegmentsFiles(
