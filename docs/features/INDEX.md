@@ -107,6 +107,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [45 — Vitest pool tuning + one-retry policy](45-vitest-pool-tuning.md) — Caps the server-suite forks pool at 4 and turns on `retry: 1` on both Vitest configs so transient tinypool "Worker exited unexpectedly" failures no longer force a full pre-push re-run.
 - [46 — Lint, format, a11y baseline](archive/46-lint-format-a11y.md) — ESLint 8 + Prettier 3 + axe-core on four core views; lint prepended to `verify`. Shipped 2026-05-18.
 - [48 — Global toast surface](archive/48-toast-surface.md) — `notifications` slice + `<ToastStack/>`; stream-middleware halts + export 5xx dispatch through it; dedupe-by-key collapses repeats; auto-dismiss 6 s. Shipped 2026-05-18.
+- [60 — CI verify-on-PR](60-ci-verify-on-pr.md) — GitHub Actions workflow runs `npm run verify` on every PR targeting `main`; ffmpeg + Node + Playwright chromium provisioned, npm + browser caches keyed on lockfile hash; pairs with the visual baselines (`e2e/visual.spec.ts`) so the same gate the pre-push hook runs locally is the gate every PR must clear before merge.
 
 ### L. Book state persistence
 
