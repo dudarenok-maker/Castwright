@@ -3,7 +3,9 @@
  * Pins:
  *   - Each route end-to-end: state.json + manuscript-edits.json updated,
  *     audio rewritten per the op plan (delete for content-changed, rename
- *     for renumbered-only), analysis cache cleared.
+ *     for renumbered-only), analysis cache rebuilt from manuscript-edits
+ *     (plan 70c — earlier code wiped the cache outright, which halted
+ *     post-restructure generation).
  *   - Validation: malformed payloads → 400.
  *   - Three-write internal consistency: after each route, on-disk state's
  *     chapter ids and manuscript-edits.json's sentence.chapterId values
@@ -422,19 +424,78 @@ describe('POST /:bookId/chapters/reorder', () => {
 /* -- cross-cutting -------------------------------------------------- */
 
 describe('chapters-restructure shared behaviour', () => {
-  it('clears the analysis cache after any structural change', async () => {
-    // Seed a fake analysis cache file so we can verify it gets removed
+  it('rebuilds the analysis cache from manuscript-edits.json after a reorder (plan 70c)', async () => {
+    /* Plan 70c — the cache used to be deleted outright on every structural
+       change, which halted post-restructure generation. It must now be
+       rebuilt from manuscript-edits.json so generation finds sentences
+       keyed by the new chapter ids. */
     mkdirSync(CACHE_DIR, { recursive: true });
     writeFileSync(
       cachePath,
-      JSON.stringify({ chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'narr', text: 'x' }] } }),
+      JSON.stringify({
+        chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'narr', text: 'stale' }] },
+      }),
     );
     expect(existsSync(cachePath)).toBe(true);
 
+    await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [3, 1, 2] });
+    expect(existsSync(cachePath)).toBe(true);
+
+    const cache = JSON.parse(readFileSync(cachePath, 'utf8')) as {
+      chapters: Record<string, Array<{ id: number; chapterId: number; text: string }>>;
+    };
+    expect(Object.keys(cache.chapters).sort()).toEqual(['1', '2', '3']);
+    // After reorder [3,1,2], original chapter 3 is now chapter 1.
+    expect(cache.chapters['1'].map((s) => s.text)).toEqual(['Gamma first.', 'Gamma second.']);
+    expect(cache.chapters['2'].map((s) => s.text)).toEqual(['Alpha first.', 'Alpha second.']);
+    expect(cache.chapters['3'].map((s) => s.text)).toEqual(['Beta first.', 'Beta second.']);
+  });
+
+  it('cache survives merge — merged chapter holds both sources concatenated (plan 70c)', async () => {
+    mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'narr', text: 'stale' }] },
+      }),
+    );
+    await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    expect(existsSync(cachePath)).toBe(true);
+
+    const cache = JSON.parse(readFileSync(cachePath, 'utf8')) as {
+      chapters: Record<string, Array<{ id: number; chapterId: number; characterId: string; text: string }>>;
+    };
+    expect(Object.keys(cache.chapters).sort()).toEqual(['1', '2']);
+    expect(cache.chapters['1'].map((s) => s.text)).toEqual(['Alpha first.', 'Alpha second.']);
+    // Merged chapter 2 = original chapter 2's sentences + original chapter 3's
+    // sentences, renumbered 1..4. characterId tags preserved per sentence.
+    expect(cache.chapters['2'].map((s) => s.id)).toEqual([1, 2, 3, 4]);
+    expect(cache.chapters['2'].map((s) => s.text)).toEqual([
+      'Beta first.',
+      'Beta second.',
+      'Gamma first.',
+      'Gamma second.',
+    ]);
+    expect(cache.chapters['2'][1].characterId).toBe('sam');
+  });
+
+  it('cache survives split — sentences partitioned at the split boundary (plan 70c)', async () => {
+    mkdirSync(CACHE_DIR, { recursive: true });
     await request(app)
-      .post(`/api/books/${bookId}/chapters/reorder`)
-      .send({ order: [3, 1, 2] });
-    expect(existsSync(cachePath)).toBe(false);
+      .post(`/api/books/${bookId}/chapters/split`)
+      .send({ chapterId: 2, afterSentenceId: 1 });
+    expect(existsSync(cachePath)).toBe(true);
+
+    const cache = JSON.parse(readFileSync(cachePath, 'utf8')) as {
+      chapters: Record<string, Array<{ id: number; text: string }>>;
+    };
+    // Pre-split: 3 chapters with 2 sentences each. Split chapter 2 after id 1
+    // → 4 chapters, with old (2,1) staying as chapter 2 and old (2,2)
+    // becoming chapter 3 sentence 1.
+    expect(Object.keys(cache.chapters).sort()).toEqual(['1', '2', '3', '4']);
+    expect(cache.chapters['2'].map((s) => s.text)).toEqual(['Beta first.']);
+    expect(cache.chapters['3'].map((s) => s.text)).toEqual(['Beta second.']);
+    expect(cache.chapters['4'].map((s) => s.text)).toEqual(['Gamma first.', 'Gamma second.']);
   });
 
   it('keeps state.json and manuscript-edits.json internally consistent', async () => {
