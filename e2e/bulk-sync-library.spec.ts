@@ -1,14 +1,13 @@
-/* Browser-level golden path for plan 41 — bulk-apply library sync on
- * confirm-cast. Walks the same cold-boot → paste → analysing → confirm
- * sequence the manual-continuity-link spec uses, then asserts:
+/* Browser-level golden path for plan 41 + Bug C — bulk-apply library
+ * matches on confirm-cast. Walks the same cold-boot → paste → analysing
+ * → confirm sequence the manual-continuity-link spec uses, then asserts:
  *
- *   1. the "Sync N profiles from library" pill renders above the
- *      cast-card grid with N matching the number of cards carrying the
- *      "Continuity preserved" footer (plan 41 invariant 1);
- *   2. clicking the pill ticks every matched character's "Sync profile"
- *      checkbox in one click (plan 41 invariant 2);
- *   3. the label flips to "Clear all syncs" after the bulk tick (plan 41
- *      invariant 3);
+ *   1. the "Apply all N matches" pill renders above the cast-card grid
+ *      with N matching the number of cards eligible for sync;
+ *   2. clicking the pill flips Reuse decision AND ticks every matched
+ *      character's "Sync profile" checkbox in one click (Bug C — the
+ *      original plan-41 behaviour was overrides-only);
+ *   3. the label flips to "Clear all syncs" after the bulk apply;
  *   4. confirming the cast advances the stage to ready (the per-card
  *      override POSTs fire through the existing handleConfirm batch).
  *
@@ -16,7 +15,7 @@
  * existing POST /api/library-cast/override path. Wall-clock budget:
  * ~16 s warm (analyser mock ~7.6 s + UI).
  *
- * Pairs with docs/features/41-bulk-library-sync.md. */
+ * Pairs with docs/features/archive/41-bulk-library-sync.md (Bug C amend). */
 
 import { test, expect } from '@playwright/test';
 
@@ -66,16 +65,16 @@ test.describe('bulk-sync library on confirm-cast', () => {
     await expect(page).toHaveURL(/#\/books\/.+\/confirm$/, { timeout: 15_000 });
     await expect(page.getByText('Captain Halloran').first()).toBeVisible({ timeout: 5_000 });
 
-    /* Step 7: the bulk-sync pill is present with N=3 matching the three
+    /* Step 7: the bulk-apply pill is present with N=3 matching the three
        fixture characters carrying the full library handle. The
        voice-match effect in src/components/layout.tsx:469 fires once
        characters hydrate; give it a beat to land. */
-    const bulkPill = page.getByRole('button', { name: /Sync 3 profiles from library/ });
+    const bulkPill = page.getByRole('button', { name: /Apply all 3 matches/ });
     await expect(bulkPill).toBeVisible({ timeout: 5_000 });
 
-    /* Step 8: click the pill — every matched character's "Sync profile"
-       checkbox ticks in one click. Per plan 41 invariant 3, the label
-       flips to "Clear all syncs" once all eligible are ticked. */
+    /* Step 8: click the pill — every matched character's Reuse decision
+       stays selected AND "Sync profile" checkbox ticks in one click. The
+       label flips to "Clear all syncs" once all eligible are applied. */
     await bulkPill.click();
     await expect(page.getByRole('button', { name: 'Clear all syncs' })).toBeVisible();
     const checkboxes = page.getByRole('checkbox', { name: /Sync profile/i });
