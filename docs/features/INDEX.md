@@ -43,6 +43,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [02 — Upload (paste or file)](02-upload-paste-or-file.md) — `.md/.txt/.epub/.pdf/.mobi/.azw3` upload + paste flow.
 - [03 — Import & confirm metadata](03-import-confirm-metadata.md) — Parse-only import then confirm-write to disk.
+- [60 — Real-binary MOBI / AZW3 parser fixtures](archive/60-real-binary-parser-fixtures.md) — Calibre-derived `sample.mobi` + `sample.azw3` lock the integration contract against `@lingo-reader/mobi-parser`; skip-when-Calibre-missing keeps fresh-clone `npm run verify` green. Shipped 2026-05-19.
 
 ### C. Analysis pipeline
 
@@ -157,3 +158,4 @@ breadcrumb so cross-references still resolve.
 - [57 — Listen-view download tiles](archive/57-download-tiles.md) — Wires the M4B chaptered + new MP3 ZIP tiles on the listen view to open `ExportAudiobookModal` with the format pre-filled; streaming-link tile remains "Coming soon" pending a slugged URL endpoint. Shipped 2026-05-19.
 - [58 — E2E coverage refresh](archive/58-e2e-coverage-refresh.md) — Un-quarantines `listen-playback` + `new-book-flow`; adds `binary-upload.spec.ts` covering EPUB / PDF / MOBI / AZW3 routing; applies file-level serial mode to five contention-flaky spec files. From 3-5 hard failures per `verify` run to 0. Shipped 2026-05-19.
 - [59 — Parallel Claude Code sessions](archive/59-parallel-claude-sessions.md) — `scripts/wt-new.mjs` spawns a git worktree on a new branch with non-colliding dev-server ports so multiple top-level `claude` sessions can run in parallel without fighting over `:5173` / `:8080` / `:9000` / `:5174`. Slot N → ports offset by `N*10`. `scripts/wt-list.mjs` lists active worktrees + their assignments. `vite.config.ts` + `playwright.config.ts` now env-driven; stock defaults preserved for the main worktree. Shipped 2026-05-19.
+- [60 — Real-binary MOBI / AZW3 parser fixtures](archive/60-real-binary-parser-fixtures.md) — `scripts/gen-parser-fixtures.mjs` probes for Calibre's `ebook-convert` and derives gitignored `sample.mobi` + `sample.azw3` from the existing EPUB fixture; new server Vitest suite + the binary-upload e2e MOBI/AZW3 cases run the real `@lingo-reader/mobi-parser` path against those binaries, skipping cleanly via `describe.skipIf` + `test.skip` when Calibre isn't installed. Shipped 2026-05-19.
