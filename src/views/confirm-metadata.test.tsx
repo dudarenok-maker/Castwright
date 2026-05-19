@@ -133,3 +133,23 @@ describe('ConfirmMetadataView — duplicate position warning', () => {
     expect(screen.getByText(/Everblaze/)).toBeInTheDocument();
   });
 });
+
+describe('ConfirmMetadataView — input theme classes', () => {
+  /* Regression: in dark mode `--ink` flips near-white, so an input without
+     an explicit `bg-white text-ink` pair gets a browser-default white
+     background AND inherits white text — invisible. The codebase's canonical
+     pattern (mirrored in src/modals/*, src/views/account.tsx, etc.) is
+     `bg-white text-ink`; the styles.css dark-theme redirect flips both
+     tokens correctly. */
+  it('AUTHOR / SERIES / BOOK # / TITLE inputs carry bg-white + text-ink', () => {
+    renderView();
+    const author = screen.getByPlaceholderText('e.g. Ursula K. Le Guin');
+    const series = screen.getByPlaceholderText('e.g. Earthsea');
+    const bookNum = screen.getByPlaceholderText('1');
+    const title = screen.getByPlaceholderText('e.g. A Wizard of Earthsea');
+    for (const input of [author, series, bookNum, title]) {
+      expect(input).toHaveClass('bg-white');
+      expect(input).toHaveClass('text-ink');
+    }
+  });
+});
