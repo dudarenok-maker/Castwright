@@ -38,6 +38,7 @@ import type {
   TtsEngine,
 } from './types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
+import { initialCharacters } from '../data/characters';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
 import { MOCK_LIBRARY } from '../mocks/library';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
@@ -470,10 +471,51 @@ function buildSolwayBayMockState(): BookStateResponse {
   };
 }
 
+/* Northern Star — primary mock book referenced by mostly every test
+   fixture (`ANALYSIS_NORTHERN_STAR`, profile-drawer specs, voice-mapping
+   specs). Plan 60 (voice library global-tab compare) needs a non-null
+   `cast` field so `api.getBookState('ns')` resolves the initial cast
+   when the user kicks off Compare from the global `#/voices` tab. The
+   rest of the response is minimal — only the fields the global-compare
+   flow reads (cast) and a barebones `state` so type-narrowing doesn't
+   surprise downstream callers if they bump into it. */
+function buildNorthernStarMockState(): BookStateResponse {
+  const now = new Date().toISOString();
+  return {
+    state: {
+      bookId: 'ns',
+      manuscriptId: 'mns_ns',
+      title: 'The Northern Star',
+      author: 'Mike Dudarenok',
+      series: 'Northern Coast Trilogy',
+      seriesPosition: 2,
+      isStandalone: false,
+      manuscriptFile: 'manuscript.epub',
+      castConfirmed: true,
+      chapters: [],
+      coverGradient: ['#3C194F', '#0F0E0D'],
+      createdAt: now,
+      updatedAt: now,
+      narratorCredit: null,
+      genre: null,
+      publicationDate: null,
+    },
+    cast: { characters: initialCharacters },
+    manuscript: { wordCount: 78_300, format: 'epub' },
+    manuscriptEdits: null,
+    revisions: null,
+    completedSlugs: [],
+    chapterCharacters: undefined,
+    changeLog: null,
+    analysis: undefined,
+  };
+}
+
 /* Seed the default fixtures. Called at module init AND from
    _resetMockBookStates so per-test resets restore the default surface. */
 function seedDefaultMockBookStates(): void {
   MOCK_BOOK_STATES.set('sb', buildSolwayBayMockState());
+  MOCK_BOOK_STATES.set('ns', buildNorthernStarMockState());
 }
 seedDefaultMockBookStates();
 
