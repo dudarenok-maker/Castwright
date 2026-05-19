@@ -5,8 +5,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { ollamaHealthRouter } from './ollama-health.js';
+import {
+  ollamaHealthRouter,
+  setOllamaBootstraps,
+  _resetOllamaBootstraps,
+} from './ollama-health.js';
 import { _resetUserSettingsCache } from '../workspace/user-settings.js';
+import { InstallBootstrap } from '../ollama/install-bootstrap.js';
+import { PullBootstrap } from '../ollama/pull-bootstrap.js';
 
 function makeApp() {
   const app = express();
@@ -25,6 +31,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  _resetOllamaBootstraps();
 });
 
 /* /api/ollama/health now fans out across /api/tags AND /api/ps so the
@@ -196,5 +203,142 @@ describe('POST /api/ollama/unload', () => {
     const res = await request(makeApp()).post('/api/ollama/unload');
     expect(res.status).toBe(503);
     expect(res.body.status).toBe('error');
+  });
+});
+
+/* ============================================================
+ * Plan 61 — install / pull / refresh
+ * ============================================================ */
+
+describe('GET /api/ollama/detect', () => {
+  it('returns installed:true with the version when ollama is on PATH', async () => {
+    setOllamaBootstraps({
+      install: new InstallBootstrap({
+        detectOllama: () => Promise.resolve('ollama version 0.5.4'),
+      }),
+    });
+    const res = await request(makeApp()).get('/api/ollama/detect');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ installed: true, version: 'ollama version 0.5.4' });
+  });
+
+  it('returns installed:false when ollama is missing', async () => {
+    setOllamaBootstraps({
+      install: new InstallBootstrap({ detectOllama: () => Promise.resolve(null) }),
+    });
+    const res = await request(makeApp()).get('/api/ollama/detect');
+    expect(res.body).toEqual({ installed: false, version: null });
+  });
+});
+
+describe('POST /api/ollama/install', () => {
+  it('starts a job and returns 202 with the initial snapshot', async () => {
+    setOllamaBootstraps({
+      install: new InstallBootstrap({
+        detectOllama: () => Promise.resolve('ollama version 0.5.4'),
+      }),
+    });
+    const res = await request(makeApp()).post('/api/ollama/install');
+    expect(res.status).toBe(202);
+    expect(res.body.id).toBeTruthy();
+    expect(['detecting', 'installed']).toContain(res.body.status);
+  });
+
+  it('GET /api/ollama/install/:id returns 404 for unknown id', async () => {
+    setOllamaBootstraps({ install: new InstallBootstrap() });
+    const res = await request(makeApp()).get('/api/ollama/install/does-not-exist');
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /api/ollama/install/:id returns the job snapshot for a real id', async () => {
+    setOllamaBootstraps({
+      install: new InstallBootstrap({
+        detectOllama: () => Promise.resolve('ollama version 0.5.4'),
+      }),
+    });
+    const post = await request(makeApp()).post('/api/ollama/install');
+    const id = post.body.id;
+    /* short-circuit means it might already be installed */
+    await new Promise((r) => setImmediate(r));
+    const get = await request(makeApp()).get(`/api/ollama/install/${id}`);
+    expect(get.status).toBe(200);
+    expect(get.body.id).toBe(id);
+  });
+});
+
+describe('POST /api/ollama/pull', () => {
+  it('400s on missing model body', async () => {
+    setOllamaBootstraps({ pull: new PullBootstrap() });
+    const res = await request(makeApp())
+      .post('/api/ollama/pull')
+      .send({})
+      .set('Content-Type', 'application/json');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/model/);
+  });
+
+  it('400s on non-allowlisted model tag', async () => {
+    setOllamaBootstraps({ pull: new PullBootstrap() });
+    const res = await request(makeApp())
+      .post('/api/ollama/pull')
+      .send({ model: 'evil-narrator:13b' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/allowlist/);
+  });
+
+  it('starts a pull job and returns 202 with the initial snapshot', async () => {
+    /* Stub fetch on the bootstrap so no real Ollama is needed. */
+    const fakeFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        body: new ReadableStream({
+          pull(controller) {
+            controller.enqueue(new TextEncoder().encode('{"status":"success"}\n'));
+            controller.close();
+          },
+        }),
+        text: () => Promise.resolve(''),
+      }),
+    );
+    setOllamaBootstraps({ pull: new PullBootstrap({ fetchFn: fakeFetch }) });
+    const res = await request(makeApp())
+      .post('/api/ollama/pull')
+      .send({ model: 'qwen3.5:4b' });
+    expect(res.status).toBe(202);
+    expect(res.body.status).toBe('pulling');
+    expect(res.body.model).toBe('qwen3.5:4b');
+  });
+
+  it('GET /api/ollama/pull/:id returns 404 for unknown id', async () => {
+    setOllamaBootstraps({ pull: new PullBootstrap() });
+    const res = await request(makeApp()).get('/api/ollama/pull/does-not-exist');
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /api/ollama/refresh', () => {
+  it('returns the same envelope as GET /health when the daemon answers', async () => {
+    mockOllamaProbes({
+      tags: [{ name: 'qwen3.5:4b' }],
+      ps: [{ name: 'qwen3.5:4b' }],
+    });
+    const res = await request(makeApp()).post('/api/ollama/refresh');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('reachable');
+    expect(res.body.models).toEqual(['qwen3.5:4b']);
+    expect(res.body.modelPulled).toBe(true);
+    expect(res.body.modelResident).toBe(true);
+  });
+
+  it('returns unreachable when the daemon refuses connection', async () => {
+    fetchMock.mockRejectedValue(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      }),
+    );
+    const res = await request(makeApp()).post('/api/ollama/refresh');
+    expect(res.body.status).toBe('unreachable');
   });
 });
