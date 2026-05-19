@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-19
 owner: null
 ---
 
 # Plan 70a — Chapter restructure bug fix (orphan recovery + empty-chapter prune + generic-title renumber)
 
-> Status: active
+> Status: stable
 > Key files: `server/src/workspace/restructure.ts`, `server/src/routes/chapters-restructure.ts`, `server/src/routes/chapters-restructure.test.ts`
 > URL surface: `#/books/<id>/restructure` (consumes the same `POST /api/books/:id/chapters/{merge,split,reorder}` endpoints — no new routes)
 > OpenAPI ops: `POST /api/books/{bookId}/chapters/merge`, `POST /api/books/{bookId}/chapters/reorder` (response now carries `warnings: string[]`)
@@ -73,4 +73,6 @@ owner: null
 
 ## Ship notes
 
-(To be filled when the branch merges. Status will flip to `stable` and the file `git mv`d to `docs/features/archive/`.)
+Shipped 2026-05-19 via PR #62 (merge commit `b2ba2a5`). Server-only change — `applyMerge` and `applyReorder` now flow through a new `postProcessRestructure` chain that auto-prunes empty chapters and renumbers generic "Chapter N" titles against new ids; `remapSentences` recovers orphan sentences (preserving the original `oldChapterId` in the response remap so the frontend reducer lookup still resolves). Added a `warnings: string[]` field to the merge / reorder response — channel opened here, frontend consumer wired in plan 70b the same day.
+
+Followed by [plan 70b](70b-restructure-extensions.md) on 2026-05-19 — the feature half (Manuscript-view entry point, sticky toolbar, exclude affordance, refresh chapter names, warnings toast).
