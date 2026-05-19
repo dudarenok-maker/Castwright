@@ -89,6 +89,11 @@ export interface ImportCandidate {
   author: string | null;
   series: string | null;
   seriesPosition: number | null;
+  /* Bug B: true when series came from a title-parenthetical heuristic
+     rather than authoritative metadata. Drives the "auto-extracted from
+     title — verify" chip on the confirm screen. Optional because older
+     server builds (pre-Bug-B) don't emit it. */
+  seriesFromTitle?: boolean;
   sourceText: string;
   wordCount: number;
   byteSize: number;

@@ -1435,3 +1435,24 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
     expect(capturedOpts).toBeUndefined();
   });
 });
+
+/* Bug D regression — the "Overall" progress bar inside the analysing
+   view used a naive (phase + phaseProgress) / 3 average while the
+   header pill used the work-weighted 0.45/0.5/0.05 formula. At 20%
+   through phase 1, naive said 40% but the pill said 55%. Both now use
+   the shared `computeOverallProgress` helper, so the % the view renders
+   must match the helper. */
+describe('AnalysingView — overall progress matches shared helper', () => {
+  it('renders 55% at 20% through phase 1 (the screenshot mismatch case)', async () => {
+    await renderViewWaitingForAnalysis();
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 1, progress: 0.2 });
+    });
+    /* The "Overall" line is a single ranged region with the percent
+       rendered next to the label. Probe for the literal "55%". */
+    expect(screen.getByText('55%')).toBeInTheDocument();
+    /* Anti-regression: the old naive-average buggy value must NOT be on
+       screen for this state. */
+    expect(screen.queryByText('40%')).not.toBeInTheDocument();
+  });
+});

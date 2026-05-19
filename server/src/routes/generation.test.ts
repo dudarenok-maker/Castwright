@@ -374,3 +374,78 @@ describe('POST /api/books/:bookId/generation', () => {
     expect(ticks[ticks.length - 1].type).toBe('idle');
   });
 });
+
+/* Bug E — every LIVE broadcast tick (progress / chapter_assembling /
+   chapter_complete / chapter_failed) carries run-level aggregates so the
+   client's global header pill keeps moving even when the user has
+   navigated to a different book and the per-chapter tick reducer drops
+   the per-row mutation.
+
+   Note on catch-up replay: chapter_complete ticks emitted by the
+   pre-loop catch-up replay (line 248-266 in generation.ts) are sent
+   via the subscriber's direct `send`, not through `broadcast`, because
+   they pre-date the job and there's no run to aggregate over. Tests
+   below split "catch-up" from "live" by the presence of the runTotal
+   field — catch-up ticks lack it, live ticks always carry it. */
+describe('POST /api/books/:bookId/generation — Bug E run aggregates on every tick', () => {
+  it('every LIVE broadcast tick carries runDone / runTotal / runInProgress', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    /* Live ticks are anything that went through broadcast — they all
+       carry the three aggregates. Catch-up replay ticks (chapter_complete
+       for chapters already on disk before this run started) lack them
+       by design. */
+    const liveTicks = ticks.filter((t) => typeof t.runTotal === 'number');
+    expect(liveTicks.length).toBeGreaterThan(0);
+    for (const t of liveTicks) {
+      expect(typeof t.runDone).toBe('number');
+      expect(typeof t.runInProgress).toBe('number');
+      /* Invariant: done + inProgress never exceeds total. */
+      expect((t.runDone as number) + (t.runInProgress as number)).toBeLessThanOrEqual(
+        t.runTotal as number,
+      );
+    }
+  });
+
+  it('runDone jumps to 1 → 2 across the two live chapter_complete ticks (force regen of two chapters)', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    const ticks = parseTicks(res.text);
+    /* Filter to LIVE chapter_complete (carries runTotal). */
+    const liveCompletes = ticks.filter(
+      (t) => t.type === 'chapter_complete' && typeof t.runTotal === 'number',
+    );
+    expect(liveCompletes.length).toBe(2);
+    /* Force regen of both chapters: runDoneBase counts chapters not in
+       targetChapters with audio on disk — but BOTH chapters ARE in the
+       force target set, so runDoneBase=0. After the first chapter
+       completes broadcast carries runDone=1; after the second, runDone=2. */
+    expect(liveCompletes[0].runDone).toBe(1);
+    expect(liveCompletes[1].runDone).toBe(2);
+    expect(liveCompletes[0].runTotal).toBe(2);
+    expect(liveCompletes[1].runTotal).toBe(2);
+    /* After each chapter_complete the in-progress count goes back to 0. */
+    expect(liveCompletes[0].runInProgress).toBe(0);
+    expect(liveCompletes[1].runInProgress).toBe(0);
+  });
+
+  it('runInProgress is 1 during the first progress tick (chapter is between loop entry and chapter_complete)', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    const ticks = parseTicks(res.text);
+    /* The very first progress tick (sent at chapter loop entry, before
+       synthesise is called) lands while runInProgress contains that
+       chapter. */
+    const firstProgress = ticks.find(
+      (t) => t.type === 'progress' && t.chapterId === 1 && t.progress === 0.01,
+    );
+    expect(firstProgress).toBeDefined();
+    expect(firstProgress!.runInProgress).toBe(1);
+    expect(firstProgress!.runTotal).toBe(2);
+  });
+});
