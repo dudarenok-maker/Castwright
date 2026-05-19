@@ -11,7 +11,7 @@
    frames; the parseTicks helper splits the response body back into typed
    ticks for assertions. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -447,5 +447,91 @@ describe('POST /api/books/:bookId/generation — Bug E run aggregates on every t
     expect(firstProgress).toBeDefined();
     expect(firstProgress!.runInProgress).toBe(1);
     expect(firstProgress!.runTotal).toBe(2);
+  });
+});
+
+/* ── Plan 70c — auto-heal empty analysis cache from manuscript-edits.json ─
+   Pre-fix, a merge/split/reorder wiped server/handoff/cache/{mId}.json
+   and the next Generate POST halted with "No analysed sentences cached
+   for this book." The route now rebuilds the cache from
+   manuscript-edits.json transparently before falling through to that
+   error path. */
+describe('POST /api/books/:bookId/generation — plan 70c auto-heal', () => {
+  let editsPath: string;
+  let cacheModule: typeof import('../store/analysis-cache.js');
+  let fsModule: typeof import('node:fs');
+
+  beforeAll(async () => {
+    cacheModule = await import('../store/analysis-cache.js');
+    fsModule = await import('node:fs');
+    const { manuscriptEditsJsonPath } = await import('../workspace/paths.js');
+    editsPath = manuscriptEditsJsonPath(bookDir);
+  });
+
+  /* Each case manipulates the on-disk cache; restore the seeded state
+     after so unrelated tests in other describe blocks still find their
+     pre-seeded cache. */
+  afterEach(async () => {
+    if (fsModule.existsSync(editsPath)) fsModule.rmSync(editsPath);
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, {
+      chapters: {
+        1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }],
+        2: [{ id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' }],
+      },
+    });
+    /* Clear any chapter audio rendered during the auto-heal happy-path
+       case so subsequent tests start from the same on-disk audio
+       baseline as beforeAll left things in. */
+    const audioRoot = join(bookDir, 'audio');
+    if (fsModule.existsSync(audioRoot)) fsModule.rmSync(audioRoot, { recursive: true, force: true });
+  });
+
+  it('rebuilds the cache from manuscript-edits.json when the cache is empty and proceeds', async () => {
+    await cacheModule.clearAnalysisCache(MANUSCRIPT_ID);
+    fsModule.writeFileSync(
+      editsPath,
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' },
+          { id: 1, chapterId: 2, characterId: 'narrator', text: 'World.' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    /* No halting error fires — generation proceeds through both chapters. */
+    expect(
+      ticks.some(
+        (t) =>
+          t.type === 'chapter_failed' &&
+          typeof t.errorReason === 'string' &&
+          /No analysed sentences cached/i.test(t.errorReason),
+      ),
+    ).toBe(false);
+    expect(ticks.some((t) => t.type === 'chapter_complete' && t.chapterId === 1)).toBe(true);
+    /* Cache file now exists on disk with both chapters re-keyed. */
+    const restored = await cacheModule.loadAnalysisCache(MANUSCRIPT_ID);
+    expect(Object.keys(restored.chapters).sort()).toEqual(['1', '2']);
+  });
+
+  it('still emits the original error when both cache AND manuscript-edits.json are empty', async () => {
+    /* Never-analysed book — nothing to rebuild from. The original
+       error path stays in place so the user knows what to do. */
+    await cacheModule.clearAnalysisCache(MANUSCRIPT_ID);
+    /* No manuscript-edits.json written — rebuild attempt finds nothing
+       and the second emptiness check fires the error. */
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks).toHaveLength(1);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(ticks[0].errorReason as string).toMatch(/No analysed sentences cached/i);
   });
 });

@@ -22,13 +22,19 @@
 import { Router, type Request, type Response } from 'express';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { audioDir, castJsonPath, stateJsonPath } from '../workspace/paths.js';
+import {
+  audioDir,
+  castJsonPath,
+  manuscriptEditsJsonPath,
+  stateJsonPath,
+} from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
+import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import {
   engineForModelKey,
   isTtsModelKey,
@@ -256,7 +262,20 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     return res.end();
   }
 
-  const analysis = await loadAnalysisCache(state.manuscriptId);
+  let analysis = await loadAnalysisCache(state.manuscriptId);
+  if (!analysis.chapters || Object.keys(analysis.chapters).length === 0) {
+    /* Plan 70c — a merge/split/reorder under the pre-fix code wiped the
+       cache. manuscript-edits.json still has every sentence with its
+       characterId + text, so try to rebuild silently before halting. The
+       second load picks up the rebuilt cache; the second emptiness check
+       below catches the genuine never-analysed case. */
+    await rebuildCacheFromEdits(state.manuscriptId, manuscriptEditsJsonPath(bookDir)).catch(
+      (e) => {
+        console.error('[generation] auto-heal cache rebuild failed', e);
+      },
+    );
+    analysis = await loadAnalysisCache(state.manuscriptId);
+  }
   if (!analysis.chapters || Object.keys(analysis.chapters).length === 0) {
     send({
       type: 'chapter_failed',
