@@ -873,6 +873,46 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ChapterAudio' }
 
+  /api/books/{bookId}/chapters/{chapterId}/clip:
+    get:
+      summary: Slice a 30-second chapter clip as MP3 (no re-encode)
+      operationId: getChapterClip
+      description: |
+        Stream a byte-sliced segment of the chapter MP3 to the caller as
+        a downloadable file. The server runs `ffmpeg -ss <start> -i <mp3>
+        -t <duration> -c copy` (fast-seek path, MP3-frame-granularity
+        accuracy is sub-30 ms — ample for a 30 s social clip). Duration
+        capped at 60 s for fair-use / viral-loop framing; longer ranges
+        should download the whole chapter MP3.
+
+        Response is `audio/mpeg` with `Content-Disposition: attachment;
+        filename="<chapter-slug>-clip-<start>s.mp3"`.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+        - in: query
+          name: start
+          required: true
+          schema: { type: number, minimum: 0 }
+          description: Clip start position, in seconds. Must be >= 0.
+        - in: query
+          name: duration
+          required: true
+          schema: { type: number, exclusiveMinimum: 0, maximum: 60 }
+          description: Clip length, in seconds. Must be > 0 and <= 60.
+      responses:
+        '200':
+          description: Sliced MP3 byte stream
+          content:
+            audio/mpeg:
+              schema: { type: string, format: binary }
+        '400':
+          description: Invalid start / duration (negative, non-numeric, or duration > 60)
+        '404':
+          description: Book / chapter / chapter audio not found on disk
+        '500':
+          description: ffmpeg unavailable or slicing failed
+
   /api/books/{bookId}/chapters/{chapterId}/audio/previous:
     get:
       summary: Get the preserved prior chapter audio (for revision a/b audition)
