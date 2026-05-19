@@ -165,6 +165,20 @@ dark-mode token / utility edit must preserve these targets:
    destructive-action / dot-indicator hues and already hold contrast
    on dark.
 
+### 2026-05-19 follow-ups (pre-ship bug bundle)
+
+Eight bugs surfaced in one testing session — five visual (dark-mode contrast / stacking) and one always-visible-metadata redesign. Three were either fully or partially fixed by PR #41 (`1264680`, `06444ee`) before the bundle started. The remaining five landed on Branch A (`fix/frontend-pre-ship-bug-bundle`):
+
+1. **Translucent `bg-white/40` + `bg-white/95`** — drawer engine-tab background (profile-drawer.tsx:1061) and drawer sticky header (profile-drawer.tsx:299, match-detail.tsx:51). Both compiled to their own Tailwind selectors and were uncovered. Added override entries at styles.css alongside the existing `/60` and `/70` block. Alpha follows the established ladder: `/40` → 0.03, `/95` → 0.08.
+2. **`bg-amber-50/60` + `hover:bg-amber-50`** — voice-drift banner at cast.tsx:206–228. Translucent /60 base + non-translucent hover variant compile to separate selectors that the bare `.bg-amber-50` redirect doesn't reach. Without them the banner painted a cream-amber wash at rest and pushed to a near-solid cream on hover — `text-ink` content disappeared. Added under the existing amber block at styles.css:236; `/60` → 0.07, hover → 0.14.
+3. **`floating-pill-inverse` utility** — the cast-view selection bar at cast.tsx:439 used `bg-ink text-canvas` as a "dark capsule in both modes" shorthand. That was a light-mode coincidence: under token inversion the pill flipped to a cream surface and the inner `bg-canvas/15` elevation overlays (Compare button enabled-state fill, count pill, divider) painted dark-on-cream and washed out. The new utility pins the colours per mode (`var(--ink)` / `var(--canvas)` in light; `#14110f` / `#f4efec` literals in dark) so the inner overlays paint the same way in both. Bespoke utility — not Tailwind — to avoid scattering `dark:` siblings (the project doesn't use Tailwind's `dark:` prefix elsewhere).
+4. **Match-detail z-index bump** — drawer-stacking bug where match-detail (mounted earlier in layout.tsx) opened underneath the profile drawer because both shared `z-50` and DOM order put profile-drawer on top. Match-detail backdrop bumped to `z-[60]`, aside to `z-[70]`. The "see why" link inside the profile drawer is a drill-deeper affordance, so the match-detail wins the stacking explicitly.
+5. **Book-card always-visible metadata strip** — book-library.tsx:387–392 gated `<h3>{book.title}</h3>` + `<p>{seriesLine}</p>` on `!effectiveCoverUrl || coverLoadFailed`. Once a real cover image rendered, both pieces vanished — series position ("Book 7") is never conveyable through cover art alone, so any book without a title baked into the artwork lost its identity. Added a small always-visible metadata strip below the cover (test id `book-meta-strip-<bookId>`) with title + series line; the big serif placeholder title stays for the no-cover case as visual identity.
+
+Test scaffold extended in lockstep: `src/test/dark-mode-css.test.ts` now pins the four new selectors + the six previously-uncovered amber selectors. New regression file `src/modals/match-detail.test.tsx` pins the z-index contract. `src/views/book-library.test.tsx` adds four cases (cover loads, no cover, in-series, standalone).
+
+Skipped: bug 5 (bulk-sync flips decisions) and bug 6 generation side — both landed in PR #41 ahead of this bundle. Bug 6 analysis-side mirror lands in this branch as a separate commit (`fix(frontend): mirror cross-book heartbeat for analysis stream`).
+
 ## Test plan
 
 ### Automated coverage
