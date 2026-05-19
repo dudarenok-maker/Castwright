@@ -1,7 +1,7 @@
 // Pairs with docs/features/06-manuscript-parsing.md (plain text + Markdown layer).
 
 import { describe, expect, it } from 'vitest';
-import { parseText, parseFilenameMetadata } from './text.js';
+import { parseText, parseFilenameMetadata, parseSeriesFromTitle } from './text.js';
 
 describe('parseFilenameMetadata', () => {
   it('extracts author / series / position / title from the conventional pattern', () => {
@@ -35,6 +35,98 @@ describe('parseFilenameMetadata', () => {
       seriesPosition: null,
       title: null,
     });
+  });
+});
+
+/* Bug B: conservative title-parenthetical heuristic for series extraction.
+   Used as a fallback when authoritative metadata (Calibre tags / filename
+   pattern) doesn't carry series info. */
+describe('parseSeriesFromTitle', () => {
+  it('extracts series and integer position from "Title (Series Book N)"', () => {
+    expect(parseSeriesFromTitle('Everblaze (Keeper of the Lost Cities Book 3)')).toEqual({
+      title: 'Everblaze',
+      series: 'Keeper of the Lost Cities',
+      seriesPosition: 3,
+    });
+  });
+
+  it('extracts series and integer position from "Title (Series #N)"', () => {
+    expect(parseSeriesFromTitle('A Wizard of Earthsea (Earthsea #1)')).toEqual({
+      title: 'A Wizard of Earthsea',
+      series: 'Earthsea',
+      seriesPosition: 1,
+    });
+  });
+
+  it('preserves decimal positions like 1.5 (novellas)', () => {
+    expect(parseSeriesFromTitle('Knife Children (Lakewalker Book 1.5)')).toEqual({
+      title: 'Knife Children',
+      series: 'Lakewalker',
+      seriesPosition: 1.5,
+    });
+  });
+
+  it('matches case-insensitively (Book / BOOK / book)', () => {
+    expect(parseSeriesFromTitle('Foo (Bar BOOK 2)').series).toBe('Bar');
+    expect(parseSeriesFromTitle('Foo (Bar book 2)').series).toBe('Bar');
+  });
+
+  it('leaves the title untouched and returns null series when no parenthetical matches', () => {
+    expect(parseSeriesFromTitle('Pride and Prejudice')).toEqual({
+      title: 'Pride and Prejudice',
+      series: null,
+      seriesPosition: null,
+    });
+  });
+
+  it('does not false-positive on subtitles that lack "Book N" or "#N"', () => {
+    /* "(Revised Edition)" is a common non-series subtitle — must NOT split. */
+    expect(parseSeriesFromTitle('Foundation (Revised Edition)').series).toBeNull();
+    /* "(A Novel)" too. */
+    expect(parseSeriesFromTitle('The Underground Railroad (A Novel)').series).toBeNull();
+  });
+
+  it('trims whitespace from the input title before matching', () => {
+    expect(parseSeriesFromTitle('  Everblaze (Keeper of the Lost Cities Book 3)  ').series).toBe(
+      'Keeper of the Lost Cities',
+    );
+  });
+});
+
+/* parseText integration with parseSeriesFromTitle — markdown H1 with a
+   series parenthetical should produce a clean title plus extracted series
+   even when there's no filename metadata to lean on. */
+describe('parseText — series extraction from title heuristic', () => {
+  it('splits "(Series Book N)" off the H1 when filename has no metadata', () => {
+    const out = parseText(
+      '# Everblaze (Keeper of the Lost Cities Book 3)\n\nThe story begins.',
+      { format: 'markdown' },
+    );
+    expect(out.title).toBe('Everblaze');
+    expect(out.series).toBe('Keeper of the Lost Cities');
+    expect(out.seriesPosition).toBe(3);
+    expect(out.seriesFromTitle).toBe(true);
+  });
+
+  it('filename-derived series wins over title heuristic (authoritative > guess)', () => {
+    const out = parseText(
+      '# Everblaze (Keeper of the Lost Cities Book 3)\n\nThe story.',
+      {
+        format: 'markdown',
+        fileName: 'Shannon Messenger - KOTLC 03 - Everblaze.md',
+      },
+    );
+    /* Filename gives KOTLC + 3; the title heuristic doesn't run, so
+       seriesFromTitle stays false (the value is filename-authoritative). */
+    expect(out.series).toBe('KOTLC');
+    expect(out.seriesPosition).toBe(3);
+    expect(out.seriesFromTitle).toBe(false);
+  });
+
+  it('leaves seriesFromTitle false on a plain markdown with no parenthetical', () => {
+    const out = parseText('# Pride and Prejudice\n\nIt is a truth.', { format: 'markdown' });
+    expect(out.series).toBeNull();
+    expect(out.seriesFromTitle).toBe(false);
   });
 });
 

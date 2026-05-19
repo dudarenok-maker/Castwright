@@ -19,6 +19,13 @@ import request from 'supertest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_EPUB = resolve(__dirname, '..', 'parsers', '__fixtures__', 'sample.epub');
+const FIXTURE_EPUB_NO_CALIBRE = resolve(
+  __dirname,
+  '..',
+  'parsers',
+  '__fixtures__',
+  'sample-title-no-calibre.epub',
+);
 
 let workspaceRoot: string;
 let app: Express;
@@ -251,5 +258,32 @@ describe('POST /api/import → POST /api/books — excluded chapters round-trip'
     for (const c of stateJson.chapters as Array<{ excluded?: boolean }>) {
       expect(c.excluded).toBeFalsy();
     }
+  });
+});
+
+/* Bug B: the staging response surfaces `seriesFromTitle` so the
+   confirm-metadata view can render the "auto-extracted" chip. */
+describe('POST /api/import — seriesFromTitle plumbing', () => {
+  it('emits seriesFromTitle=true on the candidate for an EPUB whose dc:title carries the series', async () => {
+    const epubBytes = await readFile(FIXTURE_EPUB_NO_CALIBRE);
+    const res = await request(app).post('/api/import').attach('file', epubBytes, {
+      filename: 'sample-title-no-calibre.epub',
+      contentType: 'application/epub+zip',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.candidate.title).toBe('Everblaze');
+    expect(res.body.candidate.series).toBe('Keeper of the Lost Cities');
+    expect(res.body.candidate.seriesPosition).toBe(3);
+    expect(res.body.candidate.seriesFromTitle).toBe(true);
+  });
+
+  it('emits seriesFromTitle=false on the candidate when Calibre meta is authoritative', async () => {
+    const epubBytes = await readFile(FIXTURE_EPUB);
+    const res = await request(app)
+      .post('/api/import')
+      .attach('file', epubBytes, { filename: 'sample.epub', contentType: 'application/epub+zip' });
+    expect(res.status).toBe(200);
+    expect(res.body.candidate.series).toBe('Solway Bay');
+    expect(res.body.candidate.seriesFromTitle).toBe(false);
   });
 });

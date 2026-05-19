@@ -14,6 +14,11 @@ export interface StagedImport {
   author: string | null;
   series: string | null;
   seriesPosition: number | null;
+  /** True when series came from a title-parenthetical heuristic rather
+      than authoritative metadata. Surfaced to the confirm screen so the
+      user can verify the guess. See server/src/parsers/text.ts
+      `parseSeriesFromTitle`. */
+  seriesFromTitle: boolean;
   sourceText: string;
   chapters: ChapterHint[];
   originalFileName: string | null;

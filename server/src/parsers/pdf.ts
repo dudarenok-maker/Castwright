@@ -13,7 +13,7 @@
    PDFs with a clean outline) safely. */
 
 import pdfParse from 'pdf-parse';
-import { parseText } from './text.js';
+import { parseText, parseSeriesFromTitle } from './text.js';
 import type { ParsedManuscript } from './text.js';
 import { isLikelyFrontMatterTitle } from './front-matter.js';
 
@@ -72,11 +72,33 @@ export async function parsePdf(
     chapters = chapters.map((c, i) => ({ ...c, title: outlineTitles[i] }));
   }
 
+  /* If PDF metadata Title beats the parseText-derived one AND parseText
+     hadn't already extracted a series from a title parenthetical, take
+     one more pass at the PDF title to support cases like a Calibre-
+     produced PDF whose info.Title carries "Title (Series Book N)" but
+     whose filename + body lack series hints. */
+  let finalTitle = metaTitle || parsed.title;
+  let finalSeries = parsed.series;
+  let finalSeriesPosition = parsed.seriesPosition;
+  let finalSeriesFromTitle = parsed.seriesFromTitle;
+  if (!finalSeries && metaTitle) {
+    const fromTitle = parseSeriesFromTitle(metaTitle);
+    if (fromTitle.series) {
+      finalTitle = fromTitle.title;
+      finalSeries = fromTitle.series;
+      finalSeriesPosition = fromTitle.seriesPosition;
+      finalSeriesFromTitle = true;
+    }
+  }
+
   return {
     ...parsed,
     chapters,
     format: 'pdf',
-    title: metaTitle || parsed.title,
+    title: finalTitle,
     author: metaAuthor || parsed.author,
+    series: finalSeries,
+    seriesPosition: finalSeriesPosition,
+    seriesFromTitle: finalSeriesFromTitle,
   };
 }

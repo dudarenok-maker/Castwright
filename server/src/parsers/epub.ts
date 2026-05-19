@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChapterHint } from '../store/manuscripts.js';
 import type { ParsedManuscript } from './text.js';
-import { parseFilenameMetadata } from './text.js';
+import { parseFilenameMetadata, parseSeriesFromTitle } from './text.js';
 import { tagExcitedDialog, tagHesitantDialog, tagShoutingDialog } from './audio-tags.js';
 import { stripHtml, extractFirstHeading, GENERIC_NCX_RE } from './html-utils.js';
 
@@ -35,13 +35,29 @@ export async function parseEpub(
     // epub2's createAsync returns the parsed EPub instance.
     const epub = await EPub.createAsync(filePath);
     const meta = epub.metadata as unknown as Record<string, string | undefined>;
-    const title = (meta.title ?? '').trim();
+    let title = (meta.title ?? '').trim();
     const author = (meta.creator ?? '').trim() || null;
     // Calibre stores series in the `calibre:series` meta entry, surfaced by
     // epub2 under different keys across versions — check the common ones.
-    const series = ((meta['calibre:series'] ?? meta.series ?? '') as string).trim() || null;
+    let series = ((meta['calibre:series'] ?? meta.series ?? '') as string).trim() || null;
     const posRaw = (meta['calibre:series_index'] ?? meta.series_index ?? '') as string;
-    const seriesPosition = posRaw ? parseFloat(posRaw) : null;
+    let seriesPosition: number | null = posRaw ? parseFloat(posRaw) : null;
+    /* Bug B: when Calibre metadata is absent (common in non-Calibre-produced
+       EPUBs) but the dc:title carries the series info in a parenthetical
+       like "Everblaze (Keeper of the Lost Cities Book 3)", split it off
+       so the saved book has clean title + populated series fields. The
+       frontend surfaces a "auto-extracted from title — verify" chip when
+       this fires so the user can override. */
+    let seriesFromTitle = false;
+    if (!series && title) {
+      const fromTitle = parseSeriesFromTitle(title);
+      if (fromTitle.series) {
+        title = fromTitle.title;
+        series = fromTitle.series;
+        seriesPosition = fromTitle.seriesPosition;
+        seriesFromTitle = true;
+      }
+    }
     const chapters: ChapterHint[] = [];
 
     for (let i = 0; i < epub.flow.length; i++) {
@@ -100,6 +116,7 @@ export async function parseEpub(
         seriesPosition != null && !Number.isNaN(seriesPosition)
           ? seriesPosition
           : fileMeta.seriesPosition,
+      seriesFromTitle,
     };
   } finally {
     /* Only clean up the tempdir we created. When sourcePath was given we
