@@ -23,6 +23,7 @@ import {
 } from '../lib/change-log';
 import { api, type SeriesRosterEntry } from '../lib/api';
 import { engineForModelKey } from '../lib/tts-models';
+import { computeOverallProgress } from '../lib/analysis-progress';
 import { stageToHash } from '../lib/router';
 import { TopBar, type GenerationPillData, type AnalysisPillData } from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
@@ -644,14 +645,10 @@ export function Layout() {
       kind,
       subsetChapterIds,
     } = analysisStream;
-    /* Per-phase progress + a coarse phase-weighted overall: phase 0 covers
-       the first 45%, phase 1 the next 50%, phase 2 the final 5% (matches
-       ANALYSIS_PHASES weighting used by the analysing view's overall
-       bar). */
-    const phaseWeights = [0.45, 0.5, 0.05];
-    const phaseBase = phaseWeights.slice(0, phaseId).reduce((sum, w) => sum + w, 0);
-    const phaseShare = phaseWeights[phaseId] ?? 0;
-    const overall = Math.min(1, phaseBase + Math.max(0, Math.min(1, phaseProgress)) * phaseShare);
+    /* Single source of truth for work-weighted analysis progress —
+       shared with the analysing view's "Overall" bar via
+       `src/lib/analysis-progress.ts`. */
+    const overall = computeOverallProgress(phaseId, phaseProgress);
     const percent = Math.round(overall * 100);
     const stalled =
       streamState === 'running' && lastTickAt > 0 && Date.now() - lastTickAt > STALL_THRESHOLD_MS;
