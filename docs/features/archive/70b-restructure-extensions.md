@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-19
 owner: null
 ---
 
 # Plan 70b — Chapter restructure feature extensions
 
-> Status: active
+> Status: stable
 > Key files: `src/components/restructure-chapters-button.tsx`, `src/components/restructure-chapters-panel.tsx`, `src/views/restructure.tsx`, `src/views/manuscript.tsx`, `src/components/listen/listen-header.tsx`, `src/lib/api.ts`, `server/src/workspace/restructure.ts`, `server/src/routes/chapters-restructure.ts`
 > URL surface: `#/books/<id>/manuscript` (new entry point), `#/books/<id>/restructure` (new sticky toolbar + per-row exclude + refresh button)
 > OpenAPI ops: `POST /api/books/{bookId}/chapters/exclude`, `POST /api/books/{bookId}/chapters/refresh-titles`
@@ -81,4 +81,9 @@ owner: null
 
 ## Ship notes
 
-(To be filled when the branch merges. Status will flip to `stable` and the file `git mv`d to `docs/features/archive/`.)
+Shipped 2026-05-19 via PR #63 (merge commit `ecc86fa`). Three commits:
+- `bca3046` feat(frontend,server): five-part feature bundle (button extraction, sticky toolbar, exclude affordance, refresh chapter names, warnings toast).
+- `68f2536` test(e2e): regenerated manuscript view visual baselines for the new Restructure button placement.
+- `35b57b2` fix(frontend): post-merge correction — the sticky toolbar was anchoring at `top-0 z-10` but the global `<TopBar>` is also `sticky top-0 z-40 h-16`, so the toolbar was getting parked behind the top-nav and invisible to the user. Reported on an 88-chapter book where the user scrolled to chapter 86+ and couldn't reach Merge. Fix: `top-16 z-30`.
+
+Built on [plan 70a](70a-restructure-bugfix.md). Together they close the chapter-restructure surface for the v1.4.0 slate — Manuscript-view entry is the discoverability win, sticky toolbar + per-row exclude + refresh-titles cover the long-manuscript ergonomics the user originally hit, and the `warnings` toast surfaces the silent-recovery messages from 70a so future regressions are visible inline.
