@@ -205,6 +205,23 @@ export const analysisSlice = createSlice({
         names: action.payload.names,
       };
     },
+
+    /* Cross-tab `BroadcastChannel` inbound hydrate (plan 63). Applied when
+       a sibling tab broadcasts its post-mutation snapshot of this slice
+       for `bookId`. Echo suppression lives in the middleware (the
+       middleware tags outbound messages with a per-tab instanceId and
+       drops inbound messages it sent itself); this reducer is pure and
+       must not re-broadcast (the middleware also short-circuits on this
+       action type). Cross-book isolation: when the inbound bookId
+       doesn't match our current activeStream's bookId, the snapshot is
+       still applied verbatim — the snapshot's own bookId field becomes
+       the slice's truth, mirroring how the same-tab `setActiveStream`
+       behaves. The middleware additionally guards on `currentBookId`
+       at the slice level (manuscript / chapters) so cross-bookId
+       contamination cannot leak into per-book per-chapter state. */
+    applyExternalAnalysisSnapshot(state, action: PayloadAction<AnalysisStreamSnapshot | null>) {
+      state.activeStream = action.payload;
+    },
   },
 });
 
