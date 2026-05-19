@@ -162,6 +162,7 @@ export function ListenView({
         onOpenExportModal={() => setExportModal({ tab: 'download' })}
         onEnterPreview={onEnterPreview}
         onOpenRestructure={() => dispatch(uiActions.changeView('restructure'))}
+        notes={bookMeta?.notes ?? null}
       />
 
       <ListenPlayerRegion
