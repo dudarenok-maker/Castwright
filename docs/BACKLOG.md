@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-19 (post plans 53–58 merge):** Must 0 · Should 0 · Could 29 · Won't 9
+**Counts as of 2026-05-19 (post plans 53–58 merge):** Must 0 · Should 0 · Could 32 · Won't 9
 
 ---
 
@@ -333,6 +333,36 @@ Source: net-new (2026-05-19). Spun off from plan 58 ship — the new `e2e/binary
 - _Key files:_ `scripts/gen-parser-fixtures.mjs`; `e2e/binary-upload.spec.ts`; `server/src/parsers/__fixtures__/sample.mobi` + `sample.azw3` (generated, possibly gitignored).
 - _Depends on:_ plan 58 shipped (routing-seam coverage already in place). Calibre install is the developer prerequisite.
 - _Benefit (technical):_ binary parsers are the highest-risk seam in the upload flow — third-party libs have real-world quirks that the mock-api path doesn't catch. Real fixtures lock the integration contract.
+
+### 39. GPU-arbitration semaphore for parallel Claude Code sessions
+
+Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-new.mjs` resolves port collisions but leaves GPU/VRAM contention as a manual-coordination concern documented in CONTRIBUTING.md.
+
+- _What:_ Add a small server-side semaphore around heavy-GPU operations (analyzer's chat completion path + sidecar's `/synthesize`) so concurrent requests from N parallel sessions get serialized rather than fighting over VRAM on an 8 GB GPU. Default concurrency = 1 GPU operation at a time; configurable via `GPU_CONCURRENCY` env var. Surface the queue depth in the existing top-bar pill state so the user sees "Queued (1 ahead)".
+- _Acceptance:_ Two parallel sessions both kick off `/analyse` → second request waits in queue until first completes (no VRAM spill, no silent OOM). The top-bar pill in the waiting session shows "Queued". New server Vitest spec covers the semaphore behaviour; existing tests stay green.
+- _Key files:_ new `server/src/gpu/semaphore.ts`; `server/src/analyzer/ollama.ts` (wrap chat calls); `server/src/routes/sidecar-synth.ts` (wrap synth proxy); `src/components/layout.tsx` (consume queue-depth from existing pill polling).
+- _Depends on:_ none. Pairs with the worktree parallel-sessions tooling — without the semaphore, users must queue heavy operations by hand per the CONTRIBUTING.md "GPU + shared-resource caveats" note.
+- _Benefit (user):_ removes the silent VRAM-spillover-to-RAM slowdown when two sessions hit the analyzer or sidecar concurrently. Today a parallel run can take 5–10× longer than serial because both processes thrash the GPU.
+
+### 40. Live worktree dashboard in the app
+
+Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-list.mjs` answers "which worktrees are open?" from the terminal, but once the user routinely has 3+ sessions running, an in-app view is the natural escalation.
+
+- _What:_ Add a `#/worktrees` view (and a top-bar entry point) that lists every worktree visible to `git worktree list --porcelain`, each one's branch + assigned ports + last-modified-file timestamp + a "Is the dev server alive?" probe (TCP connect against the worktree's `VITE_PORT`). Click a row → opens that worktree's dev URL in a new tab.
+- _Acceptance:_ Three worktrees open with `npm run dev` running in two of them → the view shows all three rows; the two live ones show a green dot; clicking opens their UIs. Auto-refreshes every 10 s. New server endpoint `/api/worktrees` (only enabled in dev mode or behind a flag). Vitest covers the parsing; e2e covers the navigation.
+- _Key files:_ new `src/views/worktrees.tsx`; new `server/src/routes/worktrees.ts` (dev-mode only); `src/components/layout.tsx` (top-bar link, dev-only gate).
+- _Depends on:_ none structural. Pairs with Could #39 (GPU semaphore) — the dashboard is the natural place to surface "this worktree is the one currently holding the GPU."
+- _Benefit (architectural):_ operational visibility once parallel-session workflow becomes routine. Today the user has to remember which terminal tab is on which port.
+
+### 41. Auto-reconcile helper for parallel-agent integration branches
+
+Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — CONTRIBUTING.md "Reconciliation pattern" describes the `integration/<date>` ritual but executes it manually (one `git switch` + `git merge` + `npm run verify` per agent branch). The friction-iest part of the parallel-agent workflow today.
+
+- _What:_ Add `scripts/wt-merge.mjs <branch> [<branch>...] [--into integration/<date>]` that drives the documented reconciliation pattern: cut a fresh integration branch off `main`, merge each agent branch in sequence, run `npm run verify` between merges, abort on first failure with a clear "this branch broke verify" message and instructions for dropping the offending branch. Idempotent — safe to re-run from a partially-merged integration branch.
+- _Acceptance:_ Four parallel agent branches → `node scripts/wt-merge.mjs feat/a feat/b feat/c feat/d` → integration branch created, all four merged in order, verify passes between each. Fail one branch → script aborts on that branch's verify, prints the failing test summary + the suggested follow-up command. New Pester / Node test covers the dispatch order + abort behaviour.
+- _Key files:_ new `scripts/wt-merge.mjs`; new `scripts/tests/wt-merge.test.mjs`; CONTRIBUTING.md "Reconciliation pattern" section (cross-link the helper).
+- _Depends on:_ the parallel-sessions tooling already shipped (the worktrees are the input). The verify-cache plan 50 makes the between-merge verify fast enough that this becomes practical.
+- _Benefit (user):_ collapses the 6-step manual reconciliation into one command. Today the friction of "merge, verify, merge, verify, ..." discourages users from running > 2 parallel agents.
 
 ---
 

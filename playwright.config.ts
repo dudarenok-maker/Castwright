@@ -9,8 +9,13 @@ import { defineConfig, devices } from '@playwright/test';
  * through a real browser (real router, real timers, real layout).
  *
  * Port 5174 (not 5173) so a running `npm run dev` does not conflict
- * with `npm run test:e2e`.
+ * with `npm run test:e2e`. PLAYWRIGHT_PORT can override this so parallel
+ * worktrees running e2e don't collide on :5174 either — see
+ * scripts/wt-new.mjs for the per-worktree port-offset story.
  */
+const playwrightPort = Number(process.env.PLAYWRIGHT_PORT ?? 5174);
+const baseURL = `http://127.0.0.1:${playwrightPort}`;
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -45,7 +50,7 @@ export default defineConfig({
     },
   },
   use: {
-    baseURL: 'http://127.0.0.1:5174',
+    baseURL,
     trace: 'retain-on-failure',
     /* See the retries comment above — 60 s absorbs the cold-load race
        on the first `page.goto('/')` of each worker when the suite is
@@ -58,9 +63,10 @@ export default defineConfig({
        of .env.development. We deliberately avoid `--mode test` because
        Vitest defaults to that mode and would also pick up .env.test if
        it were named that — flipping mocks on for unit tests that expect
-       the real-api code path. `--port 5174` keeps it off the dev port. */
-    command: 'npx vite --mode e2e --port 5174 --strictPort',
-    url: 'http://127.0.0.1:5174',
+       the real-api code path. `--port <playwrightPort>` keeps it off the
+       dev port (and off other worktrees' e2e ports). */
+    command: `npx vite --mode e2e --port ${playwrightPort} --strictPort`,
+    url: baseURL,
     reuseExistingServer: !process.env.CI,
     stdout: 'pipe',
     stderr: 'pipe',
