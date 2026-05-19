@@ -381,38 +381,72 @@ The tag message is the source of truth; the regression plans under
 `docs/features/` are the long-form companion (reference plan numbers in
 parens, e.g. `(32, 33)`).
 
-A release describes what shipped from a **user's** perspective, diffed
-against the **previous public release**. It is not a development diary
-and not an inventory of parked work.
+A release describes what shipped, diffed against the **previous public
+release**. The Features and Engineering sections are functional summaries
+written for a reader who is at minimum a contributor / operator
+(mechanical detail welcome); the Fixes section is the one place where
+each bullet must lead with the user-visible symptom in plain language
+before any internal explanation. A release is not a development diary
+and not an inventory of parked work. See v1.3.1's release notes for the
+canonical example of the format the rest of this section describes.
+
+### Header line
+
+`vX.Y.Z — <comma-separated themes>` on its own line, followed by a
+blank line and a one-paragraph intro that frames the release at a
+glance ("biggest single step since …", "hotfix bundle for …", "first
+public release of …"). The themes mirror the section content that
+follows so a reader skimming the releases index understands what the
+tag delivered without expanding the body.
 
 ### Sections, in order
 
 1. **Features.** User-visible additions or expansions since the previous
-   release. **One bullet per shipped capability, written from the user's
-   perspective** — describe what a listener / deployer / operator can now
-   do that they couldn't before. Lead with the affordance ("A new Models
-   card on Account…", "The character profile drawer now has…"), name the
-   benefit ("…without opening a terminal", "…remembers the choice per
-   book"), and leave architecture out. State machines, middleware names,
-   slice names, SSE channel mechanics, redux action shapes, regex
-   patterns, and library / dependency choices belong in the commit
-   message and the regression plan, not the release body. Reference the
-   regression plan number in parens at the end of the bullet.
+   release. **Paragraph form with bold-heading leads grouping multiple
+   plan items by surface area.** One paragraph per surface area
+   (Listening, Voice + cast, Ingest, Themes, …); each paragraph opens
+   with a bolded one-line subject ending in a period (e.g.
+   `**Listening surface overhaul.**`) and then runs as a long-form
+   paragraph that concatenates every shipped capability in that
+   surface, with regression-plan numbers in parens after the relevant
+   clause (e.g. `… sleep timer with countdown presets + end-of-chapter
+   mode (53)`). Internal vocabulary is allowed here when it helps a
+   contributor or operator — state machine names, slice names, file
+   names, SSE channel mechanics, library / dependency choices, regex
+   patterns, `bg-white/{40,60,70,95}` tailwind selectors, etc. The goal
+   is a functional summary that captures both the user-facing affordance
+   AND enough mechanical hint that a reader who knows the codebase can
+   immediately locate the work.
 2. **Fixes.** Bugs that escaped the previous release and that users
    actually hit. Omit this section entirely on an initial release.
-   **One bullet per bug, written from the user's perspective** — describe
-   the symptom the listener / deployer / operator saw, not the internal
-   cause. A reader who has never touched the code should understand what
-   was wrong from the bullet alone. Avoid CSS-class names, slice names,
-   middleware names, file paths, line numbers, and selector specificity
-   arguments — those belong in the commit message or the regression plan,
-   not the release body. Reference the regression plan number in parens
-   at the end of the bullet if there is one.
+   **One bullet per bug, each bullet a paragraph in its own right.**
+   The bullet structure is: `[symptom in user terms] — [parenthetical
+   clarification with em-dashes if needed]. [Now [what changed]]. (plan
+   number)`. Write the symptom from the listener / deployer / operator's
+   chair — what they saw, what was broken, what they couldn't do — and
+   close with a one-sentence "Now legible", "Now self-heals", "Now
+   stacks correctly", etc. that names the new behaviour. Internal
+   vocabulary (file paths, selector specificity, `bg-amber-50/60 +
+   hover:bg-amber-50`) is allowed inside the bullet when it
+   disambiguates which surface the bug lived on; it's discouraged when
+   it crowds out the user-symptom framing. Reference the regression
+   plan number in parens at the end of the bullet if there is one
+   (`(70c)`, `(42 follow-up)`).
 3. **Retirements.** Behavior that **shipped in a previous release** and
-   is now removed or downgraded. Tell users what to do instead.
+   is now removed or downgraded. Tell users what to do instead. Bullet
+   list; omit the section if empty.
 4. **Engineering.** Changes to the test harness, build, install
    prerequisites, deploy steps, repo layout — anything that changes how
    a contributor runs the project or how an operator deploys it.
+   **Bullet list, mechanical detail welcome.** Exact commands, file
+   paths, configuration knobs, before / after metrics, plan numbers in
+   parens at end. The Engineering section is explicitly for
+   contributors / operators, so test-harness names, CI step names,
+   refactor mechanics, dependency versions, and CI provider quirks
+   (`apt / brew / choco`, `pwsh` vs `powershell.exe`, etc.) belong
+   here. Optional trailing line for BACKLOG / archive accounting (e.g.
+   `BACKLOG since v1.2.2: Could 32 → 23 (9 items shipped, 1 net-new R1
+   entry added then resolved). …`).
 
 ### What stays out
 
@@ -443,20 +477,20 @@ and not an inventory of parked work.
    leave it out.
 4. Write the tag message with the four sections (omit any that are
    empty). Reference plan numbers in parens.
-5. **Features AND Fixes bullets both get a second pass for user
-   vocabulary.** Re-read each one and ask: would a deployer who has never
-   seen the codebase know what shipped / what was broken? Replace
-   `bg-white/60`, `book-meta-slice`, `persistence-middleware`,
-   `floating-pill-inverse`, `z-[60]`, `BroadcastChannel('audiobook-state')`,
-   `instanceId tag + inbound-action allowlist`, `state machine (idle →
-   detecting → downloading → installed)`, `NDJSON progress stream`,
-   `ffmpeg -ss / -t / -c copy`, `acceptedSelections map`, etc. with the
-   user-facing capability or symptom: "install Ollama and pull a model
-   without opening a terminal", "open the same book in two tabs and both
-   stay in sync", "audio is sliced from the existing recording, no
-   re-encode, no quality loss". Internal vocabulary in a Features or
-   Fixes bullet is a signal it was written from the diff, not from the
-   user's chair. **Engineering** bullets are exempt — that section is
-   explicitly for contributors / operators, so test-harness names, CI
-   step names, and refactor mechanics are fine there.
+5. **Fixes bullets get a second pass for user vocabulary.** Re-read
+   each one and ask: would a deployer who has never seen the codebase
+   understand what was broken from the symptom alone? The bullet must
+   open with the user-visible failure mode ("Generation halted on the
+   'No analysed sentences cached' banner", "Long chapters froze on the
+   'Worker has gone quiet' banner", "In dark mode, the Halted pill was
+   nearly invisible") before any internal explanation kicks in. Internal
+   names (`bg-amber-50/60`, `BookStateJson.description`, `bookMeta/commitDraft`)
+   are fine *inside* the bullet when they disambiguate the surface, but
+   never as the leading vocabulary. Close with "Now [past-tense state]"
+   (`Now legible`, `Now self-heals`, `Now stacks correctly`) plus the
+   plan number in parens. **Features paragraphs and Engineering bullets
+   are NOT subject to this constraint** — Features paragraphs are
+   allowed to mix functional summary with mechanical hints because the
+   reader is also a contributor / regression-plan author, and
+   Engineering is explicitly for contributors / operators.
 6. `git tag -a vX.Y.Z` and `git push --tags` once the user approves.
