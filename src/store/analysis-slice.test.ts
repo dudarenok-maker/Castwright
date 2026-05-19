@@ -267,4 +267,32 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     );
     expect(s2.activeStream).toEqual(live);
   });
+
+  /* Cross-tab BroadcastChannel hydrate (plan 63). The middleware
+     translates inbound channel messages into this reducer; tests for
+     the middleware live in `broadcast-middleware.test.ts`. Here we
+     pin the reducer's contract: it replaces activeStream verbatim,
+     including null (sibling tab cleared the stream). */
+  describe('applyExternalAnalysisSnapshot — cross-tab inbound', () => {
+    it('replaces activeStream verbatim with the inbound snapshot', () => {
+      const sibling: AnalysisStreamSnapshot = {
+        ...baseSnapshot,
+        bookId: 'b_SIBLING',
+        manuscriptId: 'm_SIBLING',
+        phaseProgress: 0.8,
+      };
+      const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
+      const s2 = analysisSlice.reducer(
+        s1,
+        analysisActions.applyExternalAnalysisSnapshot(sibling),
+      );
+      expect(s2.activeStream).toEqual(sibling);
+    });
+
+    it('accepts null to mirror a sibling clearActiveStream', () => {
+      const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
+      const s2 = analysisSlice.reducer(s1, analysisActions.applyExternalAnalysisSnapshot(null));
+      expect(s2.activeStream).toBeNull();
+    });
+  });
 });

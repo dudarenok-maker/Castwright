@@ -560,6 +560,28 @@ export const chaptersSlice = createSlice({
       }
     },
 
+    /* Cross-tab `BroadcastChannel` inbound hydrate (plan 63). Receives a
+       sibling tab's post-mutation snapshot of the cross-book generation
+       activeStream so the global header pill updates in tab B without a
+       network round-trip when tab A starts/advances a run.
+
+       Scope is intentionally narrow: only `activeStream` is mirrored,
+       NOT `chapters[]` rows / `pendingRegen` / `regenEpoch` / etc.
+       Those are per-tab UI state — duplicating them across tabs would
+       fire chapter-level regen side-effects (the Generate view watches
+       `regenEpoch` to re-open SSE) in every tab simultaneously, which is
+       the racing-writes case explicitly parked as Won't #3.
+
+       Cross-bookId isolation: the snapshot carries its own bookId in the
+       payload; we replace `activeStream` verbatim. The reducer never
+       touches per-chapter rows, so tab B's open book stays clean even
+       when tab A is generating a different book — only the header pill
+       reflects the sibling activity. Echo suppression lives in the
+       middleware (instanceId tag on outbound, ignore self-broadcasts). */
+    applyExternalChaptersSnapshot: (s, a: PayloadAction<ActiveStreamSnapshot | null>) => {
+      s.activeStream = a.payload;
+    },
+
     batchRegenerateCharacters: (
       s,
       a: PayloadAction<{ characterIds: string[]; chapterIds: number[] }>,
