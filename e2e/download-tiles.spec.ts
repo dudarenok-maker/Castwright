@@ -28,17 +28,14 @@ test.describe('plan 57 — download tiles', () => {
   test('M4B tile is live and opens the export modal with m4b pre-selected', async ({ page }) => {
     const tile = page.getByTestId('download-tile-m4b');
     await expect(tile).toBeVisible();
-    // Live tile button is enabled (no `disabled` attribute, no Coming-Soon badge).
     const button = tile.getByRole('button', { name: /Download/i });
     await expect(button).toBeEnabled();
     await button.click();
-    // ExportAudiobookModal mounts. The format-picker reflects 'm4b'.
-    // We assert the modal title / dialog role first to confirm it opened,
-    // then check that the m4b row is selected (data attribute or aria-pressed).
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 3_000 });
-    // The format toggle exposes data-testid="export-format-m4b" selected state
-    // (or similar). Match the generic check via accessible name "M4B".
-    await expect(page.getByText(/M4B/i).first()).toBeVisible();
+    // Modal mounts. Use the modal's own testid + the format-picker
+    // selected-state attribute exposed by export-audiobook.tsx
+    // (data-testid="export-format-m4b" on the M4B format pill).
+    await expect(page.getByTestId('export-audiobook-modal')).toBeVisible({ timeout: 3_000 });
+    await expect(page.getByTestId('export-format-m4b')).toBeVisible();
   });
 
   test('MP3 ZIP tile is live and opens the export modal with mp3-zip pre-selected', async ({
@@ -49,16 +46,14 @@ test.describe('plan 57 — download tiles', () => {
     const button = tile.getByRole('button', { name: /Download/i });
     await expect(button).toBeEnabled();
     await button.click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 3_000 });
-    await expect(page.getByText(/MP3.*ZIP/i).first()).toBeVisible();
+    await expect(page.getByTestId('export-audiobook-modal')).toBeVisible({ timeout: 3_000 });
+    await expect(page.getByTestId('export-format-mp3-zip')).toBeVisible();
   });
 
-  test('Streaming link tile remains "Coming soon"', async ({ page }) => {
-    /* The streaming-link tile has no data-testid (intentionally — it's
-       not live in v1.3.0). Locate it by its visible heading and assert
-       its Download button is disabled. */
-    const streamingTile = page.getByText(/Streaming link/i).locator('xpath=ancestor::div[1]');
-    const button = streamingTile.getByRole('button', { name: /Download/i });
+  test('Streaming link tile remains "Coming soon" in v1.3.0', async ({ page }) => {
+    const tile = page.getByTestId('download-tile-streaming');
+    await expect(tile).toBeVisible();
+    const button = tile.getByRole('button', { name: /Download/i });
     await expect(button).toBeDisabled();
   });
 });
