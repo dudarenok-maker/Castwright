@@ -473,3 +473,49 @@ describe('AccountView — TTS sidecar auto-start (plan 43)', () => {
     expect(screen.getByText(/restart the server to apply this change/i)).toBeInTheDocument();
   });
 });
+
+describe('AccountView — Models card (plan 61)', () => {
+  it('renders the Models section with the in-app Ollama install card', async () => {
+    /* The OllamaInstall component fires /api/ollama/detect on mount —
+       stub the global fetch so it returns "not installed" without
+       hitting the network. */
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(JSON.stringify({ installed: false, version: null }), { status: 200 }),
+      );
+    try {
+      renderView();
+      const card = await screen.findByTestId('account-models-card');
+      expect(card).toBeInTheDocument();
+      expect(card).toHaveTextContent(/local analyzer/i);
+      expect(card).toHaveTextContent(/analyzer models/i);
+      expect(card).toHaveTextContent(/coqui xtts/i);
+      /* OllamaInstall renders "not detected" once /detect resolves. */
+      await waitFor(() => {
+        expect(screen.getByTestId('ollama-install-not-detected')).toBeInTheDocument();
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('renders the cross-platform Coqui install snippet (both POSIX + PowerShell)', () => {
+    /* The card cites both `install-coqui.sh` and `install-coqui.ps1`
+       in the same block — the user must be able to copy/paste their
+       platform's command without scrolling. */
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(JSON.stringify({ installed: false, version: null }), { status: 200 }),
+      );
+    try {
+      renderView();
+      const pre = screen.getByTestId('account-coqui-install-cmd');
+      expect(pre.textContent).toMatch(/install-coqui\.ps1/);
+      expect(pre.textContent).toMatch(/install-coqui\.sh/);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
