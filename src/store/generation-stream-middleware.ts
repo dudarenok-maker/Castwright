@@ -387,10 +387,33 @@ export const generationStreamMiddleware: Middleware = (store) => {
       const after = store.getState() as StreamableRootState;
       const sliceMatchesHandle = after.chapters.currentBookId === handle.bookId;
       if (sliceMatchesHandle) {
+        /* Slice has this book's rows — derive counters from rows so we
+           pick up any user-side mutations (excluded toggles etc.). */
         dispatch(
           chaptersActions.setActiveStream(
             snapshotFromChapters(handle.bookId, handle.modelKey, after.chapters),
           ),
+        );
+      } else if (ev && ev.type !== 'idle') {
+        /* Bug E — cross-book path. The slice is on a different book so
+           the per-chapter tick reducer's cross-book guard short-circuits
+           and the snapshot stops refreshing (counters AND lastTickAt
+           freeze). Pull counters straight from the tick payload's run
+           aggregates so the pill keeps moving and the stall check stays
+           fresh. Older servers don't emit the run* fields — in that
+           case `updateActiveStreamProgress` still bumps lastTickAt so
+           the pill at minimum doesn't go spuriously stalled. */
+        const evRecord = ev as unknown as Record<string, unknown>;
+        const runDone = typeof evRecord.runDone === 'number' ? evRecord.runDone : undefined;
+        const runTotal = typeof evRecord.runTotal === 'number' ? evRecord.runTotal : undefined;
+        const runInProgress =
+          typeof evRecord.runInProgress === 'number' ? evRecord.runInProgress : undefined;
+        dispatch(
+          chaptersActions.updateActiveStreamProgress({
+            done: runDone,
+            total: runTotal,
+            inProgress: runInProgress,
+          }),
         );
       }
       if (ev && ev.type === 'chapter_complete' && ev.chapterId != null && sliceMatchesHandle) {

@@ -136,6 +136,27 @@ export const chaptersSlice = createSlice({
       s.activeStream = null;
     },
 
+    /** Bug E — cross-book heartbeat + counter refresh from a server tick
+        payload. Always bumps `lastTickAt` so the pill's stall check stays
+        fresh; conditionally overwrites done/total/inProgress when the
+        tick carried them. Used by the generation-stream middleware when
+        the slice has been rehydrated for a DIFFERENT book and the
+        per-chapter tick reducer's cross-book guard would otherwise drop
+        the tick on the floor. Slice-matches-handle path keeps using
+        `setActiveStream(snapshotFromChapters(...))` because the slice
+        rows are authoritative there. */
+    updateActiveStreamProgress: (
+      s,
+      a: PayloadAction<{ done?: number; total?: number; inProgress?: number }>,
+    ) => {
+      if (!s.activeStream) return;
+      s.activeStream.lastTickAt = Date.now();
+      const { done, total, inProgress } = a.payload;
+      if (done != null) s.activeStream.done = done;
+      if (total != null) s.activeStream.total = total;
+      if (inProgress != null) s.activeStream.inProgress = inProgress;
+    },
+
     /* Called by the Generate view the instant it opens an SSE with a regen
        spec, so a subsequent Pause → Resume cycle re-resumes "naturally"
        (no chapterIds, no force) instead of replaying force:true and wiping
