@@ -71,6 +71,13 @@ describe('dark-mode CSS overrides (styles.css)', () => {
     { selector: '.hover\\:bg-amber-50:hover', label: 'amber-50 hover (drift banner)' },
     { selector: '.text-amber-700', label: 'amber-700 status text' },
     { selector: '.border-amber-200', label: 'amber-200 panel border' },
+    /* `floating-pill-inverse` is a bespoke utility for the cast-view
+       selection bar at `src/views/cast.tsx:439`. The bar wants to read as
+       a dark capsule in BOTH modes — using `bg-ink text-canvas` was a
+       coincidence that broke under token inversion. The new utility pins
+       the colours explicitly per mode. Asserted here so a future deletion
+       doesn't silently re-introduce the cream-on-cream invisibility. */
+    { selector: '.floating-pill-inverse', label: 'floating pill inverse (selection bar)' },
   ])('repaints $label ($selector) under [data-theme=\'dark\']', ({ selector }) => {
     const pattern = new RegExp(
       String.raw`\[data-theme='dark'\][^{]*` +
