@@ -73,6 +73,7 @@ interface CapturedAnalysisCall {
   onPhase?: (e: { phaseId: number; progress: number }) => void;
   onEta?: (e: { remainingMs: number }) => void;
   onSeriesPrior?: (e: { count: number; names: string[] }) => void;
+  onHeartbeat?: (e: unknown) => void;
   resolve: () => void;
   reject: (e: unknown) => void;
 }
@@ -118,6 +119,7 @@ beforeEach(() => {
         onPhase?: (e: { phaseId: number; progress: number }) => void;
         onEta?: (e: { remainingMs: number }) => void;
         onSeriesPrior?: (e: { count: number; names: string[] }) => void;
+        onHeartbeat?: (e: unknown) => void;
       },
     ) => {
       const opts = (kindMarker === 'subset' ? maybeOpts : chapterIdsOrOpts) as {
@@ -125,6 +127,7 @@ beforeEach(() => {
         onPhase?: (e: { phaseId: number; progress: number }) => void;
         onEta?: (e: { remainingMs: number }) => void;
         onSeriesPrior?: (e: { count: number; names: string[] }) => void;
+        onHeartbeat?: (e: unknown) => void;
       };
       const chapterIds = kindMarker === 'subset' ? (chapterIdsOrOpts as number[]) : undefined;
       return new Promise<void>((resolve, reject) => {
@@ -136,6 +139,7 @@ beforeEach(() => {
           onPhase: opts.onPhase,
           onEta: opts.onEta,
           onSeriesPrior: opts.onSeriesPrior,
+          onHeartbeat: opts.onHeartbeat,
           resolve: () => resolve(),
           reject: (e: unknown) => reject(e),
         };
@@ -655,5 +659,75 @@ describe('analysisStreamMiddleware — subset-retry route (plan 32 follow-up)', 
     );
     expect(runAnalysisForChaptersMock).toHaveBeenCalledTimes(1);
     expect(runAnalysisForChaptersMock.mock.calls[0][1]).toEqual([]);
+  });
+});
+
+describe('analysisStreamMiddleware — heartbeat keeps cross-view snapshot fresh (bug 6 analysis mirror)', () => {
+  /* Mirror of the chapters-slice cross-book heartbeat shipped in commit
+     06444ee. During quiet phases (slow ML inference between onPhase /
+     onEta events) the analysis SSE only emits throttled onHeartbeat
+     ticks. Pre-fix, those heartbeats were view-only — when the user
+     navigated away from the analysing view the snapshot's lastTickAt
+     froze and the global AnalysisPill flipped to "stalled" even though
+     the run was fine. The middleware now consumes onHeartbeat and
+     dispatches bumpActiveStreamHeartbeat to keep the cross-view stall
+     heuristic honest. */
+  it('subscribes to onHeartbeat on the analysis SSE call', () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
+    expect(captured[0]?.onHeartbeat).toBeInstanceOf(Function);
+  });
+
+  it('a fired heartbeat refreshes activeStream.lastTickAt', () => {
+    const store = buildStore();
+    /* Snapshot starts at lastTickAt: 1 (per baseSnapshot fixture). */
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+        /* This tick itself bumps lastTickAt — but only because it carries
+           lastTickAt in its payload via the middleware's onPhase wiring.
+           Heartbeats arrive *between* phase ticks, when the snapshot
+           would otherwise age past STALL_THRESHOLD_MS. */
+      }),
+    );
+    /* Move the wall clock forward and fire a heartbeat. */
+    const before = store.getState().analysis.activeStream?.lastTickAt ?? 0;
+    const fixedNow = before + 10_000;
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    try {
+      captured[0]?.onHeartbeat?.({ phaseId: 0, sample: 'chunk' });
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(store.getState().analysis.activeStream?.lastTickAt).toBe(fixedNow);
+  });
+
+  it('heartbeat for a different manuscriptId is dropped by the cross-book guard', () => {
+    /* Defensive — should never happen in practice (handle owns the
+       manuscriptId), but pinning the slice-level guard so a future
+       refactor that loosens the middleware doesn't silently let
+       cross-tab heartbeats clobber the wrong snapshot. */
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    const initialLastTick = store.getState().analysis.activeStream?.lastTickAt;
+    /* Dispatch a heartbeat directly through the slice action with a
+       mismatched manuscriptId — confirms the slice's own guard fires. */
+    store.dispatch(
+      analysisActions.bumpActiveStreamHeartbeat({
+        manuscriptId: 'm_OTHER',
+        lastTickAt: 999_999,
+      }),
+    );
+    expect(store.getState().analysis.activeStream?.lastTickAt).toBe(initialLastTick);
   });
 });
