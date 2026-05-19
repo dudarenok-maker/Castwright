@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-19 (post v1.4.0 pre-cutover slate ship):** Must 0 · Should 0 · Could 25 · Won't 9
+**Counts as of 2026-05-19 (Wave-3 mid-reconciliation):** Must 0 · Should 0 · Could 24 · Won't 9
 
 ---
 
@@ -235,16 +235,6 @@ Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 - _Depends on:_ plan 18b shipped; ideally Could #24 (power-user panel) for the token storage.
 - _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
 
-### 33. Streaming-link download tile (slugged share URL)
-
-Source: net-new (2026-05-19). Spun off from plan 57 ship — v1.3.0 wired M4B + MP3 ZIP tiles; the third "Streaming link" tile remains Coming soon pending a server URL endpoint.
-
-- _What:_ Add `POST /api/books/:bookId/share` returning `{ slug, url, expiresAt? }` and `GET /share/:slug` proxying the book's M4B off disk. Wire the existing streaming-link `DownloadCard` (already carries `testid="download-tile-streaming"`) to call the POST → render a copyable URL on success. Optional: per-link password gate (header check on `GET /share/:slug`).
-- _Acceptance:_ Click Streaming-link tile → button enabled → a modal with a copyable share URL opens. Paste URL into an incognito tab → M4B downloads. New server Vitest covers the share-route mint + proxy. New e2e spec extends `e2e/download-tiles.spec.ts`.
-- _Key files:_ new `server/src/routes/share.ts`; `src/views/listen.tsx` (wire onDownload on the streaming tile); `src/modals/share-link.tsx` (new — modal with the copy-to-clipboard UI); `openapi.yaml` (`POST /api/books/:bookId/share` + `GET /share/:slug`).
-- _Depends on:_ plan 57 shipped (tile is in place).
-- _Benefit (user):_ closes the remaining "Coming soon" tile on the Listen view's download section. The viral-loop / share-with-a-friend path becomes a single click.
-
 ### 34. Export queue Retry + Download row actions
 
 Source: plan 18 follow-up (2026-05-18). Deferred from plan 18a — needs middleware integration to re-fire a failed export, which is bigger than a row-handler wiring.
@@ -265,27 +255,6 @@ Source: plan 20 close-out (2026-05-18). The `revisions.acceptedSelections` map i
 - _Depends on:_ plan 20 shipped (acceptedSelections persistence is already on disk). Pairs with Could #12 (revision history timeline) — the timeline becomes meaningful once per-segment commits land separately from full regens.
 - _Benefit (user):_ true segment-level revision control. Today accept/reject is whole-revision swap — if the user likes 9 of 10 segments in the new take but wants segment 7 from the original, they have to regenerate the whole chapter under different prompts to recover that one segment. This closes the loop the slice has been quietly capturing since plan 20 v1.
 
-<<<<<<< HEAD
-### 38. Real-binary MOBI / AZW3 fixtures for the binary-upload e2e
-
-Source: net-new (2026-05-19). Spun off from plan 58 ship — the new `e2e/binary-upload.spec.ts` covers the routing seam with dummy buffers (mock api doesn't parse content), but real-binary integration with `@lingo-reader/mobi-parser` is still untested at the browser level.
-
-- _What:_ Extend `scripts/gen-parser-fixtures.mjs` to call Calibre's `ebook-convert` (a per-developer install, not bundled) to produce tiny `sample.mobi` + `sample.azw3` from a Project Gutenberg-derived `.epub` source. Wire these into `e2e/binary-upload.spec.ts` so the MOBI/AZW3 cases load real binaries through the real (not mock) parser path. Skip the test cleanly when Calibre isn't on PATH so a fresh-clone dev environment still passes verify.
-- _Acceptance:_ With Calibre installed, `npm run test:e2e` runs all 4 binary cases through the real parser path and asserts the confirm-metadata view renders. Without Calibre, the MOBI/AZW3 cases skip with a clear "Calibre required" message; EPUB + PDF still run against the existing real fixtures.
-- _Key files:_ `scripts/gen-parser-fixtures.mjs`; `e2e/binary-upload.spec.ts`; `server/src/parsers/__fixtures__/sample.mobi` + `sample.azw3` (generated, possibly gitignored).
-- _Depends on:_ plan 58 shipped (routing-seam coverage already in place). Calibre install is the developer prerequisite.
-- _Benefit (technical):_ binary parsers are the highest-risk seam in the upload flow — third-party libs have real-world quirks that the mock-api path doesn't catch. Real fixtures lock the integration contract.
-=======
-### 37. In-app multi-model management UX
-
-Source: net-new (2026-05-18). Plan 49 (release packaging) ships with a Kokoro-only install bundle and an in-app Gemini API key field; the rest of the multi-model story still needs the deployer to drop to a terminal. This item closes that gap.
-
-- _What:_ Add to the Account view (or a sibling Models tab): (a) "Install Ollama" affordance that detects the platform, downloads the vendor installer, and walks the user through setup; (b) "Pull model" UI on the analyzer section — lists models present on disk, exposes a Pull button for the configured-default that doesn't shell to a terminal; (c) "Refresh available models" button that re-hits `/api/ollama/health` and updates the dropdown without a page reload; (d) optional Coqui XTTS pre-install script (POSIX `.sh` + PowerShell `.ps1` parallels to `install-kokoro.*`) that fetches weights ahead of first generation.
-- _Acceptance:_ Fresh deployer install (Kokoro only) → Account → Models → Install Ollama → Pull qwen3.5:4b → analyze a book, all without leaving the app. Coqui XTTS users can pre-fetch weights similarly. New Vitest specs cover the per-step state machine; one Playwright spec covers the install → pull → analyze loop end-to-end (mock the actual download).
-- _Key files:_ `src/views/account.tsx` (extend with Models section), new `src/components/ollama-install.tsx`, new `src/components/model-pull-status.tsx`, `server/src/routes/ollama-health.ts` (extend with `POST /pull`), new `server/src/ollama/install-bootstrap.ts`, new `server/tts-sidecar/scripts/install-coqui.{sh,ps1}`.
-- _Depends on:_ none structural — the Account UX seam exists from plan 49. Unparks the install-and-pull-from-UI subset of Won't #1 ("Auto-install Ollama / auto-pull models"); the headless-CI variant of Won't #1 stays parked.
-- _Benefit (user):_ closes the gap that plan 49's Kokoro-only install leaves. Today a deployer who wants Ollama or Coqui XTTS must drop to a terminal; this UX keeps the install + model-management flow entirely in-app, matching the deployer-first promise of plan 49.
->>>>>>> origin/test/e2e-real-binary-fixtures
 
 ### 39. GPU-arbitration semaphore for parallel Claude Code sessions
 

@@ -33,6 +33,7 @@ import type {
   CoverCandidate,
   BookExportRequest,
   BookExportJob,
+  BookShareLink,
   ExportLanInfo,
   BaseVoice,
   TtsEngine,
@@ -2622,6 +2623,23 @@ async function realCancelBookExport(bookId: string, exportId: string): Promise<v
     );
 }
 
+/* Plan 67 — mint (or look up) a slugged share URL for the book. The
+   server caches the slug per bookId so a second call returns the same
+   URL — no re-mint churn. The frontend opens a copy-to-clipboard modal
+   with the URL on success. */
+async function realCreateBookShareLink(bookId: string): Promise<BookShareLink> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/share`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  if (!res.ok)
+    throw new Error(
+      `Share-link mint failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
 async function realGetExportLanUrls(): Promise<ExportLanInfo> {
   const res = await fetch(`/api/export/lan`);
   if (!res.ok)
@@ -2723,6 +2741,29 @@ async function mockCancelBookExport(_bookId: string, exportId: string): Promise<
       errorReason: 'Cancelled by user.',
     });
   }
+}
+
+/* Plan 67 — mock the slug minter so the design-fixture mode shows a
+   plausible share URL without round-tripping a server. Stable per
+   bookId (memoised in module-scope) so a second click hands back the
+   same string, matching the real route's idempotent contract. */
+const MOCK_SHARE_LINKS = new Map<string, BookShareLink>();
+async function mockCreateBookShareLink(bookId: string): Promise<BookShareLink> {
+  await wait(120);
+  const cached = MOCK_SHARE_LINKS.get(bookId);
+  if (cached) return cached;
+  /* 12-char Crockford-style base32 slug, same alphabet as the server's
+     newSlug() — matches the SLUG_RE on the share route so the regex
+     pattern in e2e tests is satisfied in mock mode too. */
+  const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  let slug = '';
+  for (let i = 0; i < 12; i += 1) slug += alphabet[Math.floor(Math.random() * alphabet.length)];
+  const link: BookShareLink = {
+    slug,
+    url: `${window.location.origin}/share/${slug}`,
+  };
+  MOCK_SHARE_LINKS.set(bookId, link);
+  return link;
 }
 
 async function mockGetExportLanUrls(): Promise<ExportLanInfo> {
@@ -2882,6 +2923,7 @@ const real = {
   createBookExport: realCreateBookExport,
   getBookExport: realGetBookExport,
   cancelBookExport: realCancelBookExport,
+  createBookShareLink: realCreateBookShareLink,
   getExportLanUrls: realGetExportLanUrls,
   getChapterAudio: async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
@@ -3006,6 +3048,7 @@ const mock = {
   createBookExport: mockCreateBookExport,
   getBookExport: mockGetBookExport,
   cancelBookExport: mockCancelBookExport,
+  createBookShareLink: mockCreateBookShareLink,
   getExportLanUrls: mockGetExportLanUrls,
   getChapterAudio: mockGetChapterAudio,
   getChapterAudioPrevious: mockGetChapterAudioPrevious,
