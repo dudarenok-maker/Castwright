@@ -609,6 +609,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/chapters/{chapterId}/clip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Slice a 30-second chapter clip as MP3 (no re-encode)
+         * @description Stream a byte-sliced segment of the chapter MP3 to the caller as
+         *     a downloadable file. The server runs `ffmpeg -ss <start> -i <mp3>
+         *     -t <duration> -c copy` (fast-seek path, MP3-frame-granularity
+         *     accuracy is sub-30 ms — ample for a 30 s social clip). Duration
+         *     capped at 60 s for fair-use / viral-loop framing; longer ranges
+         *     should download the whole chapter MP3.
+         *
+         *     Response is `audio/mpeg` with `Content-Disposition: attachment;
+         *     filename="<chapter-slug>-clip-<start>s.mp3"`.
+         */
+        get: operations["getChapterClip"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/chapters/{chapterId}/audio/previous": {
         parameters: {
             query?: never;
@@ -2845,6 +2873,55 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ChapterAudio"];
                 };
+            };
+        };
+    };
+    getChapterClip: {
+        parameters: {
+            query: {
+                /** @description Clip start position, in seconds. Must be >= 0. */
+                start: number;
+                /** @description Clip length, in seconds. Must be > 0 and <= 60. */
+                duration: number;
+            };
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sliced MP3 byte stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/mpeg": string;
+                };
+            };
+            /** @description Invalid start / duration (negative, non-numeric, or duration > 60) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book / chapter / chapter audio not found on disk */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description ffmpeg unavailable or slicing failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
