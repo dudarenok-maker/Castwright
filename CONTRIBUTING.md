@@ -391,6 +391,14 @@ and not an inventory of parked work.
    release. One bullet per shipped capability.
 2. **Fixes.** Bugs that escaped the previous release and that users
    actually hit. Omit this section entirely on an initial release.
+   **One bullet per bug, written from the user's perspective** — describe
+   the symptom the listener / deployer / operator saw, not the internal
+   cause. A reader who has never touched the code should understand what
+   was wrong from the bullet alone. Avoid CSS-class names, slice names,
+   middleware names, file paths, line numbers, and selector specificity
+   arguments — those belong in the commit message or the regression plan,
+   not the release body. Reference the regression plan number in parens
+   at the end of the bullet if there is one.
 3. **Retirements.** Behavior that **shipped in a previous release** and
    is now removed or downgraded. Tell users what to do instead.
 4. **Engineering.** Changes to the test harness, build, install
@@ -426,4 +434,13 @@ and not an inventory of parked work.
    leave it out.
 4. Write the tag message with the four sections (omit any that are
    empty). Reference plan numbers in parens.
-5. `git tag -a vX.Y.Z` and `git push --tags` once the user approves.
+5. **Fixes bullets get a second pass for user vocabulary.** Re-read each
+   one and ask: would a deployer who has never seen the codebase know
+   what was broken? Replace `bg-white/60`, `book-meta-slice`,
+   `persistence-middleware`, `floating-pill-inverse`, `z-[60]`, etc. with
+   the symptom: "the connection pill rendered light-on-light", "the
+   book description silently failed to save", "the match-detail drawer
+   opened underneath the profile drawer". Internal vocabulary in a Fix
+   bullet is a signal it was written from the diff, not from the user's
+   chair.
+6. `git tag -a vX.Y.Z` and `git push --tags` once the user approves.
