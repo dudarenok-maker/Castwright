@@ -830,6 +830,12 @@ export function Layout() {
         <DriftReportModal
           events={drift}
           characters={characters}
+          /* Bug 8 — wire the inline A/B player. Both required for the
+             widget to mount; bookId routes the chapter audio URL, voices
+             resolves each character.voiceId to a playable Voice for the
+             sample side. */
+          bookId={bookId ?? undefined}
+          voices={voices}
           onClose={() => dispatch(uiActions.setShowDriftReport(false))}
           onRegenerateChapter={(charId, chapterId) => {
             dispatch(uiActions.setShowDriftReport(false));
