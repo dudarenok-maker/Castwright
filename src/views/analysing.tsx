@@ -10,6 +10,7 @@ import {
   type OllamaHealth,
 } from '../lib/api';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
+import { computeOverallProgress } from '../lib/analysis-progress';
 import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../lib/models';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import type { AnalyseResponse, DroppedQuotesResponse } from '../lib/types';
@@ -1130,7 +1131,7 @@ export function AnalysingView({
       });
   };
 
-  const overall = (phase + phaseProgress) / ANALYSIS_PHASES.length;
+  const overall = computeOverallProgress(phase, phaseProgress);
   const sinceLastSec = lastEventAt
     ? Math.max(0, Math.round((Date.now() - lastEventAt) / 1000))
     : null;
