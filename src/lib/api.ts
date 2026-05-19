@@ -320,6 +320,11 @@ export interface BaseVoiceSampleArgs {
   /** Caller's currently-selected modelKey. The server re-maps to a
       compatible model when this doesn't route to `engine`. */
   modelKey: TtsModelKey;
+  /** Optional sample text the server should speak. When omitted the
+      server falls back to its canned RAW_SAMPLE_TEXT. Used by the
+      profile-drawer preview affordance so the user can audition a
+      candidate voice on a line of their choosing. */
+  text?: string;
 }
 
 /* ── mock implementations ────────────────────────────────────────────── */
@@ -2115,12 +2120,13 @@ async function realGetBaseVoiceSample({
   engine,
   speakerName,
   modelKey,
+  text,
 }: BaseVoiceSampleArgs): Promise<VoiceSample> {
   const carrier = `raw-${engine}-${speakerName}`;
   const res = await fetch(`/api/voices/${encodeURIComponent(carrier)}/sample`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ modelKey, rawEngine: engine, rawSpeaker: speakerName }),
+    body: JSON.stringify({ modelKey, rawEngine: engine, rawSpeaker: speakerName, text }),
   });
   if (!res.ok) {
     let detail = '';
