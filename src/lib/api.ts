@@ -586,6 +586,9 @@ function applyMockSliceWrite(prev: BookStateResponse, req: PutStateRequest): Boo
         genre: patch.genre !== undefined ? patch.genre : prev.state.genre,
         publicationDate:
           patch.publicationDate !== undefined ? patch.publicationDate : prev.state.publicationDate,
+        description:
+          patch.description !== undefined ? patch.description : prev.state.description,
+        notes: patch.notes !== undefined ? patch.notes : prev.state.notes,
         updatedAt: new Date().toISOString(),
       };
       return { ...prev, state: next };

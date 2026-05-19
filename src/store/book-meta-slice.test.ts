@@ -23,6 +23,7 @@ const fullMeta = (over: Partial<EditableBookMeta> = {}): EditableBookMeta => ({
   genre: 'Literary fiction',
   publicationDate: '2026-05-09',
   description: null,
+  notes: null,
   ...over,
 });
 
@@ -54,6 +55,7 @@ describe('bookMetaSlice — hydrateFromBookState', () => {
       genre: 'Literary fiction',
       publicationDate: '2026-05-09',
       description: null,
+      notes: null,
     });
   });
 
@@ -132,6 +134,19 @@ describe('bookMetaSlice — commitDraft', () => {
     const next = reducer(start, bookMetaActions.commitDraft({ bookId: 'ns' }));
     expect(next.saved.ns).toEqual(fullMeta());
     expect(next.draft).toBeNull();
+  });
+
+  /* Plan 67 — editorial notes round-trip via the same draft → saved
+     fold that other nullable fields use. Preserves embedded line breaks
+     verbatim (the textarea editor surfaces them with whitespace-pre-wrap). */
+  it('folds a notes edit (with line breaks) into saved[bookId]', () => {
+    const start: BookMetaState = {
+      draft: { notes: 'First line.\nSecond line.\n\nThird paragraph.' },
+      saved: { ns: fullMeta() },
+    };
+    const next = reducer(start, bookMetaActions.commitDraft({ bookId: 'ns' }));
+    expect(next.draft).toBeNull();
+    expect(next.saved.ns.notes).toBe('First line.\nSecond line.\n\nThird paragraph.');
   });
 });
 
