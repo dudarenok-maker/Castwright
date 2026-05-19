@@ -464,7 +464,11 @@ function ReadyViewSwitch({
   const characters = useAppSelector((s) => s.cast.characters);
   const chapters = useAppSelector((s) => s.chapters.chapters);
   const paused = useAppSelector((s) => s.chapters.paused);
-  const drift = useAppSelector((s) => s.revisions.drift);
+  /* Cast view shows drift indicators per character, scoped to the
+     active book. The slice's `drift` is flat across books since the
+     Drift Report became multi-book; filter to bookId here so a
+     non-active book's events don't render badges on this book's cast. */
+  const drift = useAppSelector((s) => s.revisions.drift.filter((d) => d.bookId === bookId));
   const manuscript = useAppSelector((s) => s.manuscript);
   const library = useAppSelector((s) => s.library);
   const voices = useAppSelector((s) => s.voices.voices);
