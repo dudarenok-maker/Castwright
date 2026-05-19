@@ -2344,9 +2344,17 @@ components:
 
     DriftEvent:
       type: object
-      required: [id, characterId, chapterId, severity, factor, chapterTitle]
+      required: [id, bookId, characterId, chapterId, severity, factor, chapterTitle]
       properties:
         id: { type: string }
+        bookId:
+          type: string
+          description: >-
+            Book the event belongs to. Server stamps this at emit time
+            from the request path; included in the event id for global
+            uniqueness across concurrently-active books. Lets the Drift
+            Report group events by book in a single modal even when the
+            user has multiple books generating in parallel.
         characterId: { type: string }
         chapterId: { type: integer }
         chapterTitle:

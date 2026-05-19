@@ -62,6 +62,10 @@ interface RevisionsPersisted {
 
 interface DriftEvent {
   id: string;
+  /** Book the event belongs to. Stamped at emit time from the route
+      param so the Drift Report modal can group events from multiple
+      concurrently-active books in a single flat list. */
+  bookId: string;
   characterId: string;
   chapterId: number;
   /** Chapter title embedded at emit time. Lets the Drift Report modal
@@ -124,6 +128,7 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir, state } = located;
+    const bookId = req.params.bookId;
 
     const castFile = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
     const cast: CastCharacter[] = castFile?.characters ?? [];
@@ -155,6 +160,7 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
         if (!current) continue; // character removed from cast — nothing actionable here
         const detectedAt = seg.synthesizedAt ?? new Date().toISOString();
         const ctx = {
+          bookId,
           chapterId: seg.chapterId,
           chapterTitle,
           characterId,
@@ -185,6 +191,7 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
 });
 
 interface DriftContext {
+  bookId: string;
   chapterId: number;
   chapterTitle: string;
   characterId: string;
@@ -198,8 +205,9 @@ interface DriftContext {
    emit; helpers spread it into the event. */
 function comparisonFields(
   ctx: DriftContext,
-): Pick<DriftEvent, 'chapterTitle' | 'snapshot' | 'current'> {
+): Pick<DriftEvent, 'bookId' | 'chapterTitle' | 'snapshot' | 'current'> {
   return {
+    bookId: ctx.bookId,
     chapterTitle: ctx.chapterTitle,
     snapshot: ctx.snapshot,
     current: {
@@ -323,8 +331,15 @@ function pushToneDrift(out: DriftEvent[], ctx: DriftContext, key: ToneKey): void
   });
 }
 
-function driftId(ctx: { chapterId: number; characterId: string }, factor: string): string {
-  return `drift:${ctx.chapterId}:${ctx.characterId}:${factor}`;
+function driftId(
+  ctx: { bookId: string; chapterId: number; characterId: string },
+  factor: string,
+): string {
+  /* bookId in the prefix keeps event ids globally unique across
+     concurrently-active books — chapterId+characterId+factor can
+     collide for different books with parallel-numbered chapters and
+     shared narrator id. */
+  return `drift:${ctx.bookId}:${ctx.chapterId}:${ctx.characterId}:${factor}`;
 }
 
 async function loadSegmentsFiles(
