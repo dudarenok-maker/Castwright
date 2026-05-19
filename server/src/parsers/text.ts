@@ -72,8 +72,9 @@ const BARE_NUMBERED_HEADING_RE = new RegExp(`^${HEADING_KEYWORDS}\\s+${NUMBER_PA
 const BARE_STANDALONE_HEADING_RE = new RegExp(`^${STANDALONE_HEADINGS}\\s*$`, 'i');
 
 /* Cap on subtitle line length. Real chapter names rarely exceed 80 chars;
-   anything longer is almost certainly a body sentence. */
-const MAX_SUBTITLE_LEN = 80;
+   anything longer is almost certainly a body sentence. Re-used by the
+   first-line-promotion path in chapters/refresh-titles (plan 70b). */
+export const MAX_SUBTITLE_LEN = 80;
 
 /* Words that are conventionally lowercased mid-title. A title-cased
    candidate is allowed to drop these without disqualifying. */
@@ -106,7 +107,7 @@ const TITLE_STOPWORDS = new Set([
    prose like "First body" (capital + lowercase non-stopword) without
    rejecting real titles like "The Cook's Particular Soup" or "Storms,
    In Practice". Numeric/punctuation-only tokens are skipped. */
-function looksLikeTitle(s: string): boolean {
+export function looksLikeTitle(s: string): boolean {
   const words = s.split(/\s+/);
   for (let i = 0; i < words.length; i++) {
     const word = words[i].replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9']+$/g, '');

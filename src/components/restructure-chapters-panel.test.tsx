@@ -234,3 +234,170 @@ describe('RestructureChaptersPanel — back button', () => {
     expect(onBack).toHaveBeenCalled();
   });
 });
+
+/* -- plan 70b: exclude per-row + refresh-titles button -------------- */
+
+function makeExcludedChapter(id: number, title: string): Chapter {
+  return { ...makeChapter(id, title), excluded: true };
+}
+
+describe('RestructureChaptersPanel — exclude per-row (plan 70b)', () => {
+  it('renders Exclude button per row when onExclude is wired', () => {
+    render(
+      <RestructureChaptersPanel
+        chapters={FIXTURES.chapters}
+        sentences={FIXTURES.sentences}
+        onMerge={vi.fn()}
+        onSplit={vi.fn()}
+        onReorder={vi.fn()}
+        onExclude={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('restructure-exclude-1')).toBeInTheDocument();
+    expect(screen.getByTestId('restructure-exclude-2')).toBeInTheDocument();
+    expect(screen.getByTestId('restructure-exclude-3')).toBeInTheDocument();
+  });
+
+  it('hides Exclude button when onExclude is not wired (back-compat)', () => {
+    render(
+      <RestructureChaptersPanel
+        chapters={FIXTURES.chapters}
+        sentences={FIXTURES.sentences}
+        onMerge={vi.fn()}
+        onSplit={vi.fn()}
+        onReorder={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('restructure-exclude-1')).not.toBeInTheDocument();
+  });
+
+  it('shows "Exclude" label for non-excluded rows, "Include" for excluded rows', () => {
+    render(
+      <RestructureChaptersPanel
+        chapters={[
+          FIXTURES.chapters[0],
+          makeExcludedChapter(2, 'Chapter Two'),
+          FIXTURES.chapters[2],
+        ]}
+        sentences={FIXTURES.sentences}
+        onMerge={vi.fn()}
+        onSplit={vi.fn()}
+        onReorder={vi.fn()}
+        onExclude={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('restructure-exclude-1').textContent).toBe('Exclude');
+    expect(screen.getByTestId('restructure-exclude-2').textContent).toBe('Include');
+    expect(screen.getByTestId('restructure-exclude-3').textContent).toBe('Exclude');
+  });
+
+  it('fires onExclude with the inverted flag when clicked', async () => {
+    const onExclude = vi.fn();
+    render(
+      <RestructureChaptersPanel
+        chapters={[
+          FIXTURES.chapters[0],
+          makeExcludedChapter(2, 'Chapter Two'),
+          FIXTURES.chapters[2],
+        ]}
+        sentences={FIXTURES.sentences}
+        onMerge={vi.fn()}
+        onSplit={vi.fn()}
+        onReorder={vi.fn()}
+        onExclude={onExclude}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('restructure-exclude-1'));
+    fireEvent.click(screen.getByTestId('restructure-exclude-2'));
+    await waitFor(() => expect(onExclude).toHaveBeenCalledTimes(2));
+    expect(onExclude).toHaveBeenNthCalledWith(1, 1, true); // not excluded → excluded
+    expect(onExclude).toHaveBeenNthCalledWith(2, 2, false); // excluded → un-excluded
+  });
+
+  it('disables the merge checkbox for excluded rows', () => {
+    render(
+      <RestructureChaptersPanel
+        chapters={[
+          FIXTURES.chapters[0],
+          makeExcludedChapter(2, 'Chapter Two'),
+          FIXTURES.chapters[2],
+        ]}
+        sentences={FIXTURES.sentences}
+        onMerge={vi.fn()}
+        onSplit={vi.fn()}
+        onReorder={vi.fn()}
+        onExclude={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('restructure-check-1')).not.toBeDisabled();
+    expect(screen.getByTestId('restructure-check-2')).toBeDisabled();
+    expect(screen.getByTestId('restructure-check-3')).not.toBeDisabled();
+  });
+
+  it('marks excluded rows with data-excluded=true for styling assertion', () => {
+    render(
+      <RestructureChaptersPanel
+        chapters={[
+          FIXTURES.chapters[0],
+          makeExcludedChapter(2, 'Chapter Two'),
+        ]}
+        sentences={FIXTURES.sentences}
+        onMerge={vi.fn()}
+        onSplit={vi.fn()}
+        onReorder={vi.fn()}
+        onExclude={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('restructure-row-1').getAttribute('data-excluded')).toBe('false');
+    expect(screen.getByTestId('restructure-row-2').getAttribute('data-excluded')).toBe('true');
+  });
+});
+
+describe('RestructureChaptersPanel — Refresh chapter names button (plan 70b)', () => {
+  it('renders the Refresh button when onRefreshTitles is wired', () => {
+    render(
+      <RestructureChaptersPanel
+        chapters={FIXTURES.chapters}
+        sentences={FIXTURES.sentences}
+        onMerge={vi.fn()}
+        onSplit={vi.fn()}
+        onReorder={vi.fn()}
+        onRefreshTitles={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('restructure-refresh-titles')).toBeInTheDocument();
+  });
+
+  it('hides the Refresh button when onRefreshTitles is not wired', () => {
+    render(
+      <RestructureChaptersPanel
+        chapters={FIXTURES.chapters}
+        sentences={FIXTURES.sentences}
+        onMerge={vi.fn()}
+        onSplit={vi.fn()}
+        onReorder={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('restructure-refresh-titles')).not.toBeInTheDocument();
+  });
+
+  it('fires onRefreshTitles after confirm', async () => {
+    const onRefreshTitles = vi.fn().mockResolvedValue(undefined);
+    render(
+      <RestructureChaptersPanel
+        chapters={FIXTURES.chapters}
+        sentences={FIXTURES.sentences}
+        onMerge={vi.fn()}
+        onSplit={vi.fn()}
+        onReorder={vi.fn()}
+        onRefreshTitles={onRefreshTitles}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
+    // Confirm dialog appears with refresh-specific description
+    expect(screen.getByTestId('restructure-confirm')).toBeInTheDocument();
+    expect(screen.getByText(/Auto-generated/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('restructure-confirm-apply'));
+    await waitFor(() => expect(onRefreshTitles).toHaveBeenCalled());
+  });
+});
