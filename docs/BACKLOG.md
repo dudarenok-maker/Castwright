@@ -27,7 +27,6 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-19 (Wave-3 mid-reconciliation):** Must 0 · Should 0 · Could 24 · Won't 9
 
 ---
 
@@ -76,16 +75,6 @@ Source: net-new (2026-05-18). Pairs with Could #1 (loudnorm).
 - _Key files:_ new `src/components/loudness-report.tsx`; `src/views/listen.tsx` (mount); `server/src/tts/mp3.ts` (emit loudness metadata to chapter meta); `server/src/routes/chapter-audio.ts` (surface in meta endpoint).
 - _Depends on:_ Could #1 (loudnorm) — without normalization there's no expected target to compare against.
 - _Benefit (user):_ catch problem chapters before export (e.g. a voice that came out 4 LU softer than the rest). Pairs with Could #1 to make loudness drift visible, not just corrected.
-
-### 6. Share a 30-second chapter clip as MP3
-
-Source: net-new (2026-05-18).
-
-- _What:_ Add a "Share clip" button next to the play affordance in the listen view. Clicking opens a small modal with a draggable time range (default ±15 s around the current playhead, max 60 s); on confirm, the server slices the chapter MP3 to the requested range and offers the slice as a download. No re-encode — uses `ffmpeg -ss <start> -t <duration> -c copy`.
-- _Acceptance:_ Play chapter 2, click Share clip, set range 1:20-1:50, confirm → downloaded file plays the requested 30 s. New server Vitest spec covers the slicing route. Frontend Vitest covers the modal interactions.
-- _Key files:_ new `src/modals/share-clip.tsx`; `src/views/listen.tsx` (entry point); new `server/src/routes/clip.ts`; `openapi.yaml` (new `/api/books/:bookId/chapters/:chapterId/clip` route).
-- _Depends on:_ none.
-- _Benefit (user):_ viral loop for shared-book workflows — easy to send a friend "listen to this part." Today the only sharing path is the whole chapter MP3.
 
 ### 7. Library search + tag / category filter
 
