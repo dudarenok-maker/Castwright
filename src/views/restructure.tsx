@@ -17,6 +17,7 @@ import { uiActions } from '../store/ui-slice';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { libraryActions } from '../store/library-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import { api, type ChapterRestructureResponse } from '../lib/api';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
 
@@ -59,6 +60,17 @@ export function RestructureView({ bookId }: Props) {
       // generation queue pick up the new structure on next render.
       const lib = await api.getLibrary().catch(() => null);
       if (lib) dispatch(libraryActions.hydrate(lib));
+      // Plan 70b — surface server-emitted advisories (orphan recovery,
+      // empty-chapter prune, generic-title renumber from plan 70a).
+      for (const message of res.warnings ?? []) {
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'info',
+            message,
+            dedupeKey: `restructure-${message.slice(0, 40)}`,
+          }),
+        );
+      }
     },
     [bookId, dispatch],
   );
@@ -114,6 +126,37 @@ export function RestructureView({ bookId }: Props) {
     [bookId, applyResponse],
   );
 
+  const handleExclude = useCallback(
+    async (chapterId: number, excluded: boolean) => {
+      setBusy(true);
+      setErrorBanner(null);
+      try {
+        const res = await api.excludeChapters(bookId, [chapterId], excluded);
+        await applyResponse(res);
+      } catch (e) {
+        setErrorBanner((e as Error).message || 'Exclude failed.');
+        throw e;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [bookId, applyResponse],
+  );
+
+  const handleRefreshTitles = useCallback(async () => {
+    setBusy(true);
+    setErrorBanner(null);
+    try {
+      const res = await api.refreshChapterTitles(bookId);
+      await applyResponse(res);
+    } catch (e) {
+      setErrorBanner((e as Error).message || 'Refresh chapter names failed.');
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }, [bookId, applyResponse]);
+
   return (
     <div className="max-w-3xl mx-auto py-6">
       <header className="flex items-center justify-between mb-5">
@@ -136,6 +179,8 @@ export function RestructureView({ bookId }: Props) {
         onMerge={handleMerge}
         onSplit={handleSplit}
         onReorder={handleReorder}
+        onExclude={handleExclude}
+        onRefreshTitles={handleRefreshTitles}
         onBack={() => dispatch(uiActions.changeView('listen'))}
         busy={busy}
       />

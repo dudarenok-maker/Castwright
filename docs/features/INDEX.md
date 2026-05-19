@@ -64,6 +64,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [12 — Manuscript view](12-manuscript-view.md) — Sentence list, low-confidence flagging, speaker reassignment.
 - [12a — Fix: sentence reassignment scoped by (chapterId, id)](12a-fix-reassign-cross-chapter-id.md) — Reassign reducers + inspector prop scope by both chapter and sentence id; pre-fix, clicks on chapter 2+ silently mutated chapter 1. Shipped 2026-05-18.
 - [70a — Chapter restructure bug fix](70a-restructure-bugfix.md) — Orphan-sentence recovery (no more silent drops on sequential merges) + auto-prune empty chapter rows + auto-renumber generic "Chapter N" titles against new positions. Fixes the stale-numbers and zero-sentence symptoms visible on long manuscripts after merge. Server-only; `warnings: string[]` added to the merge/reorder response.
+- [70b — Chapter restructure feature extensions](70b-restructure-extensions.md) — Restructure button in the Manuscript view header (pre-generation entry); sticky Merge-selected toolbar on long manuscripts; per-row Exclude / Include toggle (soft-hide reusing `Chapter.excluded`); Refresh chapter names button (re-parse + first-line promotion); warnings toast consumer surfaces plan 70a advisory messages.
 
 ### F. TTS
 

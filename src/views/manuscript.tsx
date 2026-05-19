@@ -28,6 +28,8 @@ import { initialSentences } from '../data/sentences';
 import { useAppDispatch } from '../store';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { changeLogActions } from '../store/change-log-slice';
+import { uiActions } from '../store/ui-slice';
+import { RestructureChaptersButton } from '../components/restructure-chapters-button';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 
 interface Props {
@@ -472,15 +474,20 @@ export function ManuscriptView({
                 </span>
               )}
             </h1>
-            {onStartGenerating && (
-              <button
-                onClick={onStartGenerating}
-                className="shrink-0 inline-flex items-center gap-2 px-5 py-3 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink/90 shadow-card"
-              >
-                Approve cast &amp; start generating
-                <IconChevR className="w-4 h-4" />
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              <RestructureChaptersButton
+                onClick={() => dispatch(uiActions.changeView('restructure'))}
+              />
+              {onStartGenerating && (
+                <button
+                  onClick={onStartGenerating}
+                  className="shrink-0 inline-flex items-center gap-2 px-5 py-3 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink/90 shadow-card"
+                >
+                  Approve cast &amp; start generating
+                  <IconChevR className="w-4 h-4" />
+                </button>
+              )}
+            </div>
           </div>
           <div className="mt-3 flex items-center gap-4 text-sm text-ink/60">
             {currentChapter.excluded ? (
