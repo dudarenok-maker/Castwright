@@ -27,7 +27,7 @@ the same PR — the backlog is only useful while it stays current.
 
 Ranking within each bucket = top is highest priority.
 
-**Counts as of 2026-05-19 (mid-reconciliation):** Must 0 · Should 0 · Could 30 · Won't 9
+**Counts as of 2026-05-19 (mid-reconciliation):** Must 0 · Should 0 · Could 29 · Won't 9
 
 ---
 
@@ -136,16 +136,6 @@ Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ship
 - _Key files:_ `server/src/workspace/preserve-previous-audio.ts` (extend filename pattern); new `server/src/routes/revisions-rollback.ts`; `src/components/revision-timeline-modal.tsx` (enable Rollback button on reversible entries); slice already plumbed (plan 55's `rolledBack` reducer + `reversible` field).
 - _Depends on:_ plan 55 shipped (slice plumbing already on disk).
 - _Benefit (user):_ closes the centerpiece feature from plan 55 — true non-linear undo per chapter. Today the timeline modal is read-only; the user has to walk through accept/reject in the A/B player.
-
-### 13. Preview voice sample while editing the character
-
-Source: net-new (2026-05-18). Leverages existing `useTtsLifecycle`.
-
-- _What:_ In the profile drawer / cast-edit modal, expose a per-voice "Play sample" affordance that synthesises a short user-editable preview line (e.g. "The quick brown fox...") with the candidate voice without committing the assignment. Multiple candidates can be auditioned without closing the drawer.
-- _Acceptance:_ Open profile drawer, hover voice candidate row, click "Play sample" → preview audio renders in under 3 s (uses TTS sidecar lifecycle). Switch to another candidate, click → second preview replaces the first. No assignment is committed until Save. Vitest covers the preview-state slice; e2e covers the drawer-preview flow.
-- _Key files:_ `src/modals/profile-drawer.tsx` (add preview button + sample text input); `src/lib/use-tts-lifecycle.ts` (no changes — already exposed); new `src/components/voice-preview-button.tsx`.
-- _Depends on:_ none structural. Pairs with Could #28 (third-consumer lifecycle tracking) if/when that activates.
-- _Benefit (user):_ faster voice-picking feedback loop. Today the user assigns a voice, regenerates a sample, judges, optionally re-assigns — preview cuts that cycle from minutes to seconds.
 
 ### 14. Batch voice-replace across all books
 
