@@ -448,3 +448,405 @@ describe('chapters-restructure shared behaviour', () => {
     }
   });
 });
+
+/* -- plan 70a: orphan recovery + prune-empty + renumber-generic ----- */
+
+describe('plan 70a — orphan recovery (Part F)', () => {
+  it('recovers sentences whose chapterId is not in current state — attaches to nearest preceding survivor', async () => {
+    /* Seed manuscript-edits with sentences referencing stale chapter ids
+       (99, 100) — simulates the user's screenshot scenario where prior
+       restructure operations left orphan sentences pointing at chapters
+       that no longer exist. After merge, those sentences should be
+       recovered onto the nearest preceding surviving chapter rather
+       than silently dropped. */
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'Alpha first.' },
+          { id: 2, chapterId: 1, characterId: 'narr', text: 'Alpha second.' },
+          { id: 1, chapterId: 2, characterId: 'narr', text: 'Beta first.' },
+          { id: 2, chapterId: 2, characterId: 'sam', text: 'Beta second.' },
+          { id: 1, chapterId: 3, characterId: 'narr', text: 'Gamma first.' },
+          { id: 2, chapterId: 3, characterId: 'narr', text: 'Gamma second.' },
+          // Orphans — chapter 99 doesn't exist in state
+          { id: 1, chapterId: 99, characterId: 'narr', text: 'Orphan one.' },
+          { id: 2, chapterId: 99, characterId: 'narr', text: 'Orphan two.' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(res.status).toBe(200);
+    expect(res.body.warnings).toBeDefined();
+    const orphanWarning = (res.body.warnings as string[]).find((w) => /orphaned/i.test(w));
+    expect(orphanWarning).toBeDefined();
+    expect(orphanWarning).toMatch(/2 orphaned/);
+
+    // All 8 sentences survive — 6 originals + 2 recovered orphans.
+    const edits = readEdits();
+    expect(edits.sentences).toHaveLength(8);
+
+    // Orphans attached to nearest preceding survivor. Old chapter 99 has
+    // no preceding survivor (3 is the highest known id), so the orphans
+    // fall back to chapter 3 (the highest known id ≤ 99). Chapter 3 in
+    // pre-merge becomes chapter 2 post-merge (after merging 1+2).
+    const orphanSentences = edits.sentences.filter((s) =>
+      /^Orphan /.test(s.text),
+    );
+    expect(orphanSentences).toHaveLength(2);
+    // Both orphans land in the same post-merge chapter.
+    const orphanChapterIds = new Set(orphanSentences.map((s) => s.chapterId));
+    expect(orphanChapterIds.size).toBe(1);
+  });
+
+  it('preserves the original oldChapterId in the response remap for orphans', async () => {
+    /* The remap is what the frontend's manuscript-slice consumes to
+       rewrite sentence chapterId pointers. If we silently rewrite the
+       orphan's oldChapterId in the remap, the frontend's
+       `(originalOldChapterId, oldSentenceId)` lookup wouldn't resolve
+       and the frontend would drop the orphan a second time. */
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'Alpha first.' },
+          { id: 2, chapterId: 1, characterId: 'narr', text: 'Alpha second.' },
+          { id: 1, chapterId: 2, characterId: 'narr', text: 'Beta first.' },
+          { id: 2, chapterId: 2, characterId: 'sam', text: 'Beta second.' },
+          { id: 1, chapterId: 3, characterId: 'narr', text: 'Gamma first.' },
+          { id: 2, chapterId: 3, characterId: 'narr', text: 'Gamma second.' },
+          { id: 5, chapterId: 77, characterId: 'narr', text: 'Stale.' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(res.status).toBe(200);
+    const remap = res.body.sentenceRemap as Array<{
+      oldChapterId: number;
+      oldSentenceId: number;
+      newChapterId: number;
+      newSentenceId: number;
+    }>;
+    const orphanRemap = remap.find(
+      (r) => r.oldChapterId === 77 && r.oldSentenceId === 5,
+    );
+    expect(orphanRemap).toBeDefined();
+    // newChapterId points to a real chapter in the new state.
+    expect([1, 2]).toContain(orphanRemap!.newChapterId);
+  });
+});
+
+describe('plan 70a — prune empty chapters (Part F)', () => {
+  it('drops chapters with zero sentences after merge and renumbers survivors', async () => {
+    /* Seed a 4-chapter manuscript where chapter 3 ("Empty Phantom")
+       has body content in the source but ZERO sentences in
+       manuscript-edits.json — mirrors the user's screenshot bug where
+       analysis state left a chapter with no attached sentences. After
+       any merge, the empty chapter should be auto-pruned and survivors
+       renumbered. (Body content is required because parseText drops
+       heading-only chapters; the sentence-count gap comes from the
+       edits.json side, not the parse side.) */
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter One\n\nAlpha.\n\n# Chapter Two\n\nBeta.\n\n# Empty Phantom\n\nGamma.\n\n# Chapter Four\n\nDelta.\n',
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+          { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+          { id: 3, title: 'Empty Phantom', slug: '03-empty-phantom' },
+          { id: 4, title: 'Chapter Four', slug: '04-chapter-four' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'Alpha.' },
+          { id: 1, chapterId: 2, characterId: 'narr', text: 'Beta.' },
+          // chapter 3 deliberately empty
+          { id: 1, chapterId: 4, characterId: 'narr', text: 'Delta.' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(res.status).toBe(200);
+
+    const pruneWarning = (res.body.warnings as string[]).find((w) =>
+      /empty/i.test(w),
+    );
+    expect(pruneWarning).toBeDefined();
+    expect(pruneWarning).toMatch(/Empty Phantom/);
+
+    // Final chapters: merged (id 1) + Delta (id 2). Empty Phantom pruned.
+    const state = readState();
+    expect(state.chapters.map((c) => c.title)).toEqual([
+      'Chapter One',
+      'Chapter Four',
+    ]);
+    expect(state.chapters.map((c) => c.id)).toEqual([1, 2]);
+
+    // Sentences renumbered to point at the new chapter ids
+    const edits = readEdits();
+    const ch2Sentences = edits.sentences.filter((s) => s.chapterId === 2);
+    expect(ch2Sentences.map((s) => s.text)).toEqual(['Delta.']);
+  });
+
+  it('preserves excluded chapters even when they have zero sentences (soft-hide invariant)', async () => {
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter One\n\nAlpha.\n\n# Chapter Two\n\nBeta.\n\n# Dedication\n\n# Chapter Four\n\nDelta.\n',
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+          { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+          { id: 3, title: 'Dedication', slug: '03-dedication', excluded: true },
+          { id: 4, title: 'Chapter Four', slug: '04-chapter-four' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'Alpha.' },
+          { id: 1, chapterId: 2, characterId: 'narr', text: 'Beta.' },
+          { id: 1, chapterId: 4, characterId: 'narr', text: 'Delta.' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    // Dedication kept despite being empty + has the excluded flag
+    expect(state.chapters.map((c) => c.title)).toContain('Dedication');
+  });
+});
+
+describe('plan 70a — renumber generic titles (Part E)', () => {
+  function seedDigitTitledBook(): void {
+    /* Note on Markdown heading text: "Chapter 1" is a bare numbered
+       heading, and the parser's subtitle-merge logic (text.ts:292-302)
+       would try to lift the next line as a subtitle. Pad each chapter
+       with multi-line body to keep the subtitle lookahead from gobbling
+       narrative text. We then override state.json with the bare titles
+       we actually want exposed to the restructure post-pass. */
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter 1\n\nFirst body sentence here.\nMore content.\n\n# Chapter 2\n\nSecond body sentence here.\nMore content.\n\n# Chapter 3\n\nThird body sentence here.\nMore content.\n\n# Chapter 4\n\nFourth body sentence here.\nMore content.\n\n# Chapter 5\n\nFifth body sentence here.\nMore content.\n',
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 4, title: 'Chapter 4', slug: '04-chapter-4' },
+          { id: 5, title: 'Chapter 5', slug: '05-chapter-5' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'A.' },
+          { id: 1, chapterId: 2, characterId: 'narr', text: 'B.' },
+          { id: 1, chapterId: 3, characterId: 'narr', text: 'C.' },
+          { id: 1, chapterId: 4, characterId: 'narr', text: 'D.' },
+          { id: 1, chapterId: 5, characterId: 'narr', text: 'E.' },
+        ],
+      }),
+    );
+  }
+
+  it('re-derives "Chapter N" titles against new ids after merge', async () => {
+    seedDigitTitledBook();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    // After merge 2+3, chapters are now 4 in count.
+    // Merged chapter inherits first member's title "Chapter 2" → matches
+    // generic pattern → re-derives to "Chapter 2" at new id 2 (no change).
+    // Chapter 4 shifts to id 3 → title "Chapter 4" → re-derive to "Chapter 3".
+    // Chapter 5 shifts to id 4 → title "Chapter 5" → re-derive to "Chapter 4".
+    expect(state.chapters.map((c) => c.title)).toEqual([
+      'Chapter 1',
+      'Chapter 2',
+      'Chapter 3',
+      'Chapter 4',
+    ]);
+
+    const renumberWarning = (res.body.warnings as string[]).find((w) =>
+      /Renumbered/i.test(w),
+    );
+    expect(renumberWarning).toBeDefined();
+  });
+
+  it('preserves user-customized chapter titles during the renumber pass', async () => {
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter 1\n\nFirst body sentence here.\nMore content.\n\n# The Verdict\n\nSecond body sentence here.\nMore content.\n\n# Chapter 3\n\nThird body sentence here.\nMore content.\n\n# Chapter 4\n\nFourth body sentence here.\nMore content.\n',
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+          { id: 2, title: 'The Verdict', slug: '02-the-verdict' },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 4, title: 'Chapter 4', slug: '04-chapter-4' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'A.' },
+          { id: 1, chapterId: 2, characterId: 'narr', text: 'B.' },
+          { id: 1, chapterId: 3, characterId: 'narr', text: 'C.' },
+          { id: 1, chapterId: 4, characterId: 'narr', text: 'D.' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    // Merge 1+2: result inherits "Chapter 1" title → generic → "Chapter 1" at id 1.
+    // "The Verdict" is GONE because it was merged into chapter 1.
+    // Old chapter 3 → id 2 → generic "Chapter 3" → re-derive to "Chapter 2".
+    // Old chapter 4 → id 3 → generic → "Chapter 3".
+    expect(state.chapters.map((c) => c.title)).toEqual([
+      'Chapter 1',
+      'Chapter 2',
+      'Chapter 3',
+    ]);
+  });
+
+  it('preserves subtitled generic titles round-trip', async () => {
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter 1 — The Beginning\n\nFirst body.\nMore content.\n\n# Chapter 2 — The Middle\n\nSecond body.\nMore content.\n\n# Chapter 3 — The End\n\nThird body.\nMore content.\n',
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter 1 — The Beginning', slug: '01-chapter-1' },
+          { id: 2, title: 'Chapter 2 — The Middle', slug: '02-chapter-2' },
+          { id: 3, title: 'Chapter 3 — The End', slug: '03-chapter-3' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'A.' },
+          { id: 1, chapterId: 2, characterId: 'narr', text: 'B.' },
+          { id: 1, chapterId: 3, characterId: 'narr', text: 'C.' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [3, 1, 2] });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    // Reorder [3,1,2]: chapter 3 at new id 1 — title was "Chapter 3 — The End"
+    // → matches generic-with-subtitle → re-derives to "Chapter 1 — The End".
+    expect(state.chapters[0].title).toBe('Chapter 1 — The End');
+    expect(state.chapters[1].title).toBe('Chapter 2 — The Beginning');
+    expect(state.chapters[2].title).toBe('Chapter 3 — The Middle');
+  });
+});
