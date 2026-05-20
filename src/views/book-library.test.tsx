@@ -1,7 +1,7 @@
 /* BookLibraryView — three-state render: skeleton / empty / populated.
    Pairs with docs/features/21-book-library.md (Loading affordance section). */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
@@ -487,6 +487,73 @@ describe('BookLibraryView — loading affordance', () => {
       expect(
         screen.getByRole('heading', { level: 2, name: 'Shannon Messenger' }),
       ).toBeInTheDocument();
+    });
+  });
+
+  /* Plan 81 (Wave 3, books) — phone viewports (<640px) must render the
+     card grid even when the user's persisted localStorage preference
+     is "table". Stub matchMedia so jsdom resolves the
+     (max-width: 639px) query to true, then assert the orchestrator
+     ignores the stored preference. The stored value is NOT cleared —
+     a desktop session in the same workspace must still resume "table"
+     when matchMedia goes false. */
+  describe('mobile-viewport override (plan 81)', () => {
+    let originalMatchMedia: typeof window.matchMedia | undefined;
+
+    beforeEach(() => {
+      try {
+        localStorage.removeItem('library.viewMode');
+      } catch {
+        /* swallow */
+      }
+      originalMatchMedia = window.matchMedia;
+    });
+
+    afterEach(() => {
+      if (originalMatchMedia) {
+        window.matchMedia = originalMatchMedia;
+      }
+    });
+
+    function stubMatchMedia(matches: boolean) {
+      /* Minimal MediaQueryList shim — only the surface
+         useIsMobileViewport reads. addEventListener / removeEventListener
+         take the modern path; addListener / removeListener stay as
+         no-ops so legacy fallback doesn't throw. */
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })) as unknown as typeof window.matchMedia;
+    }
+
+    it('forces card view on phone (375×667) even when localStorage requests table', () => {
+      localStorage.setItem('library.viewMode', 'table');
+      stubMatchMedia(true);
+      renderView({ loaded: true, authors: [oneAuthor] });
+      /* Card branch: h2 with the author name renders. Table branch
+         renders <tr data-testid="library-table-row-…"> instead. */
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Shannon Messenger' }),
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId('library-table-row-b1')).not.toBeInTheDocument();
+      /* The stored preference is intact — desktop will resume table next session. */
+      expect(localStorage.getItem('library.viewMode')).toBe('table');
+    });
+
+    it('honours stored table preference on tablet/desktop (matchMedia false)', () => {
+      localStorage.setItem('library.viewMode', 'table');
+      stubMatchMedia(false);
+      renderView({ loaded: true, authors: [oneAuthor] });
+      expect(screen.getByTestId('library-table-row-b1')).toBeInTheDocument();
+      expect(
+        screen.queryByRole('heading', { level: 2, name: 'Shannon Messenger' }),
+      ).not.toBeInTheDocument();
     });
   });
 
