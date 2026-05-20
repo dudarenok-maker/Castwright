@@ -560,6 +560,23 @@ export const chaptersSlice = createSlice({
       }
     },
 
+    /* Plan 77 — reflect a successful POST /chapters/:chapterId/rename
+       on the slice. Mirrors the `setChapterExcluded` pattern: server is
+       the source of truth (writes state.json + renames the audio file
+       on disk via rewriteChapterSlugs), this just keeps the UI consistent
+       without waiting on a refetch. The `titleOverridden` flag rides
+       along so the listen / restructure / generate rows can render a
+       "manually renamed" cue if we ever surface one. NOT broadcast —
+       same per-tab mutation policy as setChapterExcluded (see
+       broadcast-middleware.ts). */
+    renameChapter: (s, a: PayloadAction<{ chapterId: number; title: string }>) => {
+      const { chapterId, title } = a.payload;
+      const ch = s.chapters.find((c) => c.id === chapterId);
+      if (!ch) return;
+      ch.title = title;
+      ch.titleOverridden = true;
+    },
+
     /* Cross-tab `BroadcastChannel` inbound hydrate (plan 63). Receives a
        sibling tab's post-mutation snapshot of the cross-book generation
        activeStream so the global header pill updates in tab B without a

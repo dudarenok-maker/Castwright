@@ -253,6 +253,16 @@ Source: net-new (2026-05-20). User added this mid-Bundle-B planning; bundled int
 - _Status: shipped in plan 76 (this PR)._
 - _Benefit (user):_ card grid breaks down at 10+ books; a dense, series-grouped table makes a long library scannable at a glance (title / status / runtime / last-worked-on visible per row without hover or scroll).
 
+### Manuscript-diff guard for renamed chapters on re-upload
+
+Source: net-new (2026-05-20). Spun off from plan 77 chapter-rename × plan 74 manuscript-diff interaction.
+
+- _What:_ When a user re-uploads a manuscript via the listen-header "Replace manuscript" flow (plan 74), the existing `previewReuploadDiff` modal compares sentence content but does not flag chapters whose `titleOverridden=true` flag would attach to a different chapter id after the re-parse. If the new manuscript has a different chapter count (or a chapter is inserted / removed mid-book), the override flag stays attached by numeric id — so it lands on the wrong chapter. Add a per-chapter override-conflict row to the diff modal: enumerate every overridden chapter whose old position doesn't match the new manuscript's heading at that position; offer "keep override" / "drop override" per row, defaulting to drop on mismatch.
+- _Acceptance:_ Book with three chapters; user renames chapter 2; user re-uploads a manuscript that splits chapter 1 into two (so the original chapter 2 is now at position 3). Diff modal shows a "Renamed chapter conflict" section listing the override + the new chapter at the override's old id, with per-row pick. Applying the upload either carries the override forward to the new id or drops it. New `manuscript-diff` Vitest spec covers both the detect-conflict and resolve-conflict paths.
+- _Key files:_ `src/components/manuscript-diff.tsx` (modal UI); `src/store/manuscript-slice.ts` (`previewReuploadDiff` / `applyReupload`); maybe a new `src/lib/chapter-override-conflict.ts` helper; `server/src/routes/book-state.ts` (PUT state path that lands the resolved overrides).
+- _Depends on:_ plan 74 shipped, plan 77 shipped.
+- _Benefit (user):_ closes the long-tail edge case where a re-upload silently mis-attributes a user's manual rename. Today an override on chapter 2 of the old manuscript stays attached to "chapter id 2" of the new one, which may be entirely different content.
+
 ---
 
 ## Won't (this round) — explicitly parked

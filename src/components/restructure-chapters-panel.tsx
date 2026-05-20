@@ -57,6 +57,11 @@ export interface RestructurePanelProps {
       Triggers re-parse of the source manuscript + first-line promotion
       pass for any chapter still carrying a generic auto-title. */
   onRefreshTitles?: () => Promise<void> | void;
+  /** Plan 77 — called when the user clicks the Rename button on a
+      chapter row. The consuming view mounts the EditChapterTitleModal
+      and re-fetches book state on save. Optional for back-compat with
+      mounts that don't yet support rename. */
+  onRename?: (chapter: Chapter) => void;
   /** Optional back action — when omitted the back button is hidden
       (e.g. when mounted in a modal that has its own close). */
   onBack?: () => void;
@@ -81,6 +86,9 @@ interface SortableChapterRowProps {
   /** Plan 70b — per-row exclude toggle. Omitted when the consumer
       didn't wire `onExclude` (back-compat with pre-70b mounts). */
   onToggleExcluded?: () => void;
+  /** Plan 77 — opens the rename modal for this chapter. Panel-level
+      modal mount; row only knows "open rename for me". */
+  onRename?: () => void;
 }
 
 function SortableChapterRow({
@@ -98,6 +106,7 @@ function SortableChapterRow({
   chapterSentences,
   onSplitHere,
   onToggleExcluded,
+  onRename,
 }: SortableChapterRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: chapter.id });
@@ -168,6 +177,19 @@ function SortableChapterRow({
             </div>
           )}
         </div>
+        {onRename && (
+          <button
+            type="button"
+            onClick={onRename}
+            disabled={busy}
+            className="px-2.5 py-1 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink/70 hover:text-ink hover:border-ink/30 disabled:opacity-40 disabled:cursor-not-allowed"
+            data-testid={`chapter-row-${chapter.id}-rename`}
+            aria-label={`Rename chapter ${chapter.id}`}
+            title="Edit chapter title"
+          >
+            Rename
+          </button>
+        )}
         {onToggleExcluded && (
           <button
             type="button"
@@ -237,6 +259,7 @@ export function RestructureChaptersPanel({
   onReorder,
   onExclude,
   onRefreshTitles,
+  onRename,
   onBack,
   busy = false,
 }: RestructurePanelProps) {
@@ -520,6 +543,7 @@ export function RestructureChaptersPanel({
                   onToggleExcluded={
                     onExclude ? () => handleToggleExcluded(chapter.id) : undefined
                   }
+                  onRename={onRename ? () => onRename(chapter) : undefined}
                 />
               );
             })}

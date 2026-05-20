@@ -63,6 +63,15 @@ export interface BookStateJson {
         `synthesizedAt`. Used as a tie-breaker for cast-drift detection
         (was the cast confirmed before or after the audio was made?). */
     audioRenderedAt?: string;
+    /** Sticky flag set by `renameChapter` (and by merge/split when an
+        explicit title override is supplied). Locks the title against
+        both heuristic refresh paths: the opportunistic
+        `refreshChapterTitles` on book-state GET and the explicit POST
+        `/api/books/:bookId/chapters/refresh-titles`. Absent or false
+        on parser-derived titles so heuristic improvements can still
+        land. Round-trips through `state.json` and through the portable
+        book bundle (plan 75). */
+    titleOverridden?: boolean;
   }>;
   coverGradient: [string, string];
   /** Cached cover-image metadata. Bytes live next to state.json at

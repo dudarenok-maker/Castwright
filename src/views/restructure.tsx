@@ -20,6 +20,8 @@ import { libraryActions } from '../store/library-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { api, type ChapterRestructureResponse } from '../lib/api';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
+import { EditChapterTitleModal } from '../modals/edit-chapter-title';
+import type { Chapter } from '../lib/types';
 
 interface Props {
   bookId: string;
@@ -31,6 +33,9 @@ export function RestructureView({ bookId }: Props) {
   const sentences = useAppSelector((s) => s.manuscript.sentences);
   const [busy, setBusy] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  /* Plan 77 — rename modal hoisted to view level so the per-row pencil
+     button just opens it. */
+  const [renamingChapter, setRenamingChapter] = useState<Chapter | null>(null);
 
   const applyResponse = useCallback(
     async (res: ChapterRestructureResponse) => {
@@ -181,8 +186,16 @@ export function RestructureView({ bookId }: Props) {
         onReorder={handleReorder}
         onExclude={handleExclude}
         onRefreshTitles={handleRefreshTitles}
+        onRename={setRenamingChapter}
         onBack={() => dispatch(uiActions.changeView('listen'))}
         busy={busy}
+      />
+      <EditChapterTitleModal
+        key={renamingChapter?.id ?? 'closed'}
+        open={renamingChapter !== null}
+        bookId={bookId}
+        chapter={renamingChapter}
+        onClose={() => setRenamingChapter(null)}
       />
     </div>
   );
