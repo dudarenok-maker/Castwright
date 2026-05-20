@@ -1,6 +1,6 @@
 ---
 status: stable
-shipped: null
+shipped: 2026-05-20
 owner: null
 ---
 
@@ -165,5 +165,22 @@ the same files.
 
 ## Ship notes
 
-Shipped on branch `fix/server-exports-relocate-and-voice-sync` —
-SHA to be filled by the merge commit.
+Shipped 2026-05-20 via PR #77 (merge commit `8089253`) off branch
+`fix/server-exports-relocate-and-voice-sync`. Four commits on the
+branch:
+
+- `a113b92` — server: relocate exports under `<bookDir>/exports`,
+  widen `renameWithRetry` for EACCES/EIO, add the Drive-hint wrapper,
+  ship the sync-folder write-probe endpoint, tee the portable bundle
+  to a local copy.
+- `9ba7714` — frontend + openapi: blur autosave, save-error banner,
+  Test probe button, mock + real `api.testSyncFolderPath`, e2e spec.
+- `7ae54a1` — plan 79 doc + `INDEX.md` entry.
+- `9dd38ee` — CI hot-fix: the original sync-folder probe test used
+  a bogus Windows drive letter (`Z:\nonexistent\...`) that on Linux
+  CI just becomes a weird filename `mkdir({recursive:true})` happily
+  creates. Swapped for a parent-is-a-file scenario (ENOTDIR surfaces
+  on every platform).
+
+No spec delta vs. the original plan body — all five sub-changes
+landed as designed.
