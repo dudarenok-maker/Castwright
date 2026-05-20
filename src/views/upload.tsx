@@ -163,10 +163,10 @@ export function UploadView() {
   }
 
   return (
-    <div className="relative min-h-[calc(100vh-64px)] flex items-center justify-center px-6 py-16">
+    <div className="relative min-h-[calc(100vh-64px)] flex items-center justify-center px-4 sm:px-6 py-8 sm:py-16">
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-90 pointer-events-none" />
       <div className="relative max-w-3xl w-full">
-        <div className="text-center mb-10">
+        <div className="text-center mb-8 sm:mb-10">
           <SectionLabel>
             {isReuploading ? 'Replace manuscript' : 'Start a new project'}
           </SectionLabel>
@@ -213,15 +213,18 @@ export function UploadView() {
                 }
               }}
               data-testid="reupload-cancel"
-              className="mt-4 text-xs text-ink/60 hover:text-ink underline"
+              className="mt-4 inline-flex items-center justify-center min-h-[44px] px-3 text-xs text-ink/60 hover:text-ink underline"
             >
               Cancel re-upload
             </button>
           )}
         </div>
 
-        <div className="mb-5 flex items-center justify-center gap-3 text-sm">
-          <label htmlFor="model-select" className="text-ink/60">
+        {/* Stacks vertically on phone (≤sm) — the select otherwise wraps mid-row
+            and the label drifts above; explicit `flex-col sm:flex-row` keeps both
+            stable. min-h on the select hits the ≥44px touch-target rule. */}
+        <div className="mb-5 flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2 sm:gap-3 text-sm">
+          <label htmlFor="model-select" className="text-ink/60 text-center sm:text-left">
             Analysis model
           </label>
           <select
@@ -229,7 +232,7 @@ export function UploadView() {
             value={selectedModel}
             disabled={busy}
             onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
-            className="px-3 py-1.5 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 focus:outline-none focus:border-peach disabled:opacity-50"
+            className="w-full sm:w-auto min-h-[44px] px-3 py-1.5 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 focus:outline-none focus:border-peach disabled:opacity-50"
           >
             {MODEL_OPTION_GROUPS.map((g) => (
               <optgroup key={g.engine} label={g.label}>
@@ -256,8 +259,11 @@ export function UploadView() {
             setDragOver(false);
             handleFile(e.dataTransfer.files?.[0]);
           }}
-          className={`relative bg-white rounded-3xl border-2 border-dashed transition-all p-12 text-center cursor-pointer ${busy ? 'opacity-60 cursor-wait' : ''} ${dragOver ? 'border-peach bg-peach/5 scale-[1.01]' : 'border-ink/15 hover:border-ink/30'}`}
+          className={`relative w-full bg-white rounded-3xl border-2 border-dashed transition-all min-h-[140px] p-6 sm:p-12 text-center cursor-pointer ${busy ? 'opacity-60 cursor-wait' : ''} ${dragOver ? 'border-peach bg-peach/5 scale-[1.01]' : 'border-ink/15 hover:border-ink/30'}`}
           onClick={() => !busy && fileInputRef.current?.click()}
+          data-testid="dropzone"
+          role="button"
+          tabIndex={0}
         >
           <input
             ref={fileInputRef}
@@ -266,22 +272,33 @@ export function UploadView() {
             accept=".md,.markdown,.txt,.text,.pdf,.epub,.mobi,.azw3"
             onChange={(e) => handleFile(e.target.files?.[0])}
           />
-          <div className="w-16 h-16 mx-auto rounded-full bg-canvas grid place-items-center mb-5">
+          <div className="w-12 h-12 sm:w-16 sm:h-16 mx-auto rounded-full bg-canvas grid place-items-center mb-3 sm:mb-5">
             {busy ? (
-              <IconSpinner className="w-7 h-7 text-magenta" />
+              <IconSpinner className="w-6 h-6 sm:w-7 sm:h-7 text-magenta" />
             ) : (
-              <IconUpload className="w-7 h-7 text-ink" />
+              <IconUpload className="w-6 h-6 sm:w-7 sm:h-7 text-ink" />
             )}
           </div>
-          <p className="text-lg font-semibold text-ink">
+          <p className="text-base sm:text-lg font-semibold text-ink">
             {busy ? 'Reading manuscript…' : 'Drop a manuscript here'}
           </p>
           <p className="text-sm text-ink/60 mt-1">
-            {busy ? 'Hashing and registering with the server.' : 'or click to browse files'}
+            {busy ? 'Hashing and registering with the server.' : 'or tap to browse files'}
           </p>
-          <div className="mt-6 flex items-center justify-center gap-4 text-xs text-ink/50">
-            <span>Markdown</span>·<span>Plain text</span>·<span>EPUB</span>·<span>PDF</span>·
-            <span>MOBI</span>·<span>AZW3</span>
+          {/* Format list wraps to multiple lines on phone so the dropzone height
+              doesn't blow out; bullet separators kept for desktop consistency. */}
+          <div className="mt-4 sm:mt-6 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-ink/50">
+            <span>Markdown</span>
+            <span className="hidden sm:inline">·</span>
+            <span>Plain text</span>
+            <span className="hidden sm:inline">·</span>
+            <span>EPUB</span>
+            <span className="hidden sm:inline">·</span>
+            <span>PDF</span>
+            <span className="hidden sm:inline">·</span>
+            <span>MOBI</span>
+            <span className="hidden sm:inline">·</span>
+            <span>AZW3</span>
           </div>
         </div>
 
@@ -291,31 +308,38 @@ export function UploadView() {
           </div>
         )}
 
-        <div className="mt-5 flex items-center justify-center gap-3 text-sm">
+        {/* Action chips: stack column-of-two on phone (full-width buttons,
+            ≥44px tap target), revert to inline row on sm and up. */}
+        <div className="mt-5 flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2 sm:gap-3 text-sm">
           <button
             disabled={busy}
             onClick={handleSample}
-            className="px-4 py-2 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 hover:text-ink disabled:opacity-50"
+            className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 hover:text-ink disabled:opacity-50"
           >
             Use sample manuscript
           </button>
           <button
             disabled={busy}
             onClick={() => setPasteOpen((v) => !v)}
-            className="px-4 py-2 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 hover:text-ink disabled:opacity-50"
+            className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 hover:text-ink disabled:opacity-50"
           >
             {pasteOpen ? 'Hide paste' : 'Paste text'}
           </button>
         </div>
 
         {pasteOpen && (
-          <div className="mt-4 bg-white rounded-3xl border border-ink/10 p-5">
+          <div className="mt-4 bg-white rounded-3xl border border-ink/10 p-4 sm:p-5">
             <textarea
               value={pastedText}
               onChange={(e) => setPastedText(e.target.value)}
               placeholder="# Chapter 1&#10;&#10;Paste your manuscript here…"
-              className="w-full h-44 rounded-xl border border-ink/10 px-4 py-3 text-sm font-mono text-ink/80 focus:outline-none focus:border-peach"
+              className="w-full h-44 rounded-xl border border-ink/10 px-3 sm:px-4 py-3 text-sm font-mono text-ink/80 focus:outline-none focus:border-peach"
             />
+            {/* Right-aligned on all viewports — PrimaryButton doesn't take
+                className so a full-width phone variant would require touching
+                primitives.tsx. The button is naturally tappable (min-h coming
+                from pl-5 pr-1.5 py-1.5 + icon row = ~40px); align-self stays
+                end on phone too so it stays predictable. */}
             <div className="mt-3 flex justify-end">
               <PrimaryButton
                 variant="dark"
@@ -331,7 +355,7 @@ export function UploadView() {
           </div>
         )}
 
-        <p className="text-center text-xs text-ink/40 mt-8">
+        <p className="text-center text-xs text-ink/40 mt-6 sm:mt-8 px-2">
           Working on a series? Voices from previous books are available in your library — we'll
           match characters automatically.
         </p>
