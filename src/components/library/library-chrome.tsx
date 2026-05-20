@@ -9,8 +9,8 @@
    selectors keep resolving. State + dispatchers stay in the
    book-library.tsx orchestrator. */
 
-import { useState } from 'react';
-import { IconPlus, IconFolder, IconCopy } from '../../lib/icons';
+import { useRef, useState } from 'react';
+import { IconPlus, IconFolder, IconCopy, IconDownload } from '../../lib/icons';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../primitives';
 import { formatHours } from '../../lib/time';
 import { StatTile } from '../../views/voices';
@@ -33,6 +33,12 @@ interface Props {
   setFilter: (f: Filter) => void;
   filters: Array<{ id: Filter; label: string }>;
   onStartNew: () => void;
+  /** Plan 75 — when present, renders an "Import portable bundle" button
+      alongside the "Start a new book" CTA. The button opens a file
+      picker (.portable.zip / .zip) and hands the chosen File to the
+      orchestrator, which POSTs it to /api/import/portable. Absent →
+      the button hides, keeping the chrome backward-compatible. */
+  onImportPortable?: (file: File) => void;
 }
 
 export function LibraryChrome({
@@ -43,7 +49,9 @@ export function LibraryChrome({
   setFilter,
   filters,
   onStartNew,
+  onImportPortable,
 }: Props) {
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   return (
     <>
       <div className="mb-8 flex items-end justify-between gap-6 flex-wrap">
@@ -58,12 +66,42 @@ export function LibraryChrome({
           </p>
           {workspace && <WorkspacePathRow info={workspace} />}
         </div>
-        <PrimaryButton variant="dark" onClick={onStartNew}>
-          <span className="inline-flex items-center gap-2">
-            <IconPlus className="w-4 h-4" />
-            Start a new book
-          </span>
-        </PrimaryButton>
+        <div className="flex items-center gap-2 flex-wrap">
+          {onImportPortable && (
+            <>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".zip,application/zip"
+                className="hidden"
+                data-testid="library-import-portable-input"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) onImportPortable(file);
+                  /* Reset the input so re-selecting the same file
+                     re-fires onChange. */
+                  e.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => importInputRef.current?.click()}
+                data-testid="library-import-portable-button"
+                className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-white border border-ink/15 text-ink hover:bg-ink/[0.04]"
+                title="Import a .portable.zip bundle exported from another machine"
+              >
+                <IconDownload className="w-4 h-4" />
+                Import portable bundle
+              </button>
+            </>
+          )}
+          <PrimaryButton variant="dark" onClick={onStartNew}>
+            <span className="inline-flex items-center gap-2">
+              <IconPlus className="w-4 h-4" />
+              Start a new book
+            </span>
+          </PrimaryButton>
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-4 mb-6">

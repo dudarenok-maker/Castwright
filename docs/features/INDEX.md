@@ -99,6 +99,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [21 — Book library](21-book-library.md) — Workspace scan + status derivation.
 - [22 — Voice library](22-voice-library.md) — Cross-book voices view + pinning.
 - [36 — Book covers (OpenLibrary)](36-book-covers.md) — Real cover artwork on cards + Listen header; auto-fetch on import, manual picker on demand; gradient skeleton fallback.
+- [75 — Portable book bundle (export + import)](75-portable-book-export.md) — Single `.zip` containing state.json + manuscript + audio + cover + change-log + MANIFEST. `GET /api/books/:id/export/portable` streams the bundle; `POST /api/import/portable` accepts a multipart upload; conflict default is `rename`. Listen view 4th download tile + Library view Import button.
 
 ### K. Cross-cutting invariants
 

@@ -1182,6 +1182,134 @@ paths:
         '404':
           description: Job id unknown or staging file missing
 
+  /api/books/{bookId}/export/portable:
+    get:
+      summary: Stream the portable book bundle (plan 75)
+      operationId: exportPortableBook
+      description: |
+        Plan 75 — returns a single `.zip` containing every artifact needed
+        to re-create the book on another machine: `state.json` +
+        manuscript file + every chapter's audio + cover image +
+        change-log + a `MANIFEST.json` envelope with schemaVersion +
+        hashes. Excludes the private `listen-progress.json` and any
+        `.previous.*` rollback files.
+
+        Internal layout:
+        ```
+        portable-book/
+          MANIFEST.json
+          state.json
+          manuscript.<ext>
+          cover.<ext>           (optional)
+          change-log.json       (optional)
+          audio/
+            <slug>.mp3
+            <slug>.peaks.json
+            <slug>.segments.json
+        ```
+
+        Response `Content-Disposition` carries an `attachment` filename
+        of `<book-title-slug>.portable.zip`. The bytes are
+        byte-deterministic across runs for a fixed input (MANIFEST
+        `exportedAt` aside).
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Zip bundle
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: 'attachment; filename="<slug>.portable.zip"'
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        '404':
+          description: Book not found
+        '500':
+          description: Build failed (manuscript missing, etc.)
+
+  /api/import/portable:
+    post:
+      summary: Import a portable book bundle into the workspace (plan 75)
+      operationId: importPortableBook
+      description: |
+        Accepts a `multipart/form-data` upload with a single `file`
+        field carrying a `.zip` bundle produced by
+        `GET /api/books/:bookId/export/portable`. The MANIFEST.json
+        envelope must declare a `schemaVersion` this server understands
+        (currently 1).
+
+        Conflict handling (when a book directory already exists at the
+        author/series/title path the bundle's state.json declares):
+
+        - `rename`  (default) — appends ` (imported)` /
+                                ` (imported 2)` etc. to the title until
+                                the slug-based directory is free; the
+                                imported bundle's state.json is rewritten
+                                with the new title and bookId so the
+                                library scan picks up a distinct entry.
+        - `overwrite` — writes into the existing directory, preserving
+                        files not in the bundle (e.g. the user's
+                        listen-progress.json).
+        - `fail`      — returns 409 without touching disk.
+
+        Per-file atomic write: each entry lands in a `.tmp-<pid>-<ts>`
+        sibling before being renamed over its final path.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Portable book bundle (.zip)
+                onConflict:
+                  type: string
+                  enum: [rename, overwrite, fail]
+                  default: rename
+      responses:
+        '201':
+          description: Bundle imported
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [bookId, targetPath, importedFiles]
+                properties:
+                  bookId: { type: string }
+                  targetPath: { type: string }
+                  importedFiles: { type: integer }
+                  conflict:
+                    type: object
+                    properties:
+                      strategy: { type: string, enum: [rename, overwrite, fail] }
+                      renamedTo: { type: string }
+        '400':
+          description: Bundle is malformed or missing required entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string, enum: [invalid_bundle, missing_file] }
+                  reason: { type: string }
+                  message: { type: string }
+        '409':
+          description: Target directory already exists and onConflict='fail'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string, enum: [bundle_conflict] }
+                  existingPath: { type: string }
+                  message: { type: string }
+
   /api/books/{bookId}/share:
     post:
       summary: Mint (or look up) a slugged share URL for the book
