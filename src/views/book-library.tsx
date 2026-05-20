@@ -124,6 +124,16 @@ export function BookLibraryView({
   useEffect(() => {
     writeStoredViewMode(viewMode);
   }, [viewMode]);
+  /* Plan 81 (Wave 3, books) — phone viewports (<640px) can't fit the
+     wide multi-column table without horizontal scroll, and the user
+     research bar for v1 says "no horizontal overflow at 375×667". On
+     phone we force the card layout regardless of the persisted
+     viewMode preference, so a tablet/desktop user whose stored
+     preference is "table" still sees usable cards when they open the
+     same workspace from a phone. The stored preference itself stays
+     unchanged — when they go back to desktop, table re-appears. */
+  const isMobileViewport = useIsMobileViewport();
+  const effectiveViewMode: LibraryViewMode = isMobileViewport ? 'card' : viewMode;
   /* First word of the user's display name → "Welcome back, Mike". Falls back
      to "back" when the user hasn't set a name (keeps the heading grammatical). */
   const displayName = useAppSelector((s) => s.account.displayName);
@@ -232,7 +242,7 @@ export function BookLibraryView({
     loaded && authors.length > 0 && hasActiveSearchOrTag && matchedBookCount === 0;
 
   return (
-    <div className="max-w-[1400px] mx-auto px-6 py-10">
+    <div className="max-w-[1400px] mx-auto px-4 py-6 sm:px-6 sm:py-10">
       <LibraryChrome
         firstName={firstName}
         workspace={workspace}
@@ -253,7 +263,7 @@ export function BookLibraryView({
       />
       {showNoResults ? (
         <NoResults onClear={clearFilters} />
-      ) : viewMode === 'card' ? (
+      ) : effectiveViewMode === 'card' ? (
         <LibraryGrid
           loaded={loaded}
           isLibraryEmpty={authors.length === 0}
@@ -267,21 +277,54 @@ export function BookLibraryView({
           onStartNew={onStartNew}
         />
       ) : (
-        <LibraryTable
-          loaded={loaded}
-          isLibraryEmpty={authors.length === 0}
-          authors={filteredAuthors}
-          activeBookId={activeBookId}
-          onOpenBook={onOpenBook}
-          onDeleteBook={onDeleteBook}
-          onReparseBook={onReparseBook}
-          onEditBook={onEditBook}
-          onCoverChanged={onCoverChanged}
-          onStartNew={onStartNew}
-        />
+        /* Plan 81 (Wave 3, books) — wrap the dense table in an
+           overflow-x container so a narrow tablet (640–767px) that
+           still resolves to the table branch (matchMedia <640 only
+           forces card mode) keeps any horizontal overflow scoped to
+           the table itself, not the document body. Desktop ≥md
+           viewports never overflow this wrapper, so the visual is
+           a no-op there. */
+        <div className="overflow-x-auto -mx-4 px-4 sm:-mx-6 sm:px-6 md:mx-0 md:px-0">
+          <LibraryTable
+            loaded={loaded}
+            isLibraryEmpty={authors.length === 0}
+            authors={filteredAuthors}
+            activeBookId={activeBookId}
+            onOpenBook={onOpenBook}
+            onDeleteBook={onDeleteBook}
+            onReparseBook={onReparseBook}
+            onEditBook={onEditBook}
+            onCoverChanged={onCoverChanged}
+            onStartNew={onStartNew}
+          />
+        </div>
       )}
     </div>
   );
+}
+
+/* Subscribes to a `(max-width: 639px)` matchMedia query so the
+   orchestrator can flip viewMode → card on phone viewports without
+   stomping the user's persisted preference. SSR / jsdom-without-mock
+   safe — returns `false` until the first effect runs. */
+function useIsMobileViewport(): boolean {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mql = window.matchMedia('(max-width: 639px)');
+    setIsMobile(mql.matches);
+    const onChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    /* addEventListener is the modern API; the legacy addListener fallback
+       covers Safari < 14. Match the same pattern use-theme.ts uses. */
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', onChange);
+      return () => mql.removeEventListener('change', onChange);
+    }
+    /* Legacy fallback — webkit Safari < 14. */
+    mql.addListener(onChange);
+    return () => mql.removeListener(onChange);
+  }, []);
+  return isMobile;
 }
 
 /* Distinct "no results" pane — fires when search/tags narrow the
