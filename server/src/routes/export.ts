@@ -26,14 +26,21 @@ import { readUserSettings } from '../workspace/user-settings.js';
 import { buildMp3Zip, ExportIncompleteError, sanitiseForZip } from '../export/build-mp3-zip.js';
 import { buildM4b } from '../export/build-m4b.js';
 import { buildMp3Folder } from '../export/build-mp3-folder.js';
+import { buildCodecZip } from '../export/build-codec-zip.js';
 import { writeFolderToSyncFolder, writeToSyncFolder } from '../export/sync-folder.js';
+import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 
 /* Mirrors the OpenAPI BookExportJob schema. Kept in sync by hand — the
    server doesn't import the generated frontend types. */
 export interface BookExportJob {
   id: string;
   bookId: string;
-  format: 'mp3-zip' | 'm4b' | 'mp3-folder';
+  /** Plan 72 widened the union with `aac-m4a-zip` and `opus-ogg-zip` — the
+      codec-zip companions to `mp3-zip`. Same per-chapter packing
+      contract; no ID3 retag (those containers use different metadata
+      systems and the v1 wires straight from the encoded chapter
+      files). */
+  format: 'mp3-zip' | 'm4b' | 'mp3-folder' | 'aac-m4a-zip' | 'opus-ogg-zip';
   destination: 'download' | 'sync-folder';
   status: 'queued' | 'in_progress' | 'done' | 'failed' | 'cancelled';
   filename: string;
@@ -50,6 +57,8 @@ const ALLOWED_FORMATS: ReadonlySet<BookExportJob['format']> = new Set([
   'mp3-zip',
   'm4b',
   'mp3-folder',
+  'aac-m4a-zip',
+  'opus-ogg-zip',
 ]);
 
 export const exportRouter = Router();
@@ -101,6 +110,11 @@ function bookFilename(state: BookStateJson, format: BookExportJob['format']): st
   const base = slugify(state.title);
   if (format === 'mp3-zip') return `${base}.zip`;
   if (format === 'm4b') return `${base}.m4b`;
+  /* Codec-zip variants (plan 72) — separate slug suffix so a user can hold
+     all three zip variants of the same book in the same staging dir
+     without name collisions. */
+  if (format === 'aac-m4a-zip') return `${base}-aac.zip`;
+  if (format === 'opus-ogg-zip') return `${base}-opus.zip`;
   /* mp3-folder: the "filename" is actually the folder name the per-chapter
      MP3s land in (under both the staging dir and the sync target). The
      download endpoint refuses this format so the lack of a single-file
@@ -307,7 +321,11 @@ exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res
 });
 
 function mimeForFormat(format: BookExportJob['format']): string {
-  return format === 'mp3-zip' ? 'application/zip' : 'audio/mp4';
+  if (format === 'm4b') return 'audio/mp4';
+  /* Every other format (mp3-zip / aac-m4a-zip / opus-ogg-zip) is a zip
+     archive. mp3-folder isn't downloadable (the route refuses it) so
+     this branch never fires for that format. */
+  return 'application/zip';
 }
 
 function preflightMissingChapters(state: BookStateJson, bookDir: string): string[] {
@@ -315,8 +333,12 @@ function preflightMissingChapters(state: BookStateJson, bookDir: string): string
   const out: string[] = [];
   for (const chapter of state.chapters) {
     if (chapter.excluded) continue;
-    const mp3Path = join(root, `${chapter.slug}.mp3`);
-    if (!existsSync(mp3Path)) out.push(chapter.slug);
+    /* Plan 72: a chapter is present when *any* recognised encoded file
+       (mp3 / m4a / ogg) lives next to it. The per-format builder is the
+       gate that surfaces a more specific missing list when the chapter
+       exists but in the wrong codec. */
+    const audio = findChapterAudio(root, chapter.slug);
+    if (!audio) out.push(chapter.slug);
   }
   return out;
 }
@@ -363,7 +385,16 @@ async function runExportJob(
       const result =
         job.format === 'mp3-zip'
           ? await buildMp3Zip({ bookDir, state, outPath, onProgress, signal })
-          : await buildM4b({ bookDir, state, outPath, onProgress, signal });
+          : job.format === 'm4b'
+            ? await buildM4b({ bookDir, state, outPath, onProgress, signal })
+            : await buildCodecZip({
+                bookDir,
+                state,
+                outPath,
+                format: job.format === 'aac-m4a-zip' ? 'aac-m4a' : 'opus',
+                onProgress,
+                signal,
+              });
       job.sizeBytes = result.sizeBytes;
       job.progress = 1;
 

@@ -1,8 +1,14 @@
-/* PCM → MP3 encoder. Pipes raw 16-bit signed little-endian mono PCM through
-   system `ffmpeg` and collects libmp3lame's stdout. Used by generation.ts
+/* PCM → audio encoder. Pipes raw 16-bit signed little-endian mono PCM through
+   system `ffmpeg` and collects the encoder's stdout. Used by generation.ts
    after per-sentence PCM has been concatenated into the full chapter buffer
-   — encoding once at chapter granularity sidesteps MP3 frame-alignment and
+   — encoding once at chapter granularity sidesteps frame-alignment and
    gapless-playback issues that per-segment encoding would create.
+
+   Format dispatch (plan 72): the `format` discriminator selects MP3
+   (LAME, default), AAC/M4A (libfdk_aac or native AAC) or Opus (libopus).
+   `buildMp3FfmpegArgs` keeps the v1 invocation byte-identical for the
+   default path; the AAC/Opus builders are siblings that route through the
+   same spawn/stdout-capture plumbing.
 
    ffmpeg is a hard runtime dep; scripts/start-app.ps1 preflights it. We do
    NOT mock the encoder boundary in tests — the integration suite spawns the
@@ -15,45 +21,88 @@
    chapter-audio meta endpoint reads it back; absence is graceful and yields
    `peaks: []` so chapters generated before this plan keep loading. */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { computePeaks } from '../audio/compute-peaks.js';
 
-/** Supported output container/codec. Single-value union today; future PRs
- *  will widen to e.g. `'mp3' | 'm4a' | 'opus'` and dispatch on this field. */
-export type EncodePcmAudioFormat = 'mp3';
+/** Supported output container/codec.
+ *  - `'mp3'` — MPEG-2 Layer III via libmp3lame (LAME VBR V2 default).
+ *  - `'aac-m4a'` — AAC-LC in an M4A (mp4 audio, raw via ipod muxer) container.
+ *    Uses libfdk_aac when ffmpeg was built with it; otherwise the native
+ *    `aac` encoder. Target ≈ 128 kbps.
+ *  - `'opus'` — Opus in an Ogg container at 96 kbps VBR (`-application audio`).
+ */
+export type EncodePcmAudioFormat = 'mp3' | 'aac-m4a' | 'opus';
 
 export interface EncodePcmToAudioOptions {
-  /** Output format. Defaults to `'mp3'`. Single-value union for now —
-   *  the dispatch on this field is the seam future encoder additions
-   *  (AAC/M4A, Opus) extend without changing this function's signature. */
+  /** Output format. Defaults to `'mp3'`. The dispatch on this field is the
+   *  seam encoder additions extend without changing this function's
+   *  signature. See `EncodePcmAudioFormat` for per-format encoder + bitrate
+   *  contracts. */
   format?: EncodePcmAudioFormat;
-  /** LAME VBR quality: 0 (best, larger) .. 9 (worst, smaller). Default 2
-      ≈ V2, the LAME preset-standard. */
+  /** LAME VBR quality (mp3 only): 0 (best, larger) .. 9 (worst, smaller).
+   *  Default 2 ≈ V2, the LAME preset-standard. Ignored by AAC/Opus paths
+   *  (they use fixed-bitrate targets — see per-format helpers). */
   quality?: number;
 }
 
-export async function encodePcmToAudio(
-  pcm: Buffer,
-  sampleRate: number,
-  opts: EncodePcmToAudioOptions = {},
-): Promise<Buffer> {
-  /* Read but don't yet branch on `format` — we accept the discriminator and
-     default it to 'mp3' so callers can already pass it explicitly, but the
-     ffmpeg invocation below is the existing MP3 path verbatim. Future PRs
-     (AAC/M4A, Opus) dispatch from here. */
-  const format: EncodePcmAudioFormat = opts.format ?? 'mp3';
-  void format;
-  const quality = opts.quality ?? 2;
+/* Cached result of probing `ffmpeg -codecs` for libfdk_aac. Cheaper to
+   spawn-and-grep once per process than every encode call. Reset between
+   tests via the exported `_resetFfmpegCodecCache` helper if a test needs
+   a clean slate. */
+let cachedHasLibFdkAac: boolean | null = null;
 
-  const args = [
+/** Probe ffmpeg's codec list for libfdk_aac. Cached per-process. Returns
+ *  `true` when the encoder is available (free-software ffmpeg builds skip
+ *  it for licensing reasons; the Windows static builds we recommend
+ *  typically don't have it). Falsy result on probe failure — caller
+ *  falls back to the native `aac` encoder. */
+export function hasLibFdkAac(): boolean {
+  if (cachedHasLibFdkAac !== null) return cachedHasLibFdkAac;
+  try {
+    const result = spawnSync('ffmpeg', ['-hide_banner', '-codecs'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (result.status !== 0) {
+      cachedHasLibFdkAac = false;
+      return cachedHasLibFdkAac;
+    }
+    /* The `-codecs` output lists each codec with its encoders inside
+       parentheses; we look for the literal `libfdk_aac` token to avoid
+       matching the plain `aac` encoder name. */
+    const out = (result.stdout ?? '') + (result.stderr ?? '');
+    cachedHasLibFdkAac = /\blibfdk_aac\b/.test(out);
+    return cachedHasLibFdkAac;
+  } catch {
+    cachedHasLibFdkAac = false;
+    return cachedHasLibFdkAac;
+  }
+}
+
+/** Test-only: drop the cached libfdk_aac probe result. */
+export function _resetFfmpegCodecCache(): void {
+  cachedHasLibFdkAac = null;
+}
+
+interface FfmpegBuildOpts {
+  sampleRate: number;
+  quality: number;
+}
+
+/** Build the ffmpeg arg list for the MP3 (libmp3lame) path. The v1
+ *  invocation — preserved byte-identical so existing chapters re-encode
+ *  identically — was extracted out of `encodePcmToAudio` when format
+ *  dispatch landed. */
+function buildMp3FfmpegArgs(opts: FfmpegBuildOpts): string[] {
+  return [
     '-loglevel',
     'error',
     '-f',
     's16le',
     '-ar',
-    String(sampleRate),
+    String(opts.sampleRate),
     '-ac',
     '1',
     '-i',
@@ -61,11 +110,106 @@ export async function encodePcmToAudio(
     '-c:a',
     'libmp3lame',
     '-q:a',
-    String(quality),
+    String(opts.quality),
     '-f',
     'mp3',
     'pipe:1',
   ];
+}
+
+/** Build the ffmpeg arg list for the AAC/M4A path. Uses libfdk_aac (VBR
+ *  mode 4 ≈ 128 kbps) when available, else falls back to the native AAC
+ *  encoder at constant 128 kbps.
+ *
+ *  M4A output cannot stream to stdout directly — the mp4 / ipod muxers
+ *  need a seekable output to write the moov atom in-place. We work around
+ *  this by writing a fragmented MP4 stream (`-movflags
+ *  +empty_moov+frag_keyframe`) which IS pipe-friendly, then `+faststart`
+ *  (folded into the same `-movflags` arg) re-ranges the box order so the
+ *  file is streaming-playable. Container is `.m4a` (mp4 audio) via the
+ *  `ipod` muxer. */
+function buildAacFfmpegArgs(opts: FfmpegBuildOpts): string[] {
+  const useFdk = hasLibFdkAac();
+  return [
+    '-loglevel',
+    'error',
+    '-f',
+    's16le',
+    '-ar',
+    String(opts.sampleRate),
+    '-ac',
+    '1',
+    '-i',
+    'pipe:0',
+    ...(useFdk ? ['-c:a', 'libfdk_aac', '-vbr', '4'] : ['-c:a', 'aac', '-b:a', '128k']),
+    /* Fragmented mp4 so the muxer can stream to stdout: `empty_moov`
+       skips the seek-back-and-write-moov dance; `frag_keyframe` starts a
+       new fragment at every keyframe (audio-only streams have every
+       frame as a keyframe, so this approximates per-frame fragments).
+       `+faststart` is a no-op on fragmented MP4 but kept defensively in
+       case ffmpeg falls back to a non-fragmented path. */
+    '-movflags',
+    '+empty_moov+frag_keyframe+faststart',
+    '-f',
+    'mp4',
+    'pipe:1',
+  ];
+}
+
+/** Build the ffmpeg arg list for the Opus path. Targets 96 kbps VBR with
+ *  `-application audio` (libopus's general-music mode — voice-grade is
+ *  noticeably tinnier on narration). Container is Ogg/Opus (`.ogg`
+ *  extension); raw `.opus` files have spotty player support, Ogg wraps
+ *  the same codec with broader compatibility. */
+function buildOpusFfmpegArgs(opts: FfmpegBuildOpts): string[] {
+  return [
+    '-loglevel',
+    'error',
+    '-f',
+    's16le',
+    '-ar',
+    String(opts.sampleRate),
+    '-ac',
+    '1',
+    '-i',
+    'pipe:0',
+    '-c:a',
+    'libopus',
+    '-b:a',
+    '96k',
+    '-application',
+    'audio',
+    '-f',
+    'ogg',
+    'pipe:1',
+  ];
+}
+
+export async function encodePcmToAudio(
+  pcm: Buffer,
+  sampleRate: number,
+  opts: EncodePcmToAudioOptions = {},
+): Promise<Buffer> {
+  const format: EncodePcmAudioFormat = opts.format ?? 'mp3';
+  const quality = opts.quality ?? 2;
+  const builderOpts: FfmpegBuildOpts = { sampleRate, quality };
+
+  let args: string[];
+  switch (format) {
+    case 'mp3':
+      args = buildMp3FfmpegArgs(builderOpts);
+      break;
+    case 'aac-m4a':
+      args = buildAacFfmpegArgs(builderOpts);
+      break;
+    case 'opus':
+      args = buildOpusFfmpegArgs(builderOpts);
+      break;
+    default: {
+      const _exhaustive: never = format;
+      throw new Error(`encodePcmToAudio: unsupported format ${String(_exhaustive)}`);
+    }
+  }
 
   return await new Promise<Buffer>((resolve, reject) => {
     const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -105,6 +249,20 @@ export async function encodePcmToAudio(
 
     child.stdin.end(pcm);
   });
+}
+
+/** Map an `EncodePcmAudioFormat` to the on-disk file extension generation
+ *  emits. Centralised so generation.ts + the audio-file locator agree on
+ *  the same mapping. */
+export function audioExtForFormat(format: EncodePcmAudioFormat): 'mp3' | 'm4a' | 'ogg' {
+  switch (format) {
+    case 'mp3':
+      return 'mp3';
+    case 'aac-m4a':
+      return 'm4a';
+    case 'opus':
+      return 'ogg';
+  }
 }
 
 /** Disk shape of `<bookDir>/audio/<slug>.peaks.json`. Single field today —

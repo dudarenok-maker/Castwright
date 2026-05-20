@@ -15,6 +15,12 @@ const FORMAT_TO_VIEW: Record<BookExportJob['format'], ExportQueueItem['format']>
      format badge surfaces 'mp3' (the per-file container) since the user
      thinks in terms of "this is a folder of MP3s". */
   'mp3-folder': 'mp3',
+  /* Plan 72: codec-zip variants — surface as `m4a` / generic `zip`
+     respectively. The Listen-view queue rail badge stays compact (we
+     don't grow the visual badge set for every codec); `zip` is the
+     honest catch-all for the Opus container. */
+  'aac-m4a-zip': 'm4a',
+  'opus-ogg-zip': 'zip',
 };
 
 export function bookExportJobToQueueItem(job: BookExportJob): ExportQueueItem {
