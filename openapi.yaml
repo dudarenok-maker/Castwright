@@ -111,6 +111,71 @@ paths:
         '400':
           description: Malformed body (failed schema validation)
 
+  /api/user/settings/sync-folder/test:
+    post:
+      summary: Probe whether a sync folder path is actually writable
+      operationId: testSyncFolderPath
+      description: |
+        Plan 79 — write-probe behind the export modal's "Test" button so
+        the user can tell immediately whether the path they typed for the
+        Voice / Smart AudioBook / Audiobookshelf tile (or the generic
+        "Sync folder" tab) is actually writable.
+
+        Server runs `mkdir({recursive: true}) + writeFile(<path>/.audiobook-write-probe, 'ok') + unlink`
+        and reports the outcome. Success means "Node can write here right
+        now" — NOT "your sync app will mirror it to your phone". The
+        latter is on the user to confirm (Drive paused, Files On-Demand
+        mode, folder not in the sync inclusion list, etc.).
+
+        The most common failure on Windows + Google Drive is a path that
+        names the legacy `Backup and Sync` layout (`C:\Users\you\Google Drive\...`)
+        when the modern Drive for Desktop is installed — Drive for
+        Desktop mounts under `<drive>:\My Drive\...` instead. The probe
+        surfaces the underlying errno + message so the modal can hint at
+        the cause.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                  description: |
+                    Absolute filesystem path the export pipeline would
+                    attempt to write into. The probe creates the folder
+                    on demand and removes the probe file before returning.
+      responses:
+        '200':
+          description: |
+            Probe outcome. `ok: true` means the write succeeded;
+            `ok: false` carries the underlying errno code (e.g. EACCES,
+            ENOENT, EBUSY) plus the original error message.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                  code:
+                    type: string
+                    description: |
+                      Node errno code when `ok` is false (e.g. EACCES,
+                      ENOENT). Absent when `ok` is true.
+                  message:
+                    type: string
+                    description: |
+                      Underlying error message when `ok` is false. Absent
+                      when `ok` is true.
+        '400':
+          description: Malformed body (path missing, empty, or too long)
+
   /api/workspace/changelog:
     get:
       summary: Aggregated change log across every book in the workspace

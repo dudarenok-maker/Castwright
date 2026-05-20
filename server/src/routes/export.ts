@@ -2,25 +2,33 @@
    GET  /api/books/:bookId/exports/:id    — poll job status
    GET  /api/books/:bookId/exports/:id/download — stream the artifact
 
-   Phase A ships `format: 'mp3-zip'` only. The body's `destination` chooses
-   the post-build delivery: `download` stages the file under the book's
-   `.audiobook/exports/<id>/<filename>` for the user to pull via the
-   download endpoint; `sync-folder` ADDITIONALLY copies the archive into
-   `userSettings.exportSyncFolder` (e.g. OneDrive watch path) so it mirrors
-   to the user's phone automatically.
+   The body's `destination` chooses the post-build delivery: `download`
+   stages the file under `<bookDir>/exports/<filename>` for the user to
+   pull via the download endpoint AND pick up directly from File Explorer;
+   `sync-folder` ADDITIONALLY copies the archive into
+   `userSettings.exportSyncFolder` (e.g. OneDrive / Drive watch path) so
+   it mirrors to the user's phone automatically.
 
-   Jobs are tracked in an in-memory Map keyed by exportId. A small manifest
-   sits next to the artifact (`manifest.json`) so a server restart can
-   re-hydrate the index — the download URL keeps working across reboots
-   because the bytes never moved. */
+   Plan 79 moved the artifact out of the hidden `.audiobook/exports/<id>/`
+   jail into a visible sibling `exports/` folder. Filenames are flat —
+   `<slug>.m4b`, `<slug>.zip`, etc. — and a re-export of the same format
+   clobbers the previous artifact (newest wins). Per-job JSON manifests
+   stay under `.audiobook/export-manifests/<exportId>.json` so the
+   exports folder shows only artifacts the user actually picks up. When a
+   new same-format build reaches `done`, older manifests of that format
+   are revoked so the queue de-dupes naturally. */
 
 import { Router, type Request, type Response } from 'express';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readdir, readFile, rm, unlink } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { nanoid } from 'nanoid';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
-import { dotAudiobook, slug as slugify } from '../workspace/paths.js';
+import {
+  bookExportManifestsDir,
+  bookExportsDir,
+  slug as slugify,
+} from '../workspace/paths.js';
 import { writeJsonAtomic } from '../workspace/state-io.js';
 import { readUserSettings } from '../workspace/user-settings.js';
 import { buildMp3Zip, ExportIncompleteError, sanitiseForZip } from '../export/build-mp3-zip.js';
@@ -28,6 +36,7 @@ import { buildM4b } from '../export/build-m4b.js';
 import { buildMp3Folder } from '../export/build-mp3-folder.js';
 import { buildCodecZip } from '../export/build-codec-zip.js';
 import { writeFolderToSyncFolder, writeToSyncFolder } from '../export/sync-folder.js';
+import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 
 /* Mirrors the OpenAPI BookExportJob schema. Kept in sync by hand — the
@@ -72,18 +81,21 @@ const jobs = new Map<string, BookExportJob>();
    the build functions having to know about jobs/jobControllers. */
 const jobControllers = new Map<string, AbortController>();
 
-function exportsDir(bookDir: string): string {
-  return join(dotAudiobook(bookDir), 'exports');
-}
 function manifestPath(bookDir: string, exportId: string): string {
-  return join(exportsDir(bookDir), exportId, 'manifest.json');
+  return join(bookExportManifestsDir(bookDir), `${exportId}.json`);
 }
 
-/* Lazy rehydrate: on first lookup for a book, scan its exports dir and
+/* Lazy rehydrate: on first lookup for a book, scan its manifests dir and
    reload any manifests we don't yet have in memory. Keeps download URLs
-   working across server restarts. */
+   working across server restarts. Per plan 79 we only look at the new
+   `.audiobook/export-manifests/` dir; any orphans the user has at the
+   old `.audiobook/exports/<id>/manifest.json` path are ignored (their
+   queue rows stay gone, the user re-exports if they care). Manifests
+   whose referenced artifact no longer exists on disk are dropped during
+   the same scan — that keeps stale "Done" rows from pointing at files
+   the user deleted from the exports folder. */
 async function rehydrateBook(bookDir: string, bookId: string): Promise<void> {
-  const dir = exportsDir(bookDir);
+  const dir = bookExportManifestsDir(bookDir);
   if (!existsSync(dir)) return;
   let entries: string[] = [];
   try {
@@ -92,16 +104,69 @@ async function rehydrateBook(bookDir: string, bookId: string): Promise<void> {
     return;
   }
   for (const name of entries) {
-    const manifest = manifestPath(bookDir, name);
-    if (!existsSync(manifest)) continue;
+    if (!name.endsWith('.json')) continue;
+    const manifest = join(dir, name);
     try {
       const raw = await readFile(manifest, 'utf8');
       const job = JSON.parse(raw) as BookExportJob;
-      if (job.id && !jobs.has(job.id) && job.bookId === bookId) {
-        jobs.set(job.id, job);
+      if (!job.id || job.bookId !== bookId) continue;
+      /* Drop any manifest whose artifact has gone missing — keeps the
+         queue honest after the user deletes files from the exports
+         folder. mp3-folder jobs reference a directory; existsSync handles
+         both files and dirs the same way. */
+      if (job.status === 'done') {
+        const artifact = resolveArtifactPath(bookDir, job);
+        if (!existsSync(artifact)) {
+          await unlink(manifest).catch(() => {});
+          continue;
+        }
       }
+      if (!jobs.has(job.id)) jobs.set(job.id, job);
     } catch {
       /* Corrupt manifest — skip, don't fail the GET. */
+    }
+  }
+}
+
+/* Resolve the on-disk artifact path for a job. The manifest stores
+   `filename` (e.g. `<slug>.m4b` or `<slug>` for mp3-folder); we join it
+   against the per-book exports dir at read time so the workspace can
+   move between machines without breaking download links. */
+function resolveArtifactPath(bookDir: string, job: BookExportJob): string {
+  return join(bookExportsDir(bookDir), job.filename);
+}
+
+/* Plan 79 — when a new same-format export finishes, revoke any prior
+   manifest for the SAME book+format. The queue rail shows one row per
+   format; clobber-newest-wins on disk plus this revocation keeps the
+   in-memory + persisted state consistent. */
+async function revokeStaleSameFormat(
+  bookDir: string,
+  bookId: string,
+  format: BookExportJob['format'],
+  keepId: string,
+): Promise<void> {
+  const dir = bookExportManifestsDir(bookDir);
+  if (!existsSync(dir)) return;
+  let entries: string[] = [];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (!name.endsWith('.json')) continue;
+    const id = basename(name, '.json');
+    if (id === keepId) continue;
+    const path = join(dir, name);
+    try {
+      const raw = await readFile(path, 'utf8');
+      const prior = JSON.parse(raw) as BookExportJob;
+      if (prior.bookId !== bookId || prior.format !== format) continue;
+      jobs.delete(prior.id);
+      await unlink(path).catch(() => {});
+    } catch {
+      /* Corrupt manifest — leave alone; the rehydrate scan will see it. */
     }
   }
 }
@@ -183,9 +248,13 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
 
   const exportId = `exp_${nanoid(10)}`;
   const filename = bookFilename(located.state, format);
-  const stagingDir = join(exportsDir(located.bookDir), exportId);
-  await mkdir(stagingDir, { recursive: true });
-  const outPath = join(stagingDir, filename);
+  /* Plan 79 — flat layout under the user-visible <bookDir>/exports/.
+     Same-format re-exports clobber the prior artifact (newest wins).
+     The matching manifest lives under .audiobook/export-manifests/. */
+  const exportsRoot = bookExportsDir(located.bookDir);
+  await mkdir(exportsRoot, { recursive: true });
+  await mkdir(bookExportManifestsDir(located.bookDir), { recursive: true });
+  const outPath = join(exportsRoot, filename);
 
   const job: BookExportJob = {
     id: exportId,
@@ -255,15 +324,21 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
     /* swallow */
   }
 
-  /* Best-effort cleanup of the staging dir so cancelled jobs don't
-     leak partial artifacts. The build's own finally clauses already
-     remove their staging-* tmp dirs; this removes the export-id
-     parent (which holds the final-output path that was about to be
-     written). */
-  const stagingDir = join(exportsDir(located.bookDir), job.id);
-  await rm(stagingDir, { recursive: true, force: true }).catch(() => {
-    /* leave it for next rehydrate */
-  });
+  /* Plan 79 — best-effort cleanup of any partial artifact. For
+     single-file formats, runExportJob's catch already unlinks the
+     `.partial-<id>` tmp; this clears the final-path file too in case
+     the rename had already completed before cancel landed. For
+     mp3-folder, the builder writes per-chapter MP3s directly into the
+     destination folder so we rm-recursive it. Do NOT rm the exports/
+     parent — other completed exports of this book live there. */
+  if (job.filename) {
+    const artifact = resolveArtifactPath(located.bookDir, job);
+    if (job.format === 'mp3-folder') {
+      await rm(artifact, { recursive: true, force: true }).catch(() => {});
+    } else {
+      await unlink(artifact).catch(() => {});
+    }
+  }
 
   return res.status(204).end();
 });
@@ -303,7 +378,7 @@ exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res
       });
   }
 
-  const path = join(exportsDir(located.bookDir), job.id, job.filename);
+  const path = resolveArtifactPath(located.bookDir, job);
   if (!existsSync(path)) return res.status(404).json({ error: 'export_artifact_missing' });
   res.sendFile(
     path,
@@ -382,21 +457,40 @@ async function runExportJob(
          the sync folder, not behind a single-file download. */
       job.downloadUrl = null;
     } else {
-      const result =
-        job.format === 'mp3-zip'
-          ? await buildMp3Zip({ bookDir, state, outPath, onProgress, signal })
-          : job.format === 'm4b'
-            ? await buildM4b({ bookDir, state, outPath, onProgress, signal })
-            : await buildCodecZip({
-                bookDir,
-                state,
-                outPath,
-                format: job.format === 'aac-m4a-zip' ? 'aac-m4a' : 'opus',
-                onProgress,
-                signal,
-              });
-      job.sizeBytes = result.sizeBytes;
-      job.progress = 1;
+      /* Plan 79 — write to a hidden `.partial-<exportId>` tmp first, then
+         atomic-rename to the final flat-named artifact at completion.
+         Without this, two concurrent same-format builds would race
+         createWriteStream on the same final path; on Windows that surfaces
+         as EBUSY/EPERM, on POSIX it interleaves bytes. The partial-then-
+         rename pattern matches sync-folder.ts's tmp+renameWithRetry shape
+         so the final clobber is atomic for any reader (the download
+         endpoint, the user's File Explorer, the sync-folder copy). */
+      const buildPath = join(bookExportsDir(bookDir), `.${job.filename}.partial-${job.id}`);
+      try {
+        const result =
+          job.format === 'mp3-zip'
+            ? await buildMp3Zip({ bookDir, state, outPath: buildPath, onProgress, signal })
+            : job.format === 'm4b'
+              ? await buildM4b({ bookDir, state, outPath: buildPath, onProgress, signal })
+              : await buildCodecZip({
+                  bookDir,
+                  state,
+                  outPath: buildPath,
+                  format: job.format === 'aac-m4a-zip' ? 'aac-m4a' : 'opus',
+                  onProgress,
+                  signal,
+                });
+        job.sizeBytes = result.sizeBytes;
+        job.progress = 1;
+        await renameWithRetry(buildPath, outPath);
+      } catch (e) {
+        /* On any failure (including cancel) the partial file is dropped
+           so a `<bookDir>/exports/` listing never shows half-baked
+           artifacts. Best-effort — if the rename above already moved it
+           there's nothing to unlink. */
+        await unlink(buildPath).catch(() => {});
+        throw e;
+      }
 
       if (job.destination === 'sync-folder' && syncFolder) {
         const synced = await writeToSyncFolder(outPath, syncFolder, job.filename);
@@ -406,6 +500,13 @@ async function runExportJob(
     }
     job.status = 'done';
     job.completedAt = new Date().toISOString();
+    /* Plan 79 — clobber-newest-wins on disk PLUS revoke any older
+       manifest for the same (book, format). Together they keep the
+       queue de-duped: one row per format, always pointing at the
+       latest build. Older artifacts on disk were already overwritten
+       by this build's atomic-rename; older manifests would otherwise
+       linger forever. */
+    await revokeStaleSameFormat(bookDir, job.bookId, job.format, job.id);
   } catch (e) {
     /* Cancellation: the DELETE handler already flipped status to
        'cancelled' before signalling abort. Honour that — don't

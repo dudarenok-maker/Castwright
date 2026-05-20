@@ -2686,6 +2686,36 @@ async function mockGetUserSettings(): Promise<UserSettings> {
   return { ...MOCK_USER_SETTINGS };
 }
 
+/* Plan 79 — write-probe for the sync-folder Test button. Mock pretends
+   any non-empty path is writable so the modal UI can be exercised in
+   mock mode without a real disk. Empty / whitespace-only paths report
+   ENOENT so the failure branch is reachable too. */
+export interface SyncFolderProbeResult {
+  ok: boolean;
+  code?: string;
+  message?: string;
+}
+async function mockTestSyncFolderPath(path: string): Promise<SyncFolderProbeResult> {
+  await wait(120);
+  if (!path || path.trim().length === 0) {
+    return { ok: false, code: 'ENOENT', message: 'No path supplied.' };
+  }
+  return { ok: true };
+}
+
+async function realTestSyncFolderPath(path: string): Promise<SyncFolderProbeResult> {
+  const res = await fetch('/api/user/settings/sync-folder/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Sync folder probe failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
 async function mockPutGeminiKey(key: string | null): Promise<UserSettings> {
   await wait(50);
   /* apiKeyStatus is marked readonly in the generated type, but the mock
@@ -3093,6 +3123,7 @@ const real = {
   getUserSettings: realGetUserSettings,
   putUserSettings: realPutUserSettings,
   putGeminiKey: realPutGeminiKey,
+  testSyncFolderPath: realTestSyncFolderPath,
   getLibrary: realGetLibrary,
   getVoices: realGetVoices,
   setVoicePin: realSetVoicePin,
@@ -3223,6 +3254,7 @@ const mock = {
   getUserSettings: mockGetUserSettings,
   putUserSettings: mockPutUserSettings,
   putGeminiKey: mockPutGeminiKey,
+  testSyncFolderPath: mockTestSyncFolderPath,
   getLibrary: mockGetLibrary,
   getVoices: mockGetVoices,
   setVoicePin: mockSetVoicePin,
