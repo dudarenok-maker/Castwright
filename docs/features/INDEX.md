@@ -99,6 +99,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [21 — Book library](21-book-library.md) — Workspace scan + status derivation.
 - [22 — Voice library](22-voice-library.md) — Cross-book voices view + pinning.
 - [36 — Book covers (OpenLibrary)](36-book-covers.md) — Real cover artwork on cards + Listen header; auto-fetch on import, manual picker on demand; gradient skeleton fallback.
+- [73 — Library search + per-book tag filter](73-library-search-tags.md) — Debounced title/author search input + tag-chip filter row in the library chrome; chip editor + suggestions dropdown in the EditBookMeta modal; tags persist to `BookStateJson.tags` and round-trip via the existing `slice: 'state'` PUT path.
 
 ### K. Cross-cutting invariants
 
