@@ -535,3 +535,185 @@ describe('POST /api/books/:bookId/generation — plan 70c auto-heal', () => {
     expect(ticks[0].errorReason as string).toMatch(/No analysed sentences cached/i);
   });
 });
+
+/* ── Plan 80 — regenerate applies manuscript-edits overlay before synth ──
+   The user edits per-sentence speaker attribution in the manuscript view;
+   those edits flush to manuscript-edits.json via PUT /state. Pre-fix, the
+   generation route loaded only the analysis cache (the analyzer's frozen
+   output) and never overlaid the edits, so regenerate rendered audio with
+   the original speakers — the user's reassignments never reached TTS.
+
+   Fix promotes rebuildCacheFromEdits from the plan-70c "cache empty"
+   auto-heal to "any edits exist" so synth always sees the canonical
+   post-edit sentence list. These tests pin that: a synth-args capture
+   asserts the synthesiseChapter receives the EDITED characterId / split
+   offspring, not the cached values. */
+describe('POST /api/books/:bookId/generation — plan 80 edits override cache', () => {
+  let editsPath: string;
+  let cacheModule: typeof import('../store/analysis-cache.js');
+  let fsModule: typeof import('node:fs');
+
+  beforeAll(async () => {
+    cacheModule = await import('../store/analysis-cache.js');
+    fsModule = await import('node:fs');
+    const { manuscriptEditsJsonPath } = await import('../workspace/paths.js');
+    editsPath = manuscriptEditsJsonPath(bookDir);
+  });
+
+  afterEach(async () => {
+    if (fsModule.existsSync(editsPath)) fsModule.rmSync(editsPath);
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, {
+      chapters: {
+        1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }],
+        2: [{ id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' }],
+      },
+    });
+    const audioRoot = join(bookDir, 'audio');
+    if (fsModule.existsSync(audioRoot))
+      fsModule.rmSync(audioRoot, { recursive: true, force: true });
+  });
+
+  it('passes the EDITED characterId to synth, not the cached one (regen-after-reassign)', async () => {
+    /* Cast has both narrator and ellie so the reassigned id resolves. */
+    fsModule.writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+          { id: 'ellie', name: 'Ellie', attributes: ['warm'] },
+        ],
+      }),
+    );
+    /* Cache says sentence 1 is the narrator — this is the stale analyzer
+       view that pre-fix regenerate would have synthesised. */
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, {
+      chapters: {
+        1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }],
+        2: [{ id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' }],
+      },
+    });
+    /* User opened the manuscript view and reassigned sentence 1 from
+       narrator to ellie. The manuscript persistence middleware flushed
+       the full sentence snapshot to manuscript-edits.json. */
+    fsModule.writeFileSync(
+      editsPath,
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'ellie', text: 'Hello.' },
+          { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+        ],
+      }),
+    );
+
+    /* Capture every call's sentences[] so we can assert what synth actually
+       received per chapter. */
+    const synthCallsByChapter: Record<number, Array<{ id: number; characterId: string }>> = {};
+    synthesiseImpl = async (args: unknown) => {
+      const a = args as {
+        sentences: Array<{ id: number; chapterId: number; characterId: string }>;
+      };
+      const ch = a.sentences[0]?.chapterId;
+      if (typeof ch === 'number') {
+        synthCallsByChapter[ch] = a.sentences.map((s) => ({
+          id: s.id,
+          characterId: s.characterId,
+        }));
+      }
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: a.sentences[0]?.characterId ?? 'narrator',
+            voiceName: 'Zephyr',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: a.sentences.map((s) => s.id),
+          },
+        ],
+      };
+    };
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+
+    /* The smoking-gun assertion: chapter 1's sentence 1 is rendered with
+       characterId 'ellie' (the user's edit), NOT 'narrator' (the stale
+       cache). Pre-fix this would have been 'narrator' and the user's
+       reassignment would have been silently discarded by synth. */
+    expect(synthCallsByChapter[1]).toEqual([{ id: 1, characterId: 'ellie' }]);
+    /* Chapter 2 had no edits to its existing sentence — confirms the
+       overlay doesn't accidentally rewrite untouched chapters. */
+    expect(synthCallsByChapter[2]).toEqual([{ id: 2, characterId: 'narrator' }]);
+  });
+
+  it('includes split-offspring sentences (ids above the cache max) in synth input', async () => {
+    /* User split sentence 1 of chapter 1 in the manuscript view; the split
+       offspring takes id maxId+1 (sentence 99 here — well above the cache's
+       max id of 2). Pre-fix regenerate would have iterated analysis.chapters
+       which only knows about the original sentence 1, dropping the split
+       half on the floor. Post-fix the rebuild from edits picks up both. */
+    fsModule.writeFileSync(
+      editsPath,
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' },
+          { id: 99, chapterId: 1, characterId: 'narrator', text: 'There.' },
+          { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+        ],
+      }),
+    );
+
+    const synthCallsByChapter: Record<number, number[]> = {};
+    synthesiseImpl = async (args: unknown) => {
+      const a = args as {
+        sentences: Array<{ id: number; chapterId: number; characterId: string }>;
+      };
+      const ch = a.sentences[0]?.chapterId;
+      if (typeof ch === 'number') synthCallsByChapter[ch] = a.sentences.map((s) => s.id);
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Zephyr',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: a.sentences.map((s) => s.id),
+          },
+        ],
+      };
+    };
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    /* Both ids reach synth, sorted ascending (rebuildCacheFromEdits sorts
+       per chapter — see analysis-cache-rebuild.ts:50-52). */
+    expect(synthCallsByChapter[1]).toEqual([1, 99]);
+  });
+
+  it('leaves the cache untouched when manuscript-edits.json is absent (rebuild skipped)', async () => {
+    /* Never-edited book — manuscript-edits.json doesn't exist, hasEdits
+       is false, rebuild is skipped, cache survives byte-for-byte. Guards
+       against accidentally clobbering a freshly-analysed book's cache
+       with whatever rebuild semantics happen to do on an empty file. */
+    /* Take a fingerprint of the cache before the request. */
+    const before = await cacheModule.loadAnalysisCache(MANUSCRIPT_ID);
+    const beforeJson = JSON.stringify(before.chapters);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+
+    const after = await cacheModule.loadAnalysisCache(MANUSCRIPT_ID);
+    expect(JSON.stringify(after.chapters)).toBe(beforeJson);
+  });
+});
