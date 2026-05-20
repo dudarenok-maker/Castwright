@@ -486,9 +486,9 @@ export function GenerationView({
   }, [activeChapters, manuscriptCounts]);
 
   return (
-    <div className="max-w-[1100px] mx-auto px-6 py-10">
-      <div className="mb-8 flex items-end justify-between gap-6 flex-wrap">
-        <div>
+    <div className="max-w-[1100px] mx-auto px-4 sm:px-6 py-6 sm:py-10">
+      <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-end md:justify-between gap-4 sm:gap-6 md:flex-wrap">
+        <div className="min-w-0">
           <SectionLabel>Audiobook generation</SectionLabel>
           <div className="mt-4">
             <MixedHeading regular="Generating" bold={title || 'your audiobook'} level="h1" />
@@ -545,16 +545,17 @@ export function GenerationView({
             </p>
           )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
           {/* Once the queue is fully drained the Pause/Resume toggle has
               nothing to pause or resume. Swap it for a Regenerate entry-point
               that opens the existing modal targeted at chapter 1 — the user
               picks scope="This and all subsequent" there to redo the whole
-              book, or sticks to a single chapter. */}
+              book, or sticks to a single chapter. min-h-[44px] hits the
+              ≥44px touch-target rule on phone. */}
           {allComplete ? (
             <button
               onClick={onRegenerateBook}
-              className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+              className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
             >
               <IconRefresh className="w-4 h-4" /> Regenerate
             </button>
@@ -567,7 +568,7 @@ export function GenerationView({
                 if (paused) reverseGuard(() => setPaused(false));
                 else setPaused(true);
               }}
-              className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+              className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
             >
               {paused ? (
                 <>
@@ -592,7 +593,8 @@ export function GenerationView({
           </div>
           <button
             onClick={() => dispatch(chaptersActions.clearLastError())}
-            className="p-1.5 rounded-full text-rose-600/70 hover:text-rose-700 hover:bg-rose-100"
+            aria-label="Dismiss generation error"
+            className="grid place-items-center w-11 h-11 rounded-full text-rose-600/70 hover:text-rose-700 hover:bg-rose-100"
           >
             <IconClose className="w-4 h-4" />
           </button>
@@ -635,7 +637,7 @@ export function GenerationView({
           <button
             type="button"
             onClick={() => setBulkRegenOpen(true)}
-            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-900/90 text-white text-xs font-semibold hover:bg-amber-900 transition-colors"
+            className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-3 py-1.5 rounded-full bg-amber-900/90 text-white text-xs font-semibold hover:bg-amber-900 transition-colors"
           >
             <IconRefresh className="w-3.5 h-3.5" /> Regenerate all
           </button>
@@ -685,7 +687,7 @@ export function GenerationView({
         onClose={() => setBulkRegenOpen(false)}
       />
 
-      <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 mb-8">
+      <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-4 sm:p-6 mb-6 sm:mb-8">
         <div className="flex items-center justify-between mb-3">
           <p className="text-sm font-semibold text-ink">Overall progress</p>
           <span className="text-sm font-bold text-ink tabular-nums">
@@ -700,7 +702,9 @@ export function GenerationView({
             {!paused && <div className="absolute inset-0 stripe-travel" />}
           </div>
         </div>
-        <div className="mt-4 grid grid-cols-4 gap-4 pt-4 border-t border-ink/10">
+        {/* 2×2 grid on phone (gap-3 keeps the numbers from jamming together
+            at 375px), revert to four columns on sm and up. */}
+        <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 pt-4 border-t border-ink/10">
           <Stat label="Completed" value={completed} />
           <Stat label="In progress" value={inProgressCnt} />
           <Stat label="Queued" value={queued} />
@@ -708,7 +712,13 @@ export function GenerationView({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+      {/* Wave-3 responsive layout: single column on phone + tablet (chapter
+          list owns the whole width — Activity panel becomes a stacked footer
+          card below), two-column with a narrower 280px side panel on `md:`
+          tablets in landscape, full 320px sidebar restored on `lg:` desktop.
+          Activity panel ordering swaps so the chapter list always stays
+          first under the page header on every viewport. */}
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_280px] lg:grid-cols-[1fr_320px] gap-4 sm:gap-6">
         <div className="space-y-3 min-w-0">
           {chapters.map((ch) => (
             <ChapterRow
@@ -762,10 +772,10 @@ export function GenerationView({
         </aside>
       </div>
 
-      <div className="mt-10 pt-6 border-t border-ink/10 flex items-center justify-between text-xs text-ink/50 flex-wrap gap-3">
-        <div className="flex items-center gap-6 flex-wrap">
+      <div className="mt-8 sm:mt-10 pt-6 border-t border-ink/10 flex items-center justify-between text-xs text-ink/50 flex-wrap gap-3">
+        <div className="flex items-center gap-3 sm:gap-6 flex-wrap">
           <span>Output: MP3 (VBR V2)</span>
-          <span>·</span>
+          <span className="hidden sm:inline">·</span>
           <span>
             Runtime so far:{' '}
             <span className="tabular-nums text-ink/70">
@@ -991,7 +1001,7 @@ function ChapterRow({
     >
       <button
         onClick={onToggle}
-        className="w-full grid grid-cols-[32px_52px_minmax(0,1fr)_120px_64px_92px_20px] items-center gap-3 px-5 py-4 text-left"
+        className="w-full grid grid-cols-[24px_44px_minmax(0,1fr)_auto_20px] sm:grid-cols-[32px_52px_minmax(0,1fr)_120px_64px_92px_20px] items-center gap-2 sm:gap-3 px-4 sm:px-5 py-4 min-h-[44px] text-left"
       >
         <span className="grid place-items-center">{stateConfig.icon}</span>
         <span className="text-sm font-bold text-ink/50 tabular-nums">
@@ -1039,13 +1049,20 @@ function ChapterRow({
             )
           )}
         </span>
-        <ChapterProgressBar
-          progress={chapter.progress}
-          state={chapter.state}
-          paused={paused}
-          assembling={assembling}
-        />
-        <span className="text-sm tabular-nums text-ink/60 text-right">
+        {/* Progress bar + duration are desktop-only cells; on phone (<sm)
+            the chapter row is icon · CH · title · badge · chevron. The
+            collapsed-row progress + duration affordances live in the chapter
+            list anyway (the row's status icon + badge already convey the
+            state) — full progress/duration return on `sm:` and up. */}
+        <span className="hidden sm:block">
+          <ChapterProgressBar
+            progress={chapter.progress}
+            state={chapter.state}
+            paused={paused}
+            assembling={assembling}
+          />
+        </span>
+        <span className="hidden sm:block text-sm tabular-nums text-ink/60 text-right">
           {chapter.state === 'in_progress' && liveTotal > 0 ? (
             <span className="text-magenta">
               {liveCurrent}/{liveTotal}
@@ -1071,21 +1088,24 @@ function ChapterRow({
               e.stopPropagation();
               onRegenerate(chapter);
             }}
-            className="shrink-0 inline-flex items-center gap-1.5 text-xs font-semibold text-rose-700 hover:text-rose-900 transition-colors"
+            className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-rose-700 hover:text-rose-900 transition-colors"
           >
             <IconRefresh className="w-3.5 h-3.5" /> Retry
           </button>
         </div>
       )}
       {(chapter.state === 'done' || (chapter.state === 'failed' && !chapter.errorReason)) && (
-        <div className="px-6 pb-4 -mt-2 flex justify-end items-center gap-3">
+        /* Action row wraps on phone (was a single overflowing row); each
+            button gets min-h + tap padding so the touch target hits ≥44px
+            without changing the visual size of the labels on desktop. */
+        <div className="px-4 sm:px-6 pb-3 sm:pb-4 -mt-2 flex flex-wrap justify-end items-center gap-x-3 gap-y-1">
           {chapter.state === 'done' && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 onPreview(chapter.id);
               }}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/70 hover:text-ink transition-colors"
+              className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/70 hover:text-ink transition-colors"
             >
               <IconPlay className="w-3.5 h-3.5" /> Preview
             </button>
@@ -1097,7 +1117,7 @@ function ChapterRow({
             }}
             data-testid={`chapter-row-${chapter.id}-rename`}
             aria-label={`Rename chapter ${chapter.id}`}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
           >
             <IconPencil className="w-3.5 h-3.5" /> Rename
           </button>
@@ -1106,7 +1126,7 @@ function ChapterRow({
               e.stopPropagation();
               onRegenerate(chapter);
             }}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
           >
             <IconRefresh className="w-3.5 h-3.5" />{' '}
             {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
@@ -1116,7 +1136,7 @@ function ChapterRow({
               e.stopPropagation();
               onToggleExcluded(chapter.id, true);
             }}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/45 hover:text-ink/70 transition-colors"
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/45 hover:text-ink/70 transition-colors"
             title="Skip this chapter — no audio will be generated for it."
           >
             <IconClose className="w-3.5 h-3.5" /> Exclude
@@ -1128,7 +1148,7 @@ function ChapterRow({
           arrow already invites interaction; putting the link in the
           expanded view keeps the collapsed row visually clean. */}
       {expanded && (chapter.state === 'queued' || chapter.state === 'in_progress') && (
-        <div className="px-6 -mt-3 flex justify-end items-center gap-3">
+        <div className="px-4 sm:px-6 -mt-3 flex flex-wrap justify-end items-center gap-x-3 gap-y-1">
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -1136,7 +1156,7 @@ function ChapterRow({
             }}
             data-testid={`chapter-row-${chapter.id}-rename`}
             aria-label={`Rename chapter ${chapter.id}`}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
           >
             <IconPencil className="w-3.5 h-3.5" /> Rename
           </button>
@@ -1146,7 +1166,7 @@ function ChapterRow({
               onToggleExcluded(chapter.id, true);
             }}
             disabled={chapter.state === 'in_progress'}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/45 hover:text-ink/70 disabled:opacity-40 transition-colors"
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/45 hover:text-ink/70 disabled:opacity-40 transition-colors"
             title={
               chapter.state === 'in_progress'
                 ? 'Pause first, then you can exclude this chapter.'
@@ -1158,8 +1178,12 @@ function ChapterRow({
         </div>
       )}
       {expanded && (
-        <div className="px-5 pb-5 pt-1 fade-in">
-          <div className="ml-[60px] pl-4 border-l border-ink/10 space-y-2">
+        <div className="px-4 sm:px-5 pb-5 pt-1 fade-in">
+          {/* On phone the 60px gutter (designed to align under the chapter
+              icon + CH label) eats too much of the 375px width — drop it
+              and rely on the left border for hierarchy. Desktop keeps the
+              gutter. */}
+          <div className="ml-0 sm:ml-[60px] pl-3 sm:pl-4 border-l border-ink/10 space-y-2">
             {Object.entries(chapter.characters).map(([cid, status]) => {
               const c = findChar(cid);
               const stat = charStats?.[cid];
@@ -1189,10 +1213,14 @@ function ChapterRow({
               return (
                 <div
                   key={cid}
-                  className="grid grid-cols-[20px_1fr_140px_128px_28px] items-center gap-4 py-1.5 text-sm group"
+                  className="grid grid-cols-[16px_minmax(0,1fr)_auto_44px] sm:grid-cols-[20px_1fr_140px_128px_28px] items-center gap-2 sm:gap-4 py-1.5 text-sm group"
                 >
                   <ColorDot color={c.color as CharColor} size={8} />
-                  <span className="min-w-0 flex items-baseline gap-2">
+                  {/* Name + line/word stat row: stacks vertically on phone
+                      (truncated names + their stat get a guaranteed row
+                      each), inline-baseline on sm+ for the original
+                      ≥640px shape. */}
+                  <span className="min-w-0 flex flex-col sm:flex-row sm:items-baseline sm:gap-2">
                     <span className="font-medium text-ink/90 truncate">{c.name}</span>
                     {stat && (
                       <span className="text-[11px] text-ink/40 tabular-nums shrink-0">
@@ -1201,12 +1229,18 @@ function ChapterRow({
                       </span>
                     )}
                   </span>
-                  <CharStatusBar
-                    status={status}
-                    fraction={fraction}
-                    fullyDone={fullyDone}
-                    paused={paused}
-                  />
+                  {/* Per-character progress bar is desktop-only (sm+). On
+                      phone the status text + numeric ratio at the right is
+                      enough; the bar requires its own grid column which
+                      would force the row to overflow at 375px. */}
+                  <span className="hidden sm:block">
+                    <CharStatusBar
+                      status={status}
+                      fraction={fraction}
+                      fullyDone={fullyDone}
+                      paused={paused}
+                    />
+                  </span>
                   <span className="text-xs text-ink/50 capitalize text-right tabular-nums">
                     {status === 'failed' ? (
                       <span className="text-rose-600 font-medium">Failed</span>
@@ -1236,13 +1270,18 @@ function ChapterRow({
                     )}
                   </span>
                   {status !== 'skipped' && (
+                    /* Hover-reveal is desktop-only; on touch (`hover: none`)
+                        the button stays visible so users can actually reach it.
+                        Touch target hits 44×44 via min-w/min-h on phone, while
+                        desktop keeps the compact 28px hover-revealed swatch. */
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         onRegenerateCharacterInChapter(cid, chapter.id);
                       }}
                       title={`Regenerate ${c.name} in this chapter`}
-                      className="opacity-0 group-hover:opacity-100 text-ink/40 hover:text-magenta grid place-items-center w-7 h-7 rounded-full hover:bg-ink/[0.06] transition-all"
+                      aria-label={`Regenerate ${c.name} in this chapter`}
+                      className="sm:opacity-0 sm:group-hover:opacity-100 text-ink/40 hover:text-magenta grid place-items-center min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:w-7 sm:h-7 rounded-full hover:bg-ink/[0.06] transition-all"
                     >
                       <IconRefresh className="w-3.5 h-3.5" />
                     </button>
@@ -1315,7 +1354,7 @@ function ExcludedChapterRow({
 
   return (
     <div className="rounded-3xl border border-ink/10 bg-ink/[0.03] overflow-hidden">
-      <div className="grid grid-cols-[32px_52px_minmax(0,1fr)_auto] items-center gap-3 px-5 py-3">
+      <div className="grid grid-cols-[24px_44px_minmax(0,1fr)_auto] sm:grid-cols-[32px_52px_minmax(0,1fr)_auto] items-center gap-2 sm:gap-3 px-4 sm:px-5 py-3">
         <span className="grid place-items-center text-ink/30">
           <span className="w-4 h-4 rounded-full border border-ink/15" />
         </span>
@@ -1344,7 +1383,7 @@ function ExcludedChapterRow({
           <button
             type="button"
             onClick={() => onCancelSubset(chapter.id)}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
           >
             Cancel
           </button>
@@ -1352,7 +1391,7 @@ function ExcludedChapterRow({
           <button
             type="button"
             onClick={() => onRetrySubset(chapter.id)}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
           >
             <IconRefresh className="w-3.5 h-3.5" /> Retry
           </button>
@@ -1360,7 +1399,7 @@ function ExcludedChapterRow({
           <button
             type="button"
             onClick={() => onIncludeClick(chapter.id)}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
           >
             + Include in book
           </button>
