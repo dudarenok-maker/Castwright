@@ -272,20 +272,26 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     return res.end();
   }
 
-  let analysis = await loadAnalysisCache(state.manuscriptId);
-  if (!analysis.chapters || Object.keys(analysis.chapters).length === 0) {
-    /* Plan 70c — a merge/split/reorder under the pre-fix code wiped the
-       cache. manuscript-edits.json still has every sentence with its
-       characterId + text, so try to rebuild silently before halting. The
-       second load picks up the rebuilt cache; the second emptiness check
-       below catches the genuine never-analysed case. */
-    await rebuildCacheFromEdits(state.manuscriptId, manuscriptEditsJsonPath(bookDir)).catch(
-      (e) => {
-        console.error('[generation] auto-heal cache rebuild failed', e);
-      },
-    );
-    analysis = await loadAnalysisCache(state.manuscriptId);
+  /* Plan 80 — manuscript-edits.json is the canonical post-analysis sentence
+     list: it carries every per-sentence characterId reassignment the user
+     has made in the manuscript view, every split-offspring sentence (ids
+     above the analyzer's max), and every cross-chapter remap from
+     merge/split/reorder. The analysis cache is the analyzer's frozen
+     output — it lags any edit the user has made. When edits exist they
+     always win, so we rebuild the cache from edits before synth.
+     Subsumes the post-merge auto-heal path from plan 70c (that path was
+     a strict subset: "cache empty AND edits exist") and additionally
+     covers the regenerate-after-speaker-edit case that 70c missed. */
+  const editsPath = manuscriptEditsJsonPath(bookDir);
+  const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath);
+  const hasEdits =
+    Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0;
+  if (hasEdits) {
+    await rebuildCacheFromEdits(state.manuscriptId, editsPath).catch((e) => {
+      console.error('[generation] rebuild cache from edits failed', e);
+    });
   }
+  const analysis = await loadAnalysisCache(state.manuscriptId);
   if (!analysis.chapters || Object.keys(analysis.chapters).length === 0) {
     send({
       type: 'chapter_failed',
