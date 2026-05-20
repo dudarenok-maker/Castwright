@@ -80,12 +80,12 @@ export function ListenDownloadSection({
         onRemove={onRemoveExport}
       />
 
-      <section className="mb-12">
+      <section className="mb-8 md:mb-12">
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <SectionLabel>Or download a file</SectionLabel>
           <span className="text-xs text-ink/50">For sideloading or archival</span>
         </div>
-        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
           <DownloadCard
             title="Full audiobook"
             format="m4b chaptered"
@@ -146,7 +146,7 @@ function DownloadCard({
   const live = onDownload != null;
   return (
     <div
-      className="rounded-3xl border p-6 transition-all bg-white border-ink/10 shadow-card relative"
+      className="rounded-3xl border p-4 sm:p-6 transition-all bg-white border-ink/10 shadow-card relative"
       data-testid={testid}
     >
       <div className="flex items-start justify-between mb-3">
@@ -165,8 +165,8 @@ function DownloadCard({
         title={live ? 'Download' : 'Download — coming soon'}
         className={
           live
-            ? 'w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-ink text-canvas hover:bg-ink/90'
-            : 'w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-ink/[0.03] text-ink/40 cursor-not-allowed'
+            ? 'min-h-[44px] w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors bg-ink text-canvas hover:bg-ink/90'
+            : 'min-h-[44px] w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors bg-ink/[0.03] text-ink/40 cursor-not-allowed'
         }
       >
         <IconDownload className="w-4 h-4" /> Download
@@ -213,7 +213,7 @@ function ListenerApps({
     audiobookshelf: onOpenAudiobookshelfExport,
   };
   return (
-    <section className="mb-12">
+    <section className="mb-8 md:mb-12">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <SectionLabel>Listen on your favourite app</SectionLabel>
         <span className="text-xs text-ink/50 inline-flex items-center gap-1.5">
@@ -224,7 +224,7 @@ function ListenerApps({
         direct handoff to other apps is coming soon. PocketBook, Voice, Smart AudioBook Player,
         BookPlayer, and Audiobookshelf are live — click any to sideload.
       </MockedPreviewBanner>
-      <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
         {SUPPORTED_APPS.map((a) => (
           <ListenerAppCard
             key={a.id}
@@ -260,7 +260,7 @@ function ListenerAppCard({ app, onSend: _onSend, onOpenLiveExport }: ListenerApp
   return (
     <article
       data-testid={`listener-app-${app.id}`}
-      className="bg-white rounded-3xl border border-ink/10 shadow-card p-5 flex flex-col"
+      className="bg-white rounded-3xl border border-ink/10 shadow-card p-4 sm:p-5 flex flex-col"
     >
       <div className="flex items-start gap-3 mb-3">
         <span
@@ -287,7 +287,7 @@ function ListenerAppCard({ app, onSend: _onSend, onOpenLiveExport }: ListenerApp
         <button
           onClick={onOpenLiveExport}
           data-testid={`listener-app-action-${app.id}`}
-          className="w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-ink text-canvas hover:bg-ink-soft"
+          className="min-h-[44px] w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors bg-ink text-canvas hover:bg-ink-soft"
         >
           <IconExternal className="w-4 h-4" /> {app.sendVerb}
         </button>
@@ -296,7 +296,7 @@ function ListenerAppCard({ app, onSend: _onSend, onOpenLiveExport }: ListenerApp
           disabled
           title={`${app.sendVerb} — coming soon`}
           data-testid={`listener-app-action-${app.id}`}
-          className="w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-ink/[0.03] text-ink/40 cursor-not-allowed"
+          className="min-h-[44px] w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors bg-ink/[0.03] text-ink/40 cursor-not-allowed"
         >
           <IconExternal className="w-4 h-4" /> {app.sendVerb}
         </button>
@@ -331,15 +331,15 @@ function ExportQueue({
     { id: 'failed', label: `Failed (${counts.failed})` },
   ];
   return (
-    <section className="mb-12">
+    <section className="mb-8 md:mb-12">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <SectionLabel>Export queue</SectionLabel>
-        <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
+        <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs flex-wrap">
           {filters.map((f) => (
             <button
               key={f.id}
               onClick={() => setFilter(f.id)}
-              className={`px-3 py-1 rounded-full font-medium transition-colors ${filter === f.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}
+              className={`min-h-[32px] px-3 py-1.5 rounded-full font-medium transition-colors ${filter === f.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}
             >
               {f.label}
             </button>
