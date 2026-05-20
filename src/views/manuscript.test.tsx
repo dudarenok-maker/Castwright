@@ -366,6 +366,7 @@ describe('ManuscriptView — cross-chapter reassign isolation', () => {
           sourceText: null,
           sentences: twoChapterSentences,
           importCandidate: null,
+          pendingReupload: null,
         },
       },
     });

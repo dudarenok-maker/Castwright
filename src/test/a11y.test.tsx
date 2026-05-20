@@ -13,6 +13,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render } from '@testing-library/react';
 import { axe } from 'jest-axe';
+import { MemoryRouter } from 'react-router-dom';
 
 import { BookLibraryView } from '../views/book-library';
 import { UploadView } from '../views/upload';
@@ -196,7 +197,9 @@ describe('a11y — upload view', () => {
     });
     const { container } = render(
       <Provider store={store}>
-        <UploadView />
+        <MemoryRouter>
+          <UploadView />
+        </MemoryRouter>
       </Provider>,
     );
     expect(await axe(container, AXE_OPTS)).toHaveNoViolations();

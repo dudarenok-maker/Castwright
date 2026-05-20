@@ -43,6 +43,7 @@ function makeStore({
     selectedModelExplicit: false,
     ttsModelKeyExplicit: false,
     themeOverride,
+    reuploadingBookId: null,
   };
   const accountPreloaded: AccountState = {
     ...FRONTEND_ACCOUNT_DEFAULTS,

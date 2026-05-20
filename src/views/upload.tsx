@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { IconUpload, IconSpinner } from '../lib/icons';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
 import { api } from '../lib/api';
@@ -9,13 +10,34 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
+import { ManuscriptDiffModal } from '../components/manuscript-diff';
+import {
+  diffSentenceArrays,
+  splitIntoSentences,
+} from '../lib/manuscript-diff';
+import type { Sentence } from '../lib/types';
 
 const TEXT_EXT_RE = /\.(md|markdown|txt|text)$/i;
 const BINARY_EXT_RE = /\.(pdf|epub|mobi|azw3)$/i;
 
 export function UploadView() {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const selectedModel = useAppSelector((s) => s.ui.selectedModel);
+  /* Plan 74 — re-upload mode is signalled by ui-slice.reuploadingBookId.
+     When set, we route the import through the diff modal instead of
+     ConfirmMetadata + a fresh analysis run. */
+  const reuploadingBookId = useAppSelector((s) => s.ui.reuploadingBookId);
+  const manuscript = useAppSelector((s) => s.manuscript);
+  const library = useAppSelector((s) => s.library.books);
+  const reuploadBook = useMemo(
+    () =>
+      reuploadingBookId != null
+        ? (library.find((b) => b.bookId === reuploadingBookId) ?? null)
+        : null,
+    [library, reuploadingBookId],
+  );
+  const isReuploading = reuploadingBookId != null;
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,12 +56,79 @@ export function UploadView() {
     setBusy(true);
     try {
       const res = await api.importManuscript(args);
+      if (isReuploading && reuploadingBookId) {
+        /* Plan 74 — re-upload branch. Skip ConfirmMetadata; build a
+           lightweight sentence array from the candidate sourceText
+           via the client splitter (the server's authoritative splitter
+           runs at analyse time, not here — for the diff display we
+           only need rough boundaries the user can recognise). The
+           sentences are stamped into chapterId=0 because the diff
+           modal indexes by position, not chapter — the analyser will
+           re-chapter on Apply. */
+        const candidateText = res.candidate.sourceText ?? '';
+        const sentenceTexts = splitIntoSentences(candidateText);
+        const newSentences: Sentence[] = sentenceTexts.map((text, i) => ({
+          id: i + 1,
+          chapterId: 0,
+          text,
+          characterId: 'narrator',
+        }));
+        dispatch(
+          manuscriptActions.previewReuploadDiff({
+            bookId: reuploadingBookId,
+            newSourceText: candidateText,
+            newSentences,
+            newWordCount: res.candidate.wordCount ?? 0,
+            newTitle: res.candidate.title ?? null,
+            newFormat: res.candidate.format ?? null,
+          }),
+        );
+        setBusy(false);
+        return;
+      }
       dispatch(manuscriptActions.setImportCandidate({ tempId: res.tempId, ...res.candidate }));
     } catch (e) {
       setError((e as Error)?.message || 'Import failed.');
       setBusy(false);
     }
   }
+
+  /* Plan 74 — diff modal Apply path: commit the new manuscript into
+     the slice, clear the re-upload flag, then navigate back to the
+     book's listen view. Re-analysis routing is intentionally left to
+     a follow-up (the existing reanalyse confirm flow handles that
+     when the user wants to re-run the analyzer). The slice update is
+     sufficient for the v1 acceptance criteria — surface what changed,
+     commit on confirm. */
+  function handleDiffApply() {
+    dispatch(manuscriptActions.applyReupload());
+    if (reuploadingBookId) {
+      dispatch(uiActions.clearReupload());
+      navigate(`/books/${encodeURIComponent(reuploadingBookId)}/listen`);
+    } else {
+      dispatch(uiActions.clearReupload());
+    }
+  }
+
+  function handleDiffDiscard() {
+    dispatch(manuscriptActions.discardReupload());
+    if (reuploadingBookId) {
+      dispatch(uiActions.clearReupload());
+      navigate(`/books/${encodeURIComponent(reuploadingBookId)}/listen`);
+    } else {
+      dispatch(uiActions.clearReupload());
+    }
+  }
+
+  /* Memo the diff result so the modal doesn't recompute on every
+     re-render. The diff input is stable across renders once
+     pendingReupload is set — capture both sides and run LCS once. */
+  const diffEntries = useMemo(() => {
+    if (!manuscript.pendingReupload) return [];
+    const oldSentenceTexts = manuscript.pendingReupload.oldSnapshot.sentences.map((s) => s.text);
+    const newSentenceTexts = manuscript.pendingReupload.newCandidate.sentences.map((s) => s.text);
+    return diffSentenceArrays(oldSentenceTexts, newSentenceTexts);
+  }, [manuscript.pendingReupload]);
 
   /* Wrap processUpload in the guard. If the user cancels at the prompt,
      `busy` never flips and the upload screen stays interactive. */
@@ -78,14 +167,57 @@ export function UploadView() {
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-90 pointer-events-none" />
       <div className="relative max-w-3xl w-full">
         <div className="text-center mb-10">
-          <SectionLabel>Start a new project</SectionLabel>
+          <SectionLabel>
+            {isReuploading ? 'Replace manuscript' : 'Start a new project'}
+          </SectionLabel>
           <div className="mt-5">
-            <MixedHeading level="h1" regular="Drop your manuscript to" bold="meet the cast" />
+            {isReuploading ? (
+              <MixedHeading
+                level="h1"
+                regular="Drop the revised manuscript to"
+                bold="see what changed"
+              />
+            ) : (
+              <MixedHeading level="h1" regular="Drop your manuscript to" bold="meet the cast" />
+            )}
           </div>
           <p className="mt-4 text-lg text-ink/70">
-            We'll read the book, find every speaking character, and synthesise a voice profile for
-            each one — generated from the prose, not picked from a list.
+            {isReuploading ? (
+              <>
+                We'll diff the new text against the existing manuscript
+                {reuploadBook?.title ? (
+                  <>
+                    {' '}
+                    for{' '}
+                    <span className="font-semibold text-ink" data-testid="reupload-book-title">
+                      {reuploadBook.title}
+                    </span>
+                  </>
+                ) : null}{' '}
+                — review changes before applying.
+              </>
+            ) : (
+              <>
+                We'll read the book, find every speaking character, and synthesise a voice
+                profile for each one — generated from the prose, not picked from a list.
+              </>
+            )}
           </p>
+          {isReuploading && (
+            <button
+              type="button"
+              onClick={() => {
+                dispatch(uiActions.clearReupload());
+                if (reuploadingBookId) {
+                  navigate(`/books/${encodeURIComponent(reuploadingBookId)}/listen`);
+                }
+              }}
+              data-testid="reupload-cancel"
+              className="mt-4 text-xs text-ink/60 hover:text-ink underline"
+            >
+              Cancel re-upload
+            </button>
+          )}
         </div>
 
         <div className="mb-5 flex items-center justify-center gap-3 text-sm">
@@ -205,6 +337,17 @@ export function UploadView() {
         </p>
       </div>
       {guardModal}
+      {/* Plan 74 — diff modal mounted whenever the slice carries a
+         pending re-upload, regardless of how this view was reached.
+         Discard restores the OLD manuscript state (snapshot); Apply
+         promotes the new candidate into the live slice fields. */}
+      <ManuscriptDiffModal
+        open={manuscript.pendingReupload != null}
+        bookTitle={reuploadBook?.title ?? manuscript.title}
+        diff={diffEntries}
+        onApply={handleDiffApply}
+        onDiscard={handleDiffDiscard}
+      />
     </div>
   );
 }
