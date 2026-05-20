@@ -62,6 +62,12 @@ export function CastView({
   });
   const [draggingVoiceId, setDraggingVoiceId] = useState<string | null>(null);
   const [dropTargetCharId, setDropTargetCharId] = useState<string | null>(null);
+  /* Plan 81 wave 4 — touch-friendly assignment mode (additive to drag-drop).
+     When a user taps "Assign" on a voice card, assigningVoice holds the
+     captured voice; tapping any character row applies it via the same
+     handleDrop code path. Cancelled via the sticky banner's Cancel button,
+     by tapping the same Assign pill again, or by completing the assignment. */
+  const [assigningVoice, setAssigningVoice] = useState<Voice | null>(null);
   const [selectedCharIds, setSelectedCharIds] = useState<string[]>([]);
   const [compareIds, setCompareIds] = useState<[string, string] | null>(null);
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
@@ -139,10 +145,7 @@ export function CastView({
     }
   }
 
-  function handleDrop(charId: string) {
-    if (!draggingVoiceId) return;
-    const voice = findVoice(draggingVoiceId);
-    if (!voice) return;
+  function applyVoiceToCharacter(charId: string, voice: Voice) {
     setCharacters((prev) =>
       prev.map((c) =>
         c.id === charId
@@ -159,8 +162,31 @@ export function CastView({
           : c,
       ),
     );
+  }
+
+  function handleDrop(charId: string) {
+    if (!draggingVoiceId) return;
+    const voice = findVoice(draggingVoiceId);
+    if (!voice) return;
+    applyVoiceToCharacter(charId, voice);
     setDraggingVoiceId(null);
     setDropTargetCharId(null);
+  }
+
+  /* Plan 81 wave 4 — touch-friendly handler. Fires when the user taps a
+     character row while assignment mode is active. Same write semantics
+     as handleDrop, then clears assignment mode. */
+  function handleTapAssignTarget(charId: string) {
+    if (!assigningVoice) return;
+    applyVoiceToCharacter(charId, assigningVoice);
+    setAssigningVoice(null);
+  }
+
+  /* Toggle handler from voice-library-panel's "Assign" pill. Tapping the
+     pill on the active voice cancels (sets back to null); tapping it on
+     a different voice swaps to that voice. */
+  function handleTapAssignToggle(voice: Voice) {
+    setAssigningVoice((prev) => (prev?.id === voice.id ? null : voice));
   }
 
   /* Plan 81 wave 3 — responsive layout split:
@@ -177,6 +203,33 @@ export function CastView({
       <div className="lg:col-span-full -mb-2">
         <StaleAudioBanner />
       </div>
+      {/* Plan 81 wave 4 — sticky assignment-mode banner. Visible whenever
+          the user has tapped "Assign" on a voice card. Tapping any
+          character row applies the voice; the banner clears on success
+          or via the explicit Cancel button. */}
+      {assigningVoice && (
+        <div
+          data-testid="tap-assign-banner"
+          className="lg:col-span-full sticky top-16 z-30 mx-auto w-full max-w-[1500px] -mb-2"
+        >
+          <div className="m-2 sm:m-4 rounded-2xl bg-magenta text-white shadow-float px-4 py-3 flex items-center gap-3">
+            <span className="text-sm font-semibold flex-1 min-w-0 truncate">
+              Assigning{' '}
+              <span className="underline decoration-white/40 underline-offset-2">
+                {assigningVoice.character}
+              </span>
+              {' — '}tap a character row to apply.
+            </span>
+            <button
+              type="button"
+              onClick={() => setAssigningVoice(null)}
+              className="shrink-0 min-h-[44px] px-3 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-semibold"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       <div>
         <div className="mb-6 md:mb-8 flex items-end justify-between gap-4 md:gap-6 flex-wrap">
           <div className="min-w-0">
@@ -302,7 +355,13 @@ export function CastView({
                   e.preventDefault();
                   handleDrop(c.id);
                 }}
-                onClick={() => onOpenProfile(c.id)}
+                onClick={() => {
+                  if (assigningVoice) {
+                    handleTapAssignTarget(c.id);
+                    return;
+                  }
+                  onOpenProfile(c.id);
+                }}
                 className={`w-full grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] px-6 py-4 items-center text-left text-sm hover:bg-ink/[0.02] transition-colors cursor-pointer ${i < filtered.length - 1 ? 'border-b border-ink/5' : ''} ${isDropTarget ? 'drop-active' : ''} ${selectedCharIds.includes(c.id) ? 'bg-peach/[0.04]' : ''}`}
               >
                 <span
@@ -485,7 +544,13 @@ export function CastView({
                   e.preventDefault();
                   handleDrop(c.id);
                 }}
-                onClick={() => onOpenProfile(c.id)}
+                onClick={() => {
+                  if (assigningVoice) {
+                    handleTapAssignTarget(c.id);
+                    return;
+                  }
+                  onOpenProfile(c.id);
+                }}
                 className={`bg-white rounded-2xl border border-ink/10 shadow-card p-4 flex flex-col gap-3 text-left cursor-pointer transition-colors ${isDropTarget ? 'drop-active' : ''} ${selected ? 'bg-peach/[0.04]' : ''}`}
               >
                 <div className="flex items-start gap-3">
@@ -736,6 +801,8 @@ export function CastView({
             onPlaySample={(c, v) => {
               void playSampleFor(c, v);
             }}
+            onTapAssign={handleTapAssignToggle}
+            assigningVoiceId={assigningVoice?.id ?? null}
           />
         </aside>
       )}
@@ -788,6 +855,16 @@ export function CastView({
                   void playSampleFor(c, v);
                 }}
                 displayMode="sheet"
+                onTapAssign={(v) => {
+                  /* Capture the voice and close the sheet so the user
+                     can see + tap the character rows below. The sticky
+                     assignment banner stays visible regardless. */
+                  handleTapAssignToggle(v);
+                  if (!assigningVoice || assigningVoice.id !== v.id) {
+                    setShowLibrary(false);
+                  }
+                }}
+                assigningVoiceId={assigningVoice?.id ?? null}
               />
             </div>
           </div>

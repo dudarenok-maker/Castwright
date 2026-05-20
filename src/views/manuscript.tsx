@@ -5,7 +5,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type MouseEvent,
   type ReactNode,
   type RefObject,
 } from 'react';
@@ -184,10 +183,25 @@ export function ManuscriptView({
 
   const findChar = useCallback((id: string) => characters.find((c) => c.id === id), [characters]);
 
-  const onBoundaryMouseDown = (boundaryIdx: number, e: MouseEvent) => {
+  /* Plan 81 wave 4 — pointer events instead of mouse events so phone +
+     tablet touch drives the same boundary-move flow. PointerEvent
+     normalises mouse + touch + pen into one handler; the underlying
+     state machine (setDrag, candidateSentenceIdx, commitBoundaryMove)
+     stays unchanged. setPointerCapture pins all subsequent move/up
+     events to the originating element so the user can drag past the
+     viewport edge on a phone without losing the gesture. */
+  const onBoundaryPointerDown = (boundaryIdx: number, e: React.PointerEvent) => {
     e.preventDefault();
     setDrag({ boundaryIdx, anchorY: e.clientY, candidateSentenceIdx: null });
     document.body.classList.add('dragging-boundary');
+    /* Capture the pointer on the source element so subsequent events
+       fire there even if the pointer moves past the viewport. Safe on
+       all PointerEvent-capable browsers; harmless if it throws. */
+    try {
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+    } catch {
+      /* Older browsers may throw on capture — fall through gracefully. */
+    }
   };
 
   function commitBoundaryMove(d: Drag) {
@@ -221,7 +235,10 @@ export function ManuscriptView({
 
   useEffect(() => {
     if (!drag) return;
-    const onMove = (e: globalThis.MouseEvent) => {
+    /* Plan 81 wave 4 — pointer events fire for mouse + touch + pen.
+       Touch users need pointermove + pointerup to drive the same
+       candidate-sentence detection the mouse path used. */
+    const onMove = (e: globalThis.PointerEvent) => {
       const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
       const sentenceEl = el?.closest?.('[data-sentence-idx]') as HTMLElement | null;
       if (sentenceEl) {
@@ -238,11 +255,13 @@ export function ManuscriptView({
       });
       document.body.classList.remove('dragging-boundary');
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
     return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drag?.boundaryIdx]);
@@ -506,7 +525,7 @@ export function ManuscriptView({
                     <BoundaryHandle
                       boundaryIdx={segIdx + 1}
                       drag={drag}
-                      onMouseDown={onBoundaryMouseDown}
+                      onPointerDown={onBoundaryPointerDown}
                     />
                   )}
                 </Fragment>
@@ -1027,21 +1046,32 @@ function SegmentRow({
 function BoundaryHandle({
   boundaryIdx,
   drag,
-  onMouseDown,
+  onPointerDown,
 }: {
   boundaryIdx: number;
   drag: Drag | null;
-  onMouseDown: (idx: number, e: MouseEvent) => void;
+  /* Plan 81 wave 4 — PointerEvent (not MouseEvent) so touch + pen + mouse
+     all flow through the same gesture. setPointerCapture in the parent
+     keeps the gesture alive past the viewport edge on phones. */
+  onPointerDown: (idx: number, e: React.PointerEvent) => void;
 }) {
   const isThisDragging = drag?.boundaryIdx === boundaryIdx;
   return (
-    <div className="relative h-3 -my-1 group">
+    <div className="relative h-4 -my-1 group">
       <span
-        onMouseDown={(e) => onMouseDown(boundaryIdx, e)}
-        className={`absolute left-0 right-0 top-1/2 -translate-y-1/2 h-[2px] cursor-ns-resize transition-colors ${isThisDragging ? 'bg-peach' : 'bg-transparent group-hover:bg-peach/40'}`}
+        onPointerDown={(e) => onPointerDown(boundaryIdx, e)}
+        /* `touch-action: none` so the browser doesn't intercept the
+           gesture for scrolling — we own the drag end-to-end. */
+        style={{ touchAction: 'none' }}
+        className={`absolute left-0 right-0 top-1/2 -translate-y-1/2 h-3 cursor-ns-resize transition-colors ${isThisDragging ? 'bg-peach/40' : 'bg-transparent group-hover:bg-peach/40'}`}
       />
+      {/* Plan 81 wave 4 — `coarse:opacity-60` keeps the boundary-handle
+          label faintly visible on touch devices that don't expose hover.
+          `(pointer: coarse)` is the standard query. Wave 4 ships a
+          `@media (pointer: coarse) { .... }` rule in styles.css to
+          back this — see the hover-audit section there. */}
       <span
-        className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-2 py-0.5 rounded-full bg-white border text-[10px] font-medium uppercase tracking-wider transition-opacity ${isThisDragging ? 'opacity-100 border-peach text-magenta pulse-ring' : 'opacity-0 group-hover:opacity-100 border-ink/15 text-ink/50'}`}
+        className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-2 py-0.5 rounded-full bg-white border text-[10px] font-medium uppercase tracking-wider transition-opacity pointer-events-none ${isThisDragging ? 'opacity-100 border-peach text-magenta pulse-ring' : 'opacity-0 group-hover:opacity-100 coarse-pointer:opacity-60 border-ink/15 text-ink/50'}`}
       >
         {isThisDragging ? 'drop on a sentence' : 'drag to move'}
       </span>
