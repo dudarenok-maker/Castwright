@@ -93,6 +93,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [32 — Audiobook export](32-audiobook-export.md) — Sideload to PocketBook Reader (Phase A: MP3.ZIP) via LAN download or sync folder; per-chapter ID3v2.4 tags, no re-encode, atomic writes.
 - [34 — MP3-folder export](34-mp3-folder-export.md) — Per-chapter MP3s in a sub-folder for folder-scanning audiobook apps (Smart AudioBook Player, BookPlayer, Audiobookshelf). Sync-folder destination only; APIC cover travels with each chapter.
 - [67 — Streaming-link download tile](archive/67-streaming-link-tile.md) — Mints a 12-char Crockford base32 slug; `GET /share/:slug` proxies the book's most-recent M4B export off disk. Closes the last "Coming soon" tile on the Listen view. Shipped 2026-05-19.
+- [77 — Per-chapter loudness report card](77-loudness-report-card.md) — Consumes plan 71's `<slug>.lufs.json` sidecars and surfaces them in the Listen view as (a) a colour-coded per-row drift pill (≤2 / 2–4 / >4 LU buckets) and (b) an expandable report card with summary line + sparkline + per-chapter table. Drift comparisons gated on `twoPass === true`; single-pass values degrade to neutral.
 
 ### I. Revisions & drift
 
