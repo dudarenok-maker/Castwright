@@ -41,7 +41,7 @@ import {
   selectTtsProvider,
   type TtsModelKey,
 } from '../tts/index.js';
-import { encodePcmToMp3, writeChapterPeaksFile } from '../tts/mp3.js';
+import { encodePcmToAudio, writeChapterPeaksFile } from '../tts/mp3.js';
 import {
   synthesiseChapter,
   type CastCharacter,
@@ -528,7 +528,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         durationSec: result.durationSec,
       });
 
-      const mp3Buffer = await encodePcmToMp3(result.pcm, result.sampleRate, { quality: 2 });
+      const mp3Buffer = await encodePcmToAudio(result.pcm, result.sampleRate, { quality: 2 });
       const mp3Path = join(audioRoot, `${chapter.slug}.mp3`);
       const segPath = join(audioRoot, `${chapter.slug}.segments.json`);
       const peaksPath = join(audioRoot, `${chapter.slug}.peaks.json`);
