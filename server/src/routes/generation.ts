@@ -30,7 +30,11 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
-import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
+import {
+  bookStateAudioFormat,
+  findBookByBookId,
+  type BookStateJson,
+} from '../workspace/scan.js';
 import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
@@ -41,7 +45,7 @@ import {
   selectTtsProvider,
   type TtsModelKey,
 } from '../tts/index.js';
-import { encodePcmToAudio, writeChapterPeaksFile } from '../tts/mp3.js';
+import { audioExtForFormat, encodePcmToAudio, writeChapterPeaksFile } from '../tts/mp3.js';
 import {
   synthesiseChapter,
   type CastCharacter,
@@ -528,15 +532,25 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         durationSec: result.durationSec,
       });
 
-      const mp3Buffer = await encodePcmToAudio(result.pcm, result.sampleRate, { quality: 2 });
-      const mp3Path = join(audioRoot, `${chapter.slug}.mp3`);
+      /* Per-book audio format (plan 72) — defaults to mp3 for state files
+         written before the field landed. Drives both the codec dispatch
+         in `encodePcmToAudio` and the file extension that lands on
+         disk. */
+      const audioFormat = bookStateAudioFormat(state);
+      const audioExt = audioExtForFormat(audioFormat);
+      const audioBuffer = await encodePcmToAudio(result.pcm, result.sampleRate, {
+        format: audioFormat,
+        quality: 2,
+      });
+      const audioPath = join(audioRoot, `${chapter.slug}.${audioExt}`);
       const segPath = join(audioRoot, `${chapter.slug}.segments.json`);
       const peaksPath = join(audioRoot, `${chapter.slug}.peaks.json`);
 
       /* Atomic write: temp-then-rename so a crash mid-write doesn't leave a
-         half-MP3 that scan.ts would mistake for a completed chapter. */
-      const tmpMp3 = `${mp3Path}.tmp-${process.pid}-${Date.now()}`;
-      await writeFile(tmpMp3, mp3Buffer);
+         half-encoded file that scan.ts would mistake for a completed
+         chapter. */
+      const tmpAudio = `${audioPath}.tmp-${process.pid}-${Date.now()}`;
+      await writeFile(tmpAudio, audioBuffer);
       /* Snapshot the cast character attributes for every character that
          actually spoke in this chapter — narrows the snapshot to the
          characters the drift detector cares about and avoids bloating the
@@ -580,7 +594,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          Best-effort — never blocks the write. */
       await preserveExistingAsPrevious(audioRoot, chapter.slug);
       await writeJsonAtomic(segPath, segmentsFile);
-      await rename(tmpMp3, mp3Path);
+      await rename(tmpAudio, audioPath);
       /* Plan 56: emit the waveform-envelope sibling alongside the MP3.
          Failure is non-fatal — peaks are a visualization aid, not load-
          bearing for playback — so we log + continue rather than abort the
