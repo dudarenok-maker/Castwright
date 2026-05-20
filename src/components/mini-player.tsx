@@ -409,7 +409,14 @@ export function MiniPlayer({
   return (
     <div className="fixed bottom-0 left-0 right-0 z-50 fade-in">
       <div className="bg-ink text-canvas border-t border-canvas/10 backdrop-blur-md">
-        <div className="max-w-[1500px] mx-auto px-6 py-3 grid grid-cols-[auto_minmax(0,2fr)_auto_minmax(0,3fr)_auto] items-center gap-5">
+        {/* Plan 81 wave 2 — responsive mini-player. Tighter padding + gap
+            on `<sm:` viewports (Pixel 7 is 412 px wide); ≥44 px touch
+            targets on prev/play/next (WCAG 2.5.5). The 5-column grid still
+            works on mobile because cols 1's inner text + col 5's marker /
+            sleep-time labels already `hidden md:block` away, leaving
+            waveform icon + play controls + scrubber + speed pill +
+            close — fits 412 px. */}
+        <div className="max-w-[1500px] mx-auto px-3 sm:px-6 py-3 grid grid-cols-[auto_minmax(0,2fr)_auto_minmax(0,3fr)_auto] items-center gap-2 sm:gap-5">
           <div className="flex items-center gap-3 min-w-0">
             <span className="w-11 h-11 rounded-xl bg-gradient-cta shrink-0 grid place-items-center">
               <IconWaveform className="w-4 h-4 text-white/70" />
@@ -428,13 +435,15 @@ export function MiniPlayer({
             <button
               onClick={onPrev}
               disabled={!prevAvailable}
-              className="p-2 rounded-full hover:bg-canvas/10 disabled:opacity-30"
+              aria-label="Previous chapter"
+              className="p-2 min-w-[44px] min-h-[44px] rounded-full hover:bg-canvas/10 disabled:opacity-30 grid place-items-center"
             >
               <IconRewind className="w-4 h-4" />
             </button>
             <button
               onClick={() => setPlaying(!playing)}
-              className="w-10 h-10 rounded-full bg-canvas text-ink grid place-items-center hover:bg-white"
+              aria-label={playing ? 'Pause' : 'Play'}
+              className="w-11 h-11 sm:w-10 sm:h-10 rounded-full bg-canvas text-ink grid place-items-center hover:bg-white"
             >
               {playing ? (
                 <IconPause className="w-4 h-4" />
@@ -445,7 +454,8 @@ export function MiniPlayer({
             <button
               onClick={onNext}
               disabled={!nextAvailable}
-              className="p-2 rounded-full hover:bg-canvas/10 disabled:opacity-30"
+              aria-label="Next chapter"
+              className="p-2 min-w-[44px] min-h-[44px] rounded-full hover:bg-canvas/10 disabled:opacity-30 grid place-items-center"
             >
               <IconForward className="w-4 h-4" />
             </button>
