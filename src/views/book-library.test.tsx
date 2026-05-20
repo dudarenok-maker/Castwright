@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import { accountSlice } from '../store/account-slice';
 import { librarySlice, libraryActions } from '../store/library-slice';
 import { BookLibraryView } from './book-library';
@@ -32,6 +32,7 @@ const oneBook: LibraryBook = {
   voiceCount: 20,
   lastWorkedOn: 'today',
   coverGradient: ['#000', '#fff'],
+  tags: [],
 };
 
 const oneAuthor: LibraryAuthor = {
@@ -356,6 +357,24 @@ describe('BookLibraryView — loading affordance', () => {
       store.dispatch(libraryActions.hydratePausedSnapshots([snapA]));
     });
     expect(store.getState().library.pausedSnapshots).toEqual({ a: snapA });
+  });
+
+  it('renders the search input above the grid (plan 73)', () => {
+    renderView({ loaded: true, authors: [oneAuthor] });
+    expect(screen.getByTestId('library-search-input')).toBeInTheDocument();
+  });
+
+  it('filters books by debounced title-search and shows a no-results pane when nothing matches', async () => {
+    renderView({ loaded: true, authors: [oneAuthor] });
+    fireEvent.change(screen.getByTestId('library-search-input'), {
+      target: { value: 'zzzzzz' },
+    });
+    /* useDebouncedValue lags ~150ms — wait for the no-results pane. */
+    await waitFor(() => {
+      expect(screen.getByTestId('library-no-results')).toBeInTheDocument();
+    });
+    /* The book grid itself collapses out under the no-results branch. */
+    expect(screen.queryByText('Shannon Messenger')).not.toBeInTheDocument();
   });
 
   it('swaps skeleton → populated grid when hydrate dispatches', () => {

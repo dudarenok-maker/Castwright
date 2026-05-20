@@ -412,6 +412,26 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           if (typeof incoming === 'boolean') return incoming;
           return fallback;
         };
+        /* Plan 73 — tags accept the full array on patch; non-string
+           entries are dropped, duplicates collapsed, surrounding
+           whitespace trimmed. Empty string → dropped (the chip editor
+           emits these only on a stray Enter, never on intentional
+           input). Undefined → preserve prior value. */
+        const pickTags = (incoming: unknown, fallback: string[] | undefined): string[] => {
+          if (incoming === undefined) return fallback ?? [];
+          if (!Array.isArray(incoming)) return fallback ?? [];
+          const out: string[] = [];
+          const seen = new Set<string>();
+          for (const entry of incoming) {
+            if (typeof entry !== 'string') continue;
+            const trimmed = entry.trim();
+            if (!trimmed) continue;
+            if (seen.has(trimmed)) continue;
+            seen.add(trimmed);
+            out.push(trimmed);
+          }
+          return out;
+        };
 
         /* When the book is flipped to standalone, the on-disk series folder
            must be the literal 'Standalones' (see workspace/paths.ts) and
@@ -435,6 +455,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           publicationDate: pickNullable(patch.publicationDate, state.publicationDate),
           description: pickNullable(patch.description, state.description),
           notes: pickNotes(patch.notes, state.notes),
+          tags: pickTags(patch.tags, state.tags),
           updatedAt: new Date().toISOString(),
         };
 

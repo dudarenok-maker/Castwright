@@ -128,6 +128,7 @@ export function ConfirmMetadataView() {
         voiceCount: 0,
         lastWorkedOn: 'Just now',
         coverGradient: ['#3C194F', '#0F0E0D'],
+        tags: [],
       };
       dispatch(libraryActions.addBook(optimistic));
       dispatch(

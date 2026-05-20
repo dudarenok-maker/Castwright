@@ -3,11 +3,15 @@
    series, set its position, or toggle the standalone flag. Title/author/
    series changes also move the on-disk folder server-side; the modal
    itself just collects the diff and hands it to the route's onSave
-   callback. */
+   callback.
 
-import { useMemo, useState } from 'react';
+   Plan 73 — also owns the per-book tag chip editor. Tags round-trip
+   through the same `slice: 'state'` PUT path as the other fields. */
+
+import { useMemo, useRef, useState } from 'react';
 import { IconClose, IconPencil } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
+import { useAppSelector } from '../store';
 import type { LibraryBook } from '../lib/types';
 
 export interface EditBookMetaPatch {
@@ -16,6 +20,10 @@ export interface EditBookMetaPatch {
   series: string;
   seriesPosition: number | null;
   isStandalone: boolean;
+  /* Plan 73 — full replacement of the book's tag set on save. Always
+     present (never undefined) so the server-side picker can distinguish
+     "user cleared the list" from "user didn't touch tags". */
+  tags: string[];
 }
 
 interface Props {
@@ -23,6 +31,16 @@ interface Props {
   book: LibraryBook;
   onClose: () => void;
   onSave: (patch: EditBookMetaPatch) => void;
+}
+
+/* Parse a chip editor token — splits comma-separated input, trims
+   whitespace, drops empties. Lets the user paste `priority, draft`
+   in one go and get two chips. */
+function parseTagInput(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
@@ -37,6 +55,7 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
       series: book.series,
       seriesPosition: book.seriesPosition,
       isStandalone: book.isStandalone,
+      tags: [...(book.tags ?? [])],
     }),
     [book],
   );
@@ -51,6 +70,77 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
     initial.seriesPosition == null ? '' : String(initial.seriesPosition),
   );
   const [isStandalone, setIsStandalone] = useState(initial.isStandalone);
+  const [tags, setTags] = useState<string[]>(initial.tags);
+  const [tagInput, setTagInput] = useState('');
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const tagInputRef = useRef<HTMLInputElement | null>(null);
+
+  /* Suggest tags from every other book in the library. Reading via the
+     selector keeps the modal in sync if the library hydrates while open
+     (rare — but it's free given the slice is already populated). The
+     active book's own tags are kept in the union so an autocomplete
+     after a removal still proposes a re-add.
+
+     We pull the raw books array out of the slice and derive the sorted
+     tag union with useMemo — selector returning a fresh array each
+     render trips React 18's "selector returned a different result"
+     warning. */
+  const libraryBooks = useAppSelector((s) => s.library.books);
+  const allTagsAcrossLibrary = useMemo(() => {
+    const set = new Set<string>();
+    for (const b of libraryBooks) {
+      for (const t of b.tags ?? []) set.add(t);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [libraryBooks]);
+  const suggestions = useMemo(() => {
+    const query = tagInput.trim().toLowerCase();
+    return allTagsAcrossLibrary.filter((t) => {
+      if (tags.includes(t)) return false;
+      if (!query) return true;
+      return t.toLowerCase().includes(query);
+    });
+  }, [allTagsAcrossLibrary, tagInput, tags]);
+
+  const addTags = (incoming: string[]) => {
+    if (incoming.length === 0) return;
+    setTags((prev) => {
+      const next = [...prev];
+      const seen = new Set(next);
+      for (const t of incoming) {
+        if (!seen.has(t)) {
+          seen.add(t);
+          next.push(t);
+        }
+      }
+      return next;
+    });
+  };
+  const removeTag = (target: string) => {
+    setTags((prev) => prev.filter((t) => t !== target));
+  };
+  const commitTagInput = () => {
+    const parsed = parseTagInput(tagInput);
+    if (parsed.length === 0) return;
+    addTags(parsed);
+    setTagInput('');
+  };
+  const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitTagInput();
+    } else if (e.key === 'Backspace' && tagInput === '' && tags.length > 0) {
+      /* Empty input + backspace pops the last chip — matches the
+         convention every chip editor on the web (GitHub labels, Gmail
+         to-field, etc.) shares. */
+      e.preventDefault();
+      setTags((prev) => prev.slice(0, -1));
+    } else if (e.key === ',') {
+      /* Comma also commits — feels natural when typing a list. */
+      e.preventDefault();
+      commitTagInput();
+    }
+  };
 
   const parsedPosition = positionInput.trim() === '' ? null : Number(positionInput);
   const positionIsValid =
@@ -61,6 +151,16 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
   const seriesClean = series.trim();
   const requiredOk = titleClean !== '' && authorClean !== '';
 
+  const tagsChanged =
+    tags.length !== initial.tags.length ||
+    tags.some((t, i) => t !== initial.tags[i]);
+  /* A pending-but-uncommitted tag in the input is also "dirty" — the
+     Save handler commits it before invoking onSave, so the form is
+     materially different from its seed state. Without this, Save sits
+     disabled while the user has typed a tag but not hit Enter, then
+     does nothing if they click it. */
+  const tagInputHasPending = parseTagInput(tagInput).length > 0;
+
   /* Dirty check: at least one user-visible field has changed. When
      standalone is on, series + position changes are ignored (the server
      overrides them anyway). */
@@ -70,7 +170,9 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
     isStandalone !== initial.isStandalone ||
     (!isStandalone &&
       (seriesClean !== initial.series.trim() ||
-        (parsedPosition ?? null) !== (initial.seriesPosition ?? null)));
+        (parsedPosition ?? null) !== (initial.seriesPosition ?? null))) ||
+    tagsChanged ||
+    tagInputHasPending;
 
   const canSave = isDirty && requiredOk && positionIsValid;
 
@@ -158,6 +260,78 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
                 Position must be a whole number ≥ 1, or empty.
               </p>
             )}
+
+            <div className="md:col-span-2">
+              <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
+                Tags
+              </span>
+              <div
+                className="mt-1 flex flex-wrap items-center gap-1.5 px-2 py-1.5 rounded-xl bg-canvas border border-ink/10 focus-within:border-ink/30"
+                data-testid="tag-editor"
+              >
+                {tags.map((tag) => (
+                  <span
+                    key={tag}
+                    data-testid={`tag-chip-${tag}`}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-purple-deep/[0.06] text-purple-deep border border-purple-deep/15"
+                  >
+                    {tag}
+                    <button
+                      type="button"
+                      onClick={() => removeTag(tag)}
+                      aria-label={`Remove tag ${tag}`}
+                      className="hover:text-magenta"
+                    >
+                      <IconClose className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+                <input
+                  ref={tagInputRef}
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={handleTagKeyDown}
+                  onFocus={() => setSuggestionsOpen(true)}
+                  /* Defer close so a mouse-down on a suggestion still
+                     fires its onMouseDown handler before blur clears
+                     the dropdown. */
+                  onBlur={() => setTimeout(() => setSuggestionsOpen(false), 120)}
+                  aria-label="Add tag"
+                  placeholder={tags.length === 0 ? 'Add tags (Enter or comma to add)' : ''}
+                  className="flex-1 min-w-[120px] bg-transparent text-sm text-ink focus:outline-none py-0.5"
+                />
+              </div>
+              {suggestionsOpen && suggestions.length > 0 && (
+                <ul
+                  data-testid="tag-suggestions"
+                  className="mt-1 max-h-32 overflow-y-auto rounded-xl bg-white border border-ink/10 shadow-card"
+                >
+                  {suggestions.slice(0, 8).map((s) => (
+                    <li key={s}>
+                      <button
+                        type="button"
+                        data-testid={`tag-suggestion-${s}`}
+                        /* onMouseDown so the click registers BEFORE the
+                           input's blur fires — otherwise the dropdown
+                           closes before the click lands. */
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          addTags([s]);
+                          setTagInput('');
+                          tagInputRef.current?.focus();
+                        }}
+                        className="w-full text-left px-3 py-1.5 text-sm text-ink hover:bg-ink/[0.04]"
+                      >
+                        {s}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-1 text-[11px] text-ink/50">
+                Use tags to filter the library view. Press Enter or comma to add.
+              </p>
+            </div>
           </div>
 
           <div className="px-6 py-4 border-t border-ink/10 flex items-center justify-between gap-3">
@@ -170,15 +344,28 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
               </button>
               <PrimaryButton
                 variant="dark"
-                onClick={() =>
+                onClick={() => {
+                  /* Last-chance commit of any uncommitted typed input so
+                     a "Save" click while a tag is mid-typed doesn't
+                     discard it. */
+                  const pendingParsed = parseTagInput(tagInput);
+                  const finalTags = [...tags];
+                  const seen = new Set(finalTags);
+                  for (const t of pendingParsed) {
+                    if (!seen.has(t)) {
+                      seen.add(t);
+                      finalTags.push(t);
+                    }
+                  }
                   onSave({
                     title: titleClean,
                     author: authorClean,
                     series: isStandalone ? initial.series : seriesClean,
                     seriesPosition: isStandalone ? null : parsedPosition,
                     isStandalone,
-                  })
-                }
+                    tags: finalTags,
+                  });
+                }}
                 disabled={!canSave}
               >
                 Save changes

@@ -76,4 +76,45 @@ export function selectPausedSnapshotForBook(
   return state.library.pausedSnapshots?.[bookId] ?? null;
 }
 
+/** Plan 73 — sorted union of every tag string across the library.
+ *  Drives the library-chrome tag-chip filter row. Stable insertion
+ *  order via `localeCompare` so the chip row doesn't shuffle as
+ *  books mutate. */
+export function selectAllTags(state: { library: LibraryState }): string[] {
+  const set = new Set<string>();
+  for (const b of state.library.books) {
+    for (const t of b.tags ?? []) set.add(t);
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+/** Plan 73 — applies the search + active-tag filters to the library's
+ *  flat book list. `search` matches case-insensitively against title
+ *  OR author; `activeTags` requires every active tag to be present on
+ *  the book (intersection semantics so picking two chips narrows, not
+ *  widens). Empty `search` and empty `activeTags` → pass-through.
+ *
+ *  Lives as a pure helper so it can be exercised in isolation by
+ *  library-slice.test.ts and reused from the orchestrator. */
+export function filterBooks(
+  books: LibraryBook[],
+  search: string,
+  activeTags: string[],
+): LibraryBook[] {
+  const q = search.trim().toLowerCase();
+  return books.filter((b) => {
+    if (q) {
+      const hay = `${b.title} ${b.author}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (activeTags.length > 0) {
+      const bookTags = b.tags ?? [];
+      for (const t of activeTags) {
+        if (!bookTags.includes(t)) return false;
+      }
+    }
+    return true;
+  });
+}
+
 export const libraryActions = librarySlice.actions;
