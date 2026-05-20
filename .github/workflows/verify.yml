@@ -39,7 +39,10 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Bumped 20 → 22 alongside plan 81 / wave 1: vite-plugin-mkcert@2
+          # pulls undici@8, which dropped Node 20 support and calls
+          # `webidl.util.markAsUncloneable` (added in Node 22).
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json
