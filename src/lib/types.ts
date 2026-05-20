@@ -6,9 +6,17 @@ export type Character = components['schemas']['Character'] & {
 /* `phase` is a UI-only sub-state set from the `chapter_assembling` SSE tick.
    It lets the Generate view distinguish "synthesising sentences" from the
    short disk-write phase between the last group and chapter_complete, so
-   the bar doesn't appear stuck at 99 %. Not part of the wire schema. */
+   the bar doesn't appear stuck at 99 %. Not part of the wire schema.
+
+   `lufs` is a UI-only mirror of the chapter's EBU R128 sidecar payload
+   (plan 71). Hydrated lazily from the book-state endpoint's per-chapter
+   `chapterLufs` map and from the chapter-audio meta endpoint on per-row
+   playback. Absent → no loudnorm pass has landed for this chapter (legacy
+   / disabled / silent-source). `null` distinguishes "fetched but no data"
+   from "not fetched yet". See plan 77 for the report-card consumer. */
 export type Chapter = components['schemas']['Chapter'] & {
   phase?: 'assembling' | null;
+  lufs?: components['schemas']['ChapterLoudness'] | null;
 };
 
 /* Sentence follows the OpenAPI spec; the optional `confidence` is a UI-only
@@ -17,6 +25,14 @@ export type Sentence = components['schemas']['Sentence'] & {
   confidence?: number;
 };
 export type Revision = components['schemas']['Revision'];
+/* Plan 77 — EBU R128 loudness sidecar payload, surfaced on the
+   ChapterAudio meta endpoint and in the book-state response's
+   per-chapter `chapterLufs` map. Persisted disk shape lives at
+   <bookDir>/audio/<slug>.lufs.json (plan 71). Field names are stable
+   contract with the sidecar JSON. Consumers MUST gate drift
+   comparisons on twoPass === true — single-pass values are nominal
+   target values, not real post-filter measurements. */
+export type ChapterLoudness = components['schemas']['ChapterLoudness'];
 export type DriftEvent = components['schemas']['DriftEvent'];
 export type TimelineEntry = components['schemas']['TimelineEntry'];
 export type MatchFactor = components['schemas']['MatchFactor'];
@@ -203,6 +219,13 @@ export interface BookStateResponse {
   } | null;
   /** Slugs of chapters that already have an audio file on disk. */
   completedSlugs: string[];
+  /** Plan 77 — per-chapter EBU R128 loudness sidecar payloads keyed
+      by chapter id. Read once at book-open so the LUFS report card on
+      the Listen view doesn't have to fan out one chapter-audio meta
+      fetch per row. Null entry = sidecar missing (legacy chapter /
+      `AUDIO_LOUDNORM_ENABLED=false` / silent-source fallthrough). The
+      map is empty `{}` when no audio has been generated yet. */
+  chapterLufs?: Record<number, ChapterLoudness | null>;
   /** chapterId → analysed speaker ids. Derived from the analysis cache and
       used by hydrateFromBookState so each chapter row seeds only the
       characters that actually speak in that chapter; without this the

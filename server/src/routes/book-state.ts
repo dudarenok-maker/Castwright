@@ -41,6 +41,7 @@ import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { parseManuscript } from '../parsers/index.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
+import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
 export const bookStateRouter = Router();
 
@@ -240,6 +241,45 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       /* fall through with empty list */
     }
 
+    /* Plan 77 — per-chapter EBU R128 loudness sidecar payloads keyed by
+       chapter id. Read once on book-open so the LUFS report card in the
+       Listen view doesn't have to N-fan-out one chapter-audio meta fetch
+       per chapter row. Missing/malformed sidecar → null entry; the
+       frontend uses absence to render a neutral "no data" badge and
+       gates drift comparisons on `twoPass === true`. Tolerant of
+       directory absence (no audio generated yet) — `chapterLufs` stays
+       empty in that case. */
+    const chapterLufs: Record<number, LoudnormSidecarJson | null> = {};
+    try {
+      if (existsSync(audioDir(bookDir))) {
+        for (const ch of state.chapters) {
+          const lufsPath = join(audioDir(bookDir), `${ch.slug}.lufs.json`);
+          if (!existsSync(lufsPath)) {
+            chapterLufs[ch.id] = null;
+            continue;
+          }
+          try {
+            const payload = await readJson<LoudnormSidecarJson>(lufsPath);
+            if (
+              payload &&
+              typeof payload.i === 'number' &&
+              typeof payload.target === 'number'
+            ) {
+              chapterLufs[ch.id] = payload;
+            } else {
+              chapterLufs[ch.id] = null;
+            }
+          } catch {
+            /* malformed sidecar — degrade to null rather than failing
+               the whole book-state request. */
+            chapterLufs[ch.id] = null;
+          }
+        }
+      }
+    } catch {
+      /* fall through — chapterLufs stays {} */
+    }
+
     /* Rehydrate the in-memory ManuscriptRecord if missing (after a server
        restart). Must parse the manuscript fully — a previous version read
        the file as utf-8 bytes with empty chapter bodies, which for EPUB
@@ -260,6 +300,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       revisions: revs,
       completedSlugs,
       chapterCharacters,
+      chapterLufs,
       changeLog: changeLog?.events ?? null,
       analysis: { failedChapterIds },
     });
