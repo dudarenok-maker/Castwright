@@ -133,6 +133,57 @@ describe('book-state router — changeLog slice', () => {
   });
 });
 
+describe('book-state router — chapterLufs hydration (plan 77)', () => {
+  /* Plan 77 surfaces per-chapter EBU R128 sidecar payloads (plan 71's
+     `<slug>.lufs.json`) in the book-state response so the listen-view
+     report card can render without N-fan-out chapter-audio meta
+     fetches. */
+  it('returns chapterLufs: {} when no audio dir / sidecars exist', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.chapterLufs).toEqual({});
+  });
+
+  it('surfaces per-chapter sidecar payloads keyed by chapter id when present', async () => {
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    /* The test chapter is id=1, slug='chapter-one' (from beforeAll). */
+    const payload = {
+      i: -15.7,
+      lra: 8.2,
+      tp: -1.9,
+      target: -16,
+      twoPass: true,
+      measuredAt: '2026-05-20T12:34:56.000Z',
+    };
+    writeFileSync(join(audioRoot, 'chapter-one.lufs.json'), JSON.stringify(payload));
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.chapterLufs).toEqual({ 1: payload });
+  });
+
+  it('returns chapterLufs[id]: null for chapters whose sidecar is missing', async () => {
+    /* Audio dir exists from the previous test; remove the sidecar to
+       verify the read path emits a null entry (NOT a missing key) so
+       the frontend's empty-state detection works. */
+    const audioRoot = join(bookDir, 'audio');
+    rmSync(join(audioRoot, 'chapter-one.lufs.json'), { force: true });
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.chapterLufs).toEqual({ 1: null });
+  });
+
+  it('absorbs malformed sidecar JSON and degrades to null for that chapter', async () => {
+    const audioRoot = join(bookDir, 'audio');
+    writeFileSync(join(audioRoot, 'chapter-one.lufs.json'), '{ this is not json');
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.chapterLufs).toEqual({ 1: null });
+    /* Clean up so the rest of the suite stays predictable. */
+    rmSync(join(audioRoot, 'chapter-one.lufs.json'), { force: true });
+  });
+});
+
 describe('book-state router — dropped-quotes endpoint', () => {
   it('GET dropped-quotes returns an empty envelope when the file does not exist', async () => {
     /* The book was created in beforeAll with no dropped-quotes.json on

@@ -377,6 +377,12 @@ export function Layout() {
             completedSlugs: res.completedSlugs ?? [],
             characters: res.cast?.characters ?? [],
             chapterCharacters: res.chapterCharacters,
+            /* Plan 77 — book-state response now carries per-chapter
+               EBU R128 sidecar payloads. Older servers omit it; the
+               slice tolerates an undefined map by leaving each row's
+               `lufs` field undefined (no-data state in the report
+               card). */
+            chapterLufs: res.chapterLufs,
           }),
         );
         dispatch(
