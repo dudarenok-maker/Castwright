@@ -11,6 +11,7 @@ import {
   IconClose,
   IconHistory,
   IconClock,
+  IconPencil,
 } from '../lib/icons';
 import { SectionLabel, MixedHeading, Pill, ColorDot } from '../components/primitives';
 import { ModelControlPill } from '../components/ModelControlPill';
@@ -30,6 +31,7 @@ const INERT_TTS_LIFECYCLE: TtsLifecycle = {
   dismissNotices: () => {},
 };
 import { ConfirmDialog } from '../modals/confirm-dialog';
+import { EditChapterTitleModal } from '../modals/edit-chapter-title';
 import { useAppDispatch, useAppSelector } from '../store';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { castActions } from '../store/cast-slice';
@@ -127,6 +129,9 @@ export function GenerationView({
      un-excludes is reflected on the next retry. */
   const selectedAnalyzerModelId = useAppSelector((s) => s.ui.selectedModel);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  /* Plan 77 — chapter rename modal state at the view level. One mount,
+     opened/closed via the per-row Rename button. */
+  const [renamingChapter, setRenamingChapter] = useState<Chapter | null>(null);
   /* Per-chapter subset-analysis state for the un-exclude flow. Lives only
      for the duration of the inline run — once the chapter transitions
      back to a normal queued row (or the user cancels) the entry is
@@ -721,6 +726,7 @@ export function GenerationView({
               onRegenerate={onRegenerate}
               onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
               onPreview={onPreview}
+              onRename={setRenamingChapter}
               onToggleExcluded={handleToggleExcluded}
               onIncludeClick={handleIncludeClick}
               onCancelSubset={handleCancelSubset}
@@ -770,6 +776,13 @@ export function GenerationView({
       </div>
       {analyzerGuardModal}
       {reverseGuardModal}
+      <EditChapterTitleModal
+        key={renamingChapter?.id ?? 'closed'}
+        open={renamingChapter !== null}
+        bookId={bookId}
+        chapter={renamingChapter}
+        onClose={() => setRenamingChapter(null)}
+      />
     </div>
   );
 }
@@ -836,6 +849,9 @@ interface ChapterRowProps {
   onRegenerate: (ch: Chapter) => void;
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
   onPreview: (chapterId: number) => void;
+  /** Plan 77 — opens the rename modal for this chapter. View-level
+      modal mount; row only knows "open rename for me". */
+  onRename: (ch: Chapter) => void;
   onToggleExcluded: (chapterId: number, excluded: boolean) => void;
   /** Guard-wrapped variant of `onToggleExcluded(id, false)`. Wraps the
       un-exclude call in `useLocalAnalyzerGuard` so the local-analyzer
@@ -868,6 +884,7 @@ function ChapterRow({
   onRegenerate,
   onRegenerateCharacterInChapter,
   onPreview,
+  onRename,
   onToggleExcluded,
   onIncludeClick,
   onCancelSubset,
@@ -1076,6 +1093,17 @@ function ChapterRow({
           <button
             onClick={(e) => {
               e.stopPropagation();
+              onRename(chapter);
+            }}
+            data-testid={`chapter-row-${chapter.id}-rename`}
+            aria-label={`Rename chapter ${chapter.id}`}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+          >
+            <IconPencil className="w-3.5 h-3.5" /> Rename
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
               onRegenerate(chapter);
             }}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
@@ -1100,7 +1128,18 @@ function ChapterRow({
           arrow already invites interaction; putting the link in the
           expanded view keeps the collapsed row visually clean. */}
       {expanded && (chapter.state === 'queued' || chapter.state === 'in_progress') && (
-        <div className="px-6 -mt-3 flex justify-end">
+        <div className="px-6 -mt-3 flex justify-end items-center gap-3">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRename(chapter);
+            }}
+            data-testid={`chapter-row-${chapter.id}-rename`}
+            aria-label={`Rename chapter ${chapter.id}`}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+          >
+            <IconPencil className="w-3.5 h-3.5" /> Rename
+          </button>
           <button
             onClick={(e) => {
               e.stopPropagation();

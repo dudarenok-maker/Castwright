@@ -258,6 +258,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/chapters/{chapterId}/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Override a chapter's title with a user-supplied label
+         * @description Sets `state.chapters[chapterId-1].title` to the supplied value and
+         *     flips `titleOverridden` to true so subsequent heuristic refresh
+         *     passes (`refreshChapterTitles` on book-state GET, and the
+         *     explicit POST `/chapters/refresh-titles`) leave it alone.
+         *     Writes state.json atomically; holds the per-book write lock.
+         *     Pure label mutation — does not touch sentence ids, slugs, audio
+         *     files, or analysis cache.
+         */
+        post: operations["renameChapter"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/chapters/merge": {
         parameters: {
             query?: never;
@@ -1950,6 +1976,17 @@ export interface components {
              *     is.
              */
             audioRenderedAt?: string;
+            /**
+             * @description When true, the user has manually renamed this chapter and
+             *     the heuristic title-refresh passes (`refreshChapterTitles`
+             *     on book-state GET, and the explicit POST
+             *     `/chapters/refresh-titles`) MUST leave the title alone.
+             *     Set by `renameChapter` and by merge/split when a caller
+             *     supplies an explicit `mergedTitle` / `newTitle`. Absent or
+             *     false on parser-derived titles so heuristic improvements can
+             *     still land.
+             */
+            titleOverridden?: boolean;
         };
         Sentence: {
             id: number;
@@ -1978,6 +2015,7 @@ export interface components {
                 audioModelKey?: "kokoro-v1" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
                 /** Format: date-time */
                 audioRenderedAt?: string;
+                titleOverridden?: boolean;
             }[];
             /**
              * @description Per-sentence translation entries. Entries whose `oldChapterId`
@@ -2457,6 +2495,55 @@ export interface operations {
                         excluded: boolean;
                     };
                 };
+            };
+            /** @description Book or chapter not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    renameChapter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description New chapter title. Server trims surrounding whitespace; rejects empty / whitespace-only / >200-char values with 400. */
+                    title: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated chapter entry from state.json */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id: number;
+                        title: string;
+                        slug: string;
+                        titleOverridden: boolean;
+                    };
+                };
+            };
+            /** @description Bad request (empty / whitespace-only / oversized title) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Book or chapter not found */
             404: {

@@ -230,6 +230,44 @@ describe('GET /:bookId/state — title-only refresh on legacy books', () => {
     expect(res.body.state.chapters[0].title).toBe('Chapter 1');
   });
 
+  it('plan 77 — skips chapters with titleOverridden=true; refreshes neighbours; bumps version', async () => {
+    /* Two chapters: the first is user-renamed (sticky), the second is
+       legacy-generic. Both go through the refresh on a legacy book —
+       the override survives, the neighbour gets the parser-aligned
+       title, and the parser version bump still lands so the refresh
+       isn't re-attempted on every GET. */
+    writeFileSync(statePath, JSON.stringify({
+      bookId,
+      manuscriptId: 'm_refresh_test',
+      title: TITLE,
+      author: AUTHOR,
+      series: SERIES,
+      seriesPosition: null,
+      isStandalone: true,
+      manuscriptFile: 'manuscript.md',
+      castConfirmed: true,
+      chapters: [
+        { id: 1, title: 'My Sticky Name', slug: '01-my-sticky-name', titleOverridden: true },
+        { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+      ],
+      coverGradient: ['#000', '#fff'],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }));
+
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+
+    const onDisk = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      chapters: Array<{ title: string; titleOverridden?: boolean }>;
+      chapterTitleParserVersion?: number;
+    };
+    expect(onDisk.chapters[0].title).toBe('My Sticky Name');
+    expect(onDisk.chapters[0].titleOverridden).toBe(true);
+    expect(onDisk.chapters[1].title).toBe('Chapter 2 — A Manifest');
+    expect(onDisk.chapterTitleParserVersion).toBe(CHAPTER_TITLE_PARSER_VERSION);
+  });
+
   it('skips refresh on parse error (corrupt EPUB) — no crash, titles preserved', async () => {
     /* Replace the source with a .epub-named file containing non-zip
        bytes that ALSO isn't valid UTF-8 (so the legacy-text-as-binary
