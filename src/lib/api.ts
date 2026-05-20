@@ -1886,6 +1886,60 @@ async function mockSetChapterExcluded(
   };
 }
 
+/* Plan 78 — user-supplied chapter rename. Server updates state.json
+   atomically (trimming whitespace, rejecting empty / >200-char), flips
+   `titleOverridden` to true so subsequent heuristic refresh-titles
+   passes leave it alone, and renames the on-disk audio file if any
+   exists. Sentence ids and analysis cache are untouched — pure label
+   mutation. */
+export interface RenameChapterResponse {
+  id: number;
+  title: string;
+  slug: string;
+  titleOverridden: boolean;
+}
+async function realRenameChapter(
+  bookId: string,
+  chapterId: number,
+  title: string,
+): Promise<RenameChapterResponse> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/rename`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Chapter rename failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockRenameChapter(
+  _bookId: string,
+  chapterId: number,
+  title: string,
+): Promise<RenameChapterResponse> {
+  await wait(60);
+  const trimmed = title.trim();
+  if (trimmed.length === 0) throw new Error('Title must not be empty.');
+  if (trimmed.length > 200) throw new Error('Title must be 200 characters or fewer.');
+  return {
+    id: chapterId,
+    title: trimmed,
+    slug: `${String(chapterId).padStart(2, '0')}-mock`,
+    titleOverridden: true,
+  };
+}
+
 /* Chapter restructure — merge/split/reorder (plan 51).
    Pure-remap semantics: sentences keep their text + characterId +
    voice assignment; only chapterId pointers and per-chapter sentence
@@ -3068,6 +3122,7 @@ const real = {
   deleteBook: realDeleteBook,
   reparseBook: realReparseBook,
   setChapterExcluded: realSetChapterExcluded,
+  renameChapter: realRenameChapter,
   mergeChapters: realMergeChapters,
   splitChapter: realSplitChapter,
   reorderChapters: realReorderChapters,
@@ -3197,6 +3252,7 @@ const mock = {
   deleteBook: mockDeleteBook,
   reparseBook: mockReparseBook,
   setChapterExcluded: mockSetChapterExcluded,
+  renameChapter: mockRenameChapter,
   mergeChapters: mockMergeChapters,
   splitChapter: mockSplitChapter,
   reorderChapters: mockReorderChapters,

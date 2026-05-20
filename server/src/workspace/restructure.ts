@@ -79,6 +79,11 @@ export interface ExcludeOp {
   excluded: boolean;
 }
 
+export interface RenameOp {
+  chapterId: number;
+  title: string;
+}
+
 /* -- helpers -------------------------------------------------------- */
 
 function chapterSlug(id: number, title: string): string {
@@ -273,6 +278,11 @@ function buildNewStateChapters(
       // Preserve audio metadata — file will be renamed, content valid
       if (oldChapter.audioModelKey) base.audioModelKey = oldChapter.audioModelKey;
       if (oldChapter.audioRenderedAt) base.audioRenderedAt = oldChapter.audioRenderedAt;
+      // Preserve the user's rename override — title carried verbatim
+      // from old chapter via `hint.title` above, so the override is
+      // still meaningful and the refresh-titles passes must continue
+      // to skip it after the renumber.
+      if (oldChapter.titleOverridden) base.titleOverridden = true;
     }
     return base;
   });
@@ -539,6 +549,8 @@ export function applyMerge(
   const lastIdx = indices[indices.length - 1];
   const mergedOldIds = indices.map((i) => sortedHintsIds[i]);
 
+  const mergedTitleSupplied =
+    typeof op.mergedTitle === 'string' && op.mergedTitle.trim().length > 0;
   const mergedTitle =
     (op.mergedTitle ?? '').trim() || sortedHints[firstIdx].title;
   const mergedBody = mergedOldIds
@@ -589,7 +601,15 @@ export function applyMerge(
   // Old narrative order for sentence concatenation
   const oldChapterIdOrder = sortedHintsIds;
 
-  const newStateChapters = buildNewStateChapters(state, newHints, fates);
+  const newStateChaptersRaw = buildNewStateChapters(state, newHints, fates);
+  // If the user supplied an explicit `mergedTitle`, the merged chapter's
+  // title is a user-authored override — flag it so subsequent
+  // refresh-titles passes leave it alone.
+  const newStateChapters = mergedTitleSupplied
+    ? newStateChaptersRaw.map((c) =>
+        c.id === mergedNewId ? { ...c, titleOverridden: true } : c,
+      )
+    : newStateChaptersRaw;
   const { sentences: newSentences, remap, warnings } = remapSentences(
     sentences,
     fates,
@@ -698,6 +718,8 @@ export function applySplit(
   const firstBody = targetHint.body.slice(0, splitIdx).trimEnd();
   const secondBody = targetHint.body.slice(splitIdx).trimStart();
 
+  const newTitleSupplied =
+    typeof op.newTitle === 'string' && op.newTitle.trim().length > 0;
   const secondTitle =
     (op.newTitle ?? '').trim() || `${targetHint.title} (cont.)`;
 
@@ -742,7 +764,15 @@ export function applySplit(
     });
   });
 
-  const newStateChapters = buildNewStateChapters(state, newHints, fates);
+  const newStateChaptersRaw = buildNewStateChapters(state, newHints, fates);
+  // If the user supplied an explicit `newTitle`, the new chapter's
+  // title is a user-authored override — flag it so subsequent
+  // refresh-titles passes leave it alone.
+  const newStateChapters = newTitleSupplied
+    ? newStateChaptersRaw.map((c) =>
+        c.id === secondHalfNewId ? { ...c, titleOverridden: true } : c,
+      )
+    : newStateChaptersRaw;
   const { sentences: newSentences, remap, warnings } = remapSentences(
     sentences,
     fates,
@@ -836,6 +866,12 @@ export function applyRefreshTitles(
   let parserAligned = 0;
   let stagedChapters = state.chapters.map((c, i) => {
     if (!parsedAligned) return c;
+    // Hard gate: the user has manually renamed this chapter, so the
+    // heuristic title-refresh MUST leave it alone regardless of what
+    // the source manuscript currently parses to. GENERIC_TITLE_RE
+    // below is the legacy backup gate (catches chapters that pre-date
+    // the override flag).
+    if (c.titleOverridden) return c;
     const candidate = opts.parsedTitles[i];
     if (!candidate || candidate === c.title) return c;
     if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;
@@ -867,6 +903,8 @@ export function applyRefreshTitles(
     for (const bucket of sentencesByChapter.values()) bucket.sort((a, b) => a.id - b.id);
 
     stagedChapters = stagedChapters.map((c) => {
+      // Same hard override gate as the parser-aligned pass above.
+      if (c.titleOverridden) return c;
       if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;
       const chapterSentences = sentencesByChapter.get(c.id);
       const firstSentence = chapterSentences?.[0]?.text?.trim();
@@ -1010,6 +1048,110 @@ export function applyExclude(
     audioOps: [],
     warnings,
   });
+}
+
+/* -- rename --------------------------------------------------------- */
+
+/** Hard-set a chapter's title to a user-supplied value and lock it
+    against future heuristic refresh passes via `titleOverridden=true`.
+    Pure label mutation — chapter id is unchanged, sentence ids are
+    untouched, sentence remap is identity. The chapter's slug is
+    re-derived from the new title; if the chapter has rendered audio
+    on disk, an audio rename op is emitted so the file follows the new
+    slug (audio bytes themselves are unchanged — content valid).
+
+    Why not via the heavier merge/split machinery? Rename doesn't touch
+    sentences, doesn't change the chapter count, and doesn't trigger
+    re-analysis — running `postProcessRestructure` on it would be wasted
+    work. Kept inline here for clarity. */
+export function applyRename(
+  state: BookStateJson,
+  hints: readonly ChapterHint[],
+  sentences: readonly RestructureSentence[],
+  op: RenameOp,
+): RestructureResult {
+  if (typeof op.chapterId !== 'number' || !Number.isInteger(op.chapterId)) {
+    throw new Error('Rename requires a chapter id (integer).');
+  }
+  if (typeof op.title !== 'string') {
+    throw new Error('Rename requires a title (string).');
+  }
+  const cleanTitle = op.title.trim();
+  if (cleanTitle.length === 0) {
+    throw new Error('Title must not be empty.');
+  }
+  if (cleanTitle.length > 200) {
+    throw new Error('Title must be 200 characters or fewer.');
+  }
+
+  const idx = state.chapters.findIndex((c) => c.id === op.chapterId);
+  if (idx < 0) {
+    throw new Error(`Chapter ${op.chapterId} not found.`);
+  }
+
+  const oldChapter = state.chapters[idx];
+  const newSlug = chapterSlug(oldChapter.id, cleanTitle);
+
+  // No-op fast path: title unchanged + already overridden. Skip the
+  // mtime touch so a duplicate-save click doesn't churn state.json.
+  if (oldChapter.title === cleanTitle && oldChapter.titleOverridden === true) {
+    return {
+      state,
+      hints: hints.slice(),
+      sentences: sentences.slice(),
+      remap: sentences.map((s) => ({
+        oldChapterId: s.chapterId,
+        oldSentenceId: s.id,
+        newChapterId: s.chapterId,
+        newSentenceId: s.id,
+      })),
+      audioOps: [],
+      warnings: [],
+    };
+  }
+
+  const newChapter = {
+    ...oldChapter,
+    title: cleanTitle,
+    slug: newSlug,
+    titleOverridden: true,
+  };
+  const newStateChapters = state.chapters.map((c, i) => (i === idx ? newChapter : c));
+
+  const audioOps: AudioOp[] = [];
+  if (oldChapter.slug !== newSlug && oldChapter.audioRenderedAt) {
+    audioOps.push({
+      kind: 'rename',
+      from: oldChapter.slug,
+      to: newSlug,
+      newChapterId: newChapter.id,
+      newChapterTitle: cleanTitle,
+    });
+  }
+
+  // Hints carry the new title so subsequent analysis/generation passes
+  // see the user's choice rather than the stale parser-derived label.
+  const newHints: ChapterHint[] = hints.map((h) =>
+    h.id === op.chapterId ? { ...h, title: cleanTitle } : h,
+  );
+
+  return {
+    state: {
+      ...state,
+      chapters: newStateChapters,
+      updatedAt: new Date().toISOString(),
+    },
+    hints: newHints,
+    sentences: sentences.slice(),
+    remap: sentences.map((s) => ({
+      oldChapterId: s.chapterId,
+      oldSentenceId: s.id,
+      newChapterId: s.chapterId,
+      newSentenceId: s.id,
+    })),
+    audioOps,
+    warnings: [],
+  };
 }
 
 /* -- reorder -------------------------------------------------------- */

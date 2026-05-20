@@ -381,6 +381,52 @@ paths:
         '404':
           description: Book or chapter not found
 
+  /api/books/{bookId}/chapters/{chapterId}/rename:
+    post:
+      summary: Override a chapter's title with a user-supplied label
+      operationId: renameChapter
+      description: |
+        Sets `state.chapters[chapterId-1].title` to the supplied value and
+        flips `titleOverridden` to true so subsequent heuristic refresh
+        passes (`refreshChapterTitles` on book-state GET, and the
+        explicit POST `/chapters/refresh-titles`) leave it alone.
+        Writes state.json atomically; holds the per-book write lock.
+        Pure label mutation — does not touch sentence ids, slugs, audio
+        files, or analysis cache.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                  description: 'New chapter title. Server trims surrounding whitespace; rejects empty / whitespace-only / >200-char values with 400.'
+      responses:
+        '200':
+          description: Updated chapter entry from state.json
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, title, slug, titleOverridden]
+                properties:
+                  id: { type: integer }
+                  title: { type: string }
+                  slug: { type: string }
+                  titleOverridden: { type: boolean }
+        '400':
+          description: 'Bad request (empty / whitespace-only / oversized title)'
+        '404':
+          description: Book or chapter not found
+
   /api/books/{bookId}/chapters/merge:
     post:
       summary: Merge two or more contiguous chapters into one
@@ -2732,6 +2778,17 @@ components:
             the segments file's `synthesizedAt`. Surfaces alongside the
             drift badge so the user can see how stale the rendered audio
             is.
+        titleOverridden:
+          type: boolean
+          description: |
+            When true, the user has manually renamed this chapter and
+            the heuristic title-refresh passes (`refreshChapterTitles`
+            on book-state GET, and the explicit POST
+            `/chapters/refresh-titles`) MUST leave the title alone.
+            Set by `renameChapter` and by merge/split when a caller
+            supplies an explicit `mergedTitle` / `newTitle`. Absent or
+            false on parser-derived titles so heuristic improvements can
+            still land.
 
     Sentence:
       type: object
@@ -2770,6 +2827,7 @@ components:
                 type: string
                 enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
               audioRenderedAt: { type: string, format: date-time }
+              titleOverridden: { type: boolean }
         sentenceRemap:
           type: array
           description: |
