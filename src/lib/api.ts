@@ -37,6 +37,7 @@ import type {
   ExportLanInfo,
   BaseVoice,
   TtsEngine,
+  ChapterLoudness,
 } from './types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
@@ -434,6 +435,51 @@ const SB_CHAPTERS: BookStateJson['chapters'] = [
 
 function buildSolwayBayMockState(): BookStateResponse {
   const now = new Date().toISOString();
+  /* Plan 77 — seed each chapter with a deterministic mock LUFS payload so
+     the listen-view report card has something to render under mocks. The
+     spread mixes on-target (most), slight-drift (a couple), and off-target
+     (one) chapters so the demo content exercises every badge colour. Two
+     chapters intentionally carry `twoPass: false` to exercise the
+     single-pass-degrades-to-neutral path, and one is left as `null` to
+     prove the missing-sidecar fallback. */
+  const target = -16;
+  const driftPattern: Array<{ deltaFromTarget: number; twoPass: boolean } | null> = [
+    { deltaFromTarget: 0.1, twoPass: true },
+    { deltaFromTarget: -1.2, twoPass: true },
+    { deltaFromTarget: 0.4, twoPass: true },
+    { deltaFromTarget: 2.6, twoPass: true },
+    { deltaFromTarget: -0.5, twoPass: true },
+    { deltaFromTarget: 0.0, twoPass: true },
+    { deltaFromTarget: -3.2, twoPass: true },
+    { deltaFromTarget: 0.7, twoPass: true },
+    { deltaFromTarget: 4.4, twoPass: true },
+    { deltaFromTarget: -0.3, twoPass: true },
+    { deltaFromTarget: 0.0, twoPass: false },
+    { deltaFromTarget: -0.1, twoPass: true },
+    { deltaFromTarget: 1.1, twoPass: true },
+    null,
+    { deltaFromTarget: 0.0, twoPass: false },
+    { deltaFromTarget: -0.6, twoPass: true },
+    { deltaFromTarget: 0.2, twoPass: true },
+    { deltaFromTarget: 0.0, twoPass: true },
+  ];
+  const chapterLufs: Record<number, ChapterLoudness | null> = {};
+  for (let i = 0; i < SB_CHAPTERS.length; i++) {
+    const ch = SB_CHAPTERS[i];
+    const pattern = driftPattern[i] ?? null;
+    if (pattern === null) {
+      chapterLufs[ch.id] = null;
+      continue;
+    }
+    chapterLufs[ch.id] = {
+      i: target + pattern.deltaFromTarget,
+      lra: 7 + (i % 3),
+      tp: -1.5 - (i % 2) * 0.4,
+      target,
+      twoPass: pattern.twoPass,
+      measuredAt: new Date(Date.now() - (i + 1) * 36_000_000).toISOString(),
+    };
+  }
   return {
     state: {
       bookId: 'sb',
@@ -467,6 +513,7 @@ function buildSolwayBayMockState(): BookStateResponse {
        playable in the Listen view's playlist. */
     completedSlugs: SB_CHAPTERS.map((c) => c.slug),
     chapterCharacters: undefined,
+    chapterLufs,
     changeLog: null,
     analysis: undefined,
   };

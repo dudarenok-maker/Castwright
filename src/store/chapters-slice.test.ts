@@ -844,6 +844,51 @@ describe('chaptersSlice — hydrateFromBookState', () => {
     );
     expect(next.paused).toBe(true);
   });
+
+  /* Plan 77 — per-chapter EBU R128 sidecar hydration. The book-state
+     response now carries `chapterLufs: Record<chapterId, payload | null>`;
+     this reducer copies each value onto the runtime Chapter row's `lufs`
+     field so the listen-view report card + per-row drift badge can read
+     from one source of truth. */
+  it('hydrates chapter.lufs from the chapterLufs map keyed by chapter id', () => {
+    const start = baseState([]);
+    const lufsPayload = {
+      i: -16.02,
+      lra: 8.4,
+      tp: -2.1,
+      target: -16,
+      twoPass: true,
+      measuredAt: '2026-05-20T12:00:00.000Z',
+    };
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters,
+        completedSlugs: [],
+        characters: cast,
+        chapterLufs: { 1: lufsPayload, 2: null },
+      }),
+    );
+    expect(next.chapters[0].lufs).toEqual(lufsPayload);
+    /* `null` entry distinguishes "fetched but no data" from
+       "older server / not fetched" — the report card uses this for the
+       per-row neutral badge vs. the empty-state banner. */
+    expect(next.chapters[1].lufs).toBeNull();
+  });
+
+  it('leaves chapter.lufs undefined when chapterLufs is absent (older-server back-compat)', () => {
+    const start = baseState([]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters,
+        completedSlugs: [],
+        characters: cast,
+      }),
+    );
+    expect(next.chapters[0].lufs).toBeUndefined();
+    expect(next.chapters[1].lufs).toBeUndefined();
+  });
 });
 
 describe('chaptersSlice — misc reducers', () => {
