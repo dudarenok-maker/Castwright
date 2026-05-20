@@ -150,10 +150,14 @@ export function ConfirmCastView({
   };
 
   return (
-    <div className="relative min-h-[calc(100vh-64px)] py-12 px-6">
+    /* Plan 81 wave 3 — phone (375 px) + tablet (834 px) layouts. Outer
+       padding shrinks on `<sm:` so the cast cards keep at least 327 px
+       of inner room on a 375 px viewport; vertical padding tightens too
+       so the header doesn't push the first card below the fold. */
+    <div className="relative min-h-[calc(100vh-64px)] py-6 sm:py-12 px-4 sm:px-6">
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-40 pointer-events-none" />
       <div className="relative max-w-3xl mx-auto">
-        <div className="text-center mb-10">
+        <div className="text-center mb-6 sm:mb-10">
           <SectionLabel>Cast confirmation</SectionLabel>
           <div className="mt-5">
             <MixedHeading
@@ -162,7 +166,7 @@ export function ConfirmCastView({
               bold={title || 'The Northern Star'}
             />
           </div>
-          <p className="mt-4 text-ink/70 text-lg">
+          <p className="mt-4 text-ink/70 text-base sm:text-lg">
             <span className="font-semibold text-ink">{characters.length} speaking characters</span>{' '}
             detected ·{' '}
             <span className="font-semibold text-purple-deep">{matchedCount} matched</span> from your
@@ -200,8 +204,17 @@ export function ConfirmCastView({
           ))}
         </div>
 
-        <div className="mt-10 flex items-center justify-between gap-3">
-          <button onClick={onReanalyse} className="text-sm font-medium text-ink/60 hover:text-ink">
+        {/* Plan 81 wave 3 — on phone (<sm:) the long "Confirm cast and
+            review manuscript" button can't share a row with the Re-analyse
+            link without overflowing the 375 px viewport. Stack vertically
+            with the confirm action on top (primary intent first on touch);
+            tablet+ keeps the inline desktop layout. Re-analyse button
+            takes a min-h tap target on phone (WCAG 2.5.5). */}
+        <div className="mt-10 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
+          <button
+            onClick={onReanalyse}
+            className="text-sm font-medium text-ink/60 hover:text-ink min-h-[44px] sm:min-h-0 self-center sm:self-auto"
+          >
             Re-analyse manuscript
           </button>
           <PrimaryButton
@@ -275,7 +288,13 @@ function ConfirmCharacterCard({
       }}
       className={`bg-white rounded-3xl border shadow-card overflow-hidden transition-colors cursor-pointer hover:border-ink/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-peach/60 ${matched ? 'border-purple-deep/15' : 'border-ink/10'}`}
     >
-      <div className="p-5 grid grid-cols-[auto_1fr_auto] items-start gap-5">
+      {/* Plan 81 wave 3 — phone (<sm:) stacks the decision-tile column
+          below the avatar+info row so the fixed 340 px decision panel
+          doesn't overflow a 375 px viewport. The decision panel spans
+          both grid columns on phone and returns to the right-hand
+          column on tablet+ (`sm:` ≥640 px). Inner padding shrinks on
+          phone to claw back another 8 px each side. */}
+      <div className="p-4 sm:p-5 grid grid-cols-[auto_1fr] sm:grid-cols-[auto_1fr_auto] items-start gap-3 sm:gap-5">
         <Avatar name={character.name} color={character.color as CharColor} size={48} />
         <div className="min-w-0">
           <div className="flex items-center gap-2 mb-1">
@@ -324,9 +343,14 @@ function ConfirmCharacterCard({
 
         {/* Decision tiles own their own clicks — stopPropagation so picking
             match/generate doesn't bubble up to the card-level
-            "open profile" handler. */}
+            "open profile" handler. Plan 81 wave 3 — on phone the panel
+            spans both grid columns (full width under the avatar+info row);
+            on tablet+ it returns to a fixed 340 px right-hand column. */}
         {matched ? (
-          <div className="grid grid-cols-2 gap-2 w-[340px]" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="col-span-2 sm:col-span-1 grid grid-cols-2 gap-2 w-full sm:w-[340px]"
+            onClick={(e) => e.stopPropagation()}
+          >
             <DecisionTile
               active={decision === 'match'}
               onClick={() => onDecision('match')}
@@ -345,7 +369,10 @@ function ConfirmCharacterCard({
             />
           </div>
         ) : (
-          <div className="w-[340px]" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="col-span-2 sm:col-span-1 w-full sm:w-[340px]"
+            onClick={(e) => e.stopPropagation()}
+          >
             <DecisionTile
               active={true}
               swatch={voice}
@@ -381,8 +408,13 @@ function ConfirmCharacterCard({
                source wins on identity conflicts). Each side keeps its
                own audio identity, per-book metrics, and evidence quotes.
                Default off so the existing reuse-as-is flow is unchanged. */
+            /* Plan 81 wave 3 — `pl-9` indent stays; the whole label is the
+               tap target (clicking anywhere on the text toggles the
+               checkbox), so the multi-line text already exceeds 44 px on
+               every viewport. Min-h on phone is a belt-and-braces guard
+               for shorter book titles. */
             <label
-              className="flex items-start gap-3 text-xs text-ink/60 pl-9 cursor-pointer select-none"
+              className="flex items-start gap-3 text-xs text-ink/60 pl-9 cursor-pointer select-none min-h-[44px] sm:min-h-0"
               onKeyDown={(e) => {
                 if (e.key === ' ' || e.key === 'Enter') e.stopPropagation();
               }}
@@ -440,10 +472,14 @@ function DecisionTile({
   readonly,
 }: DecisionTileProps) {
   return (
+    /* Plan 81 wave 3 — explicit min-h on phone gives the decision tile a
+       WCAG 2.5.5 compliant tap target (≥44 px). The existing `p-3` +
+       8 px swatch + two text lines already exceeds that on desktop; the
+       min-h is a belt-and-braces guarantee for phone. */
     <button
       onClick={onClick}
       disabled={readonly}
-      className={`text-left p-3 rounded-2xl border transition-all ${active ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'} ${readonly ? 'cursor-default' : 'cursor-pointer'}`}
+      className={`text-left p-3 min-h-[44px] rounded-2xl border transition-all ${active ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'} ${readonly ? 'cursor-default' : 'cursor-pointer'}`}
     >
       <div className="flex items-start gap-3">
         {swatch ? (

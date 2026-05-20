@@ -479,3 +479,70 @@ describe('ConfirmCastView — bulk apply pill', () => {
     expect(screen.queryByRole('button', { name: /Apply all .* match/ })).toBeNull();
   });
 });
+
+/* Plan 81 wave 3 — phone (375 px) + tablet (834 px) responsive layout.
+   jsdom doesn't actually apply CSS so we can't measure pixel widths; what
+   we can pin is the responsive class contract — the decision-tile panel
+   must declare BOTH a fluid mobile width (`w-full`) AND the desktop
+   `sm:w-[340px]` fallback, AND span both grid columns on phone so it
+   stacks below the avatar+info row instead of overflowing a 375 px
+   viewport. The grid row template itself must drop the third
+   (decision-tile) column on phone (`grid-cols-[auto_1fr] sm:grid-cols-[auto_1fr_auto]`).
+   The accompanying Playwright spec (Wave 5) is the layout authority;
+   these checks lock the class contract so an accidental revert
+   (e.g. someone re-adds `w-[340px]` without the `w-full sm:` prefix)
+   breaks here in pre-commit instead of slipping to e2e. */
+describe('ConfirmCastView — mobile + tablet layout (plan 81 wave 3)', () => {
+  it('decision-tile panel for a matched character is fluid on phone and 340 px on tablet+', () => {
+    renderView();
+    /* The matched-character panel hosts both DecisionTiles in a grid. */
+    const reuseTile = screen.getByText('From Book One').closest('button')!;
+    const panel = reuseTile.parentElement!;
+    expect(panel.className).toMatch(/\bw-full\b/);
+    expect(panel.className).toMatch(/(^|\s)sm:w-\[340px\](\s|$)/);
+    /* Spans both grid columns on phone, returns to single column on tablet+. */
+    expect(panel.className).toMatch(/\bcol-span-2\b/);
+    expect(panel.className).toMatch(/\bsm:col-span-1\b/);
+  });
+
+  it('decision-tile panel for an unmatched character is fluid on phone and 340 px on tablet+', () => {
+    renderView();
+    /* Sophie has no matchedFrom — the single readonly Generated tile is wrapped
+       in a panel div whose responsive shape mirrors the matched case. */
+    const generatedTile = screen.getByText('Generated').closest('button')!;
+    const panel = generatedTile.parentElement!;
+    expect(panel.className).toMatch(/\bw-full\b/);
+    expect(panel.className).toMatch(/(^|\s)sm:w-\[340px\](\s|$)/);
+    expect(panel.className).toMatch(/\bcol-span-2\b/);
+    expect(panel.className).toMatch(/\bsm:col-span-1\b/);
+  });
+
+  it('card grid drops the decision-tile column on phone and restores it on tablet+', () => {
+    renderView();
+    /* The avatar+info+tiles grid lives one level inside the article. */
+    const article = screen.getByRole('heading', { name: 'Sophie' }).closest('article')!;
+    const grid = article.querySelector('.grid')!;
+    expect(grid.className).toMatch(/grid-cols-\[auto_1fr\]/);
+    expect(grid.className).toMatch(/sm:grid-cols-\[auto_1fr_auto\]/);
+  });
+
+  it('every DecisionTile button declares a ≥44 px minimum tap target (WCAG 2.5.5)', () => {
+    renderView();
+    const tiles = screen.getAllByRole('button').filter((b) => b.className.includes('rounded-2xl'));
+    /* Two tiles for Keefe (match + generate) + one readonly tile for Sophie. */
+    expect(tiles.length).toBeGreaterThanOrEqual(3);
+    for (const tile of tiles) {
+      expect(tile.className).toMatch(/(^|\s)min-h-\[44px\](\s|$)/);
+    }
+  });
+
+  it('confirm-action row stacks on phone (flex-col-reverse) and goes side-by-side on tablet+', () => {
+    renderView();
+    /* The "Confirm cast and review manuscript" PrimaryButton lives in
+       the row alongside the Re-analyse link. */
+    const confirmBtn = screen.getByRole('button', { name: /Confirm cast and review manuscript/ });
+    const actionRow = confirmBtn.parentElement!;
+    expect(actionRow.className).toMatch(/flex-col-reverse/);
+    expect(actionRow.className).toMatch(/sm:flex-row/);
+  });
+});
