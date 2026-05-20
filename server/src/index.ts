@@ -17,7 +17,8 @@ import { installTimestamps } from './logger.js';
 installTimestamps();
 
 import express from 'express';
-import { mkdirSync } from 'node:fs';
+import { createServer as createHttpsServer } from 'node:https';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { mountFrontendStatic } from './frontend-static.js';
 import { fileURLToPath } from 'node:url';
@@ -39,7 +40,8 @@ import { chapterAudioRouter } from './routes/chapter-audio.js';
 import { clipRouter } from './routes/clip.js';
 import { chaptersRestructureRouter } from './routes/chapters-restructure.js';
 import { exportRouter } from './routes/export.js';
-import { exportLanRouter, enumerateLanUrls } from './routes/export-lan.js';
+import { exportLanRouter, enumerateLanUrls, isLanHttpsEnabled } from './routes/export-lan.js';
+import { certRootRouter } from './routes/cert-root.js';
 import {
   portableExportRouter,
   portableImportRouter,
@@ -147,6 +149,7 @@ app.use('/api/books', exportRouter); // mounts /:bookId/exports (POST + GET stat
 app.use('/api/books', portableExportRouter); // plan 75 — mounts /:bookId/export/portable (single GET)
 app.use('/api/import', portableImportRouter); // plan 75 — mounts POST /portable (multipart bundle)
 app.use('/api/export', exportLanRouter); // mounts /lan (LAN URL enumeration for the export modal)
+app.use('/cert', certRootRouter); // plan 81 — mounts /root.crt (mkcert root CA download for mobile LAN HTTPS)
 app.use('/api/books', shareRouter); // mounts /:bookId/share (POST — mint a slugged share URL — plan 67)
 app.use('/', sharePublicRouter); // mounts /share/:slug (public-facing M4B proxy — plan 67)
 app.use('/api/books', revisionsRouter); // mounts /:bookId/revisions (drift diff over segments snapshots)
@@ -173,6 +176,7 @@ app.use('/api/ollama', ollamaHealthRouter); // mounts GET /health (local LLM ana
 }
 
 const PORT = Number(process.env.PORT ?? 8080);
+const LAN_HTTPS_PORT = Number(process.env.LAN_HTTPS_PORT ?? 8443);
 
 /* Sidecar child-process handle: populated when the spawn succeeds, null
    when the preference is off OR something is already listening on :9000
@@ -180,16 +184,33 @@ const PORT = Number(process.env.PORT ?? 8080);
    the SIGINT/SIGTERM handlers below can reach it. */
 let sidecarHandle: SidecarHandle | null = null;
 
-app.listen(PORT, () => {
+/* Plan 81 mobile + tablet support — when LAN_HTTPS=1 is set, flip the
+   listener from HTTP on :8080 to HTTPS on :8443 using mkcert-generated
+   certs from .run/certs/. iOS Safari / Android Chrome won't show the
+   "Not Secure" warning AND clipboard / file-picker / mic / camera /
+   service-worker APIs become available on mobile.
+
+   When LAN_HTTPS is unset, behaviour is identical to before plan 81:
+   plain HTTP, app.listen(PORT) binds all interfaces, every existing
+   workflow unchanged. The HTTPS path is opt-in only via npm run start:lan
+   (which sets LAN_HTTPS=1 via cross-env). */
+const lanHttps = isLanHttpsEnabled();
+const repoRoot = resolve(__dirname, '..', '..');
+const LAN_CERT_FILE = resolve(repoRoot, '.run', 'certs', 'lan-cert.pem');
+const LAN_KEY_FILE = resolve(repoRoot, '.run', 'certs', 'lan-key.pem');
+
+const listenerCallback = () => {
+  const protocol: 'http' | 'https' = lanHttps ? 'https' : 'http';
+  const listenPort = lanHttps ? LAN_HTTPS_PORT : PORT;
   // eslint-disable-next-line no-console
-  console.log(`[server] listening on http://localhost:${PORT}`);
+  console.log(`[server] listening on ${protocol}://localhost:${listenPort}`);
   // eslint-disable-next-line no-console
   console.log(`[server] workspace root: ${WORKSPACE_ROOT}`);
 
   /* Log the LAN URLs so the user can spot which IP to point their phone's
-     browser at for the audiobook export sideload flow. Node's app.listen
-     already binds all interfaces, so every URL here genuinely reaches us. */
-  const lan = enumerateLanUrls(PORT);
+     browser at for the audiobook export sideload flow. Node's listen
+     binds all interfaces, so every URL here genuinely reaches us. */
+  const lan = enumerateLanUrls(listenPort, protocol);
   for (const url of lan.urls) {
     // eslint-disable-next-line no-console
     console.log(`[server] LAN URL: ${url}`);
@@ -246,7 +267,25 @@ app.listen(PORT, () => {
       repoRoot: resolve(__dirname, '..', '..'),
     });
   })();
-});
+};
+
+if (lanHttps) {
+  if (!existsSync(LAN_CERT_FILE) || !existsSync(LAN_KEY_FILE)) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[server] LAN_HTTPS=1 set but cert files are missing.\n` +
+        `[server] Expected: ${LAN_CERT_FILE}\n` +
+        `[server]           ${LAN_KEY_FILE}\n` +
+        `[server] Run 'npm run install:cert-mobile' first to bootstrap mkcert and generate per-LAN-IP certs.`,
+    );
+    process.exit(1);
+  }
+  const key = readFileSync(LAN_KEY_FILE);
+  const cert = readFileSync(LAN_CERT_FILE);
+  createHttpsServer({ key, cert }, app).listen(LAN_HTTPS_PORT, listenerCallback);
+} else {
+  app.listen(PORT, listenerCallback);
+}
 
 /* On Ctrl+C or kill, reap the sidecar tree before exit so port 9000 is
    free for the next boot and stop-app.bat's port sweep has nothing left
