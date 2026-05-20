@@ -1095,9 +1095,15 @@ export interface paths {
          * Enumerate the server's reachable LAN URLs
          * @description Returns non-loopback IPv4 addresses the Node server is reachable
          *     on so the export modal can render a sideload URL + QR for the
-         *     user's phone. Loopback (127.x) and link-local v6 (fe80::) are
-         *     filtered out — they're useless for sideloading. Order matches
-         *     `os.networkInterfaces()` enumeration; the modal picks the first.
+         *     user's phone, and so the mobile + tablet support flow (plan 81)
+         *     can render a "use the app on this URL" pill. Loopback (127.x)
+         *     and link-local v6 (fe80::) are filtered out — they're useless
+         *     for sideloading. Order matches `os.networkInterfaces()`
+         *     enumeration; the modal picks the first.
+         *
+         *     When LAN_HTTPS=1 is set on the server, the response's `protocol`
+         *     field is `https` and `port` is 8443 (or LAN_HTTPS_PORT override).
+         *     Otherwise `protocol` is `http` and `port` is 8080 (or PORT).
          */
         get: operations["getExportLanUrls"];
         put?: never;
@@ -2199,8 +2205,13 @@ export interface components {
             expiresAt?: string | null;
         };
         ExportLanInfo: {
-            /** @description The Node server's listening port (8080 by default). */
+            /** @description The Node server's listening port. 8080 in HTTP mode (default), 8443 in HTTPS mode (LAN_HTTPS=1, plan 81 mobile + tablet support). */
             port: number;
+            /**
+             * @description Scheme of the URLs in `urls`. `https` when LAN_HTTPS=1 is set (mkcert-backed TLS for mobile/tablet LAN access), `http` otherwise.
+             * @enum {string}
+             */
+            protocol: "http" | "https";
             urls: string[];
         };
     };

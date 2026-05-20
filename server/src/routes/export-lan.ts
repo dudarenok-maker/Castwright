@@ -12,7 +12,14 @@
 
    Order matches `os.networkInterfaces()` enumeration — the modal picks
    the first. Server defaults to listening on all interfaces (Node's
-   `app.listen(port)` binds 0.0.0.0), so any of these IPs reaches us. */
+   `app.listen(port)` binds 0.0.0.0), so any of these IPs reaches us.
+
+   Plan 81 mobile + tablet support: when LAN_HTTPS=1 is set, the protocol
+   becomes `https` and the default port becomes 8443 to match Node's
+   https.createServer listener. The user-visible LAN access protocol
+   for the mobile + tablet round runs over HTTPS (mkcert local CA so
+   browsers don't show "Not Secure" warnings and clipboard / file-picker
+   / mic / camera APIs become available on phone Safari/Chrome). */
 
 import { networkInterfaces } from 'node:os';
 import { Router, type Request, type Response } from 'express';
@@ -22,9 +29,14 @@ export const exportLanRouter = Router();
 export interface ExportLanInfo {
   urls: string[];
   port: number;
+  protocol: 'http' | 'https';
 }
 
-export function enumerateLanUrls(port: number): ExportLanInfo {
+export function isLanHttpsEnabled(): boolean {
+  return process.env.LAN_HTTPS === '1';
+}
+
+export function enumerateLanUrls(port: number, protocol: 'http' | 'https' = 'http'): ExportLanInfo {
   const urls: string[] = [];
   const ifaces = networkInterfaces();
   for (const list of Object.values(ifaces)) {
@@ -33,13 +45,17 @@ export function enumerateLanUrls(port: number): ExportLanInfo {
       if (iface.internal) continue;
       if (iface.family !== 'IPv4') continue;
       if (iface.address.startsWith('169.254.')) continue;
-      urls.push(`http://${iface.address}:${port}`);
+      urls.push(`${protocol}://${iface.address}:${port}`);
     }
   }
-  return { urls, port };
+  return { urls, port, protocol };
 }
 
 exportLanRouter.get('/lan', (_req: Request, res: Response) => {
-  const port = Number(process.env.PORT ?? 8080);
-  res.json(enumerateLanUrls(port));
+  const httpsMode = isLanHttpsEnabled();
+  const port = httpsMode
+    ? Number(process.env.LAN_HTTPS_PORT ?? 8443)
+    : Number(process.env.PORT ?? 8080);
+  const protocol: 'http' | 'https' = httpsMode ? 'https' : 'http';
+  res.json(enumerateLanUrls(port, protocol));
 });
