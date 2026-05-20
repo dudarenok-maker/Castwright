@@ -1783,6 +1783,15 @@ components:
             shipped). Always paired with `coverImageUrl` — framing on a
             book without a cover is meaningless.
         pinned: { type: boolean }
+        tags:
+          type: array
+          items: { type: string }
+          description: |
+            Free-form user-editable tag strings persisted to
+            `BookStateJson.tags` in `<bookDir>/.audiobook/state.json`. Drives
+            the library view's tag-chip filter row (plan 73). Defaults to
+            `[]` when missing from disk — books written before the field
+            landed continue to load and render the empty chip set.
 
     # --- Import + confirm-metadata ---------------------------------
     ImportCandidate:

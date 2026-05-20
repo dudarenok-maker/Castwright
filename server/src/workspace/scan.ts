@@ -125,6 +125,12 @@ export interface BookStateJson {
      extension used by `generation.ts` and the codec dispatch in
      `server/src/tts/mp3.ts:encodePcmToAudio`. */
   audioFormat?: 'mp3' | 'aac-m4a' | 'opus';
+  /* User-editable free-form tag strings. Powers the library view's
+     tag-chip filter row (plan 73). Optional on disk so books written
+     before the field landed continue to load — `scanBook` defaults to
+     `[]` so the wire shape always carries the array. Edits round-trip
+     through PUT /api/books/:bookId/state with `slice: 'state'`. */
+  tags?: string[];
 }
 
 /** Resolved chapter audio format for a book — `audioFormat` from
@@ -164,6 +170,11 @@ export interface LibraryBook {
       when `coverImageUrl` is present too. */
   coverFraming?: { offsetX: number; offsetY: number; zoom: number };
   pinned?: boolean;
+  /** Plan 73 — user-editable tags. Always an array on the wire
+      (defaults to `[]` for books whose state.json predates the
+      field) so the chip-filter row in the library view doesn't need
+      to handle the undefined case. */
+  tags: string[];
 }
 
 export interface LibrarySeries {
@@ -440,6 +451,11 @@ async function scanBook(
     coverGradient,
     coverImageUrl,
     coverFraming,
+    /* Plan 73 — surface state.json tags onto the wire. Default to []
+       so books written before the field landed render an empty chip
+       row rather than tripping the frontend's `book.tags.includes()`
+       guard. */
+    tags: Array.isArray(state?.tags) ? [...state!.tags] : [],
   };
 }
 
