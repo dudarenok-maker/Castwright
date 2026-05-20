@@ -950,7 +950,7 @@ describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, pl
   });
 });
 
-describe('chaptersSlice — renameChapter (plan 77)', () => {
+describe('chaptersSlice — renameChapter (plan 78)', () => {
   it('updates the title and locks titleOverridden=true on the target chapter', () => {
     const start = baseState([
       makeChapter(1, { title: 'Chapter 1' }),

@@ -1,4 +1,4 @@
-/* Plan 77 — chapter rename modal. Mirrors edit-book-meta.tsx visually
+/* Plan 78 — chapter rename modal. Mirrors edit-book-meta.tsx visually
    so the rename surface feels consistent with the existing per-book
    metadata editor. Opened from a pencil-icon button on the chapter row
    in the Listen / Restructure / Generation views.

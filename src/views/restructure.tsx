@@ -33,7 +33,7 @@ export function RestructureView({ bookId }: Props) {
   const sentences = useAppSelector((s) => s.manuscript.sentences);
   const [busy, setBusy] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
-  /* Plan 77 — rename modal hoisted to view level so the per-row pencil
+  /* Plan 78 — rename modal hoisted to view level so the per-row pencil
      button just opens it. */
   const [renamingChapter, setRenamingChapter] = useState<Chapter | null>(null);
 
