@@ -358,6 +358,48 @@ describe('BookLibraryView — loading affordance', () => {
     expect(store.getState().library.pausedSnapshots).toEqual({ a: snapA });
   });
 
+  it('renders the "Import portable bundle" button when onImportPortable is provided, and fires the handler on file pick (plan 75)', async () => {
+    const onImportPortable = vi.fn();
+    const store = configureStore({
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+      preloadedState: {
+        library: { loaded: true, authors: [], books: [], pausedSnapshots: {} },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <BookLibraryView
+          authors={[]}
+          activeBookId={null}
+          onOpenBook={vi.fn()}
+          onDeleteBook={vi.fn()}
+          onReparseBook={vi.fn()}
+          onEditBook={vi.fn()}
+          onStartNew={vi.fn()}
+          onImportPortable={onImportPortable}
+        />
+      </Provider>,
+    );
+    const button = screen.getByTestId('library-import-portable-button');
+    expect(button).toBeInTheDocument();
+    const input = screen.getByTestId('library-import-portable-input') as HTMLInputElement;
+    const file = new File(['fake-zip-bytes'], 'demo.portable.zip', { type: 'application/zip' });
+    /* Simulate the file-pick by populating files on the hidden input
+       and firing change — jsdom does not run a real file picker. */
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    act(() => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(onImportPortable).toHaveBeenCalledTimes(1);
+    expect(onImportPortable.mock.calls[0][0]).toBeInstanceOf(File);
+    expect(onImportPortable.mock.calls[0][0].name).toBe('demo.portable.zip');
+  });
+
+  it('omits the Import button entirely when onImportPortable is not provided (backward-compat)', () => {
+    renderView({ loaded: true, authors: [] });
+    expect(screen.queryByTestId('library-import-portable-button')).not.toBeInTheDocument();
+  });
+
   it('swaps skeleton → populated grid when hydrate dispatches', () => {
     /* The view's `authors` is a prop, not a selector — the parent route
        (routes/index.tsx) reads `library.authors` from the store and passes

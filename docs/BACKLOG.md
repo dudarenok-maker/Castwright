@@ -76,16 +76,6 @@ Source: net-new (2026-05-18).
 - _Depends on:_ none.
 - _Benefit (user):_ re-uploading a manuscript today shows no indication of what changed — the user must manually re-read or trust external version control. Diff view closes that gap.
 
-### 10. Portable book export with embedded state
-
-Source: net-new (2026-05-18).
-
-- _What:_ Add an "Export book as portable archive" affordance: zip up `<bookDir>/.audiobook/state.json` + `manuscript.txt` + all audio + cover into a single `<bookId>.zip`. Importing that zip into another workspace drops it into `<workspace>/<bookId>/` and the library view picks it up after a refresh.
-- _Acceptance:_ Export book → produces `bonus-Marlow-story.zip` containing all needed state. Drop zip into a second workspace's `import/` folder → first run picks it up, restores book to library with full cast + audio + listen progress intact. Vitest covers the manifest; e2e covers the export-then-import flow.
-- _Key files:_ new `server/src/export/build-portable-book.ts`; new `server/src/import/scan-import-folder.ts`; `src/views/listen.tsx` (export button).
-- _Depends on:_ none.
-- _Benefit (user):_ hand-off between machines without re-casting; backup-and-restore semantics for individual books.
-
 ### 12. Multi-step rollback / snapshot-per-entry (revision history)
 
 Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ships the read-only history view; this entry covers the multi-step rollback that needs snapshot-per-entry storage.
