@@ -18,6 +18,10 @@ import type { WorkspaceInfo } from '../../lib/api';
 
 type Filter = 'all' | 'in_progress' | 'complete';
 
+/** Library presentation mode. Persisted across reloads via `localStorage`
+    by the orchestrator — see `book-library.tsx`. */
+export type LibraryViewMode = 'card' | 'table';
+
 interface Totals {
   books: number;
   runtime: number;
@@ -32,6 +36,8 @@ interface Props {
   filter: Filter;
   setFilter: (f: Filter) => void;
   filters: Array<{ id: Filter; label: string }>;
+  viewMode: LibraryViewMode;
+  setViewMode: (m: LibraryViewMode) => void;
   onStartNew: () => void;
 }
 
@@ -42,6 +48,8 @@ export function LibraryChrome({
   filter,
   setFilter,
   filters,
+  viewMode,
+  setViewMode,
   onStartNew,
 }: Props) {
   return (
@@ -73,16 +81,43 @@ export function LibraryChrome({
         <StatTile label="In progress" value={totals.inProgress} />
       </div>
 
-      <div className="flex items-center gap-1 mb-6">
-        {filters.map((f) => (
+      <div className="flex items-center justify-between gap-3 mb-6">
+        <div className="flex items-center gap-1">
+          {filters.map((f) => (
+            <button
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${filter === f.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/[0.04]'}`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div
+          data-testid="library-view-mode-toggle"
+          role="group"
+          aria-label="Library view mode"
+          className="inline-flex items-center gap-0.5 p-0.5 rounded-full bg-ink/[0.04] border border-ink/10"
+        >
           <button
-            key={f.id}
-            onClick={() => setFilter(f.id)}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${filter === f.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/[0.04]'}`}
+            type="button"
+            onClick={() => setViewMode('card')}
+            aria-pressed={viewMode === 'card'}
+            data-testid="library-view-mode-card"
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${viewMode === 'card' ? 'bg-white text-ink shadow-sm' : 'text-ink/55 hover:text-ink'}`}
           >
-            {f.label}
+            Cards
           </button>
-        ))}
+          <button
+            type="button"
+            onClick={() => setViewMode('table')}
+            aria-pressed={viewMode === 'table'}
+            data-testid="library-view-mode-table"
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${viewMode === 'table' ? 'bg-white text-ink shadow-sm' : 'text-ink/55 hover:text-ink'}`}
+          >
+            Table
+          </button>
+        </div>
       </div>
     </>
   );
