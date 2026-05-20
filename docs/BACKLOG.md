@@ -46,16 +46,6 @@ Ranking within each bucket = top is highest priority.
 
 Ordered in clusters: audio quality → listening UX → library/workflow → cast/revisions → voice library → coverage & ops → streaming/sync → distribution → tracking → deferred listener-app handoffs.
 
-### 1. Audio loudness normalization (ffmpeg `loudnorm`)
-
-Source: net-new (2026-05-17). Validated absent in `server/src/tts/mp3.ts` (raw PCM → LAME VBR, no loudness filter).
-
-- _What:_ Add an optional `loudnorm` pass to the chapter encode pipeline. Two-pass mode (analyse → apply) gates on a config knob (`AUDIO_LOUDNORM=off|single|two-pass`, default `single`). Targets EBU R128 `-16 LUFS`, `-1.5 dBTP`, `LRA 11`.
-- _Acceptance:_ New server Vitest spec asserts the ffmpeg invocation includes the loudnorm filter when enabled; manual: compare two chapters generated with different voices, both land within ±1 LU of target. Skip when `AUDIO_LOUDNORM=off`.
-- _Key files:_ `server/src/tts/mp3.ts`; `server/.env.example` (new knob); `docs/features/28-chapter-audio-format.md` (extend with a "Loudness" section).
-- _Depends on:_ none. Encode latency cost is ~20-40% for single-pass loudnorm; document the trade-off.
-- _Benefit (user):_ per-voice volume drift across chapters today forces the listener to ride the volume knob. Loudnorm makes the book sit at one level.
-
 ### 2. AAC/M4A or Opus output (swappable encoder)
 
 Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
