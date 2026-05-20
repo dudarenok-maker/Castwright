@@ -111,6 +111,68 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+/* Wave 3 — phone viewport contract: the dropzone, model selector, and
+   action chips render full-width at 375×667 and the primary tap targets
+   (paste-text button, dropzone, model select) hit the ≥44px height the
+   touch-equivalence rule in `docs/features/81-mobile-tablet-support.md`
+   pins. matchMedia is mocked to "phone" so Tailwind's `sm:` variants
+   stay opted-out at the same time. */
+function mockPhoneViewport() {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 });
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: 667 });
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    configurable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: /max-width:\s*640px/.test(query) || /max-width:\s*767px/.test(query),
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
+
+describe('UploadView — phone viewport (375×667, Wave 3)', () => {
+  beforeEach(() => {
+    mockPhoneViewport();
+  });
+
+  it('renders the dropzone full-width with a ≥44px tap target', () => {
+    const store = makeStore();
+    renderUpload(store);
+    const dropzone = screen.getByTestId('dropzone');
+    /* class assertion is the deterministic phone-render signal in jsdom
+       (jsdom has no layout, so we can't read computed pixels). The
+       w-full + min-h-[140px] pair locks both the width + the
+       ≥44px-target invariant from plan 81. */
+    expect(dropzone.className).toContain('w-full');
+    expect(dropzone.className).toContain('min-h-[140px]');
+  });
+
+  it('keeps the model-selector touch target ≥44px tall', () => {
+    const store = makeStore();
+    renderUpload(store);
+    const select = screen.getByLabelText(/analysis model/i);
+    expect(select.className).toContain('min-h-[44px]');
+    expect(select.className).toContain('w-full');
+  });
+
+  it('stacks "Use sample" / "Paste text" buttons full-width with ≥44px tap targets', () => {
+    const store = makeStore();
+    renderUpload(store);
+    const sample = screen.getByRole('button', { name: /use sample manuscript/i });
+    const paste = screen.getByRole('button', { name: /paste text/i });
+    for (const btn of [sample, paste]) {
+      expect(btn.className).toContain('w-full');
+      expect(btn.className).toContain('min-h-[44px]');
+    }
+  });
+});
+
 describe('UploadView — first-time upload (existing path unchanged)', () => {
   it('on success, sets importCandidate (routes to ConfirmMetadata via the route adapter)', async () => {
     const store = makeStore();

@@ -1612,3 +1612,64 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+/* Wave 3 — phone viewport contract for the Generation view: the page
+   header action buttons (Pause / Resume / Regenerate) and each chapter
+   row's collapsed grid both hit the ≥44px touch-target invariant from
+   `docs/features/81-mobile-tablet-support.md` while the responsive
+   grid template at the top-level shrinks to single-column. Stat panel
+   collapses 4-up → 2×2 below `sm:` so the four numbers don't compress
+   to single digits at 375×667. */
+describe('GenerationView — phone viewport (375×667, Wave 3)', () => {
+  beforeEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 667 });
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: /max-width:\s*640px/.test(query) || /max-width:\s*767px/.test(query),
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+  });
+
+  it('header Pause/Resume button declares the ≥44px touch-target class', () => {
+    renderView();
+    /* paused=true at render time → button reads "Resume". The min-h-[44px]
+       class is the assertion the touch-target invariant pins on. */
+    const resume = screen.getByRole('button', { name: /resume/i });
+    expect(resume.className).toContain('min-h-[44px]');
+  });
+
+  it('stats panel uses 2-column grid on phone (collapses below sm:)', () => {
+    renderView();
+    /* "Completed" Stat lives inside the grid we just made responsive.
+       Walk up to the grid container and assert the responsive class. */
+    const completedLabel = screen.getByText(/Completed/i);
+    const grid = completedLabel.closest('.grid');
+    expect(grid).not.toBeNull();
+    expect(grid!.className).toContain('grid-cols-2');
+    expect(grid!.className).toContain('sm:grid-cols-4');
+  });
+
+  it('chapter row collapses to the mobile 5-column grid template', () => {
+    renderView();
+    /* The collapsed-row button is the chapter row's tap target. Its grid
+       template carries the mobile-only 5-column shape (icon · CH · title ·
+       badge · chevron) and the sm: 7-column override. */
+    const ch1 = screen.getByText('Chapter 1');
+    const row = ch1.closest('button');
+    expect(row).not.toBeNull();
+    expect(row!.className).toContain('grid-cols-[24px_44px_minmax(0,1fr)_auto_20px]');
+    expect(row!.className).toContain('sm:grid-cols-[32px_52px');
+    /* Touch-target invariant: the whole row is a tap target. */
+    expect(row!.className).toContain('min-h-[44px]');
+  });
+});
