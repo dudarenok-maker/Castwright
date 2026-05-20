@@ -39,8 +39,6 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { findChapterAudio, type ChapterAudioFile } from '../workspace/chapter-audio-file.js';
 import { isGenerationActive } from './generation.js';
 
-const MP3_MIME = 'audio/mpeg';
-
 /** Disk shape mirror of `ChapterPeaksFile` in `server/src/tts/mp3.ts`.
  *  Kept narrow + local so this route doesn't reach across the TTS module
  *  boundary just to import a type. */
@@ -227,13 +225,16 @@ function makeFileHandler(variant: AudioVariant = 'current') {
     if (!located) return res.status(404).json({ message: 'Chapter audio not found.' });
     const chapter = located.state.chapters.find((c) => c.id === chapterId);
     if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
-    const fileName = variant === 'current' ? `${chapter.slug}.mp3` : `${chapter.slug}.previous.mp3`;
-    const path = join(audioDir(located.bookDir), fileName);
-    if (!existsSync(path)) return res.status(404).json({ message: 'Chapter audio not found.' });
+    const audioRoot = audioDir(located.bookDir);
+    const audio =
+      variant === 'current'
+        ? findChapterAudio(audioRoot, chapter.slug)
+        : findPreviousChapterAudio(audioRoot, chapter.slug);
+    if (!audio) return res.status(404).json({ message: 'Chapter audio not found.' });
     res.sendFile(
-      path,
+      audio.path,
       {
-        headers: { 'Content-Type': MP3_MIME, 'Cache-Control': 'no-cache' },
+        headers: { 'Content-Type': audio.mime, 'Cache-Control': 'no-cache' },
       },
       (err) => {
         if (err && !res.headersSent) res.status(500).end();
@@ -243,6 +244,8 @@ function makeFileHandler(variant: AudioVariant = 'current') {
 }
 
 chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio.mp3', makeFileHandler('current'));
+chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio.m4a', makeFileHandler('current'));
+chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio.ogg', makeFileHandler('current'));
 chapterAudioRouter.get(
   '/:bookId/chapters/:chapterId/audio/previous.mp3',
   makeFileHandler('previous'),
