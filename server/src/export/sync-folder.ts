@@ -44,7 +44,7 @@ export async function writeToSyncFolder(
        droppings inside a user's synced folder is the kind of thing they
        notice and complain about. */
     await unlink(tmpPath).catch(() => {});
-    throw e;
+    throw wrapWithSyncHint(e, destDir);
   }
   return { syncPath: finalPath };
 }
@@ -88,9 +88,42 @@ export async function writeFolderToSyncFolder(
       await renameWithRetry(tmpPath, finalPath);
     } catch (e) {
       await unlink(tmpPath).catch(() => {});
-      throw e;
+      throw wrapWithSyncHint(e, targetDir);
     }
     copied++;
   }
   return { syncPath: targetDir, copied };
+}
+
+/* Plan 79 — sync-folder writes that terminate after the retry exhausts are
+   the dominant Voice → Google Drive failure mode (Drive for Desktop
+   surfaces EACCES/EIO during cache rotation; the retry handles transient
+   bursts, but if the underlying problem is structural — Drive paused,
+   folder is read-only, Files On-Demand is in a wedged state — the user
+   sees a cryptic errno). Detect Drive / OneDrive paths and prepend a
+   one-sentence hint so the export-job's errorReason is actionable. The
+   original error code stays in the message so we don't lose diagnostic
+   detail. */
+function wrapWithSyncHint(err: unknown, destDir: string): Error {
+  const base = err instanceof Error ? err : new Error(String(err));
+  const lower = destDir.toLowerCase();
+  let hint: string | null = null;
+  if (lower.includes('\\my drive\\') || lower.includes('/my drive/')) {
+    hint =
+      'Google Drive for Desktop folder: confirm Drive is running, the folder is set to "Available offline", and Drive is not paused.';
+  } else if (lower.includes('\\google drive\\') || lower.includes('/google drive/')) {
+    hint =
+      'Google Drive folder: this path looks like the legacy Backup & Sync layout. Drive for Desktop mounts under "<drive>:\\My Drive\\..." — confirm the folder exists and Drive is mirroring it.';
+  } else if (lower.includes('\\onedrive') || lower.includes('/onedrive')) {
+    hint =
+      'OneDrive folder: confirm OneDrive is running and the folder is set to "Always keep on this device".';
+  }
+  if (!hint) return base;
+  const code = (err as { code?: string }).code;
+  const codeLabel = code ? ` (${code})` : '';
+  const wrapped = new Error(`${hint} Underlying error${codeLabel}: ${base.message}`);
+  /* Preserve the original error code so callers / tests can branch on it. */
+  if (code) (wrapped as { code?: string }).code = code;
+  (wrapped as { cause?: unknown }).cause = err;
+  return wrapped;
 }

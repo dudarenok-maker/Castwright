@@ -104,6 +104,24 @@ export function audioDir(bookDir: string): string {
   return join(bookDir, 'audio');
 }
 
+/** Plan 79 — user-visible exports folder sibling to `audio/` and `.audiobook/`.
+    Finished artifacts (M4B, MP3.ZIP, AAC/Opus zips, portable bundle, and
+    the per-chapter MP3 folder) land here under their slugged filenames so
+    the user can grab them from File Explorer without opening the hidden
+    `.audiobook/` jail. Per-export isolation is gone — clobber-newest-wins
+    keeps `<slug>.m4b` always pointing at the latest build. */
+export function bookExportsDir(bookDir: string): string {
+  return join(bookDir, 'exports');
+}
+
+/** Plan 79 — manifest jail. The user-facing artifact lives in `exports/`;
+    the per-job JSON manifest (status, sizeBytes, downloadUrl, format, etc.)
+    stays hidden under `.audiobook/export-manifests/<exportId>.json` so it
+    doesn't clutter the exports folder the user actually browses. */
+export function bookExportManifestsDir(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'export-manifests');
+}
+
 export function stateJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'state.json');
 }
