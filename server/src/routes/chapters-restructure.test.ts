@@ -179,6 +179,7 @@ function readState(): {
     audioModelKey?: string;
     audioRenderedAt?: string;
     excluded?: boolean;
+    titleOverridden?: boolean;
   }>;
 } {
   return JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
@@ -1257,5 +1258,223 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
       .post(`/api/books/no-such-book/chapters/refresh-titles`)
       .send({});
     expect(res.status).toBe(404);
+  });
+
+  it('skips chapters with titleOverridden=true (plan 77)', async () => {
+    // Seed a generic-title chapter alongside a user-renamed one. The
+    // refresh pass should promote the generic title from its first
+    // sentence but leave the overridden title alone — even when a
+    // strong first-sentence candidate exists in the same chapter.
+    // Three chapters because downstream tests in this file (and the
+    // file-wide beforeEach) expect a 3-chapter manuscript on disk.
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter 1\n\nFirst body sentence here.\nMore.\n\n# Chapter 2\n\nSecond body sentence here.\nMore.\n\n# Chapter 3\n\nThird body sentence here.\nMore.\n',
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [
+          // titleOverridden looks generic but is sticky.
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleOverridden: true },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'Tempting Candidate For Chapter One' },
+          { id: 1, chapterId: 2, characterId: 'narr', text: 'Tempting Candidate For Chapter Two' },
+          { id: 1, chapterId: 3, characterId: 'narr', text: 'Tempting Candidate For Chapter Three' },
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: true });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    expect(state.chapters[0].title).toBe('Chapter 1'); // override survives
+    expect(state.chapters[1].title).toBe('Tempting Candidate For Chapter Two');
+    expect(state.chapters[2].title).toBe('Tempting Candidate For Chapter Three');
+  });
+});
+
+describe('POST /:bookId/chapters/:chapterId/rename (plan 77)', () => {
+  it('updates state.json with the new title and locks titleOverridden=true', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/2/rename`)
+      .send({ title: 'The Hunt Begins' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 2,
+      title: 'The Hunt Begins',
+      titleOverridden: true,
+    });
+    expect(res.body.slug).toMatch(/^02-/);
+
+    const state = readState();
+    expect(state.chapters[1]).toMatchObject({
+      id: 2,
+      title: 'The Hunt Begins',
+      titleOverridden: true,
+    });
+    // Other chapters unchanged.
+    expect(state.chapters[0].title).toBe('Chapter One');
+    expect(state.chapters[2].title).toBe('Chapter Three');
+  });
+
+  it('trims whitespace before applying', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/1/rename`)
+      .send({ title: '   The Verdict   ' });
+    expect(res.status).toBe(200);
+    expect(res.body.title).toBe('The Verdict');
+    expect(readState().chapters[0].title).toBe('The Verdict');
+  });
+
+  it('renames the existing audio file to follow the new slug', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/1/rename`)
+      .send({ title: 'Brand New Name' });
+    expect(res.status).toBe(200);
+    const audioFiles = readdirSync(audioRoot);
+    // Old slug audio is renamed away; new slug audio is present.
+    expect(audioFiles.some((f) => f.startsWith('01-brand-new-name'))).toBe(true);
+    expect(audioFiles.some((f) => f === '01-chapter-one.mp3')).toBe(false);
+  });
+
+  it('survives a refresh-titles pass after rename', async () => {
+    const renameRes = await request(app)
+      .post(`/api/books/${bookId}/chapters/3/rename`)
+      .send({ title: 'My Renamed Finale' });
+    expect(renameRes.status).toBe(200);
+
+    const refreshRes = await request(app)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: true });
+    expect(refreshRes.status).toBe(200);
+
+    expect(readState().chapters[2].title).toBe('My Renamed Finale');
+  });
+
+  it('rejects empty title with 400', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/2/rename`)
+      .send({ title: '   ' });
+    expect(res.status).toBe(400);
+    expect(readState().chapters[1].title).toBe('Chapter Two'); // unchanged
+  });
+
+  it('rejects oversized title with 400', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/2/rename`)
+      .send({ title: 'x'.repeat(201) });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects missing title field with 400', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/2/rename`)
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('404 when chapter id does not exist', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/99/rename`)
+      .send({ title: 'Nowhere' });
+    expect(res.status).toBe(404);
+  });
+
+  it('400 when chapterId path param is not a positive integer', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/abc/rename`)
+      .send({ title: 'Fine' });
+    expect(res.status).toBe(400);
+  });
+
+  it('404 when book does not exist', async () => {
+    const res = await request(app)
+      .post(`/api/books/no-such-book/chapters/1/rename`)
+      .send({ title: 'Anything' });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('merge/split propagate titleOverridden (plan 77)', () => {
+  it('merge with explicit mergedTitle sets titleOverridden=true on the merged chapter', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3], mergedTitle: 'Combined Finale' });
+    expect(res.status).toBe(200);
+    const state = readState();
+    const merged = state.chapters.find((c) => c.title === 'Combined Finale');
+    expect(merged?.titleOverridden).toBe(true);
+  });
+
+  it('merge without mergedTitle leaves titleOverridden absent on the merged chapter', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+    const state = readState();
+    // Merged chapter inherits Chapter Two's title — content changed, no
+    // explicit override → flag stays absent so a future refresh-titles
+    // pass can still improve it.
+    const merged = state.chapters[1];
+    expect(merged.titleOverridden).toBeUndefined();
+  });
+
+  it('split with explicit newTitle sets titleOverridden=true on the new chapter', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/split`)
+      .send({ chapterId: 1, afterSentenceId: 1, newTitle: 'Aftermath' });
+    expect(res.status).toBe(200);
+    const state = readState();
+    const newChapter = state.chapters.find((c) => c.title === 'Aftermath');
+    expect(newChapter?.titleOverridden).toBe(true);
+  });
+
+  it('reorder preserves titleOverridden across the renumber', async () => {
+    // Seed chapter 1 as renamed, then reorder so it becomes id 3.
+    const state = JSON.parse(
+      readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'),
+    );
+    state.chapters[0].title = 'Sticky One';
+    state.chapters[0].titleOverridden = true;
+    state.chapters[0].slug = '01-sticky-one';
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify(state),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [2, 3, 1] });
+    expect(res.status).toBe(200);
+
+    const after = readState();
+    // The "Sticky One" chapter is now at position 3 (id 3).
+    const sticky = after.chapters.find((c) => c.title === 'Sticky One');
+    expect(sticky?.id).toBe(3);
+    expect(sticky?.titleOverridden).toBe(true);
   });
 });

@@ -33,7 +33,7 @@ owner: null
 - **Invariants preserved.**
   - Soft-hide invariant on `Chapter.excluded` (audio preserved, ids unchanged, generation queue skips per `src/views/generation.tsx:360`).
   - Sticky toolbar uses `bg-canvas/95 backdrop-blur-sm` — design tokens via CSS custom properties, no hex literals (CLAUDE.md token rule).
-  - User-customised chapter titles preserved through the refresh-titles parser-aligned pass — the existing `GENERIC_TITLE_RE` detector gates rewrites, so anything non-generic stays put.
+  - User-customised chapter titles preserved through the refresh-titles parser-aligned pass — the existing `GENERIC_TITLE_RE` detector gates rewrites, so anything non-generic stays put. (Plan 77 added an explicit sticky `titleOverridden: boolean` flag that runs BEFORE the regex gate, so user renames stick even when the new title happens to look generic. The regex stays as backup for legacy chapters without the flag — see [77-chapter-rename.md](../77-chapter-rename.md).)
   - `data-testid="open-restructure"` preserved across the button extraction so plan-51 / plan-60 selectors still resolve.
 - **Migration story.** None. New endpoints are additive; existing books work unchanged.
 - **Reversibility.** Pure frontend / route additions. Revert is a single git revert of the diff.
