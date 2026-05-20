@@ -994,3 +994,54 @@ describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, pl
     expect(next.activeStream).toBeNull();
   });
 });
+
+describe('chaptersSlice — renameChapter (plan 78)', () => {
+  it('updates the title and locks titleOverridden=true on the target chapter', () => {
+    const start = baseState([
+      makeChapter(1, { title: 'Chapter 1' }),
+      makeChapter(2, { title: 'Chapter 2' }),
+    ]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.renameChapter({ chapterId: 2, title: 'The Hunt Begins' }),
+    );
+    expect(next.chapters[1].title).toBe('The Hunt Begins');
+    expect(next.chapters[1].titleOverridden).toBe(true);
+    // Untouched chapter stays untouched.
+    expect(next.chapters[0].title).toBe('Chapter 1');
+    expect(next.chapters[0].titleOverridden).toBeUndefined();
+  });
+
+  it('is a no-op when the chapter id does not exist', () => {
+    const start = baseState([makeChapter(1)]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.renameChapter({ chapterId: 99, title: 'Nope' }),
+    );
+    expect(next).toEqual(start);
+  });
+
+  it('preserves other chapter state (progress, characters, excluded) across the rename', () => {
+    const start = baseState([
+      makeChapter(1, {
+        title: 'Chapter 1',
+        progress: 0.42,
+        state: 'in_progress',
+        excluded: true,
+        characters: { narrator: 'in_progress', halloran: 'done', eliza: 'queued' },
+      }),
+    ]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.renameChapter({ chapterId: 1, title: 'Renamed' }),
+    );
+    expect(next.chapters[0]).toMatchObject({
+      title: 'Renamed',
+      titleOverridden: true,
+      progress: 0.42,
+      state: 'in_progress',
+      excluded: true,
+      characters: { narrator: 'in_progress', halloran: 'done', eliza: 'queued' },
+    });
+  });
+});
