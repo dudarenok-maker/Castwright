@@ -78,10 +78,12 @@ export function ListenPlayerRegion({
         onDelete={onDeleteMarker}
       />
 
-      <section className="mb-12">
-        <div className="flex items-center justify-between mb-3">
+      <section className="mb-8 md:mb-12">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <SectionLabel>Chapters</SectionLabel>
-          <span className="text-xs text-ink/50">Click any chapter to play from there</span>
+          <span className="text-xs text-ink/50 hidden sm:inline">
+            Click any chapter to play from there
+          </span>
         </div>
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
           {/* Cap the list so a 59-chapter book doesn't push the rest of the
@@ -180,77 +182,99 @@ function ChapterListenRow({
   return (
     <div
       data-testid={`chapter-row-${chapter.id}`}
-      className={`grid grid-cols-[40px_60px_1fr_220px_100px_104px] items-center gap-4 px-5 py-4 transition-colors ${isPlaying ? 'bg-peach/[0.06]' : 'hover:bg-ink/[0.02]'}`}
+      className={`px-4 sm:px-5 py-3 sm:py-4 transition-colors ${isPlaying ? 'bg-peach/[0.06]' : 'hover:bg-ink/[0.02]'}`}
     >
-      <button
-        onClick={onPlay}
-        aria-label={isPlaying ? `Pause chapter ${chapter.id}` : `Play chapter ${chapter.id}`}
-        className={`w-9 h-9 rounded-full grid place-items-center transition-all ${isPlaying ? 'bg-ink text-canvas' : 'bg-canvas border border-ink/15 text-ink hover:bg-ink hover:text-canvas'}`}
-      >
-        {isPlaying ? (
-          <IconPause className="w-3.5 h-3.5" />
-        ) : (
-          <IconPlay className="w-3.5 h-3.5 ml-0.5" />
-        )}
-      </button>
-      <span className="text-sm font-bold text-ink/50 tabular-nums">
-        CH {String(chapter.id).padStart(2, '0')}
-      </span>
-      <span className="min-w-0">
-        <span className="flex items-center gap-2">
-          <span className="font-semibold text-ink truncate">
-            {stripChapterPrefix(chapter.title)}
+      {/* On <md the row stacks the title block above a control strip
+          (play + waveform + duration + actions) so the chapter title
+          gets its own line and the controls don't overflow at 375 px.
+          md+ keeps the original 6-column grid for the desktop layout. */}
+      <div className="md:grid md:grid-cols-[40px_60px_1fr_220px_100px_104px] md:items-center md:gap-4 flex flex-col gap-2">
+        {/* On mobile this row groups the play button, chapter number,
+            title, and (collapsed) waveform metadata. md+ promotes each
+            cell to a grid track. */}
+        <div className="flex items-center gap-3 min-w-0 md:contents">
+          <button
+            onClick={onPlay}
+            aria-label={isPlaying ? `Pause chapter ${chapter.id}` : `Play chapter ${chapter.id}`}
+            className={`shrink-0 w-11 h-11 md:w-9 md:h-9 rounded-full grid place-items-center transition-all ${isPlaying ? 'bg-ink text-canvas' : 'bg-canvas border border-ink/15 text-ink hover:bg-ink hover:text-canvas'}`}
+          >
+            {isPlaying ? (
+              <IconPause className="w-3.5 h-3.5" />
+            ) : (
+              <IconPlay className="w-3.5 h-3.5 ml-0.5" />
+            )}
+          </button>
+          <span className="shrink-0 text-sm font-bold text-ink/50 tabular-nums">
+            CH {String(chapter.id).padStart(2, '0')}
           </span>
-          {showResume && resume && (
-            <Pill color="library">Resume at {formatTime(resume.currentSec)}</Pill>
-          )}
-          <LoudnessBadge chapter={chapter} />
-        </span>
-        <span className="block text-xs text-ink/50 truncate mt-0.5">
-          With{' '}
-          {charactersIn
-            .slice(0, 4)
-            .map((c) => c.name)
-            .join(', ')}
-        </span>
-      </span>
-      <Waveform progress={isPlaying ? progress : 0} active={isPlaying} />
-      <span className="text-sm tabular-nums text-ink/60 text-right">
-        {isPlaying ? (
-          <span className="text-ink font-semibold">
-            {formatTime(elapsedSec)} / {chapter.duration}
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-2 flex-wrap">
+              <span className="font-semibold text-ink truncate">
+                {stripChapterPrefix(chapter.title)}
+              </span>
+              {showResume && resume && (
+                <Pill color="library">Resume at {formatTime(resume.currentSec)}</Pill>
+              )}
+              <LoudnessBadge chapter={chapter} />
+            </span>
+            <span className="block text-xs text-ink/50 truncate mt-0.5">
+              With{' '}
+              {charactersIn
+                .slice(0, 4)
+                .map((c) => c.name)
+                .join(', ')}
+            </span>
           </span>
-        ) : (
-          chapter.duration
-        )}
-      </span>
-      <span className="flex items-center gap-1 justify-end">
-        <button
-          onClick={onRename}
-          title="Rename chapter"
-          aria-label={`Rename chapter ${chapter.id}`}
-          data-testid={`chapter-row-${chapter.id}-rename`}
-          className="text-ink/40 hover:text-magenta grid place-items-center w-8 h-8 rounded-full hover:bg-ink/[0.04]"
-        >
-          <IconPencil className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => onRegenerate(chapter)}
-          title="Regenerate"
-          className="text-ink/40 hover:text-magenta grid place-items-center w-8 h-8 rounded-full hover:bg-ink/[0.04]"
-        >
-          <IconRefresh className="w-4 h-4" />
-        </button>
-        <button
-          onClick={onShareClip}
-          title="Share a 30-second clip"
-          aria-label={`Share clip of chapter ${chapter.id}`}
-          data-testid={`chapter-row-${chapter.id}-share-clip`}
-          className="text-ink/40 hover:text-magenta grid place-items-center w-8 h-8 rounded-full hover:bg-ink/[0.04]"
-        >
-          <IconShare className="w-4 h-4" />
-        </button>
-      </span>
+        </div>
+        {/* Waveform: visible md+ where it has horizontal room. Hiding
+            on phone keeps the row scannable in a single tap-friendly
+            column. */}
+        <div className="hidden md:block">
+          <Waveform progress={isPlaying ? progress : 0} active={isPlaying} />
+        </div>
+        {/* Mobile bottom strip: duration on the left, action pills on
+            the right. md+ promotes the spans into their original grid
+            cells. */}
+        <div className="flex items-center gap-2 md:contents pl-14 md:pl-0">
+          <span className="text-sm tabular-nums text-ink/60 md:text-right flex-1 md:flex-none">
+            {isPlaying ? (
+              <span className="text-ink font-semibold">
+                {formatTime(elapsedSec)} / {chapter.duration}
+              </span>
+            ) : (
+              chapter.duration
+            )}
+          </span>
+          <span className="flex items-center gap-1 justify-end">
+            <button
+              onClick={onRename}
+              title="Rename chapter"
+              aria-label={`Rename chapter ${chapter.id}`}
+              data-testid={`chapter-row-${chapter.id}-rename`}
+              className="text-ink/40 hover:text-magenta grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full hover:bg-ink/[0.04]"
+            >
+              <IconPencil className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => onRegenerate(chapter)}
+              title="Regenerate"
+              aria-label={`Regenerate chapter ${chapter.id}`}
+              className="text-ink/40 hover:text-magenta grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full hover:bg-ink/[0.04]"
+            >
+              <IconRefresh className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onShareClip}
+              title="Share a 30-second clip"
+              aria-label={`Share clip of chapter ${chapter.id}`}
+              data-testid={`chapter-row-${chapter.id}-share-clip`}
+              className="text-ink/40 hover:text-magenta grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full hover:bg-ink/[0.04]"
+            >
+              <IconShare className="w-4 h-4" />
+            </button>
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -327,8 +351,8 @@ function MarkersPanel({ bookId, chapters, onSeek, onDelete }: MarkersPanelProps)
     if (list && list.length > 0) groups.push({ chapter: ch, markers: list });
   }
   return (
-    <section data-testid="listen-markers-panel" className="mb-12">
-      <div className="flex items-center justify-between mb-3">
+    <section data-testid="listen-markers-panel" className="mb-8 md:mb-12">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <SectionLabel>Markers</SectionLabel>
         <span className="text-xs text-ink/50">
           {markers.length} bookmark{markers.length === 1 ? '' : 's'}
@@ -336,8 +360,8 @@ function MarkersPanel({ bookId, chapters, onSeek, onDelete }: MarkersPanelProps)
       </div>
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden divide-y divide-ink/5">
         {groups.map((g) => (
-          <div key={g.chapter.id} className="px-5 py-4">
-            <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/50 mb-2">
+          <div key={g.chapter.id} className="px-4 sm:px-5 py-4">
+            <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/50 mb-2 truncate">
               CH {String(g.chapter.id).padStart(2, '0')} · {stripChapterPrefix(g.chapter.title)}
             </p>
             <ul className="space-y-1">
@@ -345,15 +369,15 @@ function MarkersPanel({ bookId, chapters, onSeek, onDelete }: MarkersPanelProps)
                 <li
                   key={m.id}
                   data-testid={`listen-marker-${m.id}`}
-                  className="flex items-center gap-3 text-sm text-ink/80"
+                  className="flex items-center gap-2 text-sm text-ink/80"
                 >
                   <button
                     type="button"
                     onClick={() => onSeek(m)}
                     data-testid={`listen-marker-seek-${m.id}`}
-                    className="flex-1 flex items-center gap-3 text-left hover:text-ink"
+                    className="flex-1 min-w-0 flex items-center gap-3 text-left hover:text-ink min-h-[44px]"
                   >
-                    <span className="tabular-nums text-xs text-ink/50 w-12">
+                    <span className="tabular-nums text-xs text-ink/50 w-12 shrink-0">
                       {formatTime(m.sec)}
                     </span>
                     <span className="truncate">{m.label || <em className="text-ink/40">No label</em>}</span>
@@ -366,7 +390,7 @@ function MarkersPanel({ bookId, chapters, onSeek, onDelete }: MarkersPanelProps)
                     onClick={() => onDelete(m.id)}
                     aria-label="Delete marker"
                     data-testid={`listen-marker-delete-${m.id}`}
-                    className="text-ink/40 hover:text-rose-500 text-xs px-2"
+                    className="shrink-0 w-11 h-11 md:w-8 md:h-8 grid place-items-center rounded-full text-ink/40 hover:text-rose-500 hover:bg-ink/[0.04]"
                   >
                     ×
                   </button>
