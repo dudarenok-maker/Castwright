@@ -11,7 +11,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { encodePcmToMp3 } from '../tts/mp3.js';
+import { encodePcmToAudio } from '../tts/mp3.js';
 import { applyId3v24Tags } from './id3-tags.js';
 
 const ffmpegPresent = (() => {
@@ -115,7 +115,7 @@ describeIf('applyId3v24Tags', () => {
   beforeAll(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'id3-tags-'));
     srcPath = join(tmpDir, 'src.mp3');
-    const mp3 = await encodePcmToMp3(silencePcm(24_000, 0.5), 24_000, { quality: 2 });
+    const mp3 = await encodePcmToAudio(silencePcm(24_000, 0.5), 24_000, { quality: 2 });
     writeFileSync(srcPath, mp3);
     srcBytes = mp3;
   });
