@@ -57,7 +57,40 @@ export default defineConfig({
        running fully parallel. Playwright's default is 30 s. */
     navigationTimeout: 60_000,
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  /* Plan 81 mobile + tablet support — three viewport projects.
+
+     `chromium`: runs every spec under `e2e/` (the desktop default, unchanged
+     from before plan 81).
+
+     `mobile-chrome` / `tablet-chrome`: scoped to specs under `e2e/responsive/`
+     via testMatch. Pre-plan-81 specs assume a desktop viewport and would
+     fail under 375×667 — restricting the mobile/tablet projects to the
+     responsive subfolder keeps existing specs single-project (no triple
+     run-time, no false failures) while letting waves 1 / 3 / 5 land
+     dedicated specs that run across all three.
+
+     Filter locally with `npm run test:e2e -- --project=chromium`. */
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    {
+      /* Phone viewport. We pin the engine to Chromium (already installed
+         via `npx playwright install chromium`) and pull only the viewport +
+         user-agent + deviceScaleFactor from the Pixel 7 preset — not the
+         engine, because Playwright's iOS presets default to WebKit and
+         iOS WebKit isn't installed on the dev box / CI. Wave 5 can add
+         WebKit projects if we want real iOS Safari coverage later. */
+      name: 'mobile-chrome',
+      use: { ...devices['Pixel 7'], browserName: 'chromium' },
+      testMatch: /responsive[\\/].*\.spec\.ts$/,
+    },
+    {
+      /* Tablet viewport, same engine pin as mobile-chrome — iPad Pro 11's
+         default defaultBrowserType is 'webkit', which we override. */
+      name: 'tablet-chrome',
+      use: { ...devices['iPad Pro 11'], browserName: 'chromium' },
+      testMatch: /responsive[\\/].*\.spec\.ts$/,
+    },
+  ],
   webServer: {
     /* `--mode e2e` makes Vite load .env.e2e (VITE_USE_MOCKS=true) instead
        of .env.development. We deliberately avoid `--mode test` because
