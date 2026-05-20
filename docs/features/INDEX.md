@@ -119,6 +119,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [45 — Vitest pool tuning + one-retry policy](45-vitest-pool-tuning.md) — Caps the server-suite forks pool at 4 and turns on `retry: 1` on both Vitest configs so transient tinypool "Worker exited unexpectedly" failures no longer force a full pre-push re-run.
 - [46 — Lint, format, a11y baseline](archive/46-lint-format-a11y.md) — ESLint 8 + Prettier 3 + axe-core on four core views; lint prepended to `verify`. Shipped 2026-05-18.
 - [48 — Global toast surface](archive/48-toast-surface.md) — `notifications` slice + `<ToastStack/>`; stream-middleware halts + export 5xx dispatch through it; dedupe-by-key collapses repeats; auto-dismiss 6 s. Shipped 2026-05-18.
+- [81 — Mobile + tablet support (LAN over HTTPS)](81-mobile-tablet-support.md) — Six-wave round: mkcert local-CA HTTPS for LAN access; Playwright mobile + tablet projects with visual baselines; responsive shell (top-bar overflow, full-screen modals, sticky mini-player); per-view responsive (parallel agents on isolated worktrees for manuscript / cast / listen / confirm-cast / generation+upload / books); touch affordances (tap-to-assign voice, button-driven manuscript split/merge) additive to existing drag-and-drop on desktop. New `npm run {dev:lan,start:lan,install:cert-mobile}` scripts.
 
 ### L. Book state persistence
 
