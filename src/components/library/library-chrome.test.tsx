@@ -20,6 +20,8 @@ function renderChrome(
       { id: 'in_progress', label: 'In progress (2)' },
       { id: 'complete', label: 'Complete (1)' },
     ],
+    viewMode: 'card',
+    setViewMode: vi.fn(),
     onStartNew: vi.fn(),
     search: '',
     setSearch: vi.fn(),

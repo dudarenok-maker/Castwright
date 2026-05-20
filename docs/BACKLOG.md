@@ -243,6 +243,16 @@ Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e
 - _Key files:_ `e2e/linux/visual.spec.ts/` (new directory); optional `.github/workflows/regen-visual-baselines.yml`; `docs/features/archive/37-e2e-playwright.md` "Visual baselines" section.
 - _Benefit (technical):_ restores Verify as a real merge gate. Today PR CI's only red signal is "visual baselines missing" — once those land, a red Verify means real regression and reviewers stop ignoring it.
 
+### Library card↔table view toggle with series-grouped table
+
+Source: net-new (2026-05-20). User added this mid-Bundle-B planning; bundled into this PR per explicit approval rather than landing a separate Round-0 docs PR. Filed here for the record so the provenance survives the merge.
+
+- _What:_ Toggle pill in the library chrome flips the books surface between the existing card grid and a dense, series-grouped table view; standalones from every author collect into a synthetic "Standalones" pseudo-section; the table reuses the same per-book callbacks (open / edit / re-parse / delete / cover-changed) the cards already wire. `library.viewMode` persisted in localStorage with a try/catch fallback to the default ('card'). Per-series collapse state is per-session only.
+- _Acceptance:_ Toggle visible in the library chrome; reload preserves the pick; row click routes to listen; series headers collapse/expand; Standalones pseudo-section appears at the bottom when any standalone books survive the filter. Locked by `library-table.test.tsx` (14 cases), `library-status-ui.test.ts` (10 cases), 6 new view-mode cases in `book-library.test.tsx`, and the `library-table-view.spec.ts` e2e.
+- _Key files:_ `src/components/library/library-table.tsx`, `src/components/library/library-status-ui.tsx`, `src/components/library/library-empty-states.tsx`, `src/components/library/library-chrome.tsx`, `src/views/book-library.tsx`.
+- _Status: shipped in plan 76 (this PR)._
+- _Benefit (user):_ card grid breaks down at 10+ books; a dense, series-grouped table makes a long library scannable at a glance (title / status / runtime / last-worked-on visible per row without hover or scroll).
+
 ---
 
 ## Won't (this round) — explicitly parked
