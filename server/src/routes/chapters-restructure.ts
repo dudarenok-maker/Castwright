@@ -31,14 +31,16 @@ import {
   applyReorder,
   applyExclude,
   applyRefreshTitles,
+  applyRename,
   type MergeOp,
   type SplitOp,
   type ReorderOp,
   type ExcludeOp,
+  type RenameOp,
   type RestructureResult,
   type RestructureSentence,
 } from '../workspace/restructure.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import {
   audioDir,
   manuscriptEditsJsonPath,
@@ -316,6 +318,71 @@ chaptersRestructureRouter.post(
     } catch (e) {
       console.error('[chapters-restructure] exclude failed', e);
       res.status(500).json({ error: (e as Error).message || 'Exclude failed.' });
+    }
+  },
+);
+
+/* User-supplied rename. The route is intentionally a single-chapter
+   POST under the restructure cluster (rather than a slice patch in PUT
+   /:bookId/state) because it's the same persistence shape as exclude
+   and benefits from the same per-book write lock against concurrent
+   chapter-restructure ops. Returns the updated chapter envelope —
+   mirrors the setChapterExcluded response shape, plus `titleOverridden`
+   so the frontend can confirm the lock landed. */
+chaptersRestructureRouter.post(
+  '/:bookId/chapters/:chapterId/rename',
+  async (req: Request, res: Response) => {
+    const chapterId = Number.parseInt(req.params.chapterId, 10);
+    if (!Number.isInteger(chapterId) || chapterId <= 0) {
+      return res.status(400).json({ error: 'chapterId must be a positive integer.' });
+    }
+    const body = (req.body ?? {}) as { title?: unknown };
+    if (typeof body.title !== 'string') {
+      return res.status(400).json({ error: '`title` (string) is required.' });
+    }
+    const op: RenameOp = { chapterId, title: body.title };
+    try {
+      const result = await withBookLock(req.params.bookId, () =>
+        applyRestructure(req.params.bookId, (state, hints, sentences) =>
+          applyRename(state, hints, sentences, op),
+        ),
+      );
+      if (result.status !== 200) {
+        // `applyRestructure` wraps applyRename's "Chapter X not found"
+        // throw as a 400; remap to 404 for unknown chapter ids so the
+        // route's HTTP semantics match the rest of the cluster.
+        const body = result.body as { error?: string };
+        if (result.status === 400 && /not found/i.test(body?.error ?? '')) {
+          return res.status(404).json(body);
+        }
+        return res.status(result.status).json(result.body);
+      }
+      // Project the updated chapter into the setChapterExcluded-shaped
+      // response envelope. Cheaper for the frontend than rehydrating
+      // the whole chapter list when only one title moved.
+      const chapters = (result.body as { chapters: BookStateJson['chapters'] }).chapters;
+      const updated = chapters.find((c) => c.id === chapterId);
+      if (!updated) {
+        return res.status(500).json({ error: 'Updated chapter missing from response.' });
+      }
+      res.status(200).json({
+        id: updated.id,
+        title: updated.title,
+        slug: updated.slug,
+        titleOverridden: updated.titleOverridden === true,
+      });
+    } catch (e) {
+      const msg = (e as Error).message || 'Rename failed.';
+      // Surface validation errors from applyRename as 400, anything
+      // else (filesystem write failures, etc.) as 500.
+      if (/not found/.test(msg)) {
+        return res.status(404).json({ error: msg });
+      }
+      if (/required|empty|characters or fewer|integer/.test(msg)) {
+        return res.status(400).json({ error: msg });
+      }
+      console.error('[chapters-restructure] rename failed', e);
+      res.status(500).json({ error: msg });
     }
   },
 );

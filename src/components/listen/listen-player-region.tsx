@@ -16,6 +16,7 @@ import {
   IconPause,
   IconShare,
   IconRefresh,
+  IconPencil,
 } from '../../lib/icons';
 import { SectionLabel, Pill } from '../primitives';
 import { Waveform } from '../waveform';
@@ -24,6 +25,7 @@ import { stripChapterPrefix } from '../../lib/format-chapter-title';
 import { useAppSelector } from '../../store';
 import { selectListenProgress, type ListenMarker } from '../../store/listen-progress-slice';
 import { ShareClipModal } from '../../modals/share-clip';
+import { EditChapterTitleModal } from '../../modals/edit-chapter-title';
 import { LoudnessReport, classifyDrift } from '../loudness-report';
 import type { Chapter, Character } from '../../lib/types';
 
@@ -56,6 +58,10 @@ export function ListenPlayerRegion({
      row carrying its own copy. The button lives per-row though, alongside
      the chapter's play affordance. */
   const [shareClipChapter, setShareClipChapter] = useState<Chapter | null>(null);
+  /* Plan 78 — chapter rename modal hoisted to region level, mirroring
+     the share-clip pattern. One modal mount, opened/closed per pencil
+     click on a row. */
+  const [renameChapter, setRenameChapter] = useState<Chapter | null>(null);
   const progress = useAppSelector(selectListenProgress(bookId));
   /* When the chapter we're sharing is the same one currently playing,
      centre the default ±15 s window on the resume bookmark (which the
@@ -101,6 +107,7 @@ export function ListenPlayerRegion({
                   onPlay={() => onPlayChapter(currentTrack === ch.id ? null : ch.id)}
                   onRegenerate={onRegenerate}
                   onShareClip={() => setShareClipChapter(ch)}
+                  onRename={() => setRenameChapter(ch)}
                 />
               );
             })}
@@ -118,6 +125,14 @@ export function ListenPlayerRegion({
         durationSec={shareClipChapter ? parseDuration(shareClipChapter.duration) : 0}
         onClose={() => setShareClipChapter(null)}
       />
+
+      <EditChapterTitleModal
+        key={renameChapter?.id ?? 'closed'}
+        open={renameChapter !== null}
+        bookId={bookId}
+        chapter={renameChapter}
+        onClose={() => setRenameChapter(null)}
+      />
     </>
   );
 }
@@ -133,6 +148,9 @@ interface ChapterListenRowProps {
       region-level component owns the modal state so it can read the
       cross-row playhead from the listen-progress slice. */
   onShareClip: () => void;
+  /** Plan 78 — opens the rename modal for this chapter. Region-level
+      modal mount; row only knows "open the rename modal for me". */
+  onRename: () => void;
 }
 
 function ChapterListenRow({
@@ -143,6 +161,7 @@ function ChapterListenRow({
   onPlay,
   onRegenerate,
   onShareClip,
+  onRename,
 }: ChapterListenRowProps) {
   /* Plan 47 — read the per-book resume bookmark. The pill renders
      only when it points at THIS chapter and the user got past the
@@ -161,7 +180,7 @@ function ChapterListenRow({
   return (
     <div
       data-testid={`chapter-row-${chapter.id}`}
-      className={`grid grid-cols-[40px_60px_1fr_220px_100px_60px] items-center gap-4 px-5 py-4 transition-colors ${isPlaying ? 'bg-peach/[0.06]' : 'hover:bg-ink/[0.02]'}`}
+      className={`grid grid-cols-[40px_60px_1fr_220px_100px_104px] items-center gap-4 px-5 py-4 transition-colors ${isPlaying ? 'bg-peach/[0.06]' : 'hover:bg-ink/[0.02]'}`}
     >
       <button
         onClick={onPlay}
@@ -206,6 +225,15 @@ function ChapterListenRow({
         )}
       </span>
       <span className="flex items-center gap-1 justify-end">
+        <button
+          onClick={onRename}
+          title="Rename chapter"
+          aria-label={`Rename chapter ${chapter.id}`}
+          data-testid={`chapter-row-${chapter.id}-rename`}
+          className="text-ink/40 hover:text-magenta grid place-items-center w-8 h-8 rounded-full hover:bg-ink/[0.04]"
+        >
+          <IconPencil className="w-4 h-4" />
+        </button>
         <button
           onClick={() => onRegenerate(chapter)}
           title="Regenerate"

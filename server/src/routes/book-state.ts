@@ -105,8 +105,15 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
 
     /* Replace titles in order; everything else (slug, excluded, audio
        state) stays put. Skip the write when nothing actually changed
-       to avoid touching mtime / triggering watchers. */
-    const newChapters = state.chapters.map((c, i) => ({ ...c, title: parsed.chapters[i].title }));
+       to avoid touching mtime / triggering watchers.
+
+       Chapters with `titleOverridden: true` are pass-through — the user
+       has manually renamed them and the heuristic refresh MUST NOT
+       clobber their work. The chapterTitleParserVersion bump below
+       still happens so the refresh isn't re-attempted on every GET. */
+    const newChapters = state.chapters.map((c, i) =>
+      c.titleOverridden ? c : { ...c, title: parsed.chapters[i].title },
+    );
     const titlesChanged = newChapters.some((c, i) => c.title !== state.chapters[i].title);
     const nextState: BookStateJson = {
       ...state,
