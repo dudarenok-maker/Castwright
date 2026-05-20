@@ -75,7 +75,15 @@ function bookIdFromState(s: StreamableRootState): string | null {
 }
 
 function hasWork(chapters: Chapter[]): boolean {
-  return chapters.some((c) => c.state === 'in_progress' || c.state === 'queued');
+  /* Excluded chapters are skipped by the server's target loop
+     (server/src/routes/generation.ts) and the active-subset counters /
+     snapshotFromChapters below — so they must also be excluded here, or
+     a pre-run exclude leaves a 'queued' row that keeps the SSE handle
+     (and the global "Generating · N/N · 100%" pill) alive forever after
+     the last real chapter finishes. */
+  return chapters.some(
+    (c) => !c.excluded && (c.state === 'in_progress' || c.state === 'queued'),
+  );
 }
 
 function snapshotFromChapters(
@@ -455,6 +463,16 @@ export const generationStreamMiddleware: Middleware = (store) => {
             dedupeKey: 'generation-stream',
           }),
         );
+      } else if (ev && ev.type === 'idle') {
+        /* Server's idle tick is the unambiguous "no more work" end-of-
+           stream signal (server/src/routes/generation.ts emits it once
+           the target loop drains). Tear down the handle here regardless
+           of which book the slice currently reflects — the reconcile-
+           based close below only runs when currentBookId === handle.bookId,
+           so an idle tick delivered while the user is on a different book
+           (or a global view) would otherwise leave the handle live and
+           the global pill stuck at "100%". */
+        closeHandle();
       }
     }
 
