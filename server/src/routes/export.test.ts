@@ -7,6 +7,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import {
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   rmSync,
   writeFileSync,
   existsSync,
@@ -103,10 +104,16 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetJobs?.();
-  /* Clear any prior staged exports between tests so download checks
-     hit a known artifact. */
-  const exportsDir = join(bookDir, '.audiobook', 'exports');
+  /* Plan 79 — clear both the new and old staging dirs between tests so
+     download checks hit a known artifact. The .audiobook/exports/<id>/
+     path is gone in production but cleaning it keeps the suite robust
+     to a future test scaffold that lands files there. */
+  const exportsDir = join(bookDir, 'exports');
+  const manifestsDir = join(bookDir, '.audiobook', 'export-manifests');
+  const legacyExportsDir = join(bookDir, '.audiobook', 'exports');
   if (existsSync(exportsDir)) rmSync(exportsDir, { recursive: true, force: true });
+  if (existsSync(manifestsDir)) rmSync(manifestsDir, { recursive: true, force: true });
+  if (existsSync(legacyExportsDir)) rmSync(legacyExportsDir, { recursive: true, force: true });
 });
 
 afterAll(() => {
@@ -261,9 +268,13 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     expect(final!.status).toBe('cancelled');
     expect(final!.errorReason).toMatch(/cancel/i);
 
-    /* Staging dir should be gone (best-effort cleanup). */
-    const stagingPath = join(bookDir, '.audiobook', 'exports', exportId);
-    expect(existsSync(stagingPath)).toBe(false);
+    /* Plan 79 — partial artifact in <bookDir>/exports/ is unlinked.
+       The exports dir itself stays (other completed exports live there);
+       the per-format final-name artifact and any `.<filename>.partial-<id>`
+       tmp are gone. */
+    const exportsDir = join(bookDir, 'exports');
+    const remaining = existsSync(exportsDir) ? readdirSync(exportsDir) : [];
+    expect(remaining.filter((n: string) => n.includes(exportId))).toEqual([]);
   }, 15_000);
 
   it('DELETE is idempotent on already-terminal jobs', async () => {
@@ -301,11 +312,105 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('done');
     expect(res.body.id).toBe(exportId);
-    /* Artifact bytes are still on disk. */
-    const path = join(bookDir, '.audiobook', 'exports', exportId, res.body.filename as string);
-    expect(existsSync(path)).toBe(true);
-    expect(statSync(path).size).toBeGreaterThan(0);
+    /* Plan 79 — artifact lives in the visible <bookDir>/exports/ folder
+       with a flat name (no exportId in the path); the manifest sits in
+       the hidden .audiobook/export-manifests/<exportId>.json jail so the
+       exports folder stays clean for the user. */
+    const artifactPath = join(bookDir, 'exports', res.body.filename as string);
+    expect(existsSync(artifactPath)).toBe(true);
+    expect(statSync(artifactPath).size).toBeGreaterThan(0);
+    const manifestPath = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
+    expect(existsSync(manifestPath)).toBe(true);
     void readFileSync;
+  });
+
+  /* Plan 79 — the user-visible artifact lives at <bookDir>/exports/<slug>.<ext>
+     (flat, no exportId, no .audiobook/ jail). Same-format re-exports
+     clobber the prior file (newest wins) AND revoke the older job's
+     manifest so the queue rail stays de-duped to one row per format. */
+  it('writes the artifact to the visible <bookDir>/exports folder (not .audiobook/)', async () => {
+    const create = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'm4b', destination: 'download' });
+    const exportId = create.body.id as string;
+    const { body: done } = await waitForDone(exportId);
+    expect(done.status).toBe('done');
+
+    const filename = done.filename as string;
+    expect(filename).toMatch(/\.m4b$/);
+    expect(filename).not.toContain(exportId); // no UUID in the visible name
+
+    const visiblePath = join(bookDir, 'exports', filename);
+    expect(existsSync(visiblePath)).toBe(true);
+
+    /* Old layout MUST be empty (or absent) — no <bookDir>/.audiobook/exports/<id>/ */
+    const legacyDir = join(bookDir, '.audiobook', 'exports');
+    expect(existsSync(legacyDir)).toBe(false);
+  }, 30_000);
+
+  it('revokes the older same-format manifest when a re-export of the same format finishes', async () => {
+    const first = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'mp3-zip', destination: 'download' });
+    const firstId = first.body.id as string;
+    await waitForDone(firstId);
+
+    const second = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'mp3-zip', destination: 'download' });
+    const secondId = second.body.id as string;
+    await waitForDone(secondId);
+
+    /* First manifest is gone, second is present. */
+    const firstManifest = join(bookDir, '.audiobook', 'export-manifests', `${firstId}.json`);
+    const secondManifest = join(bookDir, '.audiobook', 'export-manifests', `${secondId}.json`);
+    expect(existsSync(firstManifest)).toBe(false);
+    expect(existsSync(secondManifest)).toBe(true);
+
+    /* And the first job's GET now 404s — its row disappears from the queue. */
+    const lookupFirst = await request(app).get(`/api/books/${bookId}/exports/${firstId}`);
+    expect(lookupFirst.status).toBe(404);
+  });
+
+  it('different-format re-exports DO NOT revoke each other (one row per format)', async () => {
+    const zip = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'mp3-zip', destination: 'download' });
+    const zipId = zip.body.id as string;
+    await waitForDone(zipId);
+
+    const m4b = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'm4b', destination: 'download' });
+    const m4bId = m4b.body.id as string;
+    await waitForDone(m4bId);
+
+    /* Both manifests survive. */
+    expect(existsSync(join(bookDir, '.audiobook', 'export-manifests', `${zipId}.json`))).toBe(true);
+    expect(existsSync(join(bookDir, '.audiobook', 'export-manifests', `${m4bId}.json`))).toBe(true);
+  }, 30_000);
+
+  it('rehydration drops manifests whose artifact has been deleted from the exports folder', async () => {
+    const create = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'mp3-zip', destination: 'download' });
+    const exportId = create.body.id as string;
+    const { body: done } = await waitForDone(exportId);
+    expect(done.status).toBe('done');
+
+    /* Simulate the user deleting the artifact from the exports folder. */
+    const filename = done.filename as string;
+    const visiblePath = join(bookDir, 'exports', filename);
+    expect(existsSync(visiblePath)).toBe(true);
+    rmSync(visiblePath);
+
+    /* Simulate a server restart so rehydrate rescans manifests. */
+    resetJobs();
+    const lookup = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
+    expect(lookup.status).toBe(404);
+    /* Stale manifest was unlinked on the rehydrate scan. */
+    const manifestPath = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
+    expect(existsSync(manifestPath)).toBe(false);
   });
 });
 

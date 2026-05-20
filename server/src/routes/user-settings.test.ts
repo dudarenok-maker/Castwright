@@ -10,7 +10,7 @@
         submitted in PUT are ignored, not stored, not echoed verbatim. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -251,6 +251,49 @@ describe('user-settings router', () => {
 
     it('rejects a payload missing the key field with 400', async () => {
       const res = await request(app).put('/api/user/settings/gemini-key').send({});
+      expect(res.status).toBe(400);
+    });
+  });
+
+  /* Plan 79 — write-probe behind the export modal's "Test" button. The
+     endpoint does mkdir + writeFile + unlink; success means "Node can
+     write here right now", failure carries the underlying errno so the
+     modal can show a Drive-specific hint. */
+  describe('POST /sync-folder/test', () => {
+    it('returns { ok: true } for a writable temp dir', async () => {
+      const probeDir = join(workspaceRoot, 'probe-ok');
+      const res = await request(app)
+        .post('/api/user/settings/sync-folder/test')
+        .send({ path: probeDir });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
+      /* Probe file is cleaned up — no .audiobook-write-probe straggler. */
+      const stragglers = readdirSync(probeDir).filter((n) => n.includes('write-probe'));
+      expect(stragglers).toEqual([]);
+    });
+
+    it('returns { ok: false, code } when the path is on a non-existent drive', async () => {
+      /* A drive letter Windows will reject. On POSIX the path simply
+         doesn't resolve; either way mkdir surfaces an errno-bearing
+         error code that the route echoes back. */
+      const res = await request(app)
+        .post('/api/user/settings/sync-folder/test')
+        .send({ path: 'Z:\\nonexistent\\does-not-resolve\\at-all' });
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(false);
+      expect(typeof res.body.code).toBe('string');
+      expect(typeof res.body.message).toBe('string');
+    });
+
+    it('rejects with 400 when the body is missing the path field', async () => {
+      const res = await request(app).post('/api/user/settings/sync-folder/test').send({});
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects with 400 when the path is an empty string', async () => {
+      const res = await request(app)
+        .post('/api/user/settings/sync-folder/test')
+        .send({ path: '' });
       expect(res.status).toBe(400);
     });
   });

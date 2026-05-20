@@ -97,15 +97,20 @@ describe('renameWithRetry transient-error handling', () => {
     await exerciseTransient('ENOENT');
   });
 
-  it('does NOT retry past EACCES (real permission fault) — surfaces immediately', async () => {
+  it('does NOT retry past EROFS (read-only filesystem) — surfaces immediately', async () => {
+    /* Plan 79 widened the retry list to cover EACCES + EIO because Drive
+       for Desktop surfaces those transiently during cache flushes. EROFS
+       (write to a genuinely read-only mount) is the unchanged
+       "stop pretending, this won't work" code — keep the no-retry
+       guarantee asserted via that code so the contract stays explicit. */
     const target = join(workdir, 'state.json');
     let attempts = 0;
     setRenameImpl(async () => {
       attempts++;
-      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' });
     });
 
-    await expect(writeJsonAtomic(target, { ok: true })).rejects.toThrow(/EACCES/);
+    await expect(writeJsonAtomic(target, { ok: true })).rejects.toThrow(/EROFS/);
     /* Exactly one attempt — non-transient errors must NOT spam retries
        and waste 800ms of backoff before failing. */
     expect(attempts).toBe(1);
