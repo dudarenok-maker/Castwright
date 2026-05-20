@@ -54,16 +54,6 @@ Source: net-new (2026-05-20). Captured during planning of the next full version 
 
 Ordered in clusters: audio quality → listening UX → library/workflow → cast/revisions → voice library → coverage & ops → streaming/sync → distribution → tracking → deferred listener-app handoffs.
 
-### 3. Per-chapter loudness report / visualization
-
-Source: net-new (2026-05-18). Pairs with Could #1 (loudnorm).
-
-- _What:_ Add a "Loudness report" card to the listen view showing per-chapter integrated loudness (LUFS), peak (dBTP), and LRA, computed at chapter-encode time and persisted alongside the audio. Chapters drifting more than ±2 LU from target highlight red. Click a chapter row → opens that chapter in the listen view with the loudness numbers shown.
-- _Acceptance:_ After loudnorm-enabled chapter encode, each chapter row in the loudness report card shows LUFS / dBTP / LRA. Forced low-loudness mock chapter shows up red. New server Vitest spec covers loudness extraction from `ffmpeg -af ebur128`. Frontend Vitest covers the card rendering + click-through.
-- _Key files:_ new `src/components/loudness-report.tsx`; `src/views/listen.tsx` (mount); `server/src/tts/mp3.ts` (emit loudness metadata to chapter meta); `server/src/routes/chapter-audio.ts` (surface in meta endpoint).
-- _Depends on:_ Could #1 (loudnorm) — without normalization there's no expected target to compare against.
-- _Benefit (user):_ catch problem chapters before export (e.g. a voice that came out 4 LU softer than the rest). Pairs with Could #1 to make loudness drift visible, not just corrected.
-
 ### 12. Multi-step rollback / snapshot-per-entry (revision history)
 
 Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ships the read-only history view; this entry covers the multi-step rollback that needs snapshot-per-entry storage.
