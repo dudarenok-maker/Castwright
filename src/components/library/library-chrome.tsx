@@ -1,0 +1,129 @@
+/* Book-library chrome region — pure presentational lift from
+   book-library.tsx. Owns: the heading row (SectionLabel +
+   "Welcome back, …" + intro paragraph + workspace-path row +
+   "Start a new book" CTA), the totals StatTile grid, and the
+   filter-pill row.
+
+   Behaviour-neutral split — every data-testid, className, and child
+   order matches the pre-refactor JSX so book-library.test.tsx
+   selectors keep resolving. State + dispatchers stay in the
+   book-library.tsx orchestrator. */
+
+import { useState } from 'react';
+import { IconPlus, IconFolder, IconCopy } from '../../lib/icons';
+import { SectionLabel, MixedHeading, PrimaryButton } from '../primitives';
+import { formatHours } from '../../lib/time';
+import { StatTile } from '../../views/voices';
+import type { WorkspaceInfo } from '../../lib/api';
+
+type Filter = 'all' | 'in_progress' | 'complete';
+
+interface Totals {
+  books: number;
+  runtime: number;
+  voices: number;
+  inProgress: number;
+}
+
+interface Props {
+  firstName: string;
+  workspace: WorkspaceInfo | null;
+  totals: Totals;
+  filter: Filter;
+  setFilter: (f: Filter) => void;
+  filters: Array<{ id: Filter; label: string }>;
+  onStartNew: () => void;
+}
+
+export function LibraryChrome({
+  firstName,
+  workspace,
+  totals,
+  filter,
+  setFilter,
+  filters,
+  onStartNew,
+}: Props) {
+  return (
+    <>
+      <div className="mb-8 flex items-end justify-between gap-6 flex-wrap">
+        <div>
+          <SectionLabel>Your audiobooks</SectionLabel>
+          <div className="mt-4">
+            <MixedHeading regular="Welcome back," bold={firstName} level="h1" />
+          </div>
+          <p className="mt-3 text-ink/60 max-w-xl">
+            Pick up where you left off, or start a new book. Voices stay consistent across a series
+            — characters who appear in book one carry through to book seven.
+          </p>
+          {workspace && <WorkspacePathRow info={workspace} />}
+        </div>
+        <PrimaryButton variant="dark" onClick={onStartNew}>
+          <span className="inline-flex items-center gap-2">
+            <IconPlus className="w-4 h-4" />
+            Start a new book
+          </span>
+        </PrimaryButton>
+      </div>
+
+      <div className="grid grid-cols-4 gap-4 mb-6">
+        <StatTile label="Books" value={totals.books} />
+        <StatTile label="Total runtime" value={formatHours(totals.runtime)} />
+        <StatTile label="Voices" value={totals.voices} />
+        <StatTile label="In progress" value={totals.inProgress} />
+      </div>
+
+      <div className="flex items-center gap-1 mb-6">
+        {filters.map((f) => (
+          <button
+            key={f.id}
+            onClick={() => setFilter(f.id)}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${filter === f.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/[0.04]'}`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function WorkspacePathRow({ info }: { info: WorkspaceInfo }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = () => {
+    /* navigator.clipboard is async + secure-context-gated. The local dev
+       server runs on http://localhost which Chrome treats as secure, so this
+       resolves; the catch is the safety net for headless tests / iframes. */
+    void navigator.clipboard
+      .writeText(info.root)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {});
+  };
+  /* "default" means WORKSPACE_DIR wasn't set, so the path is the in-repo
+     fallback. Surface that in amber — it's not broken but it's almost
+     always not what the user wanted on a Windows + OneDrive workspace. */
+  const fromDefault = info.source === 'default';
+  return (
+    <p
+      title={
+        fromDefault
+          ? `Workspace is using the default \`../audiobook-workspace\` inside the repo. Set WORKSPACE_DIR in server/.env to relocate.`
+          : `Workspace root from WORKSPACE_DIR env var.`
+      }
+      className={`mt-2 inline-flex items-center gap-2 text-xs font-mono ${fromDefault ? 'text-amber-700' : 'text-ink/55'}`}
+    >
+      <IconFolder className={`w-3.5 h-3.5 ${fromDefault ? 'text-amber-600' : 'text-ink/45'}`} />
+      <span className="truncate max-w-[520px]">{info.root}</span>
+      <button
+        onClick={onCopy}
+        className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] uppercase tracking-wider font-semibold text-ink/55 hover:text-ink hover:bg-ink/[0.05] transition-colors"
+      >
+        <IconCopy className="w-3 h-3" />
+        {copied ? 'copied' : 'copy'}
+      </button>
+    </p>
+  );
+}
