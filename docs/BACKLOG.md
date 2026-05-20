@@ -86,16 +86,6 @@ Source: net-new (2026-05-18).
 - _Depends on:_ none.
 - _Benefit (user):_ library browsing becomes tenable at 10+ titles; tagging cross-cuts the alphabetical tree (priority / series / genre).
 
-### 8. Manuscript diff viewer on re-upload
-
-Source: net-new (2026-05-18).
-
-- _What:_ When a user re-uploads a revised manuscript for an existing book, show a side-by-side diff of the previous manuscript text vs the new one (sentence-level granularity, character-level highlighting within changed sentences). Surface changed sentences mapped to existing cast attribution, so the user knows which characters' lines changed.
-- _Acceptance:_ Re-upload a manuscript with 5 sentence changes → diff view shows those 5 sentences side-by-side; "View affected characters" expands per-sentence into the cast list. Vitest covers the diff algorithm; e2e covers the upload-then-diff flow.
-- _Key files:_ new `src/components/manuscript-diff.tsx`; new `src/lib/manuscript-diff.ts` (diff algorithm — leverage `diff` npm package); `src/views/upload.tsx`; new server endpoint for diff-friendly fetch of the previous manuscript.
-- _Depends on:_ none.
-- _Benefit (user):_ re-uploading a manuscript today shows no indication of what changed — the user must manually re-read or trust external version control. Diff view closes that gap.
-
 ### 10. Portable book export with embedded state
 
 Source: net-new (2026-05-18).

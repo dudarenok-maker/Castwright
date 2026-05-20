@@ -65,6 +65,13 @@ export interface UiState {
       OS-driven auto-flip even when the account default is pinned
       to Light or Dark on this device. */
   themeOverride: 'light' | 'dark' | 'system' | null;
+  /** Plan 74 — when set, the user clicked "Replace manuscript" on a
+      ready-stage book and the upload view will treat the next
+      successful import as a re-upload (route through the diff modal
+      instead of through ConfirmMetadata + new analysis). Cleared on
+      Apply / Discard or whenever the upload stage exits. Transient —
+      not persisted. */
+  reuploadingBookId: string | null;
 }
 
 const initialState: UiState = {
@@ -86,6 +93,7 @@ const initialState: UiState = {
   selectedModelExplicit: false,
   ttsModelKeyExplicit: false,
   themeOverride: null,
+  reuploadingBookId: null,
 };
 
 export const uiSlice = createSlice({
@@ -230,6 +238,20 @@ export const uiSlice = createSlice({
     },
     clearThemeOverride: (s) => {
       s.themeOverride = null;
+    },
+
+    /* Plan 74 — flip into re-upload mode and navigate to the upload
+       view in one shot. The upload view reads `reuploadingBookId` on
+       successful import and routes through the diff modal instead of
+       through ConfirmMetadata. */
+    startReupload: (s, a: PayloadAction<{ bookId: string }>) => {
+      s.reuploadingBookId = a.payload.bookId;
+      s.stage = { kind: 'upload' };
+    },
+    /* Plan 74 — clear the re-upload flag. Fired by the diff modal's
+       Apply / Discard paths and on any non-upload stage transition. */
+    clearReupload: (s) => {
+      s.reuploadingBookId = null;
     },
   },
   extraReducers: (builder) => {
