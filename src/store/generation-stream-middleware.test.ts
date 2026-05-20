@@ -511,6 +511,68 @@ describe('generationStreamMiddleware', () => {
     expect(snap!.done).toBe(1);
     expect(snap!.inProgress).toBe(1);
   });
+
+  it('tears down the handle when the only remaining queued chapters are excluded (stuck-pill regression)', () => {
+    /* Bug: pill froze at "Generating · 70/70 · 100%" after a Kokoro run
+       finished. Root cause: `hasWork()` in the middleware didn't filter
+       out excluded chapters, so a pre-run exclude left a row in 'queued'
+       state forever, reconcile's drain check never tripped, and the
+       SSE handle (plus the global activeStream snapshot) stayed alive
+       indefinitely. Mirrors the active-subset filter already used by
+       snapshotFromChapters and the Generate view's counters. */
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [
+      ch(1, { state: 'in_progress', progress: 0.5 }),
+      ch(2, { state: 'queued', excluded: true }),
+    ]);
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    expect(store.getState().chapters.activeStream).not.toBeNull();
+
+    /* Complete the only non-excluded chapter. After the reducer flips it
+       to 'done', reconcile should consider the queue drained (the
+       excluded 'queued' row does not count). */
+    store.dispatch(
+      chaptersSlice.actions.applyGenerationTick({
+        type: 'chapter_complete',
+        chapterId: 1,
+      } as GenerationTick),
+    );
+
+    expect(cancelMock).toHaveBeenCalled();
+    expect(store.getState().chapters.activeStream).toBeNull();
+  });
+
+  it('closes the SSE on idle even when the slice has drifted to a different book', () => {
+    /* Server emits its terminal `idle` tick to every attached subscriber
+       once the target loop drains (server/src/routes/generation.ts).
+       The middleware's reconcile-based close is gated on
+       currentBookId === handle.bookId, so an idle tick that lands while
+       the user is on a different book (or any global view) would leave
+       the handle live and the global pill stuck at 100% until the user
+       navigated back to the generating book. The middleware now closes
+       on idle unconditionally as a cross-book end-of-stream signal. */
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [ch(1, { state: 'in_progress', progress: 0.5 })]);
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+
+    /* Simulate the user opening a different book mid-run — Layout's
+       hydration effect flips currentBookId; the handle stays pinned
+       to b1 per the sticky-generation contract. */
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b2'));
+    expect(cancelMock).not.toHaveBeenCalled();
+    expect(store.getState().chapters.activeStream?.bookId).toBe('b1');
+
+    /* Final idle arrives for the still-streaming b1 job. The slice is
+       on b2 so reconcile's cross-book guard would return early — only
+       the explicit idle-tick close in the middleware tears the handle
+       down here. */
+    store.dispatch(chaptersSlice.actions.applyGenerationTick({ type: 'idle' } as GenerationTick));
+
+    expect(cancelMock).toHaveBeenCalled();
+    expect(store.getState().chapters.activeStream).toBeNull();
+  });
 });
 
 describe('generationStreamMiddleware — reverse-local-analyzer guard (plan 32 D2 follow-up)', () => {
