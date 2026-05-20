@@ -22,7 +22,7 @@ import { useEffect, useRef, useState } from 'react';
 import { IconClose, IconDownload, IconExternal } from '../lib/icons';
 import { ExportQueueRow } from '../components/export-queue-row';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
-import { api, ExportIncompleteError } from '../lib/api';
+import { api, ExportIncompleteError, type SyncFolderProbeResult } from '../lib/api';
 import { useAppDispatch, useAppSelector } from '../store';
 import { exportsActions } from '../store/exports-slice';
 import { saveAccountSettings } from '../store/account-slice';
@@ -305,6 +305,20 @@ export function ExportAudiobookModal({
     }
   };
 
+  /* Plan 79 — auto-save on blur when the input lost focus with unsaved
+     content. Previously the user had to spot and click the small "Save
+     folder" button before the submit gate unlocked; quietly persisting
+     on blur matches every other settings field in the app and removes
+     the "I typed it, it didn't stick" failure mode the user hit with
+     the Voice → Google Drive flow. The explicit Save button stays as a
+     keyboard-only fallback. */
+  const handleSyncFolderBlur = () => {
+    const trimmed = syncFolderDraft.trim();
+    const savedNow = account.exportSyncFolder ?? '';
+    if (trimmed === savedNow) return;
+    void handleSaveSyncFolder();
+  };
+
   /* Cancel a running export. Fires-and-forgets the server DELETE
      (failures don't block dismissal — the user wants out either way),
      drops the job from the slice, and returns the modal to the picker
@@ -426,6 +440,8 @@ export function ExportAudiobookModal({
                 saved={syncFolder}
                 saving={syncFolderSaving}
                 onSave={handleSaveSyncFolder}
+                onBlur={handleSyncFolderBlur}
+                saveError={account.error}
               />
             ) : tab === 'download' ? (
               <DownloadTab url={lanUrl} qrDataUrl={qrDataUrl} />
@@ -436,6 +452,8 @@ export function ExportAudiobookModal({
                 saved={syncFolder}
                 saving={syncFolderSaving}
                 onSave={handleSaveSyncFolder}
+                onBlur={handleSyncFolderBlur}
+                saveError={account.error}
               />
             )}
 
@@ -587,8 +605,23 @@ interface SyncFolderTabProps {
   saved: string | null;
   saving: boolean;
   onSave: () => void;
+  /** Plan 79 — auto-save on blur. Parent fires `saveAccountSettings`
+      when the input loses focus with unsaved content. */
+  onBlur: () => void;
+  /** Plan 79 — surfaces `account.error` from the slice when the most
+      recent save was rejected (server 5xx, validation 400). Cleared on
+      the next successful save. */
+  saveError: string | null;
 }
-function SyncFolderTab({ draft, setDraft, saved, saving, onSave }: SyncFolderTabProps) {
+function SyncFolderTab({
+  draft,
+  setDraft,
+  saved,
+  saving,
+  onSave,
+  onBlur,
+  saveError,
+}: SyncFolderTabProps) {
   const isDirty = (saved ?? '') !== draft;
   return (
     <div className="space-y-3">
@@ -604,21 +637,20 @@ function SyncFolderTab({ draft, setDraft, saved, saving, onSave }: SyncFolderTab
           type="text"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onBlur={onBlur}
           placeholder="C:\Users\you\OneDrive\Audiobooks"
           className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30 font-mono"
           aria-label="Sync folder"
           data-testid="sync-folder-input"
         />
       </label>
-      <div className="flex items-center justify-end">
-        <button
-          onClick={onSave}
-          disabled={!isDirty || saving}
-          className="text-xs font-semibold px-3 py-1.5 rounded-full bg-ink/[0.04] text-ink hover:bg-ink/[0.08] disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {saving ? 'Saving…' : isDirty ? 'Save folder' : 'Saved'}
-        </button>
-      </div>
+      <SyncFolderControls
+        draft={draft}
+        isDirty={isDirty}
+        saving={saving}
+        onSave={onSave}
+        saveError={saveError}
+      />
     </div>
   );
 }
@@ -640,7 +672,17 @@ interface TileBodyProps extends SyncFolderTabProps {
   hint: TileHint;
   hintKey: string;
 }
-function TileBody({ hint, hintKey, draft, setDraft, saved, saving, onSave }: TileBodyProps) {
+function TileBody({
+  hint,
+  hintKey,
+  draft,
+  setDraft,
+  saved,
+  saving,
+  onSave,
+  onBlur,
+  saveError,
+}: TileBodyProps) {
   const isDirty = (saved ?? '') !== draft;
   const bodyTestId = hintKey === 'voice' ? 'export-voice-body' : `export-tile-body-${hintKey}`;
   const captionTestId =
@@ -661,13 +703,72 @@ function TileBody({ hint, hintKey, draft, setDraft, saved, saving, onSave }: Til
           type="text"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onBlur={onBlur}
           placeholder="C:\Users\you\OneDrive\Audiobooks"
           className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30 font-mono"
           aria-label={hint.folderInputLabel}
           data-testid="sync-folder-input"
         />
       </label>
-      <div className="flex items-center justify-end">
+      <SyncFolderControls
+        draft={draft}
+        isDirty={isDirty}
+        saving={saving}
+        onSave={onSave}
+        saveError={saveError}
+      />
+    </div>
+  );
+}
+
+/* Plan 79 — shared controls row beneath the sync-folder input. Renders
+   the Test probe button, the Save button (kept as a keyboard-only
+   fallback to the input's onBlur autosave), and any server save error
+   as a red banner. Probe state is local because each modal-open is a
+   fresh probe attempt — no value in lifting it. */
+interface SyncFolderControlsProps {
+  draft: string;
+  isDirty: boolean;
+  saving: boolean;
+  onSave: () => void;
+  saveError: string | null;
+}
+function SyncFolderControls({
+  draft,
+  isDirty,
+  saving,
+  onSave,
+  saveError,
+}: SyncFolderControlsProps) {
+  const [probing, setProbing] = useState(false);
+  const [probe, setProbe] = useState<SyncFolderProbeResult | null>(null);
+  const canProbe = draft.trim().length > 0 && !probing;
+
+  const runProbe = async () => {
+    setProbing(true);
+    setProbe(null);
+    try {
+      const result = await api.testSyncFolderPath(draft.trim());
+      setProbe(result);
+    } catch (e) {
+      setProbe({ ok: false, message: (e as Error).message });
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={runProbe}
+          disabled={!canProbe}
+          data-testid="sync-folder-test"
+          className="text-xs font-semibold px-3 py-1.5 rounded-full bg-ink/[0.04] text-ink hover:bg-ink/[0.08] disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {probing ? 'Testing…' : 'Test'}
+        </button>
         <button
           onClick={onSave}
           disabled={!isDirty || saving}
@@ -676,6 +777,33 @@ function TileBody({ hint, hintKey, draft, setDraft, saved, saving, onSave }: Til
           {saving ? 'Saving…' : isDirty ? 'Save folder' : 'Saved'}
         </button>
       </div>
-    </div>
+      {probe ? (
+        probe.ok ? (
+          <p
+            className="text-xs text-emerald-700"
+            data-testid="sync-folder-probe-ok"
+          >
+            ✓ Folder is writable.
+          </p>
+        ) : (
+          <p
+            className="text-xs text-rose-700"
+            data-testid="sync-folder-probe-fail"
+          >
+            ✗ Cannot write to this folder
+            {probe.code ? ` (${probe.code})` : ''}
+            {probe.message ? `: ${probe.message}` : '.'}
+          </p>
+        )
+      ) : null}
+      {saveError ? (
+        <p
+          className="text-xs text-rose-700 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2"
+          data-testid="sync-folder-save-error"
+        >
+          Couldn't save the folder: {saveError}
+        </p>
+      ) : null}
+    </>
   );
 }

@@ -28,6 +28,10 @@ vi.mock('../lib/api', async () => {
       getExportLanUrls: vi.fn(async () => ({ urls: ['http://192.168.1.42:8080'], port: 8080 })),
       getUserSettings: vi.fn(async () => ({}) as unknown),
       putUserSettings: vi.fn(),
+      /* Plan 79 — sync-folder Test button calls this. Default to "ok" so
+         existing specs render without a probe banner; per-test override
+         flips the resolved value when the failure branch needs covering. */
+      testSyncFolderPath: vi.fn(async (_path: string) => ({ ok: true })),
     },
   };
 });
@@ -40,6 +44,8 @@ const mockedApi = api as unknown as {
   getBookExport: ReturnType<typeof vi.fn>;
   cancelBookExport: ReturnType<typeof vi.fn>;
   getExportLanUrls: ReturnType<typeof vi.fn>;
+  putUserSettings: ReturnType<typeof vi.fn>;
+  testSyncFolderPath: ReturnType<typeof vi.fn>;
 };
 
 function makeStore() {
@@ -341,6 +347,119 @@ describe('ExportAudiobookModal — Voice mode (prefill.appHint === "voice")', ()
     expect(screen.getByTestId('export-format-m4b')).toBeInTheDocument();
     expect(screen.getByTestId('export-format-mp3-zip')).toBeInTheDocument();
     expect(screen.queryByTestId('export-voice-body')).toBeNull();
+  });
+});
+
+/* Plan 79 — sync-folder UX hardening. Before this round the user had to
+   spot a small "Save folder" button before the submit gate would unlock,
+   the most common failure mode for Voice → Google Drive (folder typed,
+   never saved, modal reopens empty). The blur autosave + visible error
+   banner + Test probe close that loop. */
+describe('ExportAudiobookModal — sync-folder UX (plan 79)', () => {
+  it('auto-saves on input blur when the draft differs from the saved value', async () => {
+    mockedApi.putUserSettings.mockResolvedValue({
+      exportSyncFolder: 'G:\\My Drive\\Audiobooks',
+    } as never);
+    renderModal({ prefill: { format: 'm4b', destination: 'sync-folder', appHint: 'voice' } });
+    const input = screen.getByTestId('sync-folder-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'G:\\My Drive\\Audiobooks' } });
+    fireEvent.blur(input);
+    await waitFor(() => {
+      expect(mockedApi.putUserSettings).toHaveBeenCalledWith({
+        exportSyncFolder: 'G:\\My Drive\\Audiobooks',
+      });
+    });
+  });
+
+  it('does NOT auto-save on blur when the draft equals the saved value', () => {
+    renderModal({ prefill: { format: 'm4b', destination: 'sync-folder', appHint: 'voice' } });
+    /* Voice body opens with an empty draft (no saved folder yet); blurring
+       without typing anything must NOT fire a PUT. */
+    const input = screen.getByTestId('sync-folder-input');
+    fireEvent.blur(input);
+    expect(mockedApi.putUserSettings).not.toHaveBeenCalled();
+  });
+
+  it('renders the "Test" probe button and shows ✓ on a successful probe', async () => {
+    mockedApi.testSyncFolderPath.mockResolvedValueOnce({ ok: true });
+    render(
+      <Provider store={makeStoreWithSyncFolder('G:\\My Drive\\Audiobooks')}>
+        <ExportAudiobookModal
+          open={true}
+          bookId="demo__sa__test"
+          prefill={{ format: 'm4b', destination: 'sync-folder', appHint: 'voice' }}
+          onClose={vi.fn()}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('sync-folder-test'));
+    await waitFor(() => {
+      expect(mockedApi.testSyncFolderPath).toHaveBeenCalledWith('G:\\My Drive\\Audiobooks');
+      expect(screen.getByTestId('sync-folder-probe-ok')).toBeInTheDocument();
+    });
+  });
+
+  it('shows ✗ with the failure code when the probe returns ok=false', async () => {
+    mockedApi.testSyncFolderPath.mockResolvedValueOnce({
+      ok: false,
+      code: 'EACCES',
+      message: 'permission denied',
+    });
+    render(
+      <Provider store={makeStoreWithSyncFolder('G:\\My Drive\\Audiobooks')}>
+        <ExportAudiobookModal
+          open={true}
+          bookId="demo__sa__test"
+          prefill={{ format: 'm4b', destination: 'sync-folder', appHint: 'voice' }}
+          onClose={vi.fn()}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('sync-folder-test'));
+    const fail = await screen.findByTestId('sync-folder-probe-fail');
+    expect(fail.textContent).toMatch(/EACCES/);
+    expect(fail.textContent).toMatch(/permission denied/);
+  });
+
+  it('disables the Test button when the input is empty', () => {
+    renderModal({ prefill: { format: 'm4b', destination: 'sync-folder', appHint: 'voice' } });
+    const test = screen.getByTestId('sync-folder-test') as HTMLButtonElement;
+    expect(test.disabled).toBe(true);
+  });
+
+  it('surfaces a save error as a red banner when saveAccountSettings rejects', async () => {
+    /* Seed account.error directly via preloadedState — the most reliable
+       way to assert the banner renders when the slice carries an error,
+       independent of whatever thunk lifecycle wrote it. */
+    const store = configureStore({
+      reducer: {
+        exports: exportsSlice.reducer,
+        account: accountSlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        exports: exportsSlice.getInitialState(),
+        account: {
+          ...accountSlice.getInitialState(),
+          exportSyncFolder: 'G:\\My Drive\\Audiobooks',
+          error: 'EACCES: permission denied (server)',
+        },
+        ui: uiSlice.getInitialState(),
+      },
+    });
+    render(
+      <Provider store={store}>
+        <ExportAudiobookModal
+          open={true}
+          bookId="demo__sa__test"
+          prefill={{ format: 'm4b', destination: 'sync-folder', appHint: 'voice' }}
+          onClose={vi.fn()}
+        />
+      </Provider>,
+    );
+    const banner = screen.getByTestId('sync-folder-save-error');
+    expect(banner.textContent).toMatch(/EACCES/);
+    expect(banner.textContent).toMatch(/permission denied/);
   });
 });
 
