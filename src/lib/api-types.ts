@@ -871,6 +871,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/export/portable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream the portable book bundle (plan 75)
+         * @description Plan 75 — returns a single `.zip` containing every artifact needed
+         *     to re-create the book on another machine: `state.json` +
+         *     manuscript file + every chapter's audio + cover image +
+         *     change-log + a `MANIFEST.json` envelope with schemaVersion +
+         *     hashes. Excludes the private `listen-progress.json` and any
+         *     `.previous.*` rollback files.
+         *
+         *     Internal layout:
+         *     ```
+         *     portable-book/
+         *       MANIFEST.json
+         *       state.json
+         *       manuscript.<ext>
+         *       cover.<ext>           (optional)
+         *       change-log.json       (optional)
+         *       audio/
+         *         <slug>.mp3
+         *         <slug>.peaks.json
+         *         <slug>.segments.json
+         *     ```
+         *
+         *     Response `Content-Disposition` carries an `attachment` filename
+         *     of `<book-title-slug>.portable.zip`. The bytes are
+         *     byte-deterministic across runs for a fixed input (MANIFEST
+         *     `exportedAt` aside).
+         */
+        get: operations["exportPortableBook"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/import/portable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import a portable book bundle into the workspace (plan 75)
+         * @description Accepts a `multipart/form-data` upload with a single `file`
+         *     field carrying a `.zip` bundle produced by
+         *     `GET /api/books/:bookId/export/portable`. The MANIFEST.json
+         *     envelope must declare a `schemaVersion` this server understands
+         *     (currently 1).
+         *
+         *     Conflict handling (when a book directory already exists at the
+         *     author/series/title path the bundle's state.json declares):
+         *
+         *     - `rename`  (default) — appends ` (imported)` /
+         *                             ` (imported 2)` etc. to the title until
+         *                             the slug-based directory is free; the
+         *                             imported bundle's state.json is rewritten
+         *                             with the new title and bookId so the
+         *                             library scan picks up a distinct entry.
+         *     - `overwrite` — writes into the existing directory, preserving
+         *                     files not in the bundle (e.g. the user's
+         *                     listen-progress.json).
+         *     - `fail`      — returns 409 without touching disk.
+         *
+         *     Per-file atomic write: each entry lands in a `.tmp-<pid>-<ts>`
+         *     sibling before being renamed over its final path.
+         */
+        post: operations["importPortableBook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/share": {
         parameters: {
             query?: never;
@@ -3403,6 +3488,116 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    exportPortableBook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Zip bundle */
+            200: {
+                headers: {
+                    /** @description attachment; filename="<slug>.portable.zip" */
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Build failed (manuscript missing, etc.) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    importPortableBook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Portable book bundle (.zip)
+                     */
+                    file: string;
+                    /**
+                     * @default rename
+                     * @enum {string}
+                     */
+                    onConflict?: "rename" | "overwrite" | "fail";
+                };
+            };
+        };
+        responses: {
+            /** @description Bundle imported */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        bookId: string;
+                        targetPath: string;
+                        importedFiles: number;
+                        conflict?: {
+                            /** @enum {string} */
+                            strategy?: "rename" | "overwrite" | "fail";
+                            renamedTo?: string;
+                        };
+                    };
+                };
+            };
+            /** @description Bundle is malformed or missing required entries */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        error?: "invalid_bundle" | "missing_file";
+                        reason?: string;
+                        message?: string;
+                    };
+                };
+            };
+            /** @description Target directory already exists and onConflict='fail' */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        error?: "bundle_conflict";
+                        existingPath?: string;
+                        message?: string;
+                    };
+                };
             };
         };
     };

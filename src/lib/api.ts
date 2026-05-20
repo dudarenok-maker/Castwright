@@ -2714,6 +2714,59 @@ async function realGetExportLanUrls(): Promise<ExportLanInfo> {
   return res.json();
 }
 
+/* Plan 75 — portable book bundle (single .zip with state + manuscript +
+   audio + cover + change-log for one book). The export returns the
+   bundle as a Blob the caller can save via URL.createObjectURL + an
+   anchor click. The import POSTs a multipart `file` field and returns
+   the resolved bookId / targetPath so the library view can refresh and
+   navigate. */
+export interface PortableImportResult {
+  bookId: string;
+  targetPath: string;
+  importedFiles: number;
+  conflict?: { strategy: 'rename' | 'overwrite' | 'fail'; renamedTo?: string };
+}
+
+async function realExportPortable(bookId: string): Promise<Blob> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/export/portable`);
+  if (!res.ok)
+    throw new Error(
+      `Portable export failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.blob();
+}
+
+async function realImportPortable(file: File): Promise<PortableImportResult> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  const res = await fetch(`/api/import/portable`, { method: 'POST', body: form });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`Portable import failed (${res.status}): ${detail || res.statusText}`);
+  }
+  return res.json();
+}
+
+async function mockExportPortable(_bookId: string): Promise<Blob> {
+  await wait(120);
+  /* Tiny valid empty-zip (EOCD only) so a real save-as click does
+     trigger a browser download under VITE_USE_MOCKS=true. */
+  return new Blob([new Uint8Array([0x50, 0x4b, 0x05, 0x06].concat(Array(18).fill(0)))], {
+    type: 'application/zip',
+  });
+}
+
+async function mockImportPortable(file: File): Promise<PortableImportResult> {
+  await wait(150);
+  const baseTitle = file.name.replace(/\.portable\.zip$/i, '').replace(/\.zip$/i, '');
+  return {
+    bookId: `imported__standalones__${baseTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    targetPath: `(mock workspace)/${baseTitle}`,
+    importedFiles: 5,
+    conflict: { strategy: 'rename', renamedTo: `${baseTitle} (imported)` },
+  };
+}
+
 /* Mock path: simulate a ~3 s build by ticking a fake job through three
    progress phases. The "downloadUrl" points at a data: URL so a real
    click does fire a browser download under VITE_USE_MOCKS=true (it'll
@@ -2991,6 +3044,8 @@ const real = {
   getBookExport: realGetBookExport,
   cancelBookExport: realCancelBookExport,
   createBookShareLink: realCreateBookShareLink,
+  exportPortable: realExportPortable,
+  importPortable: realImportPortable,
   getExportLanUrls: realGetExportLanUrls,
   getChapterAudio: async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
@@ -3118,6 +3173,8 @@ const mock = {
   getBookExport: mockGetBookExport,
   cancelBookExport: mockCancelBookExport,
   createBookShareLink: mockCreateBookShareLink,
+  exportPortable: mockExportPortable,
+  importPortable: mockImportPortable,
   getExportLanUrls: mockGetExportLanUrls,
   getChapterAudio: mockGetChapterAudio,
   getChapterAudioPrevious: mockGetChapterAudioPrevious,
