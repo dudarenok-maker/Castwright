@@ -560,7 +560,7 @@ export const chaptersSlice = createSlice({
       }
     },
 
-    /* Plan 77 — reflect a successful POST /chapters/:chapterId/rename
+    /* Plan 78 — reflect a successful POST /chapters/:chapterId/rename
        on the slice. Mirrors the `setChapterExcluded` pattern: server is
        the source of truth (writes state.json + renames the audio file
        on disk via rewriteChapterSlugs), this just keeps the UI consistent

@@ -57,7 +57,7 @@ export function ListenPlayerRegion({
      row carrying its own copy. The button lives per-row though, alongside
      the chapter's play affordance. */
   const [shareClipChapter, setShareClipChapter] = useState<Chapter | null>(null);
-  /* Plan 77 — chapter rename modal hoisted to region level, mirroring
+  /* Plan 78 — chapter rename modal hoisted to region level, mirroring
      the share-clip pattern. One modal mount, opened/closed per pencil
      click on a row. */
   const [renameChapter, setRenameChapter] = useState<Chapter | null>(null);
@@ -145,7 +145,7 @@ interface ChapterListenRowProps {
       region-level component owns the modal state so it can read the
       cross-row playhead from the listen-progress slice. */
   onShareClip: () => void;
-  /** Plan 77 — opens the rename modal for this chapter. Region-level
+  /** Plan 78 — opens the rename modal for this chapter. Region-level
       modal mount; row only knows "open the rename modal for me". */
   onRename: () => void;
 }

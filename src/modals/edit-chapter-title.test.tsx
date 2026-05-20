@@ -1,4 +1,4 @@
-/* EditChapterTitleModal — plan 77.
+/* EditChapterTitleModal — plan 78.
 
    Coverage:
    - Modal seeds the input with the current chapter title.

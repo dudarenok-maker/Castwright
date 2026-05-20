@@ -129,7 +129,7 @@ export function GenerationView({
      un-excludes is reflected on the next retry. */
   const selectedAnalyzerModelId = useAppSelector((s) => s.ui.selectedModel);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
-  /* Plan 77 — chapter rename modal state at the view level. One mount,
+  /* Plan 78 — chapter rename modal state at the view level. One mount,
      opened/closed via the per-row Rename button. */
   const [renamingChapter, setRenamingChapter] = useState<Chapter | null>(null);
   /* Per-chapter subset-analysis state for the un-exclude flow. Lives only
@@ -849,7 +849,7 @@ interface ChapterRowProps {
   onRegenerate: (ch: Chapter) => void;
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
   onPreview: (chapterId: number) => void;
-  /** Plan 77 — opens the rename modal for this chapter. View-level
+  /** Plan 78 — opens the rename modal for this chapter. View-level
       modal mount; row only knows "open rename for me". */
   onRename: (ch: Chapter) => void;
   onToggleExcluded: (chapterId: number, excluded: boolean) => void;
