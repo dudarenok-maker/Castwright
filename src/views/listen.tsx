@@ -261,6 +261,37 @@ export function ListenView({
               );
             });
         }}
+        onPortableBundleExport={() => {
+          /* Plan 75 — fetch the bundle as a Blob and trigger a
+             browser save-as via a temp anchor. The server's
+             Content-Disposition already names the file
+             "<slug>.portable.zip", but we set `download=` on the
+             anchor too so Firefox / Safari pick it up reliably. */
+          void api
+            .exportPortable(bookId)
+            .then((blob) => {
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${bookId}.portable.zip`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              /* Release the object URL after the click — the
+                 download is already initiated, so revoking the
+                 URL straight away doesn't cancel it. */
+              setTimeout(() => URL.revokeObjectURL(url), 1000);
+            })
+            .catch((err) => {
+              dispatch(
+                notificationsActions.pushToast({
+                  kind: 'warn',
+                  message: `Portable export failed: ${err instanceof Error ? err.message : String(err)}`,
+                  dedupeKey: 'portable-export-failed',
+                }),
+              );
+            });
+        }}
         onCopyExportLink={async (item) => {
           if (!item.url) return;
           try {
