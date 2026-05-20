@@ -101,6 +101,7 @@ const reuploadBook: LibraryBook = {
   voiceCount: 1,
   lastWorkedOn: 'today',
   coverGradient: ['#000', '#fff'],
+  tags: [],
 };
 
 const oldSentences = (texts: string[]): Sentence[] =>
