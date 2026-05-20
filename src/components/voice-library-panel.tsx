@@ -18,6 +18,13 @@ interface VoiceLibraryPanelProps {
   characters?: Character[];
   onOpenProfile?: (id: string) => void;
   onPlaySample?: (character: Character, voice: Voice) => void;
+  /* Plan 81 wave 3 — layout mode. Default ('aside') preserves the legacy
+     desktop two-pane behaviour: panel caps height to the viewport so it
+     can sit sticky alongside the cast table. 'sheet' is for the mobile /
+     tablet bottom-sheet on the cast view — the panel fills its sheet
+     parent's height instead of self-capping, since the sheet itself
+     owns the height envelope. */
+  displayMode?: 'aside' | 'sheet';
 }
 
 export function VoiceLibraryPanel({
@@ -28,6 +35,7 @@ export function VoiceLibraryPanel({
   characters,
   onOpenProfile,
   onPlaySample,
+  displayMode = 'aside',
 }: VoiceLibraryPanelProps) {
   const [tab, setTab] = useState<Tab>('all');
   const filtered = library.filter((v) => tab === 'all' || v.source === tab);
@@ -39,8 +47,16 @@ export function VoiceLibraryPanel({
   ];
   const findCharacter = (v: Voice) =>
     characters ? findCharacterForVoice(v, characters) : undefined;
+  /* Aside mode keeps the legacy sticky-card sizing. Sheet mode strips
+     the rounded card chrome + height cap so the panel can lie flush
+     inside the bottom-sheet (which provides its own border + radius
+     at the top edge only). */
+  const containerClass =
+    displayMode === 'sheet'
+      ? 'bg-white overflow-hidden flex flex-col h-full'
+      : 'bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex flex-col max-h-[calc(100vh-120px)]';
   return (
-    <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex flex-col max-h-[calc(100vh-120px)]">
+    <div className={containerClass}>
       <div className="p-5 pb-0">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-sm font-bold text-ink">Voice library</h2>
