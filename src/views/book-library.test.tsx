@@ -419,6 +419,77 @@ describe('BookLibraryView — loading affordance', () => {
     expect(screen.queryByText('Della Renwick')).not.toBeInTheDocument();
   });
 
+  describe('view-mode toggle (plan 76)', () => {
+    beforeEach(() => {
+      /* jsdom ships a real localStorage — wipe between cases so the
+         lazy-initialiser default isn't leaked across specs. */
+      try {
+        localStorage.removeItem('library.viewMode');
+      } catch {
+        /* swallow */
+      }
+    });
+
+    it('renders the Cards + Table toggle pills', () => {
+      renderView({ loaded: true, authors: [oneAuthor] });
+      expect(screen.getByTestId('library-view-mode-toggle')).toBeInTheDocument();
+      expect(screen.getByTestId('library-view-mode-card')).toBeInTheDocument();
+      expect(screen.getByTestId('library-view-mode-table')).toBeInTheDocument();
+    });
+
+    it('defaults to card view when localStorage is empty', () => {
+      renderView({ loaded: true, authors: [oneAuthor] });
+      /* h2 with author name only renders in the card-view branch. */
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
+      ).toBeInTheDocument();
+      expect(screen.getByTestId('library-view-mode-card')).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    });
+
+    it('renders the table view (with the row testid) after clicking Table', () => {
+      renderView({ loaded: true, authors: [oneAuthor] });
+      fireEvent.click(screen.getByTestId('library-view-mode-table'));
+      /* Card branch's h2 disappears; table-row testid materialises. */
+      expect(
+        screen.queryByRole('heading', { level: 2, name: 'Della Renwick' }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId('library-table-row-b1')).toBeInTheDocument();
+      expect(screen.getByTestId('library-view-mode-table')).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    });
+
+    it('persists viewMode to localStorage on toggle', () => {
+      renderView({ loaded: true, authors: [oneAuthor] });
+      fireEvent.click(screen.getByTestId('library-view-mode-table'));
+      expect(localStorage.getItem('library.viewMode')).toBe('table');
+      fireEvent.click(screen.getByTestId('library-view-mode-card'));
+      expect(localStorage.getItem('library.viewMode')).toBe('card');
+    });
+
+    it('reads persisted viewMode from localStorage on mount', () => {
+      localStorage.setItem('library.viewMode', 'table');
+      renderView({ loaded: true, authors: [oneAuthor] });
+      expect(screen.getByTestId('library-table-row-b1')).toBeInTheDocument();
+      expect(screen.getByTestId('library-view-mode-table')).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    });
+
+    it('falls back to card view when localStorage value is garbage', () => {
+      localStorage.setItem('library.viewMode', 'not-a-real-mode');
+      renderView({ loaded: true, authors: [oneAuthor] });
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
+      ).toBeInTheDocument();
+    });
+  });
+
   it('swaps skeleton → populated grid when hydrate dispatches', () => {
     /* The view's `authors` is a prop, not a selector — the parent route
        (routes/index.tsx) reads `library.authors` from the store and passes

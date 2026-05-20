@@ -104,6 +104,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [36 — Book covers (OpenLibrary)](36-book-covers.md) — Real cover artwork on cards + Listen header; auto-fetch on import, manual picker on demand; gradient skeleton fallback.
 - [73 — Library search + per-book tag filter](73-library-search-tags.md) — Debounced title/author search input + tag-chip filter row in the library chrome; chip editor + suggestions dropdown in the EditBookMeta modal; tags persist to `BookStateJson.tags` and round-trip via the existing `slice: 'state'` PUT path.
 - [75 — Portable book bundle (export + import)](75-portable-book-export.md) — Single `.zip` containing state.json + manuscript + audio + cover + change-log + MANIFEST. `GET /api/books/:id/export/portable` streams the bundle; `POST /api/import/portable` accepts a multipart upload; conflict default is `rename`. Listen view 4th download tile + Library view Import button.
+- [76 — Library card↔table view](76-library-table-view.md) — Toggle pill in the library chrome flips between the existing card grid and a dense, series-grouped table view; standalones collected into a synthetic pseudo-section; `library.viewMode` persisted in localStorage. Behaviour parity via reuse of the grid's callbacks; shared `STATUS_UI` + empty-state modules extracted for both.
 
 ### K. Cross-cutting invariants
 
