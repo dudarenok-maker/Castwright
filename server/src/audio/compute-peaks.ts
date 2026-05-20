@@ -10,7 +10,7 @@
 
    Contract:
    - Input: raw 16-bit signed little-endian MONO PCM (`Buffer`), same shape
-     the sidecar emits and `encodePcmToMp3` consumes. Sample rate is
+     the sidecar emits and `encodePcmToAudio` consumes. Sample rate is
      informational — peak bins are sample-count proportional, not time-
      proportional, so the same PCM at a different sample rate produces the
      same shape. Sample rate is accepted for parity with other helpers in
