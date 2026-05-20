@@ -10,7 +10,14 @@
         submitted in PUT are ignored, not stored, not echoed verbatim. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -272,13 +279,24 @@ describe('user-settings router', () => {
       expect(stragglers).toEqual([]);
     });
 
-    it('returns { ok: false, code } when the path is on a non-existent drive', async () => {
-      /* A drive letter Windows will reject. On POSIX the path simply
-         doesn't resolve; either way mkdir surfaces an errno-bearing
-         error code that the route echoes back. */
+    it('returns { ok: false, code } when the path cannot be created (parent is a file)', async () => {
+      /* Cross-platform unwritable path: plant a regular file at
+         <workspaceRoot>/blocking-file then ask the probe to write
+         "below" it. mkdir({recursive:true}) on a path whose parent is
+         a file surfaces ENOTDIR (POSIX + Windows alike) — the route
+         echoes the code back unchanged. The earlier version used a
+         bogus drive letter, but on Linux CI 'Z:\\foo' is just a weird
+         filename mkdir happily creates.
+
+         A Windows-only bogus-drive test would also be valuable for the
+         Voice → Google Drive failure mode, but it isn't necessary for
+         contract coverage and skipping per-platform adds harness drift
+         the test isn't worth. */
+      const blocking = join(workspaceRoot, 'blocking-file');
+      writeFileSync(blocking, 'not a directory');
       const res = await request(app)
         .post('/api/user/settings/sync-folder/test')
-        .send({ path: 'Z:\\nonexistent\\does-not-resolve\\at-all' });
+        .send({ path: join(blocking, 'cannot-mkdir-here') });
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(false);
       expect(typeof res.body.code).toBe('string');
