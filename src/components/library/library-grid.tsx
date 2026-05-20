@@ -17,17 +17,13 @@ import { useEffect, useRef, useState } from 'react';
 import {
   IconPlus,
   IconStar,
-  IconCheck,
-  IconSpinner,
-  IconCheckCircle,
-  IconWarning,
   IconMore,
   IconTrash,
   IconRefresh,
   IconPencil,
   IconImage,
 } from '../../lib/icons';
-import { PrimaryButton, Pill } from '../primitives';
+import { Pill } from '../primitives';
 import { Stat } from '../../views/generation';
 import { ConfirmDialog } from '../../modals/confirm-dialog';
 import { EditBookMetaModal, type EditBookMetaPatch } from '../../modals/edit-book-meta';
@@ -35,7 +31,9 @@ import { CoverPicker } from '../../modals/cover-picker';
 import { type CoverFraming, computeCoverStyle } from '../../lib/cover-framing';
 import { useAppSelector } from '../../store';
 import { selectPausedSnapshotForBook } from '../../store/library-slice';
-import type { LibraryAuthor, LibraryBook, LibraryBookStatus } from '../../lib/types';
+import type { LibraryAuthor, LibraryBook } from '../../lib/types';
+import { STATUS_UI } from './library-status-ui';
+import { EmptyLibrary, LibrarySkeleton } from './library-empty-states';
 
 interface Props {
   loaded: boolean;
@@ -111,46 +109,6 @@ export function LibraryGrid({
     </div>
   );
 }
-
-type StatusMeta = {
-  color: 'library' | 'warning' | 'peach' | 'success' | 'danger';
-  label: string;
-  icon: JSX.Element;
-};
-
-const STATUS_UI: Record<LibraryBookStatus, StatusMeta> = {
-  not_analysed: {
-    color: 'library',
-    label: 'Ready to analyse',
-    icon: <IconPlus className="w-3.5 h-3.5" />,
-  },
-  analysing: {
-    color: 'library',
-    label: 'Analysing',
-    icon: <IconSpinner className="w-3.5 h-3.5" />,
-  },
-  cast_pending: {
-    color: 'warning',
-    label: 'Cast confirmation',
-    icon: <IconCheckCircle className="w-3.5 h-3.5" />,
-  },
-  generating: {
-    color: 'peach',
-    label: 'Generating',
-    icon: <IconSpinner className="w-3.5 h-3.5" />,
-  },
-  complete: { color: 'success', label: 'Complete', icon: <IconCheck className="w-3.5 h-3.5" /> },
-  unreadable: {
-    color: 'danger',
-    label: 'State unreadable',
-    icon: <IconWarning className="w-3.5 h-3.5" />,
-  },
-  orphaned: {
-    color: 'danger',
-    label: 'Manuscript missing',
-    icon: <IconWarning className="w-3.5 h-3.5" />,
-  },
-};
 
 function BookCard({
   book,
@@ -517,55 +475,3 @@ function NewBookCard({ onStartNew }: { onStartNew: () => void }) {
   );
 }
 
-function EmptyLibrary({ onStartNew }: { onStartNew: () => void }) {
-  return (
-    <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-12 text-center">
-      <span className="w-16 h-16 mx-auto rounded-full bg-peach/10 grid place-items-center text-peach">
-        <IconPlus className="w-7 h-7" />
-      </span>
-      <h3 className="mt-5 font-serif text-2xl font-bold text-ink">Your library is empty</h3>
-      <p className="mt-2 text-sm text-ink/60 max-w-md mx-auto leading-relaxed">
-        Books live on disk under{' '}
-        <code className="px-1.5 py-0.5 rounded bg-ink/5 text-[12px]">
-          audiobook-workspace/books/&lt;Author&gt;/&lt;Series&gt;/&lt;Title&gt;/
-        </code>
-        . Import a manuscript and we'll lay it out for you.
-      </p>
-      <div className="mt-6">
-        <PrimaryButton variant="dark" onClick={onStartNew}>
-          <span className="inline-flex items-center gap-2">
-            <IconPlus className="w-4 h-4" />
-            Import your first book
-          </span>
-        </PrimaryButton>
-      </div>
-    </div>
-  );
-}
-
-/* Placeholder rendered while `library.loaded` is false. Mirrors the populated
-   grid shape (one author block, one series row, three cards) so the layout
-   doesn't shift when real data swaps in. Height matches `min-h-[180px]` on
-   NewBookCard/BookCard. Reads as "loading" via Tailwind animate-pulse. */
-function LibrarySkeleton() {
-  return (
-    <div className="space-y-10" data-testid="library-skeleton" aria-hidden="true">
-      <section>
-        <div className="h-6 w-40 rounded bg-ink/[0.06] animate-pulse mb-3" />
-        <div className="mt-4 space-y-8">
-          <div>
-            <div className="flex items-baseline justify-between mb-3">
-              <div className="h-3 w-28 rounded bg-ink/[0.06] animate-pulse" />
-              <div className="h-3 w-14 rounded bg-ink/[0.04] animate-pulse" />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              <div className="min-h-[180px] rounded-3xl bg-ink/[0.04] animate-pulse" />
-              <div className="min-h-[180px] rounded-3xl bg-ink/[0.04] animate-pulse" />
-              <div className="min-h-[180px] rounded-3xl bg-ink/[0.04] animate-pulse" />
-            </div>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}

@@ -1,0 +1,299 @@
+/* LibraryTable — series grouping, Standalones pseudo-section,
+   per-row callbacks, collapse, and empty-state branches.
+
+   Pairs with docs/features/76-library-table-view.md. The card view
+   (library-grid) carries its own coverage in book-library.test.tsx;
+   these specs lock the table-specific seams. */
+
+import { describe, it, expect, vi } from 'vitest';
+import { configureStore } from '@reduxjs/toolkit';
+import { Provider } from 'react-redux';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { librarySlice } from '../../store/library-slice';
+import { accountSlice } from '../../store/account-slice';
+import { LibraryTable } from './library-table';
+import type { LibraryAuthor, LibraryBook } from '../../lib/types';
+
+function makeBook(over: Partial<LibraryBook> & Pick<LibraryBook, 'bookId' | 'title'>): LibraryBook {
+  const base: LibraryBook = {
+    bookId: over.bookId,
+    title: over.title,
+    author: 'Test Author',
+    series: 'Test Series',
+    seriesPosition: 1,
+    isStandalone: false,
+    status: 'complete',
+    chapterCount: 10,
+    completedChapters: 10,
+    characterCount: 5,
+    voiceCount: 5,
+    lastWorkedOn: 'today',
+    coverGradient: ['#000', '#fff'],
+    runtime: '5h 0m',
+  };
+  return { ...base, ...over };
+}
+
+function renderTable(opts: {
+  authors: LibraryAuthor[];
+  isLibraryEmpty?: boolean;
+  loaded?: boolean;
+  activeBookId?: string | null;
+  onOpenBook?: (b: LibraryBook) => void;
+  onDeleteBook?: (b: LibraryBook) => void;
+  onReparseBook?: (b: LibraryBook) => void;
+  onEditBook?: (b: LibraryBook) => Promise<void>;
+  onStartNew?: () => void;
+}) {
+  const store = configureStore({
+    reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+    preloadedState: {
+      library: {
+        loaded: opts.loaded ?? true,
+        authors: opts.authors,
+        books: opts.authors.flatMap((a) => a.series.flatMap((s) => s.books)),
+        pausedSnapshots: {},
+      },
+    },
+  });
+  return render(
+    <Provider store={store}>
+      <LibraryTable
+        loaded={opts.loaded ?? true}
+        isLibraryEmpty={opts.isLibraryEmpty ?? opts.authors.length === 0}
+        authors={opts.authors}
+        activeBookId={opts.activeBookId ?? null}
+        onOpenBook={opts.onOpenBook ?? vi.fn()}
+        onDeleteBook={opts.onDeleteBook ?? vi.fn()}
+        onReparseBook={opts.onReparseBook ?? vi.fn()}
+        onEditBook={opts.onEditBook ?? vi.fn().mockResolvedValue(undefined)}
+        onStartNew={opts.onStartNew ?? vi.fn()}
+      />
+    </Provider>,
+  );
+}
+
+describe('LibraryTable — empty / skeleton branches', () => {
+  it('renders the skeleton when loaded is false', () => {
+    renderTable({ authors: [], loaded: false, isLibraryEmpty: true });
+    expect(screen.getByTestId('library-skeleton')).toBeInTheDocument();
+  });
+
+  it('renders the empty library state when there are zero authors', () => {
+    renderTable({ authors: [], isLibraryEmpty: true });
+    expect(screen.getByText(/your library is empty/i)).toBeInTheDocument();
+  });
+
+  it('renders the no-filter-match copy when library is non-empty but every group is empty', () => {
+    /* Library has authors and was loaded, but the filter has stripped
+       every series' books — same shape the orchestrator hands the
+       grid when an active filter hides everything. */
+    const author: LibraryAuthor = { name: 'Empty Author', series: [] };
+    renderTable({ authors: [author], isLibraryEmpty: false });
+    expect(screen.getByTestId('library-no-filter-match')).toBeInTheDocument();
+  });
+});
+
+describe('LibraryTable — series grouping', () => {
+  it('renders each series under its author + series header', () => {
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author One',
+        series: [
+          {
+            name: 'Series Alpha',
+            books: [makeBook({ bookId: 'a1', title: 'Alpha One', seriesPosition: 1 })],
+          },
+          {
+            name: 'Series Beta',
+            books: [makeBook({ bookId: 'b1', title: 'Beta One', seriesPosition: 1 })],
+          },
+        ],
+      },
+    ];
+    renderTable({ authors });
+    expect(screen.getByTestId('library-table-section-Author One::Series Alpha')).toBeInTheDocument();
+    expect(screen.getByTestId('library-table-section-Author One::Series Beta')).toBeInTheDocument();
+  });
+
+  it('collects standalones from every author into a single "Standalones" group', () => {
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author A',
+        series: [
+          {
+            name: 'Series One',
+            books: [
+              makeBook({ bookId: 'sa1', title: 'A Standalone', isStandalone: true, seriesPosition: null }),
+              makeBook({ bookId: 'a1', title: 'A One', seriesPosition: 1 }),
+            ],
+          },
+        ],
+      },
+      {
+        name: 'Author B',
+        series: [
+          {
+            name: 'Series Two',
+            books: [
+              makeBook({ bookId: 'sb1', title: 'B Standalone', isStandalone: true, seriesPosition: null }),
+            ],
+          },
+        ],
+      },
+    ];
+    renderTable({ authors });
+    const standalones = screen.getByTestId('library-table-section-__standalones__');
+    expect(standalones).toBeInTheDocument();
+    expect(within(standalones).getByText('A Standalone')).toBeInTheDocument();
+    expect(within(standalones).getByText('B Standalone')).toBeInTheDocument();
+    expect(within(standalones).getByText('Standalones')).toBeInTheDocument();
+  });
+
+  it('omits the Standalones group when no standalones survive the filter', () => {
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author A',
+        series: [
+          { name: 'S', books: [makeBook({ bookId: 'a1', title: 'A One' })] },
+        ],
+      },
+    ];
+    renderTable({ authors });
+    expect(screen.queryByTestId('library-table-section-__standalones__')).not.toBeInTheDocument();
+  });
+
+  it('prefixes series-position into the title column for non-standalone rows', () => {
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author A',
+        series: [
+          { name: 'S', books: [makeBook({ bookId: 'a1', title: 'A One', seriesPosition: 4 })] },
+        ],
+      },
+    ];
+    renderTable({ authors });
+    const row = screen.getByTestId('library-table-row-a1');
+    expect(row).toHaveTextContent(/#4/);
+    expect(row).toHaveTextContent('A One');
+  });
+});
+
+describe('LibraryTable — interactions', () => {
+  it('fires onOpenBook when a row is clicked', () => {
+    const onOpenBook = vi.fn();
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author A',
+        series: [{ name: 'S', books: [makeBook({ bookId: 'a1', title: 'A One' })] }],
+      },
+    ];
+    renderTable({ authors, onOpenBook });
+    fireEvent.click(screen.getByTestId('library-table-row-a1'));
+    expect(onOpenBook).toHaveBeenCalledTimes(1);
+    expect(onOpenBook.mock.calls[0][0].bookId).toBe('a1');
+  });
+
+  it('does NOT fire onOpenBook when the kebab menu is clicked', () => {
+    const onOpenBook = vi.fn();
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author A',
+        series: [{ name: 'S', books: [makeBook({ bookId: 'a1', title: 'A One' })] }],
+      },
+    ];
+    renderTable({ authors, onOpenBook });
+    fireEvent.click(screen.getByLabelText(/Actions for A One/));
+    expect(onOpenBook).not.toHaveBeenCalled();
+  });
+
+  it('collapses and expands a series header on click', () => {
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author A',
+        series: [{ name: 'S', books: [makeBook({ bookId: 'a1', title: 'A One' })] }],
+      },
+    ];
+    renderTable({ authors });
+    /* Initially expanded — row is in the DOM. */
+    expect(screen.getByTestId('library-table-row-a1')).toBeInTheDocument();
+    const section = screen.getByTestId('library-table-section-Author A::S');
+    const header = within(section).getByRole('button', { name: /S/ });
+    fireEvent.click(header);
+    /* After collapse — row gone. */
+    expect(screen.queryByTestId('library-table-row-a1')).not.toBeInTheDocument();
+    /* Re-expand restores it. */
+    fireEvent.click(header);
+    expect(screen.getByTestId('library-table-row-a1')).toBeInTheDocument();
+  });
+
+  it('opens the Delete confirm dialog from the kebab menu and routes confirm → onDeleteBook', () => {
+    const onDeleteBook = vi.fn();
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author A',
+        series: [{ name: 'S', books: [makeBook({ bookId: 'a1', title: 'A One' })] }],
+      },
+    ];
+    renderTable({ authors, onDeleteBook });
+    fireEvent.click(screen.getByLabelText(/Actions for A One/));
+    fireEvent.click(screen.getByRole('button', { name: /Delete book/i }));
+    /* ConfirmDialog renders with the confirmLabel button. */
+    const confirmButtons = screen.getAllByRole('button', { name: /Delete book/i });
+    /* The dialog's confirm button is the LAST in the DOM (the menu's
+       trigger has closed already). */
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]);
+    expect(onDeleteBook).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the Edit modal from the kebab menu', () => {
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author A',
+        series: [{ name: 'S', books: [makeBook({ bookId: 'a1', title: 'A One' })] }],
+      },
+    ];
+    renderTable({ authors });
+    fireEvent.click(screen.getByLabelText(/Actions for A One/));
+    fireEvent.click(screen.getByRole('button', { name: /^Edit details$/i }));
+    /* EditBookMetaModal renders an "Edit details" eyebrow paragraph + a
+       Close button. Both anchor that the modal mounted; the Close button
+       is the more stable selector across modal-shell refactors. */
+    expect(screen.getByRole('button', { name: /^Close$/i })).toBeInTheDocument();
+  });
+
+  it('renders the cover <img> overlay when book.coverImageUrl is set', () => {
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author A',
+        series: [
+          {
+            name: 'S',
+            books: [
+              makeBook({
+                bookId: 'a1',
+                title: 'A One',
+                coverImageUrl: '/api/books/a1/cover',
+              }),
+            ],
+          },
+        ],
+      },
+    ];
+    renderTable({ authors });
+    const img = screen.getByTestId('book-table-cover-a1') as HTMLImageElement;
+    expect(img.getAttribute('src')).toBe('/api/books/a1/cover');
+  });
+
+  it('renders the "Open" pill on the row that matches activeBookId', () => {
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author A',
+        series: [{ name: 'S', books: [makeBook({ bookId: 'a1', title: 'A One' })] }],
+      },
+    ];
+    renderTable({ authors, activeBookId: 'a1' });
+    const row = screen.getByTestId('library-table-row-a1');
+    expect(within(row).getByText(/Open/i)).toBeInTheDocument();
+  });
+});
