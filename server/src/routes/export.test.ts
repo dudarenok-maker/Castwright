@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
-import { encodePcmToMp3 } from '../tts/mp3.js';
+import { encodePcmToAudio } from '../tts/mp3.js';
 
 const ffmpegPresent = (() => {
   try {
@@ -91,7 +91,7 @@ beforeAll(async () => {
   );
   writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
 
-  const mp3 = await encodePcmToMp3(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
+  const mp3 = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
   writeFileSync(join(audioRoot, '01-chapter-one.mp3'), mp3);
   writeFileSync(join(audioRoot, '02-chapter-two.mp3'), mp3);
 
@@ -185,7 +185,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       expect(res.body.error).toBe('export_incomplete');
       expect(res.body.missing).toContain('02-chapter-two');
     } finally {
-      const mp3 = await encodePcmToMp3(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
+      const mp3 = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
       writeFileSync(ch2, mp3);
     }
   });
