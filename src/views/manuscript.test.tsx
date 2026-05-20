@@ -10,10 +10,10 @@
    Also covers the chapter-filter affordance added so a 500+ chapter book
    does not push the cast list off the bottom of the sidebar. */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { changeLogSlice } from '../store/change-log-slice';
@@ -404,5 +404,123 @@ describe('ManuscriptView — cross-chapter reassign isolation', () => {
       { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one opening line.' },
       { id: 1, chapterId: 2, characterId: 'eliza', text: 'Chapter two opening line.' },
     ]);
+  });
+});
+
+/* Plan 81 Wave 3 — mobile/tablet responsive scaffolding.
+
+   jsdom doesn't honour Tailwind breakpoints (no real layout engine), so
+   we can't assert "the desktop sidebar is hidden at 375px." What we can
+   pin is the structural contract that survives the responsive rewrite:
+
+   1) The view renders without throwing at a mocked mobile viewport.
+   2) The mobile hamburger trigger ("Open chapter list" aria-label) is in
+      the DOM regardless of viewport — Tailwind hides it via CSS at `lg:`.
+   3) Clicking the hamburger surfaces the drawer (role=dialog + the
+      chapter list inside).
+   4) The desktop sticky sidebar + the drawer render the same chapter
+      buttons — both paths share the SidebarPanels subtree, so the
+      drawer button click goes through the same setCurrentChapterId
+      wiring. Smoke-tests the "drawer auto-closes on chapter pick" wrap.
+
+   Layout-correctness (no horizontal overflow at 375×667) belongs in
+   Playwright (Wave 5) — see docs/features/81-mobile-tablet-support.md. */
+describe('ManuscriptView — responsive scaffolding (plan 81 wave 3)', () => {
+  const r3Characters: Character[] = [
+    { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+  ];
+  const r3Chapters: Chapter[] = [
+    { id: 1, title: 'Chapter One', duration: '10:00', state: 'done', progress: 1, characters: {} },
+    { id: 2, title: 'Chapter Two', duration: '10:00', state: 'done', progress: 1, characters: {} },
+  ];
+  const r3Sentences: Sentence[] = [
+    { id: 1, chapterId: 1, characterId: 'narrator', text: 'A line.' },
+    { id: 1, chapterId: 2, characterId: 'narrator', text: 'Another line.' },
+  ];
+
+  function renderResponsive(currentChapterId = 1) {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    const setCurrent = vi.fn();
+    const utils = render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={r3Characters}
+          chapters={r3Chapters}
+          currentChapterId={currentChapterId}
+          setCurrentChapterId={setCurrent}
+          sentencesFromStore={r3Sentences}
+        />
+      </Provider>,
+    );
+    return { ...utils, setCurrent, store };
+  }
+
+  it('renders without throwing under a 375×667 matchMedia mock', () => {
+    /* Force matchMedia to report mobile (every query returns false)
+       just so any code that runs window.matchMedia at mount time
+       doesn't observe a stale `matches: true`. The view itself uses
+       CSS-only Tailwind breakpoints, but a mock keeps the test honest
+       if responsive JS state lands later. */
+    const matchMediaMock = vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      configurable: true,
+      value: matchMediaMock,
+    });
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 375 });
+    Object.defineProperty(window, 'innerHeight', {
+      writable: true,
+      configurable: true,
+      value: 667,
+    });
+
+    expect(() => renderResponsive()).not.toThrow();
+    /* Heading still renders — view content survived the responsive
+       rewrite, not just the shell. */
+    expect(screen.getByRole('heading', { name: /Chapter One/ })).toBeInTheDocument();
+  });
+
+  it('exposes a hamburger trigger and surfaces the chapter list inside a drawer when tapped', async () => {
+    const user = userEvent.setup();
+    const { setCurrent } = renderResponsive(1);
+
+    /* Trigger is always in the DOM — Tailwind `lg:hidden` removes it
+       only visually at desktop width. */
+    const hamburger = screen.getByRole('button', { name: /Open chapter list/i });
+    expect(hamburger).toBeInTheDocument();
+
+    /* Drawer is unmounted until opened. */
+    expect(screen.queryByRole('dialog', { name: /Chapters/i })).toBeNull();
+
+    await user.click(hamburger);
+
+    /* Drawer mounted with a close button + the chapter list rows. */
+    const drawer = screen.getByRole('dialog', { name: /Chapters/i });
+    expect(drawer).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Close drawer/i })).toBeInTheDocument();
+
+    /* Picking a chapter inside the drawer fires the same setter the
+       desktop sidebar uses, and the drawer auto-closes (handleChapterPick
+       wraps the prop). Use getAllByRole because both the desktop sidebar
+       (currently hidden under `lg:hidden` at jsdom default width, but
+       still mounted) and the drawer render their own copy of the button. */
+    const drawerChapterTwo = within(drawer).getByRole('button', { name: /Chapter Two/ });
+    await user.click(drawerChapterTwo);
+    expect(setCurrent).toHaveBeenCalledWith(2);
+    expect(screen.queryByRole('dialog', { name: /Chapters/i })).toBeNull();
   });
 });
