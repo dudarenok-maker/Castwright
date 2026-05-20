@@ -344,6 +344,68 @@ describe('ExportAudiobookModal — Voice mode (prefill.appHint === "voice")', ()
   });
 });
 
+/* Plan 72 — AAC/M4A and Opus toggles. The picker exposes the codec-zip
+   variants alongside MP3.ZIP + M4B; clicking through dispatches the
+   matching `format` discriminator on createBookExport. The server-side
+   gate (chapter audio must match the export codec) lives in the export
+   route + builder and surfaces via the same missing-chapter banner the
+   MP3.ZIP path already handles. */
+describe('ExportAudiobookModal — AAC/Opus format picker (plan 72)', () => {
+  it('renders all four format toggle buttons in the generic picker', () => {
+    renderModal();
+    expect(screen.getByTestId('export-format-m4b')).toBeInTheDocument();
+    expect(screen.getByTestId('export-format-mp3-zip')).toBeInTheDocument();
+    expect(screen.getByTestId('export-format-aac-m4a-zip')).toBeInTheDocument();
+    expect(screen.getByTestId('export-format-opus-ogg-zip')).toBeInTheDocument();
+  });
+
+  it('submits with format=aac-m4a-zip when the AAC toggle is selected', async () => {
+    mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
+    mockedApi.getBookExport.mockResolvedValue(
+      makeJob({ status: 'done', progress: 1, sizeBytes: 1024, downloadUrl: 'blob:demo' }),
+    );
+
+    renderModal();
+    fireEvent.click(screen.getByTestId('export-format-aac-m4a-zip'));
+    const submit = await waitFor(() => {
+      const btn = screen.getByTestId('export-submit');
+      if ((btn as HTMLButtonElement).disabled) throw new Error('still disabled');
+      return btn;
+    });
+    fireEvent.click(submit);
+
+    await waitFor(() => {
+      expect(mockedApi.createBookExport).toHaveBeenCalledWith(
+        'demo__sa__test',
+        expect.objectContaining({ format: 'aac-m4a-zip', destination: 'download' }),
+      );
+    });
+  });
+
+  it('submits with format=opus-ogg-zip when the Opus toggle is selected', async () => {
+    mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
+    mockedApi.getBookExport.mockResolvedValue(
+      makeJob({ status: 'done', progress: 1, sizeBytes: 1024, downloadUrl: 'blob:demo' }),
+    );
+
+    renderModal();
+    fireEvent.click(screen.getByTestId('export-format-opus-ogg-zip'));
+    const submit = await waitFor(() => {
+      const btn = screen.getByTestId('export-submit');
+      if ((btn as HTMLButtonElement).disabled) throw new Error('still disabled');
+      return btn;
+    });
+    fireEvent.click(submit);
+
+    await waitFor(() => {
+      expect(mockedApi.createBookExport).toHaveBeenCalledWith(
+        'demo__sa__test',
+        expect.objectContaining({ format: 'opus-ogg-zip', destination: 'download' }),
+      );
+    });
+  });
+});
+
 function makeJob(overrides: Partial<BookExportJob> = {}): BookExportJob {
   return {
     id: 'exp_test_1',

@@ -1914,9 +1914,16 @@ export interface components {
              *     Files import) pick up a folder per book. `mp3-folder` is
              *     only valid with `destination: sync-folder` since the
              *     download endpoint serves single files.
+             *     `aac-m4a-zip` and `opus-ogg-zip` (plan 72) are the codec-
+             *     zip companions of `mp3-zip` — they package the per-chapter
+             *     `.m4a` (AAC-LC ≈ 128 kbps in MP4/M4A) or `.ogg` (Opus ≈
+             *     96 kbps VBR) files into a zip without re-tagging. Requires
+             *     the book's `audioFormat` to match the export codec; books
+             *     generated as mp3 can't be exported as `aac-m4a-zip`
+             *     without re-running generation under the new format.
              * @enum {string}
              */
-            format: "mp3-zip" | "m4b" | "mp3-folder";
+            format: "mp3-zip" | "m4b" | "mp3-folder" | "aac-m4a-zip" | "opus-ogg-zip";
             /**
              * @description `download` stages the file under the book's `.audiobook/exports/`
              *     for the user to pull via `downloadBookExport`. `sync-folder`
@@ -1935,7 +1942,7 @@ export interface components {
             id: string;
             bookId: string;
             /** @enum {string} */
-            format: "mp3-zip" | "m4b" | "mp3-folder";
+            format: "mp3-zip" | "m4b" | "mp3-folder" | "aac-m4a-zip" | "opus-ogg-zip";
             /** @enum {string} */
             destination: "download" | "sync-folder";
             /** @enum {string} */
