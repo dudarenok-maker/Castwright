@@ -17,6 +17,7 @@ import { formatDuration } from '../lib/time';
    exists for the drift-report modal and the mock API. */
 import type {
   Chapter,
+  ChapterLoudness,
   Character,
   GenerationTick,
   AnalyseResponse,
@@ -214,9 +215,23 @@ export const chaptersSlice = createSlice({
           that actually speak in it. Absent (older server, or no analysis
           cache yet) — fall back to seeding every cast member as queued. */
         chapterCharacters?: Record<number, string[]>;
+        /** Plan 77 — per-chapter EBU R128 loudness sidecar payloads keyed
+          by chapter id, surfaced by the book-state endpoint. Drives the
+          listen-view LUFS report card + per-row drift badges. Absent
+          (older server) → every chapter row gets `lufs: undefined`;
+          present with a `null` entry → fetched-but-no-data, render
+          neutral. */
+        chapterLufs?: Record<number, ChapterLoudness | null>;
       }>,
     ) => {
-      const { bookId, chapters, completedSlugs, characters, chapterCharacters } = a.payload;
+      const {
+        bookId,
+        chapters,
+        completedSlugs,
+        characters,
+        chapterCharacters,
+        chapterLufs,
+      } = a.payload;
       if (bookId) s.currentBookId = bookId;
       const done = new Set(completedSlugs);
       const allCastQueued: Record<string, 'queued'> = {};
@@ -255,6 +270,12 @@ export const chaptersSlice = createSlice({
            server backfills it from segments.json for legacy chapters. */
             audioModelKey: c.audioModelKey,
             audioRenderedAt: c.audioRenderedAt,
+            /* Plan 77 — per-chapter EBU R128 loudness sidecar (plan 71)
+           hydrated from the book-state response. `null` entry = sidecar
+           absent on disk (legacy chapter / disabled / silent source);
+           map key absent (older server) → undefined. The listen-view
+           report card distinguishes both from "all-target" data. */
+            lufs: chapterLufs ? (chapterLufs[c.id] ?? null) : undefined,
           }) as Chapter,
       );
       s.lastError = null;
