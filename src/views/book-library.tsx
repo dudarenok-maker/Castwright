@@ -38,6 +38,10 @@ interface Props {
       propagates back through the slice. */
   onCoverChanged?: (book: LibraryBook) => Promise<void> | void;
   onStartNew: () => void;
+  /** Plan 75 — when present, exposes the "Import portable bundle"
+      button in the library chrome. The orchestrator wires the chosen
+      File to api.importPortable + refreshes the library. */
+  onImportPortable?: (file: File) => void;
 }
 
 const IN_PROGRESS_STATUSES = new Set<LibraryBookStatus>([
@@ -63,6 +67,7 @@ export function BookLibraryView({
   onEditBook,
   onCoverChanged,
   onStartNew,
+  onImportPortable,
 }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   /* First word of the user's display name → "Welcome back, Mike". Falls back
@@ -142,6 +147,7 @@ export function BookLibraryView({
         setFilter={setFilter}
         filters={filters}
         onStartNew={onStartNew}
+        onImportPortable={onImportPortable}
       />
       <LibraryGrid
         loaded={loaded}

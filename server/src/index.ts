@@ -40,6 +40,10 @@ import { clipRouter } from './routes/clip.js';
 import { chaptersRestructureRouter } from './routes/chapters-restructure.js';
 import { exportRouter } from './routes/export.js';
 import { exportLanRouter, enumerateLanUrls } from './routes/export-lan.js';
+import {
+  portableExportRouter,
+  portableImportRouter,
+} from './routes/exports-portable.js';
 import { shareRouter, sharePublicRouter } from './routes/share.js';
 import { revisionsRouter } from './routes/revisions.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
@@ -140,6 +144,8 @@ app.use('/api/books', chapterAudioRouter); // mounts /:bookId/chapters/:chapterI
 app.use('/api/books', clipRouter); // mounts /:bookId/chapters/:chapterId/clip (plan 69 — share-clip download)
 app.use('/api/books', chaptersRestructureRouter); // mounts /:bookId/chapters/{merge,split,reorder} (plan 51)
 app.use('/api/books', exportRouter); // mounts /:bookId/exports (POST + GET status + GET download)
+app.use('/api/books', portableExportRouter); // plan 75 — mounts /:bookId/export/portable (single GET)
+app.use('/api/import', portableImportRouter); // plan 75 — mounts POST /portable (multipart bundle)
 app.use('/api/export', exportLanRouter); // mounts /lan (LAN URL enumeration for the export modal)
 app.use('/api/books', shareRouter); // mounts /:bookId/share (POST — mint a slugged share URL — plan 67)
 app.use('/', sharePublicRouter); // mounts /share/:slug (public-facing M4B proxy — plan 67)
