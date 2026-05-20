@@ -38,6 +38,7 @@ import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { findChapterAudio, type ChapterAudioFile } from '../workspace/chapter-audio-file.js';
 import { isGenerationActive } from './generation.js';
+import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
 /** Disk shape mirror of `ChapterPeaksFile` in `server/src/tts/mp3.ts`.
  *  Kept narrow + local so this route doesn't reach across the TTS module
@@ -64,6 +65,29 @@ async function readPeaksOrEmpty(peaksPath: string): Promise<number[]> {
       `[chapter-audio] failed to read peaks file at ${peaksPath}: ${(err as Error).message}`,
     );
     return [];
+  }
+}
+
+/** Read `<bookDir>/audio/<slug>.lufs.json` when present, returning the
+ *  loudness sidecar payload. Missing file → `null`; this is the graceful
+ *  fallback contract for chapters generated before plan 71 / with
+ *  `AUDIO_LOUDNORM_ENABLED=false` / silent-source fallthrough. Plan 77
+ *  (LUFS report card) reads this off the wire and renders a "no data"
+ *  badge when null. A corrupt / malformed file is treated as missing
+ *  (logged then absorbed) so a one-off bad write doesn't 500 the meta
+ *  endpoint. */
+async function readLufsOrNull(lufsPath: string): Promise<LoudnormSidecarJson | null> {
+  if (!existsSync(lufsPath)) return null;
+  try {
+    const file = await readJson<LoudnormSidecarJson>(lufsPath);
+    if (!file || typeof file.i !== 'number' || typeof file.target !== 'number') return null;
+    return file;
+  } catch (err) {
+    /* eslint-disable-next-line no-console */
+    console.warn(
+      `[chapter-audio] failed to read lufs file at ${lufsPath}: ${(err as Error).message}`,
+    );
+    return null;
   }
 }
 
@@ -119,6 +143,14 @@ async function locateChapterAudio(
    *  so the preserved endpoint reliably returns `[]` for now — a
    *  deliberately graceful trade-off rather than a missing feature. */
   peaksPath: string;
+  /** Sibling `<slug>.lufs.json` (plan 71 loudnorm sidecar). Missing →
+   *  `readLufsOrNull` returns `null` so the meta endpoint degrades to
+   *  `lufs: null` and the LUFS report card UI (plan 77) renders a
+   *  neutral "no data" state. Only emitted on the current variant —
+   *  the preserved (.previous.*) variant has no loudnorm writer today
+   *  (parallel to `.previous.peaks.json`), so the path is non-null
+   *  but the file is reliably absent and we return null. */
+  lufsPath: string;
   chapterId: number;
   chapterTitle: string;
 } | null> {
@@ -142,7 +174,11 @@ async function locateChapterAudio(
     variant === 'current'
       ? join(root, `${chapter.slug}.peaks.json`)
       : join(root, `${chapter.slug}.previous.peaks.json`);
-  return { audio, segPath, peaksPath, chapterId, chapterTitle: chapter.title };
+  const lufsPath =
+    variant === 'current'
+      ? join(root, `${chapter.slug}.lufs.json`)
+      : join(root, `${chapter.slug}.previous.lufs.json`);
+  return { audio, segPath, peaksPath, lufsPath, chapterId, chapterTitle: chapter.title };
 }
 
 /** Mirror of findChapterAudio but for the `.previous.mp3` sibling. */
@@ -173,12 +209,21 @@ chapterAudioRouter.get(
        generated before this plan keep loading and the Listen view falls
        back gracefully. */
     const peaks = await readPeaksOrEmpty(found.peaksPath);
+    /* Plan 77: surface the EBU R128 loudness sidecar (plan 71) so the
+       LUFS report card and per-chapter drift badge can compute drift
+       from the target. Missing file → `null` — the chapter wasn't
+       loudnormed (legacy chapter / AUDIO_LOUDNORM_ENABLED=false /
+       silent-source fallthrough). The frontend MUST also gate any
+       drift-vs-ground-truth comparison on `lufs.twoPass === true`;
+       single-pass values are the nominal target, not a real measurement. */
+    const lufs = await readLufsOrNull(found.lufsPath);
     res.json({
       url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/${found.audio.urlSuffix}`,
       durationSec: meta?.durationSec ?? 0,
       peaks,
       sampleRate: meta?.sampleRate ?? 24000,
       segments,
+      lufs,
     });
   },
 );
@@ -206,12 +251,18 @@ chapterAudioRouter.get(
        gracefully. Wiring is symmetrical with /audio so a future preserve
        extension can light up the A/B waveform without a route change. */
     const peaks = await readPeaksOrEmpty(found.peaksPath);
+    /* Plan 77: same fall-through as peaks — no .previous.lufs.json writer
+       today (rollback preservation does not move loudnorm sidecars).
+       Returns `null` so the wire shape stays uniform with the /audio
+       endpoint. */
+    const lufs = await readLufsOrNull(found.lufsPath);
     res.json({
       url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/audio/previous.mp3`,
       durationSec: meta?.durationSec ?? 0,
       peaks,
       sampleRate: meta?.sampleRate ?? 24000,
       segments,
+      lufs,
     });
   },
 );

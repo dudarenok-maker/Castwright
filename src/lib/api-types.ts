@@ -1750,6 +1750,55 @@ export interface components {
                 characterId?: string;
                 sentenceId?: number;
             }[];
+            /**
+             * @description EBU R128 loudness measurement persisted next to the chapter
+             *     audio as `<slug>.lufs.json` (plan 71). Null when no loudnorm
+             *     pass landed — legacy chapter, `AUDIO_LOUDNORM_ENABLED=false`,
+             *     or silent-source fallthrough. Consumers MUST gate any
+             *     drift-vs-ground-truth comparison on `twoPass === true`;
+             *     single-pass values are nominal target values, not real
+             *     post-filter measurements. Plan 77 (LUFS report card UI)
+             *     reads this back to surface per-chapter drift badges and a
+             *     book-level loudness summary card on the Listen view.
+             */
+            lufs?: components["schemas"]["ChapterLoudness"];
+        };
+        /**
+         * @description Per-chapter loudness payload written by the encoder's `loudnorm`
+         *     filter. Mirrors `LoudnormSidecarJson` in
+         *     `server/src/tts/loudnorm.ts`; field names are stable contract
+         *     with the on-disk sidecar JSON (do not rename without bumping the
+         *     sidecar schema). See `docs/features/71-audio-loudness-normalization.md`.
+         */
+        ChapterLoudness: {
+            /**
+             * @description Measured integrated loudness (LUFS). In two-pass mode this is
+             *     the FIRST-pass measurement of the source PCM; in single-pass
+             *     mode it is the nominal target (no re-measurement is done).
+             */
+            i: number;
+            /** @description Measured loudness range (LU). Same single-pass caveat as `i`. */
+            lra: number;
+            /** @description Measured true peak (dBTP). Same single-pass caveat as `i`. */
+            tp: number;
+            /**
+             * @description Target integrated loudness (LUFS) the chapter was normalised
+             *     to. Matches `LoudnormOptions.target`. Default is `-16` (ACX
+             *     audiobook submission target).
+             */
+            target: number;
+            /**
+             * @description `true` when the measure-then-apply flow ran (±0.5 LU vs target);
+             *     `false` for single-pass streaming normalisation. UI consumers
+             *     MUST gate drift comparisons on this — single-pass `i`/`lra`/`tp`
+             *     are NOT post-filter measurements.
+             */
+            twoPass: boolean;
+            /**
+             * Format: date-time
+             * @description ISO-8601 timestamp the measurement was taken (encode time).
+             */
+            measuredAt: string;
         };
         ChangeLogEvent: {
             /** @description Monotonic id, usually now.getTime() at write time. */

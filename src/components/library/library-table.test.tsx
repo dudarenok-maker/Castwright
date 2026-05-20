@@ -1,7 +1,7 @@
 /* LibraryTable — series grouping, Standalones pseudo-section,
    per-row callbacks, collapse, and empty-state branches.
 
-   Pairs with docs/features/76-library-table-view.md. The card view
+   Pairs with docs/features/archive/76-library-table-view.md. The card view
    (library-grid) carries its own coverage in book-library.test.tsx;
    these specs lock the table-specific seams. */
 

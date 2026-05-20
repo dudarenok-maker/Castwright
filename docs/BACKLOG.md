@@ -25,14 +25,25 @@ the same PR — the backlog is only useful while it stays current.
 - **_Depends on_**: (optional) — listed only when there's a real prerequisite.
 - **_Benefit (axis)_**: the _why_ (user / technical / architectural).
 
-Ranking within each bucket = top is highest priority.
+Ranking within each bucket = top is highest priority. Item numbers are
+sequential per bucket and renumber every time an item ships (see the
+"Update rule" above) — don't cite a Could-#N from outside `BACKLOG.md`
+without re-reading the current list.
 
 
 ---
 
 ## Must — blocks v1 ship or hurts existing users
 
-(empty — Must #1 verify-cache shipped in plan 50 on 2026-05-18.)
+### 1. Multi-language support — same-language audio for same-language books (Russian first)
+
+Source: net-new (2026-05-20). Captured during planning of the next full version update; user-flagged as critical for the next full version update.
+
+- _What:_ Lift the implicit English-only assumption across the stack. Add `language` (BCP-47 string, default `"en"`) to `BookStateJson` and the OpenAPI `Book` + `Character` schemas. Add **Qwen3-TTS 0.6B** as a third sidecar engine (Alibaba, Apache 2.0, ~2.5 GB on disk, 4–6 GB VRAM during synth — fits the existing analyzer-eviction pattern) with its own cross-platform install script. Pipe `book.language` through to every sidecar `/synthesize` call. Auto-detect language on manuscript drop (≥30% Cyrillic codepoints → `"ru"`) with a chip + override on the confirm-metadata view. Filter the voice library panel by `voice.language === book.language` and auto-load Qwen3 when a Russian book becomes active. Fix the Gemini analyzer's Latin-only chars/4 token estimator for Cyrillic. Inject a language preamble into analyzer skill prompts for non-English manuscripts. Listen-header language badge + dedicated library language filter pill (separate from free-text tags). **Hard invariant: never cross-language** — Russian voices never read English text, English voices never read Russian text.
+- _Acceptance:_ Upload an English manuscript → behaviour unchanged from today (regression). Upload a Russian public-domain fixture (Pushkin / Chekhov — NOT the Marlow Story, that's English) → confirm-metadata chip detects Russian + allows override → opening the book auto-loads Qwen3 with the existing analyzer-eviction banner → cast picker shows ONLY Russian voices → preview button speaks a Russian pangram → generated chapter audio is Russian with zero English bleed-through. Cyrillic token estimate within ±10% of actual `usage.input_tokens` on a long chapter. Library `Russian` filter pill ANDs with existing tag filters. Concurrent-multibook invariant holds: starting Russian Book A then switching to English Book B mid-flight keeps Book B's picker English and Book A's in-flight analysis Russian. On a fresh clone with no Qwen3 weights, opening a Russian book surfaces a clear "run `npm run install:qwen3`" call-to-action — not a silent 404. New Vitest + Playwright coverage on every new seam (detect-language helper, voice-library filter, preview-text switch, listen-header badge, library language pill); new pytest case in `server/tts-sidecar/tests/test_qwen3.py` (Cyrillic input + `language: "ru"` → non-empty PCM, no cross-bleed under concurrent synth).
+- _Key files:_ `openapi.yaml` (add `language` to `Book` + `Character`; `BaseVoice.language` already half-extended at `openapi.yaml:2181-2185`); `src/lib/types.ts:135-185` (`BookStateJson`); `src/store/book-meta-slice.ts:22-38` (`EditableBookMeta`); server state.json reader (default-back-fill migration on read). Sidecar: `server/tts-sidecar/main.py:176,403-409,436,468,527-532` + new `server/tts-sidecar/engines/qwen3.py` + new `server/tts-sidecar/scripts/install-qwen3.mjs` (Node ESM, cross-platform) + thin `scripts/install-qwen3.ps1` wrapper for Windows discoverability. Server: `server/src/tts/voice-mapping.ts:104-146,223-242` (add Qwen3 profile tables, language-aware `pickVoiceForEngine`), `server/src/tts/synthesise-chapter.ts` (thread `book.language` to sidecar), `server/src/tts/base-voices.ts:36-41` (populate the existing-but-unfilled `language` field on every voice), `server/src/analyzer/gemini.ts:553-562` (Cyrillic-aware `estimateInputTokens`), analyzer skill-prompt loader (language preamble injection). Frontend: `src/views/upload.tsx:141-163` + new `src/lib/detect-language.ts` + the confirm-metadata view (chip + override); `src/components/listen/listen-header.tsx:219-234` (badge); `src/components/voice-library-panel.tsx` (language filter), `src/components/voice-preview-button.tsx` (per-language sample text), `src/components/model-control-pill.tsx` (Qwen3 button + auto-load on Russian-book select); `src/components/library/library-chrome.tsx:49-56` + `src/store/library-slice.ts:111` (language filter pill ANDed with tag intersection). Tailwind config needs no work — General Sans / Lora / Inter all support Cyrillic. Full design intent + wave decomposition captured in `~/.claude/plans/ok-lets-do-a-delightful-kahn.md`; move into `docs/features/NN-multi-language-russian.md` when the next round opens.
+- _Depends on:_ none structural. Reuses the existing sidecar load/unload + analyzer auto-eviction pattern (`POST /api/sidecar/{load,unload}` + `POST /api/ollama/unload` per `server/src/analyzer/ollama.ts:92`), the half-extended `BaseVoice.language` field, the per-engine `overrideTtsVoices` cast map, the tag-filter intersection at `src/store/library-slice.ts:111`, Vitest + RTL + Playwright harnesses, and the Kokoro install script as the shape reference for the new Qwen3 installer.
+- _Benefit (user / architectural):_ unlocks Russian (and arbitrary future languages) as a first-class concept — Russian books play Russian audio with Russian voices, no cross-language artefacts. The BCP-47-string contract (vs. closed enum) makes adding Spanish / German / etc. a UI-list change rather than a contract migration. Engine choice (Qwen3 over XTTS) preserves the option to monetize: XTTS's CPML is non-commercial-only; Qwen3-TTS is Apache 2.0. Critical for the next full version update per user direction.
 
 ---
 
@@ -44,19 +55,47 @@ Ranking within each bucket = top is highest priority.
 
 ## Could — nice to have, low-cost wins
 
-Ordered in clusters: audio quality → listening UX → library/workflow → cast/revisions → voice library → coverage & ops → streaming/sync → distribution → tracking → deferred listener-app handoffs.
+Ordered roughly: audio-quality magic → multibook invariants → workflow stubs → cast/revisions → voice library → ops & CI → distribution → listener-app handoffs → passive tracking.
 
-### 3. Per-chapter loudness report / visualization
+### 1. Streaming audio for live playback during chapter generation
 
-Source: net-new (2026-05-18). Pairs with Could #1 (loudnorm).
+Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
 
-- _What:_ Add a "Loudness report" card to the listen view showing per-chapter integrated loudness (LUFS), peak (dBTP), and LRA, computed at chapter-encode time and persisted alongside the audio. Chapters drifting more than ±2 LU from target highlight red. Click a chapter row → opens that chapter in the listen view with the loudness numbers shown.
-- _Acceptance:_ After loudnorm-enabled chapter encode, each chapter row in the loudness report card shows LUFS / dBTP / LRA. Forced low-loudness mock chapter shows up red. New server Vitest spec covers loudness extraction from `ffmpeg -af ebur128`. Frontend Vitest covers the card rendering + click-through.
-- _Key files:_ new `src/components/loudness-report.tsx`; `src/views/listen.tsx` (mount); `server/src/tts/mp3.ts` (emit loudness metadata to chapter meta); `server/src/routes/chapter-audio.ts` (surface in meta endpoint).
-- _Depends on:_ Could #1 (loudnorm) — without normalization there's no expected target to compare against.
-- _Benefit (user):_ catch problem chapters before export (e.g. a voice that came out 4 LU softer than the rest). Pairs with Could #1 to make loudness drift visible, not just corrected.
+- _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
+- _Acceptance:_ Generating a chapter shows audio progress under the play cursor before the chapter completes. Existing per-chapter file is still written atomically at the end.
+- _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
+- _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
 
-### 12. Multi-step rollback / snapshot-per-entry (revision history)
+### 2. Background drift polling across non-active books
+
+Source: net-new (2026-05-19). Spun off from the drift-report-fidelity work — the Drift Report modal now groups events across books, but the runtime poller only fetches the active book. Drift accumulated on Book B while the user is in Book A only surfaces after they navigate to Book B (or via the disk hydrate on book-open).
+
+- _What:_ Extend the revisions poller (`src/components/layout.tsx` ~528-540) to fan out across every book that has rendered chapters (probably `state.bookMeta.saved` filtered to books past the `confirm` stage). Each book's response is stamped with `bookId` in the `applyPoll` payload (already wired). Keep the active book on a 30s tick; throttle non-active books to a longer interval (e.g. 2 min) so we don't blow free-tier server quotas.
+- _Acceptance:_ Two books concurrently generating. Drift detected on background Book B (e.g. user changes a cast attribute in Book B's cast slice without navigating back) surfaces in the Drift Report modal opened from Book A's top bar within the poll interval. New unit test covers the multi-book fan-out; e2e spec extends `drift-report-multibook.spec.ts` with a background-poll case.
+- _Key files:_ `src/components/layout.tsx` (poller `useEffect`); maybe a new `src/store/revisions-poll-middleware.ts` if the cross-book scheduling outgrows the inline useEffect; `docs/features/35-engine-drift-detection.md` "Modal fidelity contract" invariant (e).
+- _Benefit (user):_ honours the concurrent-multibook invariant for drift. Today a user analysing Book A + generating Book B has to navigate between them to see fresh drift events for each.
+
+### 3. Export queue Retry + Download row actions
+
+Source: plan 18 follow-up (2026-05-18). Deferred from plan 18a — needs middleware integration to re-fire a failed export, which is bigger than a row-handler wiring.
+
+- _What:_ The Listen view's Export queue surfaces Retry (on `failed` rows) and Download (on `done` rows without a URL) as wired buttons. Retry re-fires the original `POST /api/books/:bookId/export` with the same payload via a middleware action that reads the job's recorded `format`/`destination`/`syncPath`. Download triggers a `GET /api/exports/:exportId/download` redirect (or a `window.location.assign(item.url)` when the job already carries `downloadUrl`).
+- _Acceptance:_ Click Retry on a failed row → a new export job appears with the same parameters and the failed row is dismissed. Click Download on a done-with-URL row → file downloads. Vitest covers the middleware re-fire path; e2e covers the visible buttons.
+- _Key files:_ `src/views/listen.tsx` (ExportQueue handlers); `src/store/exports-middleware.ts` (extend with `retryExport` thunk); `server/src/routes/exports.ts` (add `/exports/:exportId/download` redirect if needed).
+- _Depends on:_ download-tile endpoints live (today's listener-app handoff stubs land their own download URLs).
+- _Benefit (user):_ closes the remaining "Coming soon" stubs in the queue rail. Today copy + remove work (shipped in plan 18a); retry + download are the other two row actions promised by the design.
+
+### 4. Per-segment regen consumer for `revisions.acceptedSelections`
+
+Source: plan 20 close-out (2026-05-18). The `revisions.acceptedSelections` map is persisted by `revisionsActions.acceptRevision` but no in-app code reads it back — per-segment splicing of accepted takes was explicitly "Out of scope" for plan 20 v1, and remains so in the v1 close-out.
+
+- _What:_ Add a per-segment regen path that consumes `acceptedSelections[revisionId]` to re-render only the segments the user flipped to 'B' (the new take) while preserving 'A' (the original) segments verbatim. This requires (a) a server endpoint that accepts `{ revisionId, segmentSelections }` and dispatches per-segment synth, (b) a segments-manifest merge step that interleaves the two takes on disk, (c) a frontend trigger from the revision-diff player's "Commit selection" action.
+- _Acceptance:_ Open a pending revision, toggle segments 3 + 7 to 'B' (others 'A'), click "Commit selection" → the chapter MP3 is rewritten with segments 3 + 7 re-rendered from the new take, all other segments byte-identical to the preserved (A) take. Server Vitest covers the manifest merge + per-segment synth; frontend Vitest covers the action dispatch shape; e2e covers the audition-then-commit flow.
+- _Key files:_ new `server/src/routes/revisions-commit-segments.ts`; `server/src/tts/synthesise-chapter.ts` (extend for per-segment paths); `src/views/revision-diff.tsx` (dispatch through the new endpoint); `src/store/revisions-slice.ts` (mark the revision as committed once the segment-level synth completes).
+- _Depends on:_ plan 20 shipped (acceptedSelections persistence is already on disk). Pairs with Could #5 (multi-step rollback / snapshot-per-entry) — the timeline becomes meaningful once per-segment commits land separately from full regens.
+- _Benefit (user):_ true segment-level revision control. Today accept/reject is whole-revision swap — if the user likes 9 of 10 segments in the new take but wants segment 7 from the original, they have to regenerate the whole chapter under different prompts to recover that one segment. This closes the loop the slice has been quietly capturing since plan 20 v1.
+
+### 5. Multi-step rollback / snapshot-per-entry (revision history)
 
 Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ships the read-only history view; this entry covers the multi-step rollback that needs snapshot-per-entry storage.
 
@@ -66,7 +105,7 @@ Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ship
 - _Depends on:_ plan 55 shipped (slice plumbing already on disk).
 - _Benefit (user):_ closes the centerpiece feature from plan 55 — true non-linear undo per chapter. Today the timeline modal is read-only; the user has to walk through accept/reject in the A/B player.
 
-### 14. Batch voice-replace across all books
+### 6. Batch voice-replace across all books
 
 Source: net-new (2026-05-18).
 
@@ -76,7 +115,7 @@ Source: net-new (2026-05-18).
 - _Depends on:_ none.
 - _Benefit (user):_ cross-book voice consistency without per-book re-casting. Common need when switching a recurring narrator across a series.
 
-### 17. Cross-book voice compare
+### 7. Cross-book voice compare
 
 Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
 
@@ -86,116 +125,26 @@ Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-comp
 - _Depends on:_ plan 60 shipped (same on-demand fetch machinery is already in place; this entry lifts the cross-book guard and decides foreign-book save routing).
 - _Benefit (user):_ enables A/B for users who reuse the same TTS voice across books — e.g. comparing the same narrator across two books in a series to spot drift.
 
-### 21. Windows installer (Inno Setup or NSIS) wrapping the release zip
+### 8. Linux visual baselines for CI
 
-Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
+Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e/visual.spec.ts` now skips on platforms with no committed baselines so PR Verify can go green, but PR CI then carries zero visual-regression coverage. Until Linux baselines land, only local Windows runs catch chromium drift.
 
-- _What:_ Add an Inno Setup (or NSIS) script that wraps the `audiobook-generator-vX.Y.Z.zip` produced by Should #2 into a signed `.exe` installer. Installer extracts to `%LocalAppData%\AudiobookGenerator`, drops a Start Menu entry, runs prerequisite checks (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links shown for any missing dep, and offers to run `install-kokoro.ps1` post-install. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.
-- _Acceptance:_ Double-clicking the installer on a clean Windows 11 box yields a runnable app reachable at `http://localhost:5173`, with no terminal interaction required from the deployer. SmartScreen warning cleared after one user "Run anyway" click (full reputation requires an EV code-signing cert — out of scope until the cert is procured).
-- _Key files:_ new `installer/audiobook-generator.iss` (Inno Setup), new `installer/build-installer.ps1`, `.github/workflows/release.yml` (add `installer` job on `windows-latest` that runs after the zip job and uploads to the same release).
-- _Depends on:_ Should #2 shipped (the installer wraps the existing zip — no point building before the zip pipeline exists).
-- _Benefit (user):_ friction-free install for non-developers. Today's Should #2 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
+- _What:_ Commit `e2e/linux/visual.spec.ts/*.png` (12 PNGs matching the Win32 set). Two paths: (a) generate locally via Docker / WSL with `playwright test --update-snapshots visual.spec.ts`; (b) add a `workflow_dispatch` GitHub Action that runs `--update-snapshots` on an ubuntu-latest runner and opens a PR with the artefact, so future regen doesn't need a Linux box. The directory-level skip in `e2e/visual.spec.ts` re-enables the spec on Linux automatically the moment the directory exists.
+- _Acceptance:_ Next PR's Verify run is green on all 12 visual specs (no skip messages). `docs/features/archive/37-e2e-playwright.md` "Per-platform skip" subsection loses the "Win32 only" caveat. Bonus: if the workflow_dispatch path is taken, document it under "Regenerate workflow".
+- _Key files:_ `e2e/linux/visual.spec.ts/` (new directory); optional `.github/workflows/regen-visual-baselines.yml`; `docs/features/archive/37-e2e-playwright.md` "Visual baselines" section.
+- _Benefit (technical):_ restores Verify as a real merge gate. Today PR CI's only red signal is "visual baselines missing" — once those land, a red Verify means real regression and reviewers stop ignoring it.
 
-### 22. Docker image + compose file for headless / Linux deployment
-
-Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
-
-- _What:_ Add a multi-stage `Dockerfile` (frontend build → node runtime stage → sidecar Python stage) and a `docker-compose.yml` that wires the three services on `:5173 / :8080 / :9000`. Document the NVIDIA Container Toolkit GPU-passthrough prereq. Resolve whether `WORKSPACE_DIR` is bind-mounted from the host or held in a named volume (host-bind recommended — keeps per-book `.audiobook/state.json` portable across container rebuilds). Extend `release.yml` with `docker/build-push-action` to publish the image to `ghcr.io/dudarenok-maker/audiobook-generator:vX.Y.Z` on tag push.
-- _Acceptance:_ `docker compose up` on a host with NVIDIA Container Toolkit installed brings up the three-service stack reachable on the documented ports. The published image works against a fresh `WORKSPACE_DIR` bind mount; tagged versions are pullable from GHCR.
-- _Key files:_ new `Dockerfile`, new `docker-compose.yml`, new `docs/features/50-docker-image.md` (when this graduates from BACKLOG to active), `.github/workflows/release.yml` (extend with the GHCR push job).
-- _Depends on:_ Should #2 shipped (reuses the same tag-push trigger and version source); resolving the workspace-mount question.
-- _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
-
-### 23. Auto-backup scheduling for `state.json`
+### 9. Auto-backup scheduling for `state.json`
 
 Source: net-new (2026-05-18).
 
 - _What:_ Add a background backup job that on configurable cadence (daily / weekly) writes a snapshot of `<workspace>/<bookId>/.audiobook/state.json` to `<workspace>/.backups/<bookId>/<YYYYMMDD-HHMMSS>.json`. Keep last N (configurable, default 14). Manual "Restore from backup" affordance in workspace settings.
 - _Acceptance:_ Set daily backups → 14 daily snapshots accumulate in `.backups/`, oldest auto-pruned. Restore from snapshot → state.json reverted to that point; library view refreshes. New server Vitest spec covers the cron-like cadence + prune.
-- _Key files:_ new `server/src/workspace/auto-backup.ts`; `server/src/workspace/scan.ts` (initial trigger on server start); new settings affordance under Could #24 power-user panel (or inline in `src/views/library.tsx` if shipped first).
+- _Key files:_ new `server/src/workspace/auto-backup.ts`; `server/src/workspace/scan.ts` (initial trigger on server start); new settings affordance under Could #13 power-user panel (or inline in `src/views/library.tsx` if shipped first).
 - _Depends on:_ none.
 - _Benefit (user):_ disaster recovery without manual intervention. Particularly valuable on Windows where OneDrive sync conflicts can occasionally corrupt `state.json` mid-write.
 
-### 24. Keyboard shortcuts / power-user tuning panel
-
-Source: net-new (2026-05-18).
-
-- _What:_ Add a settings panel (under a gear icon in the top-bar) for power-user tuning: keyboard-shortcut overrides (e.g. spacebar = play/pause), runtime knobs (SSE chunk size, TTS concurrency cap, debounce values for autosave), accessibility toggles (high-contrast theme, larger text). Settings persist in localStorage and apply on next render.
-- _Acceptance:_ Open settings, change autosave debounce from 500ms to 2000ms → next edit waits 2s before write. Override "play/pause" shortcut to "K" → keyboard "K" toggles mini-player. Vitest covers the persistence + shortcut binding.
-- _Key files:_ new `src/views/settings.tsx`; new `src/lib/keybindings.ts`; new `src/store/settings-slice.ts`; `src/components/layout.tsx` (gear icon entry point).
-- _Depends on:_ none.
-- _Benefit (technical / accessibility):_ power-user tuning surfaces today's hardcoded values; keyboard navigation closes an accessibility gap.
-
-### 25. Streaming audio for live playback during chapter generation
-
-Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
-
-- _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
-- _Acceptance:_ Generating a chapter shows audio progress under the play cursor before the chapter completes. Existing per-chapter file is still written atomically at the end.
-- _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
-- _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
-
-### 27. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
-
-Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
-
-- _What:_ Research and prototype either (a) PocketBook Cloud upload (protocol is closed — needs reverse-engineering or vendor contact) or (b) sending the exported file as an attachment to `<user>@pbsync.com` (officially marketed for ebooks; audiobook size limits undocumented).
-- _Acceptance:_ A working prototype for one of the two paths; new tile on the export modal; documented size limits + caveats.
-- _Key files:_ new tile config in `src/data/listener-apps.ts`; `src/modals/export-audiobook.tsx`; `server/src/export/` for any new transport.
-- _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
-
-### 28. Single-poll TTS lifecycle for a third consumer (tracking)
-
-Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
-
-- _What:_ Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) already drives both today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
-- _Acceptance:_ The new surface reads `ttsLifecycle` from `useOutletContext<LayoutContext>()` (pattern from `generation.tsx`). No new `setInterval`, no new `/health` poll, no duplicated `evictionNotice` / `loadErrorNotice` state.
-- _Key files:_ `src/lib/use-tts-lifecycle.ts` (no changes expected — already exported); `src/components/layout.tsx` (no changes — already exposes the context); the new surface's component file.
-- _Depends on:_ an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
-- _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
-
-### 31. Apple Books (iOS / macOS) handoff modal
-
-Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
-
-- _What:_ Wire Apple Books tile with the appropriate handoff: macOS supports drag-into-Books; iOS supports AirDrop or sync via Files. Modal shows the platform-specific flow (detect Mac vs other UA, default to "iOS via AirDrop"). Copy-and-instructions only — no direct integration with Apple Books library API (which is restricted).
-- _Acceptance:_ Click tile → modal shows platform-detected instructions. Vitest covers the UA detection branching.
-- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`.
-- _Depends on:_ plan 18b shipped.
-- _Benefit (user):_ closes one more "Coming soon" tile.
-
-### 32. Plex (self-hosted media server) handoff modal
-
-Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
-
-- _What:_ Wire Plex tile with two paths: (a) instructions for manual upload to a Plex server library, (b) optional direct upload via the Plex API if the user has provided a Plex token (settings field). Path (b) is the most-complex of the four — Plex auth + library scan trigger.
-- _Acceptance:_ Click tile → modal shows manual upload steps. If a Plex token is configured, an "Upload directly" button hits the Plex API. Vitest covers both modes.
-- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`; `src/views/settings.tsx` (Plex token field — see Could #24 power-user panel); new `server/src/export/plex.ts` for the optional upload path.
-- _Depends on:_ plan 18b shipped; ideally Could #24 (power-user panel) for the token storage.
-- _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
-
-### 34. Export queue Retry + Download row actions
-
-Source: plan 18 follow-up (2026-05-18). Deferred from plan 18a — needs middleware integration to re-fire a failed export, which is bigger than a row-handler wiring.
-
-- _What:_ The Listen view's Export queue surfaces Retry (on `failed` rows) and Download (on `done` rows without a URL) as wired buttons. Retry re-fires the original `POST /api/books/:bookId/export` with the same payload via a middleware action that reads the job's recorded `format`/`destination`/`syncPath`. Download triggers a `GET /api/exports/:exportId/download` redirect (or a `window.location.assign(item.url)` when the job already carries `downloadUrl`).
-- _Acceptance:_ Click Retry on a failed row → a new export job appears with the same parameters and the failed row is dismissed. Click Download on a done-with-URL row → file downloads. Vitest covers the middleware re-fire path; e2e covers the visible buttons.
-- _Key files:_ `src/views/listen.tsx` (ExportQueue handlers); `src/store/exports-middleware.ts` (extend with `retryExport` thunk); `server/src/routes/exports.ts` (add `/exports/:exportId/download` redirect if needed).
-- _Depends on:_ Could #33 (download tiles) for the underlying export endpoints to be live.
-- _Benefit (user):_ closes the remaining "Coming soon" stubs in the queue rail. Today copy + remove work (shipped in plan 18a); retry + download are the other two row actions promised by the design.
-
-### 36. Per-segment regen consumer for `revisions.acceptedSelections`
-
-Source: plan 20 close-out (2026-05-18). The `revisions.acceptedSelections` map is persisted by `revisionsActions.acceptRevision` but no in-app code reads it back — per-segment splicing of accepted takes was explicitly "Out of scope" for plan 20 v1, and remains so in the v1 close-out.
-
-- _What:_ Add a per-segment regen path that consumes `acceptedSelections[revisionId]` to re-render only the segments the user flipped to 'B' (the new take) while preserving 'A' (the original) segments verbatim. This requires (a) a server endpoint that accepts `{ revisionId, segmentSelections }` and dispatches per-segment synth, (b) a segments-manifest merge step that interleaves the two takes on disk, (c) a frontend trigger from the revision-diff player's "Commit selection" action.
-- _Acceptance:_ Open a pending revision, toggle segments 3 + 7 to 'B' (others 'A'), click "Commit selection" → the chapter MP3 is rewritten with segments 3 + 7 re-rendered from the new take, all other segments byte-identical to the preserved (A) take. Server Vitest covers the manifest merge + per-segment synth; frontend Vitest covers the action dispatch shape; e2e covers the audition-then-commit flow.
-- _Key files:_ new `server/src/routes/revisions-commit-segments.ts`; `server/src/tts/synthesise-chapter.ts` (extend for per-segment paths); `src/views/revision-diff.tsx` (dispatch through the new endpoint); `src/store/revisions-slice.ts` (mark the revision as committed once the segment-level synth completes).
-- _Depends on:_ plan 20 shipped (acceptedSelections persistence is already on disk). Pairs with Could #12 (revision history timeline) — the timeline becomes meaningful once per-segment commits land separately from full regens.
-- _Benefit (user):_ true segment-level revision control. Today accept/reject is whole-revision swap — if the user likes 9 of 10 segments in the new take but wants segment 7 from the original, they have to regenerate the whole chapter under different prompts to recover that one segment. This closes the loop the slice has been quietly capturing since plan 20 v1.
-
-
-### 39. GPU-arbitration semaphore for parallel Claude Code sessions
+### 10. GPU-arbitration semaphore for parallel Claude Code sessions
 
 Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-new.mjs` resolves port collisions but leaves GPU/VRAM contention as a manual-coordination concern documented in CONTRIBUTING.md.
 
@@ -205,17 +154,7 @@ Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `s
 - _Depends on:_ none. Pairs with the worktree parallel-sessions tooling — without the semaphore, users must queue heavy operations by hand per the CONTRIBUTING.md "GPU + shared-resource caveats" note.
 - _Benefit (user):_ removes the silent VRAM-spillover-to-RAM slowdown when two sessions hit the analyzer or sidecar concurrently. Today a parallel run can take 5–10× longer than serial because both processes thrash the GPU.
 
-### 40. Live worktree dashboard in the app
-
-Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-list.mjs` answers "which worktrees are open?" from the terminal, but once the user routinely has 3+ sessions running, an in-app view is the natural escalation.
-
-- _What:_ Add a `#/worktrees` view (and a top-bar entry point) that lists every worktree visible to `git worktree list --porcelain`, each one's branch + assigned ports + last-modified-file timestamp + a "Is the dev server alive?" probe (TCP connect against the worktree's `VITE_PORT`). Click a row → opens that worktree's dev URL in a new tab.
-- _Acceptance:_ Three worktrees open with `npm run dev` running in two of them → the view shows all three rows; the two live ones show a green dot; clicking opens their UIs. Auto-refreshes every 10 s. New server endpoint `/api/worktrees` (only enabled in dev mode or behind a flag). Vitest covers the parsing; e2e covers the navigation.
-- _Key files:_ new `src/views/worktrees.tsx`; new `server/src/routes/worktrees.ts` (dev-mode only); `src/components/layout.tsx` (top-bar link, dev-only gate).
-- _Depends on:_ none structural. Pairs with Could #39 (GPU semaphore) — the dashboard is the natural place to surface "this worktree is the one currently holding the GPU."
-- _Benefit (architectural):_ operational visibility once parallel-session workflow becomes routine. Today the user has to remember which terminal tab is on which port.
-
-### 41. Auto-reconcile helper for parallel-agent integration branches
+### 11. Auto-reconcile helper for parallel-agent integration branches
 
 Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — CONTRIBUTING.md "Reconciliation pattern" describes the `integration/<date>` ritual but executes it manually (one `git switch` + `git merge` + `npm run verify` per agent branch). The friction-iest part of the parallel-agent workflow today.
 
@@ -225,33 +164,84 @@ Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — CO
 - _Depends on:_ the parallel-sessions tooling already shipped (the worktrees are the input). The verify-cache plan 50 makes the between-merge verify fast enough that this becomes practical.
 - _Benefit (user):_ collapses the 6-step manual reconciliation into one command. Today the friction of "merge, verify, merge, verify, ..." discourages users from running > 2 parallel agents.
 
-### Background drift polling across non-active books
+### 12. Live worktree dashboard in the app
 
-Source: net-new (2026-05-19). Spun off from the drift-report-fidelity work — the Drift Report modal now groups events across books, but the runtime poller only fetches the active book. Drift accumulated on Book B while the user is in Book A only surfaces after they navigate to Book B (or via the disk hydrate on book-open).
+Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-list.mjs` answers "which worktrees are open?" from the terminal, but once the user routinely has 3+ sessions running, an in-app view is the natural escalation.
 
-- _What:_ Extend the revisions poller (`src/components/layout.tsx` ~528-540) to fan out across every book that has rendered chapters (probably `state.bookMeta.saved` filtered to books past the `confirm` stage). Each book's response is stamped with `bookId` in the `applyPoll` payload (already wired). Keep the active book on a 30s tick; throttle non-active books to a longer interval (e.g. 2 min) so we don't blow free-tier server quotas.
-- _Acceptance:_ Two books concurrently generating. Drift detected on background Book B (e.g. user changes a cast attribute in Book B's cast slice without navigating back) surfaces in the Drift Report modal opened from Book A's top bar within the poll interval. New unit test covers the multi-book fan-out; e2e spec extends `drift-report-multibook.spec.ts` with a background-poll case.
-- _Key files:_ `src/components/layout.tsx` (poller `useEffect`); maybe a new `src/store/revisions-poll-middleware.ts` if the cross-book scheduling outgrows the inline useEffect; `docs/features/35-engine-drift-detection.md` "Modal fidelity contract" invariant (e).
-- _Benefit (user):_ honours the concurrent-multibook invariant for drift. Today a user analysing Book A + generating Book B has to navigate between them to see fresh drift events for each.
+- _What:_ Add a `#/worktrees` view (and a top-bar entry point) that lists every worktree visible to `git worktree list --porcelain`, each one's branch + assigned ports + last-modified-file timestamp + a "Is the dev server alive?" probe (TCP connect against the worktree's `VITE_PORT`). Click a row → opens that worktree's dev URL in a new tab.
+- _Acceptance:_ Three worktrees open with `npm run dev` running in two of them → the view shows all three rows; the two live ones show a green dot; clicking opens their UIs. Auto-refreshes every 10 s. New server endpoint `/api/worktrees` (only enabled in dev mode or behind a flag). Vitest covers the parsing; e2e covers the navigation.
+- _Key files:_ new `src/views/worktrees.tsx`; new `server/src/routes/worktrees.ts` (dev-mode only); `src/components/layout.tsx` (top-bar link, dev-only gate).
+- _Depends on:_ none structural. Pairs with Could #10 (GPU semaphore) — the dashboard is the natural place to surface "this worktree is the one currently holding the GPU."
+- _Benefit (architectural):_ operational visibility once parallel-session workflow becomes routine. Today the user has to remember which terminal tab is on which port.
 
-### Linux visual baselines for CI
+### 13. Keyboard shortcuts / power-user tuning panel
 
-Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e/visual.spec.ts` now skips on platforms with no committed baselines so PR Verify can go green, but PR CI then carries zero visual-regression coverage. Until Linux baselines land, only local Windows runs catch chromium drift.
+Source: net-new (2026-05-18).
 
-- _What:_ Commit `e2e/linux/visual.spec.ts/*.png` (12 PNGs matching the Win32 set). Two paths: (a) generate locally via Docker / WSL with `playwright test --update-snapshots visual.spec.ts`; (b) add a `workflow_dispatch` GitHub Action that runs `--update-snapshots` on an ubuntu-latest runner and opens a PR with the artefact, so future regen doesn't need a Linux box. The directory-level skip in `e2e/visual.spec.ts` re-enables the spec on Linux automatically the moment the directory exists.
-- _Acceptance:_ Next PR's Verify run is green on all 12 visual specs (no skip messages). `docs/features/archive/37-e2e-playwright.md` "Per-platform skip" subsection loses the "Win32 only" caveat. Bonus: if the workflow_dispatch path is taken, document it under "Regenerate workflow".
-- _Key files:_ `e2e/linux/visual.spec.ts/` (new directory); optional `.github/workflows/regen-visual-baselines.yml`; `docs/features/archive/37-e2e-playwright.md` "Visual baselines" section.
-- _Benefit (technical):_ restores Verify as a real merge gate. Today PR CI's only red signal is "visual baselines missing" — once those land, a red Verify means real regression and reviewers stop ignoring it.
+- _What:_ Add a settings panel (under a gear icon in the top-bar) for power-user tuning: keyboard-shortcut overrides (e.g. spacebar = play/pause), runtime knobs (SSE chunk size, TTS concurrency cap, debounce values for autosave), accessibility toggles (high-contrast theme, larger text). Settings persist in localStorage and apply on next render.
+- _Acceptance:_ Open settings, change autosave debounce from 500ms to 2000ms → next edit waits 2s before write. Override "play/pause" shortcut to "K" → keyboard "K" toggles mini-player. Vitest covers the persistence + shortcut binding.
+- _Key files:_ new `src/views/settings.tsx`; new `src/lib/keybindings.ts`; new `src/store/settings-slice.ts`; `src/components/layout.tsx` (gear icon entry point).
+- _Depends on:_ none.
+- _Benefit (technical / accessibility):_ power-user tuning surfaces today's hardcoded values; keyboard navigation closes an accessibility gap.
 
-### Library card↔table view toggle with series-grouped table
+### 14. Windows installer (Inno Setup or NSIS) wrapping the release zip
 
-Source: net-new (2026-05-20). User added this mid-Bundle-B planning; bundled into this PR per explicit approval rather than landing a separate Round-0 docs PR. Filed here for the record so the provenance survives the merge.
+Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
 
-- _What:_ Toggle pill in the library chrome flips the books surface between the existing card grid and a dense, series-grouped table view; standalones from every author collect into a synthetic "Standalones" pseudo-section; the table reuses the same per-book callbacks (open / edit / re-parse / delete / cover-changed) the cards already wire. `library.viewMode` persisted in localStorage with a try/catch fallback to the default ('card'). Per-series collapse state is per-session only.
-- _Acceptance:_ Toggle visible in the library chrome; reload preserves the pick; row click routes to listen; series headers collapse/expand; Standalones pseudo-section appears at the bottom when any standalone books survive the filter. Locked by `library-table.test.tsx` (14 cases), `library-status-ui.test.ts` (10 cases), 6 new view-mode cases in `book-library.test.tsx`, and the `library-table-view.spec.ts` e2e.
-- _Key files:_ `src/components/library/library-table.tsx`, `src/components/library/library-status-ui.tsx`, `src/components/library/library-empty-states.tsx`, `src/components/library/library-chrome.tsx`, `src/views/book-library.tsx`.
-- _Status: shipped in plan 76 (this PR)._
-- _Benefit (user):_ card grid breaks down at 10+ books; a dense, series-grouped table makes a long library scannable at a glance (title / status / runtime / last-worked-on visible per row without hover or scroll).
+- _What:_ Add an Inno Setup (or NSIS) script that wraps the `audiobook-generator-vX.Y.Z.zip` produced by Should #2 into a signed `.exe` installer. Installer extracts to `%LocalAppData%\AudiobookGenerator`, drops a Start Menu entry, runs prerequisite checks (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links shown for any missing dep, and offers to run `install-kokoro.ps1` post-install. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.
+- _Acceptance:_ Double-clicking the installer on a clean Windows 11 box yields a runnable app reachable at `http://localhost:5173`, with no terminal interaction required from the deployer. SmartScreen warning cleared after one user "Run anyway" click (full reputation requires an EV code-signing cert — out of scope until the cert is procured).
+- _Key files:_ new `installer/audiobook-generator.iss` (Inno Setup), new `installer/build-installer.ps1`, `.github/workflows/release.yml` (add `installer` job on `windows-latest` that runs after the zip job and uploads to the same release).
+- _Depends on:_ Should #2 shipped (the installer wraps the existing zip — no point building before the zip pipeline exists).
+- _Benefit (user):_ friction-free install for non-developers. Today's Should #2 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
+
+### 15. Docker image + compose file for headless / Linux deployment
+
+Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
+
+- _What:_ Add a multi-stage `Dockerfile` (frontend build → node runtime stage → sidecar Python stage) and a `docker-compose.yml` that wires the three services on `:5173 / :8080 / :9000`. Document the NVIDIA Container Toolkit GPU-passthrough prereq. Resolve whether `WORKSPACE_DIR` is bind-mounted from the host or held in a named volume (host-bind recommended — keeps per-book `.audiobook/state.json` portable across container rebuilds). Extend `release.yml` with `docker/build-push-action` to publish the image to `ghcr.io/dudarenok-maker/audiobook-generator:vX.Y.Z` on tag push.
+- _Acceptance:_ `docker compose up` on a host with NVIDIA Container Toolkit installed brings up the three-service stack reachable on the documented ports. The published image works against a fresh `WORKSPACE_DIR` bind mount; tagged versions are pullable from GHCR.
+- _Key files:_ new `Dockerfile`, new `docker-compose.yml`, new `docs/features/50-docker-image.md` (when this graduates from BACKLOG to active), `.github/workflows/release.yml` (extend with the GHCR push job).
+- _Depends on:_ Should #2 shipped (reuses the same tag-push trigger and version source); resolving the workspace-mount question.
+- _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
+
+### 16. Apple Books (iOS / macOS) handoff modal
+
+Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
+
+- _What:_ Wire Apple Books tile with the appropriate handoff: macOS supports drag-into-Books; iOS supports AirDrop or sync via Files. Modal shows the platform-specific flow (detect Mac vs other UA, default to "iOS via AirDrop"). Copy-and-instructions only — no direct integration with Apple Books library API (which is restricted).
+- _Acceptance:_ Click tile → modal shows platform-detected instructions. Vitest covers the UA detection branching.
+- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`.
+- _Depends on:_ plan 18b shipped.
+- _Benefit (user):_ closes one more "Coming soon" tile.
+
+### 17. Plex (self-hosted media server) handoff modal
+
+Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
+
+- _What:_ Wire Plex tile with two paths: (a) instructions for manual upload to a Plex server library, (b) optional direct upload via the Plex API if the user has provided a Plex token (settings field). Path (b) is the most-complex of the four — Plex auth + library scan trigger.
+- _Acceptance:_ Click tile → modal shows manual upload steps. If a Plex token is configured, an "Upload directly" button hits the Plex API. Vitest covers both modes.
+- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`; `src/views/settings.tsx` (Plex token field — see Could #13 power-user panel); new `server/src/export/plex.ts` for the optional upload path.
+- _Depends on:_ plan 18b shipped; ideally Could #13 (power-user panel) for the token storage.
+- _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
+
+### 18. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
+
+Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
+
+- _What:_ Research and prototype either (a) PocketBook Cloud upload (protocol is closed — needs reverse-engineering or vendor contact) or (b) sending the exported file as an attachment to `<user>@pbsync.com` (officially marketed for ebooks; audiobook size limits undocumented).
+- _Acceptance:_ A working prototype for one of the two paths; new tile on the export modal; documented size limits + caveats.
+- _Key files:_ new tile config in `src/data/listener-apps.ts`; `src/modals/export-audiobook.tsx`; `server/src/export/` for any new transport.
+- _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
+
+### 19. Single-poll TTS lifecycle for a third consumer (tracking)
+
+Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
+
+- _What:_ Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) already drives both today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
+- _Acceptance:_ The new surface reads `ttsLifecycle` from `useOutletContext<LayoutContext>()` (pattern from `generation.tsx`). No new `setInterval`, no new `/health` poll, no duplicated `evictionNotice` / `loadErrorNotice` state.
+- _Key files:_ `src/lib/use-tts-lifecycle.ts` (no changes expected — already exported); `src/components/layout.tsx` (no changes — already exposes the context); the new surface's component file.
+- _Depends on:_ an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
+- _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
 
 ### Manuscript-diff guard for renamed chapters on re-upload
 
