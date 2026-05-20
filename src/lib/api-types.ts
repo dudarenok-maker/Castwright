@@ -73,6 +73,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/user/settings/sync-folder/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Probe whether a sync folder path is actually writable
+         * @description Plan 79 — write-probe behind the export modal's "Test" button so
+         *     the user can tell immediately whether the path they typed for the
+         *     Voice / Smart AudioBook / Audiobookshelf tile (or the generic
+         *     "Sync folder" tab) is actually writable.
+         *
+         *     Server runs `mkdir({recursive: true}) + writeFile(<path>/.audiobook-write-probe, 'ok') + unlink`
+         *     and reports the outcome. Success means "Node can write here right
+         *     now" — NOT "your sync app will mirror it to your phone". The
+         *     latter is on the user to confirm (Drive paused, Files On-Demand
+         *     mode, folder not in the sync inclusion list, etc.).
+         *
+         *     The most common failure on Windows + Google Drive is a path that
+         *     names the legacy `Backup and Sync` layout (`C:\Users\you\Google Drive\...`)
+         *     when the modern Drive for Desktop is installed — Drive for
+         *     Desktop mounts under `<drive>:\My Drive\...` instead. The probe
+         *     surfaces the underlying errno + message so the modal can hint at
+         *     the cause.
+         */
+        post: operations["testSyncFolderPath"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workspace/changelog": {
         parameters: {
             query?: never;
@@ -2257,6 +2293,60 @@ export interface operations {
                 };
             };
             /** @description Malformed body (failed schema validation) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    testSyncFolderPath: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Absolute filesystem path the export pipeline would
+                     *     attempt to write into. The probe creates the folder
+                     *     on demand and removes the probe file before returning.
+                     */
+                    path: string;
+                };
+            };
+        };
+        responses: {
+            /**
+             * @description Probe outcome. `ok: true` means the write succeeded;
+             *     `ok: false` carries the underlying errno code (e.g. EACCES,
+             *     ENOENT, EBUSY) plus the original error message.
+             */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok: boolean;
+                        /**
+                         * @description Node errno code when `ok` is false (e.g. EACCES,
+                         *     ENOENT). Absent when `ok` is true.
+                         */
+                        code?: string;
+                        /**
+                         * @description Underlying error message when `ok` is false. Absent
+                         *     when `ok` is true.
+                         */
+                        message?: string;
+                    };
+                };
+            };
+            /** @description Malformed body (path missing, empty, or too long) */
             400: {
                 headers: {
                     [name: string]: unknown;
