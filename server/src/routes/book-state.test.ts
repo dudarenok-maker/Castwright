@@ -301,6 +301,54 @@ describe('book-state router — state slice editable metadata', () => {
     expect(onDisk.notes).toBeNull();
   });
 
+  /* Plan 73 — tags round-trip via the state slice. Full-replacement
+     semantics: a tags array on the patch replaces the prior value,
+     with non-string entries dropped, whitespace trimmed, duplicates
+     collapsed, and empty / whitespace-only strings dropped. */
+  it('PUT slice=state round-trips tags as a full-replacement array (plan 73)', async () => {
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { tags: ['favourite', 'priority'] } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.tags).toEqual(['favourite', 'priority']);
+  });
+
+  it('PUT slice=state preserves tags when patch omits the field (plan 73)', async () => {
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { narratorCredit: 'Some Narrator' } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    /* Carried forward from the previous test. */
+    expect(onDisk.tags).toEqual(['favourite', 'priority']);
+  });
+
+  it('PUT slice=state sanitises tags: trims, drops empties, collapses duplicates (plan 73)', async () => {
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'state',
+        patch: { tags: ['  draft  ', 'draft', '', '   ', 'wip', 123, null] },
+      });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.tags).toEqual(['draft', 'wip']);
+  });
+
+  it('PUT slice=state with tags=[] clears the prior tag list (plan 73)', async () => {
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { tags: [] } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.tags).toEqual([]);
+  });
+
   it('PUT slice=state stamps schema=1 on the on-disk file (plan 27 versioning seam)', async () => {
     /* End-to-end check that the migration seam wires through every
        writer hot path. The seed file in beforeAll has no schema field

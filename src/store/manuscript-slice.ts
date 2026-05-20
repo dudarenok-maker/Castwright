@@ -29,6 +29,42 @@ export interface ManuscriptState {
   sentences: Sentence[];
   /** Parsed-but-not-yet-confirmed import (sits between Import and Confirm screens). */
   importCandidate: ImportCandidate | null;
+  /** Plan 74 — set when the user re-uploads a manuscript for an
+      already-imported book. Holds the OLD slice snapshot alongside
+      the NEW candidate sentences so the diff modal can render
+      side-by-side without committing anything until the user picks
+      Apply or Discard. The current top-level slice fields (sourceText,
+      sentences, etc.) remain untouched while this is non-null — that's
+      the "preview before apply" invariant. */
+  pendingReupload: PendingReupload | null;
+}
+
+export interface PendingReupload {
+  bookId: string;
+  /** Snapshot of the current top-level slice fields the diff "old" side
+      reads from. We snapshot rather than re-derive because the slice
+      gets stamped by the Apply path; Discard restores from this snapshot. */
+  oldSnapshot: {
+    sourceText: string | null;
+    sentences: Sentence[];
+    wordCount: number;
+    title: string | null;
+    format: UploadResponse['format'] | null;
+  };
+  /** The new manuscript text the user just uploaded, ready to commit
+      on Apply. Carries the same shape as `UploadResponse` minus the
+      bookId/manuscriptId (the existing book keeps its ids). */
+  newCandidate: {
+    sourceText: string;
+    /** Pre-split sentences from the analyzer-bound source text. We hand
+        the client splitter (splitIntoSentences) the new sourceText and
+        store the result here so the modal doesn't re-split on every
+        render. */
+    sentences: Sentence[];
+    wordCount: number;
+    title: string;
+    format: UploadResponse['format'];
+  };
 }
 
 const initialState: ManuscriptState = {
@@ -40,6 +76,7 @@ const initialState: ManuscriptState = {
   sourceText: null,
   sentences: initialSentences,
   importCandidate: null,
+  pendingReupload: null,
 };
 
 export const manuscriptSlice = createSlice({
@@ -144,6 +181,70 @@ export const manuscriptSlice = createSlice({
       s.sourceText = null;
       s.sentences = initialSentences;
       s.importCandidate = null;
+      s.pendingReupload = null;
+    },
+
+    /* Plan 74 — capture the user's re-uploaded manuscript without
+       mutating the live top-level fields. The diff modal reads
+       `pendingReupload.oldSnapshot` (the current slice) against
+       `pendingReupload.newCandidate` (the just-imported text) and
+       prompts the user to Apply or Discard. Snapshotting up-front
+       keeps Discard cheap (restore from snapshot, no API round-trip)
+       and means we don't have to keep the live state in sync with
+       a held reference. */
+    previewReuploadDiff: (
+      s,
+      a: PayloadAction<{
+        bookId: string;
+        newSourceText: string;
+        newSentences: Sentence[];
+        newWordCount: number;
+        newTitle?: string | null;
+        newFormat?: UploadResponse['format'] | null;
+      }>,
+    ) => {
+      const { bookId, newSourceText, newSentences, newWordCount, newTitle, newFormat } =
+        a.payload;
+      s.pendingReupload = {
+        bookId,
+        oldSnapshot: {
+          sourceText: s.sourceText,
+          sentences: s.sentences,
+          wordCount: s.wordCount,
+          title: s.title,
+          format: s.format,
+        },
+        newCandidate: {
+          sourceText: newSourceText,
+          sentences: newSentences,
+          wordCount: newWordCount,
+          title: newTitle ?? s.title ?? 'Untitled',
+          format: newFormat ?? s.format ?? 'markdown',
+        },
+      };
+    },
+
+    /* Plan 74 — commit the pending re-upload into the slice's live
+       fields, then clear the pending slot. Mirrors `uploadComplete`'s
+       field set so downstream consumers (manuscript view, generation
+       view) react identically whether the manuscript landed via a
+       fresh upload or via the re-upload diff Apply path. */
+    applyReupload: (s) => {
+      if (!s.pendingReupload) return;
+      const { newCandidate } = s.pendingReupload;
+      s.sourceText = newCandidate.sourceText;
+      s.sentences = newCandidate.sentences;
+      s.wordCount = newCandidate.wordCount;
+      s.title = newCandidate.title;
+      s.format = newCandidate.format;
+      s.pendingReupload = null;
+    },
+
+    /* Plan 74 — drop the pending re-upload without touching anything
+       else. The slice's live fields were never mutated (that was the
+       point of the snapshot), so this is just a clear. */
+    discardReupload: (s) => {
+      s.pendingReupload = null;
     },
 
     /* User edit: reassign a single sentence to a different character.

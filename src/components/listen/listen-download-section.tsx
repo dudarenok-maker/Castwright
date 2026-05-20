@@ -41,6 +41,10 @@ interface ListenDownloadSectionProps {
       the Download button on the Streaming link tile. The orchestrator
       mints the share URL + opens the share-link modal. */
   onOpenStreamingLink: () => void;
+  /** Plan 75 — portable book bundle tile. Called when the user clicks
+      Download on the "Portable bundle" tile. The orchestrator calls
+      api.exportPortable(bookId) and saves the returned Blob. */
+  onPortableBundleExport?: () => void;
   onCopyExportLink: (item: ExportQueueItem) => Promise<void> | void;
   onRemoveExport: (item: ExportQueueItem) => void;
 }
@@ -56,6 +60,7 @@ export function ListenDownloadSection({
   onOpenM4bExport,
   onOpenMp3ZipExport,
   onOpenStreamingLink,
+  onPortableBundleExport,
   onCopyExportLink,
   onRemoveExport,
 }: ListenDownloadSectionProps) {
@@ -80,7 +85,7 @@ export function ListenDownloadSection({
           <SectionLabel>Or download a file</SectionLabel>
           <span className="text-xs text-ink/50">For sideloading or archival</span>
         </div>
-        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <DownloadCard
             title="Full audiobook"
             format="m4b chaptered"
@@ -104,6 +109,14 @@ export function ListenDownloadSection({
             description="Hosted link a listener can open in a browser. Resolves to the book's M4B."
             testid="download-tile-streaming"
             onDownload={onOpenStreamingLink}
+          />
+          <DownloadCard
+            title="Portable bundle"
+            format="full backup .zip"
+            size="—"
+            description="Full backup (state + manuscript + audio + cover) for re-importing on another machine."
+            testid="download-tile-portable"
+            onDownload={onPortableBundleExport}
           />
         </div>
       </section>

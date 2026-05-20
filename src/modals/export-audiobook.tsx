@@ -57,7 +57,12 @@ export interface ExportPrefill {
 }
 
 type TabId = 'download' | 'sync-folder';
-type FormatId = 'm4b' | 'mp3-zip' | 'mp3-folder';
+/* Plan 72 widens the union with `aac-m4a-zip` and `opus-ogg-zip` — the
+   codec-zip companions to `mp3-zip`. They require the book's
+   `audioFormat` to match (server-side gate); the picker just dispatches
+   the format and surfaces the same missing-chapter banner if the book
+   was generated with a different codec. */
+type FormatId = 'm4b' | 'mp3-zip' | 'mp3-folder' | 'aac-m4a-zip' | 'opus-ogg-zip';
 type TileHintKey = 'voice' | 'smart_audiobook' | 'bookplayer' | 'audiobookshelf';
 
 /* Per-tile specialisation. Adding a new live tile is one entry here +
@@ -393,6 +398,8 @@ export function ExportAudiobookModal({
                     [
                       { id: 'm4b', label: 'M4B' },
                       { id: 'mp3-zip', label: 'MP3.ZIP' },
+                      { id: 'aac-m4a-zip', label: 'AAC (M4A)' },
+                      { id: 'opus-ogg-zip', label: 'Opus (Ogg)' },
                     ] as Array<{ id: FormatId; label: string }>
                   ).map((f) => (
                     <button
@@ -473,7 +480,11 @@ export function ExportAudiobookModal({
                   ? 'M4B: one file, chapter markers, resumes where you stop. PocketBook lists it under Audiobooks.'
                   : format === 'mp3-zip'
                     ? 'MP3.ZIP: a folder of tagged MP3s. Universal compatibility; any audiobook app reads it.'
-                    : 'MP3 folder: per-chapter tagged MP3s mirrored into your sync folder. Folder-scanning apps pick them up.'}
+                    : format === 'aac-m4a-zip'
+                      ? 'AAC (M4A) zip: per-chapter .m4a files in a zip. Smaller than MP3 at the same quality; native on iOS / Apple Books. Requires the book to be generated with AAC output.'
+                      : format === 'opus-ogg-zip'
+                        ? 'Opus (Ogg) zip: per-chapter .ogg files in a zip. Smallest size at narration quality; broad support on Android / VLC. Requires the book to be generated with Opus output.'
+                        : 'MP3 folder: per-chapter tagged MP3s mirrored into your sync folder. Folder-scanning apps pick them up.'}
             </p>
             <div className="flex items-center gap-3">
               <button onClick={onClose} className="text-sm font-medium text-ink/60 hover:text-ink">

@@ -31,6 +31,7 @@ export const MOCK_LIBRARY: LibraryResponse = {
               runtime: '11h 24m',
               lastWorkedOn: '3 days ago',
               coverGradient: ['#6B6663', '#1A1A1A'],
+              tags: ['favourite', 'series-1'],
             },
             {
               bookId: 'ns',
@@ -49,6 +50,7 @@ export const MOCK_LIBRARY: LibraryResponse = {
               lastWorkedOn: '2 min ago',
               coverGradient: ['#3C194F', '#0F0E0D'],
               pinned: true,
+              tags: ['series-1'],
             },
             {
               bookId: 'cc',
@@ -65,6 +67,7 @@ export const MOCK_LIBRARY: LibraryResponse = {
               matchedFromLibrary: 3,
               lastWorkedOn: 'Yesterday',
               coverGradient: ['#D4A04E', '#7B5A26'],
+              tags: [],
             },
           ],
         },
@@ -86,6 +89,7 @@ export const MOCK_LIBRARY: LibraryResponse = {
               progress: 0.34,
               lastWorkedOn: 'Just now',
               coverGradient: ['#A43C6C', '#3C194F'],
+              tags: ['favourite'],
             },
           ],
         },

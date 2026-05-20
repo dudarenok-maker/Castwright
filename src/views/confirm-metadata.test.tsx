@@ -40,6 +40,7 @@ const libraryBook = (
   voiceCount: 20,
   lastWorkedOn: 'last week',
   coverGradient: ['#000', '#fff'],
+  tags: [],
   ...overrides,
 });
 

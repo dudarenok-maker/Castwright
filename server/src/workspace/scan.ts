@@ -116,6 +116,30 @@ export interface BookStateJson {
      intent, in-progress thoughts. Workspace-internal (never exported).
      Plain text with markdown line breaks preserved verbatim. Plan 67. */
   notes?: string | null;
+  /* Per-book chapter audio output format. Stamped on every state.json
+     write; absent on books written before plan 72 — those are interpreted
+     as `'mp3'` by callers (the read path defaults at the seam, see
+     `bookStateAudioFormat` below). Values: `'mp3'` (libmp3lame VBR V2,
+     default), `'aac-m4a'` (AAC-LC ≈ 128 kbps in an M4A container) or
+     `'opus'` (libopus ≈ 96 kbps VBR in an Ogg container). Drives the
+     extension used by `generation.ts` and the codec dispatch in
+     `server/src/tts/mp3.ts:encodePcmToAudio`. */
+  audioFormat?: 'mp3' | 'aac-m4a' | 'opus';
+  /* User-editable free-form tag strings. Powers the library view's
+     tag-chip filter row (plan 73). Optional on disk so books written
+     before the field landed continue to load — `scanBook` defaults to
+     `[]` so the wire shape always carries the array. Edits round-trip
+     through PUT /api/books/:bookId/state with `slice: 'state'`. */
+  tags?: string[];
+}
+
+/** Resolved chapter audio format for a book — `audioFormat` from
+ *  state.json when present, else `'mp3'` (backward compat for state files
+ *  written before plan 72). Use everywhere the value drives generation or
+ *  on-disk lookup; never read `state.audioFormat` directly so the default
+ *  stays in one place. */
+export function bookStateAudioFormat(state: BookStateJson): 'mp3' | 'aac-m4a' | 'opus' {
+  return state.audioFormat ?? 'mp3';
 }
 
 export interface LibraryBook {
@@ -146,6 +170,11 @@ export interface LibraryBook {
       when `coverImageUrl` is present too. */
   coverFraming?: { offsetX: number; offsetY: number; zoom: number };
   pinned?: boolean;
+  /** Plan 73 — user-editable tags. Always an array on the wire
+      (defaults to `[]` for books whose state.json predates the
+      field) so the chip-filter row in the library view doesn't need
+      to handle the undefined case. */
+  tags: string[];
 }
 
 export interface LibrarySeries {
@@ -422,6 +451,11 @@ async function scanBook(
     coverGradient,
     coverImageUrl,
     coverFraming,
+    /* Plan 73 — surface state.json tags onto the wire. Default to []
+       so books written before the field landed render an empty chip
+       row rather than tripping the frontend's `book.tags.includes()`
+       guard. */
+    tags: Array.isArray(state?.tags) ? [...state!.tags] : [],
   };
 }
 

@@ -1,5 +1,6 @@
-/* findChapterAudio / chapterAudioExists — MP3-only locator. The plan-39
-   contract: legacy `.wav` files on disk are invisible. A future contributor
+/* findChapterAudio / chapterAudioExists — multi-format locator (plan 72
+   widened from MP3-only to MP3/M4A/Ogg). The plan-39 contract still
+   holds: legacy `.wav` files on disk are invisible. A future contributor
    re-introducing a wav branch must trip this regression. */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -36,6 +37,32 @@ describe('findChapterAudio', () => {
 
   it('returns null when no audio exists for the slug', () => {
     expect(findChapterAudio(workdir, 'ch01')).toBeNull();
+  });
+
+  it('returns the m4a descriptor when <slug>.m4a exists (plan 72)', async () => {
+    await writeFile(join(workdir, 'ch01.m4a'), 'fake-m4a');
+    const result = findChapterAudio(workdir, 'ch01');
+    expect(result).not.toBeNull();
+    expect(result?.ext).toBe('m4a');
+    expect(result?.mime).toBe('audio/mp4');
+    expect(result?.urlSuffix).toBe('audio.m4a');
+    expect(result?.path).toBe(join(workdir, 'ch01.m4a'));
+  });
+
+  it('returns the ogg descriptor when <slug>.ogg exists (plan 72)', async () => {
+    await writeFile(join(workdir, 'ch01.ogg'), 'fake-ogg');
+    const result = findChapterAudio(workdir, 'ch01');
+    expect(result).not.toBeNull();
+    expect(result?.ext).toBe('ogg');
+    expect(result?.mime).toBe('audio/ogg');
+    expect(result?.urlSuffix).toBe('audio.ogg');
+  });
+
+  it('mp3 wins when both .mp3 and .m4a exist (legacy-first probe order)', async () => {
+    await writeFile(join(workdir, 'ch01.mp3'), 'fake-mp3');
+    await writeFile(join(workdir, 'ch01.m4a'), 'fake-m4a');
+    const result = findChapterAudio(workdir, 'ch01');
+    expect(result?.ext).toBe('mp3');
   });
 });
 
