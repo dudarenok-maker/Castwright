@@ -107,12 +107,16 @@ function CoverArt({
         </div>
       )}
       {onChangeCover && (
+        /* Hover-only on devices that can hover (desktop); always
+           visible on touch devices so phone users can still pick a
+           cover. `(hover: none)` media query via Tailwind's `[@media...]`
+           arbitrary-variant escape. */
         <button
           type="button"
           onClick={onChangeCover}
           aria-label="Change cover image"
           data-testid="listen-change-cover"
-          className="absolute bottom-3 right-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/55 text-white text-[11px] font-medium opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          className="absolute bottom-3 right-3 inline-flex items-center gap-1.5 min-h-[36px] px-3 py-2 rounded-full bg-black/55 text-white text-[11px] font-medium transition-opacity md:opacity-0 md:group-hover:opacity-100 md:focus:opacity-100 [@media(hover:none)]:opacity-100"
         >
           <IconImage className="w-3.5 h-3.5" /> Change cover
         </button>
@@ -185,20 +189,25 @@ export function ListenHeader({
   const hasNotes = trimmedNotes.length > 0;
   return (
     <>
-    <section className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-10 items-end mb-12">
-      <CoverArt
-        title={title}
-        gradient={bookCoverGradient}
-        imageUrl={!coverLoadFailed ? effectiveCoverUrl : null}
-        framing={effectiveFraming}
-        onImageError={onCoverLoadFailed}
-        runtime={formatTime(totalSec)}
-        narrator={narratorName}
-        onChangeCover={onChangeCover}
-      />
+    <section className="grid grid-cols-1 md:grid-cols-[260px_1fr] lg:grid-cols-[320px_1fr] gap-6 md:gap-8 lg:gap-10 items-end mb-8 md:mb-12">
+      {/* On <md viewports the cover is constrained + centred so a 375 px
+          phone doesn't get a full-width 350+ px tile that crowds the
+          title. md+ honours the grid track width and removes the cap. */}
+      <div className="w-full max-w-[260px] sm:max-w-[300px] mx-auto md:mx-0 md:max-w-none">
+        <CoverArt
+          title={title}
+          gradient={bookCoverGradient}
+          imageUrl={!coverLoadFailed ? effectiveCoverUrl : null}
+          framing={effectiveFraming}
+          onImageError={onCoverLoadFailed}
+          runtime={formatTime(totalSec)}
+          narrator={narratorName}
+          onChangeCover={onChangeCover}
+        />
+      </div>
       <div>
         <SectionLabel>Audiobook · ready to listen</SectionLabel>
-        <h1 className="mt-4 text-4xl md:text-5xl lg:text-6xl font-bold leading-[1.05] tracking-tight font-serif">
+        <h1 className="mt-4 text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold leading-[1.05] tracking-tight font-serif">
           {title || <span className="text-ink/30">Loading…</span>}
         </h1>
         <p className="mt-3 text-ink/70">
@@ -232,13 +241,15 @@ export function ListenHeader({
             <span className="font-semibold text-ink">{completedCount}</span> chapters voiced
           </span>
         </div>
-        <div className="mt-7 flex flex-wrap items-center gap-3">
+        {/* min-h-[44px] on every action button keeps WCAG 2.5.5 touch
+            targets honoured on phone without inflating desktop chrome. */}
+        <div className="mt-6 md:mt-7 flex flex-wrap items-center gap-2 md:gap-3">
           <button
             onClick={() => {
               if (hasListenable && firstListenableId != null) onPlayFromStart(firstListenableId);
             }}
             disabled={!hasListenable}
-            className="inline-flex items-center gap-3 rounded-full bg-ink text-canvas hover:bg-ink-soft pl-5 pr-6 py-3 text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="min-h-[44px] inline-flex items-center gap-3 rounded-full bg-ink text-canvas hover:bg-ink-soft pl-5 pr-6 py-3 text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <span className="w-8 h-8 rounded-full bg-canvas text-ink grid place-items-center">
               <IconPlay className="w-3.5 h-3.5 ml-0.5" />
@@ -248,13 +259,13 @@ export function ListenHeader({
           <button
             onClick={onOpenExportModal}
             data-testid="open-export-modal"
-            className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
+            className="min-h-[44px] px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
           >
             <IconDownload className="w-4 h-4" /> Export audiobook
           </button>
           <button
             onClick={onEnterPreview}
-            className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
+            className="min-h-[44px] px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
           >
             <IconEye className="w-4 h-4" /> Preview as listener
           </button>
@@ -264,7 +275,7 @@ export function ListenHeader({
               onClick={onReplaceManuscript}
               data-testid="listen-replace-manuscript"
               title="Re-upload manuscript to diff against the current text"
-              className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
+              className="min-h-[44px] px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
             >
               <IconUpload className="w-4 h-4" /> Replace manuscript
             </button>
@@ -272,7 +283,7 @@ export function ListenHeader({
           <button
             disabled
             title="Share — coming soon"
-            className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/40 inline-flex items-center gap-2 cursor-not-allowed"
+            className="min-h-[44px] px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/40 inline-flex items-center gap-2 cursor-not-allowed"
           >
             <IconShare className="w-4 h-4" /> Share <ComingSoonBadge />
           </button>
@@ -280,14 +291,14 @@ export function ListenHeader({
       </div>
     </section>
     {hasNotes && (
-      <section className="mb-12" data-testid="listen-notes-card">
+      <section className="mb-8 md:mb-12" data-testid="listen-notes-card">
         <button
           type="button"
           onClick={() => setNotesExpanded((v) => !v)}
           aria-expanded={notesExpanded}
           aria-controls="listen-notes-body"
           data-testid="listen-notes-toggle"
-          className="w-full bg-white rounded-3xl border border-ink/10 px-6 py-4 shadow-card flex items-center gap-3 text-left hover:border-ink/20 transition-colors"
+          className="min-h-[44px] w-full bg-white rounded-3xl border border-ink/10 px-4 sm:px-6 py-4 shadow-card flex items-center gap-3 text-left hover:border-ink/20 transition-colors"
         >
           {notesExpanded ? (
             <IconChevD className="w-4 h-4 text-ink/60" />
@@ -307,7 +318,7 @@ export function ListenHeader({
           <div
             id="listen-notes-body"
             data-testid="listen-notes-body"
-            className="mt-2 bg-white rounded-3xl border border-ink/10 p-6 shadow-card"
+            className="mt-2 bg-white rounded-3xl border border-ink/10 p-4 sm:p-6 shadow-card"
           >
             {/* whitespace-pre-wrap preserves the user's markdown line
                 breaks verbatim without a markdown renderer (full markdown
@@ -348,7 +359,7 @@ export function ListenMetadataEditor({
   if (!bookMeta) {
     return (
       <section>
-        <div className="bg-white rounded-3xl border border-ink/10 p-8 shadow-card">
+        <div className="bg-white rounded-3xl border border-ink/10 p-5 sm:p-8 shadow-card">
           <SectionLabel>Metadata</SectionLabel>
           <p className="mt-4 text-sm text-ink/50">Loading metadata…</p>
         </div>
@@ -357,7 +368,7 @@ export function ListenMetadataEditor({
   }
   return (
     <section>
-      <div className="bg-white rounded-3xl border border-ink/10 p-8 shadow-card">
+      <div className="bg-white rounded-3xl border border-ink/10 p-5 sm:p-8 shadow-card">
         <SectionLabel>Metadata</SectionLabel>
         <div className="mt-3 mb-6">
           <MixedHeading regular="Edit the" bold="audiobook details" />
@@ -439,7 +450,7 @@ export function ListenMetadataEditor({
                   onClick={onReplaceCover}
                   title="Upload a new cover from disk"
                   data-testid="meta-cover-replace"
-                  className="px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/80 hover:text-ink hover:bg-ink/[0.04] inline-flex items-center gap-1.5 transition-colors"
+                  className="min-h-[44px] px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/80 hover:text-ink hover:bg-ink/[0.04] inline-flex items-center gap-1.5 transition-colors"
                 >
                   <IconUpload className="w-3.5 h-3.5" /> Replace
                 </button>
@@ -448,7 +459,7 @@ export function ListenMetadataEditor({
                   onClick={onRegenerateCover}
                   title="Search OpenLibrary for a fresh cover candidate"
                   data-testid="meta-cover-regenerate"
-                  className="px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/80 hover:text-ink hover:bg-ink/[0.04] inline-flex items-center gap-1.5 transition-colors"
+                  className="min-h-[44px] px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/80 hover:text-ink hover:bg-ink/[0.04] inline-flex items-center gap-1.5 transition-colors"
                 >
                   <IconRefresh className="w-3.5 h-3.5" /> Regenerate
                 </button>
