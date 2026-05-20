@@ -86,6 +86,7 @@ const libraryAuthors: LibraryAuthor[] = [
             voiceCount: 20,
             lastWorkedOn: 'today',
             coverGradient: ['#3C194F', '#A43C6C'],
+            tags: [],
           },
         ],
       },

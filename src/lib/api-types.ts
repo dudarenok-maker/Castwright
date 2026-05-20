@@ -1253,6 +1253,14 @@ export interface components {
              */
             coverFraming?: components["schemas"]["CoverFraming"];
             pinned?: boolean;
+            /**
+             * @description Free-form user-editable tag strings persisted to
+             *     `BookStateJson.tags` in `<bookDir>/.audiobook/state.json`. Drives
+             *     the library view's tag-chip filter row (plan 73). Defaults to
+             *     `[]` when missing from disk — books written before the field
+             *     landed continue to load and render the empty chip set.
+             */
+            tags?: string[];
         };
         ImportCandidate: {
             /** @enum {string} */
