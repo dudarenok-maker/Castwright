@@ -68,6 +68,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 ### F. TTS
 
 - [70d — Per-sentence synth + audio-tag stripping](70d-per-sentence-synth-and-tag-strip.md) — `buildSentenceGroups` emits one group per sentence (was: fold consecutive same-speaker), and `normaliseForTts` strips the closed `[empathic]` / `[whispers]` / etc. vocabulary at the TTS boundary. Fixes long all-narrator chapters that ran past the 30 s stall watchdog, audio tags being read aloud, and same-speaker voice drift at large context sizes.
+- [71 — Audio loudness normalization (EBU R128)](71-audio-loudness-normalization.md) — Two-pass loudnorm via ffmpeg in the chapter encoder. Default ON via `AUDIO_LOUDNORM_ENABLED`; per-chapter `<slug>.lufs.json` sidecar records measured LUFS / LRA / dBTP for the upcoming report-card UI (Wave 2). Voice samples deliberately skip the pass.
 
 - [13 — TTS engine picker](13-tts-engine-picker.md) — Two-tier engine + model selector.
 - [14a — Kokoro v1 TTS engine](14a-tts-sidecar-kokoro.md) — Local sidecar default, English-only, per-engine cast voice profiles.
