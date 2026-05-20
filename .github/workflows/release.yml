@@ -32,7 +32,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Bumped 20 → 22 alongside plan 81 / wave 1 (see verify.yml).
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json
@@ -116,7 +117,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Bumped 20 → 22 alongside plan 81 / wave 1 (see verify.yml).
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json
