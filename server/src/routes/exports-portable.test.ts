@@ -6,7 +6,15 @@
    back to the import endpoint and verifies the new book lands on disk. */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -100,6 +108,32 @@ describe('GET /api/books/:bookId/export/portable', () => {
   it('returns 404 when the book does not exist', async () => {
     const res = await request(app).get('/api/books/nonexistent__nope__nope/export/portable');
     expect(res.status).toBe(404);
+  });
+
+  /* Plan 79 — portable bundle also writes a local copy into
+     <bookDir>/exports/<slug>.portable.zip so the user can pick it up
+     from File Explorer without re-running the download. The HTTP stream
+     still wins (best-effort local save; failures don't abort). */
+  it('stages a local copy at <bookDir>/exports/<slug>.portable.zip alongside the streamed download', async () => {
+    const res = await request(app)
+      .get(`/api/books/${encodeURIComponent(bookId)}/export/portable`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (c: Buffer) => chunks.push(c));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+
+    /* Local file landed in <bookDir>/exports/, matches stream size. */
+    const local = join(bookDir, 'exports');
+    expect(existsSync(local)).toBe(true);
+    const entries = readdirSync(local);
+    const portable = entries.find((n) => n.endsWith('.portable.zip'));
+    expect(portable).toBeDefined();
+    const localBytes = readFileSync(join(local, portable as string));
+    const streamBytes = res.body as Buffer;
+    expect(localBytes.length).toBe(streamBytes.length);
   });
 });
 

@@ -13,6 +13,8 @@
 
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   readUserSettings,
   writeUserSettings,
@@ -87,5 +89,44 @@ userSettingsRouter.put('/gemini-key', async (req: Request, res: Response) => {
     }
     console.error('[user-settings] PUT /gemini-key failed', err);
     res.status(500).json({ error: 'Failed to save Gemini API key.' });
+  }
+});
+
+const syncFolderTestPayloadSchema = z.object({
+  path: z.string().min(1).max(2000),
+});
+
+/* POST /api/user/settings/sync-folder/test { path }
+   Plan 79 — write-probe so the export modal's "Test" button can tell the
+   user immediately whether the folder they typed is actually writable.
+   The likely failure mode is a Google Drive path that doesn't resolve
+   (Drive not running, wrong drive letter, legacy Backup-and-Sync layout)
+   or a folder the user doesn't have write access to (Shared with me
+   vs. My Drive). The probe does mkdir + writeFile + unlink with a
+   short test buffer; success means "Node can write here right now",
+   not "your sync app will mirror it" — that part is on the user. */
+userSettingsRouter.post('/sync-folder/test', async (req: Request, res: Response) => {
+  let parsed: { path: string };
+  try {
+    parsed = syncFolderTestPayloadSchema.parse(req.body);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Invalid payload.', issues: err.issues });
+    }
+    throw err;
+  }
+  const probePath = join(parsed.path, '.audiobook-write-probe');
+  try {
+    await mkdir(parsed.path, { recursive: true });
+    await writeFile(probePath, 'ok');
+    await unlink(probePath).catch(() => {});
+    return res.json({ ok: true });
+  } catch (err) {
+    /* swallow probe-file cleanup failure separately so it doesn't mask
+       the real diagnosis */
+    await unlink(probePath).catch(() => {});
+    const code = (err as { code?: string }).code;
+    const message = (err as Error).message ?? 'unknown error';
+    return res.json({ ok: false, code, message });
   }
 });
