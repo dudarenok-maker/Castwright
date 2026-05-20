@@ -18,12 +18,42 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, type WorkspaceInfo } from '../lib/api';
 import { parseRuntime } from '../lib/time';
 import { useAppSelector } from '../store';
-import { LibraryChrome } from '../components/library/library-chrome';
+import {
+  LibraryChrome,
+  type LibraryViewMode,
+} from '../components/library/library-chrome';
 import { LibraryGrid } from '../components/library/library-grid';
+import { LibraryTable } from '../components/library/library-table';
 import type { EditBookMetaPatch } from '../modals/edit-book-meta';
 import type { LibraryAuthor, LibraryBook, LibraryBookStatus } from '../lib/types';
 
 type Filter = 'all' | 'in_progress' | 'complete';
+
+/** localStorage key for the card↔table view-mode toggle. */
+const VIEW_MODE_STORAGE_KEY = 'library.viewMode';
+
+/* localStorage can be unavailable (Safari private mode, sandboxed
+   iframes, a test env that nukes globals). Always try/catch — fall
+   back to the default rather than throwing on first render. */
+function readStoredViewMode(): LibraryViewMode {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(VIEW_MODE_STORAGE_KEY) : null;
+    if (raw === 'table' || raw === 'card') return raw;
+  } catch {
+    /* swallow — fall through to default */
+  }
+  return 'card';
+}
+
+function writeStoredViewMode(mode: LibraryViewMode): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+    }
+  } catch {
+    /* swallow — in-memory state still works, persistence just won't survive reload */
+  }
+}
 
 interface Props {
   authors: LibraryAuthor[];
@@ -65,6 +95,14 @@ export function BookLibraryView({
   onStartNew,
 }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
+  /* Card↔table presentation toggle. Initial read happens once at mount
+     (lazy initialiser keeps the localStorage probe out of every render).
+     Writes back on every change via the effect below — same shape as
+     other persisted UI preferences in the app. */
+  const [viewMode, setViewMode] = useState<LibraryViewMode>(() => readStoredViewMode());
+  useEffect(() => {
+    writeStoredViewMode(viewMode);
+  }, [viewMode]);
   /* First word of the user's display name → "Welcome back, Mike". Falls back
      to "back" when the user hasn't set a name (keeps the heading grammatical). */
   const displayName = useAppSelector((s) => s.account.displayName);
@@ -141,20 +179,37 @@ export function BookLibraryView({
         filter={filter}
         setFilter={setFilter}
         filters={filters}
+        viewMode={viewMode}
+        setViewMode={setViewMode}
         onStartNew={onStartNew}
       />
-      <LibraryGrid
-        loaded={loaded}
-        isLibraryEmpty={authors.length === 0}
-        authors={filteredAuthors}
-        activeBookId={activeBookId}
-        onOpenBook={onOpenBook}
-        onDeleteBook={onDeleteBook}
-        onReparseBook={onReparseBook}
-        onEditBook={onEditBook}
-        onCoverChanged={onCoverChanged}
-        onStartNew={onStartNew}
-      />
+      {viewMode === 'card' ? (
+        <LibraryGrid
+          loaded={loaded}
+          isLibraryEmpty={authors.length === 0}
+          authors={filteredAuthors}
+          activeBookId={activeBookId}
+          onOpenBook={onOpenBook}
+          onDeleteBook={onDeleteBook}
+          onReparseBook={onReparseBook}
+          onEditBook={onEditBook}
+          onCoverChanged={onCoverChanged}
+          onStartNew={onStartNew}
+        />
+      ) : (
+        <LibraryTable
+          loaded={loaded}
+          isLibraryEmpty={authors.length === 0}
+          authors={filteredAuthors}
+          activeBookId={activeBookId}
+          onOpenBook={onOpenBook}
+          onDeleteBook={onDeleteBook}
+          onReparseBook={onReparseBook}
+          onEditBook={onEditBook}
+          onCoverChanged={onCoverChanged}
+          onStartNew={onStartNew}
+        />
+      )}
     </div>
   );
 }

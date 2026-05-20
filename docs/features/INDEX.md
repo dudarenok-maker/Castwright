@@ -99,6 +99,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [21 — Book library](21-book-library.md) — Workspace scan + status derivation.
 - [22 — Voice library](22-voice-library.md) — Cross-book voices view + pinning.
 - [36 — Book covers (OpenLibrary)](36-book-covers.md) — Real cover artwork on cards + Listen header; auto-fetch on import, manual picker on demand; gradient skeleton fallback.
+- [76 — Library card↔table view](76-library-table-view.md) — Toggle pill in the library chrome flips between the existing card grid and a dense, series-grouped table view; standalones collected into a synthetic pseudo-section; `library.viewMode` persisted in localStorage. Behaviour parity via reuse of the grid's callbacks; shared `STATUS_UI` + empty-state modules extracted for both.
 
 ### K. Cross-cutting invariants
 
