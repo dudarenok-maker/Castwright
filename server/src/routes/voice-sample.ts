@@ -3,7 +3,7 @@
    `modelKey` (local sidecar or Gemini) and serves it from the static /audio
    mount. Files are cached on disk keyed by voiceId + modelKey + paramHash,
    so a repeat click is instant and engine-specific. Encoded to MP3 via the
-   same `encodePcmToMp3` boundary used by chapter audio (plan 28). */
+   same `encodePcmToAudio` boundary used by chapter audio (plan 28). */
 
 import { Router, type Request, type Response } from 'express';
 import { existsSync } from 'node:fs';
@@ -18,7 +18,7 @@ import {
   type TtsEngine,
   type TtsModelKey,
 } from '../tts/index.js';
-import { encodePcmToMp3 } from '../tts/mp3.js';
+import { encodePcmToAudio } from '../tts/mp3.js';
 import { pcmDurationSec } from '../tts/pcm.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from '../tts/voice-mapping.js';
 
@@ -195,7 +195,7 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     /* Compute duration from raw PCM before encode — MP3 frame counting would
        force a probe step. PCM bytes/sec is exact for 16-bit mono. */
     const durationSec = pcmDurationSec(pcm.length, sampleRate);
-    const mp3 = await encodePcmToMp3(pcm, sampleRate);
+    const mp3 = await encodePcmToAudio(pcm, sampleRate);
     await writeFile(filePath, mp3);
     return res.json({ url: publicUrl, durationSec, cached: false, modelKey });
   } catch (err) {

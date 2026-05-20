@@ -1,4 +1,4 @@
-/* Real-ffmpeg integration test for encodePcmToMp3. We deliberately do NOT
+/* Real-ffmpeg integration test for encodePcmToAudio. We deliberately do NOT
    mock the subprocess — the value of this suite is catching wire-format or
    flag-name drift in the actual encoder boundary. If ffmpeg is missing the
    suite skips with a loud reason (CI must install it; users get a one-line
@@ -9,7 +9,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync, readdirSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { encodePcmToMp3, writeChapterPeaksFile, type ChapterPeaksFile } from './mp3.js';
+import { encodePcmToAudio, writeChapterPeaksFile, type ChapterPeaksFile } from './mp3.js';
 import { BIN_COUNT } from '../audio/compute-peaks.js';
 
 const ffmpegPresent = (() => {
@@ -61,11 +61,11 @@ function findMpegSync(b: Buffer): number {
   return -1;
 }
 
-describeIfFfmpeg('encodePcmToMp3', () => {
+describeIfFfmpeg('encodePcmToAudio', () => {
   it('encodes 24 kHz mono PCM to a valid MPEG-2 Layer III mono stream', async () => {
     const sampleRate = 24_000;
     const pcm = sinePcm(sampleRate, 1.0);
-    const mp3 = await encodePcmToMp3(pcm, sampleRate, { quality: 2 });
+    const mp3 = await encodePcmToAudio(pcm, sampleRate, { quality: 2 });
 
     expect(mp3.length).toBeGreaterThan(1024); // ~1s @ V2 ≈ 18 KB, won't be tiny
 
@@ -90,14 +90,14 @@ describeIfFfmpeg('encodePcmToMp3', () => {
 
   it('rejects when ffmpeg exits non-zero (invalid sample rate)', async () => {
     const pcm = sinePcm(24_000, 0.1);
-    await expect(encodePcmToMp3(pcm, 0, { quality: 2 })).rejects.toThrow(/ffmpeg/i);
+    await expect(encodePcmToAudio(pcm, 0, { quality: 2 })).rejects.toThrow(/ffmpeg/i);
   });
 
   it('rejects with a friendly hint if ffmpeg is not on PATH', async () => {
     // We can't realistically uninstall ffmpeg per-test, but we can verify
     // the error path by spawning a guaranteed-missing binary via a child
     // module copy that takes the binary name. Skip this corner — covered
-    // by the friendly-hint string baked into encodePcmToMp3 and exercised
+    // by the friendly-hint string baked into encodePcmToAudio and exercised
     // only when users misconfigure their machine.
     // (Kept as a placeholder so future refactors that abstract the binary
     // name remember to add this assertion.)

@@ -12,7 +12,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { encodePcmToMp3 } from '../tts/mp3.js';
+import { encodePcmToAudio } from '../tts/mp3.js';
 import { buildMp3Zip, ExportIncompleteError, sanitiseForZip } from './build-mp3-zip.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
@@ -163,7 +163,7 @@ describeIfFfmpeg('buildMp3Zip', () => {
     /* Tiny silent MP3s for the three non-excluded chapters. */
     const slugs = ['01-chapter-1', '02-chapter-2', '04-chapter-3'];
     for (const slug of slugs) {
-      const mp3 = await encodePcmToMp3(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
+      const mp3 = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
       writeFileSync(join(bookDir, 'audio', `${slug}.mp3`), mp3);
     }
   });
@@ -196,7 +196,7 @@ describeIfFfmpeg('buildMp3Zip', () => {
   it('refuses with ExportIncompleteError when a non-excluded chapter has no audio file', async () => {
     const incompleteDir = join(tmpRoot, 'incomplete', 'audio');
     mkdirSync(incompleteDir, { recursive: true });
-    const mp3 = await encodePcmToMp3(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
+    const mp3 = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
     writeFileSync(join(incompleteDir, '01-chapter-1.mp3'), mp3);
     /* No MP3 (or anything) for chapter 2 — precheck must reject. */
 

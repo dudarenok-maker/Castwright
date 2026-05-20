@@ -1,7 +1,7 @@
 /* ID3v2.4 re-tagger. Takes an existing MP3 on disk, writes a new MP3 to
    `destPath` with the supplied tags and the input's audio frames copied
    byte-for-byte (`-c:a copy`). No re-encode — the LAME VBR V2 bytes
-   produced by encodePcmToMp3 survive intact.
+   produced by encodePcmToAudio survive intact.
 
    ffmpeg strips inbound MP3 tags by default when remuxing to mp3, so the
    destination ends up with only the tags we pass via `-metadata`. We
