@@ -56,16 +56,6 @@ Source: net-new (2026-05-18). Pairs with Could #1 (loudnorm).
 - _Depends on:_ Could #1 (loudnorm) — without normalization there's no expected target to compare against.
 - _Benefit (user):_ catch problem chapters before export (e.g. a voice that came out 4 LU softer than the rest). Pairs with Could #1 to make loudness drift visible, not just corrected.
 
-### 7. Library search + tag / category filter
-
-Source: net-new (2026-05-18).
-
-- _What:_ Add a search bar to the library view that filters books by title / author substring (case-insensitive). Add a tag system: each book carries a `tags: string[]` on its `BookStateJson`; chips in the library view filter by tag. Tag-edit affordance lives in the book-meta modal.
-- _Acceptance:_ Library with 10 books → typing 3 characters of a title filters to matching books. Add tag "priority" to two books, click chip → only those two remain. Tags persist on disk via the existing state-write path. Vitest covers the filter logic + tag-edit reducer; e2e covers the search-then-filter user flow.
-- _Key files:_ `src/views/library.tsx` (search bar + chip row); `src/modals/edit-book-meta.tsx` (tag editor); `openapi.yaml` (BookStateJson `tags` field); `server/src/workspace/scan.ts` (read/write `tags`).
-- _Depends on:_ none.
-- _Benefit (user):_ library browsing becomes tenable at 10+ titles; tagging cross-cuts the alphabetical tree (priority / series / genre).
-
 ### 12. Multi-step rollback / snapshot-per-entry (revision history)
 
 Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ships the read-only history view; this entry covers the multi-step rollback that needs snapshot-per-entry storage.
