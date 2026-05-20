@@ -147,7 +147,7 @@ export function ListenView({
   const title = bookMeta?.title ?? '';
   const author = bookMeta?.author ?? '';
   return (
-    <div className="max-w-[1200px] mx-auto px-6 py-10">
+    <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-6 sm:py-10">
       <ListenHeader
         title={title}
         author={author}
