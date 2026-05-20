@@ -17,7 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { encodePcmToMp3 } from '../tts/mp3.js';
+import { encodePcmToAudio } from '../tts/mp3.js';
 import { buildM4b, ExportIncompleteError } from './build-m4b.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
@@ -193,7 +193,7 @@ describeIfTools('buildM4b', () => {
        boundaries to zero. */
     const slugs = ['01-chapter-1', '02-chapter-2', '04-chapter-3'];
     for (const slug of slugs) {
-      const mp3 = await encodePcmToMp3(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
+      const mp3 = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
       writeFileSync(join(bookDir, 'audio', `${slug}.mp3`), mp3);
     }
   });
@@ -238,7 +238,7 @@ describeIfTools('buildM4b', () => {
   it('refuses with ExportIncompleteError when a non-excluded chapter has no audio file', async () => {
     const incompleteDir = join(tmpRoot, 'incomplete', 'audio');
     mkdirSync(incompleteDir, { recursive: true });
-    const mp3 = await encodePcmToMp3(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
+    const mp3 = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
     writeFileSync(join(incompleteDir, '01-chapter-1.mp3'), mp3);
     /* No audio at all for chapter 2 — precheck must reject. */
 

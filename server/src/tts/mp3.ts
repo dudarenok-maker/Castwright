@@ -20,17 +20,31 @@ import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { computePeaks } from '../audio/compute-peaks.js';
 
-export interface EncodePcmToMp3Options {
+/** Supported output container/codec. Single-value union today; future PRs
+ *  will widen to e.g. `'mp3' | 'm4a' | 'opus'` and dispatch on this field. */
+export type EncodePcmAudioFormat = 'mp3';
+
+export interface EncodePcmToAudioOptions {
+  /** Output format. Defaults to `'mp3'`. Single-value union for now —
+   *  the dispatch on this field is the seam future encoder additions
+   *  (AAC/M4A, Opus) extend without changing this function's signature. */
+  format?: EncodePcmAudioFormat;
   /** LAME VBR quality: 0 (best, larger) .. 9 (worst, smaller). Default 2
       ≈ V2, the LAME preset-standard. */
   quality?: number;
 }
 
-export async function encodePcmToMp3(
+export async function encodePcmToAudio(
   pcm: Buffer,
   sampleRate: number,
-  opts: EncodePcmToMp3Options = {},
+  opts: EncodePcmToAudioOptions = {},
 ): Promise<Buffer> {
+  /* Read but don't yet branch on `format` — we accept the discriminator and
+     default it to 'mp3' so callers can already pass it explicitly, but the
+     ffmpeg invocation below is the existing MP3 path verbatim. Future PRs
+     (AAC/M4A, Opus) dispatch from here. */
+  const format: EncodePcmAudioFormat = opts.format ?? 'mp3';
+  void format;
   const quality = opts.quality ?? 2;
 
   const args = [
@@ -109,7 +123,7 @@ export interface ChapterPeaksFile {
  *  `writeFile`, rename over target; cleanup the temp file on terminal
  *  failure so we don't leak `.tmp-*` droppings into the workspace).
  *
- *  Called by `generation.ts` alongside `encodePcmToMp3` so the peaks land
+ *  Called by `generation.ts` alongside `encodePcmToAudio` so the peaks land
  *  next to the MP3 in one render pass. Failure here is non-fatal — peaks
  *  are a visualization aid, not load-bearing for playback — but we still
  *  reject so the caller can decide whether to log / surface; today
