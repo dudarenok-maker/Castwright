@@ -72,7 +72,7 @@ export function BooksRoute() {
   const dispatch = useAppDispatch();
   const library = useAppSelector((s) => s.library);
   const bookId = useAppSelector((s) => (s.ui.stage as { bookId?: string }).bookId ?? null);
-  const { showInfo, showError } = useOutletContext<LayoutContext>();
+  const { showInfo, showError, pushToast } = useOutletContext<LayoutContext>();
 
   return (
     <BookLibraryView
@@ -226,6 +226,29 @@ export function BooksRoute() {
         });
       }}
       onStartNew={() => dispatch(uiActions.startNewBook())}
+      onImportPortable={async (file) => {
+        /* Plan 75 — POST the bundle, refresh the library, surface a
+           toast so the user sees confirmation when the import lands
+           somewhere they weren't watching (e.g. the bottom of the
+           grid). Errors surface via showError so they're dismissable. */
+        let result;
+        try {
+          result = await api.importPortable(file);
+        } catch (err) {
+          showError(`Couldn't import "${file.name}"`, (err as Error).message, 'Import');
+          return;
+        }
+        const refreshed = await api.getLibrary().catch(() => null);
+        if (refreshed) dispatch(libraryActions.hydrate(refreshed));
+        const importedBook = refreshed?.authors
+          .flatMap((a) => a.series.flatMap((s) => s.books))
+          .find((b) => b.bookId === result.bookId);
+        pushToast({
+          kind: 'info',
+          message: importedBook ? `Imported: ${importedBook.title}` : 'Bundle imported',
+          dedupeKey: 'portable-import-success',
+        });
+      }}
     />
   );
 }
