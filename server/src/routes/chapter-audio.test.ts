@@ -122,6 +122,41 @@ function resetAudio() {
   rmIfExists(`${SLUG}.previous.segments.json`);
   rmIfExists(`${SLUG}.peaks.json`);
   rmIfExists(`${SLUG}.previous.peaks.json`);
+  rmIfExists(`${SLUG}.lufs.json`);
+  rmIfExists(`${SLUG}.previous.lufs.json`);
+}
+
+/** Drop a plan-71 sibling `<slug>.lufs.json` next to the MP3 with a
+ *  realistic two-pass payload so the meta endpoint can be pinned to
+ *  read it back verbatim. */
+function writeLufs(
+  slug = SLUG,
+  payload: {
+    i: number;
+    lra: number;
+    tp: number;
+    target: number;
+    twoPass: boolean;
+    measuredAt?: string;
+  } = {
+    i: -16.02,
+    lra: 8.4,
+    tp: -2.1,
+    target: -16,
+    twoPass: true,
+  },
+) {
+  writeFileSync(
+    join(audioRoot, `${slug}.lufs.json`),
+    JSON.stringify({
+      i: payload.i,
+      lra: payload.lra,
+      tp: payload.tp,
+      target: payload.target,
+      twoPass: payload.twoPass,
+      measuredAt: payload.measuredAt ?? '2026-05-20T12:00:00.000Z',
+    }),
+  );
 }
 
 /** Drop a plan-56 sibling `<slug>.peaks.json` next to the MP3 with a
@@ -314,6 +349,105 @@ describe('chapter-audio router', () => {
            aid. The fallback path matches the legacy contract. */
         expect(res.status).toBe(200);
         expect(res.body.peaks).toEqual([]);
+      });
+    });
+  });
+
+  describe('loudness sidecar (plan 77 consumer of plan 71 writer)', () => {
+    describe('when sibling .lufs.json is present (two-pass)', () => {
+      beforeAll(() => {
+        resetAudio();
+        writeMp3();
+        writeLufs();
+      });
+
+      it('meta endpoint surfaces the lufs payload verbatim', async () => {
+        const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+        expect(res.status).toBe(200);
+        expect(res.body.lufs).toEqual({
+          i: -16.02,
+          lra: 8.4,
+          tp: -2.1,
+          target: -16,
+          twoPass: true,
+          measuredAt: '2026-05-20T12:00:00.000Z',
+        });
+      });
+    });
+
+    describe('when sibling .lufs.json is present (single-pass)', () => {
+      /* Single-pass values are the nominal target restated, not a real
+         post-filter measurement — the wire payload still carries them
+         (the gate is `twoPass === true` on the consumer side, not on
+         the route). */
+      beforeAll(() => {
+        resetAudio();
+        writeMp3();
+        writeLufs(SLUG, {
+          i: -16,
+          lra: 11,
+          tp: -1.5,
+          target: -16,
+          twoPass: false,
+        });
+      });
+
+      it('meta endpoint surfaces twoPass: false unchanged so the UI can degrade to neutral', async () => {
+        const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+        expect(res.status).toBe(200);
+        expect(res.body.lufs).toBeTruthy();
+        expect(res.body.lufs.twoPass).toBe(false);
+        expect(res.body.lufs.target).toBe(-16);
+      });
+    });
+
+    describe('when sibling .lufs.json is missing (legacy / disabled)', () => {
+      beforeAll(() => {
+        resetAudio();
+        writeMp3();
+      });
+
+      it('meta endpoint returns lufs: null — the "no data" gate for the report card', async () => {
+        const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+        expect(res.status).toBe(200);
+        expect(res.body.lufs).toBeNull();
+      });
+    });
+
+    describe('when sibling .lufs.json is malformed', () => {
+      beforeAll(() => {
+        resetAudio();
+        writeMp3();
+        writeFileSync(join(audioRoot, `${SLUG}.lufs.json`), '{ this is not json');
+      });
+
+      it('meta endpoint absorbs the parse error and returns lufs: null', async () => {
+        const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+        /* Critical: corrupt sidecar must NOT 500 the meta endpoint —
+           it's a visualization aid, not a hard dependency. The same
+           graceful-fallback contract that plan 56's peaks file
+           established. */
+        expect(res.status).toBe(200);
+        expect(res.body.lufs).toBeNull();
+      });
+    });
+
+    describe('full payload round-trip', () => {
+      it('preserves every field through the read path (no field-name drift)', async () => {
+        resetAudio();
+        writeMp3();
+        const payload = {
+          i: -18.7,
+          lra: 9.1,
+          tp: -1.8,
+          target: -18,
+          twoPass: true,
+          measuredAt: '2026-04-12T10:30:00.000Z',
+        };
+        writeLufs(SLUG, payload);
+        const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+        expect(res.status).toBe(200);
+        expect(res.body.lufs).toEqual(payload);
       });
     });
   });
