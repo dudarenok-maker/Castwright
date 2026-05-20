@@ -40,12 +40,12 @@ owner: dudarenok@gmail.com
 ### Automated coverage
 
 - **Vitest server** (`server/src/routes/chapters-restructure.test.ts`):
-  - `POST /:bookId/chapters/:chapterId/rename (plan 77)` describe block — happy path (title updates, `titleOverridden=true`, other chapters untouched), whitespace trimming, audio file rename, post-rename refresh-titles preserves the override, empty/oversized/missing title rejection (400), unknown chapter id (404), non-integer chapterId path param (400), unknown bookId (404).
+  - `POST /:bookId/chapters/:chapterId/rename (plan 78)` describe block — happy path (title updates, `titleOverridden=true`, other chapters untouched), whitespace trimming, audio file rename, post-rename refresh-titles preserves the override, empty/oversized/missing title rejection (400), unknown chapter id (404), non-integer chapterId path param (400), unknown bookId (404).
   - `POST /:bookId/chapters/refresh-titles (plan 70b)` block — new case "skips chapters with titleOverridden=true" pins the second gate.
-  - `merge/split propagate titleOverridden (plan 77)` block — explicit `mergedTitle` / `newTitle` flips the flag on the resulting chapter; absent override leaves it undefined; reorder preserves the flag across renumber.
+  - `merge/split propagate titleOverridden (plan 78)` block — explicit `mergedTitle` / `newTitle` flips the flag on the resulting chapter; absent override leaves it undefined; reorder preserves the flag across renumber.
 - **Vitest server** (`server/src/routes/book-state.refresh-titles.test.ts`):
-  - `plan 77 — skips chapters with titleOverridden=true; refreshes neighbours; bumps version` — locks the opportunistic refresh path.
-- **Vitest unit** (`src/store/chapters-slice.test.ts` `chaptersSlice — renameChapter (plan 77)` block):
+  - `plan 78 — skips chapters with titleOverridden=true; refreshes neighbours; bumps version` — locks the opportunistic refresh path.
+- **Vitest unit** (`src/store/chapters-slice.test.ts` `chaptersSlice — renameChapter (plan 78)` block):
   - updates title + locks `titleOverridden`, is a no-op on unknown chapter id, preserves other chapter state (progress, characters, excluded) across rename.
 - **Vitest component** (`src/modals/edit-chapter-title.test.tsx` — new file, 10 cases):
   - seeds input from current title; null-renders on `open={false}` / `chapter={null}`; disables Save when empty / unchanged; Save calls `api.renameChapter` with trimmed title + dispatches slice action + closes; Enter submits; Escape closes without saving; Cancel does not call api; api rejection surfaces a toast and keeps modal open.

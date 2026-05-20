@@ -57,7 +57,7 @@ export interface RestructurePanelProps {
       Triggers re-parse of the source manuscript + first-line promotion
       pass for any chapter still carrying a generic auto-title. */
   onRefreshTitles?: () => Promise<void> | void;
-  /** Plan 77 — called when the user clicks the Rename button on a
+  /** Plan 78 — called when the user clicks the Rename button on a
       chapter row. The consuming view mounts the EditChapterTitleModal
       and re-fetches book state on save. Optional for back-compat with
       mounts that don't yet support rename. */
@@ -86,7 +86,7 @@ interface SortableChapterRowProps {
   /** Plan 70b — per-row exclude toggle. Omitted when the consumer
       didn't wire `onExclude` (back-compat with pre-70b mounts). */
   onToggleExcluded?: () => void;
-  /** Plan 77 — opens the rename modal for this chapter. Panel-level
+  /** Plan 78 — opens the rename modal for this chapter. Panel-level
       modal mount; row only knows "open rename for me". */
   onRename?: () => void;
 }

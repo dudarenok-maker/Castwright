@@ -230,7 +230,7 @@ describe('GET /:bookId/state — title-only refresh on legacy books', () => {
     expect(res.body.state.chapters[0].title).toBe('Chapter 1');
   });
 
-  it('plan 77 — skips chapters with titleOverridden=true; refreshes neighbours; bumps version', async () => {
+  it('plan 78 — skips chapters with titleOverridden=true; refreshes neighbours; bumps version', async () => {
     /* Two chapters: the first is user-renamed (sticky), the second is
        legacy-generic. Both go through the refresh on a legacy book —
        the override survives, the neighbour gets the parser-aligned

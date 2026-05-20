@@ -1,4 +1,4 @@
-/* Plan 77 — rename a chapter from the Listen view, confirm the new
+/* Plan 78 — rename a chapter from the Listen view, confirm the new
    title sticks across views.
 
    Coverage:
@@ -17,7 +17,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe.configure({ mode: 'serial' });
 
-test.describe('listen view — rename chapter (plan 77)', () => {
+test.describe('listen view — rename chapter (plan 78)', () => {
   test('rename a chapter from the listen view; new title appears on the row and in restructure', async ({
     page,
   }) => {

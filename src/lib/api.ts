@@ -1839,7 +1839,7 @@ async function mockSetChapterExcluded(
   };
 }
 
-/* Plan 77 — user-supplied chapter rename. Server updates state.json
+/* Plan 78 — user-supplied chapter rename. Server updates state.json
    atomically (trimming whitespace, rejecting empty / >200-char), flips
    `titleOverridden` to true so subsequent heuristic refresh-titles
    passes leave it alone, and renames the on-disk audio file if any

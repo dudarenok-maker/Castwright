@@ -1260,7 +1260,7 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
     expect(res.status).toBe(404);
   });
 
-  it('skips chapters with titleOverridden=true (plan 77)', async () => {
+  it('skips chapters with titleOverridden=true (plan 78)', async () => {
     // Seed a generic-title chapter alongside a user-renamed one. The
     // refresh pass should promote the generic title from its first
     // sentence but leave the overridden title alone — even when a
@@ -1317,7 +1317,7 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
   });
 });
 
-describe('POST /:bookId/chapters/:chapterId/rename (plan 77)', () => {
+describe('POST /:bookId/chapters/:chapterId/rename (plan 78)', () => {
   it('updates state.json with the new title and locks titleOverridden=true', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/chapters/2/rename`)
@@ -1419,7 +1419,7 @@ describe('POST /:bookId/chapters/:chapterId/rename (plan 77)', () => {
   });
 });
 
-describe('merge/split propagate titleOverridden (plan 77)', () => {
+describe('merge/split propagate titleOverridden (plan 78)', () => {
   it('merge with explicit mergedTitle sets titleOverridden=true on the merged chapter', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/chapters/merge`)
