@@ -168,6 +168,7 @@ export function ListenView({
         onOpenExportModal={() => setExportModal({ tab: 'download' })}
         onEnterPreview={onEnterPreview}
         onOpenRestructure={() => dispatch(uiActions.changeView('restructure'))}
+        onReplaceManuscript={() => dispatch(uiActions.startReupload({ bookId }))}
         notes={bookMeta?.notes ?? null}
       />
 
