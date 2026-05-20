@@ -10,6 +10,7 @@ import {
   IconPlay,
   IconPause,
   IconSpinner,
+  IconClose,
 } from '../lib/icons';
 import { SectionLabel, MixedHeading, Avatar, Pill, VoiceSwatch } from '../components/primitives';
 import { VoiceLibraryPanel } from '../components/voice-library-panel';
@@ -49,7 +50,16 @@ export function CastView({
   onShowDrift,
 }: Props) {
   const [query, setQuery] = useState('');
-  const [showLibrary, setShowLibrary] = useState(true);
+  /* Plan 81 wave 3 — the same showLibrary state drives the desktop
+     aside (default visible) AND the mobile/tablet bottom-sheet
+     (default hidden — opens on Library-pill tap). Lazy init on
+     window.innerWidth so the sheet doesn't pop open on phone load.
+     SSR-safe: jsdom + tests always hit the desktop default since
+     they don't define matchMedia at this code path. */
+  const [showLibrary, setShowLibrary] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    return window.innerWidth >= 1024;
+  });
   const [draggingVoiceId, setDraggingVoiceId] = useState<string | null>(null);
   const [dropTargetCharId, setDropTargetCharId] = useState<string | null>(null);
   const [selectedCharIds, setSelectedCharIds] = useState<string[]>([]);
@@ -153,16 +163,23 @@ export function CastView({
     setDropTargetCharId(null);
   }
 
+  /* Plan 81 wave 3 — responsive layout split:
+     - `<lg:` (mobile + tablet): single-column. The voice library opens
+       as a bottom-sheet triggered by the "Library" pill at the top of
+       the cast view (full-width on phone, half-height on tablet).
+     - `lg:+`: legacy two-pane grid with the right-aside library.
+     `showLibrary` controls aside visibility on desktop AND sheet
+     visibility on mobile — same state, two surfaces. */
   return (
     <div
-      className={`max-w-[1500px] mx-auto px-6 py-10 grid ${showLibrary ? 'grid-cols-[1fr_360px]' : 'grid-cols-1'} gap-6 relative ${draggingVoiceId ? 'dragging-voice' : ''}`}
+      className={`max-w-[1500px] mx-auto px-4 md:px-6 py-6 md:py-10 lg:grid ${showLibrary ? 'lg:grid-cols-[1fr_360px]' : 'lg:grid-cols-1'} gap-6 relative ${draggingVoiceId ? 'dragging-voice' : ''}`}
     >
-      <div className="col-span-full -mb-2">
+      <div className="lg:col-span-full -mb-2">
         <StaleAudioBanner />
       </div>
       <div>
-        <div className="mb-8 flex items-end justify-between gap-6 flex-wrap">
-          <div>
+        <div className="mb-6 md:mb-8 flex items-end justify-between gap-4 md:gap-6 flex-wrap">
+          <div className="min-w-0">
             <SectionLabel>Your cast</SectionLabel>
             <div className="mt-4">
               <MixedHeading
@@ -179,10 +196,13 @@ export function CastView({
           </div>
           <button
             onClick={() => setShowLibrary(!showLibrary)}
-            className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+            className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+            aria-label={showLibrary ? 'Hide voice library' : 'Show voice library'}
+            aria-expanded={showLibrary}
           >
             <IconLink className="w-4 h-4" />
-            {showLibrary ? 'Hide' : 'Show'} library
+            <span className="hidden sm:inline">{showLibrary ? 'Hide' : 'Show'} library</span>
+            <span className="sm:hidden">Library</span>
           </button>
         </div>
 
@@ -227,24 +247,28 @@ export function CastView({
           </button>
         )}
 
-        <div className="flex items-center gap-3 mb-4">
-          <div className="flex-1 relative">
+        <div className="flex items-center gap-2 md:gap-3 mb-4">
+          <div className="flex-1 min-w-0 relative">
             <IconSearch className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-ink/40" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search characters"
-              className="w-full pl-11 pr-4 py-2.5 rounded-full bg-white border border-ink/10 text-sm focus:outline-none focus:border-ink/30"
+              className="w-full min-h-[44px] pl-11 pr-4 py-2.5 rounded-full bg-white border border-ink/10 text-sm focus:outline-none focus:border-ink/30"
             />
           </div>
-          <button className="px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2">
+          <button
+            aria-label="Filter characters"
+            className="min-h-[44px] min-w-[44px] px-3 sm:px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center justify-center gap-2 shrink-0"
+          >
             <IconFilter className="w-4 h-4" />
-            Filter
+            <span className="hidden sm:inline">Filter</span>
           </button>
         </div>
 
-        <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
+        {/* Plan 81 wave 3 — md:+ table layout (legacy, unchanged contract). */}
+        <div className="hidden md:block bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
           <div className="grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] px-6 py-3 text-[11px] uppercase tracking-wider font-semibold text-ink/50 border-b border-ink/10">
             <span></span>
             <span>Character</span>
@@ -428,20 +452,211 @@ export function CastView({
           })}
         </div>
 
-        <p className="mt-4 text-xs text-ink/50 text-center">
+        {/* Plan 81 wave 3 — <md: card list. Each character row collapses
+            to a vertical card: checkbox top-left, avatar + name + drift
+            badge in the header, role + tone chips + voice swatch + TTS
+            line stacked, Status pill + Play-12s button on the action
+            row. Drag-drop targets are wired the same way as the desktop
+            grid rows so a desktop user with a narrow window still gets
+            drag-to-reassign (Wave 4 will add the tap-to-assign affordance
+            for touch devices). */}
+        <div className="md:hidden flex flex-col gap-3">
+          {filtered.map((c) => {
+            const voice = findVoiceForCharacter(c, library);
+            const ttsVoice = voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, ttsEngine);
+            const isDropTarget = dropTargetCharId === c.id;
+            const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
+            const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}`;
+            const isPlayingThis =
+              playback.isPlaying && !!playback.currentUrl?.startsWith(samplePrefix);
+            const row = rowState[c.id];
+            const selected = selectedCharIds.includes(c.id);
+            return (
+              <div
+                key={c.id}
+                onDragOver={(e) => {
+                  if (draggingVoiceId) {
+                    e.preventDefault();
+                    setDropTargetCharId(c.id);
+                  }
+                }}
+                onDragLeave={() => setDropTargetCharId((t) => (t === c.id ? null : t))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  handleDrop(c.id);
+                }}
+                onClick={() => onOpenProfile(c.id)}
+                className={`bg-white rounded-2xl border border-ink/10 shadow-card p-4 flex flex-col gap-3 text-left cursor-pointer transition-colors ${isDropTarget ? 'drop-active' : ''} ${selected ? 'bg-peach/[0.04]' : ''}`}
+              >
+                <div className="flex items-start gap-3">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSelect(c.id);
+                    }}
+                    aria-label={selected ? `Deselect ${c.name}` : `Select ${c.name}`}
+                    aria-pressed={selected}
+                    className="min-w-[44px] min-h-[44px] -m-2.5 p-2.5 grid place-items-center shrink-0"
+                  >
+                    <span
+                      className={`w-6 h-6 rounded-md grid place-items-center transition-colors ${selected ? 'bg-peach' : 'bg-white border border-ink/20'}`}
+                    >
+                      {selected && <IconCheck className="w-3.5 h-3.5 text-white" />}
+                    </span>
+                  </button>
+                  <Avatar name={c.name} color={c.color as CharColor} size={44} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-semibold text-ink truncate">{c.name}</span>
+                      {driftByChar(c.id).length > 0 && (
+                        <span
+                          title={`${driftByChar(c.id).length} chapter${driftByChar(c.id).length === 1 ? '' : 's'} with voice drift`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onShowDrift();
+                          }}
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold"
+                        >
+                          <IconAlertTri className="w-2.5 h-2.5" />
+                          {driftByChar(c.id).length}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-ink/60 truncate">{c.role}</p>
+                  </div>
+                  <span className="shrink-0 tabular-nums text-xs text-ink/60 self-center">
+                    {c.lines}{' '}
+                    <span className="text-ink/40">{c.lines === 1 ? 'line' : 'lines'}</span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 min-w-0" onClick={(e) => e.stopPropagation()}>
+                  <VoiceSwatch
+                    voice={
+                      voice ?? {
+                        id: sampleVoiceId,
+                        character: c.name,
+                        bookTitle: '',
+                        bookId: '',
+                        attributes: c.attributes ?? [],
+                        gradient: ['#A55A2A', '#3C194F'],
+                        usedIn: 0,
+                        source: 'current',
+                        ttsVoice,
+                      }
+                    }
+                    size="sm"
+                    showLabel={false}
+                    onSelect={() => {
+                      void playSampleFor(c, voice);
+                    }}
+                    loading={!!row?.loading}
+                  />
+                  <div className="flex-1 min-w-0">
+                    {voice ? (
+                      <span className="block text-sm text-ink/80 truncate font-medium">
+                        {voice.character}
+                      </span>
+                    ) : (
+                      <span className="block text-sm text-ink/60 truncate italic">
+                        No library voice
+                      </span>
+                    )}
+                    <TtsVoiceLine ttsVoice={ttsVoice} />
+                    {c.matchedFrom && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onShowMatchDetail(c.id);
+                        }}
+                        className="block text-[11px] text-purple-deep/70 hover:text-purple-deep truncate underline-offset-2 hover:underline"
+                      >
+                        From {c.matchedFrom.bookTitle} ·{' '}
+                        {Math.round((c.matchedFrom.confidence ?? 0) * 100)}%
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {(c.attributes?.length ?? 0) > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {c.attributes?.slice(0, 4).map((a) => (
+                      <Pill key={a}>{a}</Pill>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center justify-between gap-3">
+                  <span>
+                    {c.voiceState === 'generated' && <Pill color="success">Generated</Pill>}
+                    {c.voiceState === 'tuned' && <Pill color="warning">Tuned</Pill>}
+                    {c.voiceState === 'reused' && <Pill color="library">Reused</Pill>}
+                    {c.voiceState === 'locked' && <Pill>Locked</Pill>}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void playSampleFor(c, voice);
+                    }}
+                    disabled={row?.loading}
+                    title={
+                      isPlayingThis
+                        ? 'Stop sample'
+                        : row?.loading
+                          ? 'Generating…'
+                          : `Generate & play a 12-second sample via ${ttsLabel(ttsModelKey)}`
+                    }
+                    className={`min-h-[44px] inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold transition-colors ${
+                      row?.loading
+                        ? 'bg-magenta/10 text-magenta cursor-wait'
+                        : isPlayingThis
+                          ? 'bg-magenta text-white hover:bg-magenta/90'
+                          : 'bg-ink/[0.06] text-ink/80 hover:bg-magenta/15 hover:text-magenta'
+                    }`}
+                  >
+                    {row?.loading ? (
+                      <IconSpinner className="w-3.5 h-3.5" />
+                    ) : isPlayingThis ? (
+                      <IconPause className="w-3.5 h-3.5" />
+                    ) : (
+                      <IconPlay className="w-3.5 h-3.5" />
+                    )}
+                    <span>
+                      {row?.loading ? 'Generating…' : isPlayingThis ? 'Stop' : 'Play 12s'}
+                    </span>
+                  </button>
+                </div>
+                {row?.error && (
+                  <span
+                    className="text-[10px] text-red-600/80 truncate"
+                    title={row.error}
+                  >
+                    ⚠ {row.error}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <p className="mt-4 text-xs text-ink/50 text-center hidden md:block">
           {draggingVoiceId
             ? 'Drop the voice on any character row to reassign.'
             : 'Drag a voice from the library onto a character to reuse it across this book and others in the series.'}
         </p>
 
         {selectedCharIds.length > 0 && (
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 fade-in">
-            <div className="floating-pill-inverse rounded-full shadow-float px-4 py-2 flex items-center gap-3">
-              <span className="text-xs text-canvas/60">Selected</span>
+          /* Plan 81 wave 3 — floating selection pill stays sticky at the
+             bottom, but on <sm: drops the avatar pile (no room) and
+             clamps its max-width to the viewport so it never overflows
+             horizontally on a 375px phone. The action buttons all get
+             min-h-[44px] for WCAG touch-target compliance. */
+          <div className="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 fade-in max-w-[calc(100vw-1rem)]">
+            <div className="floating-pill-inverse rounded-full shadow-float px-3 sm:px-4 py-2 flex items-center gap-2 sm:gap-3">
+              <span className="text-xs text-canvas/60 hidden sm:inline">Selected</span>
               <span className="px-2 py-0.5 rounded-full bg-canvas/15 text-canvas font-bold text-sm tabular-nums">
                 {selectedCharIds.length}
               </span>
-              <span className="flex items-center -space-x-1.5">
+              <span className="hidden sm:flex items-center -space-x-1.5">
                 {selectedCharIds.slice(0, 4).map((id) => {
                   const c = characters.find((x) => x.id === id);
                   return c ? (
@@ -449,7 +664,7 @@ export function CastView({
                   ) : null;
                 })}
               </span>
-              <span className="w-px h-5 bg-canvas/20" />
+              <span className="w-px h-5 bg-canvas/20 hidden sm:inline-block" />
               <button
                 onClick={() => {
                   if (selectedCharIds.length === 2)
@@ -461,19 +676,21 @@ export function CastView({
                     ? 'Compare these two cast members'
                     : 'Select exactly 2 to compare'
                 }
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Compare
               </button>
               <button
                 onClick={() => onBatchRegenerate(selectedCharIds)}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-peach text-ink text-xs font-bold hover:bg-peach/90"
+                className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-peach text-ink text-xs font-bold hover:bg-peach/90"
               >
-                <IconRefresh className="w-3.5 h-3.5" /> Regenerate
+                <IconRefresh className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Regenerate</span>
               </button>
               <button
                 onClick={() => setSelectedCharIds([])}
-                className="text-xs text-canvas/70 hover:text-canvas font-medium"
+                aria-label="Clear selection"
+                className="min-h-[44px] min-w-[44px] px-2 text-xs text-canvas/70 hover:text-canvas font-medium"
               >
                 Clear
               </button>
@@ -505,8 +722,10 @@ export function CastView({
           })()}
       </div>
 
+      {/* Plan 81 wave 3 — desktop aside (lg:+). Identical contract to
+          the original sticky-aside path; just hidden under lg. */}
       {showLibrary && (
-        <aside className="self-start sticky top-24">
+        <aside className="hidden lg:block self-start sticky top-24">
           <VoiceLibraryPanel
             library={library}
             draggingVoiceId={draggingVoiceId}
@@ -519,6 +738,60 @@ export function CastView({
             }}
           />
         </aside>
+      )}
+
+      {/* Plan 81 wave 3 — mobile + tablet bottom-sheet (<lg:). Same
+          showLibrary toggle drives this surface so the "Library" pill
+          at the top of the cast view feels like a single state. Full-
+          height on phone (h-[85vh] leaves a tap-to-dismiss strip at
+          the top); half-height on tablet (md:h-[60vh]). Drag-and-drop
+          STILL works from inside the sheet — the voice cards inherit
+          their normal drag handlers and the underlying cast rows still
+          listen for drop events, even though touch users will never
+          discover the affordance (tap-to-assign lands in wave 4). */}
+      {showLibrary && (
+        <div className="lg:hidden fixed inset-0 z-40 fade-in" role="dialog" aria-modal="true" aria-label="Voice library">
+          <button
+            type="button"
+            onClick={() => setShowLibrary(false)}
+            aria-label="Close voice library"
+            className="absolute inset-0 w-full h-full bg-ink/30 cursor-default"
+          />
+          <div className="absolute bottom-0 left-0 right-0 h-[85vh] md:h-[60vh] bg-white rounded-t-3xl shadow-drawer flex flex-col">
+            <div className="flex items-center justify-between px-5 pt-3 pb-2 border-b border-ink/10 shrink-0">
+              <span className="w-10 h-1 rounded-full bg-ink/15 absolute left-1/2 top-2 -translate-x-1/2" />
+              <h2 className="text-sm font-bold text-ink mt-1">Voice library</h2>
+              <button
+                type="button"
+                onClick={() => setShowLibrary(false)}
+                aria-label="Close voice library"
+                className="min-w-[44px] min-h-[44px] -m-2 p-2 grid place-items-center text-ink/60 hover:text-ink rounded-full"
+              >
+                <IconClose className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <VoiceLibraryPanel
+                library={library}
+                draggingVoiceId={draggingVoiceId}
+                setDraggingVoiceId={setDraggingVoiceId}
+                compact
+                characters={characters}
+                onOpenProfile={(id) => {
+                  /* Close the sheet so the profile drawer underneath is
+                     visible — sheet's z-40 backdrop would otherwise eat
+                     all pointer events meant for the drawer. */
+                  setShowLibrary(false);
+                  onOpenProfile(id);
+                }}
+                onPlaySample={(c, v) => {
+                  void playSampleFor(c, v);
+                }}
+                displayMode="sheet"
+              />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
