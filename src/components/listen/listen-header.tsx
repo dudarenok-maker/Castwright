@@ -141,6 +141,12 @@ interface ListenHeaderProps {
   onOpenExportModal: () => void;
   onEnterPreview: () => void;
   onOpenRestructure: () => void;
+  /** Plan 74 — re-upload entry point. Click flips ui-slice into
+      re-upload mode and navigates to the upload view; the diff modal
+      mounts when the import resolves. Optional so existing test
+      harnesses that don't pass it keep compiling — when absent the
+      button is hidden. */
+  onReplaceManuscript?: () => void;
   /** Plan 67 — per-book editorial notes (markdown plain text). null /
       empty string suppresses the collapsible card. Markdown line breaks
       render via whitespace-pre-wrap (no markdown parsing). */
@@ -167,6 +173,7 @@ export function ListenHeader({
   onOpenExportModal,
   onEnterPreview,
   onOpenRestructure,
+  onReplaceManuscript,
   notes,
 }: ListenHeaderProps) {
   /* Plan 67 — collapsible Notes card. Default collapsed so the header
@@ -252,6 +259,16 @@ export function ListenHeader({
             <IconEye className="w-4 h-4" /> Preview as listener
           </button>
           <RestructureChaptersButton onClick={onOpenRestructure} />
+          {onReplaceManuscript && (
+            <button
+              onClick={onReplaceManuscript}
+              data-testid="listen-replace-manuscript"
+              title="Re-upload manuscript to diff against the current text"
+              className="px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
+            >
+              <IconUpload className="w-4 h-4" /> Replace manuscript
+            </button>
+          )}
           <button
             disabled
             title="Share — coming soon"

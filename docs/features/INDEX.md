@@ -64,10 +64,12 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [12 — Manuscript view](12-manuscript-view.md) — Sentence list, low-confidence flagging, speaker reassignment.
 - [12a — Fix: sentence reassignment scoped by (chapterId, id)](12a-fix-reassign-cross-chapter-id.md) — Reassign reducers + inspector prop scope by both chapter and sentence id; pre-fix, clicks on chapter 2+ silently mutated chapter 1. Shipped 2026-05-18.
 - [70c — Restructure rebuilds the analysis cache](70c-merge-cache-rebuild.md) — Merge / split / reorder now rebuild `server/handoff/cache/{manuscriptId}.json` from `manuscript-edits.json` instead of deleting it. Generation auto-heals on the next POST if the cache is empty. Resolves post-merge halts citing "No analysed sentences cached for this book."
+- [74 — Manuscript diff viewer on re-upload](74-manuscript-diff-on-reupload.md) — Side-by-side sentence-level diff (LCS + char-level inner highlight) gates the user's re-upload of an existing book before any slice mutation lands. New `manuscript-slice` `pendingReupload` slot + `previewReuploadDiff` / `applyReupload` / `discardReupload` actions; new `ui-slice` `reuploadingBookId` + `startReupload`; entry point is the listen-header "Replace manuscript" button.
 
 ### F. TTS
 
 - [70d — Per-sentence synth + audio-tag stripping](70d-per-sentence-synth-and-tag-strip.md) — `buildSentenceGroups` emits one group per sentence (was: fold consecutive same-speaker), and `normaliseForTts` strips the closed `[empathic]` / `[whispers]` / etc. vocabulary at the TTS boundary. Fixes long all-narrator chapters that ran past the 30 s stall watchdog, audio tags being read aloud, and same-speaker voice drift at large context sizes.
+- [71 — Audio loudness normalization (EBU R128)](71-audio-loudness-normalization.md) — Two-pass loudnorm via ffmpeg in the chapter encoder. Default ON via `AUDIO_LOUDNORM_ENABLED`; per-chapter `<slug>.lufs.json` sidecar records measured LUFS / LRA / dBTP for the upcoming report-card UI (Wave 2). Voice samples deliberately skip the pass.
 
 - [13 — TTS engine picker](13-tts-engine-picker.md) — Two-tier engine + model selector.
 - [14a — Kokoro v1 TTS engine](14a-tts-sidecar-kokoro.md) — Local sidecar default, English-only, per-engine cast voice profiles.
@@ -78,6 +80,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [16 — Generation stream](16-generation-stream.md) — Chapter audio SSE stream. Cross-links to plan 28 for the on-disk format.
 - [17 — Regenerate this/forward](17-regenerate-this-or-forward.md) — Per-chapter + per-character regen.
 - [28 — Audio output format](28-chapter-audio-format.md) — Chapter audio + voice samples both MP3 VBR V2 via ffmpeg; ffmpeg preflight in `start-app.ps1`.
+- [72 — AAC/M4A and Opus chapter audio output](72-audio-codec-aac-opus.md) — `encodePcmToAudio` dispatches on `format: 'mp3' | 'aac-m4a' | 'opus'`; per-book `BookStateJson.audioFormat` field (default `'mp3'`) drives generation extension + codec; libfdk_aac auto-detect with native AAC fallback; new `aac-m4a-zip` / `opus-ogg-zip` export shapes mirror the MP3.ZIP packer. Shipped 2026-05-20.
 - [31 — Sticky generation across navigation](31-sticky-generation.md) — Generation survives every navigation except an explicit Stop or queue drain; local-analyzer triggers prompt for pause-and-analyse when a run is alive.
 - [32 — Sticky analysis across navigation](32-sticky-analysis.md) — Analysis survives every navigation except `/pause` or `fresh:true` displacement; server-owned job + multi-subscriber catch-up replay; `AnalysisPill` in the top-bar mirrors the generation pill.
 - [35 — Per-chapter engine drift detection](35-engine-drift-detection.md) — Stamp each rendered chapter with its TTS engine; surface drift when the project's active engine differs.
@@ -99,6 +102,9 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [21 — Book library](21-book-library.md) — Workspace scan + status derivation.
 - [22 — Voice library](22-voice-library.md) — Cross-book voices view + pinning.
 - [36 — Book covers (OpenLibrary)](36-book-covers.md) — Real cover artwork on cards + Listen header; auto-fetch on import, manual picker on demand; gradient skeleton fallback.
+- [73 — Library search + per-book tag filter](73-library-search-tags.md) — Debounced title/author search input + tag-chip filter row in the library chrome; chip editor + suggestions dropdown in the EditBookMeta modal; tags persist to `BookStateJson.tags` and round-trip via the existing `slice: 'state'` PUT path.
+- [75 — Portable book bundle (export + import)](75-portable-book-export.md) — Single `.zip` containing state.json + manuscript + audio + cover + change-log + MANIFEST. `GET /api/books/:id/export/portable` streams the bundle; `POST /api/import/portable` accepts a multipart upload; conflict default is `rename`. Listen view 4th download tile + Library view Import button.
+- [76 — Library card↔table view](76-library-table-view.md) — Toggle pill in the library chrome flips between the existing card grid and a dense, series-grouped table view; standalones collected into a synthetic pseudo-section; `library.viewMode` persisted in localStorage. Behaviour parity via reuse of the grid's callbacks; shared `STATUS_UI` + empty-state modules extracted for both.
 
 ### K. Cross-cutting invariants
 

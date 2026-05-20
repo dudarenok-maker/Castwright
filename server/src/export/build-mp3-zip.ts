@@ -68,7 +68,15 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
   for (let i = 0; i < chapters.length; i++) {
     const chapter = chapters[i];
     const audio = findChapterAudio(root, chapter.slug);
-    if (!audio) {
+    /* Plan 72: `findChapterAudio` widened from mp3-only to mp3/m4a/ogg.
+       The MP3.ZIP builder strictly requires `.mp3` on disk — re-encoding
+       m4a/ogg back to mp3 would force a quality-losing transcode the
+       user didn't ask for, and ID3v2 tags don't apply to those formats.
+       Treat non-mp3 chapters as missing so the 409 missing-chapter
+       banner surfaces in the modal; the user can either regenerate them
+       as mp3 (by toggling the book's audioFormat) or pick the matching
+       AAC.ZIP / Opus.ZIP export. */
+    if (!audio || audio.ext !== 'mp3') {
       missing.push(chapter.slug);
       continue;
     }
