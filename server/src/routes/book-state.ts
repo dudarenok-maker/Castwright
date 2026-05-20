@@ -412,6 +412,14 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           if (typeof incoming === 'boolean') return incoming;
           return fallback;
         };
+        const pickAudioFormat = (
+          incoming: unknown,
+          fallback: BookStateJson['audioFormat'],
+        ): BookStateJson['audioFormat'] => {
+          if (incoming === undefined) return fallback;
+          if (incoming === 'mp3' || incoming === 'aac-m4a' || incoming === 'opus') return incoming;
+          return fallback;
+        };
 
         /* When the book is flipped to standalone, the on-disk series folder
            must be the literal 'Standalones' (see workspace/paths.ts) and
@@ -435,6 +443,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           publicationDate: pickNullable(patch.publicationDate, state.publicationDate),
           description: pickNullable(patch.description, state.description),
           notes: pickNotes(patch.notes, state.notes),
+          audioFormat: pickAudioFormat(patch.audioFormat, state.audioFormat),
           updatedAt: new Date().toISOString(),
         };
 

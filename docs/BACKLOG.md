@@ -46,16 +46,6 @@ Ranking within each bucket = top is highest priority.
 
 Ordered in clusters: audio quality → listening UX → library/workflow → cast/revisions → voice library → coverage & ops → streaming/sync → distribution → tracking → deferred listener-app handoffs.
 
-### 2. AAC/M4A or Opus output (swappable encoder)
-
-Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
-
-- _What:_ Generalise `encodePcmToMp3` to accept an encoder choice (`mp3 | m4a | opus`) and add a sidecar/server config knob that selects per-book output format.
-- _Acceptance:_ The boundary in `server/src/tts/mp3.ts` (or wherever `encodePcmToMp3` lives) is renamed `encodePcmToAudio` and dispatches on format; existing tests still pass; a new test covers m4a output.
-- _Key files:_ `server/src/tts/mp3.ts`; `docs/features/28-chapter-audio-format.md`.
-- _Depends on:_ none, but cluster after Could #1 (loudnorm) so the encoder boundary is generalised AFTER the loudnorm wiring lands — otherwise we re-touch the dispatch twice.
-- _Benefit (user):_ smaller files / better quality for users who prefer either; small cost because the encoder seam already exists.
-
 ### 3. Per-chapter loudness report / visualization
 
 Source: net-new (2026-05-18). Pairs with Could #1 (loudnorm).
