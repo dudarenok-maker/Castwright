@@ -466,7 +466,7 @@ function NewBookCard({ onStartNew }: { onStartNew: () => void }) {
         <span className="w-14 h-14 mx-auto rounded-full bg-white border border-ink/10 grid place-items-center group-hover:bg-peach group-hover:border-peach group-hover:text-white transition-colors text-ink">
           <IconPlus className="w-6 h-6" />
         </span>
-        <p className="mt-4 text-base font-bold text-ink">Start a new book</p>
+        <p className="mt-4 text-base font-bold text-ink">Add another book</p>
         <p className="mt-1 text-xs text-ink/55 max-w-[280px] mx-auto leading-relaxed">
           Drop in a manuscript and we'll meet your cast within a couple of minutes.
         </p>
