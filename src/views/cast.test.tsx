@@ -7,10 +7,10 @@
    "voice.character → TTS profile" header; the reused row only adds the
    match-source line stacked below. */
 
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { CastView } from './cast';
@@ -174,11 +174,17 @@ describe('CastView compare-button visibility', () => {
 });
 
 describe('CastView voice-column presentation', () => {
+  /* Plan 81 wave 3 — the cast view renders BOTH the desktop 8-col grid
+     AND the mobile card list (CSS hides whichever doesn't match the
+     viewport). These tests scope themselves to the desktop grid via
+     rowFor() so the assertions stay deterministic regardless of which
+     surface jsdom is "showing." */
   it('shows the prebuilt voice profile line for a generated character', () => {
     renderView();
     /* The TtsVoiceLine renders the underlying actor/profile name + a
        hyphenated description. For Mr. Marrow that's "Viktor Menelaos". */
-    expect(screen.getByText('Viktor Menelaos')).toBeInTheDocument();
+    const row = rowFor('Mr. Marrow');
+    expect(within(row).getByText('Viktor Menelaos')).toBeInTheDocument();
   });
 
   it('shows the prebuilt voice profile line for a reused character — the match info does not replace it', () => {
@@ -187,16 +193,17 @@ describe('CastView voice-column presentation', () => {
        "From … · N%" link in place of TtsVoiceLine, so the underlying
        voice profile name was invisible on reused rows. Both must
        coexist now. */
-    expect(screen.getByText('Aaron Dreschner')).toBeInTheDocument();
-    expect(screen.getByText(/From the Coalfall Commission · 92%/)).toBeInTheDocument();
+    const row = rowFor('Narrator');
+    expect(within(row).getByText('Aaron Dreschner')).toBeInTheDocument();
+    expect(within(row).getByText(/From the Coalfall Commission · 92%/)).toBeInTheDocument();
   });
 
   it('keeps the match-source line scoped to the reused row only', () => {
     renderView();
-    const MarrowCell = screen.getByText('Viktor Menelaos').closest('span')!;
-    /* The match line lives in the same min-w-0 wrapper as the profile
-       line; if it leaked into the generated row we'd see it here. */
-    expect(within(MarrowCell).queryByText(/From .* · \d+%/)).toBeNull();
+    const row = rowFor('Mr. Marrow');
+    /* If the match-source line leaked into the generated row we'd see
+       it inside the desktop row container here. */
+    expect(within(row).queryByText(/From .* · \d+%/)).toBeNull();
   });
 });
 
@@ -265,5 +272,143 @@ describe('CastView VoiceSwatch sample playback', () => {
       ) as HTMLButtonElement | null;
       expect(idle).toBeTruthy();
     });
+  });
+});
+
+/* Plan 81 wave 3 — responsive layout coverage.
+
+   The cast view collapses to a single-column card list under `md:` and
+   tucks the voice library aside behind a bottom-sheet under `lg:`. The
+   tests below pin the smallest viewport (phone, 375×667) so the
+   following invariants survive future refactors:
+
+   1. View renders without throwing at phone viewport.
+   2. The "Library" pill is reachable + opens the bottom-sheet on tap.
+   3. The card list (md:hidden block) is mounted alongside the desktop
+      grid — both DOM trees coexist so tests + CSS media queries can
+      pick the right one based on viewport. */
+
+function setViewport(width: number, height: number) {
+  /* jsdom's window dimensions are writable but matchMedia is a stub
+     that always returns matches=false. We can't make CSS media queries
+     resolve, but we CAN control the lazy initialiser inside CastView
+     (showLibrary default reads window.innerWidth). Wrapping both
+     in helpers so the dependency is explicit at the call sites. */
+  Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: width });
+  Object.defineProperty(window, 'innerHeight', {
+    writable: true,
+    configurable: true,
+    value: height,
+  });
+}
+
+describe('CastView responsive (phone 375x667)', () => {
+  const originalInnerWidth = window.innerWidth;
+  const originalInnerHeight = window.innerHeight;
+  beforeEach(() => {
+    setViewport(375, 667);
+  });
+  afterEach(() => {
+    setViewport(originalInnerWidth, originalInnerHeight);
+  });
+
+  it('renders without throwing at phone viewport', () => {
+    expect(() => renderView()).not.toThrow();
+    /* Heading still mounts even though half the layout is hidden by
+       Tailwind's md:hidden / hidden md:block; both DOM trees are in
+       the document, only one visible per breakpoint. */
+    expect(screen.getByText(/Voices generated from/)).toBeInTheDocument();
+  });
+
+  it('defaults the voice-library sheet to closed under lg', () => {
+    renderView();
+    /* The sheet wraps the panel in a role=dialog when open. At phone
+       width with the default-closed behaviour, no dialog is mounted. */
+    expect(screen.queryByRole('dialog', { name: /Voice library/ })).toBeNull();
+  });
+
+  it('opens the voice-library bottom-sheet when the Library pill is tapped', () => {
+    renderView();
+    /* The pill is labelled "Show voice library" when closed; the
+     * visible text collapses to "Library" under sm. */
+    const pill = screen.getByRole('button', { name: /voice library/i });
+    fireEvent.click(pill);
+    expect(screen.getByRole('dialog', { name: /Voice library/ })).toBeInTheDocument();
+  });
+
+  it('renders character entries in both the desktop grid AND the mobile card list', () => {
+    renderView();
+    /* Both subtrees mount — Tailwind's hidden/visible switch is purely
+       CSS, so the React DOM has 2x rows for each character. The test
+       asserts the multiplicity directly. */
+    const MarrowHits = screen.getAllByText('Mr. Marrow');
+    expect(MarrowHits.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('CastView responsive touch-target sizing', () => {
+  it('floating selection pill buttons each meet the 44px touch target', () => {
+    renderView();
+    /* Open the floating pill by toggling one selection. */
+    fireEvent.click(checkboxIn(rowFor('Narrator')));
+    /* Compare + Regenerate + Clear are the three action buttons inside
+       the floating pill — each carries min-h-[44px] so a thumb tap on a
+       phone clears the WCAG 2.5.5 target-size threshold. */
+    const compare = screen.getByRole('button', { name: /^Compare$/ });
+    expect(compare.className).toMatch(/min-h-\[44px\]/);
+    const regenerate = screen.getByRole('button', { name: /Regenerate/ });
+    expect(regenerate.className).toMatch(/min-h-\[44px\]/);
+    const clear = screen.getByRole('button', { name: /Clear selection/ });
+    expect(clear.className).toMatch(/min-h-\[44px\]/);
+  });
+});
+
+describe('CastView desktop drag-drop is intact', () => {
+  /* Plan 81 wave 3 invariant: the cast.tsx onDragOver/onDragLeave/onDrop
+     handlers on the desktop grid rows remain functional. Wave 4 will add
+     tap-to-assign as a parallel path — this test pins that the drag-drop
+     path was not removed in the responsive refactor. */
+
+  it('a voice drag-and-drop onto a character row still rewrites the cast', () => {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    let castRef: Character[] = [narrator, Marrow];
+    const setCharacters = vi.fn((next: Character[] | ((prev: Character[]) => Character[])) => {
+      castRef = typeof next === 'function' ? next(castRef) : next;
+    });
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={castRef}
+          setCharacters={setCharacters}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          onBatchRegenerate={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    /* Start a drag from the library voice card so the cast view's
+       draggingVoiceId state is populated, then fire drop on the row.
+       The library card displays the voice.character name (Narrator)
+       inside a draggable div. */
+    const libraryCard = screen
+      .getAllByText('Narrator')
+      .map((el) => el.closest('div[draggable]'))
+      .find((n): n is HTMLElement => !!n);
+    expect(libraryCard).toBeTruthy();
+    act(() => {
+      fireEvent.dragStart(libraryCard!, {
+        dataTransfer: { effectAllowed: 'copy', setData: () => {} },
+      });
+    });
+    const MarrowRow = rowFor('Mr. Marrow');
+    act(() => {
+      fireEvent.dragOver(MarrowRow);
+      fireEvent.drop(MarrowRow);
+    });
+    expect(setCharacters).toHaveBeenCalled();
   });
 });
