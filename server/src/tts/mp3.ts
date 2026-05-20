@@ -19,6 +19,14 @@ import { spawn } from 'node:child_process';
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { computePeaks } from '../audio/compute-peaks.js';
+import {
+  buildSecondPassFilterString,
+  buildSinglePassFilterString,
+  isMeasurementUseable,
+  runLoudnormFirstPass,
+  type LoudnormOptions,
+  type LoudnormSidecarJson,
+} from './loudnorm.js';
 
 /** Supported output container/codec. Single-value union today; future PRs
  *  will widen to e.g. `'mp3' | 'm4a' | 'opus'` and dispatch on this field. */
@@ -32,6 +40,19 @@ export interface EncodePcmToAudioOptions {
   /** LAME VBR quality: 0 (best, larger) .. 9 (worst, smaller). Default 2
       ≈ V2, the LAME preset-standard. */
   quality?: number;
+  /** When set, run EBU R128 loudness normalisation via ffmpeg's `loudnorm`
+   *  filter as part of the encode. Undefined = no filter applied (legacy
+   *  behaviour, preserved for callers like voice samples that don't need
+   *  program-level normalisation). See `./loudnorm.ts` for the two-pass
+   *  flow and `LoudnormOptions` defaults. Plan 71. */
+  loudnorm?: LoudnormOptions;
+  /** Invoked after a `loudnorm` pass with the measured loudness stats so
+   *  the caller can persist them next to the audio (e.g. as
+   *  `<slug>.lufs.json`). Only called when `loudnorm` is set; the callback
+   *  fires with `twoPass: true` measurements when two-pass is on, and with
+   *  the target as the measurement when single-pass is on (we don't re-
+   *  measure single-pass output to save the extra ffmpeg invocation). */
+  onLoudnessMeasured?: (stats: LoudnormSidecarJson) => Promise<void> | void;
 }
 
 export async function encodePcmToAudio(
@@ -47,6 +68,49 @@ export async function encodePcmToAudio(
   void format;
   const quality = opts.quality ?? 2;
 
+  /* Optional EBU R128 loudness normalisation (plan 71). When `opts.loudnorm`
+     is undefined, behaviour is identical to today (no filter applied). When
+     `twoPass: true`, run an analysis pass first then feed the measurements
+     into the encode filter; when `twoPass: false`, append a single-pass
+     loudnorm filter inline. */
+  let loudnormFilter: string | null = null;
+  let measuredStats: LoudnormSidecarJson | null = null;
+  if (opts.loudnorm) {
+    if (opts.loudnorm.twoPass) {
+      const stats = await runLoudnormFirstPass(pcm, sampleRate, opts.loudnorm);
+      if (isMeasurementUseable(stats)) {
+        loudnormFilter = buildSecondPassFilterString(stats, opts.loudnorm);
+        measuredStats = {
+          i: stats.input_i,
+          lra: stats.input_lra,
+          tp: stats.input_tp,
+          target: opts.loudnorm.target,
+          twoPass: true,
+          measuredAt: new Date().toISOString(),
+        };
+      }
+      /* Else: silent / unusable measurement (ffmpeg emits "-inf" for dead-
+         silent input). Fall through to a plain encode without the loudnorm
+         filter and skip the sidecar callback — there's nothing meaningful
+         to normalise. Keeps test PCM (Buffer.alloc(N)) + real silent-gap
+         chapters from hard-failing the encode. */
+    } else {
+      loudnormFilter = buildSinglePassFilterString(opts.loudnorm);
+      /* Single-pass: ffmpeg normalises on the fly without an analysis step.
+         Report the target as the (assumed-achieved) measurement so the
+         sidecar JSON shape is consistent across modes; record `twoPass:
+         false` so consumers know the i/lra/tp are nominal not measured. */
+      measuredStats = {
+        i: opts.loudnorm.target,
+        lra: opts.loudnorm.lra,
+        tp: opts.loudnorm.tp,
+        target: opts.loudnorm.target,
+        twoPass: false,
+        measuredAt: new Date().toISOString(),
+      };
+    }
+  }
+
   const args = [
     '-loglevel',
     'error',
@@ -58,6 +122,7 @@ export async function encodePcmToAudio(
     '1',
     '-i',
     'pipe:0',
+    ...(loudnormFilter ? ['-af', loudnormFilter] : []),
     '-c:a',
     'libmp3lame',
     '-q:a',
@@ -67,7 +132,7 @@ export async function encodePcmToAudio(
     'pipe:1',
   ];
 
-  return await new Promise<Buffer>((resolve, reject) => {
+  const encoded = await new Promise<Buffer>((resolve, reject) => {
     const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
 
     const stdoutChunks: Buffer[] = [];
@@ -105,6 +170,16 @@ export async function encodePcmToAudio(
 
     child.stdin.end(pcm);
   });
+
+  /* Loudness-stats callback fires AFTER the encode succeeds — that way a
+     failed encode doesn't leave a `.lufs.json` sidecar describing audio
+     that never landed on disk. Awaited so caller-supplied write errors
+     surface as rejections from this function rather than unhandled. */
+  if (measuredStats && opts.onLoudnessMeasured) {
+    await opts.onLoudnessMeasured(measuredStats);
+  }
+
+  return encoded;
 }
 
 /** Disk shape of `<bookDir>/audio/<slug>.peaks.json`. Single field today —
@@ -115,6 +190,29 @@ export interface ChapterPeaksFile {
   /** Length-240 RMS envelope, every value in `[0, 1]`. See
    *  `server/src/audio/compute-peaks.ts` for the reduction contract. */
   peaks: number[];
+}
+
+/** Persist a `LoudnormSidecarJson` payload at `lufsPath` using the same
+ *  atomic temp-then-rename pattern `writeChapterPeaksFile` uses. The path
+ *  is a sibling of the chapter MP3 — typically `<bookDir>/audio/<slug>.lufs.json`.
+ *  Failure to write here is non-fatal to playback (Wave 2 plan 77's report-card
+ *  UI degrades gracefully on missing sidecar) but the caller should still
+ *  log + surface so the operator notices. Plan 71. */
+export async function writeChapterLufsFile(
+  payload: LoudnormSidecarJson,
+  lufsPath: string,
+): Promise<void> {
+  await mkdir(dirname(lufsPath), { recursive: true });
+  const tmp = `${lufsPath}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8');
+  try {
+    await rename(tmp, lufsPath);
+  } catch (err) {
+    /* Match writeChapterPeaksFile / writeJsonAtomic: clean up the temp
+       on terminal failure so we don't leak `.tmp-*` droppings. */
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
 }
 
 /** Reduce `pcm` to a 240-bin RMS envelope and persist it as JSON at

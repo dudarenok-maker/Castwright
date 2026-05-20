@@ -195,6 +195,10 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     /* Compute duration from raw PCM before encode — MP3 frame counting would
        force a probe step. PCM bytes/sec is exact for 16-bit mono. */
     const durationSec = pcmDurationSec(pcm.length, sampleRate);
+    /* No loudnorm for voice samples — only chapter audio gets the EBU R128
+       pass (plan 71). Voice samples are short auditions where program-level
+       normalisation has no listening benefit and would add ~20 % latency to
+       every Play-sample click. */
     const mp3 = await encodePcmToAudio(pcm, sampleRate);
     await writeFile(filePath, mp3);
     return res.json({ url: publicUrl, durationSec, cached: false, modelKey });

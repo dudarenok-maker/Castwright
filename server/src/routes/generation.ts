@@ -41,7 +41,8 @@ import {
   selectTtsProvider,
   type TtsModelKey,
 } from '../tts/index.js';
-import { encodePcmToAudio, writeChapterPeaksFile } from '../tts/mp3.js';
+import { encodePcmToAudio, writeChapterLufsFile, writeChapterPeaksFile } from '../tts/mp3.js';
+import { DEFAULT_LOUDNORM_OPTIONS, type LoudnormOptions } from '../tts/loudnorm.js';
 import {
   synthesiseChapter,
   type CastCharacter,
@@ -528,10 +529,35 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         durationSec: result.durationSec,
       });
 
-      const mp3Buffer = await encodePcmToAudio(result.pcm, result.sampleRate, { quality: 2 });
       const mp3Path = join(audioRoot, `${chapter.slug}.mp3`);
       const segPath = join(audioRoot, `${chapter.slug}.segments.json`);
       const peaksPath = join(audioRoot, `${chapter.slug}.peaks.json`);
+      const lufsPath = join(audioRoot, `${chapter.slug}.lufs.json`);
+
+      /* EBU R128 loudness normalisation (plan 71). Default ON; opt out
+         with AUDIO_LOUDNORM_ENABLED=false. The two-pass measure-then-apply
+         flow runs inside encodePcmToAudio; the onLoudnessMeasured callback
+         writes the sidecar JSON atomically next to the MP3. */
+      const loudnorm: LoudnormOptions | undefined =
+        process.env.AUDIO_LOUDNORM_ENABLED === 'false' ? undefined : DEFAULT_LOUDNORM_OPTIONS;
+      const mp3Buffer = await encodePcmToAudio(result.pcm, result.sampleRate, {
+        quality: 2,
+        loudnorm,
+        onLoudnessMeasured: async (stats) => {
+          try {
+            await writeChapterLufsFile(stats, lufsPath);
+          } catch (err) {
+            /* Non-fatal — playback works without the sidecar; Wave 2's
+               report-card UI degrades to "no data" gracefully. Log + carry on. */
+            /* eslint-disable-next-line no-console */
+            console.warn(
+              `[generation] failed to write loudness sidecar for ${chapter.slug}: ${
+                (err as Error).message
+              }`,
+            );
+          }
+        },
+      });
 
       /* Atomic write: temp-then-rename so a crash mid-write doesn't leave a
          half-MP3 that scan.ts would mistake for a completed chapter. */
