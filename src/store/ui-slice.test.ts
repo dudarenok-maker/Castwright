@@ -27,6 +27,7 @@ const baseState = (stage: Stage): UiState => ({
   selectedModelExplicit: false,
   ttsModelKeyExplicit: false,
   themeOverride: null,
+  reuploadingBookId: null,
 });
 
 describe('uiSlice — openBook status→stage routing', () => {
