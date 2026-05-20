@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type MouseEvent,
+  type ReactNode,
   type RefObject,
 } from 'react';
 import {
@@ -56,6 +57,28 @@ interface Drag {
   candidateSentenceIdx: number | null;
 }
 
+/* Inline hamburger icon — no equivalent in lib/icons.tsx yet, and adding
+   one globally would widen the icon set for a single mobile-only use.
+   Plan 81 Wave 3 introduces this; promote to lib/icons.tsx if a second
+   view starts needing it. */
+function IconMenu({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  );
+}
+
 export function ManuscriptView({
   characters,
   chapters,
@@ -73,6 +96,14 @@ export function ManuscriptView({
   const [filterChar, setFilterChar] = useState<string | null>(null);
   const [chapterFilter, setChapterFilter] = useState<string>('');
   const [drag, setDrag] = useState<Drag | null>(null);
+  /* Plan 81 Wave 3 — mobile/tablet drawer + bottom-sheet toggles. These
+     are local UI state, not router state: the drawer auto-closes on
+     chapter pick (mobile/tablet two-pane semantics), and the inspector
+     sheet auto-closes on segment-cleared. Never rendered above `lg:`
+     (the panels are inline at desktop), so toggling them on a desktop
+     viewport is a no-op. */
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const currentChapter = chapters.find((c) => c.id === currentChapterId) || chapters[0];
   const currentIdx = chapters.findIndex((c) => c.id === currentChapterId);
   const prevChapter = chapters[currentIdx - 1];
@@ -277,195 +308,104 @@ export function ManuscriptView({
      swaps us back in as soon as chapters arrive. */
   if (!currentChapter) return null;
 
+  /* Wrap setCurrentChapterId so picking a chapter on mobile/tablet
+     auto-closes the drawer — the user's intent is "go to this chapter,"
+     not "browse the chapter list while reading the prose underneath."
+     Desktop is unaffected because the drawer is never opened there. */
+  const handleChapterPick = (id: number) => {
+    setCurrentChapterId(id);
+    setSidebarOpen(false);
+  };
+
+  const selectedSegObj = segments.find((s) => s.id === selectedSeg);
+
+  /* The sidebar (chapters + detected) and the inspector panel are
+     rendered as their own subtrees so the same markup can show inline
+     on `lg:` (sticky asides) AND inside drawer/sheet overlays on
+     `<lg:`. */
+  const sidebarPanels = (
+    <SidebarPanels
+      chapters={chapters}
+      filteredChapters={filteredChapters}
+      chapterFilter={chapterFilter}
+      setChapterFilter={setChapterFilter}
+      currentChapterId={currentChapterId}
+      onChapterPick={handleChapterPick}
+      chapterRowRefs={chapterRowRefs}
+      characters={characters}
+      counts={counts}
+      filterChar={filterChar}
+      setFilterChar={setFilterChar}
+      onOpenProfile={onOpenProfile}
+    />
+  );
+
+  const inspectorContent = (
+    <SegmentInspector
+      seg={selectedSegObj}
+      characters={characters}
+      findChar={findChar}
+      onClose={() => {
+        setSelectedSeg(null);
+        setInspectorOpen(false);
+      }}
+      onReassignSegment={(seg, newCharId) => {
+        reassignSegment(seg, newCharId);
+        setSelectedSeg(null);
+        setInspectorOpen(false);
+      }}
+      onReassignSentence={(chapterId, sentenceId, newCharId) => {
+        dispatch(
+          manuscriptActions.setSentenceCharacter({
+            chapterId,
+            sentenceId,
+            characterId: newCharId,
+          }),
+        );
+        dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 }));
+      }}
+      onOpenProfile={onOpenProfile}
+    />
+  );
+
   return (
     <div
-      className="max-w-[1500px] mx-auto px-6 py-8 grid grid-cols-[280px_1fr_360px] gap-6"
+      className="max-w-[1500px] mx-auto px-3 md:px-6 py-6 md:py-8 lg:grid lg:grid-cols-[280px_1fr_360px] lg:gap-6"
       ref={containerRef}
     >
-      {/* Sidebar shell — flex column with no outer scroll. Each card owns
+      {/* Desktop-only sticky sidebar (chapters + detected).
+          Sidebar shell — flex column with no outer scroll. Each card owns
           its own internal scroll region (min-h-0 + overflow-y-auto on the
           list) so a 500-chapter book never pushes the cast off-screen.
           Both cards share the vertical space equally (flex-1 + basis-0)
           so they're the same height regardless of how much content each
-          holds. */}
-      <div className="self-start sticky top-24 h-[calc(100vh-100px)] flex flex-col gap-4">
-        <aside className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex-1 basis-0 min-h-0 flex flex-col">
-          <div className="shrink-0 px-5 pt-5 pb-3">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-bold text-ink">Chapters</h2>
-              <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
-                {chapterFilter.trim()
-                  ? `${filteredChapters.length}/${chapters.length}`
-                  : chapters.length}
-              </span>
-            </div>
-            <label className="relative block">
-              <IconSearch className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-ink/40 pointer-events-none" />
-              <input
-                type="text"
-                value={chapterFilter}
-                onChange={(e) => setChapterFilter(e.target.value)}
-                placeholder="Filter chapters…"
-                aria-label="Filter chapters"
-                className="w-full rounded-lg border border-ink/10 bg-canvas/40 pl-8 pr-2 py-1.5 text-xs focus:outline-none focus:border-peach"
-              />
-            </label>
-          </div>
-          <ul className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-5 pb-5 space-y-0.5">
-            {filteredChapters.map((ch) => {
-              const active = currentChapterId === ch.id;
-              const excluded = !!ch.excluded;
-              const titleCls = excluded
-                ? 'font-medium text-ink/40 line-through decoration-1'
-                : active
-                  ? 'font-semibold text-ink'
-                  : 'font-medium text-ink/80';
-              return (
-                <li key={ch.id}>
-                  <button
-                    onClick={() => setCurrentChapterId(ch.id)}
-                    ref={(el) => {
-                      if (el) chapterRowRefs.current.set(ch.id, el);
-                      else chapterRowRefs.current.delete(ch.id);
-                    }}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors relative ${active ? 'bg-ink/[0.05]' : 'hover:bg-ink/[0.03]'}`}
-                    title={
-                      excluded ? 'Excluded — not analyzed, no audio will be generated.' : undefined
-                    }
-                  >
-                    {active && (
-                      <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-peach" />
-                    )}
-                    <span
-                      className={`text-[11px] font-bold tabular-nums w-7 ${excluded ? 'text-ink/30' : active ? 'text-magenta' : 'text-ink/40'}`}
-                    >
-                      CH {String(ch.id).padStart(2, '0')}
-                    </span>
-                    <span className="flex-1 min-w-0">
-                      <span className={`block text-sm truncate ${titleCls}`}>
-                        {stripChapterPrefix(ch.title)}
-                      </span>
-                      <span
-                        className={`block text-[11px] tabular-nums ${excluded ? 'text-ink/45 italic' : 'text-ink/50'}`}
-                      >
-                        {excluded ? 'Excluded' : ch.duration}
-                      </span>
-                    </span>
-                    {!excluded && ch.state === 'in_progress' && (
-                      <IconSpinner className="w-3 h-3 text-magenta shrink-0" />
-                    )}
-                    {!excluded && ch.state === 'done' && (
-                      <IconCheck className="w-3 h-3 text-emerald-600 shrink-0" />
-                    )}
-                    {!excluded && ch.state === 'failed' && (
-                      <IconWarning className="w-3 h-3 text-rose-600 shrink-0" />
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-            {filteredChapters.length === 0 && (
-              <li className="px-3 py-2 text-[11px] text-ink/45 italic">
-                No chapters match "{chapterFilter.trim()}".
-              </li>
-            )}
-          </ul>
-        </aside>
-
-        <aside className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex-1 basis-0 min-h-0 flex flex-col">
-          <div className="shrink-0 px-5 pt-5 pb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-ink">Detected</h2>
-            <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
-              {characters.length}
-            </span>
-          </div>
-          {/* Single scroll region for the cast list + "Add character" +
-              help text, mirroring the prior in-card flow but bounded so
-              the chapter card next to it isn't crowded out. */}
-          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-5 pb-5">
-            <ul className="space-y-1">
-              {characters.map((c) => {
-                const active = filterChar === c.id;
-                const cc = CHAR_COLORS[c.color as CharColor] ?? CHAR_COLORS.narrator;
-                return (
-                  <li key={c.id}>
-                    <div
-                      className={`group/char relative w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
-                      style={
-                        active
-                          ? { background: cc.tint, boxShadow: `inset 0 0 0 1px ${cc.ring}` }
-                          : undefined
-                      }
-                    >
-                      {active && (
-                        <span
-                          className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full"
-                          style={{ background: cc.hex }}
-                        />
-                      )}
-                      <button
-                        onClick={() => setFilterChar(active ? null : c.id)}
-                        className="flex-1 min-w-0 flex items-center gap-3 text-left"
-                        title={active ? 'Clear filter' : 'Filter manuscript to this character'}
-                      >
-                        <ColorDot color={c.color as CharColor} size={10} />
-                        <span className="flex-1 min-w-0">
-                          <span
-                            className={`block text-sm truncate ${active ? 'font-bold' : 'font-medium text-ink'}`}
-                            style={active ? { color: cc.hex } : undefined}
-                          >
-                            {c.name}
-                          </span>
-                          <span className="block text-xs text-ink/50 truncate">{c.role}</span>
-                        </span>
-                        <span
-                          className={`text-xs tabular-nums ${active ? 'font-semibold' : 'text-ink/50'}`}
-                          style={active ? { color: cc.hex } : undefined}
-                        >
-                          {counts[c.id] || 0}
-                        </span>
-                      </button>
-                      {onOpenProfile && (
-                        <button
-                          onClick={() => onOpenProfile(c.id)}
-                          title={`Open ${c.name} profile`}
-                          className={`p-1.5 rounded-lg text-ink/40 hover:text-ink hover:bg-ink/[0.05] transition-opacity ${active ? 'opacity-100' : 'opacity-0 group-hover/char:opacity-100 focus:opacity-100'}`}
-                        >
-                          <IconEye className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-            <button className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-dashed border-ink/20 text-sm text-ink/60 hover:border-peach hover:text-peach transition-colors">
-              <IconPlus className="w-4 h-4" /> Add character
-            </button>
-            <hr className="my-5 border-ink/10" />
-            <div className="text-xs text-ink/50 leading-relaxed space-y-2">
-              <p>
-                <span className="font-semibold text-ink/70">Move a boundary:</span> drag the line
-                between paragraphs and drop onto any sentence.
-              </p>
-              <p>
-                <span className="font-semibold text-ink/70">Reassign:</span> hover any paragraph and
-                use the dropdown.
-              </p>
-              <p>
-                <span className="font-semibold text-ink/70">Profile:</span> click a character's name
-                to open their full profile.
-              </p>
-            </div>
-          </div>
-        </aside>
+          holds.
+          On `<lg:` the same markup is rendered inside <Drawer> further
+          down, with `lg:hidden` on the trigger and `hidden lg:flex` on
+          this column so neither path duplicates. */}
+      <div className="hidden lg:flex self-start sticky top-24 h-[calc(100vh-100px)] flex-col gap-4">
+        {sidebarPanels}
       </div>
 
-      <main>
+      <main className="min-w-0">
+        {/* Mobile/tablet local header bar — hamburger (open chapter list)
+            on `<lg:` only. Lives inside the view, not in the global
+            top-bar, so it can't interfere with the shared shell. */}
+        <div className="lg:hidden mb-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open chapter list"
+            className="inline-flex items-center justify-center min-w-11 min-h-11 px-3 rounded-xl border border-ink/10 bg-white text-ink/70 hover:text-ink hover:border-ink/30"
+          >
+            <IconMenu className="w-5 h-5" />
+            <span className="ml-2 text-sm font-semibold">Chapters</span>
+          </button>
+        </div>
         <div className="mb-6">
           <SectionLabel>Manuscript analysis</SectionLabel>
-          <div className="mt-4 flex items-start gap-6">
-            <h1 className="flex-1 text-3xl md:text-4xl font-medium leading-[1.1] tracking-tight">
+          <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-start md:gap-6">
+            <h1 className="flex-1 min-w-0 break-words text-2xl md:text-3xl lg:text-4xl font-medium leading-[1.1] tracking-tight">
               Chapter {currentChapter.id} —{' '}
               <span className="font-bold">{stripChapterPrefix(currentChapter.title)}</span>
               {currentChapter.excluded && (
@@ -474,14 +414,14 @@ export function ManuscriptView({
                 </span>
               )}
             </h1>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <RestructureChaptersButton
                 onClick={() => dispatch(uiActions.changeView('restructure'))}
               />
               {onStartGenerating && (
                 <button
                   onClick={onStartGenerating}
-                  className="shrink-0 inline-flex items-center gap-2 px-5 py-3 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink/90 shadow-card"
+                  className="shrink-0 inline-flex items-center gap-2 px-5 min-h-11 py-3 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink/90 shadow-card"
                 >
                   Approve cast &amp; start generating
                   <IconChevR className="w-4 h-4" />
@@ -489,7 +429,7 @@ export function ManuscriptView({
               )}
             </div>
           </div>
-          <div className="mt-3 flex items-center gap-4 text-sm text-ink/60">
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink/60">
             {currentChapter.excluded ? (
               <span className="text-ink/55">
                 Excluded at import — not analyzed, no audio will be generated.
@@ -497,9 +437,9 @@ export function ManuscriptView({
             ) : (
               <>
                 <span>{segments.length} segments</span>
-                <span>·</span>
+                <span className="hidden sm:inline">·</span>
                 <span>{Object.keys(counts).length} speakers</span>
-                <span>·</span>
+                <span className="hidden sm:inline">·</span>
                 <span className="text-amber-700">
                   {
                     chapterSentences.filter((s) => s.confidence != null && s.confidence < 0.75)
@@ -513,14 +453,16 @@ export function ManuscriptView({
               <button
                 onClick={() => prevChapter && setCurrentChapterId(prevChapter.id)}
                 disabled={!prevChapter}
-                className="px-2 py-1 rounded-lg border border-ink/10 bg-white text-ink/70 hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center gap-1 text-xs font-medium"
+                aria-label="Previous chapter"
+                className="px-3 min-h-11 min-w-11 py-1 rounded-lg border border-ink/10 bg-white text-ink/70 hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1 text-xs font-medium"
               >
                 <IconChevL className="w-3.5 h-3.5" /> Prev
               </button>
               <button
                 onClick={() => nextChapter && setCurrentChapterId(nextChapter.id)}
                 disabled={!nextChapter}
-                className="px-2 py-1 rounded-lg border border-ink/10 bg-white text-ink/70 hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center gap-1 text-xs font-medium"
+                aria-label="Next chapter"
+                className="px-3 min-h-11 min-w-11 py-1 rounded-lg border border-ink/10 bg-white text-ink/70 hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1 text-xs font-medium"
               >
                 Next <IconChevR className="w-3.5 h-3.5" />
               </button>
@@ -529,7 +471,7 @@ export function ManuscriptView({
         </div>
 
         {currentChapter.excluded ? (
-          <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
+          <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 md:p-10 text-center">
             <p className="text-base font-semibold text-ink/70">
               This chapter was excluded at import.
             </p>
@@ -541,7 +483,7 @@ export function ManuscriptView({
             </p>
           </div>
         ) : (
-          <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10">
+          <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-5 md:p-10">
             <article ref={articleRef} className="font-serif text-[17px] leading-[1.8] text-ink/90">
               {segments.map((seg, segIdx) => (
                 <Fragment key={seg.id}>
@@ -552,6 +494,10 @@ export function ManuscriptView({
                     dimmed={!!filterChar && filterChar !== seg.characterId}
                     drag={drag}
                     onSelect={() => setSelectedSeg(seg.id)}
+                    onShowDetails={() => {
+                      setSelectedSeg(seg.id);
+                      setInspectorOpen(true);
+                    }}
                     onReassignSegment={(newCharId) => reassignSegment(seg, newCharId)}
                     onOpenProfile={onOpenProfile}
                     findChar={findChar}
@@ -568,33 +514,361 @@ export function ManuscriptView({
             </article>
           </div>
         )}
+
       </main>
 
-      <aside className="self-start sticky top-24">
-        <SegmentInspector
-          seg={segments.find((s) => s.id === selectedSeg)}
-          characters={characters}
-          findChar={findChar}
-          onClose={() => setSelectedSeg(null)}
-          onReassignSegment={(seg, newCharId) => {
-            reassignSegment(seg, newCharId);
-            setSelectedSeg(null);
-          }}
-          onReassignSentence={(chapterId, sentenceId, newCharId) => {
-            dispatch(
-              manuscriptActions.setSentenceCharacter({
-                chapterId,
-                sentenceId,
-                characterId: newCharId,
-              }),
-            );
-            dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 }));
-          }}
-          onOpenProfile={onOpenProfile}
-        />
+      {/* Inspector aside — single mounted instance for tablet + desktop.
+          At `lg:` it lives in the grid's third column as a sticky aside.
+          At `md:` (768–1023) it falls into the same column but the parent
+          grid is single-column (only `lg:` enables three columns), so it
+          stacks below `<main>` inline as a full-width card. At `<md:` it
+          stays mounted but `hidden md:block` removes it visually — the
+          mobile bottom-sheet below uses a fresh subtree when opened so
+          we don't end up with two simultaneously-visible inspectors. */}
+      <aside className="hidden md:block lg:self-start lg:sticky lg:top-24 lg:max-h-[calc(100vh-100px)] mt-6 lg:mt-0">
+        {inspectorContent}
       </aside>
 
+      {/* Mobile sidebar drawer — slides in from the left, traps the
+          chapter+detected cards. `lg:hidden` so it never mounts on
+          desktop. The drawer body reuses sidebarPanels via the same
+          flex-column layout the sticky aside uses. */}
+      <Drawer
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        title="Chapters"
+        side="left"
+      >
+        <div className="flex flex-col gap-4 h-full">{sidebarPanels}</div>
+      </Drawer>
+
+      {/* Mobile bottom-sheet inspector — only opened when the user taps
+          the "Details" pill on a SegmentRow at `<md:`. Tablet/desktop
+          render the inspector inline / aside instead (see above).
+          The sheet closes on outer-tap, on the close button, and on
+          successful reassignment. */}
+      <BottomSheet
+        open={inspectorOpen && !!selectedSegObj}
+        onClose={() => setInspectorOpen(false)}
+      >
+        {inspectorContent}
+      </BottomSheet>
+
       <SelectionPopover sel={selection} characters={characters} onAssign={assignSelectionTo} />
+    </div>
+  );
+}
+
+/* ── Sidebar panels — chapter list + detected cast.
+   Extracted so the same DOM can render inside the sticky desktop aside
+   AND inside the mobile/tablet drawer overlay without duplicating ~150
+   lines of markup. */
+interface SidebarPanelsProps {
+  chapters: Chapter[];
+  filteredChapters: Chapter[];
+  chapterFilter: string;
+  setChapterFilter: (v: string) => void;
+  currentChapterId: number | null;
+  onChapterPick: (id: number) => void;
+  chapterRowRefs: RefObject<Map<number, HTMLButtonElement>>;
+  characters: Character[];
+  counts: Record<string, number>;
+  filterChar: string | null;
+  setFilterChar: (v: string | null) => void;
+  onOpenProfile?: (id: string) => void;
+}
+
+function SidebarPanels({
+  chapters,
+  filteredChapters,
+  chapterFilter,
+  setChapterFilter,
+  currentChapterId,
+  onChapterPick,
+  chapterRowRefs,
+  characters,
+  counts,
+  filterChar,
+  setFilterChar,
+  onOpenProfile,
+}: SidebarPanelsProps) {
+  return (
+    <>
+      <aside className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex-1 basis-0 min-h-0 flex flex-col">
+        <div className="shrink-0 px-5 pt-5 pb-3">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-bold text-ink">Chapters</h2>
+            <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
+              {chapterFilter.trim()
+                ? `${filteredChapters.length}/${chapters.length}`
+                : chapters.length}
+            </span>
+          </div>
+          <label className="relative block">
+            <IconSearch className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-ink/40 pointer-events-none" />
+            <input
+              type="text"
+              value={chapterFilter}
+              onChange={(e) => setChapterFilter(e.target.value)}
+              placeholder="Filter chapters…"
+              aria-label="Filter chapters"
+              className="w-full rounded-lg border border-ink/10 bg-canvas/40 pl-8 pr-2 py-1.5 text-xs focus:outline-none focus:border-peach"
+            />
+          </label>
+        </div>
+        <ul className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-5 pb-5 space-y-0.5">
+          {filteredChapters.map((ch) => {
+            const active = currentChapterId === ch.id;
+            const excluded = !!ch.excluded;
+            const titleCls = excluded
+              ? 'font-medium text-ink/40 line-through decoration-1'
+              : active
+                ? 'font-semibold text-ink'
+                : 'font-medium text-ink/80';
+            return (
+              <li key={ch.id}>
+                <button
+                  onClick={() => onChapterPick(ch.id)}
+                  ref={(el) => {
+                    if (el) chapterRowRefs.current?.set(ch.id, el);
+                    else chapterRowRefs.current?.delete(ch.id);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors relative ${active ? 'bg-ink/[0.05]' : 'hover:bg-ink/[0.03]'}`}
+                  title={
+                    excluded ? 'Excluded — not analyzed, no audio will be generated.' : undefined
+                  }
+                >
+                  {active && (
+                    <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-peach" />
+                  )}
+                  <span
+                    className={`text-[11px] font-bold tabular-nums w-7 ${excluded ? 'text-ink/30' : active ? 'text-magenta' : 'text-ink/40'}`}
+                  >
+                    CH {String(ch.id).padStart(2, '0')}
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className={`block text-sm truncate ${titleCls}`}>
+                      {stripChapterPrefix(ch.title)}
+                    </span>
+                    <span
+                      className={`block text-[11px] tabular-nums ${excluded ? 'text-ink/45 italic' : 'text-ink/50'}`}
+                    >
+                      {excluded ? 'Excluded' : ch.duration}
+                    </span>
+                  </span>
+                  {!excluded && ch.state === 'in_progress' && (
+                    <IconSpinner className="w-3 h-3 text-magenta shrink-0" />
+                  )}
+                  {!excluded && ch.state === 'done' && (
+                    <IconCheck className="w-3 h-3 text-emerald-600 shrink-0" />
+                  )}
+                  {!excluded && ch.state === 'failed' && (
+                    <IconWarning className="w-3 h-3 text-rose-600 shrink-0" />
+                  )}
+                </button>
+              </li>
+            );
+          })}
+          {filteredChapters.length === 0 && (
+            <li className="px-3 py-2 text-[11px] text-ink/45 italic">
+              No chapters match "{chapterFilter.trim()}".
+            </li>
+          )}
+        </ul>
+      </aside>
+
+      <aside className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex-1 basis-0 min-h-0 flex flex-col">
+        <div className="shrink-0 px-5 pt-5 pb-3 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-ink">Detected</h2>
+          <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
+            {characters.length}
+          </span>
+        </div>
+        {/* Single scroll region for the cast list + "Add character" +
+            help text, mirroring the prior in-card flow but bounded so
+            the chapter card next to it isn't crowded out. */}
+        <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-5 pb-5">
+          <ul className="space-y-1">
+            {characters.map((c) => {
+              const active = filterChar === c.id;
+              const cc = CHAR_COLORS[c.color as CharColor] ?? CHAR_COLORS.narrator;
+              return (
+                <li key={c.id}>
+                  <div
+                    className={`group/char relative w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
+                    style={
+                      active
+                        ? { background: cc.tint, boxShadow: `inset 0 0 0 1px ${cc.ring}` }
+                        : undefined
+                    }
+                  >
+                    {active && (
+                      <span
+                        className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full"
+                        style={{ background: cc.hex }}
+                      />
+                    )}
+                    <button
+                      onClick={() => setFilterChar(active ? null : c.id)}
+                      className="flex-1 min-w-0 flex items-center gap-3 text-left"
+                      title={active ? 'Clear filter' : 'Filter manuscript to this character'}
+                    >
+                      <ColorDot color={c.color as CharColor} size={10} />
+                      <span className="flex-1 min-w-0">
+                        <span
+                          className={`block text-sm truncate ${active ? 'font-bold' : 'font-medium text-ink'}`}
+                          style={active ? { color: cc.hex } : undefined}
+                        >
+                          {c.name}
+                        </span>
+                        <span className="block text-xs text-ink/50 truncate">{c.role}</span>
+                      </span>
+                      <span
+                        className={`text-xs tabular-nums ${active ? 'font-semibold' : 'text-ink/50'}`}
+                        style={active ? { color: cc.hex } : undefined}
+                      >
+                        {counts[c.id] || 0}
+                      </span>
+                    </button>
+                    {onOpenProfile && (
+                      <button
+                        onClick={() => onOpenProfile(c.id)}
+                        title={`Open ${c.name} profile`}
+                        aria-label={`Open ${c.name} profile`}
+                        className={`min-w-11 min-h-11 p-1.5 inline-flex items-center justify-center rounded-lg text-ink/40 hover:text-ink hover:bg-ink/[0.05] transition-opacity ${active ? 'opacity-100' : 'opacity-0 group-hover/char:opacity-100 focus:opacity-100'}`}
+                      >
+                        <IconEye className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          <button className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 min-h-11 rounded-xl border border-dashed border-ink/20 text-sm text-ink/60 hover:border-peach hover:text-peach transition-colors">
+            <IconPlus className="w-4 h-4" /> Add character
+          </button>
+          <hr className="my-5 border-ink/10" />
+          <div className="text-xs text-ink/50 leading-relaxed space-y-2">
+            <p>
+              <span className="font-semibold text-ink/70">Move a boundary:</span> drag the line
+              between paragraphs and drop onto any sentence.
+            </p>
+            <p>
+              <span className="font-semibold text-ink/70">Reassign:</span> hover any paragraph and
+              use the dropdown.
+            </p>
+            <p>
+              <span className="font-semibold text-ink/70">Profile:</span> click a character's name
+              to open their full profile.
+            </p>
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+/* ── Drawer (mobile/tablet chapter list)
+   A simple fixed-position slide-out panel. Only renders below `lg:` per
+   the container `lg:hidden` wrapper at the call site, but we also early-
+   return when `open` is false so the (open) DOM cost is paid only when
+   the user actually opens it. Closes on backdrop tap + on the close
+   button + on Escape. */
+function Drawer({
+  open,
+  onClose,
+  title,
+  side,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  side: 'left' | 'right';
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  const sideCls = side === 'left' ? 'left-0' : 'right-0';
+  return (
+    <div className="lg:hidden fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label={title}>
+      <div
+        className="absolute inset-0 bg-ink/40"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div
+        className={`absolute top-0 bottom-0 ${sideCls} w-[88%] max-w-[360px] bg-canvas shadow-card flex flex-col`}
+      >
+        <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-ink/10">
+          <h2 className="text-sm font-bold text-ink">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close drawer"
+            className="min-w-11 min-h-11 inline-flex items-center justify-center rounded-full text-ink/60 hover:text-ink hover:bg-ink/5"
+          >
+            <IconClose className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto p-3">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ── BottomSheet (mobile segment inspector)
+   Rises from the bottom edge with a backdrop. Only used at `<md:` —
+   tablet renders the inspector inline below prose, desktop renders it
+   as a sticky aside. Capped at ~85vh so the user can still see context
+   above the sheet. */
+function BottomSheet({
+  open,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div
+      className="md:hidden fixed inset-0 z-40"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Segment details"
+    >
+      <div
+        className="absolute inset-0 bg-ink/40"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div className="absolute left-0 right-0 bottom-0 max-h-[85vh] flex flex-col">
+        {/* Drag handle bar — purely visual cue that this is a sheet.
+            No actual drag-to-dismiss yet; close via backdrop tap or
+            the inspector's own close button. */}
+        <div className="shrink-0 flex justify-center pt-2 pb-1 bg-white rounded-t-3xl">
+          <span className="w-10 h-1 rounded-full bg-ink/20" />
+        </div>
+        <div className="flex-1 min-h-0 overflow-hidden bg-white">{children}</div>
+      </div>
     </div>
   );
 }
@@ -606,6 +880,7 @@ interface SegmentRowProps {
   dimmed: boolean;
   drag: Drag | null;
   onSelect: () => void;
+  onShowDetails: () => void;
   onReassignSegment: (newCharId: string) => void;
   onOpenProfile?: (id: string) => void;
   findChar: (id: string) => Character | undefined;
@@ -618,6 +893,7 @@ function SegmentRow({
   dimmed,
   drag,
   onSelect,
+  onShowDetails,
   onReassignSegment,
   onOpenProfile,
   findChar,
@@ -673,6 +949,22 @@ function SegmentRow({
           <span
             className={`ml-auto flex items-center gap-1 transition-opacity ${hovered || selected ? 'opacity-100' : 'opacity-0'}`}
           >
+            {/* Mobile-only "Details" pill — opens the inspector bottom
+                sheet. Hidden on `md:` and up because tablet shows the
+                inspector inline below the prose and desktop shows it
+                as a sticky aside; in both cases tapping a segment
+                already surfaces the inspector content. */}
+            {selected && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onShowDetails();
+                }}
+                className="md:hidden inline-flex items-center gap-1 px-3 min-h-11 py-1 rounded-md bg-peach text-ink text-xs font-semibold"
+              >
+                Details
+              </button>
+            )}
             <div className="relative">
               <button
                 onClick={(e) => {
@@ -796,8 +1088,11 @@ function SegmentInspector({
        confidence stay pinned at the top, the long character / per-sentence
        lists scroll in the middle, the help text stays pinned at the bottom.
        Without this the 30-character "Reassign whole segment to" list spills
-       past the viewport on large casts. */
-    <div className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex flex-col max-h-[calc(100vh-100px)]">
+       past the viewport on large casts.
+       At `<md:` the parent is a bottom-sheet (height capped at 85vh by the
+       sheet); the inner max-h-[calc(100vh-100px)] still applies but the
+       sheet shell wins, so the lists scroll inside the sheet body. */
+    <div className="bg-white rounded-3xl md:border md:border-ink/10 md:shadow-card overflow-hidden flex flex-col max-h-[calc(100vh-100px)] h-full">
       <div className="shrink-0 p-5 pb-0 flex items-center gap-3">
         <span className="w-1 h-8 rounded-full" style={{ background: cc.hex }} />
         <div className="flex-1 min-w-0">
@@ -810,12 +1105,17 @@ function SegmentInspector({
           <button
             onClick={() => onOpenProfile(c.id)}
             title={`Open ${c.name} profile`}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-semibold text-ink/70 hover:text-ink hover:bg-ink/[0.05]"
+            aria-label={`Open ${c.name} profile`}
+            className="inline-flex items-center gap-1.5 px-2.5 min-h-11 py-1.5 rounded-full text-[11px] font-semibold text-ink/70 hover:text-ink hover:bg-ink/[0.05]"
           >
             <IconEye className="w-3.5 h-3.5" /> Profile
           </button>
         )}
-        <button onClick={onClose} className="p-1.5 rounded-full hover:bg-ink/5 text-ink/60">
+        <button
+          onClick={onClose}
+          aria-label="Close inspector"
+          className="min-w-11 min-h-11 inline-flex items-center justify-center rounded-full hover:bg-ink/5 text-ink/60"
+        >
           <IconClose className="w-4 h-4" />
         </button>
       </div>
@@ -851,7 +1151,7 @@ function SegmentInspector({
                 <button
                   key={cand.id}
                   onClick={() => onReassignSegment(seg, cand.id)}
-                  className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
+                  className={`relative w-full flex items-center gap-3 px-3 py-2 min-h-11 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
                   style={
                     active
                       ? { background: candCc.tint, boxShadow: `inset 0 0 0 1px ${candCc.ring}` }
