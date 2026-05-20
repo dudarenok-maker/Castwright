@@ -177,6 +177,11 @@ export interface BookStateJson {
       intent, in-progress thoughts. Workspace-internal (never exported).
       Plain text with markdown line breaks preserved verbatim. See plan 67. */
   notes?: string | null;
+  /** Plan 73 — user-editable free-form tags. Optional on disk so books
+      written before the field landed continue to load; the server scan
+      pads with `[]` so the wire (`LibraryBook.tags`) always carries an
+      array. */
+  tags?: string[];
 }
 
 export interface BookStateResponse {
@@ -368,6 +373,11 @@ export interface LibraryBook {
       Absent → bare object-cover. */
   coverFraming?: components['schemas']['CoverFraming'];
   pinned?: boolean;
+  /** Plan 73 — user-editable per-book tags. Always an array on the
+      wire (server defaults to `[]` for books whose state.json predates
+      the field), so the library view's tag-chip filter row can union
+      across books without guarding on undefined. */
+  tags: string[];
 }
 
 export type CoverCandidate = components['schemas']['CoverCandidate'];

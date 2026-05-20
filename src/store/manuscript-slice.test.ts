@@ -17,6 +17,7 @@ const baseState = (initial: Sentence[]) => ({
   sourceText: null,
   sentences: initial,
   importCandidate: null,
+  pendingReupload: null,
 });
 
 describe('manuscriptSlice — splitSentence', () => {
@@ -503,6 +504,117 @@ describe('manuscriptSlice — bookId anchoring', () => {
     expect(next.bookId).toBeNull();
     expect(next.manuscriptId).toBeNull();
     expect(next.title).toBeNull();
+  });
+});
+
+/* ── Plan 74 — re-upload diff state transitions ─────────────────────── */
+
+describe('manuscriptSlice — previewReuploadDiff', () => {
+  it('captures the current slice into oldSnapshot and stashes the new candidate', () => {
+    const start = {
+      ...baseState(sentences([{ id: 1, text: 'Original.', characterId: 'narrator' }])),
+      bookId: 'bk_a',
+      sourceText: 'Original.',
+      wordCount: 1,
+      title: 'Book A',
+      format: 'markdown' as const,
+    };
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.previewReuploadDiff({
+        bookId: 'bk_a',
+        newSourceText: 'Revised.',
+        newSentences: sentences([{ id: 1, text: 'Revised.', characterId: 'narrator' }]),
+        newWordCount: 1,
+      }),
+    );
+    /* Live fields stay untouched — that's the "preview before apply" invariant. */
+    expect(next.sourceText).toBe('Original.');
+    expect(next.sentences[0].text).toBe('Original.');
+    /* Pending slot holds both sides for the diff modal. */
+    expect(next.pendingReupload).not.toBeNull();
+    expect(next.pendingReupload?.bookId).toBe('bk_a');
+    expect(next.pendingReupload?.oldSnapshot.sourceText).toBe('Original.');
+    expect(next.pendingReupload?.newCandidate.sourceText).toBe('Revised.');
+    expect(next.pendingReupload?.newCandidate.sentences[0].text).toBe('Revised.');
+  });
+
+  it('falls back to current title / format on the candidate when caller omits them', () => {
+    const start = {
+      ...baseState([]),
+      bookId: 'bk_a',
+      title: 'Book A',
+      format: 'epub' as const,
+    };
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.previewReuploadDiff({
+        bookId: 'bk_a',
+        newSourceText: 'New text.',
+        newSentences: sentences([{ id: 1, text: 'New text.', characterId: 'narrator' }]),
+        newWordCount: 2,
+      }),
+    );
+    expect(next.pendingReupload?.newCandidate.title).toBe('Book A');
+    expect(next.pendingReupload?.newCandidate.format).toBe('epub');
+  });
+});
+
+describe('manuscriptSlice — applyReupload', () => {
+  it('promotes pendingReupload.newCandidate into the live slice fields and clears the slot', () => {
+    const start = {
+      ...baseState(sentences([{ id: 1, text: 'Original.', characterId: 'narrator' }])),
+      bookId: 'bk_a',
+      sourceText: 'Original.',
+      wordCount: 1,
+      title: 'Book A',
+      format: 'markdown' as const,
+    };
+    const previewed = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.previewReuploadDiff({
+        bookId: 'bk_a',
+        newSourceText: 'Revised.',
+        newSentences: sentences([{ id: 1, text: 'Revised.', characterId: 'narrator' }]),
+        newWordCount: 2,
+      }),
+    );
+    const next = manuscriptSlice.reducer(previewed, manuscriptActions.applyReupload());
+    expect(next.sourceText).toBe('Revised.');
+    expect(next.sentences[0].text).toBe('Revised.');
+    expect(next.wordCount).toBe(2);
+    expect(next.pendingReupload).toBeNull();
+  });
+
+  it('is a no-op when no pendingReupload is set', () => {
+    const start = baseState([]);
+    const next = manuscriptSlice.reducer(start, manuscriptActions.applyReupload());
+    expect(next).toEqual(start);
+  });
+});
+
+describe('manuscriptSlice — discardReupload', () => {
+  it('clears pendingReupload without touching the live slice fields', () => {
+    const start = {
+      ...baseState(sentences([{ id: 1, text: 'Original.', characterId: 'narrator' }])),
+      bookId: 'bk_a',
+      sourceText: 'Original.',
+    };
+    const previewed = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.previewReuploadDiff({
+        bookId: 'bk_a',
+        newSourceText: 'Revised.',
+        newSentences: sentences([{ id: 1, text: 'Revised.', characterId: 'narrator' }]),
+        newWordCount: 1,
+      }),
+    );
+    const next = manuscriptSlice.reducer(previewed, manuscriptActions.discardReupload());
+    expect(next.pendingReupload).toBeNull();
+    /* Live fields were never mutated by previewReuploadDiff, so Discard
+       leaves them at the pre-preview values. */
+    expect(next.sourceText).toBe('Original.');
+    expect(next.sentences[0].text).toBe('Original.');
   });
 });
 

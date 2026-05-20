@@ -10,6 +10,11 @@
    sub-components staying purely presentational so per-region work
    doesn't fight the orchestrator's selectors.
 
+   Plan 73 — also owns the search input + tag-chip filter state.
+   Search/tags compose with the existing status pill via
+   intersection semantics; a "no results" pane fires when an active
+   filter narrows to zero rows.
+
    This view's public `BookLibraryView` prop contract is unchanged
    from the pre-split file — callers in App.tsx / routes/index.tsx
    require no updates. */
@@ -18,12 +23,46 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, type WorkspaceInfo } from '../lib/api';
 import { parseRuntime } from '../lib/time';
 import { useAppSelector } from '../store';
-import { LibraryChrome } from '../components/library/library-chrome';
+import { useDebouncedValue } from '../lib/use-debounced-value';
+import {
+  LibraryChrome,
+  type LibraryViewMode,
+} from '../components/library/library-chrome';
 import { LibraryGrid } from '../components/library/library-grid';
+import { LibraryTable } from '../components/library/library-table';
+import { filterBooks, selectAllTags } from '../store/library-slice';
+import { PrimaryButton } from '../components/primitives';
+import { IconClose } from '../lib/icons';
 import type { EditBookMetaPatch } from '../modals/edit-book-meta';
 import type { LibraryAuthor, LibraryBook, LibraryBookStatus } from '../lib/types';
 
 type Filter = 'all' | 'in_progress' | 'complete';
+
+/** localStorage key for the card↔table view-mode toggle. */
+const VIEW_MODE_STORAGE_KEY = 'library.viewMode';
+
+/* localStorage can be unavailable (Safari private mode, sandboxed
+   iframes, a test env that nukes globals). Always try/catch — fall
+   back to the default rather than throwing on first render. */
+function readStoredViewMode(): LibraryViewMode {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(VIEW_MODE_STORAGE_KEY) : null;
+    if (raw === 'table' || raw === 'card') return raw;
+  } catch {
+    /* swallow — fall through to default */
+  }
+  return 'card';
+}
+
+function writeStoredViewMode(mode: LibraryViewMode): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+    }
+  } catch {
+    /* swallow — in-memory state still works, persistence just won't survive reload */
+  }
+}
 
 interface Props {
   authors: LibraryAuthor[];
@@ -38,6 +77,10 @@ interface Props {
       propagates back through the slice. */
   onCoverChanged?: (book: LibraryBook) => Promise<void> | void;
   onStartNew: () => void;
+  /** Plan 75 — when present, exposes the "Import portable bundle"
+      button in the library chrome. The orchestrator wires the chosen
+      File to api.importPortable + refreshes the library. */
+  onImportPortable?: (file: File) => void;
 }
 
 const IN_PROGRESS_STATUSES = new Set<LibraryBookStatus>([
@@ -63,8 +106,24 @@ export function BookLibraryView({
   onEditBook,
   onCoverChanged,
   onStartNew,
+  onImportPortable,
 }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
+  /* Plan 73 — raw input fires every keystroke, debouncedSearch lags by
+     ~150ms so the filter chain doesn't re-run mid-word. activeTags is
+     a sorted array (not a Set) so it serialises cleanly through the
+     prop interface and the test harness. */
+  const [search, setSearch] = useState('');
+  const [activeTags, setActiveTags] = useState<string[]>([]);
+  const debouncedSearch = useDebouncedValue(search, 150);
+  /* Plan 76 — card↔table presentation toggle. Initial read happens once
+     at mount (lazy initialiser keeps the localStorage probe out of every
+     render). Writes back on every change via the effect below — same
+     shape as other persisted UI preferences in the app. */
+  const [viewMode, setViewMode] = useState<LibraryViewMode>(() => readStoredViewMode());
+  useEffect(() => {
+    writeStoredViewMode(viewMode);
+  }, [viewMode]);
   /* First word of the user's display name → "Welcome back, Mike". Falls back
      to "back" when the user hasn't set a name (keeps the heading grammatical). */
   const displayName = useAppSelector((s) => s.account.displayName);
@@ -74,6 +133,16 @@ export function BookLibraryView({
      the api.getLibrary() round-trip — reads as "library wiped." Skeleton stays
      up until libraryActions.hydrate fires (set by src/components/layout.tsx). */
   const loaded = useAppSelector((s) => s.library.loaded);
+  /* Plan 73 — union of all tags across the library. We read the raw
+     books array from the slice and derive the sorted tag union with
+     useMemo so React 18 doesn't warn about a selector returning a
+     fresh array reference each render. `selectAllTags` is still
+     exported for direct unit testing in library-slice.test.ts. */
+  const libraryBooksForTags = useAppSelector((s) => s.library.books);
+  const allTags = useMemo(
+    () => selectAllTags({ library: { loaded: true, authors: [], books: libraryBooksForTags, pausedSnapshots: {} } }),
+    [libraryBooksForTags],
+  );
   /* Surface the active workspace root so a stale `WORKSPACE_DIR` override
      (or worse: silently falling back to the in-repo default) is obvious at
      a glance. Page-local state — only the Books page needs this; widening
@@ -114,10 +183,20 @@ export function BookLibraryView({
     },
   ];
 
-  /* Apply the active filter at the orchestrator boundary so <LibraryGrid />
-     stays a pure render of whatever it's handed. Series with no matching
-     books are dropped, and authors with no matching series collapse out
-     entirely — same pre-split semantics. */
+  const toggleTag = (tag: string) => {
+    setActiveTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
+    );
+  };
+  const clearFilters = () => {
+    setSearch('');
+    setActiveTags([]);
+  };
+
+  /* Apply status filter + search + tag intersection at the orchestrator
+     boundary so <LibraryGrid /> stays a pure render of whatever it's
+     handed. Series with no matching books are dropped, and authors with
+     no matching series collapse out entirely — same pre-split semantics. */
   const filteredAuthors = useMemo<LibraryAuthor[]>(() => {
     return authors
       .map((author) => ({
@@ -125,12 +204,32 @@ export function BookLibraryView({
         series: author.series
           .map((series) => ({
             ...series,
-            books: series.books.filter((b) => matchesFilter(b, filter)),
+            books: filterBooks(
+              series.books.filter((b) => matchesFilter(b, filter)),
+              debouncedSearch,
+              activeTags,
+            ),
           }))
           .filter((series) => series.books.length > 0),
       }))
       .filter((author) => author.series.length > 0);
-  }, [authors, filter]);
+  }, [authors, filter, debouncedSearch, activeTags]);
+
+  const matchedBookCount = useMemo(
+    () =>
+      filteredAuthors.reduce(
+        (sum, a) => sum + a.series.reduce((s, ser) => s + ser.books.length, 0),
+        0,
+      ),
+    [filteredAuthors],
+  );
+
+  /* "No results" only fires when an active search/tag filter narrowed
+     the otherwise-non-empty library to zero rows. An empty library
+     still falls through to the existing <EmptyLibrary /> path. */
+  const hasActiveSearchOrTag = debouncedSearch.trim().length > 0 || activeTags.length > 0;
+  const showNoResults =
+    loaded && authors.length > 0 && hasActiveSearchOrTag && matchedBookCount === 0;
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 py-10">
@@ -141,20 +240,71 @@ export function BookLibraryView({
         filter={filter}
         setFilter={setFilter}
         filters={filters}
+        viewMode={viewMode}
+        setViewMode={setViewMode}
         onStartNew={onStartNew}
+        onImportPortable={onImportPortable}
+        search={search}
+        setSearch={setSearch}
+        allTags={allTags}
+        activeTags={activeTags}
+        toggleTag={toggleTag}
+        clearFilters={clearFilters}
       />
-      <LibraryGrid
-        loaded={loaded}
-        isLibraryEmpty={authors.length === 0}
-        authors={filteredAuthors}
-        activeBookId={activeBookId}
-        onOpenBook={onOpenBook}
-        onDeleteBook={onDeleteBook}
-        onReparseBook={onReparseBook}
-        onEditBook={onEditBook}
-        onCoverChanged={onCoverChanged}
-        onStartNew={onStartNew}
-      />
+      {showNoResults ? (
+        <NoResults onClear={clearFilters} />
+      ) : viewMode === 'card' ? (
+        <LibraryGrid
+          loaded={loaded}
+          isLibraryEmpty={authors.length === 0}
+          authors={filteredAuthors}
+          activeBookId={activeBookId}
+          onOpenBook={onOpenBook}
+          onDeleteBook={onDeleteBook}
+          onReparseBook={onReparseBook}
+          onEditBook={onEditBook}
+          onCoverChanged={onCoverChanged}
+          onStartNew={onStartNew}
+        />
+      ) : (
+        <LibraryTable
+          loaded={loaded}
+          isLibraryEmpty={authors.length === 0}
+          authors={filteredAuthors}
+          activeBookId={activeBookId}
+          onOpenBook={onOpenBook}
+          onDeleteBook={onDeleteBook}
+          onReparseBook={onReparseBook}
+          onEditBook={onEditBook}
+          onCoverChanged={onCoverChanged}
+          onStartNew={onStartNew}
+        />
+      )}
+    </div>
+  );
+}
+
+/* Distinct "no results" pane — fires when search/tags narrow the
+   library to zero rows. Mirrors the shape of <EmptyLibrary /> in
+   library-grid.tsx so the rounded-3xl panel stays consistent. */
+function NoResults({ onClear }: { onClear: () => void }) {
+  return (
+    <div
+      className="bg-white rounded-3xl border border-ink/10 shadow-card p-12 text-center"
+      data-testid="library-no-results"
+    >
+      <span className="w-16 h-16 mx-auto rounded-full bg-ink/[0.05] grid place-items-center text-ink/55">
+        <IconClose className="w-7 h-7" />
+      </span>
+      <h3 className="mt-5 font-serif text-2xl font-bold text-ink">No books match your filters</h3>
+      <p className="mt-2 text-sm text-ink/60 max-w-md mx-auto leading-relaxed">
+        Try a different search term, or clear the active tag chips to see every book again.
+      </p>
+      <div className="mt-6">
+        <PrimaryButton variant="ghost" onClick={onClear} icon={false}>
+          Clear filters
+        </PrimaryButton>
+      </div>
     </div>
   );
 }

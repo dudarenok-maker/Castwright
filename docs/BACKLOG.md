@@ -46,26 +46,6 @@ Ranking within each bucket = top is highest priority.
 
 Ordered in clusters: audio quality → listening UX → library/workflow → cast/revisions → voice library → coverage & ops → streaming/sync → distribution → tracking → deferred listener-app handoffs.
 
-### 1. Audio loudness normalization (ffmpeg `loudnorm`)
-
-Source: net-new (2026-05-17). Validated absent in `server/src/tts/mp3.ts` (raw PCM → LAME VBR, no loudness filter).
-
-- _What:_ Add an optional `loudnorm` pass to the chapter encode pipeline. Two-pass mode (analyse → apply) gates on a config knob (`AUDIO_LOUDNORM=off|single|two-pass`, default `single`). Targets EBU R128 `-16 LUFS`, `-1.5 dBTP`, `LRA 11`.
-- _Acceptance:_ New server Vitest spec asserts the ffmpeg invocation includes the loudnorm filter when enabled; manual: compare two chapters generated with different voices, both land within ±1 LU of target. Skip when `AUDIO_LOUDNORM=off`.
-- _Key files:_ `server/src/tts/mp3.ts`; `server/.env.example` (new knob); `docs/features/28-chapter-audio-format.md` (extend with a "Loudness" section).
-- _Depends on:_ none. Encode latency cost is ~20-40% for single-pass loudnorm; document the trade-off.
-- _Benefit (user):_ per-voice volume drift across chapters today forces the listener to ride the volume knob. Loudnorm makes the book sit at one level.
-
-### 2. AAC/M4A or Opus output (swappable encoder)
-
-Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
-
-- _What:_ Generalise `encodePcmToMp3` to accept an encoder choice (`mp3 | m4a | opus`) and add a sidecar/server config knob that selects per-book output format.
-- _Acceptance:_ The boundary in `server/src/tts/mp3.ts` (or wherever `encodePcmToMp3` lives) is renamed `encodePcmToAudio` and dispatches on format; existing tests still pass; a new test covers m4a output.
-- _Key files:_ `server/src/tts/mp3.ts`; `docs/features/28-chapter-audio-format.md`.
-- _Depends on:_ none, but cluster after Could #1 (loudnorm) so the encoder boundary is generalised AFTER the loudnorm wiring lands — otherwise we re-touch the dispatch twice.
-- _Benefit (user):_ smaller files / better quality for users who prefer either; small cost because the encoder seam already exists.
-
 ### 3. Per-chapter loudness report / visualization
 
 Source: net-new (2026-05-18). Pairs with Could #1 (loudnorm).
@@ -75,36 +55,6 @@ Source: net-new (2026-05-18). Pairs with Could #1 (loudnorm).
 - _Key files:_ new `src/components/loudness-report.tsx`; `src/views/listen.tsx` (mount); `server/src/tts/mp3.ts` (emit loudness metadata to chapter meta); `server/src/routes/chapter-audio.ts` (surface in meta endpoint).
 - _Depends on:_ Could #1 (loudnorm) — without normalization there's no expected target to compare against.
 - _Benefit (user):_ catch problem chapters before export (e.g. a voice that came out 4 LU softer than the rest). Pairs with Could #1 to make loudness drift visible, not just corrected.
-
-### 7. Library search + tag / category filter
-
-Source: net-new (2026-05-18).
-
-- _What:_ Add a search bar to the library view that filters books by title / author substring (case-insensitive). Add a tag system: each book carries a `tags: string[]` on its `BookStateJson`; chips in the library view filter by tag. Tag-edit affordance lives in the book-meta modal.
-- _Acceptance:_ Library with 10 books → typing 3 characters of a title filters to matching books. Add tag "priority" to two books, click chip → only those two remain. Tags persist on disk via the existing state-write path. Vitest covers the filter logic + tag-edit reducer; e2e covers the search-then-filter user flow.
-- _Key files:_ `src/views/library.tsx` (search bar + chip row); `src/modals/edit-book-meta.tsx` (tag editor); `openapi.yaml` (BookStateJson `tags` field); `server/src/workspace/scan.ts` (read/write `tags`).
-- _Depends on:_ none.
-- _Benefit (user):_ library browsing becomes tenable at 10+ titles; tagging cross-cuts the alphabetical tree (priority / series / genre).
-
-### 8. Manuscript diff viewer on re-upload
-
-Source: net-new (2026-05-18).
-
-- _What:_ When a user re-uploads a revised manuscript for an existing book, show a side-by-side diff of the previous manuscript text vs the new one (sentence-level granularity, character-level highlighting within changed sentences). Surface changed sentences mapped to existing cast attribution, so the user knows which characters' lines changed.
-- _Acceptance:_ Re-upload a manuscript with 5 sentence changes → diff view shows those 5 sentences side-by-side; "View affected characters" expands per-sentence into the cast list. Vitest covers the diff algorithm; e2e covers the upload-then-diff flow.
-- _Key files:_ new `src/components/manuscript-diff.tsx`; new `src/lib/manuscript-diff.ts` (diff algorithm — leverage `diff` npm package); `src/views/upload.tsx`; new server endpoint for diff-friendly fetch of the previous manuscript.
-- _Depends on:_ none.
-- _Benefit (user):_ re-uploading a manuscript today shows no indication of what changed — the user must manually re-read or trust external version control. Diff view closes that gap.
-
-### 10. Portable book export with embedded state
-
-Source: net-new (2026-05-18).
-
-- _What:_ Add an "Export book as portable archive" affordance: zip up `<bookDir>/.audiobook/state.json` + `manuscript.txt` + all audio + cover into a single `<bookId>.zip`. Importing that zip into another workspace drops it into `<workspace>/<bookId>/` and the library view picks it up after a refresh.
-- _Acceptance:_ Export book → produces `bonus-Marlow-story.zip` containing all needed state. Drop zip into a second workspace's `import/` folder → first run picks it up, restores book to library with full cast + audio + listen progress intact. Vitest covers the manifest; e2e covers the export-then-import flow.
-- _Key files:_ new `server/src/export/build-portable-book.ts`; new `server/src/import/scan-import-folder.ts`; `src/views/listen.tsx` (export button).
-- _Depends on:_ none.
-- _Benefit (user):_ hand-off between machines without re-casting; backup-and-restore semantics for individual books.
 
 ### 12. Multi-step rollback / snapshot-per-entry (revision history)
 
@@ -292,6 +242,16 @@ Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e
 - _Acceptance:_ Next PR's Verify run is green on all 12 visual specs (no skip messages). `docs/features/archive/37-e2e-playwright.md` "Per-platform skip" subsection loses the "Win32 only" caveat. Bonus: if the workflow_dispatch path is taken, document it under "Regenerate workflow".
 - _Key files:_ `e2e/linux/visual.spec.ts/` (new directory); optional `.github/workflows/regen-visual-baselines.yml`; `docs/features/archive/37-e2e-playwright.md` "Visual baselines" section.
 - _Benefit (technical):_ restores Verify as a real merge gate. Today PR CI's only red signal is "visual baselines missing" — once those land, a red Verify means real regression and reviewers stop ignoring it.
+
+### Library card↔table view toggle with series-grouped table
+
+Source: net-new (2026-05-20). User added this mid-Bundle-B planning; bundled into this PR per explicit approval rather than landing a separate Round-0 docs PR. Filed here for the record so the provenance survives the merge.
+
+- _What:_ Toggle pill in the library chrome flips the books surface between the existing card grid and a dense, series-grouped table view; standalones from every author collect into a synthetic "Standalones" pseudo-section; the table reuses the same per-book callbacks (open / edit / re-parse / delete / cover-changed) the cards already wire. `library.viewMode` persisted in localStorage with a try/catch fallback to the default ('card'). Per-series collapse state is per-session only.
+- _Acceptance:_ Toggle visible in the library chrome; reload preserves the pick; row click routes to listen; series headers collapse/expand; Standalones pseudo-section appears at the bottom when any standalone books survive the filter. Locked by `library-table.test.tsx` (14 cases), `library-status-ui.test.ts` (10 cases), 6 new view-mode cases in `book-library.test.tsx`, and the `library-table-view.spec.ts` e2e.
+- _Key files:_ `src/components/library/library-table.tsx`, `src/components/library/library-status-ui.tsx`, `src/components/library/library-empty-states.tsx`, `src/components/library/library-chrome.tsx`, `src/views/book-library.tsx`.
+- _Status: shipped in plan 76 (this PR)._
+- _Benefit (user):_ card grid breaks down at 10+ books; a dense, series-grouped table makes a long library scannable at a glance (title / status / runtime / last-worked-on visible per row without hover or scroll).
 
 ---
 

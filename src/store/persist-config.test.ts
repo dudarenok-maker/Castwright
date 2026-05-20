@@ -47,6 +47,7 @@ describe('UI_PERSIST_WHITELIST', () => {
       'showRevisionPlayer',
       'showDriftReport',
       'previewMode',
+      'reuploadingBookId',
     ];
     for (const key of transientKeys) {
       expect(
@@ -80,12 +81,13 @@ describe('MANUSCRIPT_PERSIST_WHITELIST', () => {
     ]);
   });
 
-  it('omits sentences / sourceText / importCandidate (server-sourced or transient — stale persistence would race the hydrate)', () => {
+  it('omits sentences / sourceText / importCandidate / pendingReupload (server-sourced or transient — stale persistence would race the hydrate)', () => {
     const initial = manuscriptSlice.reducer(undefined, { type: 'noop' });
     const transientKeys: Array<keyof typeof initial> = [
       'sentences',
       'sourceText',
       'importCandidate',
+      'pendingReupload',
     ];
     for (const key of transientKeys) {
       expect(

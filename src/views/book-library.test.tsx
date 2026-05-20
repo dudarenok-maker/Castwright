@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import { accountSlice } from '../store/account-slice';
 import { librarySlice, libraryActions } from '../store/library-slice';
 import { BookLibraryView } from './book-library';
@@ -32,6 +32,7 @@ const oneBook: LibraryBook = {
   voiceCount: 20,
   lastWorkedOn: 'today',
   coverGradient: ['#000', '#fff'],
+  tags: [],
 };
 
 const oneAuthor: LibraryAuthor = {
@@ -356,6 +357,137 @@ describe('BookLibraryView — loading affordance', () => {
       store.dispatch(libraryActions.hydratePausedSnapshots([snapA]));
     });
     expect(store.getState().library.pausedSnapshots).toEqual({ a: snapA });
+  });
+
+  it('renders the "Import portable bundle" button when onImportPortable is provided, and fires the handler on file pick (plan 75)', async () => {
+    const onImportPortable = vi.fn();
+    const store = configureStore({
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+      preloadedState: {
+        library: { loaded: true, authors: [], books: [], pausedSnapshots: {} },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <BookLibraryView
+          authors={[]}
+          activeBookId={null}
+          onOpenBook={vi.fn()}
+          onDeleteBook={vi.fn()}
+          onReparseBook={vi.fn()}
+          onEditBook={vi.fn()}
+          onStartNew={vi.fn()}
+          onImportPortable={onImportPortable}
+        />
+      </Provider>,
+    );
+    const button = screen.getByTestId('library-import-portable-button');
+    expect(button).toBeInTheDocument();
+    const input = screen.getByTestId('library-import-portable-input') as HTMLInputElement;
+    const file = new File(['fake-zip-bytes'], 'demo.portable.zip', { type: 'application/zip' });
+    /* Simulate the file-pick by populating files on the hidden input
+       and firing change — jsdom does not run a real file picker. */
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    act(() => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(onImportPortable).toHaveBeenCalledTimes(1);
+    expect(onImportPortable.mock.calls[0][0]).toBeInstanceOf(File);
+    expect(onImportPortable.mock.calls[0][0].name).toBe('demo.portable.zip');
+  });
+
+  it('omits the Import button entirely when onImportPortable is not provided (backward-compat)', () => {
+    renderView({ loaded: true, authors: [] });
+    expect(screen.queryByTestId('library-import-portable-button')).not.toBeInTheDocument();
+  });
+
+  it('renders the search input above the grid (plan 73)', () => {
+    renderView({ loaded: true, authors: [oneAuthor] });
+    expect(screen.getByTestId('library-search-input')).toBeInTheDocument();
+  });
+
+  it('filters books by debounced title-search and shows a no-results pane when nothing matches', async () => {
+    renderView({ loaded: true, authors: [oneAuthor] });
+    fireEvent.change(screen.getByTestId('library-search-input'), {
+      target: { value: 'zzzzzz' },
+    });
+    /* useDebouncedValue lags ~150ms — wait for the no-results pane. */
+    await waitFor(() => {
+      expect(screen.getByTestId('library-no-results')).toBeInTheDocument();
+    });
+    /* The book grid itself collapses out under the no-results branch. */
+    expect(screen.queryByText('Della Renwick')).not.toBeInTheDocument();
+  });
+
+  describe('view-mode toggle (plan 76)', () => {
+    beforeEach(() => {
+      /* jsdom ships a real localStorage — wipe between cases so the
+         lazy-initialiser default isn't leaked across specs. */
+      try {
+        localStorage.removeItem('library.viewMode');
+      } catch {
+        /* swallow */
+      }
+    });
+
+    it('renders the Cards + Table toggle pills', () => {
+      renderView({ loaded: true, authors: [oneAuthor] });
+      expect(screen.getByTestId('library-view-mode-toggle')).toBeInTheDocument();
+      expect(screen.getByTestId('library-view-mode-card')).toBeInTheDocument();
+      expect(screen.getByTestId('library-view-mode-table')).toBeInTheDocument();
+    });
+
+    it('defaults to card view when localStorage is empty', () => {
+      renderView({ loaded: true, authors: [oneAuthor] });
+      /* h2 with author name only renders in the card-view branch. */
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
+      ).toBeInTheDocument();
+      expect(screen.getByTestId('library-view-mode-card')).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    });
+
+    it('renders the table view (with the row testid) after clicking Table', () => {
+      renderView({ loaded: true, authors: [oneAuthor] });
+      fireEvent.click(screen.getByTestId('library-view-mode-table'));
+      /* Card branch's h2 disappears; table-row testid materialises. */
+      expect(
+        screen.queryByRole('heading', { level: 2, name: 'Della Renwick' }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId('library-table-row-b1')).toBeInTheDocument();
+      expect(screen.getByTestId('library-view-mode-table')).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    });
+
+    it('persists viewMode to localStorage on toggle', () => {
+      renderView({ loaded: true, authors: [oneAuthor] });
+      fireEvent.click(screen.getByTestId('library-view-mode-table'));
+      expect(localStorage.getItem('library.viewMode')).toBe('table');
+      fireEvent.click(screen.getByTestId('library-view-mode-card'));
+      expect(localStorage.getItem('library.viewMode')).toBe('card');
+    });
+
+    it('reads persisted viewMode from localStorage on mount', () => {
+      localStorage.setItem('library.viewMode', 'table');
+      renderView({ loaded: true, authors: [oneAuthor] });
+      expect(screen.getByTestId('library-table-row-b1')).toBeInTheDocument();
+      expect(screen.getByTestId('library-view-mode-table')).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    });
+
+    it('falls back to card view when localStorage value is garbage', () => {
+      localStorage.setItem('library.viewMode', 'not-a-real-mode');
+      renderView({ loaded: true, authors: [oneAuthor] });
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
+      ).toBeInTheDocument();
+    });
   });
 
   it('swaps skeleton → populated grid when hydrate dispatches', () => {
