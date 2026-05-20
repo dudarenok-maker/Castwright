@@ -25,6 +25,13 @@ interface VoiceLibraryPanelProps {
      parent's height instead of self-capping, since the sheet itself
      owns the height envelope. */
   displayMode?: 'aside' | 'sheet';
+  /* Plan 81 wave 4 — touch-friendly alternative to drag-and-drop. When
+     set, every voice card renders an "Assign" pill alongside its drag
+     handle; tapping the pill calls onTapAssign(voice) which the cast
+     view uses to enter assignment mode (sticky banner + tap-a-character
+     to apply). Drag-and-drop on desktop stays intact regardless. */
+  onTapAssign?: (voice: Voice) => void;
+  assigningVoiceId?: string | null;
 }
 
 export function VoiceLibraryPanel({
@@ -36,6 +43,8 @@ export function VoiceLibraryPanel({
   onOpenProfile,
   onPlaySample,
   displayMode = 'aside',
+  onTapAssign,
+  assigningVoiceId,
 }: VoiceLibraryPanelProps) {
   const [tab, setTab] = useState<Tab>('all');
   const filtered = library.filter((v) => tab === 'all' || v.source === tab);
@@ -64,7 +73,11 @@ export function VoiceLibraryPanel({
             {library.length} voices · {bookCount} {bookCount === 1 ? 'book' : 'books'}
           </span>
         </div>
-        <p className="text-xs text-ink/50 mb-3">Drag onto a character to reuse.</p>
+        <p className="text-xs text-ink/50 mb-3">
+          {onTapAssign
+            ? 'Drag a voice onto a character, or tap "Assign" then tap a character.'
+            : 'Drag onto a character to reuse.'}
+        </p>
         <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
           {tabs.map((t) => (
             <button
@@ -91,6 +104,8 @@ export function VoiceLibraryPanel({
             character={findCharacter(v)}
             onOpenProfile={onOpenProfile}
             onPlaySample={onPlaySample}
+            onTapAssign={onTapAssign}
+            isAssigningTarget={assigningVoiceId === v.id}
           />
         ))}
       </div>
@@ -121,6 +136,12 @@ interface VoiceCardProps {
      omitted, the legacy drag-only / click-to-open card renders unchanged. */
   selected?: boolean;
   onToggleSelect?: (voice: Voice) => void;
+  /* Plan 81 wave 4 — touch-friendly tap-to-assign affordance. When set,
+     the card renders an "Assign" pill that fires onTapAssign(voice) so
+     phones/tablets (where HTML5 drag-and-drop doesn't fire) can still
+     reuse voices. isAssigningTarget surfaces the active state. */
+  onTapAssign?: (voice: Voice) => void;
+  isAssigningTarget?: boolean;
 }
 
 export function VoiceCard({
@@ -137,6 +158,8 @@ export function VoiceCard({
   onSelect,
   selected,
   onToggleSelect,
+  onTapAssign,
+  isAssigningTarget = false,
 }: VoiceCardProps) {
   const isDragging = draggingVoiceId === voice.id;
   const canOpenProfile = !!(character && onOpenProfile);
@@ -238,9 +261,25 @@ export function VoiceCard({
           </div>
         )}
       </div>
-      <span className="text-ink/30 group-hover:text-ink/60 transition-colors mt-1">
-        <IconDrag className="w-4 h-4" />
-      </span>
+      {onTapAssign ? (
+        <button
+          type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onTapAssign(voice);
+          }}
+          aria-label={isAssigningTarget ? `Cancel assigning ${voice.character}` : `Assign ${voice.character} to a character`}
+          aria-pressed={isAssigningTarget}
+          className={`shrink-0 min-h-[44px] min-w-[44px] px-3 inline-flex items-center justify-center rounded-full text-xs font-semibold transition-colors ${isAssigningTarget ? 'bg-magenta text-white hover:bg-magenta/90' : 'bg-ink/[0.06] text-ink/70 hover:bg-ink/10 hover:text-ink'}`}
+        >
+          {isAssigningTarget ? 'Cancel' : 'Assign'}
+        </button>
+      ) : (
+        <span className="text-ink/30 group-hover:text-ink/60 transition-colors mt-1 hidden md:inline">
+          <IconDrag className="w-4 h-4" />
+        </span>
+      )}
     </div>
   );
 }

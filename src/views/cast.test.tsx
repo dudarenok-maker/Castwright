@@ -412,3 +412,101 @@ describe('CastView desktop drag-drop is intact', () => {
     expect(setCharacters).toHaveBeenCalled();
   });
 });
+
+/* Plan 81 wave 4 — tap-to-assign is the touch-friendly parallel path
+   to drag-and-drop. Tapping the "Assign" pill on a voice card captures
+   that voice; tapping any character row applies it via the same
+   `applyVoiceToCharacter` write path. Sticky banner at the top surfaces
+   the in-flight state; Cancel button + "Assign" pill tap toggles
+   exit the mode. Desktop drag-drop stays intact (tested above). */
+describe('CastView wave-4 tap-to-assign', () => {
+  it('starts in the no-assignment state (no banner visible)', () => {
+    renderView();
+    expect(screen.queryByTestId('tap-assign-banner')).toBeNull();
+  });
+
+  it('tapping a voice card "Assign" pill surfaces the sticky banner', () => {
+    renderView();
+    /* The library renders one Assign pill per voice card. Pick the
+       Narrator voice card's pill. */
+    const assignPills = screen.getAllByRole('button', {
+      name: /^Assign Narrator to a character$/,
+    });
+    expect(assignPills.length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(assignPills[0]);
+    const banner = screen.getByTestId('tap-assign-banner');
+    expect(banner.textContent).toMatch(/Assigning/);
+    expect(banner.textContent).toContain('Narrator');
+  });
+
+  it('tapping a character row in assignment mode applies the voice', () => {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    let castRef: Character[] = [narrator, sweeney];
+    const setCharacters = vi.fn((next: Character[] | ((prev: Character[]) => Character[])) => {
+      castRef = typeof next === 'function' ? next(castRef) : next;
+    });
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={castRef}
+          setCharacters={setCharacters}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          onBatchRegenerate={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    /* Enter assignment mode for the Narrator voice card. */
+    const assignPills = screen.getAllByRole('button', {
+      name: /^Assign Narrator to a character$/,
+    });
+    fireEvent.click(assignPills[0]);
+    /* Tap Sweeney's row — applyVoiceToCharacter fires through the same
+       code path as handleDrop. setCharacters should be called. */
+    fireEvent.click(rowFor('Mr. Sweeney'));
+    expect(setCharacters).toHaveBeenCalled();
+    /* Banner clears after assignment. */
+    expect(screen.queryByTestId('tap-assign-banner')).toBeNull();
+  });
+
+  it('Cancel button on the banner exits assignment mode without applying', () => {
+    const setCharacters = vi.fn();
+    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[narrator, sweeney]}
+          setCharacters={setCharacters}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          onBatchRegenerate={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    const assignPills = screen.getAllByRole('button', {
+      name: /^Assign Narrator to a character$/,
+    });
+    fireEvent.click(assignPills[0]);
+    expect(screen.getByTestId('tap-assign-banner')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+    expect(screen.queryByTestId('tap-assign-banner')).toBeNull();
+    expect(setCharacters).not.toHaveBeenCalled();
+  });
+
+  it('the Assign pill has a ≥44px touch target', () => {
+    renderView();
+    const assignPills = screen.getAllByRole('button', {
+      name: /^Assign Narrator to a character$/,
+    });
+    expect(assignPills[0].className).toMatch(/min-h-\[44px\]/);
+    expect(assignPills[0].className).toMatch(/min-w-\[44px\]/);
+  });
+});

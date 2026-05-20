@@ -1,7 +1,20 @@
 import type { Config } from 'tailwindcss';
+import plugin from 'tailwindcss/plugin';
 
 const config: Config = {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
+  plugins: [
+    /* Plan 81 wave 4 — `coarse-pointer:` variant matches `@media (pointer: coarse)`
+       (touchscreens). Lets components surface a fallback for hover-only
+       affordances without a JS pointer-type check. Example use:
+       `opacity-0 group-hover:opacity-100 coarse-pointer:opacity-60` —
+       reveals on hover for mouse users, stays faintly visible on touch
+       devices where hover doesn't exist. */
+    plugin(({ addVariant }) => {
+      addVariant('coarse-pointer', '@media (pointer: coarse)');
+      addVariant('fine-pointer', '@media (pointer: fine)');
+    }),
+  ],
   theme: {
     extend: {
       colors: {
@@ -32,7 +45,6 @@ const config: Config = {
       borderRadius: { sm: '8px', md: '12px', lg: '20px', xl: '28px', '2xl': '40px', '3xl': '56px' },
     },
   },
-  plugins: [],
 };
 
 export default config;
