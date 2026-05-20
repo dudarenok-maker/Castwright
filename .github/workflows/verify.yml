@@ -39,7 +39,13 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Bumped 20 → 24 alongside plan 81 / wave 1. The trigger was
+          # vite-plugin-mkcert@2 pulling undici@8 (Node 22+ required for
+          # `webidl.util.markAsUncloneable`); we picked 24 to match the
+          # dev box exactly so "works on my machine" Node-version drift
+          # can't bite us. Node 24 enters LTS in October 2026; until
+          # then it's the Current release line.
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json

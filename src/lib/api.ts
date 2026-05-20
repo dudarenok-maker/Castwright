@@ -3017,7 +3017,7 @@ async function mockCreateBookShareLink(bookId: string): Promise<BookShareLink> {
 
 async function mockGetExportLanUrls(): Promise<ExportLanInfo> {
   await wait(20);
-  return { urls: ['http://192.168.1.42:8080'], port: 8080 };
+  return { urls: ['http://192.168.1.42:8080'], port: 8080, protocol: 'http' };
 }
 
 async function mockGetSidecarHealth(): Promise<SidecarHealth> {
