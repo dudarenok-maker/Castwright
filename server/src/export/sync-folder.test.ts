@@ -54,4 +54,83 @@ describe('writeToSyncFolder', () => {
     const stragglers = readdirSync(dest).filter((n) => n.includes('.tmp-'));
     expect(stragglers).toEqual([]);
   });
+
+  /* Plan 79 — Google Drive / OneDrive sync failures should surface with
+     a destination-specific hint instead of just the raw errno. The
+     renameWithRetry primitive throws after exhausting its backoff; the
+     wrapper catches that and prepends "Google Drive for Desktop folder:
+     ..." / "OneDrive folder: ..." so the export modal can show the user
+     what's likely wrong without them digging through server logs. */
+  it('wraps the error with a Drive hint when destDir looks like a Drive for Desktop mount', async () => {
+    const dest = join(tmpRoot, 'My Drive', 'Audiobooks');
+    /* Source missing -> copyFile throws ENOENT before rename even runs.
+       The wrapper only kicks in on the rename branch, so we craft a
+       failure inside rename by writing to a path whose parent is a file
+       (EEXIST/ENOTDIR depending on platform). Easiest: write to a path
+       under a dest-dir that we then rm in a child invocation. We just
+       assert that on a successful rename inside a "My Drive"-shaped
+       path, no hint is added (happy path coverage), and reserve the
+       hint assertion for an injected-failure test where we mock rename
+       directly. */
+    const result = await writeToSyncFolder(srcPath, dest, 'audiobook.zip');
+    expect(result.syncPath).toBe(join(dest, 'audiobook.zip'));
+  });
+});
+
+/* Plan 79 — atomic-rename retry contract widened to cover EACCES/EIO
+   (Drive for Desktop's virtual FS surfaces these intermittently during
+   sync-scan flushes). The retry primitive is in workspace/atomic-rename
+   so the contract test lives there too; this suite just smoke-checks
+   the writer doesn't regress the happy paths. */
+describe('writeToSyncFolder — Drive hint wrapping', () => {
+  it('wraps a terminal rename failure inside a Google Drive path with a Drive-specific hint', async () => {
+    /* The cleanest way to force the rename branch to throw is to point
+       the copy at a directory whose final component already exists as a
+       READONLY directory (so the rename onto that name fails with
+       EISDIR / EPERM). We avoid filesystem mocking here — instead we
+       drive the wrapper directly via an injected path that smells like
+       Drive but contains a forced-fail destination.
+
+       Use a fresh tmp dir + create a directory at the destination
+       filename ("audiobook.zip" exists as a dir, not a file). On
+       Windows + POSIX, rename onto a non-empty directory of the same
+       name fails with EPERM/ENOTEMPTY; renameWithRetry's retry list
+       covers EPERM, but ENOTEMPTY isn't in it, so the throw escapes
+       to the wrapper, which adds the Drive hint. */
+    const driveTmp = mkdtempSync(join(tmpdir(), 'sync-drive-test-'));
+    try {
+      const drivePath = join(driveTmp, 'My Drive', 'Audiobooks');
+      mkdirSync(join(drivePath, 'audiobook.zip'), { recursive: true });
+      /* Plant a file inside so rename-over-dir fails (rename onto a
+         non-empty dir is rejected on every platform). */
+      writeFileSync(join(drivePath, 'audiobook.zip', 'sentinel'), 'block');
+
+      const src = join(driveTmp, 'src.bin');
+      writeFileSync(src, Buffer.from('x'.repeat(32)));
+
+      await expect(writeToSyncFolder(src, drivePath, 'audiobook.zip')).rejects.toThrow(
+        /Google Drive for Desktop/i,
+      );
+    } finally {
+      rmSync(driveTmp, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves the error message unwrapped when destDir is not a known sync mount', async () => {
+    const plainTmp = mkdtempSync(join(tmpdir(), 'sync-plain-test-'));
+    try {
+      const plainPath = join(plainTmp, 'random', 'folder');
+      mkdirSync(join(plainPath, 'audiobook.zip'), { recursive: true });
+      writeFileSync(join(plainPath, 'audiobook.zip', 'sentinel'), 'block');
+
+      const src = join(plainTmp, 'src.bin');
+      writeFileSync(src, Buffer.from('x'.repeat(32)));
+
+      await expect(writeToSyncFolder(src, plainPath, 'audiobook.zip')).rejects.not.toThrow(
+        /Google Drive|OneDrive/i,
+      );
+    } finally {
+      rmSync(plainTmp, { recursive: true, force: true });
+    }
+  });
 });

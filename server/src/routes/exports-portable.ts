@@ -18,6 +18,8 @@
 
 import { Router, type Request, type Response } from 'express';
 import multer from 'multer';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { buildPortableBundleByBookId } from '../export/build-portable-book.js';
 import {
   BundleConflictError,
@@ -26,7 +28,8 @@ import {
   type ConflictStrategy,
 } from '../import/scan-import-folder.js';
 import { findBookByBookId } from '../workspace/scan.js';
-import { slug as slugify } from '../workspace/paths.js';
+import { bookExportsDir, slug as slugify } from '../workspace/paths.js';
+import { renameWithRetry } from '../workspace/atomic-rename.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -40,6 +43,17 @@ portableExportRouter.get('/:bookId/export/portable', async (req: Request, res: R
   try {
     const result = await buildPortableBundleByBookId(located.state.bookId);
     const downloadName = `${slugify(located.state.title)}.portable.zip`;
+
+    /* Plan 79 — also write the bundle into <bookDir>/exports/ so the
+       user can pick it up directly from File Explorer alongside the
+       other artifacts. Best-effort: a local-save failure logs a warning
+       but never blocks the HTTP response (the user still gets the
+       streamed download). Atomic via tmp+rename so a partially-written
+       portable.zip can't be picked up mid-write. */
+    await stagePortableLocally(located.bookDir, downloadName, result.buffer).catch((err) => {
+      console.warn('[portable-export] local copy failed (non-fatal)', err);
+    });
+
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
     res.setHeader('Content-Length', result.buffer.length.toString());
@@ -50,6 +64,24 @@ portableExportRouter.get('/:bookId/export/portable', async (req: Request, res: R
     res.status(500).json({ error: 'portable_export_failed', message: (e as Error).message });
   }
 });
+
+async function stagePortableLocally(
+  bookDir: string,
+  filename: string,
+  buf: Buffer,
+): Promise<void> {
+  const exportsRoot = bookExportsDir(bookDir);
+  await mkdir(exportsRoot, { recursive: true });
+  const finalPath = join(exportsRoot, filename);
+  const tmpPath = `${finalPath}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(tmpPath, buf);
+  try {
+    await renameWithRetry(tmpPath, finalPath);
+  } catch (err) {
+    await unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+}
 
 export const portableImportRouter = Router();
 
