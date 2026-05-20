@@ -9,7 +9,12 @@ import { mkdtempSync, readFileSync, rmSync, existsSync, readdirSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { encodePcmToAudio, writeChapterPeaksFile, type ChapterPeaksFile } from './mp3.js';
+import {
+  encodePcmToAudio,
+  writeChapterLufsFile,
+  writeChapterPeaksFile,
+  type ChapterPeaksFile,
+} from './mp3.js';
 import { BIN_COUNT } from '../audio/compute-peaks.js';
 
 const ffmpegPresent = (() => {
@@ -178,3 +183,58 @@ describe('writeChapterPeaksFile', () => {
     }
   });
 });
+
+/* writeChapterLufsFile coverage (plan 71). Sibling to writeChapterPeaksFile;
+   same atomic-write pattern. Pure fs + JSON — no ffmpeg dependency, runs
+   unconditionally. */
+describe('writeChapterLufsFile', () => {
+  function workDir(): string {
+    return mkdtempSync(join(tmpdir(), 'audiobook-lufs-test-'));
+  }
+
+  it('writes a LoudnormSidecarJson payload at the requested path', async () => {
+    const dir = workDir();
+    try {
+      const lufsPath = join(dir, 'audio', 'ch-one.lufs.json');
+      const payload = {
+        i: -16.2,
+        lra: 8.4,
+        tp: -2.1,
+        target: -16,
+        twoPass: true,
+        measuredAt: '2026-05-20T12:00:00.000Z',
+      };
+      await writeChapterLufsFile(payload, lufsPath);
+      expect(existsSync(lufsPath)).toBe(true);
+      const parsed = JSON.parse(readFileSync(lufsPath, 'utf8'));
+      expect(parsed).toEqual(payload);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('atomic rename leaves no .tmp-* droppings on success', async () => {
+    const dir = workDir();
+    try {
+      const audioDir = join(dir, 'audio');
+      const lufsPath = join(audioDir, 'ch-clean.lufs.json');
+      await writeChapterLufsFile(
+        {
+          i: -16,
+          lra: 11,
+          tp: -1.5,
+          target: -16,
+          twoPass: false,
+          measuredAt: new Date().toISOString(),
+        },
+        lufsPath,
+      );
+      const entries = readdirSync(audioDir);
+      expect(entries.filter((e) => e.includes('.tmp-'))).toEqual([]);
+      expect(entries).toContain('ch-clean.lufs.json');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
