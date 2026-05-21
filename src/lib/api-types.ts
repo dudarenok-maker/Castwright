@@ -1225,6 +1225,33 @@ export interface components {
              */
             autoStartSidecar?: boolean;
             /**
+             * @description Plan 88 phase-2 — optional override for Phase 0 (cast
+             *     detection) analyzer model. When `null`, falls through to the
+             *     `ANALYZER_PHASE0_MODEL` env var, then opts.model, then the
+             *     hardcoded default (`gemma-4-31b-it`). When set, MUST be one
+             *     of the ids from src/lib/models.ts MODEL_OPTIONS. Env var
+             *     still wins so ops can override at the process boundary for
+             *     triage; per-request `opts.model` then wins over user-settings.
+             *     See [docs/features/archive/88-analyzer-per-phase-model.md].
+             */
+            analyzerPhase0Model?: string | null;
+            /**
+             * @description Plan 88 phase-2 — optional override for Phase 1 (attribution)
+             *     analyzer model. Same precedence as `analyzerPhase0Model`:
+             *     env > opts.model > user-settings > hardcoded default
+             *     (`gemini-3.1-flash-lite`).
+             */
+            analyzerPhase1Model?: string | null;
+            /**
+             * @description Plan 88 phase-2 — minimum chapter lag between Phase 0 cast
+             *     detection and Phase 1 attribution. `null` falls through to
+             *     `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` env then the default
+             *     (`10`). `0` releases the lag entirely; `10` anchors
+             *     attribution to the roster-author model's interpretive
+             *     baseline (recommended).
+             */
+            analyzerPhase1MinLagChapters?: number | null;
+            /**
              * @description Whether process.env.GEMINI_API_KEY is non-empty. The key value
              *     itself is never returned over the wire — the UI uses this flag
              *     to render a "set in server/.env" pill.
@@ -1266,6 +1293,9 @@ export interface components {
             /** @enum {string} */
             defaultThemePreference?: "light" | "dark" | "system";
             autoStartSidecar?: boolean;
+            analyzerPhase0Model?: string | null;
+            analyzerPhase1Model?: string | null;
+            analyzerPhase1MinLagChapters?: number | null;
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];
