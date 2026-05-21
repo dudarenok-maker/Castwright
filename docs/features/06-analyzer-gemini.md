@@ -4,6 +4,7 @@
 > Key files: `server/src/analyzer/gemini.ts`, `server/src/analyzer/rate-limit.ts`, `server/src/analyzer/index.ts`, `server/src/handoff/schemas.ts`
 > URL surface: indirect (`#/books/:bookId/analysing`)
 > OpenAPI ops: `POST /api/manuscripts/:id/analysis`
+> Pipelined integration: since [plan 88](88-analyzer-per-phase-model.md), Gemini can drive Phase 1 (attribution) while a different model (typically Gemma) drives Phase 0 (cast detection) in the same run — set `ANALYZER_PHASE1_MODEL=gemini-3.1-flash-lite` to engage. The per-model rate-limit buckets below apply per-phase analyzer independently.
 
 ## What this covers
 

@@ -8,6 +8,15 @@ import { rm } from 'node:fs/promises';
 import { Router, type Request, type Response } from 'express';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { selectAnalyzer, type AnalyzerSelection } from '../analyzer/index.js';
+import {
+  selectAnalyzerForPhase,
+  isPerPhaseModelSelectionActive,
+} from '../analyzer/select-analyzer.js';
+import {
+  createPhaseWatermark,
+  createSequentialWatermark,
+  type PhaseWatermark,
+} from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
@@ -65,6 +74,40 @@ function humanModel(modelId: string | undefined): string {
     which is fine, Ollama tags are already human-readable. */
 function engineLabel(engine: 'local' | 'gemini', modelId: string): string {
   return engine === 'local' ? `Ollama (${modelId})` : humanModel(modelId);
+}
+
+/* Plan 88 — pipelined two-model analyzer.
+   Read the minimum-lag knob from env with a default of 10 chapters.
+   The lag is the user's "keep 10 chapters between Gemma and Gemini"
+   requirement: Phase 1 chapter K dispatches when Phase 0's watermark
+   reaches `K + ANALYZER_PHASE1_MIN_LAG_CHAPTERS`. Set to `0` to release
+   the lag (pipelining still happens; Gemini just dispatches as soon
+   as the per-chapter roster snapshot exists for its chapter).
+   Negative or non-numeric values fall back to the default. */
+const DEFAULT_PHASE1_MIN_LAG_CHAPTERS = 10;
+function readPhase1MinLagChapters(): number {
+  const raw = process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS;
+  if (raw === undefined || raw === null || raw.trim() === '') {
+    return DEFAULT_PHASE1_MIN_LAG_CHAPTERS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_PHASE1_MIN_LAG_CHAPTERS;
+  return Math.floor(parsed);
+}
+
+/* Per-job watermark factory. Real watermark when the per-phase env
+   vars are active AND we're not in legacy manual mode. Otherwise the
+   sequential stub (Phase 1 waits for `markPhase0AllDone()` exactly
+   like today's hard phase gate). Exported for unit testing. */
+export function createWatermarkForJob(): PhaseWatermark {
+  /* Manual cowork loop can't pipeline because it waits for human
+     input between phases — short-circuit to the sequential stub
+     regardless of any per-phase env vars. */
+  const manual = process.env.ANALYZER === 'manual';
+  if (manual || !isPerPhaseModelSelectionActive()) {
+    return createSequentialWatermark();
+  }
+  return createPhaseWatermark({ minLagChapters: readPhase1MinLagChapters() });
 }
 
 /* Front-end palette has 30 character slots (see src/lib/colors.ts
@@ -936,13 +979,13 @@ ${chapter.body}
    from the same map via a future GET-or-cheap-POST handshake — for
    now the only consumers are the POST handler's dispatch + /pause. */
 
-interface AnalysisSubscriber {
+export interface AnalysisSubscriber {
   send: (payload: unknown) => void;
   res: Response;
   keepAlive: NodeJS.Timeout;
 }
 
-interface AnalysisJobReplayState {
+export interface AnalysisJobReplayState {
   /** Every log event emitted, in order. Replayed verbatim to a new
       subscriber so the phase log surfaces what's already happened. */
   logs: Array<{ kind: 'log'; phaseId: number; message: string }>;
@@ -972,7 +1015,7 @@ interface AnalysisJobReplayState {
   lastSeriesPrior: { kind: 'series-prior'; count: number; names: string[] } | null;
 }
 
-interface AnalysisJob {
+export interface AnalysisJob {
   controller: AbortController;
   subscribers: Set<AnalysisSubscriber>;
   manuscriptId: string;
@@ -1398,20 +1441,35 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      response until res.end() is called explicitly (by endJob() inside
      runMainAnalyzerJob), so the response stays open and continues to
      receive broadcast events for the lifetime of the job. */
-  void runMainAnalyzerJob(job, record, selection, { requestedFresh, allowStage1Shrink });
+  void runMainAnalyzerJob(job, record, selection, {
+    requestedFresh,
+    allowStage1Shrink,
+    requestedModel,
+  });
 });
 
-interface MainAnalyzerJobOpts {
+export interface MainAnalyzerJobOpts {
   requestedFresh: boolean;
   allowStage1Shrink: boolean;
+  /* Plan 88 — when the route layer received an explicit `model` in the
+     request body, the per-phase env vars are bypassed (UI dropdown
+     wins). Carry this signal through so the job knows whether to ask
+     `selectAnalyzerForPhase` for a Phase-1-specific analyzer or just
+     reuse the main one. */
+  requestedModel: string | undefined;
 }
 
 /* Detached analyzer loop body. Runs as a background promise spawned
    from the main POST handler; broadcasts every event to job.subscribers
    and tracks replay state via trackForReplay. Ends all subscribers + de-
    registers the job from the in-flight map via endJob on any exit path
-   (normal completion, error, abort). */
-async function runMainAnalyzerJob(
+   (normal completion, error, abort).
+   Exported for plan-88-follow-up testing — the route's pipelining
+   contract (Phase 0 + Phase 1 pools running concurrently via
+   Promise.all, back-pressure semaphore engaging in production code
+   paths, not just unit tests of the watermark) needs end-to-end
+   coverage that drives this body with spy analyzers + a stub record. */
+export async function runMainAnalyzerJob(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
   selection: AnalyzerSelection,
@@ -1425,6 +1483,45 @@ async function runMainAnalyzerJob(
   const recordRef = record;
   const activeModelId = selection.model;
   const analyzerLabel = engineLabel(selection.engine, activeModelId);
+
+  /* Plan 88 — pipelined two-model analyzer.
+     When `ANALYZER_PHASE1_MODEL` is set, Phase 1 attribution runs on a
+     DIFFERENT analyzer than Phase 0 cast detection — split the load
+     across two independent free-tier rate-limit buckets. Without a
+     per-request override (`requestedModel` already handled inside
+     `selectAnalyzer`), `selectAnalyzerForPhase('phase1')` honours the
+     env var. Falls back to the same `selection.analyzer` so the legacy
+     single-model path keeps working.
+
+     The watermark seam decides the dispatch contract:
+       - Pipelined mode (per-phase env vars set, not manual): Phase 1
+         worker awaits `markPhase0ChapterComplete(K + LAG)` before
+         dispatching chapter K. Back-pressure semaphore enforced.
+       - Sequential mode (legacy / manual): Phase 1 worker awaits
+         `markPhase0AllDone()` — equivalent to today's hard phase gate.
+     The current route still runs Phase 0 → Phase 0b → Phase 1
+     serially at the code level; the awaits resolve trivially as Phase
+     0b completes. The seam is in place so a follow-up can launch the
+     two pools concurrently without re-plumbing this layer. */
+  const phase1Selection: AnalyzerSelection = opts.requestedModel
+    ? selection
+    : selectAnalyzerForPhase({ phase: 'phase1' });
+  const phase1Analyzer = phase1Selection.analyzer;
+  const phase1ModelId = phase1Selection.model;
+  const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
+  const pipelinedPerPhase =
+    !opts.requestedModel &&
+    isPerPhaseModelSelectionActive() &&
+    process.env.ANALYZER !== 'manual';
+  if (pipelinedPerPhase) {
+    console.log(
+      `[analysis] manuscript=${manuscriptId} pipelined ` +
+        `phase0=${selection.engine}:${selection.model} ` +
+        `phase1=${phase1Selection.engine}:${phase1Selection.model} ` +
+        `lag=${readPhase1MinLagChapters()}`,
+    );
+  }
+  const watermark: PhaseWatermark = createWatermarkForJob();
 
   const send = (payload: unknown) => {
     broadcastToJob(job, payload);
@@ -1544,9 +1641,63 @@ async function runMainAnalyzerJob(
         console.warn('[analysis] series prior scan failed:', priorErr);
       }
     }
-    let stage1: Stage1Output;
-    let stage1ActualMs = 0;
+    /* Plan 88 follow-up — definite-assignment assertion. `stage1` is
+       set in both branches of the cache check (immediately for cache
+       hit; via `runPhase0Pool` await for cache miss). TypeScript can't
+       follow the assignment through the async closure, so we assert.
+       Any code path reading `stage1` runs AFTER `await Promise.all`
+       returns (or inside the cache-hit branch after assignment), so
+       the invariant holds. */
+    let stage1!: Stage1Output;
     const totalCastChapters = record.chapterHints.length;
+    /* Plan 88 follow-up — pipelined Phase 0/Phase 1 execution.
+       In pipelined mode (per-phase env vars set, not manual), Phase 1
+       workers dispatch against a rolling-roster snapshot taken when
+       the watermark releases their chapter (`awaitPhase1Dispatch`).
+       `phase1Stage1Ready` flips true once Phase 0b consolidation (or
+       a cache hit) has produced the finalised `stage1`. Before that,
+       `getPhase1Stage1Snapshot` falls back to `rosterSnapshotFn()`
+       which folds the rolling Phase-0 chapterCast into a fresh
+       structured-clone snapshot. */
+    let phase1Stage1Ready = false;
+    let rosterSnapshotFn: (() => CharacterOutput[]) | null = null;
+    const getPhase1Stage1Snapshot = (): Stage1Output => {
+      /* Final-roster path: cache hit OR Phase 0b consolidation completed.
+         Always preferred when available so chapters dispatching after
+         `markPhase0AllDone()` use the verified + sorted + colour-assigned
+         roster instead of the raw merged shape. */
+      if (phase1Stage1Ready) return stage1;
+      /* Pipelined mode: snapshot the rolling roster at dispatch time.
+         The mergeRosterChapter function keeps insertion order stable, so
+         two snapshots taken at the same watermark are deterministic. The
+         snapshot is structured-cloned so a later Phase 0 merge can't
+         retroactively mutate a Phase 1 worker's view. */
+      if (rosterSnapshotFn) {
+        return {
+          characters: structuredClone(rosterSnapshotFn()),
+          chapters: recordRef.chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        };
+      }
+      /* Should never reach here — watermark + cache shape pin the order.
+         Fall through to an empty roster so the inbox is still well-formed
+         (Phase 1 will produce all-narrator attributions for the chapter,
+         which the reconcile pass downstream demotes cleanly). */
+      return {
+        characters: [],
+        chapters: recordRef.chapterHints.map((c) => ({ id: c.id, title: c.title })),
+      };
+    };
+    /* Failure signalling from Phase 0 to Phase 1 and to the post-Promise.all
+       handler. When Phase 0 finishes with any chapters still in the failed
+       set, we set this so Phase 1 workers can bail without dispatching and
+       the outer code can emit the `cast_incomplete` SSE error. */
+    let phase0FailedCount = 0;
+    let stage1ActualMs = 0;
+    /* Plan 88 follow-up — Promise.all arm for Phase 0. Set in the
+       cache-miss branch (real work); stays `null` in the cache-hit
+       branch (nothing to do). The outer Promise.all below filters
+       null arms. */
+    let phase0PoolPromise: Promise<void> | null = null;
     /* Observed-pace trackers for Phase 0a — declared at the route scope so
        Phase 1's ETA projection can read them too. SUM-of-per-chapter ms,
        not wall-clock; for wall-clock-rate use phase0WallClockMs below.
@@ -1641,6 +1792,15 @@ async function runMainAnalyzerJob(
       }
       await persistDroppedQuotesBatch(recordRef.bookDir, manuscriptId, 'analysis-stream', verified);
       send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters) });
+      /* Plan 88 follow-up — cache hit: Phase 0 is already complete, so
+         the finalised stage1 is the canonical roster for any Phase 1
+         worker that asks for a snapshot. Flip the flag so
+         `getPhase1Stage1Snapshot` returns `stage1` directly without
+         consulting the (empty) rolling-roster fallback. Release any
+         Phase 1 waiters immediately — there's no Phase 0 work to
+         pipeline against. */
+      phase1Stage1Ready = true;
+      watermark.markPhase0AllDone();
     } else {
       /* Phase 0a — per-chapter cast detection. The chapterCast cache
          lets us resume mid-Phase-0a after a crash / rate-limit / model
@@ -1671,6 +1831,13 @@ async function runMainAnalyzerJob(
         }
         return r;
       };
+      /* Plan 88 follow-up — expose the rolling roster to the Phase 1
+         worker's `getPhase1Stage1Snapshot()` helper. Closes over
+         `chapterCast` so each Phase-1 dispatch sees whatever Phase 0
+         workers have folded in at that moment. The snapshot fn returns
+         a plain array (values()) — caller is responsible for the
+         structuredClone if it wants isolation. */
+      rosterSnapshotFn = (): CharacterOutput[] => Array.from(rebuildRoster().values());
       const emitCastUpdate = (): void => {
         const roster = rebuildRoster();
         /* Name-only fold so descriptor speakers ("The Jogger", "Drooly
@@ -1930,6 +2097,15 @@ async function runMainAnalyzerJob(
         chapterCast[ch.id] = result.characters;
         completedCast.add(i);
         cache.chapterCast = chapterCast;
+        /* Plan 88 — advance the Phase 0 watermark on each successful
+           per-chapter completion. The watermark is monotonic and
+           tolerates out-of-order completions (worker for chapter N+2
+           may finish before worker for chapter N). With the sequential
+           stub watermark (legacy / manual mode), this is a no-op. With
+           the real watermark (pipelined mode), it releases any parked
+           Phase 1 waiter whose chapter is within `LAG` of the new
+           value. */
+        watermark.markPhase0ChapterComplete(i);
         /* A previously-failed chapter just succeeded on resume — clear it
            from the durable failed-id list AND notify the live view so the
            Retry row disappears immediately, not just on the next book-state
@@ -2002,139 +2178,195 @@ async function runMainAnalyzerJob(
         sendCastLiveTick();
       }
 
-      /* Concurrency pool — same shape as the Phase 1 chapter pool.
-         Per-chapter failures are caught INSIDE runCastChapter (they
-         become non-fatal log events + a failedCastChapters entry), so
-         the only thing that should escape here is AnalysisAbortedError —
-         the SSE client disconnected, we should tear the whole pool down
-         and let the outer try/catch end the response cleanly. */
-      let nextCastTask = 0;
-      let castAborted = false;
-      const castWorkers: Promise<void>[] = [];
-      const launchNextCast = async (): Promise<void> => {
-        while (nextCastTask < castTaskIndices.length && !castAborted) {
-          const i = castTaskIndices[nextCastTask++];
+      /* Plan 88 follow-up — wrap the Phase 0 worker pool + Phase 0b
+         consolidation in a single async function so we can launch
+         Phase 1 concurrently below. In pipelined mode this is the
+         outer Promise.all arm; in sequential / cache modes the function
+         awaits the same way as before but Phase 1's `awaitPhase1Dispatch`
+         parks until `markPhase0AllDone()` fires inside this body. */
+      const runPhase0Pool = async (): Promise<void> => {
+        /* Concurrency pool — same shape as the Phase 1 chapter pool.
+           Per-chapter failures are caught INSIDE runCastChapter (they
+           become non-fatal log events + a failedCastChapters entry), so
+           the only thing that should escape here is AnalysisAbortedError —
+           the SSE client disconnected, we should tear the whole pool down
+           and let the outer try/catch end the response cleanly. */
+        let nextCastTask = 0;
+        let castAborted = false;
+        const castWorkers: Promise<void>[] = [];
+        const launchNextCast = async (): Promise<void> => {
+          while (nextCastTask < castTaskIndices.length && !castAborted) {
+            const i = castTaskIndices[nextCastTask++];
+            try {
+              await runCastChapter(i);
+            } catch (e) {
+              castInFlight.delete(i);
+              castAborted = true;
+              throw e;
+            }
+          }
+        };
+        for (let w = 0; w < Math.min(castConcurrency, castTaskIndices.length); w++) {
+          castWorkers.push(launchNextCast());
+        }
+        await Promise.all(castWorkers);
+
+        /* Phase 1+ MUST NOT advance while any chapter is missing its cast —
+           otherwise attribution / voice matching run against a partial
+           roster and the user gets a degraded book without ever being
+           asked to retry. Stop here, leave cache.stage1 unset so the
+           next /analysis/stream re-enters Phase 0a's resume path
+           (failedChapterIds is re-queued automatically), and surface a
+           `cast_incomplete` error code the analysing view treats as
+           "paused, awaiting retry" rather than a fatal error.
+           Per-chapter failure markers (cache.chapterCast[id]=[] and
+           cache.failedChapterIds) are already on disk via the per-failure
+           write at the catch site above.
+           In the pipelined refactor the early return moved out — we
+           record the failed count via `phase0FailedCount` and let the
+           outer Promise.all settle (Phase 1 workers exit cleanly via
+           the same flag check after `awaitPhase1Dispatch`). The
+           outer post-Promise.all code emits the SSE `cast_incomplete`
+           error and returns. We still mark Phase 0 all-done so any
+           Phase 1 workers parked on the watermark release cleanly
+           instead of deadlocking. */
+        if (failedCastChapters.size > 0) {
+          const failedCount = failedCastChapters.size;
+          phase0FailedCount = failedCount;
+          log(
+            0,
+            `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? '' : 's'} still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.`,
+          );
+          send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
+          /* Release any parked Phase 1 waiters so they can observe
+             `phase0FailedCount > 0` and short-circuit out of dispatch.
+             Without this they'd hang forever waiting on the watermark. */
+          watermark.markPhase0AllDone();
+          return;
+        }
+
+        /* ── Phase 0b — finalise the roster.
+           Replay merge once more in chapter-id order (canonical), then
+           sort+verify+colour. Always include 'narrator' so downstream
+           (stage-2 attribution, voice picker) can rely on its presence. */
+        const finalRoster = rebuildRoster();
+        const rawCharacters = Array.from(finalRoster.values());
+        sortEvidence(rawCharacters);
+        const verified = verifyEvidenceAgainstSource(rawCharacters, record.sourceText, (msg) =>
+          log(0, msg),
+        );
+        const characters = dropEvidencelessCast(rawCharacters, (msg) => log(0, msg));
+        stage1 = {
+          characters,
+          /* Carry the parser's chapter list verbatim — Phase 0a deliberately
+             doesn't return a chapters[] field, and stage 2's prompt /
+             merging downstream both work off the same list. */
+          chapters: recordRef.chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        };
+        /* Plan 88 follow-up — Phase 0b consolidation produced the final
+           roster. Flip `phase1Stage1Ready` BEFORE `markPhase0AllDone()`
+           so any Phase 1 waiter released by the watermark sees the
+           finalised roster instead of falling back to the rolling
+           snapshot. */
+        phase1Stage1Ready = true;
+        cache.stage1 = stage1;
+        await saveAnalysisCache(manuscriptId, cache);
+        await persistDroppedQuotesBatch(
+          recordRef.bookDir,
+          manuscriptId,
+          'analysis-stream',
+          verified,
+        );
+        stage1ActualMs = Date.now() - stage0Start;
+        send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters) });
+        /* Cast.json reflects the verified Phase 0b state before Phase 1's
+           attribution pass starts (which can be the longest phase by far
+           on a long book). We apply the name-only fold here too — the
+           live SSE just emitted the same shape, and the user's mental
+           model of "this is what we detected" needs to line up between
+           the streaming view and `.audiobook/cast.json` on disk.
+           stage1.characters itself stays un-folded for stage-2 attribution
+           — the descriptor names need to survive into the stage-2 prompt
+           so the model can map dialogue to them. The post-Phase-1 fold
+           later overwrites this file with the authoritative counts.
+           No clientGone gate: with sticky analysis the run survives
+           navigation, so the on-disk state stays in lockstep with the
+           broadcast events regardless of subscriber count. */
+        if (recordRef.bookDir) {
           try {
-            await runCastChapter(i);
-          } catch (e) {
-            castInFlight.delete(i);
-            castAborted = true;
-            throw e;
+            const stage1Cast = attachLinesAndScenes(
+              assignPaletteColors(previewFoldForLiveView(stage1.characters)),
+              [],
+            );
+            await writeJsonAtomic(castJsonPath(recordRef.bookDir), { characters: stage1Cast });
+          } catch (persistErr) {
+            console.warn('[analysis] stage1 cast.json write failed', persistErr);
           }
         }
-      };
-      for (let w = 0; w < Math.min(castConcurrency, castTaskIndices.length); w++) {
-        castWorkers.push(launchNextCast());
-      }
-      await Promise.all(castWorkers);
-
-      /* Phase 1+ MUST NOT advance while any chapter is missing its cast —
-         otherwise attribution / voice matching run against a partial
-         roster and the user gets a degraded book without ever being
-         asked to retry. Stop here, leave cache.stage1 unset so the
-         next /analysis/stream re-enters Phase 0a's resume path
-         (failedChapterIds is re-queued automatically), and surface a
-         `cast_incomplete` error code the analysing view treats as
-         "paused, awaiting retry" rather than a fatal error.
-         Per-chapter failure markers (cache.chapterCast[id]=[] and
-         cache.failedChapterIds) are already on disk via the per-failure
-         write at the catch site above. */
-      if (failedCastChapters.size > 0) {
-        const failedCount = failedCastChapters.size;
-        log(
-          0,
-          `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? '' : 's'} still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.`,
-        );
-        send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
-        endJob(job, {
-          kind: 'error',
-          code: 'cast_incomplete',
-          message: `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? '' : 's'} failed cast detection. Retry below to continue.`,
-        });
-        return;
-      }
-
-      /* ── Phase 0b — finalise the roster.
-         Replay merge once more in chapter-id order (canonical), then
-         sort+verify+colour. Always include 'narrator' so downstream
-         (stage-2 attribution, voice picker) can rely on its presence. */
-      const finalRoster = rebuildRoster();
-      const rawCharacters = Array.from(finalRoster.values());
-      sortEvidence(rawCharacters);
-      const verified = verifyEvidenceAgainstSource(rawCharacters, record.sourceText, (msg) =>
-        log(0, msg),
-      );
-      const characters = dropEvidencelessCast(rawCharacters, (msg) => log(0, msg));
-      stage1 = {
-        characters,
-        /* Carry the parser's chapter list verbatim — Phase 0a deliberately
-           doesn't return a chapters[] field, and stage 2's prompt /
-           merging downstream both work off the same list. */
-        chapters: recordRef.chapterHints.map((c) => ({ id: c.id, title: c.title })),
-      };
-      cache.stage1 = stage1;
-      await saveAnalysisCache(manuscriptId, cache);
-      await persistDroppedQuotesBatch(recordRef.bookDir, manuscriptId, 'analysis-stream', verified);
-      stage1ActualMs = Date.now() - stage0Start;
-      send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters) });
-      /* Cast.json reflects the verified Phase 0b state before Phase 1's
-         attribution pass starts (which can be the longest phase by far
-         on a long book). We apply the name-only fold here too — the
-         live SSE just emitted the same shape, and the user's mental
-         model of "this is what we detected" needs to line up between
-         the streaming view and `.audiobook/cast.json` on disk.
-         stage1.characters itself stays un-folded for stage-2 attribution
-         — the descriptor names need to survive into the stage-2 prompt
-         so the model can map dialogue to them. The post-Phase-1 fold
-         later overwrites this file with the authoritative counts.
-         No clientGone gate: with sticky analysis the run survives
-         navigation, so the on-disk state stays in lockstep with the
-         broadcast events regardless of subscriber count. */
-      if (recordRef.bookDir) {
-        try {
-          const stage1Cast = attachLinesAndScenes(
-            assignPaletteColors(previewFoldForLiveView(stage1.characters)),
-            [],
+        /* Use the observed rate to refine stage 2's estimate. Stage 2
+           prompt is a similar size to stage 1 plus the small character
+           roster, but its output is much larger (one JSON entry per
+           sentence), hence the stretch factor. Moved inside Phase 0
+           as part of the pipelining refactor so the "Detected N
+           characters" log fires when Phase 0b actually finishes — in
+           pipelined mode this can land WHILE Phase 1 chapters are
+           already running concurrently, which is the user-visible
+           signal that pipelining is engaged. */
+        if (stage1ActualMs > 0) {
+          stage2EstMs = clampEst(stage1ActualMs * STAGE2_STRETCH);
+          log(
+            0,
+            `Detected ${stage1.characters.length} character${stage1.characters.length === 1 ? '' : 's'}: ${stage1.characters.map((c) => c.name).join(', ')}`,
           );
-          await writeJsonAtomic(castJsonPath(recordRef.bookDir), { characters: stage1Cast });
-        } catch (persistErr) {
-          console.warn('[analysis] stage1 cast.json write failed', persistErr);
+          /* Report the *parser*'s chapter count — that's what stage 2
+             actually iterates. The analyzer's own count can occasionally
+             collapse on flaky models even though the chapter list was
+             provided verbatim in the inbox; the parser is the
+             operational source of truth. */
+          const parserChapterCount = record.chapterHints.length;
+          log(
+            0,
+            `${parserChapterCount} chapter${parserChapterCount === 1 ? '' : 's'} identified in ${humanSeconds(stage1ActualMs)}`,
+          );
         }
-      }
+        send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
+        /* Plan 88 — Phase 0b consolidation has produced the final roster
+           (`stage1.characters` above). Release any remaining Phase 1
+           waiters parked on the back-pressure semaphore — they'll dispatch
+           against the final roster regardless of where Gemma's watermark
+           was when they queued. With the sequential stub watermark this is
+           the trigger that lets Phase 1 begin at all. */
+        watermark.markPhase0AllDone();
+      };
+      /* Defer the await — Phase 1 is launched concurrently below and
+         the outer Promise.all joins both pools. In sequential mode
+         (no per-phase env vars / manual) Phase 1 workers all park on
+         `awaitPhase1Dispatch` until `markPhase0AllDone()` fires inside
+         this function, so observable behaviour matches today's strict
+         phase gate. In pipelined mode, Phase 1 dispatches as Phase 0
+         chapters complete (subject to the LAG semaphore). */
+      phase0PoolPromise = runPhase0Pool();
     }
-    /* Use the observed rate to refine stage 2's estimate. Stage 2 prompt is
-       a similar size to stage 1 plus the small character roster, but its
-       output is much larger (one JSON entry per sentence), hence the
-       stretch factor. */
-    if (stage1ActualMs > 0) {
-      stage2EstMs = clampEst(stage1ActualMs * STAGE2_STRETCH);
-      log(
-        0,
-        `Detected ${stage1.characters.length} character${stage1.characters.length === 1 ? '' : 's'}: ${stage1.characters.map((c) => c.name).join(', ')}`,
-      );
-      /* Report the *parser*'s chapter count — that's what stage 2 actually
-         iterates. The analyzer's own count can occasionally collapse on
-         flaky models even though the chapter list was provided verbatim in
-         the inbox; the parser is the operational source of truth. */
-      const parserChapterCount = record.chapterHints.length;
-      log(
-        0,
-        `${parserChapterCount} chapter${parserChapterCount === 1 ? '' : 's'} identified in ${humanSeconds(stage1ActualMs)}`,
-      );
-    }
-    send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
 
     /* ── Phase 1: parsing and attribution (handoff stage 2, per chapter).
        We split stage 2 by chapter so each call fits well inside the model's
        context window and free-tier rate limits can recover between calls.
        Overall progress is (chapters_done + current_chapter_local_progress) /
-       total_chapters. */
+       total_chapters.
+       Plan 88 follow-up — Phase 1 setup happens UNCONDITIONALLY here,
+       and the worker pool runs concurrently with Phase 0 (in
+       cache-miss / pipelined mode). Each worker calls
+       `watermark.awaitPhase1Dispatch(i)` before dispatching, which in
+       sequential mode parks until Phase 0b consolidation fires
+       `markPhase0AllDone()` (today's hard phase gate, preserved) and in
+       pipelined mode parks until Phase 0 chapter `i + LAG` completes
+       (the new back-pressure semaphore). */
     markPhase(1);
     send({ kind: 'phase', phaseId: 1, progress: 0.02, label: PHASES[1].label });
     const totalChapters = record.chapterHints.length;
     log(
       1,
-      `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${analyzerLabel}, one at a time…`,
+      `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${phase1AnalyzerLabel}, one at a time…`,
     );
     log(1, `Estimated stage time: ~${humanSeconds(stage2EstMs)} (based on stage 1 rate)`);
     if (cachedChapterCount > 0) {
@@ -2292,6 +2524,37 @@ async function runMainAnalyzerJob(
 
     async function runChapter(i: number): Promise<void> {
       const ch = recordRef.chapterHints[i];
+      /* Plan 88 — back-pressure semaphore.
+         In sequential mode this resolves once `markPhase0AllDone()`
+         fires inside `runPhase0Pool` (today's hard phase gate). In
+         pipelined mode (per-phase env vars set) it blocks until Phase
+         0's watermark has advanced to `i + ANALYZER_PHASE1_MIN_LAG_CHAPTERS`,
+         OR Phase 0b consolidation has signalled all-done — whichever
+         comes first. If Gemini ever catches up to within `LAG` of
+         Gemma's watermark, this is where the user's "keep 10 chapters
+         between them" rule enforces a wait. */
+      const dispatchWaitStart = Date.now();
+      await watermark.awaitPhase1Dispatch(i);
+      /* Plan 88 follow-up — if Phase 0 finished with failed cast
+         chapters, `runPhase0Pool` set `phase0FailedCount` and called
+         `markPhase0AllDone` to release us. Exit cleanly without
+         dispatching the Phase 1 call — the outer post-Promise.all
+         handler emits the `cast_incomplete` SSE error. Returning
+         here also keeps the worker pool's normal early-termination
+         path intact (no thrown error, no `aborted = true`). */
+      if (phase0FailedCount > 0) return;
+      const dispatchWaitMs = Date.now() - dispatchWaitStart;
+      if (dispatchWaitMs > 250) {
+        /* Surface the back-pressure wait so the user can tell Gemini
+           is being deliberately throttled to preserve roster context
+           (rather than mistaking the pause for a stalled model). The
+           >250ms guard avoids spamming logs with sub-second microtask
+           hops in the sequential path. */
+        log(
+          1,
+          `Chapter ${i + 1}/${totalChapters} — held back ${humanSeconds(dispatchWaitMs)} to preserve ${readPhase1MinLagChapters()}-chapter roster lag.`,
+        );
+      }
       const chapterEstMs = chapterEstMsFor(ch.body.length);
       const loggedOverages = new Set<number>();
       const loggedHeartbeats = new Set<number>();
@@ -2339,13 +2602,27 @@ async function runMainAnalyzerJob(
 
       log(
         1,
-        `Chapter ${i + 1}/${totalChapters} — ${ch.title} (${ch.body.length.toLocaleString()} chars, ~${humanSeconds(chapterEstMs)}) via ${analyzerLabel}…`,
+        `Chapter ${i + 1}/${totalChapters} — ${ch.title} (${ch.body.length.toLocaleString()} chars, ~${humanSeconds(chapterEstMs)}) via ${phase1AnalyzerLabel}…`,
       );
       let chapterLastHeartbeatAt = 0;
-      const result = await analyzer.runStage2Chapter(
+      /* Plan 88 — Phase 1 attribution runs on `phase1Analyzer`.
+         In pipelined mode this is a separate model (e.g. Gemini Flash
+         while Phase 0 used Gemma); in legacy / manual mode it's the
+         same instance as `analyzer` so behaviour is unchanged. The
+         throttle event carries the Phase-1 model id so the UI can
+         label the rate-limit pause correctly. */
+      /* Plan 88 follow-up — Phase 1 reads its stage1 snapshot via
+         `getPhase1Stage1Snapshot()` at dispatch time. In pipelined mode
+         this returns a structured-clone of the rolling roster (whatever
+         Phase 0 chapters have folded so far); in sequential / cache
+         modes it returns the finalised `stage1`. The watermark guarantees
+         we never call this with a roster that lags Phase 0 by less than
+         `MIN_LAG_CHAPTERS`. */
+      const phase1Stage1 = getPhase1Stage1Snapshot();
+      const result = await phase1Analyzer.runStage2Chapter(
         manuscriptId,
         ch.id,
-        buildStage2ChapterInbox(manuscriptId, recordRef.title, stage1, ch),
+        buildStage2ChapterInbox(manuscriptId, recordRef.title, phase1Stage1, ch),
         {
           signal: abortController.signal,
           onWaiting: (elapsed) => tickOverall(elapsed),
@@ -2373,7 +2650,7 @@ async function runMainAnalyzerJob(
               kind: 'throttle',
               phaseId: 1,
               chapterIndex: i + 1,
-              model: activeModelId,
+              model: phase1ModelId,
               waitMs,
               reason,
             });
@@ -2451,29 +2728,59 @@ async function runMainAnalyzerJob(
       sendLiveTick();
     }
 
-    /* Concurrency pool — keep up to `concurrency` chapters in flight at a
-       time. The first failure aborts new task dispatch, but already-running
-       tasks finish their work and write to the cache, so a resume picks up
-       cleanly from where the run left off. */
-    let nextTask = 0;
-    let aborted = false;
-    const workers: Promise<void>[] = [];
-    const launchNext = async (): Promise<void> => {
-      while (nextTask < taskIndices.length && !aborted) {
-        const i = taskIndices[nextTask++];
-        try {
-          await runChapter(i);
-        } catch (e) {
-          inFlight.delete(i);
-          aborted = true;
-          throw e;
+    /* Plan 88 follow-up — wrap the Phase 1 worker pool in an async
+       function so it can run concurrently with `runPhase0Pool` via
+       Promise.all below. The pool's internal shape is unchanged; only
+       the outer await moved. */
+    const runPhase1Pool = async (): Promise<void> => {
+      /* Concurrency pool — keep up to `concurrency` chapters in flight at
+         a time. The first failure aborts new task dispatch, but already-
+         running tasks finish their work and write to the cache, so a
+         resume picks up cleanly from where the run left off. */
+      let nextTask = 0;
+      let aborted = false;
+      const workers: Promise<void>[] = [];
+      const launchNext = async (): Promise<void> => {
+        while (nextTask < taskIndices.length && !aborted) {
+          const i = taskIndices[nextTask++];
+          try {
+            await runChapter(i);
+          } catch (e) {
+            inFlight.delete(i);
+            aborted = true;
+            throw e;
+          }
         }
+      };
+      for (let w = 0; w < Math.min(concurrency, taskIndices.length); w++) {
+        workers.push(launchNext());
       }
+      await Promise.all(workers);
     };
-    for (let w = 0; w < Math.min(concurrency, taskIndices.length); w++) {
-      workers.push(launchNext());
+
+    /* Plan 88 follow-up — Phase 0 and Phase 1 pools run concurrently in
+       pipelined mode. In sequential / cache modes the Phase 1 pool's
+       per-worker `awaitPhase1Dispatch` parks until Phase 0b fires
+       `markPhase0AllDone()`, so the observable behaviour matches today's
+       hard phase gate. `phase0PoolPromise` is null in the cache-hit
+       branch (no Phase 0 work). */
+    const armsToJoin: Promise<void>[] = [runPhase1Pool()];
+    if (phase0PoolPromise) armsToJoin.push(phase0PoolPromise);
+    await Promise.all(armsToJoin);
+
+    /* Plan 88 follow-up — Phase 0 ended with failed cast chapters; emit
+       the `cast_incomplete` SSE error and bail. Phase 1 workers exited
+       cleanly via the in-flight `phase0FailedCount` check above (they
+       were released by `markPhase0AllDone` inside the Phase 0 failure
+       branch). */
+    if (phase0FailedCount > 0) {
+      endJob(job, {
+        kind: 'error',
+        code: 'cast_incomplete',
+        message: `Phase 0 paused — ${phase0FailedCount} chapter${phase0FailedCount === 1 ? '' : 's'} failed cast detection. Retry below to continue.`,
+      });
+      return;
     }
-    await Promise.all(workers);
 
     /* Stitch the per-chapter results into narrative order. */
     for (const ch of record.chapterHints) {
