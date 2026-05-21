@@ -67,6 +67,30 @@ export interface ChapterSegment {
   startSec: number;
   /** Exclusive end time in the chapter audio, in seconds. */
   endSec: number;
+  /** Discriminator for synthetic segments that aren't backed by a manuscript
+      sentence. `'title'` marks the narrator-voiced chapter-title beat
+      prepended to each chapter (see CHAPTER_LEAD_SILENCE_SEC below). Body
+      sentences leave this field undefined so the on-disk segments.json
+      shape stays backwards-compatible with pre-title chapters. */
+  kind?: 'title';
+}
+
+/** Silence padding bookending the spoken chapter-title narration. Each chapter
+    MP3 now opens with `[lead silence] + [narrator: title] + [post silence] +
+    [body sentences]`. Defaults match standard audiobook chapter breaks —
+    3.0 s of total padding is enough for the listener to register the
+    boundary without dragging. Tuned together with the documented invariant
+    in `docs/features/28-chapter-audio-format.md`; adjust both at once. */
+const CHAPTER_LEAD_SILENCE_SEC = 1.5;
+const CHAPTER_POST_TITLE_SILENCE_SEC = 1.5;
+
+/** Build a zero-filled mono 16-bit LE PCM buffer of the requested duration.
+    Matches the per-chapter PCM contract — same byte layout as what the TTS
+    providers return, so the rest of the synth pipeline (concat, encode,
+    loudnorm) treats it identically to spoken audio. */
+function buildSilencePcm16(sampleRate: number, seconds: number): Buffer {
+  const samples = Math.round(sampleRate * seconds);
+  return Buffer.alloc(samples * 2);
 }
 
 export interface ChapterSynthesisResult {
@@ -119,6 +143,33 @@ export interface SynthesiseChapterOpts {
       the per-bookId server mutex to stop a stale generation handler when a
       new POST arrives for the same book. */
   signal?: AbortSignal;
+  /** Pre-built spoken phrase for the chapter title (e.g. `"Chapter 2.
+      Moolark."`). Built by `buildChapterTitleNarration` in
+      `chapter-title-narration.ts` from `chapter.id` + parsed `chapter.title`.
+      When non-empty, the synth loop prepends
+      `[CHAPTER_LEAD_SILENCE_SEC of silence] + [narrator voicing this string]
+      + [CHAPTER_POST_TITLE_SILENCE_SEC of silence]` ahead of the body
+      sentences. The title's TTS response anchors the chapter's sample rate
+      (same rule the first body group used before this feature). Undefined or
+      blank skips the title beat AND the silence padding — legacy behaviour
+      for callers that don't opt in. */
+  chapterTitleNarration?: string;
+  /** Cast id used to look up the voice for the chapter-title narration.
+      Defaults to `'narrator'`, the special-cased narrator character
+      (`src/views/listen.tsx:139`). The picker falls through to a
+      narrator-voice bucket when the character has no gender / age / tone
+      hints, which is the correct routing for the title regardless of
+      whether the cast actually contains a `'narrator'` row. */
+  narratorCharacterId?: string;
+  /** Tick BEFORE the chapter-title TTS call begins. Lets the SSE route emit
+      a "Synthesising chapter title…" hint so the client's stall detector
+      doesn't fire while the (potentially multi-second) title synth runs.
+      Mirrors `onGroupStart` for body groups. */
+  onTitleStart?: () => void;
+  /** Tick AFTER the chapter-title TTS call completes. The accumulated
+      duration is the audio time at the end of the title segment (i.e. the
+      moment the post-title silence begins). */
+  onTitleComplete?: (e: { accumulatedSec: number }) => void;
 }
 
 /** One group per sentence. Plan 70d — earlier code folded consecutive
@@ -194,6 +245,10 @@ export async function synthesiseChapter(
     onGroupComplete,
     onGroupRetry,
     signal,
+    chapterTitleNarration,
+    narratorCharacterId = 'narrator',
+    onTitleStart,
+    onTitleComplete,
   } = opts;
 
   const castById = new Map(cast.map((c) => [c.id, c]));
@@ -203,6 +258,67 @@ export async function synthesiseChapter(
   const segments: ChapterSegment[] = [];
   let runningBytes = 0;
   let sampleRate = 24000; // first call sets this; default matches Gemini's documented rate.
+
+  /* Title beat: when the caller supplies a pre-built spoken phrase, prepend
+     `[lead silence] + [narrator voicing the title] + [post silence]` ahead
+     of the body groups. The title's TTS response anchors the chapter's
+     sample rate, so the silence buffers can be sized correctly without
+     guessing — we synth the title first, set the anchor from its response,
+     then bracket it with silence. The title contributes one synthetic
+     segment with `kind: 'title'` and an empty sentenceIds[]; the silence
+     padding is deliberately NOT recorded as segments (it's not narration,
+     it's structural padding, and the listen view's timeline shouldn't show
+     dead-air rows). */
+  const titleText = chapterTitleNarration?.trim();
+  if (titleText) {
+    if (signal?.aborted) {
+      throw new DOMException('synthesiseChapter aborted', 'AbortError');
+    }
+    const narratorChar =
+      castById.get(narratorCharacterId) ?? { id: narratorCharacterId, name: 'Narrator' };
+    const narratorVoice = pickVoiceForEngine(
+      engine,
+      toVoiceLike(narratorChar),
+      buildHintFromCast(narratorChar),
+    );
+
+    onTitleStart?.();
+
+    const titleResult = await withTtsRetry(
+      () =>
+        provider.synthesize({
+          text: normaliseForTts(titleText),
+          voiceName: narratorVoice,
+          modelKey,
+          signal,
+        }),
+      { signal },
+    );
+
+    sampleRate = titleResult.sampleRate;
+    const leadSilence = buildSilencePcm16(sampleRate, CHAPTER_LEAD_SILENCE_SEC);
+    const postSilence = buildSilencePcm16(sampleRate, CHAPTER_POST_TITLE_SILENCE_SEC);
+
+    chunks.push(leadSilence);
+    runningBytes += leadSilence.length;
+    const titleStartSec = pcmDurationSec(runningBytes, sampleRate);
+    chunks.push(titleResult.pcm);
+    runningBytes += titleResult.pcm.length;
+    const titleEndSec = pcmDurationSec(runningBytes, sampleRate);
+    chunks.push(postSilence);
+    runningBytes += postSilence.length;
+
+    segments.push({
+      groupIndex: -1,
+      characterId: narratorChar.id,
+      sentenceIds: [],
+      startSec: titleStartSec,
+      endSec: titleEndSec,
+      kind: 'title',
+    });
+
+    onTitleComplete?.({ accumulatedSec: titleEndSec });
+  }
 
   for (const group of groups) {
     /* Cheap abort check between groups — covers the common case where the
