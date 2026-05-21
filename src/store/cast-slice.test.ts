@@ -315,6 +315,45 @@ describe('castSlice — applyMerge (manual character merge response)', () => {
   });
 });
 
+describe('castSlice — addCharacter (POST /cast/add-from-roster response)', () => {
+  it('appends a new character to the slice with matchedFrom + voiceId preserved', () => {
+    const start = baseState([makeChar('narrator'), makeChar('sophie')]);
+    const incoming: Character = {
+      id: 'councillor-alina_from_kotlc',
+      name: 'Councillor Alina',
+      role: 'character',
+      color: 'unset',
+      gender: 'female',
+      ageRange: 'adult',
+      voiceId: 'v_alina',
+      voiceState: 'reused',
+      matchedFrom: {
+        bookId: 'kotlc-1',
+        characterId: 'councillor-alina',
+        bookTitle: 'Keeper of the Lost Cities',
+        confidence: 1,
+      },
+    };
+    const next = castSlice.reducer(start, castActions.addCharacter(incoming));
+    expect(next.characters).toHaveLength(3);
+    expect(next.characters[2]).toEqual(incoming);
+  });
+
+  it('is idempotent when an entry with the same id already exists', () => {
+    const existing: Character = {
+      id: 'alina_local',
+      name: 'Councillor Alina',
+      role: 'character',
+      color: 'unset',
+      voiceState: 'reused',
+    };
+    const start = baseState([makeChar('narrator'), existing]);
+    const next = castSlice.reducer(start, castActions.addCharacter(existing));
+    expect(next.characters).toHaveLength(2);
+    expect(next.characters[1]).toEqual(existing);
+  });
+});
+
 describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () => {
   it('writes matchedFrom + voiceId + reused state on the targeted character', () => {
     const start = baseState([

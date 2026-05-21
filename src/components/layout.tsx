@@ -74,6 +74,13 @@ export interface LayoutContext {
      into a single timer-bumped toast. */
   pushToast: (args: { kind: 'error' | 'warn' | 'info'; message: string; dedupeKey?: string }) => void;
   ttsLifecycle: TtsLifecycle;
+  /* Prior-series roster for the currently-open book. Lazily fetched
+     once per book — empty array until the fetch lands or if the book
+     is a standalone / has no prior series-mates. Consumers (today:
+     ProfileDrawer manual-link optgroup, ManuscriptView reassign
+     picker) read this without spinning up their own /series-roster
+     poll. */
+  priorRoster: SeriesRosterEntry[];
 }
 
 export function Layout() {
@@ -184,17 +191,18 @@ export function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* Prior-series roster cache, keyed by source bookId. Lazily fetched the
-     first time the user opens the profile drawer for a given book so
-     the manual continuity-link picker (ProfileDrawer's "From prior books
-     in this series" optgroup) has data to render. Cached so reopening
-     the drawer within the same book doesn't refetch.
+  /* Prior-series roster cache, keyed by source bookId. Fetched the
+     first time we know there's an open book — feeds both the
+     ProfileDrawer's "From prior books in this series" optgroup AND
+     the manuscript-view reassign picker (so both surfaces share one
+     /series-roster round-trip per book). Cached so subsequent surface
+     opens within the same book don't refetch.
      Errors are stored as empty arrays so a failing fetch doesn't loop. */
   const [priorRosterByBook, setPriorRosterByBook] = useState<Map<string, SeriesRosterEntry[]>>(
     new Map(),
   );
   useEffect(() => {
-    if (!openProfileId || !bookId) return;
+    if (!bookId) return;
     if (priorRosterByBook.has(bookId)) return;
     let cancelled = false;
     void api
@@ -211,7 +219,7 @@ export function Layout() {
     return () => {
       cancelled = true;
     };
-  }, [openProfileId, bookId, priorRosterByBook]);
+  }, [bookId, priorRosterByBook]);
 
   /* Library hydration — fetch the on-disk workspace whenever the user
      returns to the books stage, and once at mount. */
@@ -623,7 +631,8 @@ export function Layout() {
      hydrate, OS scheme flip). Return value unused at this layer —
      the paint surface is CSS, not React. */
   useTheme();
-  const ctx: LayoutContext = { showInfo, showError, pushToast, ttsLifecycle };
+  const priorRoster = bookId ? (priorRosterByBook.get(bookId) ?? []) : [];
+  const ctx: LayoutContext = { showInfo, showError, pushToast, ttsLifecycle, priorRoster };
 
   /* Reverse local-analyzer guard for the regenerate modals (D2 in
      plan 32). The modals' onConfirm callbacks all dispatch a

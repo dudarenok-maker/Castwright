@@ -386,16 +386,14 @@ describe('ManuscriptView — cross-chapter reassign isolation', () => {
     await user.click(screen.getByText('Chapter two opening line.'));
     expect(screen.getByText('Reassign whole segment to')).toBeInTheDocument();
 
-    /* Click the Eliza chip in the "Reassign whole segment to" list. The
-       inspector lists every cast member; Eliza appears once in the list
-       and once in the sidebar (Detected), so use getAllByText and click
-       the inspector copy (last in DOM order under the inspector card). */
-    const elizaButtons = screen.getAllByRole('button', { name: /Eliza/ });
-    /* The inspector copy is inside the inspector card — its parent button
-       has the role and contains the colour dot + name. Pick the last one
-       because the inspector card renders below the sidebar card in DOM
-       order. */
-    await user.click(elizaButtons[elizaButtons.length - 1]);
+    /* The inspector renders the current speaker as a "Change…" button.
+       Click it to open the CharacterSearchPicker, then click the Eliza
+       row inside the picker's listbox. Eliza also appears in the sidebar
+       Detected card, so scope the click to the listbox role. */
+    await user.click(screen.getByText(/Change…/));
+    const picker = screen.getByRole('dialog', { name: /reassign speaker/i });
+    const elizaOption = within(picker).getByRole('option', { name: /Eliza/ });
+    await user.click(elizaOption);
 
     /* Store assertion is the regression contract. Chapter 2's sentence
        reassigned; chapter 1's same-id sentence untouched. */

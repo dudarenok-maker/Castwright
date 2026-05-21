@@ -63,6 +63,11 @@ vi.mock('../lib/api', () => ({
        'ready' here so it shouldn't trigger, but keep a stub so any
        drift in that guard doesn't crash the test. */
     matchVoices: vi.fn(async () => ({ matches: [] })),
+    /* Plan 90 — Layout fetches the series roster on bookId change so
+       the manuscript-view reassign picker has roster entries to surface.
+       Return empty so the effect's catch path doesn't fire and these
+       tests stay focused on per-book hydration. */
+    getSeriesRoster: vi.fn(async () => ({ characters: [] })),
   },
   AnalysisError: class extends Error {},
   ExportIncompleteError: class extends Error {
