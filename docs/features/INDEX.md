@@ -90,6 +90,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 ### H. Playback & listen
 
 - [19 — Listener preview](19-preview-listener.md) — Listener-POV full-screen preview.
+- [82 — Export queue Retry + Download row actions](82-export-queue-retry-download.md) — Failed rows surface a wired Retry button (re-fires `POST /api/books/:bookId/exports` with the same wire params); done rows without a signed URL surface a Download button (streams `/api/books/:bookId/exports/:exportId/download`). New `retryExport` thunk in `src/store/exports-middleware.ts`; new wire-context fields on `ExportQueueItem`. Closes plan 18's last two "Coming soon" stubs.
 - [47 — Listening progress / resume bookmarks](archive/47-listen-progress.md) — Per-book sibling `listen-progress.json`; mini-player seeks to the saved point on chapter mount; Listen view "Resume at MM:SS" pill. Shipped 2026-05-18.
 - [69 — Share a 30-second chapter clip](archive/69-share-chapter-clip.md) — Per-chapter "Share clip" affordance in the listen view's player region; modal-driven start/end picker (default ±15 s around playhead, max 60 s); server slices via `ffmpeg -ss -i -t -c copy` (no re-encode). Shipped 2026-05-19.
 - [32 — Audiobook export](32-audiobook-export.md) — Sideload to PocketBook Reader (Phase A: MP3.ZIP) via LAN download or sync folder; per-chapter ID3v2.4 tags, no re-encode, atomic writes.

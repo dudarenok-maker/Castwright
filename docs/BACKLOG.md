@@ -75,17 +75,7 @@ Source: net-new (2026-05-19). Spun off from the drift-report-fidelity work — t
 - _Key files:_ `src/components/layout.tsx` (poller `useEffect`); maybe a new `src/store/revisions-poll-middleware.ts` if the cross-book scheduling outgrows the inline useEffect; `docs/features/35-engine-drift-detection.md` "Modal fidelity contract" invariant (e).
 - _Benefit (user):_ honours the concurrent-multibook invariant for drift. Today a user analysing Book A + generating Book B has to navigate between them to see fresh drift events for each.
 
-### 3. Export queue Retry + Download row actions
-
-Source: plan 18 follow-up (2026-05-18). Deferred from plan 18a — needs middleware integration to re-fire a failed export, which is bigger than a row-handler wiring.
-
-- _What:_ The Listen view's Export queue surfaces Retry (on `failed` rows) and Download (on `done` rows without a URL) as wired buttons. Retry re-fires the original `POST /api/books/:bookId/export` with the same payload via a middleware action that reads the job's recorded `format`/`destination`/`syncPath`. Download triggers a `GET /api/exports/:exportId/download` redirect (or a `window.location.assign(item.url)` when the job already carries `downloadUrl`).
-- _Acceptance:_ Click Retry on a failed row → a new export job appears with the same parameters and the failed row is dismissed. Click Download on a done-with-URL row → file downloads. Vitest covers the middleware re-fire path; e2e covers the visible buttons.
-- _Key files:_ `src/views/listen.tsx` (ExportQueue handlers); `src/store/exports-middleware.ts` (extend with `retryExport` thunk); `server/src/routes/exports.ts` (add `/exports/:exportId/download` redirect if needed).
-- _Depends on:_ download-tile endpoints live (today's listener-app handoff stubs land their own download URLs).
-- _Benefit (user):_ closes the remaining "Coming soon" stubs in the queue rail. Today copy + remove work (shipped in plan 18a); retry + download are the other two row actions promised by the design.
-
-### 4. Per-segment regen consumer for `revisions.acceptedSelections`
+### 3. Per-segment regen consumer for `revisions.acceptedSelections`
 
 Source: plan 20 close-out (2026-05-18). The `revisions.acceptedSelections` map is persisted by `revisionsActions.acceptRevision` but no in-app code reads it back — per-segment splicing of accepted takes was explicitly "Out of scope" for plan 20 v1, and remains so in the v1 close-out.
 
