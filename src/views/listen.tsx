@@ -6,7 +6,7 @@ import { ShareLinkModal } from '../modals/share-link';
 import { parseDuration } from '../lib/time';
 import { EXPORT_QUEUE } from '../data/export-queue';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useAppDispatch, useAppSelectorShallow } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { listenProgressActions } from '../store/listen-progress-slice';
 import { api } from '../lib/api';
@@ -118,8 +118,11 @@ export function ListenView({
 
   /* Live job list from the store, with the visual fixtures as a fallback
      so design-system mode (VITE_USE_MOCKS=true with no live exports) keeps
-     showing the demo content the prototype shipped with. */
-  const liveJobs = useAppSelector((s) => s.exports.byBookId[bookId] ?? []);
+     showing the demo content the prototype shipped with.
+     Shallow-equal selector (plan 89 C3): the array's element identities are
+     stable across unrelated `byBookId[otherBook]` ticks, so Listen on Book A
+     should not re-render when Book B's exports advance. */
+  const liveJobs = useAppSelectorShallow((s) => s.exports.byBookId[bookId] ?? []);
   const useMockFallback = import.meta.env.VITE_USE_MOCKS === 'true' && liveJobs.length === 0;
   const queueItems = useMemo<ExportQueueItem[]>(
     () => (useMockFallback ? EXPORT_QUEUE : liveJobs.map(bookExportJobToQueueItem)),

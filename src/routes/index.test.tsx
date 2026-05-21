@@ -7,6 +7,7 @@
 // manuscript slice (populated by Layout's book-state hydration) and the
 // library entry.
 
+import { Suspense } from 'react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
@@ -138,9 +139,13 @@ function renderAtAnalysing(store: ReturnType<typeof makeStore>) {
   return render(
     <Provider store={store}>
       <MemoryRouter initialEntries={['/books/b1/analysing']}>
-        <Routes>
-          <Route path="/books/:bookId/analysing" element={<AnalysingRoute />} />
-        </Routes>
+        {/* Plan 89 C5 — route-leaf views are React.lazy now, so Suspense is
+            required wherever AnalysingRoute mounts AnalysingView. */}
+        <Suspense fallback={<div data-testid="suspense-loading" />}>
+          <Routes>
+            <Route path="/books/:bookId/analysing" element={<AnalysingRoute />} />
+          </Routes>
+        </Suspense>
       </MemoryRouter>
     </Provider>,
   );
@@ -636,9 +641,12 @@ describe('ChangelogRoute', () => {
     render(
       <Provider store={store}>
         <MemoryRouter initialEntries={['/log']}>
-          <Routes>
-            <Route path="/log" element={<ChangelogRoute />} />
-          </Routes>
+          {/* Plan 89 C5 — ChangeLogView is lazy now, wrap in Suspense. */}
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route path="/log" element={<ChangelogRoute />} />
+            </Routes>
+          </Suspense>
         </MemoryRouter>
       </Provider>,
     );
@@ -670,7 +678,7 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
      was already populated). Fix: anchor the manuscript slice to a
      bookId and prefer the library entry's title whenever the slice
      points at a different book. */
-  it("renders Book B's title on Book B's /generate even when the manuscript slice is still pinned to Book A", () => {
+  it("renders Book B's title on Book B's /generate even when the manuscript slice is still pinned to Book A", async () => {
     const store = makeStore();
     /* Library has both books — the user is meant to see Book B's title. */
     store.dispatch(
@@ -728,17 +736,22 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
     render(
       <Provider store={store}>
         <MemoryRouter initialEntries={['/books/b2/generate']}>
-          <Routes>
-            <Route path="/books/:bookId/:view" element={<ReadyRoute />} />
-          </Routes>
+          {/* Plan 89 C5 — GenerationView is lazy, wrap in Suspense. */}
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route path="/books/:bookId/:view" element={<ReadyRoute />} />
+            </Routes>
+          </Suspense>
         </MemoryRouter>
       </Provider>,
     );
 
     /* The Generate H1 reads "Generating <title>" via MixedHeading.
        Both halves render in the same heading element, so a substring
-       match against the title alone is enough. */
-    const heading = screen.getByRole('heading', { level: 1 });
+       match against the title alone is enough. The await is required
+       because GenerationView is React.lazy now (plan 89 C5) — the
+       initial paint is the Suspense fallback. */
+    const heading = await screen.findByRole('heading', { level: 1 });
     expect(heading.textContent).toContain('Mystery Novel');
     expect(heading.textContent).not.toContain('Bonus Keefe Story');
   });
