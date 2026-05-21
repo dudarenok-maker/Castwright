@@ -123,70 +123,113 @@ const TONE_LABELS: Record<ToneKey, string> = {
 
 export const revisionsRouter = Router();
 
+/* Plan 83 — per-book revisions computation, extracted from the single-book
+   route so both that route AND the new bulk `GET /api/revisions?bookIds=...`
+   endpoint can share one codepath. Returns `null` when the book doesn't
+   exist on disk (caller decides whether to 404 or skip it in a fan-out). */
+export async function getRevisionsForBook(
+  bookId: string,
+): Promise<{ pending: never[]; drift: DriftEvent[] } | null> {
+  const located = await findBookByBookId(bookId);
+  if (!located) return null;
+  const { bookDir, state } = located;
+
+  const castFile = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
+  const cast: CastCharacter[] = castFile?.characters ?? [];
+  if (cast.length === 0) {
+    // No cast confirmed yet — nothing to compare against.
+    return { pending: [], drift: [] };
+  }
+  const castById = new Map(cast.map((c) => [c.id, c]));
+
+  const persisted = await readJson<RevisionsPersisted>(revisionsJsonPath(bookDir));
+  const dismissed = new Set(Array.isArray(persisted?.dismissed) ? persisted!.dismissed! : []);
+
+  const segmentsByChapter = await loadSegmentsFiles(bookDir, state.chapters);
+  /* Build a chapterId -> scan title fallback map once. `seg.chapterTitle`
+     wins when populated (older segments files may omit it); state.chapters
+     is the next-best source; "Chapter N" is the floor. */
+  const scanTitleById = new Map<number, string>();
+  for (const ch of state.chapters) scanTitleById.set(ch.id, ch.title);
+  const drift: DriftEvent[] = [];
+
+  for (const seg of segmentsByChapter) {
+    const chapterTitle =
+      seg.chapterTitle?.trim() ||
+      scanTitleById.get(seg.chapterId)?.trim() ||
+      `Chapter ${seg.chapterId}`;
+    const snapshots = seg.characterSnapshots ?? {};
+    for (const [characterId, snapshot] of Object.entries(snapshots)) {
+      const current = castById.get(characterId);
+      if (!current) continue; // character removed from cast — nothing actionable here
+      const detectedAt = seg.synthesizedAt ?? new Date().toISOString();
+      const ctx = {
+        bookId,
+        chapterId: seg.chapterId,
+        chapterTitle,
+        characterId,
+        snapshot,
+        current,
+        detectedAt,
+      };
+      /* No engine-drift factor: engine isn't stored in cast.json (it's per-
+         generation, set on the Generate view), so there's no current value
+         to compare against. A voiceId swap covers the cross-engine case in
+         practice — voice ids are engine-scoped. */
+      pushHardDrift(drift, ctx, 'voice', 'Voice', snapshot.voiceId, current.voiceId);
+      pushHardDrift(drift, ctx, 'gender', 'Gender', snapshot.gender, current.gender);
+      pushHardDrift(drift, ctx, 'ageRange', 'Age range', snapshot.ageRange, current.ageRange);
+      for (const key of TONE_KEYS) {
+        pushToneDrift(drift, ctx, key);
+      }
+      pushAttributesDrift(drift, ctx);
+    }
+  }
+
+  const filtered = drift.filter((d) => !dismissed.has(d.id));
+  return { pending: [], drift: filtered };
+}
+
 revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) => {
   try {
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir, state } = located;
-    const bookId = req.params.bookId;
-
-    const castFile = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
-    const cast: CastCharacter[] = castFile?.characters ?? [];
-    if (cast.length === 0) {
-      // No cast confirmed yet — nothing to compare against.
-      return res.json({ pending: [], drift: [] });
-    }
-    const castById = new Map(cast.map((c) => [c.id, c]));
-
-    const persisted = await readJson<RevisionsPersisted>(revisionsJsonPath(bookDir));
-    const dismissed = new Set(Array.isArray(persisted?.dismissed) ? persisted!.dismissed! : []);
-
-    const segmentsByChapter = await loadSegmentsFiles(bookDir, state.chapters);
-    /* Build a chapterId -> scan title fallback map once. `seg.chapterTitle`
-       wins when populated (older segments files may omit it); state.chapters
-       is the next-best source; "Chapter N" is the floor. */
-    const scanTitleById = new Map<number, string>();
-    for (const ch of state.chapters) scanTitleById.set(ch.id, ch.title);
-    const drift: DriftEvent[] = [];
-
-    for (const seg of segmentsByChapter) {
-      const chapterTitle =
-        seg.chapterTitle?.trim() ||
-        scanTitleById.get(seg.chapterId)?.trim() ||
-        `Chapter ${seg.chapterId}`;
-      const snapshots = seg.characterSnapshots ?? {};
-      for (const [characterId, snapshot] of Object.entries(snapshots)) {
-        const current = castById.get(characterId);
-        if (!current) continue; // character removed from cast — nothing actionable here
-        const detectedAt = seg.synthesizedAt ?? new Date().toISOString();
-        const ctx = {
-          bookId,
-          chapterId: seg.chapterId,
-          chapterTitle,
-          characterId,
-          snapshot,
-          current,
-          detectedAt,
-        };
-        /* No engine-drift factor: engine isn't stored in cast.json (it's per-
-           generation, set on the Generate view), so there's no current value
-           to compare against. A voiceId swap covers the cross-engine case in
-           practice — voice ids are engine-scoped. */
-        pushHardDrift(drift, ctx, 'voice', 'Voice', snapshot.voiceId, current.voiceId);
-        pushHardDrift(drift, ctx, 'gender', 'Gender', snapshot.gender, current.gender);
-        pushHardDrift(drift, ctx, 'ageRange', 'Age range', snapshot.ageRange, current.ageRange);
-        for (const key of TONE_KEYS) {
-          pushToneDrift(drift, ctx, key);
-        }
-        pushAttributesDrift(drift, ctx);
-      }
-    }
-
-    const filtered = drift.filter((d) => !dismissed.has(d.id));
-    res.json({ pending: [], drift: filtered });
+    const result = await getRevisionsForBook(req.params.bookId);
+    if (!result) return res.status(404).json({ error: 'Book not found.' });
+    res.json(result);
   } catch (e) {
     console.error('[revisions] GET failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to compute revisions.' });
+  }
+});
+
+/* Plan 83 — bulk endpoint for background-drift fan-out across non-active
+   books. Frontend's two-tier poller (active book on 30s tick, non-active
+   books on 120s tick) calls this with the cross-book id list; the response
+   is keyed by bookId so the slice's applyPoll cascade fires per-book. Skips
+   bookIds that don't exist on disk (no 404 — just omitted from response) so
+   one removed book doesn't take down the whole poll. Lives on its own
+   Router instance because it's mounted at `/api` (not `/api/books`). */
+export const revisionsBulkRouter = Router();
+revisionsBulkRouter.get('/revisions', async (req: Request, res: Response) => {
+  try {
+    const raw = String(req.query.bookIds ?? '');
+    const bookIds = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    if (bookIds.length === 0) {
+      return res.status(400).json({ error: 'bookIds query param is required (comma-separated)' });
+    }
+    if (bookIds.length > 50) {
+      return res.status(400).json({ error: 'Up to 50 bookIds per request' });
+    }
+    const entries = await Promise.all(
+      bookIds.map(async (id) => [id, await getRevisionsForBook(id)] as const),
+    );
+    const byBookId: Record<string, { pending: never[]; drift: DriftEvent[] }> = {};
+    for (const [id, result] of entries) {
+      if (result) byBookId[id] = result;
+    }
+    res.json({ byBookId });
+  } catch (e) {
+    console.error('[revisions] bulk GET failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Failed to compute bulk revisions.' });
   }
 });
 

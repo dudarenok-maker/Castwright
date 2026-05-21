@@ -99,6 +99,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 ### I. Revisions & drift
 
+- [83 — Background drift polling across non-active books](83-drift-poll-multibook.md) — New `GET /api/revisions?bookIds=...` bulk endpoint + frontend two-tier poller (30 s active, 120 s background). Drift on Book B surfaces in Book A's modal within ~2 min without a navigate. Active-book latency unchanged.
 
 ### J. Library & workspace
 
