@@ -59,6 +59,9 @@ interface TopBarProps {
       (sourced from the account slice in the wrapping component), so it acts
       as the single discoverable entry-point to account settings. */
   onOpenAccount: () => void;
+  /** Plan 86 — optional dev-only entry to the worktree dashboard.
+      Production passes undefined; the chip is hidden when undefined. */
+  onOpenWorktrees?: () => void;
   /** Display name rendered as the avatar's initials. Sourced from the
       account slice — the persisted user-level value, with a built-in
       seed default. */
@@ -110,6 +113,7 @@ export function TopBar({
   onOpenVoices,
   onOpenChangelog,
   onOpenAccount,
+  onOpenWorktrees,
   userDisplayName,
   generationPill,
   analysisPill,
@@ -210,6 +214,18 @@ export function TopBar({
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
+          {onOpenWorktrees && (
+            <button
+              type="button"
+              onClick={onOpenWorktrees}
+              aria-label="Worktrees (dev)"
+              title="Worktrees (dev)"
+              data-testid="topbar-worktrees-link"
+              className={`text-xs font-mono px-2 py-1 rounded-md transition-colors hover:bg-ink/5 ${stage === 'worktrees' ? 'bg-ink/10 ring-1 ring-ink/20' : 'text-ink/50'}`}
+            >
+              wt
+            </button>
+          )}
           <ThemeToggleButton />
           <button
             type="button"
