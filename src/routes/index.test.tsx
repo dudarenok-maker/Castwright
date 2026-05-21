@@ -347,6 +347,7 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
         loadErrorNotice: null,
         dismissNotices: vi.fn(),
       },
+      priorRoster: [],
     };
     function OutletShim() {
       return <Outlet context={ctx} />;
@@ -465,6 +466,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
         loadErrorNotice: null,
         dismissNotices: vi.fn(),
       },
+      priorRoster: [],
     };
     function OutletShim() {
       return <Outlet context={ctx} />;
@@ -731,13 +733,34 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
     };
     store.dispatch(chaptersActions.setChapters([chapter]));
 
+    /* Plan 90 — ReadyViewSwitch now reads priorRoster + pushToast off the
+       Layout's outlet context. Wrap the route with a parent that supplies
+       a stub LayoutContext via <Outlet context={...}/>. */
+    const layoutCtx: LayoutContext = {
+      showInfo: vi.fn(),
+      showError: vi.fn(),
+      pushToast: vi.fn(),
+      ttsLifecycle: {
+        coqui: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
+        kokoro: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
+        evictionNotice: null,
+        loadErrorNotice: null,
+        dismissNotices: vi.fn(),
+      },
+      priorRoster: [],
+    };
+    function LayoutShim() {
+      return <Outlet context={layoutCtx} />;
+    }
     render(
       <Provider store={store}>
         <MemoryRouter initialEntries={['/books/b2/generate']}>
           {/* Plan 89 C5 — GenerationView is lazy, wrap in Suspense. */}
           <Suspense fallback={<div data-testid="suspense-loading" />}>
             <Routes>
-              <Route path="/books/:bookId/:view" element={<ReadyRoute />} />
+              <Route element={<LayoutShim />}>
+                <Route path="/books/:bookId/:view" element={<ReadyRoute />} />
+              </Route>
             </Routes>
           </Suspense>
         </MemoryRouter>

@@ -21,6 +21,7 @@ import {
   IconSearch,
 } from '../lib/icons';
 import { SectionLabel, ColorDot, Pill } from '../components/primitives';
+import { CharacterSearchPicker } from '../components/character-search-picker';
 import { CHAR_COLORS } from '../lib/colors';
 import { splitAudioTagSpans } from '../lib/audio-tags';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
@@ -31,6 +32,7 @@ import { changeLogActions } from '../store/change-log-slice';
 import { uiActions } from '../store/ui-slice';
 import { RestructureChaptersButton } from '../components/restructure-chapters-button';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
+import type { SeriesRosterEntry } from '../lib/api';
 
 interface Props {
   characters: Character[];
@@ -40,6 +42,16 @@ interface Props {
   sentencesFromStore?: Sentence[];
   onOpenProfile?: (id: string) => void;
   onStartGenerating?: () => void;
+  /* Plan: low-confidence-triage-polish — prior-series roster (from
+     LayoutContext) and the materialise-then-assign callback. The
+     reassign pickers render roster entries below the local cast under
+     a "From prior books in this series" separator; picking one fires
+     onAddFromSeriesRoster which POSTs /cast/add-from-roster, dispatches
+     castActions.addCharacter with the response, and returns the newly-
+     minted local id so the picker can immediately reassign the
+     sentence. */
+  priorRoster?: SeriesRosterEntry[];
+  onAddFromSeriesRoster?: (entry: SeriesRosterEntry) => Promise<string>;
 }
 
 interface IndexedSentence extends Sentence {
@@ -86,6 +98,8 @@ export function ManuscriptView({
   sentencesFromStore,
   onOpenProfile,
   onStartGenerating,
+  priorRoster,
+  onAddFromSeriesRoster,
 }: Props) {
   const dispatch = useAppDispatch();
   /* Sentences are the single source of truth in Redux. All edits go via
@@ -182,6 +196,88 @@ export function ManuscriptView({
   }, [sentences, currentChapterId]);
 
   const findChar = useCallback((id: string) => characters.find((c) => c.id === id), [characters]);
+
+  /* Plan: low-confidence-triage-polish — derive the ordered list of
+     low-confidence sentence ids (confidence < 0.75) for the current
+     chapter. Pairs with the header pill's ▲/▼ + J/K shortcuts that
+     jump to the next/previous misattributed sentence. The 0.75
+     threshold matches the existing stat counter (line 480 below) and
+     the SegmentRow Low-confidence pill rendered around line 980. */
+  const lowConfidenceSentenceIds = useMemo(
+    () =>
+      chapterSentences
+        .filter((s) => s.confidence != null && s.confidence < 0.75)
+        .map((s) => s.id),
+    [chapterSentences],
+  );
+  const [lowConfCursor, setLowConfCursor] = useState(0);
+  /* Reset the cursor when we switch chapters or the list shrinks below it. */
+  useEffect(() => {
+    if (lowConfCursor >= lowConfidenceSentenceIds.length) {
+      setLowConfCursor(0);
+    }
+  }, [lowConfCursor, lowConfidenceSentenceIds.length]);
+
+  const jumpToLowConfidence = useCallback(
+    (direction: 1 | -1) => {
+      const k = lowConfidenceSentenceIds.length;
+      if (k === 0 || currentChapterId == null) return;
+      const next = (lowConfCursor + direction + k) % k;
+      setLowConfCursor(next);
+      const targetSentenceId = lowConfidenceSentenceIds[next];
+      /* Open the inspector on the segment containing the targeted
+         sentence. Segments are derived per current chapter (above), so
+         a substring scan is bounded. */
+      const containingSeg = segments.find((g) =>
+        g.sentences.some((s) => s.id === targetSentenceId),
+      );
+      if (containingSeg) {
+        setSelectedSeg(containingSeg.id);
+        setInspectorOpen(true);
+      }
+      /* Scroll the sentence span into view. data-sentence-id is unique
+         within the rendered chapter so a top-level querySelector is
+         enough; scope to articleRef defensively. */
+      const root = articleRef.current ?? document;
+      const el = root.querySelector?.(`[data-sentence-id="${targetSentenceId}"]`) as
+        | HTMLElement
+        | null;
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    },
+    [lowConfidenceSentenceIds, lowConfCursor, segments, currentChapterId],
+  );
+
+  /* J / K keyboard shortcuts for next / previous low-confidence
+     attribution. Guarded against firing while the user is typing in
+     an input / textarea / contenteditable (e.g. the chapter filter,
+     the picker search input). No-op when there are no low-confidence
+     sentences in the current chapter. */
+  useEffect(() => {
+    if (lowConfidenceSentenceIds.length === 0) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      const tgt = e.target as HTMLElement | null;
+      if (
+        tgt &&
+        (tgt.tagName === 'INPUT' ||
+          tgt.tagName === 'TEXTAREA' ||
+          tgt.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === 'j' || e.key === 'J') {
+        e.preventDefault();
+        jumpToLowConfidence(1);
+      } else if (e.key === 'k' || e.key === 'K') {
+        e.preventDefault();
+        jumpToLowConfidence(-1);
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [jumpToLowConfidence, lowConfidenceSentenceIds.length]);
 
   /* Plan 81 wave 4 — pointer events instead of mouse events so phone +
      tablet touch drives the same boundary-move flow. PointerEvent
@@ -363,6 +459,8 @@ export function ManuscriptView({
     <SegmentInspector
       seg={selectedSegObj}
       characters={characters}
+      priorRoster={priorRoster}
+      onAddFromSeriesRoster={onAddFromSeriesRoster}
       findChar={findChar}
       onClose={() => {
         setSelectedSeg(null);
@@ -459,13 +557,42 @@ export function ManuscriptView({
                 <span className="hidden sm:inline">·</span>
                 <span>{Object.keys(counts).length} speakers</span>
                 <span className="hidden sm:inline">·</span>
-                <span className="text-amber-700">
-                  {
-                    chapterSentences.filter((s) => s.confidence != null && s.confidence < 0.75)
-                      .length
-                  }{' '}
-                  low-confidence
-                </span>
+                {/* Plan: low-confidence-triage-polish — active navigator
+                    pill. ▲ / ▼ jump to prev / next low-confidence
+                    sentence (wraps around). J / K do the same via the
+                    window-level keydown handler above. Disabled when
+                    the count is 0. */}
+                {lowConfidenceSentenceIds.length === 0 ? (
+                  <span className="text-ink/40">0 low-confidence</span>
+                ) : (
+                  <span
+                    className="inline-flex items-center gap-1 text-amber-700"
+                    role="group"
+                    aria-label="Low-confidence navigation"
+                  >
+                    <span className="tabular-nums">
+                      {lowConfidenceSentenceIds.length} low-confidence
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => jumpToLowConfidence(-1)}
+                      title="Previous low-confidence (K)"
+                      aria-label="Previous low-confidence sentence"
+                      className="inline-flex items-center justify-center min-w-7 min-h-7 px-1.5 rounded border border-amber-700/30 bg-white hover:bg-amber-50 text-amber-700 text-xs leading-none"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => jumpToLowConfidence(1)}
+                      title="Next low-confidence (J)"
+                      aria-label="Next low-confidence sentence"
+                      className="inline-flex items-center justify-center min-w-7 min-h-7 px-1.5 rounded border border-amber-700/30 bg-white hover:bg-amber-50 text-amber-700 text-xs leading-none"
+                    >
+                      ▼
+                    </button>
+                  </span>
+                )}
               </>
             )}
             <span className="ml-auto flex items-center gap-1">
@@ -509,6 +636,8 @@ export function ManuscriptView({
                   <SegmentRow
                     seg={seg}
                     characters={characters}
+                    priorRoster={priorRoster}
+                    onAddFromSeriesRoster={onAddFromSeriesRoster}
                     selected={selectedSeg === seg.id}
                     dimmed={!!filterChar && filterChar !== seg.characterId}
                     drag={drag}
@@ -895,6 +1024,8 @@ function BottomSheet({
 interface SegmentRowProps {
   seg: Segment;
   characters: Character[];
+  priorRoster?: SeriesRosterEntry[];
+  onAddFromSeriesRoster?: (entry: SeriesRosterEntry) => Promise<string>;
   selected: boolean;
   dimmed: boolean;
   drag: Drag | null;
@@ -908,6 +1039,8 @@ interface SegmentRowProps {
 function SegmentRow({
   seg,
   characters,
+  priorRoster,
+  onAddFromSeriesRoster,
   selected,
   dimmed,
   drag,
@@ -995,27 +1128,14 @@ function SegmentRow({
                 Reassign <IconArrowDn className="w-3 h-3" />
               </button>
               {menuOpen && (
-                <div
-                  className="absolute right-0 top-full mt-1 w-44 bg-white border border-ink/10 rounded-xl shadow-card py-1 z-10"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {characters.map((cc) => (
-                    <button
-                      key={cc.id}
-                      onClick={() => {
-                        onReassignSegment(cc.id);
-                        setMenuOpen(false);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-ink/[0.04] text-left text-sm"
-                    >
-                      <ColorDot color={cc.color as CharColor} />
-                      <span className="flex-1">{cc.name}</span>
-                      {cc.id === seg.characterId && (
-                        <IconCheck className="w-3.5 h-3.5 text-ink/60" />
-                      )}
-                    </button>
-                  ))}
-                </div>
+                <CharacterSearchPicker
+                  characters={characters}
+                  priorRoster={priorRoster}
+                  currentCharacterId={seg.characterId}
+                  onPick={(id) => onReassignSegment(id)}
+                  onAddFromSeriesRoster={onAddFromSeriesRoster}
+                  onClose={() => setMenuOpen(false)}
+                />
               )}
             </div>
           </span>
@@ -1082,6 +1202,8 @@ function BoundaryHandle({
 interface InspectorProps {
   seg: Segment | undefined;
   characters: Character[];
+  priorRoster?: SeriesRosterEntry[];
+  onAddFromSeriesRoster?: (entry: SeriesRosterEntry) => Promise<string>;
   findChar: (id: string) => Character | undefined;
   onClose: () => void;
   onReassignSegment: (seg: Segment, newCharId: string) => void;
@@ -1092,12 +1214,18 @@ interface InspectorProps {
 function SegmentInspector({
   seg,
   characters,
+  priorRoster,
+  onAddFromSeriesRoster,
   findChar,
   onClose,
   onReassignSegment,
   onReassignSentence,
   onOpenProfile,
 }: InspectorProps) {
+  /* Which per-sentence picker is open, if any. Single instance — closing
+     one by picking auto-closes; opening another flips this state. */
+  const [openSentencePicker, setOpenSentencePicker] = useState<number | null>(null);
+  const [segmentPickerOpen, setSegmentPickerOpen] = useState(false);
   if (!seg)
     return (
       <div className="bg-white rounded-3xl border border-dashed border-ink/15 p-6 text-sm text-ink/50">
@@ -1173,38 +1301,29 @@ function SegmentInspector({
           <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">
             Reassign whole segment to
           </p>
-          <div className="flex flex-col gap-1">
-            {characters.map((cand) => {
-              const active = cand.id === seg.characterId;
-              const candCc = CHAR_COLORS[cand.color as CharColor] ?? CHAR_COLORS.narrator;
-              return (
-                <button
-                  key={cand.id}
-                  onClick={() => onReassignSegment(seg, cand.id)}
-                  className={`relative w-full flex items-center gap-3 px-3 py-2 min-h-11 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
-                  style={
-                    active
-                      ? { background: candCc.tint, boxShadow: `inset 0 0 0 1px ${candCc.ring}` }
-                      : undefined
-                  }
-                >
-                  {active && (
-                    <span
-                      className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full"
-                      style={{ background: candCc.hex }}
-                    />
-                  )}
-                  <ColorDot color={cand.color as CharColor} />
-                  <span
-                    className={`text-sm flex-1 ${active ? 'font-bold' : 'text-ink'}`}
-                    style={active ? { color: candCc.hex } : undefined}
-                  >
-                    {cand.name}
-                  </span>
-                  {active && <IconCheck className="w-4 h-4" style={{ color: candCc.hex }} />}
-                </button>
-              );
-            })}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setSegmentPickerOpen(true)}
+              className="w-full flex items-center gap-3 px-3 py-2 min-h-11 rounded-xl text-left bg-canvas/60 border border-ink/10 hover:border-ink/30 transition-colors"
+            >
+              <ColorDot color={c.color as CharColor} />
+              <span className="text-sm flex-1 truncate" style={{ color: cc.hex }}>
+                {c.name}
+              </span>
+              <span className="text-[11px] text-ink/50">Change…</span>
+            </button>
+            {segmentPickerOpen && (
+              <CharacterSearchPicker
+                className="absolute left-0 right-0 top-full mt-1 bg-white border border-ink/10 rounded-xl shadow-card py-1 z-10"
+                characters={characters}
+                priorRoster={priorRoster}
+                currentCharacterId={seg.characterId}
+                onPick={(id) => onReassignSegment(seg, id)}
+                onAddFromSeriesRoster={onAddFromSeriesRoster}
+                onClose={() => setSegmentPickerOpen(false)}
+              />
+            )}
           </div>
         </div>
         {seg.sentences.length > 1 && (
@@ -1218,23 +1337,29 @@ function SegmentInspector({
                   <p className="text-xs text-ink/80 leading-snug line-clamp-3 font-serif">
                     {renderSentenceText(s.text)}
                   </p>
-                  <details className="mt-2">
-                    <summary className="text-[11px] text-ink/60 cursor-pointer hover:text-ink">
+                  <div className="relative mt-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpenSentencePicker((curr) => (curr === s.id ? null : s.id))
+                      }
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium text-ink/70 bg-white border border-ink/10 hover:border-ink/30"
+                    >
                       Reassign just this one
-                    </summary>
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {characters.map((cand) => (
-                        <button
-                          key={cand.id}
-                          onClick={() => onReassignSentence(s.chapterId, s.id, cand.id)}
-                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] ${cand.id === seg.characterId ? 'bg-ink/[0.06] text-ink/60' : 'bg-white border border-ink/10 hover:border-ink/30'}`}
-                        >
-                          <ColorDot color={cand.color as CharColor} size={8} />
-                          <span>{cand.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </details>
+                      <IconArrowDn className="w-3 h-3" />
+                    </button>
+                    {openSentencePicker === s.id && (
+                      <CharacterSearchPicker
+                        className="absolute left-0 top-full mt-1 w-72 bg-white border border-ink/10 rounded-xl shadow-card py-1 z-10"
+                        characters={characters}
+                        priorRoster={priorRoster}
+                        currentCharacterId={s.characterId}
+                        onPick={(id) => onReassignSentence(s.chapterId, s.id, id)}
+                        onAddFromSeriesRoster={onAddFromSeriesRoster}
+                        onClose={() => setOpenSentencePicker(null)}
+                      />
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
