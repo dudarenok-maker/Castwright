@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
-owner: null
+status: stable
+shipped: '2026-05-21'
+owner: dudarenok-maker
 ---
 
 # Pipelined two-model analyzer (Gemma cast + Gemini attribution, 10-chapter lag)
 
-> Status: active (pipelining live; see Implementation status below)
+> Status: stable
 > Key files: `server/src/analyzer/select-analyzer.ts`, `server/src/analyzer/phase-watermark.ts`, `server/src/routes/analysis.ts` (`runMainAnalyzerJob`, `runPhase0Pool`, `runPhase1Pool`, `getPhase1Stage1Snapshot`), `server/src/routes/analysis-pipelining.test.ts`, `server/src/analyzer/rate-limit.ts:122`, `server/.env.example`, `docs/features/06-analyzer-gemini.md`
 > URL surface: indirect — `#/books/<id>/analysing`; SSE stream emitted by `POST /api/books/:bookId/analyse`
 > OpenAPI ops: none — env-var driven
@@ -124,4 +124,15 @@ The `cast_incomplete` failure gate at the end of Phase 0 (chapters that failed c
 
 ## Ship notes
 
-_(filled when status flips to `stable` — shipped date, commit SHA, observed wall-clock and quota delta on the canonical manuscript; especially the Gemma-finish-to-Gemini-finish gap which is the headline pipelining win)_
+Shipped **2026-05-21** via PR [#106](https://github.com/dudarenok-maker/AudioBook-Generator/pull/106), merged at `df1be3e`. Implementation arrived in three commits across two agent runs:
+
+- **`2e71993`** — first agent's seam-only landing: `phase-watermark.ts` (real + sequential-stub modules with 10 unit-test cases pinning monotonicity, back-pressure, manual-handoff short-circuit), `select-analyzer.ts` (`selectAnalyzerForPhase` + `isPerPhaseModelSelectionActive`), three env knobs in `server/.env.example`, watermark plumbed into `runMainAnalyzerJob` but execution still serial.
+- **`5434035`** — first agent's commit, the seam-only state described above.
+- **`6c90047`** — follow-up agent's fix to the `writeJsonAtomic` same-millisecond temp-file race that surfaced when Phase 0 and Phase 1 began saving `analysis-cache.json` concurrently. Same-ms `${pid}-${Date.now()}` temp-file collisions caused ENOENT on the second rename; now uses `${pid}-${ts}-${seq}-${rnd}` (monotonic counter + 4-byte random). Pinned by `server/src/workspace/state-io.test.ts` (20 parallel writes, no ENOENT, no leaked `.tmp-` droppings).
+- **Final commit on the branch (also `2e71993` after rebase)** — second agent's `Promise.all([runPhase0Pool(), runPhase1Pool()])` restructure plus the in-route pipelining test suite at `server/src/routes/analysis-pipelining.test.ts` (697 lines, 5 cases). Case 3 specifically proves back-pressure engages in production: Phase 0 ch 13 held, watermark caps at 11, Phase 1 ch 3 PARKS for the full timeout, releasing ch 13 unblocks it.
+
+Total tests added across both phases: 21 watermark/selector unit + 5 in-route pipelining + 1 state-io concurrency = 27 new server vitest cases. Zero pre-existing tests changed semantics. The `cast_incomplete` failure gate at the old `analysis.ts:2031-2055` is now a `phase0FailedCount` safety check (releases parked Phase 1 waiters via `markPhase0AllDone`, then bails after `Promise.all` settles). Manual handoff (`ANALYZER=manual`) collapses to sequential via the `createSequentialWatermark()` stub — file-drop cowork loop unchanged.
+
+Follow-up filed as **BACKLOG Could #31**: surface the three env knobs (`ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS`) in the Account tab so users can tune without dropping into env config.
+
+Wall-clock and quota delta against the canonical manuscript are in the manual-acceptance walkthrough; defer to the user's run for actual numbers.
