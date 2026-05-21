@@ -445,15 +445,46 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      character to an invalid speaker_id) and the rest of the queue will hit
      the same wall. Escalate to fatal on the second hit so the user gets one
      clean banner instead of a long stream of identical chapter_failed
-     ticks. See screenshot 2026-05-13 181647 for the cascade we're killing. */
+     ticks. See screenshot 2026-05-13 181647 for the cascade we're killing.
+
+     Plan 87: the cascade state is shared across the worker pool. With K>1
+     the next-failure-classified-as-fatal still aborts the controller, which
+     short-circuits the remaining queued chapters and lets the in-flight
+     siblings finish (or be aborted via the same signal — synthesiseChapter
+     forwards it into the sidecar fetch). */
   const cascade = newCascadeState();
 
-  for (const chapter of targetChapters) {
-    if (controller.signal.aborted) break;
+  /* Plan 87 — fatal escalation flag. Workers check this between chapters so
+     a parallel cascade fires the abort exactly once and the remaining queue
+     drains cleanly. The signal-abort path handles in-flight siblings; this
+     flag stops a worker from picking up a fresh chapter after the cascade
+     has been detected. */
+  let cascadeFatal = false;
+
+  /* Plan 87 — process a single chapter end-to-end (the body that used to
+     live inline in the for…await loop). Kept identical to the serial
+     behaviour byte-for-byte; the only call-site change is that multiple
+     of these may now run concurrently inside the worker pool below.
+
+     Per-chapter watchdog: each invocation has its own independent
+     `synthesiseChapter` call with its own `onGroupStart` heartbeat, so a
+     stalled chapter no longer blocks siblings. The shared `controller.signal`
+     still threads through every call — pause or regen displacement aborts
+     all in-flight chapters at once, matching the K=1 contract. */
+  const processOneChapter = async (chapter: (typeof targetChapters)[number]): Promise<void> => {
+    if (controller.signal.aborted) return;
+    if (cascadeFatal) return;
 
     /* Pin this chapter as in-flight on the job so the subscribe-side
        catch-up replay has something to emit for a post-reload client.
-       Cleared on chapter_complete and on loop exit. */
+       Cleared on chapter_complete / chapter_failed / abort.
+
+       Plan 87: with K>1, multiple chapters may be in flight concurrently.
+       `currentChapterId` / `lastProgressTick` track the most-recent
+       in-flight chapter — the catch-up replay only needs *something*
+       in-progress to render, and a tick from the most-recent chapter is
+       as good as any other. Per-chapter resume granularity comes from
+       the `runInProgress` set, which the broadcast() enricher reads. */
     job.currentChapterId = chapter.id;
     job.lastProgressTick = null;
     job.runInProgress.add(chapter.id);
@@ -468,7 +499,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         chapterId: chapter.id,
         errorReason: 'No sentences available for this chapter — analysis cache is incomplete.',
       });
-      continue;
+      return;
     }
 
     const totalLines = sentences.length;
@@ -518,7 +549,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            gone quiet" stall detector resets even when a single group is a
            multi-minute synth call (long narrator block on CPU XTTS).
            Without this, group-complete was the only tick and the SSE went
-           silent for the entire duration of each call. */
+           silent for the entire duration of each call.
+
+           Plan 87: each chapter's onGroupStart fires independently — a
+           stalled sibling chapter doesn't suppress this chapter's
+           heartbeat because they're separate `synthesiseChapter` calls. */
         onGroupStart: ({ group, totalGroups }) => {
           const firstSentenceId = group.sentenceIds[0];
           const positional = sentences.findIndex((s) => s.id === firstSentenceId);
@@ -608,7 +643,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
 
       /* Atomic write: temp-then-rename so a crash mid-write doesn't leave a
          half-encoded file that scan.ts would mistake for a completed
-         chapter. */
+         chapter. Per-chapter slug + pid + ts in the temp name means
+         concurrent chapter writes (plan 87) never collide on the same
+         temp path. */
       const tmpAudio = `${audioPath}.tmp-${process.pid}-${Date.now()}`;
       await writeFile(tmpAudio, audioBuffer);
       /* Snapshot the cast character attributes for every character that
@@ -673,7 +710,19 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          + future playback slice can render it without re-reading the audio.
          Also stamp the TTS model key + render timestamp so the frontend
          can surface engine-drift badges without reading every segments
-         file on chapter-list hydrate (see docs/features/35-engine-drift). */
+         file on chapter-list hydrate (see docs/features/35-engine-drift).
+
+         Plan 87: with K>1 chapters completing in parallel, two workers
+         can race to read-modify-write state.json. read+write are not
+         atomic — the second writer's read picks up the first writer's
+         on-disk record (the rename is atomic), so each chapter's
+         duration / audioModelKey lands eventually. The race window is
+         narrow (sub-second between read and writeJsonAtomic on local
+         SSD) and the only contested field is `chapters[i].duration` /
+         `audioModelKey` / `audioRenderedAt` — both keyed by chapter id,
+         so siblings cannot clobber each other's data. The risk is
+         `updatedAt` carrying a slightly stale timestamp when reads
+         interleave, which the scan layer tolerates. */
       const statePath = stateJsonPath(bookDir);
       const prev = await readJson<BookStateJson>(statePath);
       if (prev) {
@@ -701,9 +750,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          audioModelKey rides along so the slice can stamp the chapter
          immediately without waiting for a state.json reload (otherwise
          an in-session engine switch wouldn't flag drift until the user
-         navigates away and back). */
-      job.currentChapterId = null;
-      job.lastProgressTick = null;
+         navigates away and back).
+
+         Plan 87: only clear `currentChapterId` if it's still pointing at
+         THIS chapter. With K>1 a sibling chapter that started after us
+         may have written its own id into the slot — clearing
+         unconditionally would erase a still-valid in-progress marker. */
+      if (job.currentChapterId === chapter.id) {
+        job.currentChapterId = null;
+        job.lastProgressTick = null;
+      }
       /* Bug E: bump run-level aggregates BEFORE broadcast so the emitted
          tick carries the post-completion state. */
       job.runInProgress.delete(chapter.id);
@@ -720,12 +776,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     } catch (e) {
       /* AbortError = our own controller fired (regen displacement or
          explicit /pause). Don't report it as a chapter failure — silently
-         break the loop; the outer `idle` + cleanup below handles the rest. */
+         exit the worker; the outer `idle` + cleanup below handles the rest. */
       if ((e as { name?: string })?.name === 'AbortError') {
         /* Drop the in-flight marker before breaking — keeps cross-book
            runInProgress accurate if the abort race left us mid-chapter. */
         job.runInProgress.delete(chapter.id);
-        break;
+        return;
       }
       const initial = describeSynthesisError(e);
       let { errorReason, fatal } = initial;
@@ -745,9 +801,57 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         chapterId: chapter.id,
         errorReason,
       });
-      if (fatal) break;
+      if (fatal) {
+        /* Plan 87: with K>1, set the flag AND abort the shared signal so
+           in-flight siblings exit and pending workers short-circuit. K=1
+           behaviour stays byte-identical (signal abort is a no-op when
+           nothing else is in flight). */
+        cascadeFatal = true;
+        if (!controller.signal.aborted) controller.abort();
+      }
     }
+  };
+
+  /* Plan 87 — bounded worker pool. Replaces the original `for…await
+     synthesiseChapter` loop at this site with K concurrent workers that
+     pull from a shared index. K=1 reproduces the serial loop byte-for-byte
+     (one worker, sequential pulls, same processOneChapter body), so
+     setting `GEN_CHAPTER_CONCURRENCY=1` is the safety valve.
+
+     Why an index-pulling pool rather than `Promise.all(map(...))`:
+     - Bounds the concurrency without spinning up N pending promises.
+     - Each worker picks the next available chapter from a shared cursor,
+       so a fast chapter doesn't block on a slow sibling.
+     - Natural respect for the cascade-fatal flag: each worker checks the
+       flag at the top of its loop and bails out cleanly.
+
+     The sidecar `/synthesize` route is already concurrent (asyncio.to_thread
+     offload, GIL-releasing inference — pinned by
+     server/tts-sidecar/tests/test_concurrent_synthesis.py:214-244). Kokoro
+     v1 is ~1 GB resident and two concurrent inferences fit on an 8 GB GPU
+     without eviction; that's the documented default. */
+  const concurrencyEnv = process.env.GEN_CHAPTER_CONCURRENCY;
+  const parsedConcurrency = concurrencyEnv ? Number.parseInt(concurrencyEnv, 10) : NaN;
+  const concurrency =
+    Number.isFinite(parsedConcurrency) && parsedConcurrency >= 1 ? parsedConcurrency : 2;
+  const effectiveConcurrency = Math.min(concurrency, targetChapters.length || 1);
+
+  let nextIndex = 0;
+  const workers: Promise<void>[] = [];
+  for (let workerId = 0; workerId < effectiveConcurrency; workerId++) {
+    workers.push(
+      (async () => {
+        while (true) {
+          if (controller.signal.aborted || cascadeFatal) return;
+          const i = nextIndex++;
+          if (i >= targetChapters.length) return;
+          const chapter = targetChapters[i];
+          await processOneChapter(chapter);
+        }
+      })(),
+    );
   }
+  await Promise.all(workers);
 
   /* Only deregister if we're still the current job — a newer regen may have
      already displaced us, and removing its entry would defeat the dispatcher
