@@ -57,6 +57,7 @@ import {
   type CastCharacter,
   type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
+import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 
 export const generationRouter = Router();
@@ -482,6 +483,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     broadcast(job, { type: 'progress', ...initialTick });
 
     try {
+      /* Build the spoken chapter-title phrase from chapter.id + chapter.title.
+         Returns null only when both inputs are unusable (defensive — every
+         confirmed chapter has at least an id), in which case `?? undefined`
+         lets `synthesiseChapter` skip the title beat the same way it does
+         for callers that haven't opted in. */
+      const chapterTitleNarration =
+        buildChapterTitleNarration({ id: chapter.id, title: chapter.title }) ?? undefined;
       const result = await synthesiseChapter({
         sentences,
         cast: cast.characters,
@@ -489,6 +497,23 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         modelKey,
         engine,
         signal: controller.signal,
+        chapterTitleNarration,
+        narratorCharacterId: 'narrator',
+        /* Title-beat ticks so the SSE stream doesn't go silent while the
+           pre-body title synth runs (Coqui can take a couple of seconds for
+           a short phrase, the stall detector fires at 30 s). currentLine: 0
+           keeps the UI's "line N of M" caption at the pre-body state. */
+        onTitleStart: () => {
+          const tick = {
+            chapterId: chapter.id,
+            characterId: 'narrator',
+            progress: 0.005,
+            currentLine: 0,
+            totalLines,
+          };
+          job.lastProgressTick = tick;
+          broadcast(job, { type: 'progress', ...tick });
+        },
         /* Tick AT THE START of each group so the client's 30s "Worker has
            gone quiet" stall detector resets even when a single group is a
            multi-minute synth call (long narrator block on CPU XTTS).
