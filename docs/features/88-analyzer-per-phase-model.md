@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
@@ -109,6 +109,14 @@ If Gemma identifies a character first in chapter 20, Gemini's chapter 5 (dispatc
 - **Multi-tier model fan-out** (e.g. three models, three phases) — single-axis pipeline only in v1.
 - **A1 — parallel chapter synthesis** → plan 87 (parallel branch).
 - **C2/C3/C5 — frontend perf bundle** → plan 89 (parallel branch).
+
+## v1 status note (2026-05-21)
+
+The watermark + per-phase analyzer modules land here with the route layer fully wired to call `markPhase0ChapterComplete(K)` on every cast completion, `markPhase0AllDone()` after Phase 0b consolidation, and `await watermark.awaitPhase1Dispatch(K)` before every Phase 1 chapter dispatch. The Phase 1 worker pool also uses a SEPARATE analyzer instance keyed to `ANALYZER_PHASE1_MODEL` when set — so the quota split (Gemma 1,500 RPD bucket for Phase 0, Gemini 500 RPD bucket for Phase 1) is real and active today.
+
+The route layer still runs Phase 0 → Phase 0b → Phase 1 serially at the code-flow level; the `awaitPhase1Dispatch` waiters all resolve trivially as Phase 0b completes (the watermark already passed every chapter's lag horizon before Phase 1 dispatches begin). The seam is in place to launch the two pools concurrently — a follow-up PR can wrap the Phase 0 cast pool in a Promise and dispatch Phase 1's pool in parallel, at which point the back-pressure semaphore activates end-to-end and Phase 1 starts attributing chapter 0 ~10 chapters into Phase 0's run.
+
+Track the follow-up under `docs/BACKLOG.md` "Pipelined Phase 0+1 concurrent execution" (Could bucket).
 
 ## Ship notes
 
