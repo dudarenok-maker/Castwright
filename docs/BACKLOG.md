@@ -164,17 +164,7 @@ Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `s
 - _Depends on:_ none. Pairs with the worktree parallel-sessions tooling — without the semaphore, users must queue heavy operations by hand per the CONTRIBUTING.md "GPU + shared-resource caveats" note.
 - _Benefit (user):_ removes the silent VRAM-spillover-to-RAM slowdown when two sessions hit the analyzer or sidecar concurrently. Today a parallel run can take 5–10× longer than serial because both processes thrash the GPU.
 
-### 11. Auto-reconcile helper for parallel-agent integration branches
-
-Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — CONTRIBUTING.md "Reconciliation pattern" describes the `integration/<date>` ritual but executes it manually (one `git switch` + `git merge` + `npm run verify` per agent branch). The friction-iest part of the parallel-agent workflow today.
-
-- _What:_ Add `scripts/wt-merge.mjs <branch> [<branch>...] [--into integration/<date>]` that drives the documented reconciliation pattern: cut a fresh integration branch off `main`, merge each agent branch in sequence, run `npm run verify` between merges, abort on first failure with a clear "this branch broke verify" message and instructions for dropping the offending branch. Idempotent — safe to re-run from a partially-merged integration branch.
-- _Acceptance:_ Four parallel agent branches → `node scripts/wt-merge.mjs feat/a feat/b feat/c feat/d` → integration branch created, all four merged in order, verify passes between each. Fail one branch → script aborts on that branch's verify, prints the failing test summary + the suggested follow-up command. New Pester / Node test covers the dispatch order + abort behaviour.
-- _Key files:_ new `scripts/wt-merge.mjs`; new `scripts/tests/wt-merge.test.mjs`; CONTRIBUTING.md "Reconciliation pattern" section (cross-link the helper).
-- _Depends on:_ the parallel-sessions tooling already shipped (the worktrees are the input). The verify-cache plan 50 makes the between-merge verify fast enough that this becomes practical.
-- _Benefit (user):_ collapses the 6-step manual reconciliation into one command. Today the friction of "merge, verify, merge, verify, ..." discourages users from running > 2 parallel agents.
-
-### 12. Live worktree dashboard in the app
+### 11. Live worktree dashboard in the app
 
 Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-list.mjs` answers "which worktrees are open?" from the terminal, but once the user routinely has 3+ sessions running, an in-app view is the natural escalation.
 
@@ -184,7 +174,7 @@ Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `s
 - _Depends on:_ none structural. Pairs with Could #10 (GPU semaphore) — the dashboard is the natural place to surface "this worktree is the one currently holding the GPU."
 - _Benefit (architectural):_ operational visibility once parallel-session workflow becomes routine. Today the user has to remember which terminal tab is on which port.
 
-### 13. Keyboard shortcuts / power-user tuning panel
+### 12. Keyboard shortcuts / power-user tuning panel
 
 Source: net-new (2026-05-18).
 
@@ -194,7 +184,7 @@ Source: net-new (2026-05-18).
 - _Depends on:_ none.
 - _Benefit (technical / accessibility):_ power-user tuning surfaces today's hardcoded values; keyboard navigation closes an accessibility gap.
 
-### 14. Windows installer (Inno Setup or NSIS) wrapping the release zip
+### 13. Windows installer (Inno Setup or NSIS) wrapping the release zip
 
 Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
 
@@ -204,7 +194,7 @@ Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-pack
 - _Depends on:_ Should #2 shipped (the installer wraps the existing zip — no point building before the zip pipeline exists).
 - _Benefit (user):_ friction-free install for non-developers. Today's Should #2 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
 
-### 15. Docker image + compose file for headless / Linux deployment
+### 14. Docker image + compose file for headless / Linux deployment
 
 Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
 
@@ -214,7 +204,7 @@ Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-pack
 - _Depends on:_ Should #2 shipped (reuses the same tag-push trigger and version source); resolving the workspace-mount question.
 - _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
 
-### 16. Apple Books (iOS / macOS) handoff modal
+### 15. Apple Books (iOS / macOS) handoff modal
 
 Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 
@@ -224,7 +214,7 @@ Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 - _Depends on:_ plan 18b shipped.
 - _Benefit (user):_ closes one more "Coming soon" tile.
 
-### 17. Plex (self-hosted media server) handoff modal
+### 16. Plex (self-hosted media server) handoff modal
 
 Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 
@@ -234,7 +224,7 @@ Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 - _Depends on:_ plan 18b shipped; ideally Could #13 (power-user panel) for the token storage.
 - _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
 
-### 18. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
+### 17. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
 
 Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 
@@ -243,7 +233,7 @@ Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 - _Key files:_ new tile config in `src/data/listener-apps.ts`; `src/modals/export-audiobook.tsx`; `server/src/export/` for any new transport.
 - _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
 
-### 19. Single-poll TTS lifecycle for a third consumer (tracking)
+### 18. Single-poll TTS lifecycle for a third consumer (tracking)
 
 Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
 
