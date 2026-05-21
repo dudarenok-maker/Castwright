@@ -282,17 +282,7 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item A3).
 - _Depends on:_ none structural. Speed gain conditional on mixed-engine casts.
 - _Benefit (user):_ eliminates the 30 s XTTS cold-load on first use for mixed-engine books; enables fluid engine mixing per character.
 
-### 23. Speculative per-chapter Phase 1 (analyzer)
-
-Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item B2).
-
-- _What:_ Drop the global roster gate at `server/src/routes/analysis.ts:2031-2055`. Once chapter N's Phase 0 completes, fire its Phase 1 against the chapter-local roster; reconcile global character ids at the end by rewriting attributions whose character was a duplicate of one in the merged roster.
-- _Acceptance:_ A long book starts producing attribution results visibly earlier than today (no Phase 0 → Phase 1 wall). Duplicate-character normalisation across chapters (e.g. "Mom" in ch1 == "Mother" in ch7) is correct. Manual cowork flow (`server/handoff/`) still works or is explicitly opt-out.
-- _Key files:_ `server/src/routes/analysis.ts:2031-2055`; `server/src/analyzer/cache.ts` (invalidation rules).
-- _Depends on:_ plan 88 shipped (per-phase analyzer split must land first to keep cache shapes simple).
-- _Benefit (user):_ ~30% end-to-end faster on long books. High regression surface — pursue only if plan 88 leaves attribution latency biting.
-
-### 24. Per-call local→Gemini analyzer overflow
+### 23. Per-call local→Gemini analyzer overflow
 
 Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item B4).
 
@@ -302,7 +292,7 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item B4).
 - _Depends on:_ plan 88 shipped (its per-phase plumbing is the seam this builds on).
 - _Benefit (user):_ uses idle Gemini quota when local is the bottleneck. Lower priority than plan 88's bucketed split.
 
-### 25. Confirm-cast + listen-chapter list virtualisation
+### 24. Confirm-cast + listen-chapter list virtualisation
 
 Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C4).
 
@@ -312,7 +302,7 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C4).
 - _Depends on:_ Should #1 (shares the virtualiser dep + helper — pair to amortise dep adoption).
 - _Benefit (user):_ only matters above ~40 rows. Most books are below the threshold today.
 
-### 26. Waveform memoisation
+### 25. Waveform memoisation
 
 Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C6).
 
