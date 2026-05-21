@@ -76,16 +76,7 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
 - _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
 
-### 2. Background drift polling across non-active books
-
-Source: net-new (2026-05-19). Spun off from the drift-report-fidelity work — the Drift Report modal now groups events across books, but the runtime poller only fetches the active book. Drift accumulated on Book B while the user is in Book A only surfaces after they navigate to Book B (or via the disk hydrate on book-open).
-
-- _What:_ Extend the revisions poller (`src/components/layout.tsx` ~528-540) to fan out across every book that has rendered chapters (probably `state.bookMeta.saved` filtered to books past the `confirm` stage). Each book's response is stamped with `bookId` in the `applyPoll` payload (already wired). Keep the active book on a 30s tick; throttle non-active books to a longer interval (e.g. 2 min) so we don't blow free-tier server quotas.
-- _Acceptance:_ Two books concurrently generating. Drift detected on background Book B (e.g. user changes a cast attribute in Book B's cast slice without navigating back) surfaces in the Drift Report modal opened from Book A's top bar within the poll interval. New unit test covers the multi-book fan-out; e2e spec extends `drift-report-multibook.spec.ts` with a background-poll case.
-- _Key files:_ `src/components/layout.tsx` (poller `useEffect`); maybe a new `src/store/revisions-poll-middleware.ts` if the cross-book scheduling outgrows the inline useEffect; `docs/features/35-engine-drift-detection.md` "Modal fidelity contract" invariant (e).
-- _Benefit (user):_ honours the concurrent-multibook invariant for drift. Today a user analysing Book A + generating Book B has to navigate between them to see fresh drift events for each.
-
-### 3. Export queue Retry + Download row actions
+### 2. Export queue Retry + Download row actions
 
 Source: plan 18 follow-up (2026-05-18). Deferred from plan 18a — needs middleware integration to re-fire a failed export, which is bigger than a row-handler wiring.
 

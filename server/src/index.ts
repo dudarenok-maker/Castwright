@@ -47,7 +47,7 @@ import {
   portableImportRouter,
 } from './routes/exports-portable.js';
 import { shareRouter, sharePublicRouter } from './routes/share.js';
-import { revisionsRouter } from './routes/revisions.js';
+import { revisionsRouter, revisionsBulkRouter } from './routes/revisions.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
 import { ollamaHealthRouter } from './routes/ollama-health.js';
 import { workspaceRouter } from './routes/workspace.js';
@@ -153,6 +153,7 @@ app.use('/cert', certRootRouter); // plan 81 — mounts /root.crt (mkcert root C
 app.use('/api/books', shareRouter); // mounts /:bookId/share (POST — mint a slugged share URL — plan 67)
 app.use('/', sharePublicRouter); // mounts /share/:slug (public-facing M4B proxy — plan 67)
 app.use('/api/books', revisionsRouter); // mounts /:bookId/revisions (drift diff over segments snapshots)
+app.use('/api', revisionsBulkRouter); // plan 83 — bulk /revisions?bookIds=... for cross-book fan-out
 app.use('/api/voices', voicesRouter); // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter); // mounts POST /:voiceId/sample
 app.use('/api/sidecar', sidecarHealthRouter); // mounts GET /health
