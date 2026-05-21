@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { waitForRouteReady } from './helpers';
 
 /**
  * Plan 57 + plan 67 — Listen-view download tiles e2e.
@@ -24,6 +25,7 @@ test.describe('plan 57 — download tiles', () => {
     await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 })).toBeVisible({
       timeout: 10_000,
     });
+    await waitForRouteReady(page);
   });
 
   test('M4B tile is live and opens the export modal with m4b pre-selected', async ({ page }) => {
@@ -35,7 +37,7 @@ test.describe('plan 57 — download tiles', () => {
     // Modal mounts. Use the modal's own testid + the format-picker
     // selected-state attribute exposed by export-audiobook.tsx
     // (data-testid="export-format-m4b" on the M4B format pill).
-    await expect(page.getByTestId('export-audiobook-modal')).toBeVisible({ timeout: 3_000 });
+    await expect(page.getByTestId('export-audiobook-modal')).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId('export-format-m4b')).toBeVisible();
   });
 
@@ -47,7 +49,7 @@ test.describe('plan 57 — download tiles', () => {
     const button = tile.getByRole('button', { name: /Download/i });
     await expect(button).toBeEnabled();
     await button.click();
-    await expect(page.getByTestId('export-audiobook-modal')).toBeVisible({ timeout: 3_000 });
+    await expect(page.getByTestId('export-audiobook-modal')).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId('export-format-mp3-zip')).toBeVisible();
   });
 
@@ -61,11 +63,11 @@ test.describe('plan 57 — download tiles', () => {
     await button.click();
 
     // Share-link modal mounts with the slugged URL in a copyable input.
-    await expect(page.getByTestId('share-link-modal')).toBeVisible({ timeout: 3_000 });
+    await expect(page.getByTestId('share-link-modal')).toBeVisible({ timeout: 10_000 });
     const urlInput = page.getByTestId('share-link-url');
     // Mock createBookShareLink resolves to `${origin}/share/<12-char slug>`.
     await expect(urlInput).toHaveValue(/\/share\/[0-9ABCDEFGHJKMNPQRSTVWXYZ]{12}$/, {
-      timeout: 3_000,
+      timeout: 10_000,
     });
     const copyButton = page.getByTestId('share-link-copy');
     await expect(copyButton).toBeEnabled();

@@ -62,3 +62,14 @@ export async function goToConfirm(page: Page): Promise<void> {
     page.getByRole('button', { name: /Confirm cast and review manuscript/i }),
   ).toBeVisible({ timeout: 5_000 });
 }
+
+/* Plan 89 C5 — DelayedSpinner paints at +150 ms while a React.lazy chunk
+ * is in flight. Waiting for it to detach gives the lazy view a determi-
+ * nistic mount point regardless of cache warmth. Warm cache: spinner
+ * never paints; this resolves immediately. Cold cache: blocks until the
+ * lazy chunk resolves and Suspense swaps to the real view. */
+export async function waitForRouteReady(page: Page): Promise<void> {
+  await page
+    .locator('[data-testid="route-suspense-fallback"]')
+    .waitFor({ state: 'detached', timeout: 15_000 });
+}

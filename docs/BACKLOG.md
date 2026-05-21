@@ -59,16 +59,6 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey at `~/.claude
 - _Depends on:_ none.
 - _Benefit (user):_ unblocks long chapters in the manuscript view — today the worst frontend pain point. Pairs with Could #25 (confirm-cast + listen-chapter virtualisation) which reuses the same dep.
 
-### 2. De-flake `cast-drawer` + `download-tiles` Playwright specs
-
-Source: net-new (2026-05-21). Surfaced during the plan 87/88/89 ship round — both specs failed first run then passed on retry, reliably enough that Playwright marked them "flaky" and exited non-zero, blocking pre-push for unrelated docs branches. User asked for it as Should so it gets done soon.
-
-- _What:_ Investigate the failure mode for `e2e/cast-drawer.spec.ts:24:3` ("clicking a character opens the drawer with evidence + toggleable 'Show more'") and `e2e/download-tiles.spec.ts:29:3` ("plan 57 — M4B tile is live and opens the export modal with m4b pre-selected"). Both fail on `expect(locator).toBeVisible()` — likely timing against the new `React.lazy` Suspense boundaries from plan 89 (route splitting) where the modal/drawer DOM nodes aren't mounted until the lazy chunk loads. Fix is probably either (a) wait for a stable post-suspense locator first (e.g. the route's heading), then drill in; or (b) bump the per-locator timeout for these two assertions. NOT a `test.retry()` band-aid — those would mask real regressions.
-- _Acceptance:_ Run `npm run test:e2e` 5× in succession from a clean main; both specs are green on first attempt every time, no Playwright "flaky" classification, exit code 0. The fix must NOT introduce arbitrary `waitFor(timeout)` constants — use proper element-stability waits.
-- _Key files:_ `e2e/cast-drawer.spec.ts`, `e2e/download-tiles.spec.ts`; potentially `e2e/helpers/*.ts` if a shared "wait for lazy route to mount" helper is needed.
-- _Depends on:_ none.
-- _Benefit (technical):_ restores pre-push as a real merge gate. Today flaky specs train reviewers to retry pre-push reflexively, which masks genuine regressions. Also unblocks future docs-only branches that legitimately don't touch e2e but get gated on these.
-
 ---
 
 ## Could — nice to have, low-cost wins
