@@ -148,17 +148,22 @@ Sidecar will fall back to CPU and log it. Verify `nvidia-smi` works at the OS le
 
 ---
 
-## Switching analyzer to Ollama (local, free, on-device)
+## Setting up the analyzer
 
-The install bundle ships Kokoro for TTS only. The analyzer defaults to Google's free Gemini API. To switch the analyzer to Ollama (private, fully on-device):
+The install bundle ships Kokoro weights for TTS only — the analyzer needs either a local Ollama daemon or a Gemini API key. The server-side default is `ANALYZER=local` (Ollama); if no Ollama daemon is reachable, the analyzer auto-falls back to the Gemini free tier when a key is configured.
 
-1. Install Ollama from <https://ollama.com>.
-2. Pull a model: `ollama pull qwen3.5:4b` (~2.5 GB).
-3. In the app: **Account → Server configuration → Analyzer engine** → "Local Ollama".
-4. **Account → Defaults for new books → Analysis model** → "Qwen3.5 4B (local)".
-5. Save. The next analysis routes to your local Ollama.
+**Option A — Ollama (private, fully on-device).** Since v1.3.0 the Account → Models card in the running app installs Ollama and pulls models without leaving the UI:
 
-> **Coming in a future release**: an "Install Ollama" + "Pull model" UX on the Account tab so you don't have to leave the app for the above. Tracked in [docs/BACKLOG.md](docs/BACKLOG.md) as a Could-bucket item.
+1. Start the app (`npm run start:prod`), open **Account → Models**.
+2. Click **Install Ollama** (platform-aware bootstrap; Windows / macOS / Linux all covered).
+3. Click **Pull model** and pick e.g. `qwen3.5:4b` (~2.5 GB).
+4. **Account → Defaults for new books → Analysis model** → pick the pulled model. Save.
+
+Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3.5:4b`, then set the model in the Account tab.
+
+**Option B — Gemini (cloud, free tier).** Get a key from <https://aistudio.google.com>, paste it into **Account → Server configuration → Gemini API key**. Engine selection follows from the model picker — pick any Gemini model in **Defaults for new books → Analysis model**. Save. The key persists to `server/user-settings.json` (gitignored, plaintext, same trust model as `server/.env`).
+
+**Option C — Pipelined two-model split (v1.4.0).** For long books: Phase 0 (cast detection) runs on Gemma while Phase 1 (sentence attribution) runs on Gemini Flash in parallel, hitting independent rate-limit buckets so effective quota nearly doubles. Configure under **Account → Defaults for new books → Phase 0 model + Phase 1 model + Min-lag chapters** (default 10), or set `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` in `server/.env`. Manual handoff (`ANALYZER=manual`) short-circuits to sequential — the file-drop cowork loop can't pipeline.
 
 ## Switching TTS to Coqui XTTS v2 (alternate, on-device)
 
@@ -166,13 +171,41 @@ The install bundle ships Kokoro for TTS only. The analyzer defaults to Google's 
 2. **TTS model** → "Coqui XTTS v2".
 3. Save. The first chapter generation triggers a one-time ~2 GB model download.
 
-## Using Gemini for analysis or TTS (cloud, free tier)
+## Using Gemini for TTS (cloud, free tier)
 
-1. Get an API key from <https://aistudio.google.com> (Google account required).
-2. In the app: **Account → Server configuration → Gemini API key** → paste the key → Save.
-3. Engine selection follows from the model picker: choose any Gemini model in **Defaults for new books → Analysis model** (or TTS engine + model). Save.
+The same Gemini key configured for the analyzer (see Option B above) doubles as the TTS provider when picked.
+
+1. Get an API key from <https://aistudio.google.com> (Google account required), saved via **Account → Server configuration → Gemini API key**.
+2. **Account → Defaults for new books → TTS engine** → "Gemini (cloud)".
+3. **TTS model** → pick `gemini-3.1-flash-preview-tts` or `gemini-2.5-flash-preview-tts`. Save.
 
 The key is stored plaintext in `server/user-settings.json` (gitignored, same trust model as `server/.env` for a single-user workspace). The env var `GEMINI_API_KEY` in `server/.env` still wins if both are set — useful for CI / scripted setups.
+
+---
+
+## Picking a chapter audio format (v1.4.0)
+
+Chapter audio defaults to MP3 VBR V2. Two newer codecs are available per-book under **Listen view → metadata editor → Audio format** or in the export modal:
+
+- **MP3** (default) — broadest player support; VBR V2.
+- **AAC / M4A** — smaller files at equal perceived quality; `libfdk_aac` is auto-detected on the host ffmpeg with a graceful fallback to the native AAC encoder.
+- **Opus** — best ratio at very low bitrates; ideal for streaming over LAN.
+
+The `audioFormat` field is new on `BookStateJson` (default `'mp3'`) — existing books carry the default and need no migration. Export shapes mirror the codec: `aac-m4a-zip`, `opus-ogg-zip`, plus the existing `mp3-zip` + `mp3-folder` + `m4b-single`.
+
+Loudness normalization (EBU R128, two-pass, targeting -16 LUFS / 11 LU / -1.5 dBTP) is **on by default** for every newly-rendered chapter. To opt out per server install, set `AUDIO_LOUDNORM_ENABLED=false` in `server/.env`. The Listen view's loudness report card surfaces measured LUFS / LRA / dBTP and flags drift between chapters.
+
+---
+
+## Mobile + tablet access over LAN HTTPS (v1.4.0)
+
+The app drives on phone + tablet via LAN HTTPS using `mkcert` so iOS / Android trust the cert without browser warnings. One-time setup per dev box:
+
+1. Install `mkcert` — `scoop install mkcert` (Windows), `brew install mkcert` (macOS), or `apt install mkcert` (Linux). Then `mkcert -install`.
+2. `npm run install:cert-mobile` — prints LAN URL + QR code + per-OS root-cert install steps.
+3. Install the root CA on each mobile device once (iOS: Settings → Profile downloaded → Install → trust; Android: Settings → Security → Install certificate).
+4. Run the server in LAN mode: `npm run start:lan` for the production bundle on `https://0.0.0.0:8443`, or `npm run dev:lan` for HMR-capable Vite + Node on `https://0.0.0.0:5173`/`:8443`.
+5. Open the printed LAN URL on the device — lock icon, no warning.
 
 ---
 
@@ -187,3 +220,10 @@ A new release is just a new zip — there's no in-app auto-update yet.
 5. `npm run start:prod`.
 
 Your workspace (`WORKSPACE_DIR` from `server/.env`) is separate from the install folder and survives across upgrades unchanged.
+
+### v1.3.x → v1.4.0 notes
+
+- `BookStateJson` gained an optional `audioFormat` field (`'mp3' | 'aac-m4a' | 'opus'`). Existing books default to `'mp3'`; no migration required.
+- Finished exports moved from the hidden `.audiobook/exports/<id>/` jail to a visible `<bookDir>/exports/<slug>.<ext>` sibling to `audio/`. Old exports stay where they were — only new exports land in the new location.
+- Audio loudness normalization is on by default in v1.4.0. Set `AUDIO_LOUDNORM_ENABLED=false` in `server/.env` if you need bit-exact match with previously-rendered chapters; otherwise regenerate to bring older chapters into the loudness target.
+- New optional env knobs: `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` (pipelined two-model analyzer), `GEN_CHAPTER_CONCURRENCY` (parallel chapter synthesis, default 2). All have safe defaults — leave unset to keep the v1.3.1 behaviour.
