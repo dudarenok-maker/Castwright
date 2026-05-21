@@ -342,6 +342,16 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Depends on:_ none (the on-disk segment shape already carries `kind: 'title'` since PR #101).
 - _Benefit (user):_ visual cue that matches the audible cue — listener sees "you're hearing the title now" before the body segments start. Today the title beat is audible-only.
 
+### 30. Generation SSE survives Node hot-reload during dev
+
+Source: net-new (2026-05-21). Surfaced while smoke-testing PR #107 — a `tsx` restart killed the active SSE bridge and the frontend showed "Worker has gone quiet · 67s" while the sidecar kept synthesising in the background.
+
+- _What:_ When the Node server hot-reloads in dev (`tsx watch` triggered by any file change under `server/src/`), the open `/api/generation/stream` SSE connection dies with it. The sidecar keeps synthesising for as long as the in-flight HTTP request is alive, but the frontend's `generation-stream-middleware` sees no more `progress` ticks and surfaces the "Worker has gone quiet" stall banner after `STALL_THRESHOLD_MS`. Auto-reconnect on the SSE consumer side (re-open against the active book's stream endpoint if it drops while a generation is alive) would let the dev keep editing without manually Pause/Resume-ing every time. Two-layer fix: the consumer reopens; the server-side stream emits an idempotent `resume_from` ack so a reconnect doesn't replay completed chapters. Production users hit this rarely — only on crash recovery — but the seam is exactly the same.
+- _Acceptance:_ Edit any file under `server/src/` during a live generation; `tsx` restarts the Node server; within ~3 s the frontend re-establishes the SSE and the chapter list keeps advancing without a "Worker has gone quiet" banner. The book's state.json reflects no double-progress for already-completed chapters.
+- _Key files:_ `src/store/generation-stream-middleware.ts` (reconnect logic — today the middleware treats the EventSource ending as a terminal stop); `src/lib/api.ts` `realStreamGeneration` (handle source error/end events as recoverable when a book is mid-flight); `server/src/routes/generation.ts` (idempotent resume — emit a snapshot of completed chapters first, then resume per-chapter `progress`).
+- _Depends on:_ none. Self-contained inside the streaming surface.
+- _Benefit (dev / technical):_ no more false "stalled" banners during interactive development. Same fix incidentally covers production crash-recovery (Node OOM, manual restart) so users running long books survive a sidecar/server bounce without losing the visible progress thread.
+
 ---
 
 ## Won't (this round) — explicitly parked
