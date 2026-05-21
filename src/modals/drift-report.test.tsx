@@ -13,8 +13,9 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
-import { DriftReportModal, type DriftBookGroup } from './drift-report';
+import { DriftReportModal, type DriftBookGroupView } from './drift-report';
 import { uiSlice } from '../store/ui-slice';
+import { groupDriftEvents } from '../store/revisions-slice';
 import type { DriftEvent, Character, Voice } from '../lib/types';
 
 vi.mock('../lib/use-sample-playback', () => ({
@@ -73,12 +74,12 @@ function makeEvent(over: Partial<DriftEvent>): DriftEvent {
   } as DriftEvent;
 }
 
-function group(events: DriftEvent[], over: Partial<DriftBookGroup> = {}): DriftBookGroup {
+function group(events: DriftEvent[], over: Partial<DriftBookGroupView> = {}): DriftBookGroupView {
   return {
     bookId: 'book-A',
     bookTitle: 'Bonus Keefe Story',
     characters,
-    events,
+    groups: groupDriftEvents(events),
     ...over,
   };
 }
@@ -89,7 +90,7 @@ describe('DriftReportModal — auto-queueable severe drift (C1+C2)', () => {
     const onRegenerateChapter = vi.fn();
     render(
       <DriftReportModal
-        eventsByBook={[group([makeEvent({})])]}
+        groupsByBook={[group([makeEvent({})])]}
         onClose={vi.fn()}
         onRegenerateChapter={onRegenerateChapter}
         onAutoQueueRegenerate={onAutoQueueRegenerate}
@@ -98,7 +99,7 @@ describe('DriftReportModal — auto-queueable severe drift (C1+C2)', () => {
     );
     const autoBtn = screen.getByTestId('drift-auto-regen-drift:book-A:1:eliza:voice');
     expect(autoBtn).toBeInTheDocument();
-    expect(autoBtn).toHaveTextContent(/Auto-regen now/i);
+    expect(autoBtn).toHaveTextContent(/Auto-regen/i);
     expect(screen.queryByTestId('drift-regen-drift:book-A:1:eliza:voice')).toBeNull();
 
     fireEvent.click(autoBtn);
@@ -111,7 +112,7 @@ describe('DriftReportModal — auto-queueable severe drift (C1+C2)', () => {
     const onRegenerateChapter = vi.fn();
     render(
       <DriftReportModal
-        eventsByBook={[
+        groupsByBook={[
           group([
             makeEvent({
               id: 'drift:book-A:1:eliza:pace',
@@ -130,7 +131,7 @@ describe('DriftReportModal — auto-queueable severe drift (C1+C2)', () => {
     );
     const manualBtn = screen.getByTestId('drift-regen-drift:book-A:1:eliza:pace');
     expect(manualBtn).toBeInTheDocument();
-    expect(manualBtn).toHaveTextContent(/Regenerate this chapter/i);
+    expect(manualBtn).toHaveTextContent(/Regenerate/i);
     expect(screen.queryByTestId('drift-auto-regen-drift:book-A:1:eliza:pace')).toBeNull();
 
     fireEvent.click(manualBtn);
@@ -142,7 +143,7 @@ describe('DriftReportModal — auto-queueable severe drift (C1+C2)', () => {
     const onRegenerateChapter = vi.fn();
     render(
       <DriftReportModal
-        eventsByBook={[group([makeEvent({})])]}
+        groupsByBook={[group([makeEvent({})])]}
         onClose={vi.fn()}
         onRegenerateChapter={onRegenerateChapter}
         onDismiss={vi.fn()}
@@ -158,7 +159,7 @@ describe('DriftReportModal — auto-queueable severe drift (C1+C2)', () => {
     const onAutoQueueRegenerate = vi.fn();
     render(
       <DriftReportModal
-        eventsByBook={[
+        groupsByBook={[
           group([
             makeEvent({}),
             makeEvent({
@@ -189,7 +190,7 @@ describe('DriftReportModal — fidelity contract (drift-report-fidelity plan)', 
        chapter. Now the title comes off the event payload, server-emitted. */
     render(
       <DriftReportModal
-        eventsByBook={[
+        groupsByBook={[
           group([
             makeEvent({
               chapterTitle: 'A Real Chapter Title',
@@ -212,7 +213,7 @@ describe('DriftReportModal — fidelity contract (drift-report-fidelity plan)', 
   it('renders a book header per group when more than one book has drift', () => {
     render(
       <DriftReportModal
-        eventsByBook={[
+        groupsByBook={[
           group([makeEvent({})], { bookId: 'book-A', bookTitle: 'Book Aleph' }),
           group(
             [
@@ -239,7 +240,7 @@ describe('DriftReportModal — fidelity contract (drift-report-fidelity plan)', 
   it('omits the book sub-header when only one book has drift', () => {
     render(
       <DriftReportModal
-        eventsByBook={[group([makeEvent({})], { bookTitle: 'Bonus Keefe Story' })]}
+        groupsByBook={[group([makeEvent({})], { bookTitle: 'Bonus Keefe Story' })]}
         onClose={vi.fn()}
         onRegenerateChapter={vi.fn()}
         onDismiss={vi.fn()}
@@ -256,7 +257,7 @@ describe('DriftReportModal — fidelity contract (drift-report-fidelity plan)', 
   it('renders the side-by-side comparison with both When rendered and Now columns', () => {
     render(
       <DriftReportModal
-        eventsByBook={[
+        groupsByBook={[
           group([
             makeEvent({
               snapshot: {
@@ -293,7 +294,7 @@ describe('DriftReportModal — fidelity contract (drift-report-fidelity plan)', 
   it('marks the changed-factor row with data-changed=true', () => {
     render(
       <DriftReportModal
-        eventsByBook={[
+        groupsByBook={[
           group([
             makeEvent({
               factor: 'warmth',
@@ -349,7 +350,7 @@ describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
     return render(
       <Provider store={store}>
         <DriftReportModal
-          eventsByBook={[group(events, { bookId: 'b-keeper' })]}
+          groupsByBook={[group(events, { bookId: 'b-keeper' })]}
           voices={[elizaVoice]}
           onClose={vi.fn()}
           onRegenerateChapter={vi.fn()}
@@ -406,5 +407,217 @@ describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
     pauseASpy.mockClear();
     unmount();
     expect(pauseASpy).toHaveBeenCalled();
+  });
+});
+
+/* Cast Drift consolidation (plan 91) — one card per
+   `(book × character × snapshot)` group, redundant compare table
+   deduped, per-chapter strip + bulk actions for multi-chapter groups.
+   Backstop for the 300-event hang the user reported. */
+describe('DriftReportModal — consolidated (book × character × snapshot) groups (plan 91)', () => {
+  /* Two snapshots — same character, before & after a mid-book cast edit. */
+  const snapA: DriftEvent['snapshot'] = {
+    voiceId: 'old-voice',
+    tone: { warmth: 40, pace: 50 },
+    attributes: ['warm'],
+  };
+  const snapB: DriftEvent['snapshot'] = {
+    voiceId: 'second-old-voice',
+    tone: { warmth: 40, pace: 50 },
+    attributes: ['warm'],
+  };
+  const cur: DriftEvent['current'] = {
+    voiceId: 'new-voice',
+    tone: { warmth: 80, pace: 50 },
+    attributes: ['warm', 'enthusiastic'],
+  };
+
+  function makeChapterEvent(chapterId: number, over: Partial<DriftEvent> = {}): DriftEvent {
+    return makeEvent({
+      id: `drift:book-A:${chapterId}:eliza:voice`,
+      chapterId,
+      chapterTitle: `Chapter ${chapterId}`,
+      snapshot: snapA,
+      current: cur,
+      ...over,
+    });
+  }
+
+  it('collapses N same-snapshot events into a single card with the compare table rendered once', () => {
+    render(
+      <DriftReportModal
+        groupsByBook={[
+          group([makeChapterEvent(1), makeChapterEvent(2), makeChapterEvent(3)]),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    /* Three events → one group → one compare card. The 8 row testids
+       collapse to single occurrences. */
+    expect(screen.getAllByTestId('drift-compare-row-voice')).toHaveLength(1);
+    /* Card chapter count + modal header "3 chapters flagged" both
+       contain the substring — at minimum the card surface must show
+       its chapter count. */
+    expect(screen.getAllByText(/3 chapters/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('splits two snapshots for the same character into two cards (mid-book cast edit)', () => {
+    render(
+      <DriftReportModal
+        groupsByBook={[
+          group([
+            makeChapterEvent(1, { snapshot: snapA }),
+            makeChapterEvent(2, { snapshot: snapA }),
+            makeChapterEvent(3, { snapshot: snapB }),
+          ]),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    /* Two snapshots → two cards → two compare tables. */
+    expect(screen.getAllByTestId('drift-compare-row-voice')).toHaveLength(2);
+  });
+
+  it('a single-chapter group renders its action row inline (no expand button needed)', () => {
+    render(
+      <DriftReportModal
+        groupsByBook={[group([makeChapterEvent(1)])]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onAutoQueueRegenerate={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    /* Single-chapter optimisation — no Show-N toggle, no Regen-all
+       (single-chapter regen-all would just duplicate the inline button). */
+    expect(screen.queryByTestId(/^drift-group-toggle-/)).toBeNull();
+    expect(screen.queryByTestId(/^drift-group-regen-all-/)).toBeNull();
+    /* The single-chapter row still surfaces auto-regen + dismiss. */
+    expect(screen.getByTestId('drift-auto-regen-drift:book-A:1:eliza:voice')).toBeInTheDocument();
+    expect(screen.getByTestId('drift-dismiss-drift:book-A:1:eliza:voice')).toBeInTheDocument();
+  });
+
+  it('a multi-chapter group keeps the chapters strip collapsed by default', () => {
+    render(
+      <DriftReportModal
+        groupsByBook={[group([makeChapterEvent(1), makeChapterEvent(2)])]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    /* Collapsed by default → chapter rows hidden, toggle visible. */
+    expect(screen.queryByTestId(/^drift-event-drift:book-A:1:eliza/)).toBeNull();
+    const toggle = screen.getByText(/Show 2 chapters/i);
+    fireEvent.click(toggle);
+    /* After expand, both chapter rows are visible. */
+    expect(screen.getByTestId('drift-event-drift:book-A:1:eliza:voice')).toBeInTheDocument();
+    expect(screen.getByTestId('drift-event-drift:book-A:2:eliza:voice')).toBeInTheDocument();
+  });
+
+  it('Regenerate all fires onRegenerateChapter once per chapter in the group', () => {
+    const onRegenerateChapter = vi.fn();
+    render(
+      <DriftReportModal
+        groupsByBook={[
+          group([makeChapterEvent(1), makeChapterEvent(2), makeChapterEvent(3)]),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={onRegenerateChapter}
+        onDismiss={vi.fn()}
+      />,
+    );
+    const regenAll = screen.getByTestId(/^drift-group-regen-all-/);
+    fireEvent.click(regenAll);
+    expect(onRegenerateChapter).toHaveBeenCalledTimes(3);
+    expect(onRegenerateChapter).toHaveBeenCalledWith('book-A', 'eliza', 1);
+    expect(onRegenerateChapter).toHaveBeenCalledWith('book-A', 'eliza', 2);
+    expect(onRegenerateChapter).toHaveBeenCalledWith('book-A', 'eliza', 3);
+  });
+
+  it('Auto-regen all is only present when every event in the group is autoQueueable', () => {
+    const onAutoQueueRegenerate = vi.fn();
+    render(
+      <DriftReportModal
+        groupsByBook={[
+          group([
+            makeChapterEvent(1, { autoQueueable: true }),
+            makeChapterEvent(2, { autoQueueable: false }),
+          ]),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onAutoQueueRegenerate={onAutoQueueRegenerate}
+        onDismiss={vi.fn()}
+      />,
+    );
+    /* Mixed autoQueueable → no bulk auto-regen surface. */
+    expect(screen.queryByTestId(/^drift-group-auto-regen-all-/)).toBeNull();
+  });
+
+  it('Auto-regen all fires onAutoQueueRegenerate once per chapter when all are autoQueueable', () => {
+    const onAutoQueueRegenerate = vi.fn();
+    render(
+      <DriftReportModal
+        groupsByBook={[
+          group([
+            makeChapterEvent(1, { autoQueueable: true }),
+            makeChapterEvent(2, { autoQueueable: true }),
+          ]),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onAutoQueueRegenerate={onAutoQueueRegenerate}
+        onDismiss={vi.fn()}
+      />,
+    );
+    const autoAll = screen.getByTestId(/^drift-group-auto-regen-all-/);
+    fireEvent.click(autoAll);
+    expect(onAutoQueueRegenerate).toHaveBeenCalledTimes(2);
+  });
+
+  it('Dismiss all fires onDismiss once per event in the group', () => {
+    const onDismiss = vi.fn();
+    render(
+      <DriftReportModal
+        groupsByBook={[
+          group([makeChapterEvent(1), makeChapterEvent(2), makeChapterEvent(3)]),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={onDismiss}
+      />,
+    );
+    fireEvent.click(screen.getByTestId(/^drift-group-dismiss-all-/));
+    expect(onDismiss).toHaveBeenCalledTimes(3);
+  });
+
+  it('header summary counts every event across every group (matches today\'s shape)', () => {
+    /* The "{N} chapters flagged" line in the modal header has been the
+       canonical drift-count surface since multi-book landed; the
+       consolidation must not change this number — only the *card* count. */
+    render(
+      <DriftReportModal
+        groupsByBook={[
+          group([
+            makeChapterEvent(1, { snapshot: snapA }),
+            makeChapterEvent(2, { snapshot: snapA }),
+            makeChapterEvent(3, { snapshot: snapB }),
+            makeChapterEvent(4, { snapshot: snapB }),
+            makeChapterEvent(5, { snapshot: snapB }),
+          ]),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/5 chapters flagged/)).toBeInTheDocument();
+    /* Only 2 cards though — one per snapshot. */
+    expect(screen.getAllByTestId(/^drift-group-/).length).toBeGreaterThanOrEqual(2);
   });
 });

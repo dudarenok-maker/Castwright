@@ -103,6 +103,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 ### I. Revisions & drift
 
 - [83 — Background drift polling across non-active books](83-drift-poll-multibook.md) — New `GET /api/revisions?bookIds=...` bulk endpoint + frontend two-tier poller (30 s active, 120 s background). Drift on Book B surfaces in Book A's modal within ~2 min without a navigate. Active-book latency unchanged.
+- [91 — Cast Drift modal consolidation by (book × character × snapshot)](91-cast-drift-consolidation.md) — One card per group instead of one card per event; ~300-event modal collapses to ~6–18 cards. `createSelector`-memoised `selectDriftGroupsByBook` + `React.memo`-wrapped row components + memoised prop builder in `layout.tsx` drop DOM-node count from ~7,200 to ~200. Detailed `ProfileCompareCard` preserved (renders once per group), per-chapter Regen / Listen / Dismiss preserved in an expandable strip; bulk Regen-all / Dismiss-all / Auto-regen-all added on multi-chapter groups.
 
 ### J. Library & workspace
 

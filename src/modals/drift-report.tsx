@@ -1,31 +1,34 @@
-import { useEffect, useRef, useState } from 'react';
-import { IconAlertTri, IconClose, IconRefresh, IconWaveform } from '../lib/icons';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { IconAlertTri, IconChevD, IconClose, IconRefresh, IconWaveform } from '../lib/icons';
 import { Avatar, Pill } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { api } from '../lib/api';
 import { useAppSelector } from '../store';
+import type { DriftGroup } from '../store/revisions-slice';
 import type { DriftEvent, Character, CharColor, Voice } from '../lib/types';
 
-/* The modal now renders drift events grouped by book — the user's
-   concurrent-multibook workflow means a single open modal can be
-   showing drift from Book A AND Book B at the same time. Each event
-   carries `bookId`, `chapterTitle`, `snapshot` and `current` from the
-   server so the modal is a pure projection of the event payload (no
-   joins against the chapters / cast slice, both of which are scoped
-   to the active book). */
-export interface DriftBookGroup {
+/* The modal renders one card per `(book × character × snapshot)` group
+   (see `selectDriftGroupsByBook` in `src/store/revisions-slice.ts`).
+   Each card shows the snapshot→current diff once at the top, plus an
+   expandable strip of per-chapter actions for every chapter affected by
+   that diff. A character whose voice profile was edited once collapses
+   from N chapter-cards (the old shape) to a single card with N rows
+   inside — DOM-node count drops from ~7,200 to ~200 for a 300-event
+   modal. */
+export interface DriftBookGroupView {
   bookId: string;
   bookTitle: string;
   /** Cast for the book the events belong to. Used for avatar colour /
       display name resolution; missing entries fall back to the event's
       embedded `current.name` so cross-book events still render. */
   characters: Character[];
-  events: DriftEvent[];
+  /** Pre-grouped drift events from `selectDriftGroupsByBook`. */
+  groups: DriftGroup[];
 }
 
 interface Props {
-  eventsByBook: DriftBookGroup[];
+  groupsByBook: DriftBookGroupView[];
   onClose: () => void;
   onRegenerateChapter: (bookId: string, characterId: string, chapterId: number) => void;
   /** Optional one-click shortcut for events flagged `autoQueueable` by
@@ -52,16 +55,19 @@ const severityColor: Record<DriftEvent['severity'], 'danger' | 'warning' | 'neut
 };
 
 export function DriftReportModal({
-  eventsByBook,
+  groupsByBook,
   onClose,
   onRegenerateChapter,
   onAutoQueueRegenerate,
   onDismiss,
   voices,
 }: Props) {
-  const totalCount = eventsByBook.reduce((acc, g) => acc + g.events.length, 0);
+  const totalCount = groupsByBook.reduce(
+    (acc, g) => acc + g.groups.reduce((sub, gr) => sub + gr.events.length, 0),
+    0,
+  );
   if (totalCount === 0) return null;
-  const bookCount = eventsByBook.length;
+  const bookCount = groupsByBook.length;
 
   return (
     <>
@@ -94,10 +100,10 @@ export function DriftReportModal({
               within tolerance.
             </p>
 
-            {eventsByBook.map((group) => (
+            {groupsByBook.map((view) => (
               <DriftBookSection
-                key={group.bookId}
-                group={group}
+                key={view.bookId}
+                view={view}
                 showBookHeader={bookCount > 1}
                 voices={voices}
                 onRegenerateChapter={onRegenerateChapter}
@@ -118,25 +124,36 @@ export function DriftReportModal({
 }
 
 function DriftBookSection({
-  group,
+  view,
   showBookHeader,
   voices,
   onRegenerateChapter,
   onAutoQueueRegenerate,
   onDismiss,
 }: {
-  group: DriftBookGroup;
+  view: DriftBookGroupView;
   showBookHeader: boolean;
   voices?: Voice[];
   onRegenerateChapter: (bookId: string, characterId: string, chapterId: number) => void;
   onAutoQueueRegenerate?: (bookId: string, characterId: string, chapterId: number) => void;
   onDismiss: (eventId: string) => void;
 }) {
-  const grouped = group.events.reduce<Record<string, DriftEvent[]>>((acc, e) => {
-    (acc[e.severity] ??= []).push(e);
+  /* Bucket cards by topSeverity so the severity-ordering UX persists —
+     the user reads severe drift first, mild last. */
+  const bySeverity = useMemo(() => {
+    const acc: Record<DriftEvent['severity'], DriftGroup[]> = {
+      severe: [],
+      moderate: [],
+      mild: [],
+    };
+    for (const g of view.groups) acc[g.topSeverity].push(g);
     return acc;
-  }, {});
-  const findChar = (id: string) => group.characters.find((c) => c.id === id);
+  }, [view.groups]);
+  const totalChapters = useMemo(
+    () => view.groups.reduce((acc, g) => acc + g.events.length, 0),
+    [view.groups],
+  );
+  const findChar = (id: string) => view.characters.find((c) => c.id === id);
 
   return (
     <section className="space-y-4">
@@ -146,15 +163,13 @@ function DriftBookSection({
             Book
           </span>
           <h4 className="text-sm font-bold text-ink leading-tight flex-1 truncate">
-            {group.bookTitle}
+            {view.bookTitle}
           </h4>
-          <span className="text-xs text-ink/50 tabular-nums">
-            {group.events.length} flagged
-          </span>
+          <span className="text-xs text-ink/50 tabular-nums">{totalChapters} flagged</span>
         </header>
       )}
       {severityOrder.map((sev) => {
-        const items = grouped[sev];
+        const items = bySeverity[sev];
         if (!items || items.length === 0) return null;
         return (
           <section key={sev}>
@@ -164,87 +179,19 @@ function DriftBookSection({
               <span className="text-xs text-ink/50 tabular-nums">{items.length}</span>
             </div>
             <div className="space-y-2">
-              {items.map((e) => {
-                const char = findChar(e.characterId);
-                /* `e.current.name` is always present from the server emit; the
-                   cast lookup adds color + the up-to-date display name when
-                   the cast slice happens to hold this book. */
-                const displayName = char?.name || e.current?.name || e.characterId;
-                const colorKey = (char?.color as CharColor | undefined) || 'narrator';
+              {items.map((g) => {
+                const char = findChar(g.characterId);
                 return (
-                  <article
-                    key={e.id}
-                    className="p-4 rounded-2xl border border-ink/10 bg-white"
-                    data-testid={`drift-event-${e.id}`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <Avatar name={displayName} color={colorKey} size={36} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap mb-1">
-                          <h4 className="text-sm font-bold text-ink">{displayName}</h4>
-                          <span className="text-xs text-ink/50">in</span>
-                          <span className="text-xs font-semibold text-ink">
-                            CH {String(e.chapterId).padStart(2, '0')} ·{' '}
-                            {stripChapterPrefix(e.chapterTitle)}
-                          </span>
-                        </div>
-                        <p
-                          className="text-[11px] uppercase tracking-wider font-bold mb-2"
-                          style={{ color: CHAR_COLORS[colorKey].hex }}
-                        >
-                          {e.factorLabel}
-                        </p>
-                        <p className="text-xs text-ink/70 leading-relaxed mb-3">{e.description}</p>
-                        <ProfileCompareCard event={e} />
-                        <div className="flex items-center gap-2 mt-3">
-                          {e.autoQueueable && onAutoQueueRegenerate ? (
-                            <button
-                              onClick={() =>
-                                onAutoQueueRegenerate(group.bookId, e.characterId, e.chapterId)
-                              }
-                              data-testid={`drift-auto-regen-${e.id}`}
-                              title="Skip the confirmation modal — auto-queue this regeneration"
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-peach text-ink text-xs font-semibold hover:bg-peach/85"
-                            >
-                              <IconRefresh className="w-3.5 h-3.5" /> Auto-regen now
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() =>
-                                onRegenerateChapter(group.bookId, e.characterId, e.chapterId)
-                              }
-                              data-testid={`drift-regen-${e.id}`}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink-soft"
-                            >
-                              <IconRefresh className="w-3.5 h-3.5" /> Regenerate this chapter
-                            </button>
-                          )}
-                          {(() => {
-                            const rowVoice = voices?.find((v) => v.id === char?.voiceId);
-                            /* Listen widget mounts only when the caller plumbed
-                               a resolvable voice. Cross-book events whose cast
-                               isn't loaded won't have a voice match — gracefully
-                               omit the widget in that case. */
-                            if (!rowVoice) return null;
-                            return (
-                              <DriftListenWidget
-                                event={e}
-                                bookId={group.bookId}
-                                voice={rowVoice}
-                                character={char}
-                              />
-                            );
-                          })()}
-                          <button
-                            onClick={() => onDismiss(e.id)}
-                            className="ml-auto text-xs font-medium text-ink/50 hover:text-ink/80"
-                          >
-                            Dismiss
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </article>
+                  <DriftGroupCard
+                    key={g.groupId}
+                    group={g}
+                    bookId={view.bookId}
+                    character={char}
+                    voices={voices}
+                    onRegenerateChapter={onRegenerateChapter}
+                    onAutoQueueRegenerate={onAutoQueueRegenerate}
+                    onDismiss={onDismiss}
+                  />
                 );
               })}
             </div>
@@ -255,15 +202,291 @@ function DriftBookSection({
   );
 }
 
+const DriftGroupCard = memo(function DriftGroupCard({
+  group,
+  bookId,
+  character,
+  voices,
+  onRegenerateChapter,
+  onAutoQueueRegenerate,
+  onDismiss,
+}: {
+  group: DriftGroup;
+  bookId: string;
+  character: Character | undefined;
+  voices?: Voice[];
+  onRegenerateChapter: (bookId: string, characterId: string, chapterId: number) => void;
+  onAutoQueueRegenerate?: (bookId: string, characterId: string, chapterId: number) => void;
+  onDismiss: (eventId: string) => void;
+}) {
+  /* `e.current.name` is always present from the server emit; the cast
+     lookup adds color + the up-to-date display name when the cast slice
+     happens to hold this book. */
+  const { snapshot, current } = group;
+  const displayName = character?.name || current?.name || group.characterId;
+  const colorKey = (character?.color as CharColor | undefined) || 'narrator';
+  const rowVoice = voices?.find((v) => v.id === character?.voiceId);
+  const single = group.events.length === 1;
+  const [expanded, setExpanded] = useState(single);
+
+  /* Highlight any row whose snapshot ≠ current — the consolidated card
+     shows the *full* drift surface, not just the factor that triggered
+     the most recent event. The factor strip below the header still
+     names which factors fired emits, but the compare table flags every
+     differing field so the user can judge the whole picture at once. */
+  const changedFactors = useMemo(() => diffFactors(snapshot, current), [snapshot, current]);
+
+  return (
+    <article
+      className="p-4 rounded-2xl border border-ink/10 bg-white"
+      data-testid={`drift-group-${group.groupId}`}
+    >
+      <div className="flex items-start gap-3">
+        <Avatar name={displayName} color={colorKey} size={36} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <h4 className="text-sm font-bold text-ink">{displayName}</h4>
+            <span className="text-xs text-ink/50">·</span>
+            <span className="text-xs font-semibold text-ink tabular-nums">
+              {group.events.length} chapter{group.events.length === 1 ? '' : 's'}
+            </span>
+            {!single && (
+              <span className="text-[10px] text-ink/45 tabular-nums">
+                {group.severityCounts.severe > 0 && (
+                  <span className="mr-1">{group.severityCounts.severe}× severe</span>
+                )}
+                {group.severityCounts.moderate > 0 && (
+                  <span className="mr-1">{group.severityCounts.moderate}× moderate</span>
+                )}
+                {group.severityCounts.mild > 0 && (
+                  <span>{group.severityCounts.mild}× mild</span>
+                )}
+              </span>
+            )}
+          </div>
+          {group.factors.length > 0 && (
+            <p
+              className="text-[11px] uppercase tracking-wider font-bold mb-2 flex flex-wrap gap-x-2"
+              style={{ color: CHAR_COLORS[colorKey].hex }}
+              data-testid={`drift-group-factors-${group.groupId}`}
+            >
+              {group.factors.map((f) => (
+                <span key={f}>{factorDisplay(f, group.events)}</span>
+              ))}
+            </p>
+          )}
+          <ProfileCompareCard
+            snapshot={snapshot}
+            current={current}
+            changedFactors={changedFactors}
+          />
+
+          {single ? (
+            <ChapterRow
+              event={group.events[0]}
+              bookId={bookId}
+              character={character}
+              voice={rowVoice}
+              onRegenerateChapter={onRegenerateChapter}
+              onAutoQueueRegenerate={onAutoQueueRegenerate}
+              onDismiss={onDismiss}
+            />
+          ) : (
+            <>
+              <button
+                onClick={() => setExpanded((x) => !x)}
+                aria-expanded={expanded}
+                data-testid={`drift-group-toggle-${group.groupId}`}
+                className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-ink/70 hover:text-ink"
+              >
+                <IconChevD
+                  className={`w-3.5 h-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`}
+                />
+                {expanded
+                  ? 'Hide chapters'
+                  : `Show ${group.events.length} chapter${group.events.length === 1 ? '' : 's'}`}
+              </button>
+              {expanded && (
+                <ul
+                  className="mt-2 divide-y divide-ink/5 rounded-xl border border-ink/10 overflow-hidden"
+                  data-testid={`drift-group-chapters-${group.groupId}`}
+                >
+                  {group.events.map((e) => (
+                    <li key={e.id} className="p-2 bg-white">
+                      <ChapterRow
+                        event={e}
+                        bookId={bookId}
+                        character={character}
+                        voice={rowVoice}
+                        onRegenerateChapter={onRegenerateChapter}
+                        onAutoQueueRegenerate={onAutoQueueRegenerate}
+                        onDismiss={onDismiss}
+                        compact
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="flex items-center gap-2 mt-3 flex-wrap">
+                {group.allAutoQueueable && onAutoQueueRegenerate && (
+                  <button
+                    onClick={() => {
+                      for (const e of group.events) {
+                        onAutoQueueRegenerate(bookId, e.characterId, e.chapterId);
+                      }
+                    }}
+                    data-testid={`drift-group-auto-regen-all-${group.groupId}`}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-peach text-ink text-xs font-semibold hover:bg-peach/85"
+                  >
+                    <IconRefresh className="w-3.5 h-3.5" /> Auto-regen all
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    for (const e of group.events) {
+                      onRegenerateChapter(bookId, e.characterId, e.chapterId);
+                    }
+                  }}
+                  data-testid={`drift-group-regen-all-${group.groupId}`}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink-soft"
+                >
+                  <IconRefresh className="w-3.5 h-3.5" /> Regenerate all
+                </button>
+                <button
+                  onClick={() => {
+                    for (const e of group.events) onDismiss(e.id);
+                  }}
+                  data-testid={`drift-group-dismiss-all-${group.groupId}`}
+                  className="ml-auto text-xs font-medium text-ink/50 hover:text-ink/80"
+                >
+                  Dismiss all
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+});
+
+/* Per-chapter row inside a consolidated card. `compact` is used inside
+   the expanded chapter strip (smaller rows + reduced metadata); the
+   non-compact form is the single-chapter optimisation that renders
+   inline at the bottom of the card. Both render the same Regen / Listen
+   / Dismiss surface. */
+function ChapterRow({
+  event,
+  bookId,
+  character,
+  voice,
+  onRegenerateChapter,
+  onAutoQueueRegenerate,
+  onDismiss,
+  compact,
+}: {
+  event: DriftEvent;
+  bookId: string;
+  character?: Character;
+  voice?: Voice;
+  onRegenerateChapter: (bookId: string, characterId: string, chapterId: number) => void;
+  onAutoQueueRegenerate?: (bookId: string, characterId: string, chapterId: number) => void;
+  onDismiss: (eventId: string) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-center gap-2 flex-wrap ${compact ? '' : 'mt-3'}`}
+      data-testid={`drift-event-${event.id}`}
+    >
+      <span className="text-xs font-semibold text-ink tabular-nums">
+        CH {String(event.chapterId).padStart(2, '0')}
+      </span>
+      <span className="text-xs text-ink/70 flex-1 min-w-0 truncate">
+        {stripChapterPrefix(event.chapterTitle)}
+      </span>
+      {event.autoQueueable && onAutoQueueRegenerate ? (
+        <button
+          onClick={() => onAutoQueueRegenerate(bookId, event.characterId, event.chapterId)}
+          data-testid={`drift-auto-regen-${event.id}`}
+          title="Skip the confirmation modal — auto-queue this regeneration"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-peach text-ink text-[11px] font-semibold hover:bg-peach/85"
+        >
+          <IconRefresh className="w-3 h-3" /> Auto-regen
+        </button>
+      ) : (
+        <button
+          onClick={() => onRegenerateChapter(bookId, event.characterId, event.chapterId)}
+          data-testid={`drift-regen-${event.id}`}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-ink text-canvas text-[11px] font-semibold hover:bg-ink-soft"
+        >
+          <IconRefresh className="w-3 h-3" /> Regenerate
+        </button>
+      )}
+      {voice && (
+        <DriftListenWidget event={event} bookId={bookId} voice={voice} character={character} />
+      )}
+      <button
+        onClick={() => onDismiss(event.id)}
+        data-testid={`drift-dismiss-${event.id}`}
+        className="text-[11px] font-medium text-ink/50 hover:text-ink/80"
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+/* Returns the set of factor strings whose value differs between two
+   profile snapshots. Used to highlight every changed row in the compare
+   card (the consolidated card shows the full drift surface, not just
+   one trigger factor). */
+function diffFactors(
+  snap: DriftEvent['snapshot'] | undefined,
+  cur: DriftEvent['current'] | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  if (!snap || !cur) return out;
+  if (snap.voiceId !== cur.voiceId) out.add('voice');
+  if (snap.gender !== cur.gender) out.add('gender');
+  if (snap.ageRange !== cur.ageRange) out.add('ageRange');
+  if (snap.tone?.warmth !== cur.tone?.warmth) out.add('warmth');
+  if (snap.tone?.pace !== cur.tone?.pace) out.add('pace');
+  if (snap.tone?.authority !== cur.tone?.authority) out.add('authority');
+  if (snap.tone?.emotion !== cur.tone?.emotion) out.add('emotion');
+  const a = (snap.attributes ?? []).slice().sort().join('|');
+  const b = (cur.attributes ?? []).slice().sort().join('|');
+  if (a !== b) out.add('attributes');
+  return out;
+}
+
+/* Map a factor id back to a display label. Prefer the
+   `factorLabel` carried on one of the group's events (server-provided,
+   capitalised + localisable), fall back to a title-cased id. */
+function factorDisplay(factorId: string, events: DriftEvent[]): string {
+  const match = events.find((e) => e.factor === factorId);
+  if (match?.factorLabel) return match.factorLabel;
+  return factorId.charAt(0).toUpperCase() + factorId.slice(1);
+}
+
 /* Side-by-side "When rendered" vs "Now" profile comparison. Reads the
    structured `snapshot` (pre-render) and `current` (live cast) payloads
    the server attaches to every drift event. Fields that didn't change
-   render in muted ink; the changed field (matching `event.factor`) is
-   highlighted on the right column. */
-function ProfileCompareCard({ event }: { event: DriftEvent }) {
-  const snap = event.snapshot ?? {};
-  const cur = event.current ?? {};
-  const factor = event.factor;
+   render in muted ink; changed fields are highlighted on the right
+   column. The consolidated card passes the full set of changed factors
+   so every drifting row lights up — not just the single factor that
+   triggered the most recent event. */
+const ProfileCompareCard = memo(function ProfileCompareCard({
+  snapshot,
+  current,
+  changedFactors,
+}: {
+  snapshot: DriftEvent['snapshot'] | undefined;
+  current: DriftEvent['current'] | undefined;
+  changedFactors: Set<string>;
+}) {
+  const snap = snapshot ?? {};
+  const cur = current ?? {};
   type Row = {
     label: string;
     factor: string;
@@ -342,14 +565,18 @@ function ProfileCompareCard({ event }: { event: DriftEvent }) {
       </div>
       <div className="divide-y divide-ink/5">
         {rows.map((row) => (
-          <ProfileCompareRow key={row.factor} row={row} changed={row.factor === factor} />
+          <ProfileCompareRow
+            key={row.factor}
+            row={row}
+            changed={changedFactors.has(row.factor)}
+          />
         ))}
       </div>
     </div>
   );
-}
+});
 
-function ProfileCompareRow({
+const ProfileCompareRow = memo(function ProfileCompareRow({
   row,
   changed,
 }: {
@@ -400,9 +627,9 @@ function ProfileCompareRow({
       )}
     </div>
   );
-}
+});
 
-function ToneBar({
+const ToneBar = memo(function ToneBar({
   value,
   muted,
   highlight,
@@ -435,9 +662,9 @@ function ToneBar({
       {highlight && <span className="text-magenta">←</span>}
     </div>
   );
-}
+});
 
-function AttributeList({
+const AttributeList = memo(function AttributeList({
   values,
   diffAgainst,
   muted,
@@ -450,10 +677,20 @@ function AttributeList({
   muted?: boolean;
   highlight?: boolean;
 }) {
+  const diff = useMemo(() => {
+    if (!diffAgainst) return null;
+    const before = new Set(diffAgainst);
+    const after = new Set(values);
+    return {
+      added: values.filter((v) => !before.has(v)),
+      removed: diffAgainst.filter((v) => !after.has(v)),
+      kept: values.filter((v) => before.has(v)),
+    };
+  }, [values, diffAgainst]);
   if (values.length === 0 && (!diffAgainst || diffAgainst.length === 0)) {
     return <span className="text-ink/40">—</span>;
   }
-  if (!diffAgainst) {
+  if (!diff) {
     /* Plain "before" rendering — comma-separated. */
     return (
       <span className={`${muted ? 'text-ink/55' : 'text-ink/70'} truncate`}>
@@ -461,19 +698,14 @@ function AttributeList({
       </span>
     );
   }
-  const before = new Set(diffAgainst);
-  const after = new Set(values);
-  const added = values.filter((v) => !before.has(v));
-  const removed = diffAgainst.filter((v) => !after.has(v));
-  const kept = values.filter((v) => before.has(v));
   return (
     <div className="flex flex-wrap gap-1 items-center">
-      {kept.map((v) => (
+      {diff.kept.map((v) => (
         <span key={`k-${v}`} className="text-ink/65">
           {v}
         </span>
       ))}
-      {added.map((v) => (
+      {diff.added.map((v) => (
         <span
           key={`a-${v}`}
           className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
@@ -483,7 +715,7 @@ function AttributeList({
           + {v}
         </span>
       ))}
-      {removed.map((v) => (
+      {diff.removed.map((v) => (
         <span key={`r-${v}`} className="text-ink/40 line-through">
           {v}
         </span>
@@ -491,7 +723,7 @@ function AttributeList({
       {highlight && <span className="text-magenta">←</span>}
     </div>
   );
-}
+});
 
 /* Inline A/B compare player rendered per drift row when the user clicks
    Listen. A = the chapter audio as currently rendered (what the drift
@@ -612,27 +844,27 @@ function DriftListenWidget({
         <button
           data-testid={`drift-listen-${event.id}`}
           onClick={() => setOpen(true)}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-canvas border border-ink/10 text-ink/70 hover:text-ink text-xs font-medium"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-canvas border border-ink/10 text-ink/70 hover:text-ink text-[11px] font-medium"
         >
-          <IconWaveform className="w-3.5 h-3.5" /> Listen
+          <IconWaveform className="w-3 h-3" /> Listen
         </button>
       ) : (
         <>
           <button
             data-testid={`drift-play-chapter-${event.id}`}
             onClick={() => (playing === 'A' ? pauseAll() : void playChapter())}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium ${playing === 'A' ? 'bg-ink text-canvas border-ink' : 'bg-canvas border-ink/10 text-ink/70 hover:text-ink'}`}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium ${playing === 'A' ? 'bg-ink text-canvas border-ink' : 'bg-canvas border-ink/10 text-ink/70 hover:text-ink'}`}
           >
-            <IconWaveform className="w-3.5 h-3.5" />
+            <IconWaveform className="w-3 h-3" />
             {playing === 'A' ? 'Pause chapter' : 'Chapter'}
           </button>
           <button
             data-testid={`drift-play-voice-${event.id}`}
             onClick={() => (playing === 'B' ? pauseAll() : void playVoice())}
             disabled={busy}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium disabled:opacity-50 disabled:cursor-wait ${playing === 'B' ? 'bg-ink text-canvas border-ink' : 'bg-canvas border-ink/10 text-ink/70 hover:text-ink'}`}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium disabled:opacity-50 disabled:cursor-wait ${playing === 'B' ? 'bg-ink text-canvas border-ink' : 'bg-canvas border-ink/10 text-ink/70 hover:text-ink'}`}
           >
-            <IconWaveform className="w-3.5 h-3.5" />
+            <IconWaveform className="w-3 h-3" />
             {busy ? 'Loading…' : playing === 'B' ? 'Pause voice' : 'Voice profile'}
           </button>
         </>
