@@ -114,7 +114,9 @@ server/               Node + Express API (TypeScript)
 e2e/                  Playwright specs against Vite in mock mode
 scripts/              Orchestration (start/stop/install/preflight) — primarily
                       Node ESM since v1.2.2; wt-new.mjs spawns parallel Claude
-                      worktrees (v1.3.0)
+                      worktrees, wt-list.mjs shows their port assignments,
+                      wt-merge.mjs (v1.3.1) drives the integration-branch
+                      reconciliation pattern
 .github/workflows/    CI — release.yml on tag push, verify.yml on every PR (v1.3.0)
 docs/
   features/           Living per-feature regression plans (INDEX.md)
@@ -138,6 +140,37 @@ Copy `server/.env.example` as a starting point. Notable knobs:
 Frontend reads `VITE_USE_MOCKS` from `.env.development`. Mock mode
 round-trips against an in-memory store and is what the Playwright e2e
 suite runs against.
+
+## Parallel sessions (developer-only)
+
+Multiple Claude Code (or any) sessions can run in parallel against this
+repo via git worktrees with non-colliding ports:
+
+- `node scripts/wt-new.mjs feat/foo-slug` — creates a worktree under
+  `.claude/worktrees/agent-…`, cuts the branch, and writes a `.env.local`
+  with VITE_PORT / PORT / LOCAL_TTS_PORT / PLAYWRIGHT_PORT offset by
+  `slot * 10` so dev servers don't fight over `:5173` / `:8080` / `:9000`
+  / `:5174`. The parent worktree keeps stock defaults.
+- `node scripts/wt-list.mjs` — terminal-friendly table of every active
+  worktree with its slot, branch, and port assignments.
+- **`#/worktrees` view (dev mode only)** — once a dev server is running
+  (`npm run dev`), open `http://localhost:5173/#/worktrees` or click
+  the small `wt` chip in the top-bar (left of the theme toggle, dev-only).
+  The view lists every worktree with a live TCP probe against each
+  VITE_PORT (green dot = dev server alive). Click a green row → opens
+  that worktree's dev URL in a new tab. Auto-refresh every 10 s. The
+  backing `GET /api/worktrees` route 404s in production builds.
+- `node scripts/wt-merge.mjs <branch> [<branch>...]` — drives the
+  CONTRIBUTING.md "Reconciliation pattern" for parallel-agent branches:
+  cuts `integration/<YYYY-MM-DD>` off `main`, merges each branch via
+  `--no-ff`, runs `npm run verify` between merges, aborts on conflict
+  (exit 2) or verify failure (exit 3) with a copy-pasteable follow-up.
+  Idempotent; `--dry-run` previews without mutating.
+
+See [`docs/features/86-worktree-dashboard.md`](docs/features/86-worktree-dashboard.md),
+[`docs/features/85-wt-merge-helper.md`](docs/features/85-wt-merge-helper.md),
+and [`CONTRIBUTING.md` "Parallel agents"](CONTRIBUTING.md#parallel-agents)
+for the full workflow.
 
 ## Documentation
 
