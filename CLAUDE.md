@@ -157,6 +157,39 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 - Visual redesign. Reproduce the existing look pixel-for-pixel.
 - Backend work. This repo is the frontend that will call the OpenAPI spec.
 
+## Mobile testing protocol (plan 81)
+
+The app drives on phone + tablet over LAN HTTPS (plan 81 archive: `docs/features/archive/81-mobile-tablet-support.md`). When working on any view, verify it stays responsive at three viewports:
+
+| Viewport | Tailwind prefix | Target devices | Layout rule |
+|---|---|---|---|
+| `<640px` | (default) | portrait phones | single-column, drawers + bottom sheets, modals full-screen, hamburger menus |
+| `640–1024px` | `sm:` and `md:` | tablets, landscape phones | two-column where appropriate, modals as dialog, secondary panes as right drawer |
+| `≥1024px` | `lg:` and `xl:` | desktop, tablet landscape | three-pane layouts, full top bar |
+
+**Touch-equivalence rule:** every desktop drag/hover affordance ships its tap replacement. Examples already in the codebase:
+- Cast voice library: drag-and-drop voice card → cast row OR tap "Assign" pill → tap row (`src/views/cast.tsx`).
+- Manuscript paragraph boundary: PointerEvent handler covers mouse + touch + pen in one path (`src/views/manuscript.tsx`).
+- Hover-reveal labels: `coarse-pointer:opacity-60` keeps them faintly visible on touch devices (`src/views/manuscript.tsx` boundary handle).
+
+**Touch targets:** every interactive control ≥44×44 px on phone per WCAG 2.5.5. Use `min-h-[44px] sm:min-h-0` so phones get the touch target without changing desktop sizing.
+
+**LAN access for real-device testing:**
+
+1. One-time per dev box: install `mkcert` (`scoop install mkcert` / `brew install mkcert` / `apt install mkcert`), then `mkcert -install`.
+2. `npm run install:cert-mobile` — prints LAN URL + QR code + per-OS root-cert install steps.
+3. Install the root CA on each mobile device once (iOS: Settings → Profile downloaded → Install → trust; Android: Settings → Security → Install certificate).
+4. Run the server in LAN HTTPS mode: `npm run dev:lan` (HMR-capable Vite + Node both at `https://0.0.0.0:5173`/`:8443`) OR `npm run build && npm run start:lan` (production bundle at `https://0.0.0.0:8443`).
+5. Open the printed LAN URL on the device — lock icon, no warning.
+
+**Automated regression net:**
+
+- `npm run test:e2e` (pre-push gate, ~90s): `playwright test --project=chromium`. Runs every spec + the chromium project of the responsive specs (`e2e/responsive/*.spec.ts`).
+- `npm run test:e2e:mobile` (opt-in, ~10-15min): `playwright test --project=mobile-chrome --project=tablet-chrome`. Runs only `e2e/responsive/*.spec.ts` at phone (Pixel 7) + tablet (iPad Pro 11) viewports.
+- `npm run test:e2e:all` (opt-in, ~17min): everything across all 3 projects.
+
+Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it auto-runs at every project.
+
 ## Suggested follow-ups (not requirements)
 
 - **Model lifecycle is split between eager and button-driven** —
