@@ -598,6 +598,25 @@ export const chaptersSlice = createSlice({
       ch.titleOverridden = true;
     },
 
+    /* Plan 84 — drop the `titleOverridden` flag on a set of chapter ids
+       after a manuscript re-upload (plan 74) detected the chapter count
+       or order changed. Without this, an old override stays attached to
+       a numeric chapter id whose CONTENT is now entirely different — so
+       the rename silently mis-attributes.
+
+       The diff modal's apply path computes conflicts via
+       `detectOverrideConflicts` (src/lib/chapter-override-conflict.ts)
+       and dispatches this action with the offending ids before / after
+       `manuscriptActions.applyReupload`. The chapter's `title` reverts
+       to whatever the new manuscript's parse produced once the next
+       state.json round-trip lands. */
+    clearOverrides: (s, a: PayloadAction<{ chapterIds: number[] }>) => {
+      const ids = new Set(a.payload.chapterIds);
+      for (const ch of s.chapters) {
+        if (ids.has(ch.id)) ch.titleOverridden = false;
+      }
+    },
+
     /* Cross-tab `BroadcastChannel` inbound hydrate (plan 63). Receives a
        sibling tab's post-mutation snapshot of the cross-book generation
        activeStream so the global header pill updates in tab B without a

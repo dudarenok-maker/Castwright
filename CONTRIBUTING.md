@@ -93,6 +93,21 @@ When N parallel agent branches finish:
 If a merge breaks `verify` and the fix isn't obvious, drop the offending branch
 from the batch and ship the rest — re-cut the branch later off the new `main`.
 
+For automation, see `scripts/wt-merge.mjs` — it drives the same sequence
+(integration branch off `main`, `git merge --no-ff` per agent branch, `npm run verify`
+between merges) in one command. Example:
+
+```powershell
+node scripts/wt-merge.mjs feat/server-foo feat/frontend-bar feat/scripts-baz
+```
+
+The helper is idempotent (safe to re-run on a partially-merged integration
+branch — it skips branches whose merge commit is already present), aborts on
+the first conflict (exit 2) or verify failure (exit 3) with a suggested
+follow-up command that drops the offending branch, and supports `--dry-run`
+for a plan-only preview. See `docs/features/85-wt-merge-helper.md` for the
+full contract.
+
 ### Running multiple Claude Code conversations
 
 The worktree pattern above keeps the working tree isolated; the helper
