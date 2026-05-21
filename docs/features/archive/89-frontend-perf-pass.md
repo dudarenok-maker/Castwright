@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
-owner: null
+status: stable
+shipped: '2026-05-21'
+owner: dudarenok-maker
 ---
 
 # Frontend perf pass — broadcast diffing + selector equality + route code-split
 
-> Status: active
+> Status: stable
 > Key files: `src/store/broadcast-middleware.ts:171-189`, `src/store/index.ts:151`, `src/views/listen.tsx:121`, `src/lib/icons.tsx`, `vite.config.ts`
 > URL surface: indirect — every routed view (lazy boundaries appear at first navigation)
 > OpenAPI ops: none
@@ -67,4 +67,14 @@ Three independent micro-optimisations on the frontend that share a deployment sh
 
 ## Ship notes
 
-_(filled when status flips to `stable` — shipped date, commit SHA, observed message-volume + render-count delta in the concurrent-multi-book scenario)_
+Shipped **2026-05-21** via PR [#104](https://github.com/dudarenok-maker/AudioBook-Generator/pull/104), merged at `9ffb79b`. All three sub-items (C2/C3/C5) landed as planned.
+
+- **C2 (broadcast diffing):** `src/store/broadcast-middleware.ts` shallow-diffs `activeStream` snapshots + debounces phaseProgress-only ticks. Test suite grew 13 → 22.
+- **C3 (selector equality):** new `useAppSelectorShallow` in `src/store/index.ts`. Applied at five sites: `src/views/listen.tsx:122`, `src/components/layout.tsx:82`, `src/components/layout.tsx:83`, `src/components/layout.tsx:480`, `src/routes/index.tsx:497`.
+- **C5 (route code-split):** `React.lazy` views via `src/routes/index.tsx`, single shared Suspense fallback in the layout shell with a 150 ms delay (`src/components/delayed-spinner.tsx`, new). `vite.config.ts` `manualChunks`. `src/components/stat-tiles.tsx` extracted to break an eager-import anchor from `library-chrome.tsx`/`library-grid.tsx`.
+- **Build delta:** main bundle 410 kB → 345 kB (gzip 108 kB → 91 kB); per-view chunks ≤70 kB gzipped each.
+- **Tests:** 1,371 frontend unit + 1,211 server + 2 new Playwright specs (`e2e/route-lazy.spec.ts`, `e2e/concurrent-multi-book.spec.ts`) all green.
+
+Plan 63 narrow-scope BroadcastChannel rule preserved: broadcast action allowlist unchanged; diff scope strictly inside `activeStream`. Narrow-scope test cases (per-chapter row, inbound `applyExternal*` reducer) still red-line non-broadcast behaviour.
+
+One pre-existing intermittent `Worker exited unexpectedly` flake in `test:server` exists on `main` — verified via stash-round-trip during this round; caught + re-ran cleanly so verify cache stayed green. Tracked as part of **BACKLOG Should #3** (the broader pre-push gate de-flake work).
