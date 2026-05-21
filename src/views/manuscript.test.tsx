@@ -522,3 +522,74 @@ describe('ManuscriptView — responsive scaffolding (plan 81 wave 3)', () => {
     expect(screen.queryByRole('dialog', { name: /Chapters/i })).toBeNull();
   });
 });
+
+/* Plan 92 — manuscript view virtualisation.
+   The view falls back to a flat `segments.map` render below 60
+   segments (preserves UX + keeps jsdom tests on the simple path) and
+   switches to `useWindowVirtualizer` from `@tanstack/react-virtual`
+   above the threshold. These cases pin the threshold semantics; the
+   actual windowing behaviour (only visible rows in DOM) is verified
+   end-to-end by Playwright since jsdom can't measure layout. */
+describe('ManuscriptView — virtualisation threshold (plan 92)', () => {
+  const narrator: Character = {
+    id: 'narrator',
+    name: 'Narrator',
+    role: 'Narrator',
+    color: 'narrator',
+  };
+  const dialogue: Character = {
+    id: 'speaker',
+    name: 'Speaker',
+    role: 'Lead',
+    color: 'slot-4',
+  };
+  const chapter: Chapter = {
+    id: 1,
+    title: 'Long Chapter',
+    duration: '40:00',
+    state: 'done',
+    progress: 1,
+    characters: {},
+  };
+
+  function renderWithSentenceCount(count: number) {
+    /* Alternating-character sentences guarantee one segment per
+       sentence (the segmenter only folds *consecutive* same-speaker
+       sentences). So `count` sentences ⇒ `count` segments. */
+    const sentences: Sentence[] = Array.from({ length: count }, (_, i) => ({
+      id: i + 1,
+      chapterId: 1,
+      characterId: i % 2 === 0 ? 'narrator' : 'speaker',
+      text: `Sentence ${i + 1}.`,
+    }));
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={[narrator, dialogue]}
+          chapters={[chapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={sentences}
+        />
+      </Provider>,
+    );
+  }
+
+  it('renders the flat segment list below the 60-segment threshold (no virtual container)', () => {
+    renderWithSentenceCount(20);
+    expect(screen.queryByTestId('manuscript-virtual-container')).toBeNull();
+    /* Sanity — at least some sentence content rendered. */
+    expect(screen.getByText('Sentence 1.')).toBeInTheDocument();
+  });
+
+  it('switches to the virtualised container above the threshold', () => {
+    renderWithSentenceCount(120);
+    expect(screen.getByTestId('manuscript-virtual-container')).toBeInTheDocument();
+  });
+});
