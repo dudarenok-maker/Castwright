@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # Parallel chapter synthesis with bounded worker pool
 
-> Status: draft
+> Status: active
 > Key files: `server/src/routes/generation.ts:485-530`, `server/src/synthesise-chapter.ts`, `src/lib/api.ts`, `src/store/ui-slice.ts`
 > URL surface: indirect — `#/books/<id>/generation`; SSE stream emitted by `POST /api/books/:bookId/generation`
 > OpenAPI ops: `POST /api/books/{id}/generation` — wire shape unchanged; SSE event payloads gain per-chapter track identification (every event already carries `chapterId`; consumer must stop assuming events arrive in monotonic chapter order)
