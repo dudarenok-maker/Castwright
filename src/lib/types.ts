@@ -578,4 +578,8 @@ export type Stage =
     }
   | { kind: 'voices' }
   | { kind: 'changelog' }
-  | { kind: 'account' };
+  | { kind: 'account' }
+  /* Plan 86 — dev-only worktree dashboard. The top-bar entry + the
+     `/api/worktrees` server route are both gated behind dev mode so
+     production users never see it. */
+  | { kind: 'worktrees' };

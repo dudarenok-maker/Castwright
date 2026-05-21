@@ -135,17 +135,7 @@ Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `s
 - _Depends on:_ none. Pairs with the worktree parallel-sessions tooling — without the semaphore, users must queue heavy operations by hand per the CONTRIBUTING.md "GPU + shared-resource caveats" note.
 - _Benefit (user):_ removes the silent VRAM-spillover-to-RAM slowdown when two sessions hit the analyzer or sidecar concurrently. Today a parallel run can take 5–10× longer than serial because both processes thrash the GPU.
 
-### 11. Live worktree dashboard in the app
-
-Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-list.mjs` answers "which worktrees are open?" from the terminal, but once the user routinely has 3+ sessions running, an in-app view is the natural escalation.
-
-- _What:_ Add a `#/worktrees` view (and a top-bar entry point) that lists every worktree visible to `git worktree list --porcelain`, each one's branch + assigned ports + last-modified-file timestamp + a "Is the dev server alive?" probe (TCP connect against the worktree's `VITE_PORT`). Click a row → opens that worktree's dev URL in a new tab.
-- _Acceptance:_ Three worktrees open with `npm run dev` running in two of them → the view shows all three rows; the two live ones show a green dot; clicking opens their UIs. Auto-refreshes every 10 s. New server endpoint `/api/worktrees` (only enabled in dev mode or behind a flag). Vitest covers the parsing; e2e covers the navigation.
-- _Key files:_ new `src/views/worktrees.tsx`; new `server/src/routes/worktrees.ts` (dev-mode only); `src/components/layout.tsx` (top-bar link, dev-only gate).
-- _Depends on:_ none structural. Pairs with Could #10 (GPU semaphore) — the dashboard is the natural place to surface "this worktree is the one currently holding the GPU."
-- _Benefit (architectural):_ operational visibility once parallel-session workflow becomes routine. Today the user has to remember which terminal tab is on which port.
-
-### 12. Keyboard shortcuts / power-user tuning panel
+### 11. Keyboard shortcuts / power-user tuning panel
 
 Source: net-new (2026-05-18).
 
