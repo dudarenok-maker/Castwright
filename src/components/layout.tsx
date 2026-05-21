@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, Suspense, type ReactNode } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useAppDispatch, useAppSelector } from '../store';
+import { DelayedSpinner } from './delayed-spinner';
+import { useAppDispatch, useAppSelector, useAppSelectorShallow } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { fetchAccountSettings } from '../store/account-slice';
@@ -79,8 +80,13 @@ export function Layout() {
   const stage = useAppSelector((s) => s.ui.stage);
   const ui = useAppSelector((s) => s.ui);
   const userDisplayName = useAppSelector((s) => s.account.displayName);
-  const characters = useAppSelector((s) => s.cast.characters);
-  const chapters = useAppSelector((s) => s.chapters.chapters);
+  /* Plan 89 C3 — `characters` and `chapters.chapters` are large arrays the
+     Layout reads every render. Use shallow equality so unrelated slice mutations
+     (e.g. a foreign book's drift poll bumping `revisions`, or a heartbeat tick
+     into `analysis.activeStream`) don't force a full Layout re-render when the
+     array identity is structurally unchanged. */
+  const characters = useAppSelectorShallow((s) => s.cast.characters);
+  const chapters = useAppSelectorShallow((s) => s.chapters.chapters);
   const activeStream = useAppSelector((s) => s.chapters.activeStream);
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
   const driftByBookId = useAppSelector(selectDriftByBook);
@@ -476,7 +482,11 @@ export function Layout() {
      the library entry the first time the user opens a book; the on-disk
      fetch above overwrites it with the authoritative state.json values when
      it lands. */
-  const libraryBooks = useAppSelector((s) => s.library.books);
+  /* Plan 89 C3 — library.books is a large array (one entry per book) that
+     repaint-churns on every 30 / 120 s drift-poll fan-out. Shallow equality
+     keeps the dependent bookMeta hydrate effect from refiring when no array
+     element changed identity. */
+  const libraryBooks = useAppSelectorShallow((s) => s.library.books);
   const bookMetaSavedKeys = useAppSelector((s) => Object.keys(s.bookMeta.saved).join('|'));
   useEffect(() => {
     if (!bookId || stageKind !== 'ready') return;
@@ -757,7 +767,14 @@ export function Layout() {
         userDisplayName={userDisplayName}
       />
 
-      <Outlet context={ctx} />
+      {/* Plan 89 C5 — single shared Suspense boundary for the route-leaf
+          views (each lazy-loaded in src/routes/index.tsx). The fallback's
+          150 ms delay (DelayedSpinner default) means cached routes swap
+          in with no visible spinner; only genuinely-cold chunk downloads
+          paint the loading state. */}
+      <Suspense fallback={<DelayedSpinner />}>
+        <Outlet context={ctx} />
+      </Suspense>
 
       <ToastStack />
 

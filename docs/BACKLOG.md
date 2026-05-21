@@ -312,15 +312,15 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C6).
 - _Depends on:_ none.
 - _Benefit (technical):_ avoids 480+ DOM mutations per 800 ms when many waveforms are visible simultaneously. Low real-world impact today (rare to see >3 waveforms at once).
 
-### 26. Concurrent Phase 0+1 execution (activate plan 88's pipeline seam)
+### 26. Interleaved SSE in `mockStreamGeneration` for parallel-chapter e2e
 
-Source: net-new (2026-05-21). Spun off from plan 88 ship notes.
+Source: net-new (2026-05-21). Deferred from plan 87 implementation — server side shipped, mock-mode e2e not landed.
 
-- _What:_ Plan 88 landed the watermark + per-phase analyzer plumbing but Phase 0 and Phase 1 still run serially at the code-flow level. Refactor `server/src/routes/analysis.ts` `runMainAnalyzerJob` so the Phase 1 worker pool launches concurrently with Phase 0 (`Promise.all([phase0Pool, phase1Pool])`) and reads from a rolling-roster snapshot at each chapter's dispatch. With pipelining live, the back-pressure semaphore (`awaitPhase1Dispatch`) starts holding Phase 1 chapters when Gemini catches up — observable via the existing `held back N s to preserve LAG-chapter roster lag` log line.
-- _Acceptance:_ On a 30-chapter manuscript with `ANALYZER_PHASE0_MODEL=gemma-4-31b-it` + `ANALYZER_PHASE1_MODEL=gemini-3.1-flash-lite` and default `ANALYZER_PHASE1_MIN_LAG_CHAPTERS=10`, Phase 1 chapter 0 dispatches as soon as Phase 0 chapter 9 completes (telemetry: `gemini.phase1.chapter=0` log within ~50 ms of `gemma.phase0.chapter=9`). Total wall-clock saved is roughly "Gemma's Phase 0 time minus the 10-chapter lag." Manual back-pressure test: artificially rate-limit Gemma; Gemini logs `held back N s to preserve 10-chapter roster lag` once per chapter where it would otherwise have caught up.
-- _Key files:_ `server/src/routes/analysis.ts:1414-2548` (the `runMainAnalyzerJob` body — the Phase 0a/0b block + Phase 1 chapter pool need restructuring around `Promise.all`); `server/src/analyzer/phase-watermark.ts` (already in place).
-- _Depends on:_ plan 88 shipped (this PR).
-- _Benefit (user):_ delivers the wall-clock pipelining gain that plan 88 was scoped for. The per-phase quota split landed in plan 88 already; this is the concurrency win on top.
+- _What:_ Teach `mockStreamGeneration` (`src/lib/api.ts`) to advance multiple chapters concurrently when the generate POST would have been parallel server-side (i.e. when more than one chapter is in `queued` state at start). Today the mock advances exactly one chapter at a time and only flips to the next queued chapter when the active one completes — that hard-codes a serial-loop assumption the real backend no longer holds (plan 87). Then add `e2e/generation-parallel.spec.ts` asserting that chapter 2 emits `chapter:start` BEFORE chapter 1 emits `chapter:done`.
+- _Acceptance:_ in mock mode with K queued chapters, the Generate view's chapter rows show two simultaneous "Generating" pills (not just one). E2e spec passes.
+- _Key files:_ `src/lib/api.ts` (`mockStreamGeneration`); new `e2e/generation-parallel.spec.ts`.
+- _Depends on:_ plan 87 server-side worker pool (shipped).
+- _Benefit (user/technical):_ closes the mock/real parity gap so the parallel SSE wire shape is visually exercised in dev mode and CI gates regressions. Today the parallel orchestration is only pinned at the server vitest layer.
 
 ---
 

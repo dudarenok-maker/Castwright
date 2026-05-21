@@ -1,4 +1,4 @@
-/* Cross-tab `BroadcastChannel` state sync (plan 63).
+/* Cross-tab `BroadcastChannel` state sync (plan 63, refined by plan 89 C2).
 
    Two tabs open on the same workspace cooperatively share the analysis +
    generation pill state. When tab A starts an analysis or advances a
@@ -7,13 +7,13 @@
    page refresh.
 
    Channel: `audiobook-state` (one shared channel name across the app).
-   Payload shape: `{ kind: 'sync:analysis' | 'sync:chapters', instanceId,
-   bookId, snapshot }`. The `instanceId` is a per-tab UUID generated at
-   module init; each outbound message carries it and the inbound
-   listener drops messages whose `instanceId` matches our own (echo
-   suppression — without this, the broadcast loop becomes infinite
-   ping-pong because every inbound `applyExternal*Snapshot` dispatch
-   would re-broadcast in the outbound path).
+   Payload shape (plan 89 C2): `{ kind: 'sync:analysis' | 'sync:chapters',
+   instanceId, bookId, mode: 'full' | 'diff' | 'clear', diff?, snapshot? }`.
+   The `instanceId` is a per-tab UUID generated at module init; each outbound
+   message carries it and the inbound listener drops messages whose
+   `instanceId` matches our own (echo suppression — without this, the
+   broadcast loop becomes infinite ping-pong because every inbound
+   `applyExternal*Snapshot` dispatch would re-broadcast in the outbound path).
 
    Two layers of echo suppression:
    1. **Instance tag.** Outbound messages carry our `instanceId`; the
@@ -24,6 +24,26 @@
       lets a self-message slip past layer 1, the inbound dispatch
       won't re-broadcast because its action type isn't in the
       broadcast rules table.
+
+   Plan 89 C2 — shallow diffing + phaseProgress debounce:
+
+   The post-mutation snapshot is shallow-compared against the last value
+   we broadcast for the same `(kind, bookId)` pair. Only the changed
+   fields ride the wire — and when the *only* delta is `phaseProgress`
+   (+ optionally `lastTickAt`), we debounce to one broadcast per
+   `PROGRESS_DEBOUNCE_MS` so an analyzer phase that ticks 10x/sec
+   doesn't fan 10 messages/sec into every idle tab. The recipient
+   reconstructs the full snapshot by spreading the diff onto its local
+   activeStream (`mode: 'diff'`), or replaces it wholesale on initial /
+   structural changes (`mode: 'full'`) or clears (`mode: 'clear'`).
+
+   PRESERVED INVARIANT (plan 63): the diff stays strictly inside the
+   `activeStream` field of the analysis / chapters slices. The set of
+   broadcast-eligible action types
+   (`ANALYSIS_BROADCAST_ACTIONS` / `CHAPTERS_BROADCAST_ACTIONS`) does
+   not widen — per-chapter rows / cast / manuscript still never
+   broadcast. The C2 change is solely about the *payload shape* of the
+   existing broadcasts.
 
    Graceful degradation: `BroadcastChannel` is missing in some older
    browsers and (historically) in non-jsdom environments. The middleware
@@ -54,20 +74,72 @@ import { chaptersActions, type ActiveStreamSnapshot } from './chapters-slice';
 /** Shared channel name. Hard-coded — there is exactly one. */
 export const BROADCAST_CHANNEL_NAME = 'audiobook-state';
 
-/** Outbound message shape. Discriminated by `kind`. */
+/** Plan 89 C2 — coalesce phaseProgress-only ticks within this window into a
+ *  single broadcast. The receiver still gets the latest value, and a
+ *  user-facing pill that updates at most 4x/sec is well below the perception
+ *  threshold for "smooth" progress. Tuned to be longer than a typical SSE
+ *  tick interval (~50–200 ms) so consecutive ticks reliably batch, but short
+ *  enough that the worst-case latency is invisible. */
+export const PROGRESS_DEBOUNCE_MS = 250;
+
+/** Plan 89 C2 — discriminator for the payload shape after diffing. */
+export type BroadcastMode = 'full' | 'diff' | 'clear';
+
+/** Outbound message shape (plan 89 C2). Discriminated by `kind`.
+ *
+ *  - `mode: 'full'` — `snapshot` carries the entire activeStream. Sent on the
+ *    first broadcast for a given `(kind, bookId)`, or when the bookId has
+ *    changed since the last broadcast (the receiver can't safely apply a
+ *    diff onto a foreign-book base).
+ *  - `mode: 'diff'` — `diff` carries only the keys that changed since our
+ *    last broadcast. The receiver spreads it onto its existing
+ *    activeStream. `snapshot` is omitted from this branch.
+ *  - `mode: 'clear'` — the snapshot was set to null (clearActiveStream).
+ *    `snapshot` is null; receivers null-out their activeStream. */
 export type BroadcastMessage =
   | {
       kind: 'sync:analysis';
       instanceId: string;
       /** Snapshot's own `bookId` for fast pre-filter on the receiver. */
       bookId: string | null;
-      snapshot: AnalysisStreamSnapshot | null;
+      mode: 'full';
+      snapshot: AnalysisStreamSnapshot;
+    }
+  | {
+      kind: 'sync:analysis';
+      instanceId: string;
+      bookId: string | null;
+      mode: 'diff';
+      /** Subset of AnalysisStreamSnapshot fields that changed. */
+      diff: Partial<AnalysisStreamSnapshot>;
+    }
+  | {
+      kind: 'sync:analysis';
+      instanceId: string;
+      bookId: string | null;
+      mode: 'clear';
+      snapshot: null;
     }
   | {
       kind: 'sync:chapters';
       instanceId: string;
       bookId: string | null;
-      snapshot: ActiveStreamSnapshot | null;
+      mode: 'full';
+      snapshot: ActiveStreamSnapshot;
+    }
+  | {
+      kind: 'sync:chapters';
+      instanceId: string;
+      bookId: string | null;
+      mode: 'diff';
+      diff: Partial<ActiveStreamSnapshot>;
+    }
+  | {
+      kind: 'sync:chapters';
+      instanceId: string;
+      bookId: string | null;
+      mode: 'clear';
+      snapshot: null;
     };
 
 /** Action types that mutate the analysis slice's activeStream. The
@@ -124,13 +196,61 @@ function hasBroadcastChannel(): boolean {
   return typeof BroadcastChannel === 'function';
 }
 
+/** Plan 89 C2 — compute the shallow diff between `prev` and `next` (one-level
+ *  field comparison). Returns `null` when the two are field-wise equal. The
+ *  diff includes every key present in `next` whose value differs by `===`
+ *  from `prev`'s value (or that wasn't present in `prev`). Symmetric
+ *  deletion (a key that disappeared) isn't modelled — the snapshots are
+ *  fixed-shape structs from a typed interface, not freeform maps, so
+ *  `undefined` legitimately survives a diff round-trip. */
+function shallowDiff<T extends Record<string, unknown>>(prev: T, next: T): Partial<T> | null {
+  let changed = false;
+  const out: Partial<T> = {};
+  for (const k in next) {
+    if (prev[k] !== next[k]) {
+      out[k] = next[k];
+      changed = true;
+    }
+  }
+  return changed ? out : null;
+}
+
+/** Plan 89 C2 — true when the diff *only* touches phaseProgress and (optionally)
+ *  lastTickAt. Those are the high-frequency progress ticks the
+ *  PROGRESS_DEBOUNCE_MS window collapses. */
+function isProgressOnlyDiff(diff: Partial<Record<string, unknown>>): boolean {
+  const keys = Object.keys(diff);
+  if (keys.length === 0) return false;
+  for (const k of keys) {
+    if (k !== 'phaseProgress' && k !== 'lastTickAt') return false;
+  }
+  return true;
+}
+
+/** Outbound dispatcher options consumed by the middleware factory. Pulled out
+ *  so tests can stub `now()` and skip the real `setTimeout` clock. */
+interface OutboundOpts {
+  /** ms-since-epoch clock used for the debounce window. Tests override this
+   *  to make the assertion deterministic without faking timers. */
+  now: () => number;
+  /** Debounce window. Tests sometimes shorten this for assertion speed. */
+  debounceMs: number;
+}
+
 /** Factory so tests can build the middleware against an injected
     channel + instanceId rather than the module-global ones. Production
     callers use `broadcastMiddleware` (the singleton below). */
 export function createBroadcastMiddleware(opts?: {
   channel?: BroadcastChannel | null;
   instanceId?: string;
+  /** Plan 89 C2 — test-only knobs. Both default to production values. */
+  now?: () => number;
+  debounceMs?: number;
 }): Middleware {
+  const outbound: OutboundOpts = {
+    now: opts?.now ?? (() => Date.now()),
+    debounceMs: opts?.debounceMs ?? PROGRESS_DEBOUNCE_MS,
+  };
   return (store) => {
     const instanceId = opts?.instanceId ?? makeInstanceId();
     const channel: BroadcastChannel | null =
@@ -140,6 +260,26 @@ export function createBroadcastMiddleware(opts?: {
           ? new BroadcastChannel(BROADCAST_CHANNEL_NAME)
           : null;
 
+    /* Plan 89 C2 — last broadcast snapshot per kind, keyed by bookId. We
+       keep the bookId on the entry so a bookId change between successive
+       snapshots forces a `mode: 'full'` send (the receiver can't apply a
+       diff onto a foreign-book base). null = nothing sent yet. */
+    let lastAnalysisSent: {
+      bookId: string | null;
+      snapshot: AnalysisStreamSnapshot;
+    } | null = null;
+    let lastChaptersSent: {
+      bookId: string | null;
+      snapshot: ActiveStreamSnapshot;
+    } | null = null;
+    /* Track the wall-clock of the last progress-only emission per kind so
+       the debounce can drop intermediate ticks. lastSendAt is bumped on
+       every send (full / diff / clear) so a structural broadcast also
+       resets the window — a fresh phase transition isn't a progress
+       tick and shouldn't be debounced. */
+    let lastAnalysisSendAt = -Infinity;
+    let lastChaptersSendAt = -Infinity;
+
     if (channel) {
       channel.onmessage = (ev: MessageEvent<BroadcastMessage>) => {
         const msg = ev.data;
@@ -147,14 +287,61 @@ export function createBroadcastMiddleware(opts?: {
         /* Echo suppression layer 1: drop messages we sent ourselves. */
         if (msg.instanceId === instanceId) return;
         if (msg.kind === 'sync:analysis') {
-          store.dispatch(analysisActions.applyExternalAnalysisSnapshot(msg.snapshot));
+          /* Reconstruct the inbound snapshot from the message's mode. */
+          if (msg.mode === 'clear') {
+            store.dispatch(analysisActions.applyExternalAnalysisSnapshot(null));
+          } else if (msg.mode === 'full') {
+            store.dispatch(analysisActions.applyExternalAnalysisSnapshot(msg.snapshot));
+          } else if (msg.mode === 'diff') {
+            /* Spread the diff onto our existing activeStream — that's our
+               best snapshot of "the sender's previous full state".
+               Inbound from another tab on a fresh open should never be
+               a diff: the sender's lastAnalysisSent would be null →
+               first broadcast is `mode: 'full'`. If we somehow receive
+               a diff without a base, drop it rather than reconstructing
+               a broken partial — the next non-debounced tick will be
+               full. */
+            const current = (store.getState() as BroadcastableRootState).analysis.activeStream;
+            if (current) {
+              store.dispatch(
+                analysisActions.applyExternalAnalysisSnapshot({ ...current, ...msg.diff }),
+              );
+            }
+          }
           return;
         }
         if (msg.kind === 'sync:chapters') {
-          store.dispatch(chaptersActions.applyExternalChaptersSnapshot(msg.snapshot));
+          if (msg.mode === 'clear') {
+            store.dispatch(chaptersActions.applyExternalChaptersSnapshot(null));
+          } else if (msg.mode === 'full') {
+            store.dispatch(chaptersActions.applyExternalChaptersSnapshot(msg.snapshot));
+          } else if (msg.mode === 'diff') {
+            const current = (store.getState() as BroadcastableRootState).chapters.activeStream;
+            if (current) {
+              store.dispatch(
+                chaptersActions.applyExternalChaptersSnapshot({ ...current, ...msg.diff }),
+              );
+            }
+          }
           return;
         }
       };
+    }
+
+    /** Post the message, swallowing channel-closed races. Returns true on
+     *  success so the outer flow can update the last-sent cursors only on
+     *  actual sends (e.g. a debounce-skip should not bump them). */
+    function send(msg: BroadcastMessage): boolean {
+      try {
+        channel?.postMessage(msg);
+        return true;
+      } catch (err) {
+        /* postMessage can throw if the channel was closed under us
+           (e.g. page unload races). Swallow — the cold-boot endpoint
+           fallback is still the correctness floor. */
+        console.warn('[broadcast] postMessage failed', err);
+        return false;
+      }
     }
 
     return (next) => (action) => {
@@ -171,19 +358,50 @@ export function createBroadcastMiddleware(opts?: {
       if (ANALYSIS_BROADCAST_ACTIONS.has(type)) {
         const state = store.getState() as BroadcastableRootState;
         const snapshot = state.analysis.activeStream;
-        const msg: BroadcastMessage = {
-          kind: 'sync:analysis',
-          instanceId,
-          bookId: snapshot?.bookId ?? null,
-          snapshot,
-        };
-        try {
-          channel.postMessage(msg);
-        } catch (err) {
-          /* postMessage can throw if the channel was closed under us
-             (e.g. page unload races). Swallow — the cold-boot endpoint
-             fallback is still the correctness floor. */
-          console.warn('[broadcast] postMessage failed', err);
+        const bookId = snapshot?.bookId ?? null;
+        const now = outbound.now();
+
+        if (snapshot === null) {
+          /* Clear path — always sent, never debounced. Reset the
+             baseline so the next live snapshot is a `mode: 'full'`. */
+          if (send({ kind: 'sync:analysis', instanceId, bookId: null, mode: 'clear', snapshot: null })) {
+            lastAnalysisSent = null;
+            lastAnalysisSendAt = now;
+          }
+          return result;
+        }
+
+        /* No previous baseline, or the bookId changed → send the whole
+           snapshot. The receiver can't safely apply a diff over a
+           foreign-book base. */
+        if (!lastAnalysisSent || lastAnalysisSent.bookId !== bookId) {
+          if (send({ kind: 'sync:analysis', instanceId, bookId, mode: 'full', snapshot })) {
+            lastAnalysisSent = { bookId, snapshot };
+            lastAnalysisSendAt = now;
+          }
+          return result;
+        }
+
+        const diff = shallowDiff(
+          lastAnalysisSent.snapshot as unknown as Record<string, unknown>,
+          snapshot as unknown as Record<string, unknown>,
+        ) as Partial<AnalysisStreamSnapshot> | null;
+        if (!diff) {
+          /* No-op tick — slice state didn't change. Skip the wire. */
+          return result;
+        }
+
+        /* phaseProgress-only ticks debounce within PROGRESS_DEBOUNCE_MS. */
+        if (
+          isProgressOnlyDiff(diff as Partial<Record<string, unknown>>) &&
+          now - lastAnalysisSendAt < outbound.debounceMs
+        ) {
+          return result;
+        }
+
+        if (send({ kind: 'sync:analysis', instanceId, bookId, mode: 'diff', diff })) {
+          lastAnalysisSent = { bookId, snapshot };
+          lastAnalysisSendAt = now;
         }
         return result;
       }
@@ -191,16 +409,46 @@ export function createBroadcastMiddleware(opts?: {
       if (CHAPTERS_BROADCAST_ACTIONS.has(type)) {
         const state = store.getState() as BroadcastableRootState;
         const snapshot = state.chapters.activeStream;
-        const msg: BroadcastMessage = {
-          kind: 'sync:chapters',
-          instanceId,
-          bookId: snapshot?.bookId ?? null,
-          snapshot,
-        };
-        try {
-          channel.postMessage(msg);
-        } catch (err) {
-          console.warn('[broadcast] postMessage failed', err);
+        const bookId = snapshot?.bookId ?? null;
+        const now = outbound.now();
+
+        if (snapshot === null) {
+          if (send({ kind: 'sync:chapters', instanceId, bookId: null, mode: 'clear', snapshot: null })) {
+            lastChaptersSent = null;
+            lastChaptersSendAt = now;
+          }
+          return result;
+        }
+
+        if (!lastChaptersSent || lastChaptersSent.bookId !== bookId) {
+          if (send({ kind: 'sync:chapters', instanceId, bookId, mode: 'full', snapshot })) {
+            lastChaptersSent = { bookId, snapshot };
+            lastChaptersSendAt = now;
+          }
+          return result;
+        }
+
+        const diff = shallowDiff(
+          lastChaptersSent.snapshot as unknown as Record<string, unknown>,
+          snapshot as unknown as Record<string, unknown>,
+        ) as Partial<ActiveStreamSnapshot> | null;
+        if (!diff) return result;
+
+        /* chapters slice doesn't have a phaseProgress field, but the same
+           debounce-only-progress rule applies: lastTickAt heartbeats land
+           solo (no other field flips), and a stream of those should
+           collapse the same way. We treat a diff that only touches
+           `lastTickAt` as the chapters-side equivalent. */
+        if (
+          isProgressOnlyDiff(diff as Partial<Record<string, unknown>>) &&
+          now - lastChaptersSendAt < outbound.debounceMs
+        ) {
+          return result;
+        }
+
+        if (send({ kind: 'sync:chapters', instanceId, bookId, mode: 'diff', diff })) {
+          lastChaptersSent = { bookId, snapshot };
+          lastChaptersSendAt = now;
         }
         return result;
       }
