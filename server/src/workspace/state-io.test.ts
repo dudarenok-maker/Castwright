@@ -59,6 +59,37 @@ describe('writeJsonAtomic happy path', () => {
     const onDisk = JSON.parse(await readFile(target, 'utf8'));
     expect(onDisk).toEqual({ v: 2 });
   });
+
+  it('survives concurrent writes to the same target without ENOENT on rename', async () => {
+    /* Plan 88 regression — Phase 0 and Phase 1 of the pipelined analyzer
+       both save to `${manuscriptId}.json` from inside the same tick. The
+       previous temp-file naming (`${path}.tmp-${pid}-${Date.now()}`)
+       collided on millisecond-equal Date.now() values: both calls picked
+       the same temp path, one renamed it away, the other's rename then
+       failed with ENOENT. The unique-suffix temp names defend against
+       that race. CI Linux saw it consistently; Windows mostly hid the
+       race behind slower fs latency. Fire many parallel writes and
+       assert all complete + the final on-disk file is one of the
+       payloads (last-writer-wins is acceptable; ANY rename failure is
+       not). */
+    const target = join(workdir, 'state.json');
+    const N = 20;
+    const writes = Array.from({ length: N }, (_, i) =>
+      writeJsonAtomic(target, { writer: i }),
+    );
+    await Promise.all(writes);
+
+    /* Every promise resolved — no ENOENT escape. */
+    const final = JSON.parse(await readFile(target, 'utf8')) as { writer: number };
+    expect(final).toHaveProperty('writer');
+    expect(typeof final.writer).toBe('number');
+    expect(final.writer).toBeGreaterThanOrEqual(0);
+    expect(final.writer).toBeLessThan(N);
+
+    /* Every tmp dropping is reaped. */
+    const droppings = (await readdir(workdir)).filter((n) => n.includes('.tmp-'));
+    expect(droppings).toEqual([]);
+  });
 });
 
 describe('renameWithRetry transient-error handling', () => {
