@@ -116,6 +116,20 @@ export const castSlice = createSlice({
         };
       });
     },
+    /* From POST /api/books/:bookId/cast/add-from-roster — the user
+       picked a prior series-mate's character from the manuscript-view
+       reassign picker and the server has appended a new row to this
+       book's cast.json. Idempotent on the redux side: if a character
+       with the same id already exists (shouldn't happen — server mints
+       unique ids — but defensive against double-dispatch under network
+       retry) the existing entry is left in place. The caller follows
+       with manuscriptActions.setSentenceCharacter / setSentencesCharacter
+       using the returned id to reassign the originating sentence. */
+    addCharacter: (s, a: PayloadAction<Character>) => {
+      const incoming = a.payload;
+      if (s.characters.some((c) => c.id === incoming.id)) return;
+      s.characters.push(incoming);
+    },
     /* From POST /api/books/:bookId/cast/link-prior — the user just
        manually declared "this character is the same person as that one
        from a prior series book." Single-row analogue of applyVoiceMatches

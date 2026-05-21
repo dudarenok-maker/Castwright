@@ -517,6 +517,7 @@ function ReadyViewSwitch({
 }) {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const { priorRoster, pushToast } = useOutletContext<LayoutContext>();
   /* Plan 89 C3 — shallow equality for the active book's `chapters` array;
      unchanged identity must not re-render the ReadyViewSwitch when an
      unrelated slice mutates (e.g. notifications, exports for another book). */
@@ -558,6 +559,25 @@ function ReadyViewSwitch({
           sentencesFromStore={manuscript.sentences}
           onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
           onStartGenerating={() => dispatch(uiActions.changeView('generate'))}
+          priorRoster={priorRoster}
+          onAddFromSeriesRoster={async (entry) => {
+            try {
+              const res = await api.addFromSeriesRoster({
+                bookId,
+                targetBookId: entry.bookId,
+                targetCharacterId: entry.id,
+              });
+              dispatch(castActions.addCharacter(res.character));
+              return res.character.id;
+            } catch (err) {
+              pushToast({
+                kind: 'error',
+                message: `Couldn't add ${entry.name}: ${err instanceof Error ? err.message : 'unknown error'}`,
+                dedupeKey: 'add-from-roster',
+              });
+              throw err;
+            }
+          }}
         />
       );
     case 'cast':

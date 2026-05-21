@@ -270,6 +270,23 @@ export interface SeriesRosterEntry {
 export interface SeriesRosterResponse {
   characters: SeriesRosterEntry[];
 }
+/* POST /api/books/:bookId/cast/add-from-roster — add a new local
+   character pulled from a prior series-mate's cast. Used by the
+   manuscript-view reassign picker when the analyzer missed a
+   recurring series character entirely (no local row to link via the
+   sibling cast/link-prior endpoint). Server appends a new row to the
+   source book's cast.json with voiceId + voiceState='reused' +
+   matchedFrom populated, and returns the full new character record so
+   the frontend can dispatch castActions.addCharacter and immediately
+   reassign the sentence in one click. */
+export interface AddFromSeriesRosterArgs {
+  bookId: string;
+  targetBookId: string;
+  targetCharacterId: string;
+}
+export interface AddFromSeriesRosterResponse {
+  character: import('./types').Character;
+}
 export interface StreamArgs {
   bookId: string;
   modelKey: TtsModelKey;
@@ -1736,6 +1753,60 @@ async function realLinkPriorCharacter(
   return res.json();
 }
 
+async function realAddFromSeriesRoster(
+  args: AddFromSeriesRosterArgs,
+): Promise<AddFromSeriesRosterResponse> {
+  const { bookId, ...body } = args;
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/add-from-roster`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Add-from-roster failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockAddFromSeriesRoster(
+  args: AddFromSeriesRosterArgs,
+): Promise<AddFromSeriesRosterResponse> {
+  await wait(120);
+  const prior = MOCK_SERIES_ROSTER.find(
+    (e) => e.bookId === args.targetBookId && e.id === args.targetCharacterId,
+  );
+  if (!prior) {
+    throw new Error(`Target character "${args.targetCharacterId}" not found in mock roster.`);
+  }
+  /* Mock id mirrors the server's slug pattern so e2e specs reading the
+     id from a fixture stay aligned across mock + real. */
+  const newId = `${prior.id}_from_${args.targetBookId.slice(0, 8)}`;
+  return {
+    character: {
+      id: newId,
+      name: prior.name,
+      role: 'character',
+      color: 'unset',
+      gender: prior.gender,
+      ageRange: prior.ageRange,
+      voiceId: prior.voiceId,
+      voiceState: 'reused',
+      matchedFrom: {
+        bookId: args.targetBookId,
+        characterId: args.targetCharacterId,
+        bookTitle: prior.bookTitle,
+        confidence: 1,
+      },
+    } as import('./types').Character,
+  };
+}
+
 async function mockLinkPriorCharacter(
   args: LinkPriorCharacterArgs,
 ): Promise<LinkPriorCharacterResponse> {
@@ -3188,6 +3259,7 @@ const real = {
   overrideLibraryCast: realOverrideLibraryCast,
   getSeriesRoster: realGetSeriesRoster,
   linkPriorCharacter: realLinkPriorCharacter,
+  addFromSeriesRoster: realAddFromSeriesRoster,
   deleteBook: realDeleteBook,
   reparseBook: realReparseBook,
   setChapterExcluded: realSetChapterExcluded,
@@ -3358,6 +3430,7 @@ const mock = {
   overrideLibraryCast: mockOverrideLibraryCast,
   getSeriesRoster: mockGetSeriesRoster,
   linkPriorCharacter: mockLinkPriorCharacter,
+  addFromSeriesRoster: mockAddFromSeriesRoster,
   deleteBook: mockDeleteBook,
   reparseBook: mockReparseBook,
   setChapterExcluded: mockSetChapterExcluded,
