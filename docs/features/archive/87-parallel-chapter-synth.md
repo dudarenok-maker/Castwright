@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
-owner: null
+status: stable
+shipped: '2026-05-21'
+owner: dudarenok-maker
 ---
 
 # Parallel chapter synthesis with bounded worker pool
 
-> Status: active
+> Status: stable
 > Key files: `server/src/routes/generation.ts:485-530`, `server/src/synthesise-chapter.ts`, `src/lib/api.ts`, `src/store/ui-slice.ts`
 > URL surface: indirect — `#/books/<id>/generation`; SSE stream emitted by `POST /api/books/:bookId/generation`
 > OpenAPI ops: `POST /api/books/{id}/generation` — wire shape unchanged; SSE event payloads gain per-chapter track identification (every event already carries `chapterId`; consumer must stop assuming events arrive in monotonic chapter order)
@@ -60,4 +60,13 @@ Real-backend regression on the canonical end-to-end manuscript:
 
 ## Ship notes
 
-_(filled when status flips to `stable` — shipped date, commit SHA, observed wall-clock delta on the canonical manuscript)_
+Shipped **2026-05-21** via PR [#102](https://github.com/dudarenok-maker/AudioBook-Generator/pull/102), merged at commit `7b6cd1c`. Implementation followed the plan unchanged.
+
+Highlights:
+- `processOneChapter` extracted from the inline body of `runMainGenerationJob` in `server/src/routes/generation.ts` and wrapped in a K-wide index-pulling worker pool driven by `GEN_CHAPTER_CONCURRENCY` (default `2`, invalid env falls back to `2`, range `>=1`).
+- Cascade-fatal aborts the shared signal so in-flight siblings exit cleanly; `job.currentChapterId` cleanup is sibling-safe.
+- `src/store/chapters-slice.ts` routes interleaved per-chapter events (progress, chapter_complete, chapter_failed) by `chapterId` — events for chapter B never touch chapter A's row, even when both are `in_progress` simultaneously.
+- 10 new tests landed: 6 server vitest cases in `server/src/routes/generation.test.ts` (K=1 strict, K=2 both-in-flight, K=2 start-ordering, K=2 no-drop, K>N clamp, invalid-env fallback) + 4 frontend vitest cases in `src/store/chapters-slice.test.ts` (interleaved-event routing). Existing tests set `GEN_CHAPTER_CONCURRENCY=1` in `beforeAll` to preserve byte-identical serial assertions.
+- Punted to **BACKLOG Could #27**: Playwright e2e for interleaved SSE in mock mode. The current `mockStreamGeneration` hard-codes serial advance; teaching the mock to interleave is a separate isolated change.
+
+Wall-clock measurement against the canonical end-to-end manuscript is in the manual-acceptance walkthrough; defer to the user's run for actual numbers once Round-4 perf-tuning pass opens.
