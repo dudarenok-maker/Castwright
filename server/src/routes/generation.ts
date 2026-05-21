@@ -304,6 +304,23 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const audioRoot = audioDir(bookDir);
   await mkdir(audioRoot, { recursive: true });
 
+  /* Decide which chapters to (re)generate. Default: every chapter that does
+     not already have an audio file on disk. `force` overrides existence.
+     Excluded chapters (front/back-matter the user opted out of narrating)
+     are always skipped — even an explicit requestedIds=[...] that lists an
+     excluded chapter is filtered out, since generating audio for an
+     excluded chapter would silently undo the user's choice.
+
+     Computed BEFORE the catch-up replay so the replay can skip in-scope
+     chapters (see comment on the replay loop). */
+  const targetChapters = state.chapters.filter((c) => {
+    if (c.excluded) return false;
+    if (requestedIds && !requestedIds.includes(c.id)) return false;
+    if (force) return true;
+    return !chapterAudioExists(audioRoot, c.slug);
+  });
+  const targetIdSet = new Set(targetChapters.map((c) => c.id));
+
   /* Catch-up replay: emit a chapter_complete for every chapter already on
      disk so a reconnecting client (post-pause, page refresh, etc.) snaps to
      the latest state without needing a separate GET. Cheap — one tick per
@@ -312,9 +329,18 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
 
      Excluded chapters are skipped — even if stale audio is still on disk
      from before they were excluded, we don't want to tell the frontend
-     the chapter is "complete" when the user opted out of narrating it. */
+     the chapter is "complete" when the user opted out of narrating it.
+
+     In-scope chapters (force-regen targets whose audio still exists on
+     disk because the synthesis loop hasn't overwritten it yet) are also
+     skipped — emitting chapter_complete here would race the live run and
+     snap the chapter's UI back to "Done" before the synthesis loop's
+     first progress tick lands, freezing the row at the stale duration
+     and making the regen look like a no-op. (Repro that prompted this
+     guard: screenshot 2026-05-21 174722.) */
   for (const ch of state.chapters) {
     if (ch.excluded) continue;
+    if (targetIdSet.has(ch.id)) continue;
     if (chapterAudioExists(audioRoot, ch.slug)) {
       const cachedSentences = analysis.chapters[ch.id] ?? [];
       send({
@@ -332,19 +358,6 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       });
     }
   }
-
-  /* Decide which chapters to (re)generate. Default: every chapter that does
-     not already have an audio file on disk. `force` overrides existence.
-     Excluded chapters (front/back-matter the user opted out of narrating)
-     are always skipped — even an explicit requestedIds=[...] that lists an
-     excluded chapter is filtered out, since generating audio for an
-     excluded chapter would silently undo the user's choice. */
-  const targetChapters = state.chapters.filter((c) => {
-    if (c.excluded) return false;
-    if (requestedIds && !requestedIds.includes(c.id)) return false;
-    if (force) return true;
-    return !chapterAudioExists(audioRoot, c.slug);
-  });
 
   if (targetChapters.length === 0) {
     send({ type: 'idle' });
@@ -410,7 +423,6 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      overwritten — done count rebounds via completedThisRun as it
      finishes). */
   const nonExcluded = state.chapters.filter((c) => !c.excluded);
-  const targetIdSet = new Set(targetChapters.map((c) => c.id));
   const runDoneBase = nonExcluded.filter(
     (c) => !targetIdSet.has(c.id) && chapterAudioExists(audioRoot, c.slug),
   ).length;
