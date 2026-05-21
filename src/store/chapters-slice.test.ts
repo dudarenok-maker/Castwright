@@ -1045,3 +1045,52 @@ describe('chaptersSlice — renameChapter (plan 78)', () => {
     });
   });
 });
+
+describe('chaptersSlice — clearOverrides (plan 84)', () => {
+  it('clears titleOverridden on the listed chapter ids only', () => {
+    const start = baseState([
+      makeChapter(1, { title: 'One', titleOverridden: true }),
+      makeChapter(2, { title: 'Two', titleOverridden: true }),
+      makeChapter(3, { title: 'Three', titleOverridden: true }),
+    ]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.clearOverrides({ chapterIds: [1, 3] }),
+    );
+    expect(next.chapters[0].titleOverridden).toBe(false);
+    expect(next.chapters[1].titleOverridden).toBe(true); // not in list
+    expect(next.chapters[2].titleOverridden).toBe(false);
+  });
+
+  it('is a no-op when the id list is empty', () => {
+    const start = baseState([makeChapter(1, { title: 'One', titleOverridden: true })]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.clearOverrides({ chapterIds: [] }),
+    );
+    expect(next.chapters[0].titleOverridden).toBe(true);
+  });
+
+  it('ignores chapter ids that do not exist', () => {
+    const start = baseState([makeChapter(1, { title: 'One', titleOverridden: true })]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.clearOverrides({ chapterIds: [99, 42] }),
+    );
+    expect(next.chapters[0].titleOverridden).toBe(true);
+  });
+
+  it('preserves the chapter title (the new manuscript parse will overwrite it on the next state.json round-trip)', () => {
+    const start = baseState([
+      makeChapter(1, { title: 'My User Rename', titleOverridden: true }),
+    ]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.clearOverrides({ chapterIds: [1] }),
+    );
+    // Title stays put for the moment — only the flag flips. The PUT-state
+    // round-trip + re-parse refreshes the title.
+    expect(next.chapters[0].title).toBe('My User Rename');
+    expect(next.chapters[0].titleOverridden).toBe(false);
+  });
+});
