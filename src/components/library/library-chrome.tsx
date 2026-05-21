@@ -13,7 +13,7 @@ import { useRef, useState } from 'react';
 import { IconPlus, IconFolder, IconCopy, IconClose, IconDownload } from '../../lib/icons';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../primitives';
 import { formatHours } from '../../lib/time';
-import { StatTile } from '../../views/voices';
+import { StatTile } from '../stat-tiles';
 import type { WorkspaceInfo } from '../../lib/api';
 
 type Filter = 'all' | 'in_progress' | 'complete';

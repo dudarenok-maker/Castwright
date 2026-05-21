@@ -11,7 +11,12 @@
    `uiPersistConfig` / `manuscriptPersistConfig` below for the full list. */
 
 import { configureStore } from '@reduxjs/toolkit';
-import { useDispatch, useSelector, type TypedUseSelectorHook } from 'react-redux';
+import {
+  useDispatch,
+  useSelector,
+  shallowEqual,
+  type TypedUseSelectorHook,
+} from 'react-redux';
 import {
   persistReducer,
   persistStore,
@@ -150,3 +155,22 @@ export type AppDispatch = typeof store.dispatch;
 
 export const useAppDispatch: () => AppDispatch = useDispatch;
 export const useAppSelector: TypedUseSelectorHook<RootState> = useSelector;
+
+/** Shallow-equal variant of `useAppSelector` (plan 89 C3). Wraps `useSelector`
+ *  with react-redux's `shallowEqual` so a selector that returns an array /
+ *  object only causes a re-render when at least one element / key changes
+ *  identity — not on every parent dispatch.
+ *
+ *  Use this for selectors that read large slice arrays (e.g. `cast.characters`,
+ *  `chapters.chapters`, `library.books`) or per-book sub-slices (e.g.
+ *  `exports.byBookId[bookId]`). Do NOT use for scalar / single-value reads —
+ *  the default referential equality is already optimal there.
+ *
+ *  Conversion sites (capped at five per plan 89):
+ *  - `src/views/listen.tsx:122` — `s.exports.byBookId[bookId] ?? []` (Listen view's export-queue read; the array is recomputed on every other-book export tick).
+ *  - `src/components/layout.tsx:82` — `s.cast.characters` (re-render on every reducer dispatch when array identity is stable).
+ *  - `src/components/layout.tsx:83` — `s.chapters.chapters` (same — Layout is mounted on every route).
+ *  - `src/components/layout.tsx:479` — `s.library.books` (large; drift-poll fan-out churns this every 30 / 120 s).
+ *  - `src/routes/index.tsx:497` — `s.chapters.chapters` in ReadyViewSwitch (sister to layout but scoped to ready stage). */
+export const useAppSelectorShallow: TypedUseSelectorHook<RootState> = (selector) =>
+  useSelector(selector, shallowEqual);
