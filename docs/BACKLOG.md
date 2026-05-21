@@ -284,16 +284,6 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item B4).
 - _Depends on:_ plan 88 shipped (its per-phase plumbing is the seam this builds on).
 - _Benefit (user):_ uses idle Gemini quota when local is the bottleneck. Lower priority than plan 88's bucketed split.
 
-### 24. Confirm-cast + listen-chapter list virtualisation
-
-Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C4).
-
-- _What:_ Apply Should #1's `@tanstack/react-virtual` pattern to `src/views/confirm-cast.tsx:187-205` and `src/components/listen/listen-player-region.tsx:93-117`. Same virtualiser dep + helper shape.
-- _Acceptance:_ Books with >40 characters mount without confirm-cast jank; books with >40 chapters mount without listen-region jank. Existing tests still green.
-- _Key files:_ `src/views/confirm-cast.tsx`; `src/components/listen/listen-player-region.tsx`; shared dep from Should #1.
-- _Depends on:_ Should #1 (shares the virtualiser dep + helper — pair to amortise dep adoption).
-- _Benefit (user):_ only matters above ~40 rows. Most books are below the threshold today.
-
 ### 25. Waveform memoisation
 
 Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C6).
