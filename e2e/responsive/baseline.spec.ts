@@ -1,4 +1,4 @@
-/* Plan 81 wave 1 — responsive baseline.
+/* Plan 81 wave 5 — responsive baseline (promoted from wave 1).
  *
  * Runs under all three Playwright projects (chromium / mobile-chrome /
  * tablet-chrome) via the testMatch glob in playwright.config.ts. Each
@@ -8,18 +8,16 @@
  *   mobile-chrome  Pixel 7         412x915  (browserName overridden to chromium)
  *   tablet-chrome  iPad Pro 11     834x1194 (browserName overridden to chromium)
  *
- * Wave 1 scope: prove the e2e plumbing works for mobile + tablet projects
- * (the smoke half of the spec runs everywhere) AND lock no-horizontal-
- * scroll on the desktop chromium project (the only project where the
- * desktop layout is intended to render correctly today). Per-view layout
- * fixes for cast / manuscript / etc. land in waves 2-3, then wave 5
- * upgrades the smoke assertion on mobile/tablet to the same strict
- * no-overflow check we run on desktop today.
+ * History: shipped in wave 1 as smoke-only on mobile/tablet (no-overflow
+ * assertion was gated to chromium because waves 2-4 hadn't made views
+ * responsive yet). Wave 5 promotes the assertion to all projects — every
+ * Wave 3 view-responsive PR and Wave 4 touch-affordance PR has shipped,
+ * so the views ARE responsive on phone + tablet.
  *
- * Concretely: mobile + tablet projects currently have N hundred px of
- * horizontal overflow on most views (that's the whole point of plan 81).
- * Asserting "no overflow" on mobile in wave 1 would be a false-failure
- * gate. Smoke-only here, strict in wave 5. */
+ * Companion: `e2e/responsive/coverage.spec.ts` is the comprehensive
+ * matrix (every view × every project). This file is the fast smoke
+ * subset (just library + listen) that can run in <30 s and confirms
+ * the project plumbing is alive. */
 
 import { test, expect } from '@playwright/test';
 
@@ -35,20 +33,16 @@ async function expectNoHorizontalScroll(page: import('@playwright/test').Page) {
 }
 
 test.describe('responsive baseline', () => {
-  test('library renders', async ({ page }, testInfo) => {
+  test('library renders + no horizontal overflow', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
       timeout: 10_000,
     });
-    /* Let staggered card-mount transitions settle; matches the same
-       300 ms used by visual.spec.ts before screenshot capture. */
     await page.waitForTimeout(300);
-    if (testInfo.project.name === 'chromium') {
-      await expectNoHorizontalScroll(page);
-    }
+    await expectNoHorizontalScroll(page);
   });
 
-  test('listen renders', async ({ page }, testInfo) => {
+  test('listen renders + no horizontal overflow', async ({ page }) => {
     await page.goto('/#/books/sb/listen');
     await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 })).toBeVisible({
       timeout: 5_000,
@@ -57,8 +51,6 @@ test.describe('responsive baseline', () => {
       timeout: 5_000,
     });
     await page.waitForTimeout(300);
-    if (testInfo.project.name === 'chromium') {
-      await expectNoHorizontalScroll(page);
-    }
+    await expectNoHorizontalScroll(page);
   });
 });
