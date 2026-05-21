@@ -146,11 +146,10 @@ test('bump-version --level patch advances both versions, commits, tags', () => {
     const tags = gitExec( ['tag', '--list'], { cwd: dir, encoding: 'utf8' }).trim();
     assert.equal(tags, 'v1.2.4');
 
-    const annotation = execFileSync(
-      'git',
-      ['tag', '-l', '--format=%(contents)', 'v1.2.4'],
-      { cwd: dir, encoding: 'utf8' },
-    );
+    const annotation = gitExec(['tag', '-l', '--format=%(contents)', 'v1.2.4'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
     assert.match(annotation, /v1\.2\.4/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -214,11 +213,10 @@ test('bump-version --notes-file uses file content as the tag annotation', () => 
     rmSync(notes, { force: true });
     assert.equal(out.status, 0, out.stderr);
 
-    const annotation = execFileSync(
-      'git',
-      ['tag', '-l', '--format=%(contents)', 'v1.0.1'],
-      { cwd: dir, encoding: 'utf8' },
-    );
+    const annotation = gitExec(['tag', '-l', '--format=%(contents)', 'v1.0.1'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
     assert.match(annotation, /Fixes:/);
     assert.match(annotation, /the bug/);
   } finally {
@@ -245,6 +243,48 @@ test('bump-version refuses a dirty tree (unless --dry-run)', () => {
     assert.notEqual(out.status, 0);
     assert.match(out.stderr, /Working tree is not clean/);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/* Regression for BACKLOG Should #3: a polluted GIT_DIR / GIT_WORK_TREE /
+   GIT_INDEX_FILE env (the shape husky's pre-commit hook produces when run
+   inside a worktree) must NOT misdirect any subprocess call in this test
+   to the parent repo. Before the fix, two bare execFileSync('git', …)
+   callsites bypassed gitExec()'s env scrubbing — they read `git tag -l`
+   from whichever repo the leaked GIT_DIR pointed at, which in worktree
+   pre-commit was the parent .git (no v1.0.1 tag there → empty annotation
+   → `assert.match(annotation, /Fixes:/)` fails with actual: ''). */
+test('polluted GIT_* env cannot misdirect subprocess from throwaway repo', () => {
+  const dir = setupRepo('1.0.0');
+  const saved = {
+    GIT_DIR: process.env.GIT_DIR,
+    GIT_WORK_TREE: process.env.GIT_WORK_TREE,
+    GIT_INDEX_FILE: process.env.GIT_INDEX_FILE,
+  };
+  try {
+    process.env.GIT_DIR = resolve(tmpdir(), 'sentinel.git');
+    process.env.GIT_WORK_TREE = resolve(tmpdir(), 'sentinel-worktree');
+    process.env.GIT_INDEX_FILE = resolve(tmpdir(), 'sentinel-index');
+
+    const notes = resolve(tmpdir(), `bump-notes-leak-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, '# v1.0.1\n\nFixes:\n- the leak\n');
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes]);
+    rmSync(notes, { force: true });
+    assert.equal(out.status, 0, out.stderr);
+
+    /* Tag-annotation read was the canonical failing line pre-fix. */
+    const annotation = gitExec(['tag', '-l', '--format=%(contents)', 'v1.0.1'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.match(annotation, /Fixes:/);
+    assert.match(annotation, /the leak/);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });
