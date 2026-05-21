@@ -115,6 +115,7 @@ The chapter still lands on disk; only the `.lufs.json` sidecar is missing. Real-
 - `server/src/tts/mp3-spawn-args.test.ts` — module-level mock of `node:child_process.spawn`:
   - No `loudnorm` option → no `-af loudnorm` flag in args (back-compat).
   - `twoPass: false` → exactly one ffmpeg spawn with `-af loudnorm=I=-16:LRA=11:TP=-1.5:linear=true`.
+  - With loudnorm → every codec builder (mp3 / aac-m4a / opus) emits an output `-ar` between `-af` and `-c:a` matching the input sample rate (locks the 2026-05-21 ffmpeg-8 fix — see "Post-ship correction" below).
 - `server/src/tts/mp3.test.ts` — `writeChapterLufsFile` coverage: round-trips payload, atomic rename leaves no `.tmp-*` droppings.
 
 ### Manual acceptance walkthrough
@@ -141,3 +142,15 @@ Requires a real chapter generation against a live sidecar (or the cached PCM tri
 ## Ship notes
 
 Shipped 2026-05-20 on branch `feat/server-audio-loudnorm`. Implementation adds `server/src/tts/loudnorm.ts` (new file, ~220 lines) + extends `server/src/tts/mp3.ts` with the `loudnorm` option + sibling `writeChapterLufsFile`. Generation call site at `server/src/routes/generation.ts` wires `AUDIO_LOUDNORM_ENABLED` (default ON) and the sidecar write callback. Voice-sample call site annotated to make the deliberate skip explicit. 17 new automated tests across `loudnorm.test.ts` (12), `mp3-spawn-args.test.ts` (2), `mp3.test.ts` (3 — `writeChapterLufsFile` coverage).
+
+### Post-ship correction (2026-05-21) — ffmpeg 8.x sample-rate output drift
+
+Bug: 5 chapters of *Exile* regenerated on 2026-05-21 produced MP3s with duration **3.05–3.07× the segments.json `durationSec`**. Audio played at correct pitch and ran the full inflated length on disk (verified: `ffprobe 03-chapter-one-one.mp3` = 2061 s vs `segments.json.durationSec` = 674 s). Chapters generated 2026-05-20 with the same engine / sample rate / loudnorm config were unaffected.
+
+Root cause: ffmpeg's `loudnorm` filter resamples internally to 192 kHz for EBU R128 processing. Under ffmpeg 7.x the filter chain reached libmp3lame at the input sample rate; under ffmpeg 8.x (the user upgraded from 7.x to 8.1.1-full_build-www.gyan.dev between the two synth dates) the filter's output stream metadata reached the encoder at the wrong rate, producing the 3.05× duration stretch on 24 kHz mono Kokoro PCM. The MP3 declares 48 kHz / 32 kbps — both wrong (input is 24 kHz, V2 VBR should be ~190 kbps) and both explained by the broken sample-rate pipeline.
+
+Fix: explicit output `-ar String(opts.sampleRate)` in `server/src/tts/mp3.ts` `buildMp3FfmpegArgs` / `buildAacFfmpegArgs` / `buildOpusFfmpegArgs`, threaded between the `-af <filter>` and `-c:a <codec>` flags. The encoder boundary now owns the rate contract regardless of filter-chain behaviour. Filter strings in `loudnorm.ts` unchanged.
+
+Regression test: `server/src/tts/mp3-spawn-args.test.ts` adds three parameterised cases (mp3 / aac-m4a / opus) asserting an output `-ar` flag exists strictly between `-af` and `-c:a` and carries the input sample rate. Contract-level rather than ffprobe-end-to-end because the bug only manifests on real-speech PCM with non-trivial dynamic range — synthetic sine / noise PCM does not reproduce the 3× stretch even on the broken pipeline.
+
+Backfill: re-synthesize the 5 affected Exile chapters (`03-chapter-one-one`, `04-chapter-two-two`, `05-chapter-three-three`, `06-chapter-four-four`, `08-chapter-six-six`) and delete their stale `.previous.mp3` rollback files (same corrupted bytes — accepting a rollback would replay the bug). Discovery rule for any future audit: broken iff `ffprobe duration / segments.json durationSec > 1.5`.
