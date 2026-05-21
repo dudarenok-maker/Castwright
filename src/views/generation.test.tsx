@@ -46,6 +46,7 @@ function HostedOutlet() {
     showError: vi.fn(),
     pushToast: vi.fn(),
     ttsLifecycle,
+    priorRoster: [],
   };
   return <Outlet context={ctx} />;
 }
