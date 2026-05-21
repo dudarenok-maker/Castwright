@@ -69,16 +69,6 @@ Source: net-new (2026-05-21). Surfaced during the plan 87/88/89 ship round — b
 - _Depends on:_ none.
 - _Benefit (technical):_ restores pre-push as a real merge gate. Today flaky specs train reviewers to retry pre-push reflexively, which masks genuine regressions. Also unblocks future docs-only branches that legitimately don't touch e2e but get gated on these.
 
-### 3. Fix `bump-version.test.mjs` GIT_DIR leak that breaks worktree pre-commit
-
-Source: net-new (2026-05-21). Surfaced again during the plan 87/88/89 ship round; documented as a workaround in user memory `feedback_worktree_precommit_git_env_leak` since 2026-05 but no permanent fix in tree. Memory says "commit from main checkout until BACKLOG #25 lands" — that's the workaround, not the fix.
-
-- _What:_ In `scripts/tests/bump-version.test.mjs`, the test inherits the husky hook's env (including `GIT_DIR`, `GIT_WORK_TREE`) into its git subprocess calls. When the test runs as part of pre-commit inside a worktree, those leaked vars point its subprocess at the wrong git directory, producing the cryptic `expected: /Fixes:/ … actual: ''` assertion failure even though standalone `npm run test:hooks` passes 190/190. Fix: explicitly scrub the inherited `GIT_*` env vars in the subprocess spawn (e.g. `{ env: { ...filterGitEnv(process.env) } }`), so the test always operates against the checked-out repo, regardless of whether it's invoked from a husky hook, a worktree, or a bare shell.
-- _Acceptance:_ Commit from a worktree (e.g. `node scripts/wt-new.mjs <branch>`, edit anything, `git commit`) — pre-commit runs cleanly without the GIT_DIR leak. The "commit from main checkout" workaround in `feedback_worktree_precommit_git_env_leak` becomes obsolete; memory updates to drop the workaround line. Pester or node-test suite gains a regression case that simulates a polluted env and asserts the subprocess still sees the right repo.
-- _Key files:_ `scripts/tests/bump-version.test.mjs`; possibly `scripts/lib/git-helpers.mjs` if env scrubbing is hoisted to a shared helper.
-- _Depends on:_ none.
-- _Benefit (technical):_ unblocks the always-worktree standard. Today every committer in a worktree has to either bypass with `--no-verify` (against the rules) or context-switch back to main checkout for every commit. The leak has been documented for ~2 weeks; time to actually fix it.
-
 ---
 
 ## Could — nice to have, low-cost wins
