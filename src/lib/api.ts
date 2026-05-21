@@ -2495,9 +2495,17 @@ export interface SidecarHealth {
   /* Load-state surface added when the sidecar grew /load + /unload endpoints
      (see server/tts-sidecar/main.py). Older sidecars don't ship these, so
      the proxy defaults them to `false` / `null` and the UI can treat them
-     as authoritative. */
+     as authoritative.
+
+     `modelLoaded` / `loading` stay Coqui-specific for back-compat (the
+     Coqui pill polls them); `kokoroLoaded` / `kokoroLoading` are the
+     Kokoro pair, added when Kokoro got its own in-app Stop pill. Both
+     pairs fan out from the same /health response so useTtsLifecycle
+     stays on one poll per tick. */
   modelLoaded?: boolean;
   loading?: boolean;
+  kokoroLoaded?: boolean;
+  kokoroLoading?: boolean;
   device?: string | null;
 }
 
@@ -3027,32 +3035,50 @@ async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   return {
     status: 'reachable',
     url: '(mock)',
-    engines: ['coqui', 'gemini'],
+    engines: ['coqui', 'kokoro', 'gemini'],
     modelLoaded: MOCK_SIDECAR_MODEL_LOADED,
     loading: false,
-    device: MOCK_SIDECAR_MODEL_LOADED ? 'cuda' : null,
+    kokoroLoaded: MOCK_SIDECAR_KOKORO_LOADED,
+    kokoroLoading: false,
+    device: MOCK_SIDECAR_MODEL_LOADED || MOCK_SIDECAR_KOKORO_LOADED ? 'cuda' : null,
   };
 }
 
 /* In-memory model state for the mock path — flipped by mockLoadSidecar /
    mockUnloadSidecar so the in-app Load/Stop pill round-trips visibly under
-   VITE_USE_MOCKS=true. */
+   VITE_USE_MOCKS=true. Per-engine flags so the Kokoro pill can be exercised
+   independently from Coqui in e2e tests. Kokoro defaults to `true` to mirror
+   the real sidecar's eager-preload-at-startup behaviour. */
 let MOCK_SIDECAR_MODEL_LOADED = false;
+let MOCK_SIDECAR_KOKORO_LOADED = true;
 let MOCK_OLLAMA_MODEL_LOADED = false;
 
-async function realLoadSidecar(): Promise<ModelControlResult> {
+async function realLoadSidecar(
+  opts: { engine?: 'coqui' | 'kokoro' } = {},
+): Promise<ModelControlResult> {
+  /* Default to Coqui when the caller omits `engine` — preserves back-compat
+     with the original signature. The Kokoro pill always passes
+     `{ engine: 'kokoro' }` explicitly. */
+  const body = opts.engine ? { engine: opts.engine } : {};
   const res = await fetch('/api/sidecar/load', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: '{}',
+    body: JSON.stringify(body),
   });
   return (await res
     .json()
     .catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
 }
 
-async function realUnloadSidecar(): Promise<ModelControlResult> {
-  const res = await fetch('/api/sidecar/unload', { method: 'POST' });
+async function realUnloadSidecar(
+  opts: { engine?: 'coqui' | 'kokoro' } = {},
+): Promise<ModelControlResult> {
+  const body = opts.engine ? { engine: opts.engine } : {};
+  const res = await fetch('/api/sidecar/unload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   return (await res
     .json()
     .catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
@@ -3080,15 +3106,27 @@ async function realGetOllamaHealth(): Promise<OllamaHealth> {
   return res.json();
 }
 
-async function mockLoadSidecar(): Promise<ModelControlResult> {
+async function mockLoadSidecar(
+  opts: { engine?: 'coqui' | 'kokoro' } = {},
+): Promise<ModelControlResult> {
   await wait(60);
-  MOCK_SIDECAR_MODEL_LOADED = true;
+  if (opts.engine === 'kokoro') {
+    MOCK_SIDECAR_KOKORO_LOADED = true;
+  } else {
+    MOCK_SIDECAR_MODEL_LOADED = true;
+  }
   return { status: 'ready' };
 }
 
-async function mockUnloadSidecar(): Promise<ModelControlResult> {
+async function mockUnloadSidecar(
+  opts: { engine?: 'coqui' | 'kokoro' } = {},
+): Promise<ModelControlResult> {
   await wait(40);
-  MOCK_SIDECAR_MODEL_LOADED = false;
+  if (opts.engine === 'kokoro') {
+    MOCK_SIDECAR_KOKORO_LOADED = false;
+  } else {
+    MOCK_SIDECAR_MODEL_LOADED = false;
+  }
   return { status: 'idle' };
 }
 

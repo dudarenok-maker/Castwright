@@ -1,8 +1,16 @@
 /* Pin the contract of useTtsLifecycle so a future refactor that consolidates
-   it with Generation view's local pill (or hoists state to Redux) can't
-   silently regress: the load flow must auto-evict the analyzer FIRST, set
-   the eviction banner only if the analyzer was actually resident, then
-   load TTS; the stop flow unloads TTS and clears notices. */
+   it with Generation view's local pills (or hoists state to Redux) can't
+   silently regress:
+
+   - One /health probe drives BOTH the Coqui and Kokoro pill states.
+   - Coqui load auto-evicts the analyzer first and surfaces the eviction banner
+     only when the analyzer was actually resident.
+   - Kokoro load does NOT touch the analyzer (1 GB Kokoro + 7 GB Ollama fits an
+     8 GB GPU per plan 14a) — important regression net for the VRAM math.
+   - load/unload call the right engine on the wire (`api.loadSidecar({engine})`)
+     so the proxy can dispatch Coqui vs. Kokoro correctly.
+   - Optimistic pending state is per-engine — a Stop click on one engine doesn't
+     drag the other pill into 'idle'. */
 
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +35,8 @@ beforeEach(() => {
     url: '',
     loading: false,
     modelLoaded: false,
+    kokoroLoaded: false,
+    kokoroLoading: false,
   });
   mocks.getOllamaHealth.mockResolvedValue({
     status: 'reachable',
@@ -42,52 +52,84 @@ afterEach(() => {
 });
 
 describe('useTtsLifecycle', () => {
-  it('starts in "idle" state before the first probe completes', () => {
+  it('starts both engines in "idle" before the first probe completes', () => {
     const { result } = renderHook(() => useTtsLifecycle());
-    /* Synchronous initial render: probe has fired but hasn't resolved yet. */
-    expect(result.current.state).toBe('idle');
+    expect(result.current.coqui.state).toBe('idle');
+    expect(result.current.kokoro.state).toBe('idle');
   });
 
-  it('flips to "ready" when /health reports modelLoaded=true', async () => {
+  it('flips Coqui pill to "ready" when /health reports modelLoaded=true', async () => {
     mocks.getSidecarHealth.mockResolvedValueOnce({
       status: 'reachable',
       url: '',
       loading: false,
       modelLoaded: true,
+      kokoroLoaded: false,
+      kokoroLoading: false,
     });
     const { result } = renderHook(() => useTtsLifecycle());
-    await waitFor(() => expect(result.current.state).toBe('ready'));
+    await waitFor(() => expect(result.current.coqui.state).toBe('ready'));
+    expect(result.current.kokoro.state).toBe('idle');
   });
 
-  it('flips to "unreachable" when /health rejects', async () => {
+  it('flips Kokoro pill to "ready" when /health reports kokoroLoaded=true', async () => {
+    /* The eager-preload reality: Kokoro is loaded from startup so the
+       first /health probe usually reports ready=true. Coqui starts unloaded
+       (PRELOAD_COQUI=0). Both states fan out from one response. */
+    mocks.getSidecarHealth.mockResolvedValueOnce({
+      status: 'reachable',
+      url: '',
+      loading: false,
+      modelLoaded: false,
+      kokoroLoaded: true,
+      kokoroLoading: false,
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.kokoro.state).toBe('ready'));
+    expect(result.current.coqui.state).toBe('idle');
+  });
+
+  it('drives both pills from a SINGLE /health probe per tick (one-poll invariant)', async () => {
+    /* The architectural rule plan 30 G1 enforced and BACKLOG #15 protects:
+       per-engine fan-out must not introduce a second poll. After one mount
+       cycle + first probe, getSidecarHealth must have been called exactly
+       once. */
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
+    expect(mocks.getSidecarHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it('flips both pills to "unreachable" when /health rejects', async () => {
     mocks.getSidecarHealth.mockRejectedValueOnce(new Error('boom'));
     const { result } = renderHook(() => useTtsLifecycle());
-    await waitFor(() => expect(result.current.state).toBe('unreachable'));
+    await waitFor(() => expect(result.current.coqui.state).toBe('unreachable'));
+    expect(result.current.kokoro.state).toBe('unreachable');
   });
 
-  it('onLoad auto-evicts the analyzer and surfaces the eviction banner when analyzer WAS resident', async () => {
+  it('Coqui onLoad auto-evicts the analyzer and surfaces the eviction banner when analyzer WAS resident', async () => {
     const { result } = renderHook(() => useTtsLifecycle());
-    await waitFor(() => expect(result.current.state).toBe('idle'));
+    await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
 
     await act(async () => {
-      await result.current.onLoad();
+      await result.current.coqui.onLoad();
     });
 
     expect(mocks.unloadAnalyzer).toHaveBeenCalledOnce();
     expect(mocks.loadSidecar).toHaveBeenCalledOnce();
+    expect(mocks.loadSidecar).toHaveBeenCalledWith({ engine: 'coqui' });
     expect(result.current.evictionNotice).toBe('Analyzer unloaded to free VRAM for TTS.');
   });
 
-  it('onLoad does NOT surface the eviction banner when analyzer was already unloaded', async () => {
+  it('Coqui onLoad does NOT surface the eviction banner when analyzer was already unloaded', async () => {
     mocks.getOllamaHealth.mockResolvedValueOnce({
       status: 'reachable',
       modelResident: false,
     });
     const { result } = renderHook(() => useTtsLifecycle());
-    await waitFor(() => expect(result.current.state).toBe('idle'));
+    await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
 
     await act(async () => {
-      await result.current.onLoad();
+      await result.current.coqui.onLoad();
     });
 
     /* unloadAnalyzer still fires (idempotent) but the banner stays off
@@ -96,55 +138,126 @@ describe('useTtsLifecycle', () => {
     expect(result.current.evictionNotice).toBeNull();
   });
 
-  it('onLoad surfaces a load-error banner when loadSidecar returns status=error', async () => {
-    mocks.loadSidecar.mockResolvedValueOnce({ status: 'error', error: 'weights missing' });
+  it('Kokoro onLoad does NOT touch the analyzer (1 GB Kokoro fits alongside Ollama)', async () => {
+    /* Regression net for the plan 14a VRAM invariant: Kokoro's footprint is
+       small enough to coexist with the analyzer; auto-evicting on every
+       Kokoro Load would needlessly trash the analyzer's residency and
+       trigger a re-warm the next time the user runs analysis. */
     const { result } = renderHook(() => useTtsLifecycle());
-    await waitFor(() => expect(result.current.state).toBe('idle'));
+    await waitFor(() => expect(result.current.kokoro.state).toBe('idle'));
 
     await act(async () => {
-      await result.current.onLoad();
+      await result.current.kokoro.onLoad();
+    });
+
+    expect(mocks.unloadAnalyzer).not.toHaveBeenCalled();
+    expect(mocks.getOllamaHealth).not.toHaveBeenCalled();
+    expect(mocks.loadSidecar).toHaveBeenCalledOnce();
+    expect(mocks.loadSidecar).toHaveBeenCalledWith({ engine: 'kokoro' });
+    expect(result.current.evictionNotice).toBeNull();
+  });
+
+  it('Coqui onLoad surfaces a load-error banner when loadSidecar returns status=error', async () => {
+    mocks.loadSidecar.mockResolvedValueOnce({ status: 'error', error: 'weights missing' });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
+
+    await act(async () => {
+      await result.current.coqui.onLoad();
     });
 
     expect(result.current.loadErrorNotice).toBe('weights missing');
   });
 
-  it('onLoad surfaces a load-error banner when loadSidecar throws', async () => {
+  it('Coqui onLoad surfaces a load-error banner when loadSidecar throws', async () => {
     mocks.loadSidecar.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
     const { result } = renderHook(() => useTtsLifecycle());
-    await waitFor(() => expect(result.current.state).toBe('idle'));
+    await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
 
     await act(async () => {
-      await result.current.onLoad();
+      await result.current.coqui.onLoad();
     });
 
     expect(result.current.loadErrorNotice).toMatch(/connect ECONNREFUSED/);
   });
 
-  it('onStop calls unloadSidecar and clears any prior notices', async () => {
+  it('Coqui onStop calls unloadSidecar with engine=coqui and clears any prior notices', async () => {
     const { result } = renderHook(() => useTtsLifecycle());
-    await waitFor(() => expect(result.current.state).toBe('idle'));
+    await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
 
     /* Plant a notice via onLoad first, then verify onStop clears it. */
     await act(async () => {
-      await result.current.onLoad();
+      await result.current.coqui.onLoad();
     });
     expect(result.current.evictionNotice).not.toBeNull();
 
     await act(async () => {
-      await result.current.onStop();
+      await result.current.coqui.onStop();
     });
     expect(mocks.unloadSidecar).toHaveBeenCalledOnce();
+    expect(mocks.unloadSidecar).toHaveBeenCalledWith({ engine: 'coqui' });
     expect(result.current.evictionNotice).toBeNull();
     expect(result.current.loadErrorNotice).toBeNull();
+  });
+
+  it('Kokoro onStop calls unloadSidecar with engine=kokoro', async () => {
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.kokoro.state).toBe('idle'));
+
+    await act(async () => {
+      await result.current.kokoro.onStop();
+    });
+    expect(mocks.unloadSidecar).toHaveBeenCalledOnce();
+    expect(mocks.unloadSidecar).toHaveBeenCalledWith({ engine: 'kokoro' });
+  });
+
+  it('Kokoro pending state does not bleed into Coqui pill', async () => {
+    /* Per-engine pending override: when the user clicks Stop on Kokoro,
+       only the Kokoro pill flips to 'idle' optimistically — the Coqui
+       pill keeps its current state until the next /health resolve. */
+    mocks.getSidecarHealth.mockResolvedValueOnce({
+      status: 'reachable',
+      url: '',
+      loading: false,
+      modelLoaded: true,
+      kokoroLoaded: true,
+      kokoroLoading: false,
+    });
+    /* Make the unload promise hang so the pending override stays in place
+       long enough for assertion. */
+    let resolveUnload: (v: { status: string }) => void = () => {};
+    mocks.unloadSidecar.mockReturnValueOnce(
+      new Promise((r) => {
+        resolveUnload = r;
+      }),
+    );
+
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.coqui.state).toBe('ready'));
+    expect(result.current.kokoro.state).toBe('ready');
+
+    let stopPromise: Promise<void> = Promise.resolve();
+    act(() => {
+      stopPromise = result.current.kokoro.onStop();
+    });
+    /* Pending override fires synchronously inside onStop before the await. */
+    expect(result.current.kokoro.state).toBe('idle');
+    expect(result.current.coqui.state).toBe('ready');
+
+    /* Release the hang so the test cleans up. */
+    await act(async () => {
+      resolveUnload({ status: 'idle' });
+      await stopPromise;
+    });
   });
 
   it('dismissNotices clears both banner strings without calling the API', async () => {
     mocks.loadSidecar.mockResolvedValueOnce({ status: 'error', error: 'X' });
     const { result } = renderHook(() => useTtsLifecycle());
-    await waitFor(() => expect(result.current.state).toBe('idle'));
+    await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
 
     await act(async () => {
-      await result.current.onLoad();
+      await result.current.coqui.onLoad();
     });
     expect(result.current.loadErrorNotice).toBe('X');
 
