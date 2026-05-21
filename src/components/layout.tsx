@@ -28,6 +28,7 @@ import { stageToHash } from '../lib/router';
 import { TopBar, type GenerationPillData, type AnalysisPillData } from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
+import { selectEnginesInUse } from '../store/engines-in-use-selector';
 import { useTheme } from '../lib/use-theme';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { MiniPlayer } from './mini-player';
@@ -627,18 +628,44 @@ export function Layout() {
     useReverseLocalAnalyzerGuard();
   const showGlobalTtsPill =
     stageKind === 'analysing' || stageKind === 'confirm' || stageKind === 'ready';
+  /* Pills only render for engines actually in use by the current book —
+     Coqui pill when the book synthesises with Coqui, Kokoro pill when it
+     synthesises with Kokoro. Today this is derived from the book's
+     effective default model key (singleton set); the set shape leaves
+     room for per-character engine overrides without churning consumers.
+     Gemini has no Stop pill (cloud, no VRAM to free). */
+  const enginesInUse = useAppSelector(selectEnginesInUse);
   const ttsPillElement = showGlobalTtsPill ? (
-    <ModelControlPill
-      kind="tts"
-      state={ttsLifecycle.state}
-      unreachableLabel="Sidecar process not running"
-      onLoad={() => {
-        void ttsLifecycle.onLoad();
-      }}
-      onStop={() => {
-        void ttsLifecycle.onStop();
-      }}
-    />
+    <span className="inline-flex items-center gap-2 flex-wrap">
+      {enginesInUse.has('kokoro') && (
+        <ModelControlPill
+          kind="tts"
+          engineLabel="Kokoro"
+          state={ttsLifecycle.kokoro.state}
+          unreachableLabel="Sidecar process not running"
+          onLoad={() => {
+            void ttsLifecycle.kokoro.onLoad();
+          }}
+          onStop={() => {
+            void ttsLifecycle.kokoro.onStop();
+          }}
+        />
+      )}
+      {enginesInUse.has('coqui') && (
+        <ModelControlPill
+          kind="tts"
+          engineLabel="Coqui XTTS"
+          state={ttsLifecycle.coqui.state}
+          unreachableLabel="Sidecar process not running"
+          onLoad={() => {
+            void ttsLifecycle.coqui.onLoad();
+          }}
+          onStop={() => {
+            void ttsLifecycle.coqui.onStop();
+          }}
+        />
+      )}
+    </span>
   ) : null;
 
   /* Re-render once per second while a generation run is alive so the global

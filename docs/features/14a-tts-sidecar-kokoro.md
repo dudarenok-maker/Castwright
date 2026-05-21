@@ -35,12 +35,26 @@ the cast UI ever surfaces "upload a reference clip per character").
    — quality is the goal and thrift knobs invite future degradation
    debates we don't want.
 
-3. **Eagerly preloaded on sidecar startup.** Unlike XTTS, Kokoro is
-   NOT gated behind the in-app Load/Stop pill. Cold load is ~1 s and
-   VRAM cost is ~1 GB, well within headroom on 8 GB. Failure-tolerant:
-   if the weights aren't installed yet, the sidecar logs a warning and
-   stays alive on the Coqui path so the user can still get audio while
-   they run `scripts/install-kokoro.ps1`.
+3. **Eagerly preloaded on sidecar startup, with a user-facing Stop.**
+   The eager-preload hook in `server/tts-sidecar/main.py` warms Kokoro at
+   sidecar startup (~1 s cold load, ~1 GB VRAM) so the first `/synthesize`
+   call is hot. Kokoro now has its own in-app Load/Stop pill in the top
+   bar — a user who wants to free the 1 GB (e.g. to make headroom for a
+   long Coqui run) can click Stop without restarting the sidecar; the
+   pill flips to "Kokoro idle / Load" and a subsequent click re-warms in
+   ~1 s. The pill only renders on books whose effective engine is Kokoro
+   (driven by `selectEnginesInUse` in `src/store/engines-in-use-selector.ts`).
+   The eager preload itself is unchanged — restarting the sidecar always
+   brings Kokoro back. Failure-tolerant: if the weights aren't installed
+   yet, the sidecar logs a warning and stays alive on the Coqui path so
+   the user can still get audio while they run
+   `scripts/install-kokoro.ps1`.
+
+   The Stop pill rides the same consolidated `useTtsLifecycle` hook that
+   powers the Coqui pill — one /health probe per 30 s tick fans out into
+   both engines' state. Adding any future engine pill MUST extend this
+   hook, not spin up a parallel poll (see `BACKLOG #15` for the
+   third-consumer extension guidance).
 
 4. **Voice fallback mirrors Coqui's substitute-and-warn.** A
    `/synthesize` request for an unknown voice (including any

@@ -654,8 +654,10 @@ async def _preload_default_engines() -> None:
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Liveness + load-state probe. `model_loaded` / `loading` / `device` let
-    the Node proxy render the right state in the in-app Load/Stop pill without
-    a separate round-trip to /speakers.
+    the Node proxy render the right state in the Coqui Load/Stop pill;
+    `kokoro_loaded` / `kokoro_loading` do the same for the Kokoro pill.
+    Both engines' state fan out from this single response so the frontend's
+    consolidated useTtsLifecycle hook stays on one /health poll per tick.
 
     `poisoned: true` signals "this process needs to be restarted before
     /synthesize will work again" — set the first time a device-side assert
@@ -673,11 +675,25 @@ def health() -> dict[str, Any]:
         device = coqui._resolved_device if model_loaded else None
         poisoned = coqui._poisoned
         poison_reason = coqui._poison_reason
+    # Kokoro load state — `model_loaded` / `loading` above stay Coqui-specific
+    # for back-compat (the Node proxy reads them as the Coqui pill's state).
+    # Kokoro gets its own pair of fields so the new Kokoro pill (top bar +
+    # Generation view) can read it from the same single /health response,
+    # preserving the one-poll invariant the consolidated useTtsLifecycle hook
+    # enforces.
+    kokoro_loaded = False
+    kokoro_loading = False
+    kokoro = ENGINES.get("kokoro")
+    if isinstance(kokoro, KokoroEngine):
+        kokoro_loaded = kokoro._kokoro is not None
+        kokoro_loading = kokoro._loading
     return {
         "ok": True,
         "engines": sorted(ENGINES.keys()),
         "model_loaded": model_loaded,
         "loading": loading,
+        "kokoro_loaded": kokoro_loaded,
+        "kokoro_loading": kokoro_loading,
         "device": device,
         "poisoned": poisoned,
         "poison_reason": poison_reason,
@@ -686,15 +702,46 @@ def health() -> dict[str, Any]:
 
 @app.post("/load")
 async def load_model(req: Request) -> JSONResponse:
-    """Load the Coqui XTTS model into memory. Idempotent — returns `ready`
-    immediately if the model is already resident. Body: `{ model?: str }`,
-    defaults to `xtts_v2`. Serialised by `_load_lock` so concurrent UI
-    clicks don't double-load."""
+    """Load a TTS engine's model into memory. Idempotent — returns `ready`
+    immediately if the model is already resident.
+
+    Body: `{ engine?: 'coqui' | 'kokoro', model?: str }`. `engine` defaults
+    to `'coqui'` for back-compat with existing callers; `model` defaults to
+    `xtts_v2` for Coqui and `v1` for Kokoro. Each engine has its own
+    `_load_lock` so concurrent UI clicks against the same engine serialise,
+    but a Coqui load and a Kokoro load can proceed in parallel."""
     try:
         body = await req.json()
     except Exception:
         body = {}
-    model = body.get("model") if isinstance(body, dict) else None
+    if not isinstance(body, dict):
+        body = {}
+    engine_id = body.get("engine")
+    if not isinstance(engine_id, str) or engine_id not in {"coqui", "kokoro"}:
+        engine_id = "coqui"
+
+    if engine_id == "kokoro":
+        kokoro = ENGINES.get("kokoro")
+        if not isinstance(kokoro, KokoroEngine):
+            return JSONResponse(
+                {"status": "error", "error": "kokoro engine missing"}, status_code=500
+            )
+        if kokoro._kokoro is not None:
+            return JSONResponse({"status": "ready"})
+        async with kokoro._load_lock:
+            if kokoro._kokoro is not None:
+                return JSONResponse({"status": "ready"})
+            kokoro._loading = True
+            try:
+                await asyncio.to_thread(kokoro._ensure_loaded, "v1")
+            except Exception as e:
+                log.exception("/load failed (engine=kokoro)")
+                return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+            finally:
+                kokoro._loading = False
+        return JSONResponse({"status": "ready"})
+
+    model = body.get("model")
     if not isinstance(model, str) or not model.strip():
         model = "xtts_v2"
 
@@ -722,11 +769,31 @@ async def load_model(req: Request) -> JSONResponse:
 
 
 @app.post("/unload")
-async def unload_model() -> JSONResponse:
-    """Drop the loaded XTTS model and free GPU memory. Idempotent — returns
-    `idle` whether or not a model was loaded. The Analysing screen's Load
-    button fires this automatically (via the Node proxy) to evict TTS before
-    warming the analyzer LLM, and vice-versa."""
+async def unload_model(req: Request) -> JSONResponse:
+    """Drop a TTS engine's loaded model and free GPU memory. Idempotent —
+    returns `idle` whether or not the engine had a model resident.
+
+    Body: `{ engine?: 'coqui' | 'kokoro' }`, default `'coqui'`. Coqui unload
+    is what the Analysing screen fires automatically to evict TTS before
+    warming the analyzer LLM. Kokoro unload is user-triggered via the
+    in-app Stop pill (sidecar restart re-loads it via the eager preload
+    hook)."""
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    engine_id = body.get("engine")
+    if not isinstance(engine_id, str) or engine_id not in {"coqui", "kokoro"}:
+        engine_id = "coqui"
+
+    if engine_id == "kokoro":
+        kokoro = ENGINES.get("kokoro")
+        if isinstance(kokoro, KokoroEngine):
+            await asyncio.to_thread(kokoro.unload)
+        return JSONResponse({"status": "idle"})
+
     coqui = ENGINES.get("coqui")
     if isinstance(coqui, CoquiEngine):
         await asyncio.to_thread(coqui.unload)

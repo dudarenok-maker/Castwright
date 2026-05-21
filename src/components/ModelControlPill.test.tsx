@@ -86,6 +86,54 @@ describe('ModelControlPill — label per state', () => {
     );
     expect(screen.getByText('Sidecar process not running')).toBeInTheDocument();
   });
+
+  it('uses the engineLabel override for the pill noun when supplied', () => {
+    /* The Kokoro and Coqui pills both mount with `kind="tts"` but render
+       per-engine labels ("Kokoro ready" / "Coqui idle") so a user with
+       both engines visible can distinguish them at a glance. */
+    const { onLoad, onStop } = makeHandlers();
+    render(
+      <ModelControlPill
+        kind="tts"
+        state="ready"
+        engineLabel="Kokoro"
+        onLoad={onLoad}
+        onStop={onStop}
+      />,
+    );
+    expect(screen.getByText(/Kokoro ready/i)).toBeInTheDocument();
+    /* The default "TTS model ready" must NOT appear when engineLabel is set
+       — both rendering would leak the abstraction. */
+    expect(screen.queryByText(/TTS model ready/i)).not.toBeInTheDocument();
+  });
+
+  it('flips engineLabel into the loading + unavailable copy too', () => {
+    /* The label flow uses the engineLabel for every state. Pin the two
+       extra cases (loading, unreachable) so a future refactor that
+       hard-codes "TTS model" in one branch can't slip through. */
+    const { onLoad, onStop } = makeHandlers();
+    const { rerender } = render(
+      <ModelControlPill
+        kind="tts"
+        state="loading"
+        engineLabel="Coqui XTTS"
+        onLoad={onLoad}
+        onStop={onStop}
+      />,
+    );
+    expect(screen.getByText(/loading coqui xtts/i)).toBeInTheDocument();
+
+    rerender(
+      <ModelControlPill
+        kind="tts"
+        state="unreachable"
+        engineLabel="Coqui XTTS"
+        onLoad={onLoad}
+        onStop={onStop}
+      />,
+    );
+    expect(screen.getByText(/Coqui XTTS unavailable/i)).toBeInTheDocument();
+  });
 });
 
 describe('ModelControlPill — action routing', () => {
