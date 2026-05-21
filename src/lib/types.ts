@@ -527,6 +527,19 @@ export interface ExportQueueItem {
   progress?: number;
   url?: string;
   errorReason?: string;
+  /* Plan 82 — re-fire context carried from the wire `BookExportJob`. The
+     Retry button on a `failed` row reads these to re-POST the original
+     export request via the exports-middleware `retryExport` thunk; the
+     Download button on a `done` row reads `bookId` + `exportId` to build
+     the `/api/books/{bookId}/exports/{exportId}/download` URL when `url`
+     is absent. Optional only for the fixture-based mock fallback rows in
+     `src/data/export-queue.ts` — every live `bookExportJobToQueueItem`
+     row carries them. */
+  bookId?: string;
+  exportId?: string;
+  wireFormat?: 'mp3-zip' | 'm4b' | 'mp3-folder' | 'aac-m4a-zip' | 'opus-ogg-zip';
+  wireDestination?: 'download' | 'sync-folder';
+  syncPath?: string;
 }
 
 /* Audiobook export job + request schemas, sourced from the OpenAPI spec.
