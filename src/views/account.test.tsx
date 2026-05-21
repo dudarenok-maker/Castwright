@@ -31,6 +31,9 @@ const SERVER_FIXTURE: UserSettings = {
   ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
   minorCastMinLines: 3,
+  analyzerPhase0Model: null,
+  analyzerPhase1Model: null,
+  analyzerPhase1MinLagChapters: null,
   apiKeyStatus: 'unset',
   workspaceRoot: '/users/mike/workspace',
   workspaceSource: 'env',
@@ -501,6 +504,7 @@ describe('AccountView — Models card (plan 61)', () => {
   });
 
   it('renders the cross-platform Coqui install snippet (both POSIX + PowerShell)', () => {
+
     /* The card cites both `install-coqui.sh` and `install-coqui.ps1`
        in the same block — the user must be able to copy/paste their
        platform's command without scrolling. */
@@ -517,5 +521,124 @@ describe('AccountView — Models card (plan 61)', () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+});
+
+describe('AccountView — Analyzer card (plan 88 phase-2)', () => {
+  it('renders the Analyzer card with all three knobs', () => {
+    renderView();
+    expect(screen.getByTestId('account-analyzer-phase0-model')).toBeInTheDocument();
+    expect(screen.getByTestId('account-analyzer-phase1-model')).toBeInTheDocument();
+    expect(screen.getByTestId('account-analyzer-phase1-min-lag')).toBeInTheDocument();
+  });
+
+  it('the Phase 0 picker starts on "(use server default)" when slice value is null', () => {
+    renderView({ analyzerPhase0Model: null });
+    const select = screen.getByTestId('account-analyzer-phase0-model') as HTMLSelectElement;
+    expect(select.value).toBe('');
+  });
+
+  it('the Phase 0 picker reflects the persisted slice value', () => {
+    renderView({ analyzerPhase0Model: 'gemma-4-31b-it' });
+    const select = screen.getByTestId('account-analyzer-phase0-model') as HTMLSelectElement;
+    expect(select.value).toBe('gemma-4-31b-it');
+  });
+
+  it('the Phase 1 picker reflects the persisted slice value', () => {
+    renderView({ analyzerPhase1Model: 'gemini-3.1-flash-lite' });
+    const select = screen.getByTestId('account-analyzer-phase1-model') as HTMLSelectElement;
+    expect(select.value).toBe('gemini-3.1-flash-lite');
+  });
+
+  it('the min-lag input renders blank when slice value is null', () => {
+    renderView({ analyzerPhase1MinLagChapters: null });
+    const input = screen.getByTestId('account-analyzer-phase1-min-lag') as HTMLInputElement;
+    expect(input.value).toBe('');
+  });
+
+  it('the min-lag input renders the persisted slice value', () => {
+    renderView({ analyzerPhase1MinLagChapters: 10 });
+    const input = screen.getByTestId('account-analyzer-phase1-min-lag') as HTMLInputElement;
+    expect(input.value).toBe('10');
+  });
+
+  it('the min-lag input clamps an out-of-range entry to [0, 50]', () => {
+    renderView({ analyzerPhase1MinLagChapters: 10 });
+    const input = screen.getByTestId('account-analyzer-phase1-min-lag') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '999' } });
+    expect(input.value).toBe('50');
+    fireEvent.change(input, { target: { value: '-7' } });
+    expect(input.value).toBe('0');
+  });
+
+  it('round-trips the three Analyzer fields through the Save patch', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      analyzerPhase0Model: 'qwen3.5:9b',
+      analyzerPhase1Model: 'gemini-3.1-flash-lite',
+      analyzerPhase1MinLagChapters: 15,
+    });
+    const user = userEvent.setup();
+    renderView({
+      analyzerPhase0Model: null,
+      analyzerPhase1Model: null,
+      analyzerPhase1MinLagChapters: null,
+    });
+
+    fireEvent.change(screen.getByTestId('account-analyzer-phase0-model'), {
+      target: { value: 'qwen3.5:9b' },
+    });
+    fireEvent.change(screen.getByTestId('account-analyzer-phase1-model'), {
+      target: { value: 'gemini-3.1-flash-lite' },
+    });
+    fireEvent.change(screen.getByTestId('account-analyzer-phase1-min-lag'), {
+      target: { value: '15' },
+    });
+
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+    const [patch] = (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch.analyzerPhase0Model).toBe('qwen3.5:9b');
+    expect(patch.analyzerPhase1Model).toBe('gemini-3.1-flash-lite');
+    expect(patch.analyzerPhase1MinLagChapters).toBe(15);
+  });
+
+  it('clearing the min-lag input sends null in the Save patch (fall through to env / default)', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      analyzerPhase1MinLagChapters: null,
+    });
+    const user = userEvent.setup();
+    renderView({ analyzerPhase1MinLagChapters: 10 });
+    fireEvent.change(screen.getByTestId('account-analyzer-phase1-min-lag'), {
+      target: { value: '' },
+    });
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+    const [patch] = (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch.analyzerPhase1MinLagChapters).toBeNull();
+  });
+
+  it('switching a model picker back to "(use server default)" sends null in the Save patch', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      analyzerPhase0Model: null,
+    });
+    const user = userEvent.setup();
+    renderView({ analyzerPhase0Model: 'gemma-4-31b-it' });
+    fireEvent.change(screen.getByTestId('account-analyzer-phase0-model'), {
+      target: { value: '' },
+    });
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+    const [patch] = (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch.analyzerPhase0Model).toBeNull();
   });
 });

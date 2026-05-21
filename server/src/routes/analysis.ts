@@ -11,6 +11,7 @@ import { selectAnalyzer, type AnalyzerSelection } from '../analyzer/index.js';
 import {
   selectAnalyzerForPhase,
   isPerPhaseModelSelectionActive,
+  resolvePhase1MinLagChapters,
 } from '../analyzer/select-analyzer.js';
 import {
   createPhaseWatermark,
@@ -77,26 +78,17 @@ function engineLabel(engine: 'local' | 'gemini', modelId: string): string {
 }
 
 /* Plan 88 — pipelined two-model analyzer.
-   Read the minimum-lag knob from env with a default of 10 chapters.
-   The lag is the user's "keep 10 chapters between Gemma and Gemini"
+   Min-lag resolution moved into server/src/analyzer/select-analyzer.ts
+   (`resolvePhase1MinLagChapters`) so it shares precedence shape with
+   the model picker: env > user-settings > hardcoded default (10). The
+   lag is the user's "keep 10 chapters between Gemma and Gemini"
    requirement: Phase 1 chapter K dispatches when Phase 0's watermark
    reaches `K + ANALYZER_PHASE1_MIN_LAG_CHAPTERS`. Set to `0` to release
    the lag (pipelining still happens; Gemini just dispatches as soon
-   as the per-chapter roster snapshot exists for its chapter).
-   Negative or non-numeric values fall back to the default. */
-const DEFAULT_PHASE1_MIN_LAG_CHAPTERS = 10;
-function readPhase1MinLagChapters(): number {
-  const raw = process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS;
-  if (raw === undefined || raw === null || raw.trim() === '') {
-    return DEFAULT_PHASE1_MIN_LAG_CHAPTERS;
-  }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_PHASE1_MIN_LAG_CHAPTERS;
-  return Math.floor(parsed);
-}
+   as the per-chapter roster snapshot exists for its chapter). */
 
-/* Per-job watermark factory. Real watermark when the per-phase env
-   vars are active AND we're not in legacy manual mode. Otherwise the
+/* Per-job watermark factory. Real watermark when the per-phase
+   knobs are active AND we're not in legacy manual mode. Otherwise the
    sequential stub (Phase 1 waits for `markPhase0AllDone()` exactly
    like today's hard phase gate). Exported for unit testing. */
 export function createWatermarkForJob(): PhaseWatermark {
@@ -107,7 +99,7 @@ export function createWatermarkForJob(): PhaseWatermark {
   if (manual || !isPerPhaseModelSelectionActive()) {
     return createSequentialWatermark();
   }
-  return createPhaseWatermark({ minLagChapters: readPhase1MinLagChapters() });
+  return createPhaseWatermark({ minLagChapters: resolvePhase1MinLagChapters() });
 }
 
 /* Front-end palette has 30 character slots (see src/lib/colors.ts
@@ -1518,7 +1510,7 @@ export async function runMainAnalyzerJob(
       `[analysis] manuscript=${manuscriptId} pipelined ` +
         `phase0=${selection.engine}:${selection.model} ` +
         `phase1=${phase1Selection.engine}:${phase1Selection.model} ` +
-        `lag=${readPhase1MinLagChapters()}`,
+        `lag=${resolvePhase1MinLagChapters()}`,
     );
   }
   const watermark: PhaseWatermark = createWatermarkForJob();
@@ -2552,7 +2544,7 @@ export async function runMainAnalyzerJob(
            hops in the sequential path. */
         log(
           1,
-          `Chapter ${i + 1}/${totalChapters} — held back ${humanSeconds(dispatchWaitMs)} to preserve ${readPhase1MinLagChapters()}-chapter roster lag.`,
+          `Chapter ${i + 1}/${totalChapters} — held back ${humanSeconds(dispatchWaitMs)} to preserve ${resolvePhase1MinLagChapters()}-chapter roster lag.`,
         );
       }
       const chapterEstMs = chapterEstMsFor(ch.body.length);

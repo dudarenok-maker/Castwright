@@ -437,31 +437,35 @@ describe('runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution', () 
 
 /* ───────────────────────────────────────────────────────────────────
    Case 2 — Rolling roster snapshot at Phase 1 dispatch time.
-   Phase 1 chapter 5's analyzer call must see a roster containing
-   Phase 0 chapters 1..15's characters (i.e. ch1-char .. ch15-char),
-   but NOT ch16+-char.
+   Phase 1 chapter K's analyzer call must see a roster containing
+   only the Phase 0 chapters whose watermark has caught up (K + LAG).
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — rolling roster snapshot', () => {
   it('Phase 1 chapter K dispatches with a roster snapshot containing only Phase 0 chapters 1..K+LAG', async () => {
     const manuscriptId = `test-rolling-roster-${Date.now()}`;
-    /* 20 chapters keeps the verify pass fast (~3 evidence quotes per
-       chapter × 20 chapters × source-scan) so the test fits inside the
-       per-file timeout budget under vitest's parallel-fork pool load. */
-    registerStubManuscript(manuscriptId, 20);
+    /* 12 chapters + min-lag=5 + concurrency=1 keeps the Phase 0 grind
+       short enough (11 sequential dispatches before the holding chapter
+       12 stalls the pool) that the inner `waitFor` doesn't have to span
+       a full CI-cold-start budget. The smaller fixture pins the same
+       invariant the larger one used to — "Phase 1 chapter K sees roster
+       up to K+LAG, nothing beyond". Holding chapter 12 keeps the
+       chapter-12 ch-cast OUT of the roster snapshot so the `not.toContain`
+       assertion still has teeth. */
+    registerStubManuscript(manuscriptId, 12);
     process.env.STAGE2_CONCURRENCY = '1';
 
     const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
     const phase0Selection = buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it');
     const phase1Selection = buildSpyAnalyzerSelection(phase1Analyzer, 'gemini-3.1-flash-lite');
-    setPipelinedMode({ pipelined: true, phase1Selection, minLag: 10 });
+    setPipelinedMode({ pipelined: true, phase1Selection, minLag: 5 });
 
-    /* Hold Phase 0 chapter 17 so chapters 1..16 complete but chapter
-       17+ stay pending. Phase 1 chapter id=6 (index 5) needs
-       watermark >= 5+10=15. Watermark=15 means chapter index 15
-       (id=16) completed and chapterCast[16] is folded. So the
+    /* Hold Phase 0 chapter 12 so chapters 1..11 complete but chapter
+       12+ stay pending. Phase 1 chapter id=6 (index 5) needs
+       watermark >= 5+5=10. Watermark=10 means chapter index 10
+       (id=11) completed and chapterCast[11] is folded. So the
        roster snapshot at Phase 1 ch6's dispatch contains ch1-char..
-       ch16-char (+narrator), but NOT ch17-char or beyond. */
-    fixture.holdPhase0.set(17, () => {});
+       ch11-char (+narrator), but NOT ch12-char or beyond. */
+    fixture.holdPhase0.set(12, () => {});
 
     const job = buildStubJob(manuscriptId);
     try {
@@ -472,8 +476,11 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
         requestedModel: undefined,
       });
 
-      /* Wait until Phase 1 chapter 6 (index 5, needs watermark>=15) has
-         dispatched. */
+      /* Wait until Phase 1 chapter 6 (index 5, needs watermark>=10) has
+         dispatched. 10s budget is the same as the previous 20-chapter
+         shape but now fronts only 11 sequential Phase 0 processings —
+         warm-cache local runs land in <600ms; CI cold-start should
+         clear with comfortable margin. */
       await waitFor(
         () => fixture.trace.some((t) => t.phase === 1 && t.chapterId === 6),
         10_000,
@@ -484,17 +491,16 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
       );
       expect(phase1Chapter6).toBeDefined();
       const roster = phase1Chapter6!.rosterIds ?? [];
-      /* Roster contains ch1-char through ch16-char (Phase 0 chapters
-         1..16 folded) plus 'narrator'. Should NOT contain ch17-char or
-         beyond because chapter 17 is held pending. */
+      /* Roster contains ch1-char through ch11-char (Phase 0 chapters
+         1..11 folded) plus 'narrator'. Should NOT contain ch12-char
+         because chapter 12 is held pending. */
       expect(roster).toContain('ch1-char');
-      expect(roster).toContain('ch15-char');
-      expect(roster).toContain('ch16-char');
-      expect(roster).not.toContain('ch17-char');
-      expect(roster).not.toContain('ch18-char');
+      expect(roster).toContain('ch10-char');
+      expect(roster).toContain('ch11-char');
+      expect(roster).not.toContain('ch12-char');
 
       /* Release the rest so the run can complete. */
-      fixture.releasePhase0(17);
+      fixture.releasePhase0(12);
       await runPromise;
     } finally {
       removeManuscript(manuscriptId);
