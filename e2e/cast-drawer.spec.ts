@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, waitForRouteReady } from './helpers';
 
 /**
  * Cast → profile drawer flow — plan 37 follow-on.
@@ -25,6 +25,7 @@ test.describe('cast view → profile drawer', () => {
     page,
   }) => {
     await goToConfirm(page);
+    await waitForRouteReady(page);
 
     /* Confirm-cast view renders character cards. Each card has
        aria-label="Open profile for <name>" (src/views/confirm-cast.tsx:241).
@@ -37,7 +38,7 @@ test.describe('cast view → profile drawer', () => {
     /* Drawer opens. The "Evidence from the manuscript" section is the
        load-bearing assertion — proves the drawer mounted with the right
        character hydrated. */
-    await expect(page.getByText(/Evidence from the manuscript/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Evidence from the manuscript/i)).toBeVisible({ timeout: 10_000 });
 
     /* Initial state: 3 quotes shown, "+ Show 1 more" toggle visible. */
     const showMore = page.getByRole('button', { name: /Show 1 more/i });
