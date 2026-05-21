@@ -59,6 +59,26 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey at `~/.claude
 - _Depends on:_ none.
 - _Benefit (user):_ unblocks long chapters in the manuscript view — today the worst frontend pain point. Pairs with Could #25 (confirm-cast + listen-chapter virtualisation) which reuses the same dep.
 
+### 2. De-flake `cast-drawer` + `download-tiles` Playwright specs
+
+Source: net-new (2026-05-21). Surfaced during the plan 87/88/89 ship round — both specs failed first run then passed on retry, reliably enough that Playwright marked them "flaky" and exited non-zero, blocking pre-push for unrelated docs branches. User asked for it as Should so it gets done soon.
+
+- _What:_ Investigate the failure mode for `e2e/cast-drawer.spec.ts:24:3` ("clicking a character opens the drawer with evidence + toggleable 'Show more'") and `e2e/download-tiles.spec.ts:29:3` ("plan 57 — M4B tile is live and opens the export modal with m4b pre-selected"). Both fail on `expect(locator).toBeVisible()` — likely timing against the new `React.lazy` Suspense boundaries from plan 89 (route splitting) where the modal/drawer DOM nodes aren't mounted until the lazy chunk loads. Fix is probably either (a) wait for a stable post-suspense locator first (e.g. the route's heading), then drill in; or (b) bump the per-locator timeout for these two assertions. NOT a `test.retry()` band-aid — those would mask real regressions.
+- _Acceptance:_ Run `npm run test:e2e` 5× in succession from a clean main; both specs are green on first attempt every time, no Playwright "flaky" classification, exit code 0. The fix must NOT introduce arbitrary `waitFor(timeout)` constants — use proper element-stability waits.
+- _Key files:_ `e2e/cast-drawer.spec.ts`, `e2e/download-tiles.spec.ts`; potentially `e2e/helpers/*.ts` if a shared "wait for lazy route to mount" helper is needed.
+- _Depends on:_ none.
+- _Benefit (technical):_ restores pre-push as a real merge gate. Today flaky specs train reviewers to retry pre-push reflexively, which masks genuine regressions. Also unblocks future docs-only branches that legitimately don't touch e2e but get gated on these.
+
+### 3. Fix `bump-version.test.mjs` GIT_DIR leak that breaks worktree pre-commit
+
+Source: net-new (2026-05-21). Surfaced again during the plan 87/88/89 ship round; documented as a workaround in user memory `feedback_worktree_precommit_git_env_leak` since 2026-05 but no permanent fix in tree. Memory says "commit from main checkout until BACKLOG #25 lands" — that's the workaround, not the fix.
+
+- _What:_ In `scripts/tests/bump-version.test.mjs`, the test inherits the husky hook's env (including `GIT_DIR`, `GIT_WORK_TREE`) into its git subprocess calls. When the test runs as part of pre-commit inside a worktree, those leaked vars point its subprocess at the wrong git directory, producing the cryptic `expected: /Fixes:/ … actual: ''` assertion failure even though standalone `npm run test:hooks` passes 190/190. Fix: explicitly scrub the inherited `GIT_*` env vars in the subprocess spawn (e.g. `{ env: { ...filterGitEnv(process.env) } }`), so the test always operates against the checked-out repo, regardless of whether it's invoked from a husky hook, a worktree, or a bare shell.
+- _Acceptance:_ Commit from a worktree (e.g. `node scripts/wt-new.mjs <branch>`, edit anything, `git commit`) — pre-commit runs cleanly without the GIT_DIR leak. The "commit from main checkout" workaround in `feedback_worktree_precommit_git_env_leak` becomes obsolete; memory updates to drop the workaround line. Pester or node-test suite gains a regression case that simulates a polluted env and asserts the subprocess still sees the right repo.
+- _Key files:_ `scripts/tests/bump-version.test.mjs`; possibly `scripts/lib/git-helpers.mjs` if env scrubbing is hoisted to a shared helper.
+- _Depends on:_ none.
+- _Benefit (technical):_ unblocks the always-worktree standard. Today every committer in a worktree has to either bypass with `--no-verify` (against the rules) or context-switch back to main checkout for every commit. The leak has been documented for ~2 weeks; time to actually fix it.
+
 ---
 
 ## Could — nice to have, low-cost wins
@@ -351,6 +371,16 @@ Source: net-new (2026-05-21). Surfaced while smoke-testing PR #107 — a `tsx` r
 - _Key files:_ `src/store/generation-stream-middleware.ts` (reconnect logic — today the middleware treats the EventSource ending as a terminal stop); `src/lib/api.ts` `realStreamGeneration` (handle source error/end events as recoverable when a book is mid-flight); `server/src/routes/generation.ts` (idempotent resume — emit a snapshot of completed chapters first, then resume per-chapter `progress`).
 - _Depends on:_ none. Self-contained inside the streaming surface.
 - _Benefit (dev / technical):_ no more false "stalled" banners during interactive development. Same fix incidentally covers production crash-recovery (Node OOM, manual restart) so users running long books survive a sidecar/server bounce without losing the visible progress thread.
+
+### 31. Surface plan 88 analyzer settings in the Account tab (Phase 0 model + Phase 1 model + min-lag chapters)
+
+Source: net-new (2026-05-21). Captured during plan 88 ship review — user flagged that the two-model default (Gemma for Phase 0 cast detection, Gemini for Phase 1 attribution) and the 10-chapter minimum lag are env-only today, with no Account-tab UI.
+
+- _What:_ Extend the Account view (`src/views/account.tsx`) — likely a new "Analyzer" card adjacent to the existing Plan 61 "Models" install/pull card — with three user-settable preferences: (a) Phase 0 model picker (default `gemma-4-31b-it`), (b) Phase 1 model picker (default `gemini-3.1-flash-lite`), (c) Phase 1 minimum lag in chapters (default `10`, numeric input or slider; `0` releases the lag). Picker options come from the existing Gemini model catalog + any locally-pulled Ollama models from plan 61's Models card. Persist via `src/store/account-slice.ts` (or wherever existing account prefs live) and round-trip through a new `PUT /api/user/settings/analyzer` endpoint that writes to the user-settings JSON. Server reads these as the runtime override for the three env knobs (`ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS`); explicit env still wins if set (for ops debugging).
+- _Acceptance:_ Open Account view → see Analyzer card with three controls populated by today's defaults. Change Phase 1 model from `gemini-3.1-flash-lite` → `gemini-3.1-pro`; trigger an analysis; SSE telemetry shows the new model on Phase 1 chapters. Lower the lag to `5`; analysis dispatches Phase 1 chapter 0 once Phase 0 chapter 4 completes (instead of chapter 9). Set lag to `0`; pipelining starts immediately. Unset all three (or click "Reset to defaults"); behaviour reverts to today's defaults. Setting an explicit env var still overrides the Account-tab preference (env wins). New Vitest covers the slice + API contract; new Playwright spec covers the Account-card flow; new server vitest covers the env-vs-preference resolution order.
+- _Key files:_ `src/views/account.tsx` (new Analyzer card mount); new `src/components/account-analyzer-card.tsx`; `src/store/account-slice.ts` or new analyzer-settings slice; new `server/src/routes/user-settings-analyzer.ts` (or extend existing `server/src/routes/voice-sample.ts`-adjacent user-settings route); `server/src/workspace/user-settings.ts` (persist the three keys); `server/src/analyzer/select-analyzer.ts` (read preference + apply env-wins resolution); `openapi.yaml` (new endpoint + payload shape); `src/lib/api-types.ts` (regenerated).
+- _Depends on:_ plan 88 shipped (its env knobs + `selectAnalyzerForPhase` seam are what this UI wraps).
+- _Benefit (user):_ removes the "edit `.env` to tune the analyzer" friction. Non-developer users can experiment with Phase 1 model choice (e.g. trading gemini-3.1-flash-lite quota for the pricier-but-smarter gemini-3.1-pro on a long book) and lag width from a UI surface. Pairs naturally with plan 61's Models card — installing a model and then designating it as the Phase-0 or Phase-1 default both live in one place. Plan 88's lag default of 10 is conservative; some users may want to trade more drift for more parallelism by lowering it without dropping into env config.
 
 ---
 
