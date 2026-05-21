@@ -26,6 +26,9 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
   | 'coverPickerDefaultTab'
   | 'defaultThemePreference'
   | 'autoStartSidecar'
+  | 'analyzerPhase0Model'
+  | 'analyzerPhase1Model'
+  | 'analyzerPhase1MinLagChapters'
 > = {
   displayName: 'Mike Dudarenok',
   /* Gemini 3.1 Flash Lite over the Google API key is the new default
@@ -66,4 +69,12 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
      the analyzer can toggle off in the Account view. Flip in lockstep
      with server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   autoStartSidecar: true,
+  /* Plan 88 phase-2 — Account-tab Analyzer card knobs. `null` means
+     "fall through to env / hardcoded default" so an unhydrated render
+     doesn't pin a value the user hasn't actually saved. Flip in
+     lockstep with server/src/workspace/user-settings.ts
+     DEFAULT_USER_SETTINGS. */
+  analyzerPhase0Model: null,
+  analyzerPhase1Model: null,
+  analyzerPhase1MinLagChapters: null,
 };
