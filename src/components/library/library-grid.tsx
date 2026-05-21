@@ -24,7 +24,7 @@ import {
   IconImage,
 } from '../../lib/icons';
 import { Pill } from '../primitives';
-import { Stat } from '../../views/generation';
+import { Stat } from '../stat-tiles';
 import { ConfirmDialog } from '../../modals/confirm-dialog';
 import { EditBookMetaModal, type EditBookMetaPatch } from '../../modals/edit-book-meta';
 import { CoverPicker } from '../../modals/cover-picker';

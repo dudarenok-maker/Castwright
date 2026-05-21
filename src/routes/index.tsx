@@ -3,7 +3,7 @@
    something different from the current redux state. The Layout component
    owns the reverse direction (Redux→URL sync). */
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, lazy, type ReactNode } from 'react';
 import {
   createHashRouter,
   Navigate,
@@ -12,7 +12,7 @@ import {
   useParams,
   useSearchParams,
 } from 'react-router-dom';
-import { useAppDispatch, useAppSelector, store } from '../store';
+import { useAppDispatch, useAppSelector, useAppSelectorShallow, store } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { chaptersActions } from '../store/chapters-slice';
@@ -26,20 +26,44 @@ import { stageEqual } from '../lib/router';
 import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { Layout, type LayoutContext } from '../components/layout';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
-import { UploadView } from '../views/upload';
-import { AnalysingView } from '../views/analysing';
+/* Plan 89 C5 — route-leaf views are lazy-loaded so the initial library route
+   bundle no longer pulls in the manuscript editor / generation / listen /
+   cast / etc. code. Each view becomes its own chunk; a shared Suspense
+   boundary in Layout shows a DelayedSpinner if the chunk takes >150 ms
+   (so warm cache navigations don't flash a spinner).
+   The non-route-leaf views (BookLibraryView, ConfirmMetadataView,
+   ConfirmCastView) are still eagerly imported — they fall under conditional
+   sub-routes (ReadyRoute's switch, UploadRoute's conditional) where the
+   eager cost is negligible OR they are the landing route and lazy-loading
+   them would only slow first paint. */
+const UploadView = lazy(() => import('../views/upload').then((m) => ({ default: m.UploadView })));
+const AnalysingView = lazy(() =>
+  import('../views/analysing').then((m) => ({ default: m.AnalysingView })),
+);
 import { ConfirmCastView } from '../views/confirm-cast';
-import { ManuscriptView } from '../views/manuscript';
-import { CastView } from '../views/cast';
-import { LibraryView } from '../views/voices';
-import { GenerationView } from '../views/generation';
-import { ListenView } from '../views/listen';
+const ManuscriptView = lazy(() =>
+  import('../views/manuscript').then((m) => ({ default: m.ManuscriptView })),
+);
+const CastView = lazy(() => import('../views/cast').then((m) => ({ default: m.CastView })));
+const LibraryView = lazy(() => import('../views/voices').then((m) => ({ default: m.LibraryView })));
+const GenerationView = lazy(() =>
+  import('../views/generation').then((m) => ({ default: m.GenerationView })),
+);
+const ListenView = lazy(() => import('../views/listen').then((m) => ({ default: m.ListenView })));
 import { BookLibraryView } from '../views/book-library';
 import { ConfirmMetadataView } from '../views/confirm-metadata';
-import { ChangeLogView } from '../views/change-log';
-import { AccountView } from '../views/account';
-import { RestructureView } from '../views/restructure';
-import { WorktreesView } from '../views/worktrees';
+const ChangeLogView = lazy(() =>
+  import('../views/change-log').then((m) => ({ default: m.ChangeLogView })),
+);
+const AccountView = lazy(() =>
+  import('../views/account').then((m) => ({ default: m.AccountView })),
+);
+const RestructureView = lazy(() =>
+  import('../views/restructure').then((m) => ({ default: m.RestructureView })),
+);
+const WorktreesView = lazy(() =>
+  import('../views/worktrees').then((m) => ({ default: m.WorktreesView })),
+);
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 import type { Character, Stage, View } from '../lib/types';
@@ -493,8 +517,11 @@ function ReadyViewSwitch({
 }) {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  /* Plan 89 C3 — shallow equality for the active book's `chapters` array;
+     unchanged identity must not re-render the ReadyViewSwitch when an
+     unrelated slice mutates (e.g. notifications, exports for another book). */
   const characters = useAppSelector((s) => s.cast.characters);
-  const chapters = useAppSelector((s) => s.chapters.chapters);
+  const chapters = useAppSelectorShallow((s) => s.chapters.chapters);
   const paused = useAppSelector((s) => s.chapters.paused);
   /* Cast view shows drift indicators per character, scoped to the
      active book. The slice's `drift` is flat across books since the
