@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -530,7 +530,12 @@ export function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageKind, bookId, characters.length]);
 
-  /* Revisions + drift poll — runs while the book is open ('ready'). */
+  /* Revisions + drift poll — active book on a 30 s tick (existing behavior).
+     Plan 83 layered a 120 s background fan-out across non-active books past
+     the cast-pending stage so foreign-book drift surfaces in the active
+     book's Drift Report modal without a navigate. The two tickers run in
+     separate useEffects so changing the active book doesn't restart the
+     background timer. */
   useEffect(() => {
     if (stageKind !== 'ready' || !bookId) return;
     let cancelled = false;
@@ -545,6 +550,44 @@ export function Layout() {
       clearInterval(t);
     };
   }, [stageKind, bookId, dispatch]);
+
+  /* Plan 83 — background fan-out across non-active books past cast-pending
+     (i.e. books that have actual chapter audio to drift). Excludes the
+     active book (covered by the 30 s ticker above). Cadence is 120 s to
+     conserve free-tier server quotas; the slice's applyPoll action is
+     already multi-book-aware (per-bookId event merge). */
+  const bgBookIds = useMemo(() => {
+    return library.books
+      .filter(
+        (b) =>
+          b.status !== 'not_analysed' &&
+          b.status !== 'analysing' &&
+          b.status !== 'cast_pending' &&
+          b.status !== 'unreadable' &&
+          b.status !== 'orphaned' &&
+          b.bookId !== bookId,
+      )
+      .map((b) => b.bookId);
+  }, [library.books, bookId]);
+  const bgKey = bgBookIds.join('|');
+  useEffect(() => {
+    if (bgBookIds.length === 0) return;
+    let cancelled = false;
+    const fetchOnce = () =>
+      api.pollRevisionsBulk({ bookIds: bgBookIds }).then((res) => {
+        if (cancelled) return;
+        for (const [id, r] of Object.entries(res.byBookId)) {
+          dispatch(revisionsActions.applyPoll({ ...r, bookId: id }));
+        }
+      });
+    fetchOnce();
+    const t = setInterval(fetchOnce, 120000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bgKey, dispatch]);
 
   if (ui.previewMode) {
     return (

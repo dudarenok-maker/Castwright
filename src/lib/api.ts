@@ -3248,6 +3248,25 @@ const real = {
     }
     return res.json();
   },
+  /* Plan 83 — background-drift fan-out across non-active books. Active-
+     book poll keeps using pollRevisions above; the layout.tsx two-tier
+     poller calls this every 120s for every book past the cast-pending
+     stage. Server returns { byBookId: { [bookId]: RevisionsResponse } }
+     and silently omits any bookId that's not on disk. */
+  pollRevisionsBulk: async ({
+    bookIds,
+  }: {
+    bookIds: string[];
+  }): Promise<{ byBookId: Record<string, RevisionsResponse> }> => {
+    if (bookIds.length === 0) return { byBookId: {} };
+    const url = `/api/revisions?bookIds=${bookIds.map(encodeURIComponent).join(',')}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Bulk revisions poll failed (${res.status}): ${detail || res.statusText}`);
+    }
+    return res.json();
+  },
   /* Plan 86 — dev-only worktree dashboard backing. The server route 404s
      in production; the api caller surfaces that as a thrown Error so the
      view shows a "dev-only" message. */
@@ -3336,6 +3355,21 @@ const mock = {
   acceptChapterRevision: mockAcceptChapterRevision,
   rejectChapterRevision: mockRejectChapterRevision,
   pollRevisions: mockPollRevisions,
+  /* Plan 83 — mock fans out via the existing single-book mock for each id.
+     Real server runs the per-book helper in parallel; the mock can do the
+     same with no rate concerns since it's all in-memory. */
+  pollRevisionsBulk: async ({
+    bookIds,
+  }: {
+    bookIds: string[];
+  }): Promise<{ byBookId: Record<string, RevisionsResponse> }> => {
+    const entries = await Promise.all(
+      bookIds.map(async (bookId) => [bookId, await mockPollRevisions({ bookId })] as const),
+    );
+    const byBookId: Record<string, RevisionsResponse> = {};
+    for (const [id, r] of entries) byBookId[id] = r;
+    return { byBookId };
+  },
   /* Plan 86 — mock returns an empty worktrees list. Production gets
      this same shape via the real api when NODE_ENV !== 'production'. */
   getWorktrees: async (): Promise<{

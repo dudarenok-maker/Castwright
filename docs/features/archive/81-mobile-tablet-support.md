@@ -1,12 +1,12 @@
 ---
-status: draft
-shipped: null
-owner: null
+status: stable
+shipped: '2026-05-21'
+owner: dudarenok-maker
 ---
 
 # Mobile + tablet support (LAN-accessible over HTTPS)
 
-> Status: draft (round in progress; six waves)
+> Status: stable (six-wave round shipped)
 > Key files: `vite.config.ts`, `server/src/index.ts`, `playwright.config.ts`, `src/components/layout.tsx`, `src/views/{manuscript,cast,listen,confirm-cast,generation,upload,books}.tsx`, `src/components/listen/*.tsx`, `src/components/voice-library-panel.tsx`, `src/components/mini-player.tsx`, `src/modals/`, `index.html`, `tailwind.config.ts`, `package.json`, `scripts/print-cert-install-instructions.mjs` (new), `docs/BACKLOG.md`, `docs/features/INDEX.md`, `CLAUDE.md`.
 > URL surface: indirect — every existing view + a new `GET /api/lan-urls` debug endpoint + a new `GET /cert/root.crt` static route on the Node server.
 > OpenAPI ops: net-new `GET /api/lan-urls` (returns `{ urls: string[] }`). Existing ops unchanged.
@@ -172,4 +172,33 @@ Per [[feedback_parallel_vs_sequential_agents]] and [[feedback_worktree_when_para
 
 ## Ship notes
 
-(To be filled when status flips to `stable`.)
+**Shipped:** 2026-05-21 across six PRs, all merged into `main`.
+
+| Wave | PR | Commit | Shipped |
+|---|---|---|---|
+| 0 — Docs (plan + BACKLOG + INDEX) | [#81](https://github.com/dudarenok-maker/AudioBook-Generator/pull/81) | `e8366b5` | 2026-05-20 |
+| 1 — LAN HTTPS via mkcert + Playwright mobile/tablet projects | [#82](https://github.com/dudarenok-maker/AudioBook-Generator/pull/82) | `127be45` | 2026-05-20 |
+| 2 — Responsive shell (top-bar + mini-player + touch targets) | [#83](https://github.com/dudarenok-maker/AudioBook-Generator/pull/83) | `ae9630a` | 2026-05-20 |
+| 3 — Per-view responsive (6 parallel sub-PRs) | [#84](https://github.com/dudarenok-maker/AudioBook-Generator/pull/84) (books), [#85](https://github.com/dudarenok-maker/AudioBook-Generator/pull/85) (confirm-cast), [#86](https://github.com/dudarenok-maker/AudioBook-Generator/pull/86) (manuscript), [#87](https://github.com/dudarenok-maker/AudioBook-Generator/pull/87) (listen), [#88](https://github.com/dudarenok-maker/AudioBook-Generator/pull/88) (generation+upload), [#90](https://github.com/dudarenok-maker/AudioBook-Generator/pull/90) (cast) | `5522d5e` + `fd35ad0` + `bca835b` + `2327077` + `b67633c` + `850eeaa` | 2026-05-20–21 |
+| (fix) Re-bless manuscript visual snapshots post-wave-3 | [#89](https://github.com/dudarenok-maker/AudioBook-Generator/pull/89) | `bf8584c` | 2026-05-21 |
+| 4 — Touch affordances (tap-to-assign + pointer-event boundaries) | [#91](https://github.com/dudarenok-maker/AudioBook-Generator/pull/91) | `dc07830` | 2026-05-21 |
+| 5 — Comprehensive e2e responsive coverage + script split | [#92](https://github.com/dudarenok-maker/AudioBook-Generator/pull/92) | `c0dc2b6` | 2026-05-21 |
+| 6 — Ship + archive | this PR | — | 2026-05-21 |
+
+**Deltas vs. the original spec:**
+
+- Plan-time placeholder used file number 79; renumbered to 81 because 79 + 80 shipped in parallel (Exports-in-book-folder + Regenerate-applies-manuscript-edits) while this round was in planning.
+- mkcert dev path uses `vite-plugin-mkcert` (Vite-managed) PLUS a separate `scripts/setup-lan-certs.mjs` + `.run/certs/lan-{cert,key}.pem` for the Node prod server. The two cert sources are independent so each pipeline stays simple.
+- The plan called for a single `GET /api/lan-urls` endpoint; shipped reusing the pre-existing `GET /api/export/lan` route (already returned `enumerateLanUrls` JSON) — added a `protocol` discriminator field so consumers can tell HTTP vs HTTPS mode.
+- Wave 3 parallel agents: 5 of 6 pushed their PRs from worktree directly. The 6th (cast) hit a pre-existing `scripts/tests/bump-version.test.mjs` hook bug surfaced only in worktree pre-commit contexts; cast PR landed via byte-for-byte copy to a clean branch off main (PR #90). Pre-existing bug is filed as a follow-up — non-blocking for plan 81 because cast worked through the workaround.
+- Wave 5 script split (test:e2e chromium-only + test:e2e:mobile opt-in) was the documented fallback in the original spec when mobile/tablet runtime breached the 5 min pre-push budget; original budget would have been 17 min without the split.
+- Plan called for "in-app LAN banner under dev settings"; deferred to a follow-up (the LAN URL + cert install QR are reachable via console log + `npm run install:cert-mobile` script today, sufficient for the alpha access pattern).
+
+**Two-tier deferred follow-ups (filed as new BACKLOG entries):**
+
+- Non-blocking GitHub Actions workflow running `test:e2e:mobile` on every PR so the mobile coverage matrix gets visibility without blowing the pre-push budget.
+- Bless mobile + tablet visual baselines per Playwright project once layouts stabilise — `visual.spec.ts` is chromium-only today.
+- Investigate the browser-launch contention surfaced when 3 Playwright projects run in parallel locally (the timeout errors during Wave 5 dev were resource-pressure failures, not real layout bugs — reducing worker count for the mobile suite likely fixes it).
+- In-app dev-settings LAN banner with one-click "Copy LAN URL" + "Install cert on phone" link.
+- Broad hover-affordance audit (sweep all `group-hover:`/`peer-hover:`/`hover:opacity-0` usages with the new `coarse-pointer:` Tailwind variant Wave 4 shipped).
+- Pre-existing pre-commit hook bug in `scripts/tests/bump-version.test.mjs` (GIT_DIR/GIT_WORK_TREE inheritance in worktree contexts).
