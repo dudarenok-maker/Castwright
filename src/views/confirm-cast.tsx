@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import { IconCheck, IconRefresh } from '../lib/icons';
 import { SectionLabel, MixedHeading, Avatar, Pill, PrimaryButton } from '../components/primitives';
 import type { Character, Voice, CharColor } from '../lib/types';
@@ -183,26 +184,17 @@ export function ConfirmCastView({
           </div>
         )}
 
-        <div className="space-y-3">
-          {characters.map((c) => (
-            <ConfirmCharacterCard
-              key={c.id}
-              character={c}
-              voice={findVoice(c.voiceId)}
-              ttsEngine={ttsEngine}
-              decision={decisions[c.id]}
-              onDecision={(d) => setDecisions({ ...decisions, [c.id]: d })}
-              overrideLibrary={!!overrides[c.id]}
-              canOverrideLibrary={
-                /* Only meaningful when both the decision is "reuse" and the
-                   matched record carries the library handle. */
-                !!onOverrideLibrary && !!c.matchedFrom?.bookId && !!c.matchedFrom?.characterId
-              }
-              onToggleOverride={(v) => setOverrides({ ...overrides, [c.id]: v })}
-              onOpenProfile={() => onOpenProfile(c.id)}
-            />
-          ))}
-        </div>
+        <CharacterList
+          characters={characters}
+          findVoice={findVoice}
+          ttsEngine={ttsEngine}
+          decisions={decisions}
+          setDecisions={setDecisions}
+          overrides={overrides}
+          setOverrides={setOverrides}
+          onOverrideLibrary={onOverrideLibrary}
+          onOpenProfile={onOpenProfile}
+        />
 
         {/* Plan 81 wave 3 — on phone (<sm:) the long "Confirm cast and
             review manuscript" button can't share a row with the Re-analyse
@@ -256,6 +248,118 @@ interface CardProps {
       column stops propagation so picking match/generate doesn't also pop
       the drawer. Mirrors the ready-stage Cast view's row click behavior. */
   onOpenProfile: () => void;
+}
+
+/* Plan 93 — virtualise the character list above a 40-row threshold.
+   Below it, the flat-render path keeps the simple DOM tree (no extra
+   wrapper divs, no measureElement reads); above it the windowed render
+   keeps DOM-node count bounded regardless of cast size. Uses
+   `useWindowVirtualizer` because the confirm-cast page scrolls at the
+   document level, not in an internal container. */
+function CharacterList({
+  characters,
+  findVoice,
+  ttsEngine,
+  decisions,
+  setDecisions,
+  overrides,
+  setOverrides,
+  onOverrideLibrary,
+  onOpenProfile,
+}: {
+  characters: Character[];
+  findVoice: (id: string | undefined) => Voice | undefined;
+  ttsEngine: 'coqui' | 'gemini' | 'piper' | 'kokoro';
+  decisions: Record<string, Decision>;
+  setDecisions: (d: Record<string, Decision>) => void;
+  overrides: Record<string, boolean>;
+  setOverrides: (o: Record<string, boolean>) => void;
+  onOverrideLibrary?: (args: OverrideArgs) => Promise<void>;
+  onOpenProfile: (id: string) => void;
+}) {
+  const virtualEnabled = characters.length >= 40;
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+  useLayoutEffect(() => {
+    const node = listRef.current;
+    if (!node) return;
+    let frame = 0;
+    const measure = () => {
+      setScrollMargin(node.getBoundingClientRect().top + window.scrollY);
+    };
+    measure();
+    const onResize = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [characters.length]);
+  const virtualizer = useWindowVirtualizer({
+    count: virtualEnabled ? characters.length : 0,
+    estimateSize: () => 180,
+    overscan: 5,
+    scrollMargin,
+  });
+
+  const renderCard = (c: Character) => (
+    <ConfirmCharacterCard
+      character={c}
+      voice={findVoice(c.voiceId)}
+      ttsEngine={ttsEngine}
+      decision={decisions[c.id]}
+      onDecision={(d) => setDecisions({ ...decisions, [c.id]: d })}
+      overrideLibrary={!!overrides[c.id]}
+      canOverrideLibrary={
+        /* Only meaningful when both the decision is "reuse" and the
+           matched record carries the library handle. */
+        !!onOverrideLibrary && !!c.matchedFrom?.bookId && !!c.matchedFrom?.characterId
+      }
+      onToggleOverride={(v) => setOverrides({ ...overrides, [c.id]: v })}
+      onOpenProfile={() => onOpenProfile(c.id)}
+    />
+  );
+
+  if (!virtualEnabled) {
+    return (
+      <div ref={listRef} className="space-y-3">
+        {characters.map((c) => (
+          <div key={c.id}>{renderCard(c)}</div>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div
+      ref={listRef}
+      data-testid="confirm-cast-virtual-container"
+      style={{ position: 'relative', height: virtualizer.getTotalSize() }}
+    >
+      {virtualizer.getVirtualItems().map((virtualItem) => {
+        const c = characters[virtualItem.index];
+        return (
+          <div
+            key={virtualItem.key}
+            data-index={virtualItem.index}
+            ref={virtualizer.measureElement}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualItem.start - virtualizer.options.scrollMargin}px)`,
+              paddingBottom: 12,
+            }}
+          >
+            {renderCard(c)}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function ConfirmCharacterCard({

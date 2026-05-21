@@ -137,3 +137,27 @@ describe('ListenPlayerRegion — LoudnessReport card', () => {
     expect(screen.getByTestId('loudness-report')).toBeInTheDocument();
   });
 });
+
+/* Plan 93 — chapter-list virtualisation threshold. The list has its
+   own internal scroll container (max-h-[560px]) — `useVirtualizer`
+   with `getScrollElement` is the right shape (not the window
+   virtualizer manuscript uses). Below 40 chapters the flat-render
+   path stays for short books; above it, the windowed render takes
+   over. */
+describe('ListenPlayerRegion — chapter-list virtualisation threshold (plan 93)', () => {
+  function manyChapters(n: number): Chapter[] {
+    return Array.from({ length: n }, (_, i) => makeChapter(i + 1));
+  }
+
+  it('renders the flat chapter list below the 40-row threshold', () => {
+    renderRegion(manyChapters(20));
+    expect(screen.queryByTestId('listen-chapters-virtual-container')).toBeNull();
+    /* Flat path still mounts row testids. */
+    expect(screen.getByText('Chapter 1')).toBeInTheDocument();
+  });
+
+  it('switches to the virtualised container at or above the threshold', () => {
+    renderRegion(manyChapters(60));
+    expect(screen.getByTestId('listen-chapters-virtual-container')).toBeInTheDocument();
+  });
+});
