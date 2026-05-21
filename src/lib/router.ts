@@ -8,6 +8,7 @@ import type { Stage } from './types';
      #/voices                            → { kind: 'voices' }
      #/log                               → { kind: 'changelog' }
      #/account                           → { kind: 'account' }
+     #/worktrees                         → { kind: 'worktrees' } (dev-only)
      #/books/:bookId/analysing           → { kind: 'analysing', bookId }
      #/books/:bookId/confirm?profile=    → { kind: 'confirm',   bookId,
                                              openProfileId }
@@ -28,6 +29,8 @@ export function stageToHash(stage: Stage | null | undefined): string {
       return '#/log';
     case 'account':
       return '#/account';
+    case 'worktrees':
+      return '#/worktrees';
     case 'analysing':
       return stage.bookId ? `#/books/${stage.bookId}/analysing` : '#/new';
     case 'confirm': {
