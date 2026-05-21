@@ -105,6 +105,14 @@ interface ChapterSegmentsFile {
     sentenceIds: number[];
     startSec: number;
     endSec: number;
+    /** `'title'` on the synthetic narrator-voiced chapter-title segment
+        (see `synthesise-chapter.ts`). Filtered out before publishing to
+        the `ChapterAudio` API segments[] because the wire contract types
+        `sentenceId` as a required integer and title segments have an
+        empty sentenceIds[]. The on-disk record stays so the writer can
+        audit / future UI can opt in to rendering the title beat on the
+        timeline. */
+    kind?: 'title';
   }>;
   /** Per-character voice snapshot captured at synthesis time. Read by the
       revisions route to surface drift. Older segments files (pre-snapshot
@@ -197,13 +205,17 @@ chapterAudioRouter.get(
     /* On-disk segments use `startSec/endSec/sentenceIds[]` (per-group). The
      ChapterAudio contract publishes `start/end/sentenceId` (singular) — map
      each group to one outward segment, using the group's first sentence id
-     as the representative. */
-    const segments = (meta?.segments ?? []).map((s) => ({
-      start: s.startSec,
-      end: s.endSec,
-      characterId: s.characterId,
-      sentenceId: s.sentenceIds[0],
-    }));
+     as the representative. Filter out title segments (`kind === 'title'`)
+     so the wire shape stays clean: title segments have an empty sentenceIds[]
+     and the OpenAPI contract types sentenceId as a required integer. */
+    const segments = (meta?.segments ?? [])
+      .filter((s) => s.kind !== 'title')
+      .map((s) => ({
+        start: s.startSec,
+        end: s.endSec,
+        characterId: s.characterId,
+        sentenceId: s.sentenceIds[0],
+      }));
     /* Plan 56: surface the real 240-bin RMS peaks emitted at encode time.
        Missing file → `[]`, preserving the pre-plan-56 contract so chapters
        generated before this plan keep loading and the Listen view falls
@@ -238,12 +250,14 @@ chapterAudioRouter.get(
     const found = await locateChapterAudio(req.params.bookId, req.params.chapterId, 'previous');
     if (!found) return res.status(404).json({ message: 'No preserved previous audio.' });
     const meta = await readJson<ChapterSegmentsFile>(found.segPath);
-    const segments = (meta?.segments ?? []).map((s) => ({
-      start: s.startSec,
-      end: s.endSec,
-      characterId: s.characterId,
-      sentenceId: s.sentenceIds[0],
-    }));
+    const segments = (meta?.segments ?? [])
+      .filter((s) => s.kind !== 'title')
+      .map((s) => ({
+        start: s.startSec,
+        end: s.endSec,
+        characterId: s.characterId,
+        sentenceId: s.sentenceIds[0],
+      }));
     /* Plan 56: the preserved audition variant has no peaks writer today
        (rollback preservation does not move peaks alongside the audio +
        segments pair). `readPeaksOrEmpty` therefore typically returns `[]`
