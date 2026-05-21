@@ -47,6 +47,15 @@ interface ListenDownloadSectionProps {
   onPortableBundleExport?: () => void;
   onCopyExportLink: (item: ExportQueueItem) => Promise<void> | void;
   onRemoveExport: (item: ExportQueueItem) => void;
+  /* Plan 82 — Retry on `failed` rows re-fires the original export via
+     the exports-middleware `retryExport` thunk (reads `bookId` +
+     `exportId` + `wireFormat` + `wireDestination` + `syncPath` off the
+     item). Download on `done` rows without a signed `url` builds the
+     `/api/books/{bookId}/exports/{exportId}/download` URL. Both
+     handlers are optional — the listen view wires them; the export
+     modal preview row still only wires Download. */
+  onRetryExport?: (item: ExportQueueItem) => void;
+  onDownloadExport?: (item: ExportQueueItem) => void;
 }
 
 export function ListenDownloadSection({
@@ -63,6 +72,8 @@ export function ListenDownloadSection({
   onPortableBundleExport,
   onCopyExportLink,
   onRemoveExport,
+  onRetryExport,
+  onDownloadExport,
 }: ListenDownloadSectionProps) {
   return (
     <>
@@ -78,6 +89,8 @@ export function ListenDownloadSection({
         items={queueItems}
         onCopyLink={onCopyExportLink}
         onRemove={onRemoveExport}
+        onRetry={onRetryExport}
+        onDownload={onDownloadExport}
       />
 
       <section className="mb-8 md:mb-12">
@@ -311,10 +324,14 @@ function ExportQueue({
   items,
   onCopyLink,
   onRemove,
+  onRetry,
+  onDownload,
 }: {
   items: ExportQueueItem[];
   onCopyLink?: (item: ExportQueueItem) => void;
   onRemove?: (item: ExportQueueItem) => void;
+  onRetry?: (item: ExportQueueItem) => void;
+  onDownload?: (item: ExportQueueItem) => void;
 }) {
   const [filter, setFilter] = useState<QueueFilter>('all');
   const visible = items.filter((it) => filter === 'all' || it.status === filter);
@@ -354,15 +371,10 @@ function ExportQueue({
           <ExportQueueRow
             key={it.id}
             item={it}
-            onDownload={
-              it.url
-                ? (clicked) => {
-                    if (clicked.url) window.location.assign(clicked.url);
-                  }
-                : undefined
-            }
+            onDownload={onDownload}
             onCopyLink={onCopyLink}
             onRemove={onRemove}
+            onRetry={onRetry}
           />
         ))}
       </div>

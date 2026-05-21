@@ -9,12 +9,17 @@ import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { chaptersActions } from '../store/chapters-slice';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { ManuscriptDiffModal } from '../components/manuscript-diff';
 import {
   diffSentenceArrays,
   splitIntoSentences,
 } from '../lib/manuscript-diff';
+import {
+  detectOverrideConflicts,
+  scanCandidateChapters,
+} from '../lib/chapter-override-conflict';
 import type { Sentence } from '../lib/types';
 
 const TEXT_EXT_RE = /\.(md|markdown|txt|text)$/i;
@@ -30,6 +35,10 @@ export function UploadView() {
   const reuploadingBookId = useAppSelector((s) => s.ui.reuploadingBookId);
   const manuscript = useAppSelector((s) => s.manuscript);
   const library = useAppSelector((s) => s.library.books);
+  /* Plan 84 — current chapters with their `titleOverridden` flags. Used
+     to detect renamed-chapter conflicts on re-upload (plan 78 × plan 74
+     interaction). */
+  const currentChapters = useAppSelector((s) => s.chapters.chapters);
   const reuploadBook = useMemo(
     () =>
       reuploadingBookId != null
@@ -101,6 +110,20 @@ export function UploadView() {
      sufficient for the v1 acceptance criteria — surface what changed,
      commit on confirm. */
   function handleDiffApply() {
+    /* Plan 84 — drop the titleOverridden flag on any chapter that the
+       new manuscript's parse will no longer match. The override flag
+       is keyed by numeric id; if the re-uploaded manuscript shifts
+       content at that id, the rename silently mis-attributes. We
+       conservatively clear the conflicting overrides so the new
+       parse's titles win. Users who want to re-apply a rename can do
+       so from the chapter list after the re-upload commits. */
+    if (overrideConflicts.length > 0) {
+      dispatch(
+        chaptersActions.clearOverrides({
+          chapterIds: overrideConflicts.map((c) => c.oldChapterId),
+        }),
+      );
+    }
     dispatch(manuscriptActions.applyReupload());
     if (reuploadingBookId) {
       dispatch(uiActions.clearReupload());
@@ -129,6 +152,19 @@ export function UploadView() {
     const newSentenceTexts = manuscript.pendingReupload.newCandidate.sentences.map((s) => s.text);
     return diffSentenceArrays(oldSentenceTexts, newSentenceTexts);
   }, [manuscript.pendingReupload]);
+
+  /* Plan 84 — compute override conflicts. Old chapters come from the
+     chapters slice (carries the titleOverridden flag from plan 78);
+     new chapter headings are heuristically scanned out of the candidate
+     source text because the server's authoritative chapter parse only
+     runs at analyse time. */
+  const overrideConflicts = useMemo(() => {
+    if (!manuscript.pendingReupload) return [];
+    const newChapters = scanCandidateChapters(
+      manuscript.pendingReupload.newCandidate.sourceText,
+    );
+    return detectOverrideConflicts(currentChapters, newChapters);
+  }, [manuscript.pendingReupload, currentChapters]);
 
   /* Wrap processUpload in the guard. If the user cancels at the prompt,
      `busy` never flips and the upload screen stays interactive. */
@@ -369,6 +405,7 @@ export function UploadView() {
         open={manuscript.pendingReupload != null}
         bookTitle={reuploadBook?.title ?? manuscript.title}
         diff={diffEntries}
+        overrideConflicts={overrideConflicts}
         onApply={handleDiffApply}
         onDiscard={handleDiffDiscard}
       />

@@ -40,6 +40,15 @@ export function bookExportJobToQueueItem(job: BookExportJob): ExportQueueItem {
     progress: job.progress ?? undefined,
     url: job.downloadUrl ?? undefined,
     errorReason: job.errorReason ?? undefined,
+    /* Plan 82 — propagate the wire context so the queue row's Retry
+       (re-POST same format/destination) and Download (build the
+       /api/books/.../exports/.../download URL when no signed `url`
+       came back) actions can fire without a re-fetch. */
+    bookId: job.bookId,
+    exportId: job.id,
+    wireFormat: job.format,
+    wireDestination: job.destination,
+    syncPath: job.syncPath ?? undefined,
   };
 }
 

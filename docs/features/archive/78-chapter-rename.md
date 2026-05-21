@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-21
 owner: dudarenok@gmail.com
 ---
 
@@ -73,8 +73,6 @@ Run against real backend (`npm start`) with the canonical end-to-end manuscript 
 - **Bulk rename** / find-and-replace across chapter titles. Single-chapter rename only for v1; bulk is a `docs/BACKLOG.md` follow-up if the user reports renaming five chapters in a row.
 - **Reset to auto-derived.** There is no "clear my override and re-run heuristic" button in v1. Workaround: rename to the parser's likely candidate manually.
 - **History / undo.** No per-rename audit trail; the user just renames again if the new title is wrong.
-- **Manuscript-diff-on-reupload structural mismatch** (plan 74 interaction). If a re-uploaded manuscript has a different chapter count than the previous version, the `titleOverridden` flag stays attached by chapter id — which may land on the wrong chapter after the re-parse. Tracked in `docs/BACKLOG.md`; the fix surfaces overridden-chapter conflicts in the existing manuscript-diff modal before commit.
-
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Initial rename + override flag shipped 2026-05-20. The manuscript-diff-on-reupload structural-mismatch gap (where `titleOverridden` could attach to drifted content after a re-parse) is closed by plan 84 (shipped 2026-05-21 in PR #96) — `detectOverrideConflicts` + a chapter-slice `clearOverrides` reducer dispatched from the re-upload diff modal's apply path. Plan 78 graduates to stable now that gap is closed.
