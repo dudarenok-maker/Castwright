@@ -11,6 +11,7 @@ import { uiActions } from '../store/ui-slice';
 import { listenProgressActions } from '../store/listen-progress-slice';
 import { api } from '../lib/api';
 import { exportsActions } from '../store/exports-slice';
+import { retryExport } from '../store/exports-middleware';
 import { notificationsActions } from '../store/notifications-slice';
 import { ListenHeader, ListenMetadataEditor } from '../components/listen/listen-header';
 import { ListenPlayerRegion } from '../components/listen/listen-player-region';
@@ -316,6 +317,31 @@ export function ListenView({
         }}
         onRemoveExport={(item) => {
           dispatch(exportsActions.exportDismissed({ bookId, exportId: item.id }));
+        }}
+        onRetryExport={(item) => {
+          /* Plan 82 — re-fire the original export. Reads the wire context
+             that the adapter propagated onto the queue row (bookId,
+             exportId, wireFormat, wireDestination, syncPath). */
+          if (!item.bookId || !item.exportId || !item.wireFormat || !item.wireDestination) return;
+          dispatch(
+            retryExport({
+              bookId: item.bookId,
+              exportId: item.exportId,
+              format: item.wireFormat,
+              destination: item.wireDestination,
+              syncPath: item.syncPath,
+            }),
+          );
+        }}
+        onDownloadExport={(item) => {
+          /* Plan 82 — Download on a `done` row without a signed `url`
+             builds the /download URL from bookId + exportId. When `url`
+             is present (cloud-mediated downloads), we prefer it. */
+          if (item.url) {
+            window.location.assign(item.url);
+          } else if (item.bookId && item.exportId) {
+            window.location.assign(`/api/books/${item.bookId}/exports/${item.exportId}/download`);
+          }
         }}
       />
 
