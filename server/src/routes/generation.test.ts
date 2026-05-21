@@ -363,6 +363,60 @@ describe('POST /api/books/:bookId/generation', () => {
     ).toEqual({ prior: true });
   });
 
+  it('catch-up replay skips in-scope chapters so a force-regen does not snap back to "Done"', async () => {
+    /* Repro for screenshot 2026-05-21 174722: user changed a voice setting
+       on Exile (every chapter Done with audio on disk), hit "Regenerate
+       this chapter" on ch3, the activity log fired the right events but
+       the chapter row immediately snapped back to "Done" and no progress
+       UI ever appeared. Root cause: the catch-up replay (designed to snap
+       a reconnecting client to current on-disk state) was emitting a
+       chapter_complete for the very chapter about to be regenerated,
+       which raced the synthesis loop and froze the frontend row at the
+       stale duration.
+
+       Fix: the catch-up replay must skip any chapter in the current run's
+       scope. This test pins that invariant — and the negative control
+       (chapter 2 is OUT of scope and still gets its catch-up tick)
+       confirms the replay is still doing its job for unrelated chapters.
+
+       Catch-up tick convention (see Bug E doc-comment below): catch-up
+       ticks lack runTotal; live ticks always carry it. */
+    const fs = await import('node:fs');
+    const audioRoot = join(bookDir, 'audio');
+    if (fs.existsSync(audioRoot)) fs.rmSync(audioRoot, { recursive: true, force: true });
+    fs.mkdirSync(audioRoot, { recursive: true });
+    /* Both chapters have audio on disk before the request — like Exile. */
+    fs.writeFileSync(join(audioRoot, '01-chapter-one.mp3'), 'PRIOR-ch1');
+    fs.writeFileSync(join(audioRoot, '01-chapter-one.segments.json'), '{}');
+    fs.writeFileSync(join(audioRoot, '02-chapter-two.mp3'), 'PRIOR-ch2');
+    fs.writeFileSync(join(audioRoot, '02-chapter-two.segments.json'), '{}');
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+
+    /* In-scope chapter (ch1): NO catch-up chapter_complete (would lack
+       runTotal), MUST have at least one live one (carries runTotal). */
+    const ch1Completes = ticks.filter(
+      (t) => t.type === 'chapter_complete' && t.chapterId === 1,
+    );
+    const ch1Catchup = ch1Completes.filter((t) => typeof t.runTotal !== 'number');
+    const ch1Live = ch1Completes.filter((t) => typeof t.runTotal === 'number');
+    expect(ch1Catchup).toHaveLength(0);
+    expect(ch1Live.length).toBeGreaterThan(0);
+
+    /* Out-of-scope chapter (ch2): MUST get a catch-up chapter_complete
+       (proves the replay still works for chapters not in the regen
+       target). No live one — ch2 isn't synthesised this run. */
+    const ch2Completes = ticks.filter(
+      (t) => t.type === 'chapter_complete' && t.chapterId === 2,
+    );
+    const ch2Catchup = ch2Completes.filter((t) => typeof t.runTotal !== 'number');
+    expect(ch2Catchup).toHaveLength(1);
+  });
+
   it('classifies XTTS "index out of range in self" as fatal on first hit', async () => {
     synthesiseImpl = async () => {
       throw new Error('Local TTS sidecar returned 500: {"detail":"index out of range in self"}');
