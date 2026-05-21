@@ -1636,6 +1636,38 @@ components:
             and the Node server still serves requests over a red
             /api/sidecar/health until they do.
             Plan [43](docs/features/43-auto-start-sidecar.md).
+        analyzerPhase0Model:
+          type: string
+          nullable: true
+          description: |
+            Plan 88 phase-2 — optional override for Phase 0 (cast
+            detection) analyzer model. When `null`, falls through to the
+            `ANALYZER_PHASE0_MODEL` env var, then opts.model, then the
+            hardcoded default (`gemma-4-31b-it`). When set, MUST be one
+            of the ids from src/lib/models.ts MODEL_OPTIONS. Env var
+            still wins so ops can override at the process boundary for
+            triage; per-request `opts.model` then wins over user-settings.
+            See [docs/features/archive/88-analyzer-per-phase-model.md].
+        analyzerPhase1Model:
+          type: string
+          nullable: true
+          description: |
+            Plan 88 phase-2 — optional override for Phase 1 (attribution)
+            analyzer model. Same precedence as `analyzerPhase0Model`:
+            env > opts.model > user-settings > hardcoded default
+            (`gemini-3.1-flash-lite`).
+        analyzerPhase1MinLagChapters:
+          type: integer
+          minimum: 0
+          maximum: 50
+          nullable: true
+          description: |
+            Plan 88 phase-2 — minimum chapter lag between Phase 0 cast
+            detection and Phase 1 attribution. `null` falls through to
+            `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` env then the default
+            (`10`). `0` releases the lag entirely; `10` anchors
+            attribution to the roster-author model's interpretive
+            baseline (recommended).
         apiKeyStatus:
           type: string
           enum: [set, unset]
@@ -1692,6 +1724,17 @@ components:
           enum: [light, dark, system]
         autoStartSidecar:
           type: boolean
+        analyzerPhase0Model:
+          type: string
+          nullable: true
+        analyzerPhase1Model:
+          type: string
+          nullable: true
+        analyzerPhase1MinLagChapters:
+          type: integer
+          minimum: 0
+          maximum: 50
+          nullable: true
 
     # --- Library ----------------------------------------------------
     LibraryResponse:

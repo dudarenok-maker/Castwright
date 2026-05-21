@@ -47,6 +47,18 @@ export function AccountView() {
     account.workspaceDirOverride ?? '',
   );
   const [minorCastMinLines, setMinorCastMinLines] = useState<number>(account.minorCastMinLines);
+  /* Plan 88 phase-2 — Account-tab Analyzer card. `null` means "fall
+     through to env / hardcoded default"; the picker renders that as a
+     "(use server default)" option at the top of each model select. */
+  const [analyzerPhase0Model, setAnalyzerPhase0Model] = useState<string | null>(
+    account.analyzerPhase0Model ?? null,
+  );
+  const [analyzerPhase1Model, setAnalyzerPhase1Model] = useState<string | null>(
+    account.analyzerPhase1Model ?? null,
+  );
+  const [analyzerPhase1MinLagChapters, setAnalyzerPhase1MinLagChapters] = useState<number | null>(
+    account.analyzerPhase1MinLagChapters ?? null,
+  );
   const [coverPickerDefaultTab, setCoverPickerDefaultTab] = useState<
     NonNullable<UserSettings['coverPickerDefaultTab']>
   >(account.coverPickerDefaultTab ?? 'search');
@@ -69,6 +81,9 @@ export function AccountView() {
     setOllamaUrl(account.ollamaUrl);
     setWorkspaceDirOverride(account.workspaceDirOverride ?? '');
     setMinorCastMinLines(account.minorCastMinLines);
+    setAnalyzerPhase0Model(account.analyzerPhase0Model ?? null);
+    setAnalyzerPhase1Model(account.analyzerPhase1Model ?? null);
+    setAnalyzerPhase1MinLagChapters(account.analyzerPhase1MinLagChapters ?? null);
     setCoverPickerDefaultTab(account.coverPickerDefaultTab ?? 'search');
     setDefaultThemePreference(account.defaultThemePreference ?? 'system');
     setAutoStartSidecar(account.autoStartSidecar ?? true);
@@ -83,6 +98,9 @@ export function AccountView() {
     account.ollamaUrl,
     account.workspaceDirOverride,
     account.minorCastMinLines,
+    account.analyzerPhase0Model,
+    account.analyzerPhase1Model,
+    account.analyzerPhase1MinLagChapters,
     account.coverPickerDefaultTab,
     account.defaultThemePreference,
     account.autoStartSidecar,
@@ -118,6 +136,9 @@ export function AccountView() {
       analysisEngine !== account.analysisEngine ||
       ollamaUrl !== account.ollamaUrl ||
       minorCastMinLines !== account.minorCastMinLines ||
+      analyzerPhase0Model !== (account.analyzerPhase0Model ?? null) ||
+      analyzerPhase1Model !== (account.analyzerPhase1Model ?? null) ||
+      analyzerPhase1MinLagChapters !== (account.analyzerPhase1MinLagChapters ?? null) ||
       coverPickerDefaultTab !== (account.coverPickerDefaultTab ?? 'search') ||
       defaultThemePreference !== (account.defaultThemePreference ?? 'system') ||
       autoStartDirty ||
@@ -132,6 +153,9 @@ export function AccountView() {
     analysisEngine,
     ollamaUrl,
     minorCastMinLines,
+    analyzerPhase0Model,
+    analyzerPhase1Model,
+    analyzerPhase1MinLagChapters,
     coverPickerDefaultTab,
     defaultThemePreference,
     autoStartDirty,
@@ -150,6 +174,9 @@ export function AccountView() {
       ollamaUrl,
       workspaceDirOverride: workspaceDirOverride.trim() === '' ? null : workspaceDirOverride.trim(),
       minorCastMinLines,
+      analyzerPhase0Model,
+      analyzerPhase1Model,
+      analyzerPhase1MinLagChapters,
       coverPickerDefaultTab,
       defaultThemePreference,
       autoStartSidecar,
@@ -290,6 +317,91 @@ export function AccountView() {
                 </option>
               ))}
             </select>
+          </FieldRow>
+        </FormCard>
+
+        <FormCard
+          title="Analyzer"
+          hint="Plan 88 — per-phase analyzer models + minimum chapter lag between Phase 0 cast detection and Phase 1 attribution. Leave any field blank to fall through to the server's env var or hardcoded default. Explicit env vars on the server (ANALYZER_PHASE{0,1}_MODEL / ANALYZER_PHASE1_MIN_LAG_CHAPTERS) still win — ops can override at the process boundary for triage."
+        >
+          <FieldRow
+            label="Phase 0 model (cast detection)"
+            sublabel='Drives the cast-roster pass. Gemma 4 31B is the recommended default — high free-tier headroom (1,500/day) and strong at character identification.'
+          >
+            <select
+              value={analyzerPhase0Model ?? ''}
+              onChange={(e) =>
+                setAnalyzerPhase0Model(e.target.value === '' ? null : e.target.value)
+              }
+              data-testid="account-analyzer-phase0-model"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            >
+              <option value="">(use server default)</option>
+              {MODEL_OPTION_GROUPS.map((g) => (
+                <optgroup key={g.engine} label={g.label}>
+                  {g.models.map((m) => (
+                    <option key={m.id} value={m.id} title={m.hint}>
+                      {m.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </FieldRow>
+          <FieldRow
+            label="Phase 1 model (attribution)"
+            sublabel='Drives the per-sentence speaker-attribution pass. Gemini 3.1 Flash Lite is the recommended default — fast, comfortably parses a novel in the 500/day free-tier bucket.'
+          >
+            <select
+              value={analyzerPhase1Model ?? ''}
+              onChange={(e) =>
+                setAnalyzerPhase1Model(e.target.value === '' ? null : e.target.value)
+              }
+              data-testid="account-analyzer-phase1-model"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            >
+              <option value="">(use server default)</option>
+              {MODEL_OPTION_GROUPS.map((g) => (
+                <optgroup key={g.engine} label={g.label}>
+                  {g.models.map((m) => (
+                    <option key={m.id} value={m.id} title={m.hint}>
+                      {m.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </FieldRow>
+          <FieldRow
+            label="Phase 1 minimum chapter lag"
+            sublabel="0 releases the lag; 10 anchors attribution to the roster-author model's interpretive baseline (recommended). Leave blank to use the server default."
+          >
+            <input
+              type="number"
+              min={0}
+              max={50}
+              step={1}
+              value={
+                analyzerPhase1MinLagChapters === null || analyzerPhase1MinLagChapters === undefined
+                  ? ''
+                  : analyzerPhase1MinLagChapters
+              }
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === '') {
+                  setAnalyzerPhase1MinLagChapters(null);
+                  return;
+                }
+                const parsed = parseInt(raw, 10);
+                if (Number.isFinite(parsed)) {
+                  /* Clamp to schema [0, 50] so Save can't 400 on a fat-finger. */
+                  setAnalyzerPhase1MinLagChapters(Math.max(0, Math.min(50, parsed)));
+                }
+              }}
+              placeholder="(use server default)"
+              data-testid="account-analyzer-phase1-min-lag"
+              className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            />
           </FieldRow>
         </FormCard>
 
