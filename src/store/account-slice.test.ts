@@ -31,6 +31,9 @@ const SERVER_FIXTURE: UserSettings = {
   ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
   minorCastMinLines: 3,
+  analyzerPhase0Model: null,
+  analyzerPhase1Model: null,
+  analyzerPhase1MinLagChapters: null,
   apiKeyStatus: 'set',
   workspaceRoot: '/some/path',
   workspaceSource: 'env',
@@ -64,6 +67,86 @@ describe('accountSlice — granular setters', () => {
     expect(a.coverPickerDefaultTab).toBe('upload');
     const b = accountSlice.reducer(a, accountActions.setCoverPickerDefaultTab('search'));
     expect(b.coverPickerDefaultTab).toBe('search');
+  });
+
+  /* Plan 88 phase-2 — Account-tab Analyzer card setters. The three
+     setters mirror the server-side precedence chain at the slice
+     level: `null` clears the saved value (server falls through to
+     env / hardcoded default); a non-null value persists. */
+  it('setAnalyzerPhase0Model accepts a model id or null', () => {
+    const a = accountSlice.reducer(
+      undefined,
+      accountActions.setAnalyzerPhase0Model('gemma-4-31b-it'),
+    );
+    expect(a.analyzerPhase0Model).toBe('gemma-4-31b-it');
+    const b = accountSlice.reducer(a, accountActions.setAnalyzerPhase0Model(null));
+    expect(b.analyzerPhase0Model).toBeNull();
+  });
+
+  it('setAnalyzerPhase1Model accepts a model id or null', () => {
+    const a = accountSlice.reducer(
+      undefined,
+      accountActions.setAnalyzerPhase1Model('gemini-3.1-flash-lite'),
+    );
+    expect(a.analyzerPhase1Model).toBe('gemini-3.1-flash-lite');
+    const b = accountSlice.reducer(a, accountActions.setAnalyzerPhase1Model(null));
+    expect(b.analyzerPhase1Model).toBeNull();
+  });
+
+  it('setAnalyzerPhase1MinLagChapters accepts a positive integer or null', () => {
+    const a = accountSlice.reducer(
+      undefined,
+      accountActions.setAnalyzerPhase1MinLagChapters(15),
+    );
+    expect(a.analyzerPhase1MinLagChapters).toBe(15);
+    const b = accountSlice.reducer(a, accountActions.setAnalyzerPhase1MinLagChapters(0));
+    expect(b.analyzerPhase1MinLagChapters).toBe(0);
+    const c = accountSlice.reducer(b, accountActions.setAnalyzerPhase1MinLagChapters(null));
+    expect(c.analyzerPhase1MinLagChapters).toBeNull();
+  });
+});
+
+describe('accountSlice — Analyzer card (plan 88 phase-2)', () => {
+  it('hydrates the three analyzer fields from the server fetch response', async () => {
+    (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      analyzerPhase0Model: 'gemma-4-31b-it',
+      analyzerPhase1Model: 'gemini-3.1-flash-lite',
+      analyzerPhase1MinLagChapters: 10,
+    });
+    const store = makeStore();
+    await store.dispatch(fetchAccountSettings());
+    const s = store.getState().account;
+    expect(s.analyzerPhase0Model).toBe('gemma-4-31b-it');
+    expect(s.analyzerPhase1Model).toBe('gemini-3.1-flash-lite');
+    expect(s.analyzerPhase1MinLagChapters).toBe(10);
+  });
+
+  it('round-trips the three analyzer fields through saveAccountSettings', async () => {
+    const putSpy = api.putUserSettings as unknown as ReturnType<typeof vi.fn>;
+    putSpy.mockResolvedValue({
+      ...SERVER_FIXTURE,
+      analyzerPhase0Model: 'qwen3.5:9b',
+      analyzerPhase1Model: 'gemini-3-flash-preview',
+      analyzerPhase1MinLagChapters: 5,
+    });
+    const store = makeStore();
+    await store.dispatch(
+      saveAccountSettings({
+        analyzerPhase0Model: 'qwen3.5:9b',
+        analyzerPhase1Model: 'gemini-3-flash-preview',
+        analyzerPhase1MinLagChapters: 5,
+      }),
+    );
+    expect(putSpy).toHaveBeenCalledWith({
+      analyzerPhase0Model: 'qwen3.5:9b',
+      analyzerPhase1Model: 'gemini-3-flash-preview',
+      analyzerPhase1MinLagChapters: 5,
+    });
+    const s = store.getState().account;
+    expect(s.analyzerPhase0Model).toBe('qwen3.5:9b');
+    expect(s.analyzerPhase1Model).toBe('gemini-3-flash-preview');
+    expect(s.analyzerPhase1MinLagChapters).toBe(5);
   });
 });
 

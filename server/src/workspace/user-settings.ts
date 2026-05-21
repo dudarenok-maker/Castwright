@@ -78,6 +78,15 @@ export const userSettingsSchema = z.object({
      Optional with a `true` default so legacy user-settings.json
      files load unchanged and a fresh install gets TTS-on-boot. */
   autoStartSidecar: z.boolean().optional(),
+  /* Plan 88 phase-2 — Account-tab surface for the per-phase analyzer
+     model knobs. Each `null`/`undefined` means "fall through to env /
+     hardcoded default" per the precedence chain enforced in
+     server/src/analyzer/select-analyzer.ts: explicit env >
+     per-request opts.model > user-settings JSON > hardcoded default.
+     Optional so legacy user-settings.json files load unchanged. */
+  analyzerPhase0Model: z.string().nullable().optional(),
+  analyzerPhase1Model: z.string().nullable().optional(),
+  analyzerPhase1MinLagChapters: z.number().int().min(0).max(50).nullable().optional(),
   /* Plan 49 — UI-managed Gemini API key. Stored plaintext (same trust
      model as server/.env, which is gitignored and single-user). The
      env var GEMINI_API_KEY still wins when present (for CI / power
@@ -132,6 +141,13 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      defaultTtsModelKey. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   autoStartSidecar: true,
+  /* Plan 88 phase-2 — Account-tab surface for the per-phase analyzer
+     knobs. `null` means "fall through to env / hardcoded default" so
+     a fresh user-settings.json doesn't pin a value the deployer may
+     not have intended. */
+  analyzerPhase0Model: null,
+  analyzerPhase1Model: null,
+  analyzerPhase1MinLagChapters: null,
   /* Plan 49 — null = no UI-saved key. Resolver falls through to env
      (process.env.GEMINI_API_KEY) and then null. */
   geminiApiKey: null,

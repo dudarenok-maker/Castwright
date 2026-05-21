@@ -2750,6 +2750,9 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     sidecarUrl,
     workspaceDirOverride,
     exportSyncFolder,
+    analyzerPhase0Model,
+    analyzerPhase1Model,
+    analyzerPhase1MinLagChapters,
   } = patch;
   Object.assign(
     MOCK_USER_SETTINGS,
@@ -2762,6 +2765,9 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         sidecarUrl,
         workspaceDirOverride,
         exportSyncFolder,
+        analyzerPhase0Model,
+        analyzerPhase1Model,
+        analyzerPhase1MinLagChapters,
       }).filter(([, v]) => v !== undefined),
     ),
   );
