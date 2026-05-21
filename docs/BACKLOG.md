@@ -76,7 +76,7 @@ Source: plan 20 close-out (2026-05-18). The `revisions.acceptedSelections` map i
 - _Depends on:_ plan 20 shipped (acceptedSelections persistence is already on disk). Pairs with Could #5 (multi-step rollback / snapshot-per-entry) — the timeline becomes meaningful once per-segment commits land separately from full regens.
 - _Benefit (user):_ true segment-level revision control. Today accept/reject is whole-revision swap — if the user likes 9 of 10 segments in the new take but wants segment 7 from the original, they have to regenerate the whole chapter under different prompts to recover that one segment. This closes the loop the slice has been quietly capturing since plan 20 v1.
 
-### 5. Multi-step rollback / snapshot-per-entry (revision history)
+### 3. Multi-step rollback / snapshot-per-entry (revision history)
 
 Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ships the read-only history view; this entry covers the multi-step rollback that needs snapshot-per-entry storage.
 
@@ -86,7 +86,7 @@ Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ship
 - _Depends on:_ plan 55 shipped (slice plumbing already on disk).
 - _Benefit (user):_ closes the centerpiece feature from plan 55 — true non-linear undo per chapter. Today the timeline modal is read-only; the user has to walk through accept/reject in the A/B player.
 
-### 6. Batch voice-replace across all books
+### 4. Batch voice-replace across all books
 
 Source: net-new (2026-05-18).
 
@@ -96,7 +96,7 @@ Source: net-new (2026-05-18).
 - _Depends on:_ none.
 - _Benefit (user):_ cross-book voice consistency without per-book re-casting. Common need when switching a recurring narrator across a series.
 
-### 7. Cross-book voice compare
+### 5. Cross-book voice compare
 
 Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
 
@@ -106,7 +106,7 @@ Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-comp
 - _Depends on:_ plan 60 shipped (same on-demand fetch machinery is already in place; this entry lifts the cross-book guard and decides foreign-book save routing).
 - _Benefit (user):_ enables A/B for users who reuse the same TTS voice across books — e.g. comparing the same narrator across two books in a series to spot drift.
 
-### 8. Linux visual baselines for CI
+### 6. Linux visual baselines for CI
 
 Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e/visual.spec.ts` now skips on platforms with no committed baselines so PR Verify can go green, but PR CI then carries zero visual-regression coverage. Until Linux baselines land, only local Windows runs catch chromium drift.
 
@@ -115,7 +115,7 @@ Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e
 - _Key files:_ `e2e/linux/visual.spec.ts/` (new directory); optional `.github/workflows/regen-visual-baselines.yml`; `docs/features/archive/37-e2e-playwright.md` "Visual baselines" section.
 - _Benefit (technical):_ restores Verify as a real merge gate. Today PR CI's only red signal is "visual baselines missing" — once those land, a red Verify means real regression and reviewers stop ignoring it.
 
-### 9. Auto-backup scheduling for `state.json`
+### 7. Auto-backup scheduling for `state.json`
 
 Source: net-new (2026-05-18).
 
@@ -125,7 +125,7 @@ Source: net-new (2026-05-18).
 - _Depends on:_ none.
 - _Benefit (user):_ disaster recovery without manual intervention. Particularly valuable on Windows where OneDrive sync conflicts can occasionally corrupt `state.json` mid-write.
 
-### 10. GPU-arbitration semaphore for parallel Claude Code sessions
+### 8. GPU-arbitration semaphore for parallel Claude Code sessions
 
 Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-new.mjs` resolves port collisions but leaves GPU/VRAM contention as a manual-coordination concern documented in CONTRIBUTING.md.
 
@@ -135,7 +135,7 @@ Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `s
 - _Depends on:_ none. Pairs with the worktree parallel-sessions tooling — without the semaphore, users must queue heavy operations by hand per the CONTRIBUTING.md "GPU + shared-resource caveats" note.
 - _Benefit (user):_ removes the silent VRAM-spillover-to-RAM slowdown when two sessions hit the analyzer or sidecar concurrently. Today a parallel run can take 5–10× longer than serial because both processes thrash the GPU.
 
-### 11. Keyboard shortcuts / power-user tuning panel
+### 9. Keyboard shortcuts / power-user tuning panel
 
 Source: net-new (2026-05-18).
 
@@ -145,7 +145,7 @@ Source: net-new (2026-05-18).
 - _Depends on:_ none.
 - _Benefit (technical / accessibility):_ power-user tuning surfaces today's hardcoded values; keyboard navigation closes an accessibility gap.
 
-### 13. Windows installer (Inno Setup or NSIS) wrapping the release zip
+### 10. Windows installer (Inno Setup or NSIS) wrapping the release zip
 
 Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
 
@@ -155,7 +155,7 @@ Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-pack
 - _Depends on:_ Should #2 shipped (the installer wraps the existing zip — no point building before the zip pipeline exists).
 - _Benefit (user):_ friction-free install for non-developers. Today's Should #2 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
 
-### 14. Docker image + compose file for headless / Linux deployment
+### 11. Docker image + compose file for headless / Linux deployment
 
 Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
 
@@ -165,7 +165,7 @@ Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-pack
 - _Depends on:_ Should #2 shipped (reuses the same tag-push trigger and version source); resolving the workspace-mount question.
 - _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
 
-### 15. Apple Books (iOS / macOS) handoff modal
+### 12. Apple Books (iOS / macOS) handoff modal
 
 Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 
@@ -175,7 +175,7 @@ Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 - _Depends on:_ plan 18b shipped.
 - _Benefit (user):_ closes one more "Coming soon" tile.
 
-### 16. Plex (self-hosted media server) handoff modal
+### 13. Plex (self-hosted media server) handoff modal
 
 Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 
@@ -185,7 +185,7 @@ Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 - _Depends on:_ plan 18b shipped; ideally Could #13 (power-user panel) for the token storage.
 - _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
 
-### 17. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
+### 14. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
 
 Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 
@@ -194,7 +194,7 @@ Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 - _Key files:_ new tile config in `src/data/listener-apps.ts`; `src/modals/export-audiobook.tsx`; `server/src/export/` for any new transport.
 - _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
 
-### 18. Single-poll TTS lifecycle for a third consumer (tracking)
+### 15. Single-poll TTS lifecycle for a third consumer (tracking)
 
 Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
 
@@ -204,7 +204,7 @@ Source: [`30-global-model-control.md`](features/30-global-model-control.md) "Whe
 - _Depends on:_ an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
 - _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
 
-### 20. Non-blocking GH Actions workflow for `npm run test:e2e:mobile`
+### 16. Non-blocking GH Actions workflow for `npm run test:e2e:mobile`
 
 Source: net-new (2026-05-21). Spun off from plan 81 wave 5 (PR #92).
 
@@ -214,7 +214,7 @@ Source: net-new (2026-05-21). Spun off from plan 81 wave 5 (PR #92).
 - _Depends on:_ plan 81 shipped (which added the `test:e2e:mobile` script).
 - _Benefit (technical):_ catches mobile regressions in PRs without blowing the pre-push budget. Two-tier gate — mobile is opt-in for local iteration but mandatory-visibility in CI.
 
-### 21. Bless mobile + tablet visual-snapshot baselines per Playwright project
+### 17. Bless mobile + tablet visual-snapshot baselines per Playwright project
 
 Source: net-new (2026-05-21). Plan 81 wave 5 follow-up.
 
@@ -224,7 +224,7 @@ Source: net-new (2026-05-21). Plan 81 wave 5 follow-up.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (technical):_ pixel-level mobile/tablet regression net. Today the no-overflow assertion catches layout breakage but not visual drift; this entry closes that gap.
 
-### 22. Mobile Playwright worker count tuning (browser-launch contention fix)
+### 18. Mobile Playwright worker count tuning (browser-launch contention fix)
 
 Source: net-new (2026-05-21). Surfaced during plan 81 wave 5 development.
 
@@ -234,7 +234,7 @@ Source: net-new (2026-05-21). Surfaced during plan 81 wave 5 development.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (technical):_ unblocks #20 — the non-blocking CI workflow needs reliable mobile e2e to be useful as a signal source.
 
-### 23. In-app LAN HTTPS banner under dev settings
+### 19. In-app LAN HTTPS banner under dev settings
 
 Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 
@@ -244,7 +244,7 @@ Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
 
-### 24. Broad hover-affordance audit with `coarse-pointer:` Tailwind variant
+### 20. Broad hover-affordance audit with `coarse-pointer:` Tailwind variant
 
 Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
 
@@ -253,16 +253,6 @@ Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
 - _Key files:_ grep `src/**/*.tsx` for `group-hover:` / `peer-hover:` / `hover:opacity-0`; apply per-component judgement.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances.
-
-### 25. Pre-existing pre-commit hook bug — bump-version test leaks GIT_DIR/GIT_WORK_TREE in worktree contexts
-
-Source: net-new (2026-05-21). Surfaced during plan 81 wave 3 cast agent's pre-commit attempts.
-
-- _What:_ `scripts/tests/bump-version.test.mjs` runs `execFileSync('git', ['init', ...])` inside a tempdir, but when the test runs from inside a husky pre-commit hook in a worktree context, git's hook-invocation machinery exports GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE / GIT_PREFIX to every child process. The child `git init` then operates on the parent repo's git directory, polluting the parent branch with "chore: seed" + "drift" commits and failing the assertion "nothing to commit on branch X". Fix: scrub the GIT_* env namespace before every `execFileSync` / `spawnSync` call in this test. An initial fix attempt (build `cleanGitEnv` once at module load, thread `env: cleanGitEnv` into every spawn) compiled but did not fully resolve — the failure persists when the hook actually fires in real conditions. Needs deeper investigation: probably the `bump-version.mjs` script itself (which the test spawns as a child node process) is the actual leak point, since the test scrub doesn't propagate through bump-version's own subprocess invocations.
-- _Acceptance:_ Open a worktree against the repo, make a non-trivial change, run `git commit` — pre-commit hook runs `test:hooks` step including `bump-version.test.mjs` and passes. Currently fails in this scenario.
-- _Key files:_ `scripts/tests/bump-version.test.mjs` (test) and likely also `scripts/bump-version.mjs` (the script under test, which also shells out to git and may need the same scrub).
-- _Depends on:_ none.
-- _Benefit (technical):_ unblocks parallel-worktree development. Today every worktree commit can fail this test, forcing the developer to either re-attempt from the main checkout or bypass with `--no-verify`. Both workarounds are friction.
 
 ---
 
