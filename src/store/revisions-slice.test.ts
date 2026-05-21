@@ -1,7 +1,12 @@
 // Pairs with docs/features/12-revisions-pipeline.md
 
 import { describe, expect, it } from 'vitest';
-import { revisionsSlice, revisionsActions, selectDriftByBook } from './revisions-slice';
+import {
+  revisionsSlice,
+  revisionsActions,
+  selectDriftByBook,
+  selectDriftGroupsByBook,
+} from './revisions-slice';
 import type { Revision, DriftEvent, RevisionsResponse } from '../lib/types';
 
 const rev = (id: string, overrides: Partial<Revision> = {}): Revision => ({
@@ -514,6 +519,146 @@ describe('revisionsSlice — multi-book drift (plan: drift-report-fidelity)', ()
     expect(grouped.map((g) => g.bookId)).toEqual(['book-A', 'book-B']);
     expect(grouped[0].events.map((d) => d.id)).toEqual(['d-A1', 'd-A2']);
     expect(grouped[1].events.map((d) => d.id)).toEqual(['d-B1']);
+  });
+
+  it('selectDriftByBook returns a stable reference when the drift array is unchanged', () => {
+    /* Memoisation invariant — unrelated reducer dispatches must not
+       force the modal's selector to walk the array again. */
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [drift('d-A1', { bookId: 'book-A' })],
+      }),
+    );
+    const first = selectDriftByBook({ revisions: s });
+    const second = selectDriftByBook({ revisions: s });
+    expect(second).toBe(first);
+  });
+});
+
+describe('selectDriftGroupsByBook — (book × character × snapshot) consolidation', () => {
+  /* Sample snapshots — A and B differ on voiceId so they fingerprint
+     apart; A and A' are deeply equal so they fingerprint together
+     (mid-book cast edit edge case). */
+  const snapA: DriftEvent['snapshot'] = {
+    voiceId: 'old-voice',
+    tone: { warmth: 40, pace: 50 },
+    attributes: ['warm'],
+  };
+  const snapB: DriftEvent['snapshot'] = {
+    voiceId: 'second-old-voice',
+    tone: { warmth: 40, pace: 50 },
+    attributes: ['warm'],
+  };
+  const cur: DriftEvent['current'] = {
+    voiceId: 'new-voice',
+    tone: { warmth: 60, pace: 50 },
+    attributes: ['warm'],
+  };
+
+  it('collapses N events sharing one snapshot into a single group', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          drift('d1', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur }),
+          drift('d2', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur }),
+          drift('d3', { bookId: 'book-A', chapterId: 3, snapshot: snapA, current: cur }),
+        ],
+      }),
+    );
+    const result = selectDriftGroupsByBook({ revisions: s });
+    expect(result).toHaveLength(1);
+    expect(result[0].groups).toHaveLength(1);
+    expect(result[0].groups[0].events.map((e) => e.id)).toEqual(['d1', 'd2', 'd3']);
+  });
+
+  it('splits a character with two snapshots (mid-book cast edit) into two groups', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          drift('d1', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur }),
+          drift('d2', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur }),
+          drift('d3', { bookId: 'book-A', chapterId: 3, snapshot: snapB, current: cur }),
+        ],
+      }),
+    );
+    const groups = selectDriftGroupsByBook({ revisions: s })[0].groups;
+    expect(groups).toHaveLength(2);
+    expect(groups[0].events.map((e) => e.id)).toEqual(['d1', 'd2']);
+    expect(groups[1].events.map((e) => e.id)).toEqual(['d3']);
+  });
+
+  it('sorts events within a group by chapterId ascending', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          drift('d3', { bookId: 'book-A', chapterId: 9, snapshot: snapA, current: cur }),
+          drift('d1', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur }),
+          drift('d2', { bookId: 'book-A', chapterId: 5, snapshot: snapA, current: cur }),
+        ],
+      }),
+    );
+    const events = selectDriftGroupsByBook({ revisions: s })[0].groups[0].events;
+    expect(events.map((e) => e.chapterId)).toEqual([2, 5, 9]);
+  });
+
+  it('aggregates severity counts and topSeverity per group', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          drift('d1', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, severity: 'severe' }),
+          drift('d2', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur, severity: 'moderate' }),
+          drift('d3', { bookId: 'book-A', chapterId: 3, snapshot: snapA, current: cur, severity: 'mild' }),
+        ],
+      }),
+    );
+    const g = selectDriftGroupsByBook({ revisions: s })[0].groups[0];
+    expect(g.topSeverity).toBe('severe');
+    expect(g.severityCounts).toEqual({ severe: 1, moderate: 1, mild: 1 });
+  });
+
+  it('union of factors across events lands on the group', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          drift('d1', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, factor: 'voice' }),
+          drift('d2', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur, factor: 'warmth' }),
+          drift('d3', { bookId: 'book-A', chapterId: 3, snapshot: snapA, current: cur, factor: 'voice' }),
+        ],
+      }),
+    );
+    const g = selectDriftGroupsByBook({ revisions: s })[0].groups[0];
+    expect(g.factors.sort()).toEqual(['voice', 'warmth']);
+  });
+
+  it('allAutoQueueable is false when any event is not autoQueueable', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          drift('d1', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, autoQueueable: true }),
+          drift('d2', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur, autoQueueable: undefined }),
+        ],
+      }),
+    );
+    expect(selectDriftGroupsByBook({ revisions: s })[0].groups[0].allAutoQueueable).toBe(false);
+  });
+
+  it('returns a stable reference when the drift array is unchanged', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [drift('d1', { bookId: 'book-A', snapshot: snapA, current: cur })],
+      }),
+    );
+    const first = selectDriftGroupsByBook({ revisions: s });
+    const second = selectDriftGroupsByBook({ revisions: s });
+    expect(second).toBe(first);
   });
 });
 
