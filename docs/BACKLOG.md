@@ -49,15 +49,7 @@ Source: net-new (2026-05-20). Captured during planning of the next full version 
 
 ## Should — important, not blocking ship
 
-### 1. Manuscript view virtualisation
-
-Source: net-new (2026-05-21). Spun off from the perf-tuning survey at `~/.claude/plans/want-to-focus-this-bright-donut.md` (item C1). Explicitly demoted from MUST during the survey lock — current feel is bearable, but the manuscript view is the frontend's worst offender (renders every sentence/segment as DOM nodes with per-boundary listeners) and chapters above ~300 sentences feel janky during boundary drag.
-
-- _What:_ Wrap the segment list in `src/views/manuscript.tsx:507-1040` with a virtualiser (`@tanstack/react-virtual`). Render only segments in the viewport plus a buffer. Adjust the boundary-drag PointerEvent handler at `:524-530` for absolute scroll offsets, and route the inspector's "scroll to selected sentence" through `virtualiser.scrollToIndex`.
-- _Acceptance:_ a 500-sentence chapter mounts with ~20 DOM nodes (not 500) plus the surrounding buffer. Boundary drag stays smooth at any chapter size. The "scroll to selected sentence" affordance still lands on the right sentence with the inspector open. New Vitest cases for virtualised boundary behaviour + one e2e for scroll-to-selected.
-- _Key files:_ `src/views/manuscript.tsx` (segment list + boundary handler); `package.json` (new dep); new Vitest in `src/views/manuscript.test.ts`; new Playwright spec under `e2e/`.
-- _Depends on:_ none.
-- _Benefit (user):_ unblocks long chapters in the manuscript view — today the worst frontend pain point. Pairs with Could #25 (confirm-cast + listen-chapter virtualisation) which reuses the same dep.
+(none currently)
 
 ---
 

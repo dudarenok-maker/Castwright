@@ -2,12 +2,14 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
   type RefObject,
 } from 'react';
+import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import {
   IconChevR,
   IconChevL,
@@ -197,6 +199,53 @@ export function ManuscriptView({
 
   const findChar = useCallback((id: string) => characters.find((c) => c.id === id), [characters]);
 
+  /* Plan 92 — virtualise the segment list above ~60 segments. Below
+     that the cost of windowing (extra wrapper divs, layout-effect
+     measurement, scroll-translate math) outweighs the rendered-row
+     savings; above it the per-segment perf cost during boundary drag
+     is what the user feels as jank. The threshold also keeps jsdom
+     tests on the flat path (their fixtures are 1–10 sentences). */
+  const virtualEnabled = segments.length >= 60;
+  /* `useWindowVirtualizer` virtualises against the document scroll —
+     which matches the manuscript view's current architecture (the
+     `<article>` is just a content block, page scroll lives on the
+     body). `scrollMargin` is the offset from the document top to the
+     start of the virtualised region, so the virtualizer can map scroll
+     positions to virtual-item indices correctly. */
+  const [scrollMargin, setScrollMargin] = useState(0);
+  useLayoutEffect(() => {
+    /* Read the article's top offset from the document — invalidates
+       on every chapter switch since header heights shift between
+       chapters of different titles + segments. */
+    const node = articleRef.current;
+    if (!node) return;
+    let frame = 0;
+    const measure = () => {
+      const rect = node.getBoundingClientRect();
+      setScrollMargin(rect.top + window.scrollY);
+    };
+    measure();
+    /* Re-measure on resize since the article's offsetTop can shift when
+       header layout reflows. */
+    const onResize = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [currentChapterId, segments.length]);
+  const virtualizer = useWindowVirtualizer({
+    count: virtualEnabled ? segments.length : 0,
+    estimateSize: () => 220,
+    overscan: 5,
+    scrollMargin,
+  });
+  const virtualItems = virtualEnabled ? virtualizer.getVirtualItems() : [];
+  const virtualTotalSize = virtualEnabled ? virtualizer.getTotalSize() : 0;
+
   /* Plan: low-confidence-triage-polish — derive the ordered list of
      low-confidence sentence ids (confidence < 0.75) for the current
      chapter. Pairs with the header pill's ▲/▼ + J/K shortcuts that
@@ -228,25 +277,37 @@ export function ManuscriptView({
       /* Open the inspector on the segment containing the targeted
          sentence. Segments are derived per current chapter (above), so
          a substring scan is bounded. */
-      const containingSeg = segments.find((g) =>
+      const containingSegIdx = segments.findIndex((g) =>
         g.sentences.some((s) => s.id === targetSentenceId),
       );
+      const containingSeg = containingSegIdx >= 0 ? segments[containingSegIdx] : null;
       if (containingSeg) {
         setSelectedSeg(containingSeg.id);
         setInspectorOpen(true);
       }
-      /* Scroll the sentence span into view. data-sentence-id is unique
-         within the rendered chapter so a top-level querySelector is
-         enough; scope to articleRef defensively. */
-      const root = articleRef.current ?? document;
-      const el = root.querySelector?.(`[data-sentence-id="${targetSentenceId}"]`) as
-        | HTMLElement
-        | null;
-      if (el && typeof el.scrollIntoView === 'function') {
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      /* Plan 92 — when virtualised, the target sentence may be off-screen
+         (its segment not yet in DOM). Bring the containing segment into
+         the window first via `scrollToIndex`, then refine to the sentence
+         span on the next frame. Below the virtualisation threshold the
+         span is always in DOM, so the existing scrollIntoView path
+         applies directly. */
+      const refine = () => {
+        const root = articleRef.current ?? document;
+        const el = root.querySelector?.(`[data-sentence-id="${targetSentenceId}"]`) as
+          | HTMLElement
+          | null;
+        if (el && typeof el.scrollIntoView === 'function') {
+          el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      };
+      if (virtualEnabled && containingSegIdx >= 0) {
+        virtualizer.scrollToIndex(containingSegIdx, { align: 'center' });
+        requestAnimationFrame(refine);
+      } else {
+        refine();
       }
     },
-    [lowConfidenceSentenceIds, lowConfCursor, segments, currentChapterId],
+    [lowConfidenceSentenceIds, lowConfCursor, segments, currentChapterId, virtualEnabled, virtualizer],
   );
 
   /* J / K keyboard shortcuts for next / previous low-confidence
@@ -631,34 +692,93 @@ export function ManuscriptView({
         ) : (
           <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-5 md:p-10">
             <article ref={articleRef} className="font-serif text-[17px] leading-[1.8] text-ink/90">
-              {segments.map((seg, segIdx) => (
-                <Fragment key={seg.id}>
-                  <SegmentRow
-                    seg={seg}
-                    characters={characters}
-                    priorRoster={priorRoster}
-                    onAddFromSeriesRoster={onAddFromSeriesRoster}
-                    selected={selectedSeg === seg.id}
-                    dimmed={!!filterChar && filterChar !== seg.characterId}
-                    drag={drag}
-                    onSelect={() => setSelectedSeg(seg.id)}
-                    onShowDetails={() => {
-                      setSelectedSeg(seg.id);
-                      setInspectorOpen(true);
-                    }}
-                    onReassignSegment={(newCharId) => reassignSegment(seg, newCharId)}
-                    onOpenProfile={onOpenProfile}
-                    findChar={findChar}
-                  />
-                  {segIdx < segments.length - 1 && (
-                    <BoundaryHandle
-                      boundaryIdx={segIdx + 1}
+              {virtualEnabled ? (
+                /* Plan 92 — windowed render. The article becomes a
+                   positioned container of `virtualTotalSize` px; each
+                   visible virtual item is absolute-positioned with
+                   `translateY`. `measureElement` reads each row's true
+                   height after mount so the virtualizer corrects its
+                   estimateSize over the first few frames. Boundary
+                   handles render inside each row's wrapper so they
+                   move with their segment. */
+                <div
+                  data-testid="manuscript-virtual-container"
+                  style={{ position: 'relative', height: virtualTotalSize }}
+                >
+                  {virtualItems.map((virtualItem) => {
+                    const seg = segments[virtualItem.index];
+                    const isLast = virtualItem.index === segments.length - 1;
+                    return (
+                      <div
+                        key={virtualItem.key}
+                        data-index={virtualItem.index}
+                        ref={virtualizer.measureElement}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          transform: `translateY(${virtualItem.start - virtualizer.options.scrollMargin}px)`,
+                        }}
+                      >
+                        <SegmentRow
+                          seg={seg}
+                          characters={characters}
+                          priorRoster={priorRoster}
+                          onAddFromSeriesRoster={onAddFromSeriesRoster}
+                          selected={selectedSeg === seg.id}
+                          dimmed={!!filterChar && filterChar !== seg.characterId}
+                          drag={drag}
+                          onSelect={() => setSelectedSeg(seg.id)}
+                          onShowDetails={() => {
+                            setSelectedSeg(seg.id);
+                            setInspectorOpen(true);
+                          }}
+                          onReassignSegment={(newCharId) => reassignSegment(seg, newCharId)}
+                          onOpenProfile={onOpenProfile}
+                          findChar={findChar}
+                        />
+                        {!isLast && (
+                          <BoundaryHandle
+                            boundaryIdx={virtualItem.index + 1}
+                            drag={drag}
+                            onPointerDown={onBoundaryPointerDown}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                segments.map((seg, segIdx) => (
+                  <Fragment key={seg.id}>
+                    <SegmentRow
+                      seg={seg}
+                      characters={characters}
+                      priorRoster={priorRoster}
+                      onAddFromSeriesRoster={onAddFromSeriesRoster}
+                      selected={selectedSeg === seg.id}
+                      dimmed={!!filterChar && filterChar !== seg.characterId}
                       drag={drag}
-                      onPointerDown={onBoundaryPointerDown}
+                      onSelect={() => setSelectedSeg(seg.id)}
+                      onShowDetails={() => {
+                        setSelectedSeg(seg.id);
+                        setInspectorOpen(true);
+                      }}
+                      onReassignSegment={(newCharId) => reassignSegment(seg, newCharId)}
+                      onOpenProfile={onOpenProfile}
+                      findChar={findChar}
                     />
-                  )}
-                </Fragment>
-              ))}
+                    {segIdx < segments.length - 1 && (
+                      <BoundaryHandle
+                        boundaryIdx={segIdx + 1}
+                        drag={drag}
+                        onPointerDown={onBoundaryPointerDown}
+                      />
+                    )}
+                  </Fragment>
+                ))
+              )}
             </article>
           </div>
         )}
