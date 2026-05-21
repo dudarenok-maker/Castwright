@@ -69,6 +69,10 @@ function parseTicks(body: string): ParsedTick[] {
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-generation-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
+  /* Plan 87 — default test concurrency is K=1 so the existing assertions
+     stay byte-identical to the pre-pool serial loop. The new parallel
+     describe block below sets K=2 explicitly per-case via the env knob. */
+  process.env.GEN_CHAPTER_CONCURRENCY = '1';
 
   const [{ generationRouter }, { makeBookId }, cacheModule] = await Promise.all([
     import('./generation.js'),
@@ -128,6 +132,7 @@ afterAll(async () => {
   await cacheModule.clearAnalysisCache(MANUSCRIPT_ID);
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
+  delete process.env.GEN_CHAPTER_CONCURRENCY;
 });
 
 beforeEach(() => {
@@ -356,6 +361,60 @@ describe('POST /api/books/:bookId/generation', () => {
     expect(
       JSON.parse(fs.readFileSync(join(audioRoot, '01-chapter-one.previous.segments.json'), 'utf8')),
     ).toEqual({ prior: true });
+  });
+
+  it('catch-up replay skips in-scope chapters so a force-regen does not snap back to "Done"', async () => {
+    /* Repro for screenshot 2026-05-21 174722: user changed a voice setting
+       on Exile (every chapter Done with audio on disk), hit "Regenerate
+       this chapter" on ch3, the activity log fired the right events but
+       the chapter row immediately snapped back to "Done" and no progress
+       UI ever appeared. Root cause: the catch-up replay (designed to snap
+       a reconnecting client to current on-disk state) was emitting a
+       chapter_complete for the very chapter about to be regenerated,
+       which raced the synthesis loop and froze the frontend row at the
+       stale duration.
+
+       Fix: the catch-up replay must skip any chapter in the current run's
+       scope. This test pins that invariant — and the negative control
+       (chapter 2 is OUT of scope and still gets its catch-up tick)
+       confirms the replay is still doing its job for unrelated chapters.
+
+       Catch-up tick convention (see Bug E doc-comment below): catch-up
+       ticks lack runTotal; live ticks always carry it. */
+    const fs = await import('node:fs');
+    const audioRoot = join(bookDir, 'audio');
+    if (fs.existsSync(audioRoot)) fs.rmSync(audioRoot, { recursive: true, force: true });
+    fs.mkdirSync(audioRoot, { recursive: true });
+    /* Both chapters have audio on disk before the request — like Exile. */
+    fs.writeFileSync(join(audioRoot, '01-chapter-one.mp3'), 'PRIOR-ch1');
+    fs.writeFileSync(join(audioRoot, '01-chapter-one.segments.json'), '{}');
+    fs.writeFileSync(join(audioRoot, '02-chapter-two.mp3'), 'PRIOR-ch2');
+    fs.writeFileSync(join(audioRoot, '02-chapter-two.segments.json'), '{}');
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+
+    /* In-scope chapter (ch1): NO catch-up chapter_complete (would lack
+       runTotal), MUST have at least one live one (carries runTotal). */
+    const ch1Completes = ticks.filter(
+      (t) => t.type === 'chapter_complete' && t.chapterId === 1,
+    );
+    const ch1Catchup = ch1Completes.filter((t) => typeof t.runTotal !== 'number');
+    const ch1Live = ch1Completes.filter((t) => typeof t.runTotal === 'number');
+    expect(ch1Catchup).toHaveLength(0);
+    expect(ch1Live.length).toBeGreaterThan(0);
+
+    /* Out-of-scope chapter (ch2): MUST get a catch-up chapter_complete
+       (proves the replay still works for chapters not in the regen
+       target). No live one — ch2 isn't synthesised this run. */
+    const ch2Completes = ticks.filter(
+      (t) => t.type === 'chapter_complete' && t.chapterId === 2,
+    );
+    const ch2Catchup = ch2Completes.filter((t) => typeof t.runTotal !== 'number');
+    expect(ch2Catchup).toHaveLength(1);
   });
 
   it('classifies XTTS "index out of range in self" as fatal on first hit', async () => {
@@ -715,5 +774,276 @@ describe('POST /api/books/:bookId/generation — plan 80 edits override cache', 
 
     const after = await cacheModule.loadAnalysisCache(MANUSCRIPT_ID);
     expect(JSON.stringify(after.chapters)).toBe(beforeJson);
+  });
+});
+
+/* ── Plan 87 — bounded chapter-concurrency worker pool ────────────────────
+   The route used to walk targetChapters with a sequential `for…await`.
+   Plan 87 replaced that with a K-wide worker pool sized by
+   `GEN_CHAPTER_CONCURRENCY` (default 2). Each chapter still walks its
+   sentences sequentially inside `synthesiseChapter` — concurrency is at
+   the chapter layer only.
+
+   These cases set the env knob explicitly per-describe so:
+     - K=1 path is the byte-identical serial baseline (matches the original
+       loop behaviour the rest of the file pins).
+     - K=2 path proves two chapters actually overlap on the wire, that
+       neither blocks the other's progress ticks, and that no chapter is
+       silently dropped or duplicated.
+     - K>=N (concurrency exceeds chapter count) clamps to N workers and
+       still completes every chapter exactly once.
+
+   We control concurrency by setting `process.env.GEN_CHAPTER_CONCURRENCY`
+   inside the `it` body BEFORE calling the route — the route reads
+   `process.env` at request time, not module-load time. Restoring the
+   default after each case keeps the rest of the file's K=1 pin intact. */
+describe('POST /api/books/:bookId/generation — plan 87 bounded chapter concurrency', () => {
+  let originalConcurrency: string | undefined;
+
+  beforeEach(() => {
+    originalConcurrency = process.env.GEN_CHAPTER_CONCURRENCY;
+  });
+
+  afterEach(async () => {
+    if (originalConcurrency === undefined) delete process.env.GEN_CHAPTER_CONCURRENCY;
+    else process.env.GEN_CHAPTER_CONCURRENCY = originalConcurrency;
+    /* Clean per-case audio so the next case's chapterAudioExists check
+       starts from the same baseline. */
+    const fs = await import('node:fs');
+    const audioRoot = join(bookDir, 'audio');
+    if (fs.existsSync(audioRoot)) fs.rmSync(audioRoot, { recursive: true, force: true });
+  });
+
+  it('K=1 (env=1) — chapters synthesise strictly one-at-a-time (byte-identical to today)', async () => {
+    process.env.GEN_CHAPTER_CONCURRENCY = '1';
+    /* Track concurrent synthesise invocations. With K=1 only ever one
+       chapter is between `synthesiseChapter` start and finish. */
+    let inflight = 0;
+    let maxInflight = 0;
+    synthesiseImpl = async () => {
+      inflight += 1;
+      maxInflight = Math.max(maxInflight, inflight);
+      /* Yield once so a stacked second synth would observe inflight>1 if
+         the pool ever fired two workers concurrently at K=1. */
+      await new Promise((r) => setImmediate(r));
+      inflight -= 1;
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Zephyr',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: [1],
+          },
+        ],
+      };
+    };
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    expect(maxInflight).toBe(1);
+    const ticks = parseTicks(res.text);
+    /* Both chapters still complete. */
+    expect(ticks.filter((t) => t.type === 'chapter_complete').map((t) => t.chapterId)).toEqual([
+      1, 2,
+    ]);
+  });
+
+  it('K=2 — both chapters enter synthesiseChapter before either completes', async () => {
+    process.env.GEN_CHAPTER_CONCURRENCY = '2';
+    /* Gate every synth on a deferred resolver so the test can observe the
+       inflight window. With K=2 and two chapters, both workers must enter
+       synth before any can complete — that's the smoking gun for the
+       worker pool. */
+    let inflight = 0;
+    let maxInflight = 0;
+    const resolvers: Array<() => void> = [];
+    synthesiseImpl = async () => {
+      inflight += 1;
+      maxInflight = Math.max(maxInflight, inflight);
+      await new Promise<void>((resolve) => {
+        resolvers.push(resolve);
+        /* Once BOTH workers are inside synth, release them together. The
+           sequential baseline would never reach `resolvers.length === 2`
+           because the second worker only starts after the first finishes. */
+        if (resolvers.length === 2) {
+          for (const r of resolvers) r();
+        }
+      });
+      inflight -= 1;
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Zephyr',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: [1],
+          },
+        ],
+      };
+    };
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    /* This is the parallel-pool smoking gun: maxInflight reached 2. K=1
+       would have completed with maxInflight === 1. */
+    expect(maxInflight).toBe(2);
+    const ticks = parseTicks(res.text);
+    /* Each chapter still completes exactly once (no drops, no dupes). */
+    const completes = ticks.filter((t) => t.type === 'chapter_complete' && t.chapterId != null);
+    expect(completes.map((t) => t.chapterId).sort()).toEqual([1, 2]);
+  });
+
+  it('K=2 — each chapter emits a chapter:start (initial 0.01 progress) before any chapter completes', async () => {
+    /* This is the consumer-facing parallel guarantee: the client must see
+       chapter 2's first progress tick (the loop-entry 0.01 marker) before
+       chapter 1's chapter_complete. The chapters slice routes ticks by
+       chapterId, so the in-flight chapter 2 needs to enter the pipeline
+       before chapter 1 wraps. */
+    process.env.GEN_CHAPTER_CONCURRENCY = '2';
+    const resolvers: Array<() => void> = [];
+    synthesiseImpl = async () => {
+      await new Promise<void>((resolve) => {
+        resolvers.push(resolve);
+        if (resolvers.length === 2) {
+          for (const r of resolvers) r();
+        }
+      });
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Zephyr',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: [1],
+          },
+        ],
+      };
+    };
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    /* Find positions of: ch2's initial 0.01 progress tick and ch1's
+       chapter_complete. The first must come before the second. */
+    const ch2Start = ticks.findIndex(
+      (t) => t.type === 'progress' && t.chapterId === 2 && t.progress === 0.01,
+    );
+    const ch1Complete = ticks.findIndex(
+      (t) => t.type === 'chapter_complete' && t.chapterId === 1,
+    );
+    expect(ch2Start).toBeGreaterThanOrEqual(0);
+    expect(ch1Complete).toBeGreaterThanOrEqual(0);
+    expect(ch2Start).toBeLessThan(ch1Complete);
+  });
+
+  it('K=2 — both chapter_complete ticks land, no chapter is dropped or duplicated', async () => {
+    process.env.GEN_CHAPTER_CONCURRENCY = '2';
+    /* Defaults synthesiseImpl from beforeEach() returns immediately — no
+       gating. The worker pool still has to claim each chapter exactly
+       once via the shared cursor. */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    const completes = ticks.filter(
+      (t) => t.type === 'chapter_complete' && typeof t.chapterId === 'number',
+    );
+    expect(completes.map((t) => t.chapterId).sort()).toEqual([1, 2]);
+    /* Idle tick is still the terminator. */
+    expect(ticks[ticks.length - 1].type).toBe('idle');
+  });
+
+  it('K=4 (concurrency > target chapter count) clamps to N workers, every chapter completes once', async () => {
+    /* Worker count is `min(concurrency, targetChapters.length)`. With 2
+       chapters and K=4 we expect exactly 2 workers — the pool's index
+       cursor still hands each chapter out exactly once. */
+    process.env.GEN_CHAPTER_CONCURRENCY = '4';
+    let synthCalls = 0;
+    synthesiseImpl = async () => {
+      synthCalls += 1;
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Zephyr',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: [1],
+          },
+        ],
+      };
+    };
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    /* Each chapter synthesised exactly once — no double-claim from idle workers. */
+    expect(synthCalls).toBe(2);
+    const ticks = parseTicks(res.text);
+    expect(ticks.filter((t) => t.type === 'chapter_complete').length).toBe(2);
+  });
+
+  it('invalid env (non-numeric) falls back to default K=2', async () => {
+    /* If the operator typos GEN_CHAPTER_CONCURRENCY=garbage, we don't
+       want the route to refuse — we want it to silently fall back to the
+       default. Verify by observing maxInflight reaches 2 against gated
+       synth. */
+    process.env.GEN_CHAPTER_CONCURRENCY = 'not-a-number';
+    let inflight = 0;
+    let maxInflight = 0;
+    const resolvers: Array<() => void> = [];
+    synthesiseImpl = async () => {
+      inflight += 1;
+      maxInflight = Math.max(maxInflight, inflight);
+      await new Promise<void>((resolve) => {
+        resolvers.push(resolve);
+        if (resolvers.length === 2) {
+          for (const r of resolvers) r();
+        }
+      });
+      inflight -= 1;
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Zephyr',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: [1],
+          },
+        ],
+      };
+    };
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    expect(maxInflight).toBe(2);
   });
 });
