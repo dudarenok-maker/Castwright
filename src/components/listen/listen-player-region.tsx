@@ -10,7 +10,8 @@
    shell (not on the listen view), so this region only exposes the
    chapter-row triggers + the markers sidebar. */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   IconPlay,
   IconPause,
@@ -69,6 +70,21 @@ export function ListenPlayerRegion({
      modal centres on chapter midpoint. */
   const sharePlayhead =
     shareClipChapter && progress?.chapterId === shareClipChapter.id ? progress.currentSec : null;
+
+  /* Plan 93 — virtualise the chapter list above 40 rows. The list
+     already has its own internal scroll container (max-h-[560px]) so
+     `useVirtualizer` with `getScrollElement` pointing at that ref is
+     the right shape (vs. manuscript's `useWindowVirtualizer`). Below
+     the threshold the flat-render path keeps the simple DOM tree. */
+  const chapterListRef = useRef<HTMLDivElement>(null);
+  const chapterVirtEnabled = listenable.length >= 40;
+  const chapterVirtualizer = useVirtualizer({
+    count: chapterVirtEnabled ? listenable.length : 0,
+    getScrollElement: () => chapterListRef.current,
+    estimateSize: () => 88,
+    overscan: 5,
+  });
+
   return (
     <>
       <MarkersPanel
@@ -91,28 +107,69 @@ export function ListenPlayerRegion({
               rounded corners stay clean; scrollbar-thin paints an inset thumb
               that clears those corners. */}
           <div
+            ref={chapterListRef}
             data-testid="listen-chapters-scroll"
             className="max-h-[560px] overflow-y-auto scrollbar-thin divide-y divide-ink/5"
           >
-            {listenable.map((ch) => {
-              const charsIn = Object.entries(ch.characters)
-                .filter(([, st]) => st !== 'skipped')
-                .map(([id]) => findChar(id))
-                .filter(Boolean) as Character[];
-              return (
-                <ChapterListenRow
-                  key={ch.id}
-                  bookId={bookId}
-                  chapter={ch}
-                  charactersIn={charsIn}
-                  isPlaying={currentTrack === ch.id}
-                  onPlay={() => onPlayChapter(currentTrack === ch.id ? null : ch.id)}
-                  onRegenerate={onRegenerate}
-                  onShareClip={() => setShareClipChapter(ch)}
-                  onRename={() => setRenameChapter(ch)}
-                />
-              );
-            })}
+            {chapterVirtEnabled ? (
+              <div
+                data-testid="listen-chapters-virtual-container"
+                style={{ position: 'relative', height: chapterVirtualizer.getTotalSize() }}
+              >
+                {chapterVirtualizer.getVirtualItems().map((virtualItem) => {
+                  const ch = listenable[virtualItem.index];
+                  const charsIn = Object.entries(ch.characters)
+                    .filter(([, st]) => st !== 'skipped')
+                    .map(([id]) => findChar(id))
+                    .filter(Boolean) as Character[];
+                  return (
+                    <div
+                      key={virtualItem.key}
+                      data-index={virtualItem.index}
+                      ref={chapterVirtualizer.measureElement}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualItem.start}px)`,
+                      }}
+                    >
+                      <ChapterListenRow
+                        bookId={bookId}
+                        chapter={ch}
+                        charactersIn={charsIn}
+                        isPlaying={currentTrack === ch.id}
+                        onPlay={() => onPlayChapter(currentTrack === ch.id ? null : ch.id)}
+                        onRegenerate={onRegenerate}
+                        onShareClip={() => setShareClipChapter(ch)}
+                        onRename={() => setRenameChapter(ch)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              listenable.map((ch) => {
+                const charsIn = Object.entries(ch.characters)
+                  .filter(([, st]) => st !== 'skipped')
+                  .map(([id]) => findChar(id))
+                  .filter(Boolean) as Character[];
+                return (
+                  <ChapterListenRow
+                    key={ch.id}
+                    bookId={bookId}
+                    chapter={ch}
+                    charactersIn={charsIn}
+                    isPlaying={currentTrack === ch.id}
+                    onPlay={() => onPlayChapter(currentTrack === ch.id ? null : ch.id)}
+                    onRegenerate={onRegenerate}
+                    onShareClip={() => setShareClipChapter(ch)}
+                    onRename={() => setRenameChapter(ch)}
+                  />
+                );
+              })
+            )}
           </div>
         </div>
       </section>
