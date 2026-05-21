@@ -312,7 +312,7 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C6).
 - _Depends on:_ none.
 - _Benefit (technical):_ avoids 480+ DOM mutations per 800 ms when many waveforms are visible simultaneously. Low real-world impact today (rare to see >3 waveforms at once).
 
-### 27. Interleaved SSE in `mockStreamGeneration` for parallel-chapter e2e
+### 26. Interleaved SSE in `mockStreamGeneration` for parallel-chapter e2e
 
 Source: net-new (2026-05-21). Deferred from plan 87 implementation — server side shipped, mock-mode e2e not landed.
 

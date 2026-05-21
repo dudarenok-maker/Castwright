@@ -50,7 +50,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [05 — Manual handoff analyzer](05-analyzer-manual-handoff.md) — `ANALYZER=manual` file-drop cowork loop.
 - [06 — Gemini analyzer](06-analyzer-gemini.md) — `ANALYZER=gemini` direct-API mode (also the fallback when local is unreachable).
 - [29 — Local Ollama analyzer + fallback](29-analyzer-ollama-local.md) — `ANALYZER=local` default; auto-fallback to Gemini only when daemon is unreachable.
-- [88 — Analyzer per-phase model](88-analyzer-per-phase-model.md) — Phase 0 / Phase 1 use independent models with a chapter-index warm-up window; `ANALYZER_PHASE{0,1}_MODEL` + `ANALYZER_PHASE1_WARMUP_CHAPTERS` env knobs; rate-limit buckets already per-model.
+- [88 — Pipelined two-model analyzer (Gemma cast + Gemini attribution, 10-chapter lag)](88-analyzer-per-phase-model.md) — Phase 0 / Phase 1 use independent models pipelined with a back-pressure semaphore; `ANALYZER_PHASE{0,1}_MODEL` + `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` env knobs; rate-limit buckets already per-model; watermark seam at `server/src/analyzer/phase-watermark.ts`.
 - [07 — Audio tag vocabulary](07-audio-tag-vocabulary.md) — `[tag]` vocabulary UI ↔ parser sync.
 - [08 — Audio tag auto-detection](08-audio-tag-auto-detection.md) — Server-side auto-tagging from punctuation/markdown/HTML.
 

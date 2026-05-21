@@ -19,8 +19,18 @@
 
 import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { dirname } from 'node:path';
 import { renameWithRetry } from './atomic-rename.js';
+
+/* Monotonic in-process counter so two `writeJsonAtomic` calls that arrive
+   in the same millisecond (same `Date.now()`, same `process.pid`) don't
+   collide on temp-file names. Without this, plan 88 pipelining produced
+   ENOENT-on-rename races: Phase 0 and Phase 1 both save to the same
+   cache path inside a single tick, both pick `${path}.tmp-${pid}-${ts}`,
+   one renames the temp away, the other's `renameWithRetry(tmp, path)`
+   then explodes because its tmp no longer exists. */
+let tmpSeq = 0;
 
 export interface WriteJsonOpts {
   /** Rotate `path` -> `path.bak.1`, shift `path.bak.{i}` -> `path.bak.{i+1}`,
@@ -89,7 +99,15 @@ export async function writeJsonAtomic(
   if (opts?.rotate && existsSync(path)) {
     await rotateBackups(path, opts.rotate.keep);
   }
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  /* Unique per call: pid + monotonic in-process counter + a 4-byte random
+     suffix. The counter alone defeats same-millisecond collisions inside
+     one process; the random tail defends against a hypothetical second
+     worker process landing on the same `${pid}-${seq}` (the seq resets per
+     process). All three components stay short so the path doesn't blow
+     past Windows' 260-char limit on deeply-nested workspace folders. */
+  const seq = (tmpSeq = (tmpSeq + 1) >>> 0);
+  const rnd = randomBytes(4).toString('hex');
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}-${seq}-${rnd}`;
   await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
   try {
     await renameWithRetry(tmp, path);
