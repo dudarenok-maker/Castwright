@@ -74,6 +74,39 @@ describe('GET /api/sidecar/health', () => {
     expect(res.body.modelLoaded).toBe(false);
     expect(res.body.loading).toBe(false);
     expect(res.body.device).toBeNull();
+    /* Kokoro fields default identically — an older sidecar that doesn't
+       report them must not cause the new Kokoro pill to render as
+       `undefined` (which the pill state machine treats as a falsy load
+       state, but better to coerce explicitly). */
+    expect(res.body.kokoroLoaded).toBe(false);
+    expect(res.body.kokoroLoading).toBe(false);
+  });
+
+  it('forwards the Kokoro per-engine fields as kokoroLoaded / kokoroLoading', async () => {
+    /* The new Kokoro pill polls the same /health response. The proxy must
+       split the snake_case `kokoro_loaded` / `kokoro_loading` fields out
+       to camelCase so the single useTtsLifecycle hook can fan them out
+       per engine without a second probe. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['coqui', 'kokoro'],
+          model_loaded: false,
+          loading: false,
+          kokoro_loaded: true,
+          kokoro_loading: false,
+          device: 'cuda',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.modelLoaded).toBe(false);
+    expect(res.body.loading).toBe(false);
+    expect(res.body.kokoroLoaded).toBe(true);
+    expect(res.body.kokoroLoading).toBe(false);
   });
 
   it('returns unreachable when the sidecar responds non-2xx', async () => {
@@ -160,6 +193,28 @@ describe('POST /api/sidecar/load', () => {
     expect(res.status).toBe(503);
     expect(res.body.error).toMatch(/did not complete within/);
   });
+
+  it('forwards the engine field through to the sidecar', async () => {
+    /* The Kokoro pill posts `{ engine: 'kokoro' }`; the proxy MUST round-
+       trip that to the sidecar verbatim, otherwise the sidecar's default
+       resolution lands on Coqui and stops the wrong engine. */
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ status: 'ready' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await request(makeApp()).post('/api/sidecar/load').send({ engine: 'kokoro' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/load$/),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ engine: 'kokoro' }),
+      }),
+    );
+  });
 });
 
 describe('POST /api/sidecar/unload', () => {
@@ -178,6 +233,28 @@ describe('POST /api/sidecar/unload', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/unload$/),
       expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('forwards the engine field through to the sidecar', async () => {
+    /* Kokoro Stop pill sends `{ engine: 'kokoro' }` here. Symmetric with
+       /load — without this, the proxy would drop the body and the
+       sidecar would default to Coqui, stopping the wrong engine. */
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ status: 'idle' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await request(makeApp()).post('/api/sidecar/unload').send({ engine: 'kokoro' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/unload$/),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ engine: 'kokoro' }),
+      }),
     );
   });
 

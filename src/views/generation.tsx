@@ -15,6 +15,7 @@ import {
 } from '../lib/icons';
 import { SectionLabel, MixedHeading, Pill, ColorDot } from '../components/primitives';
 import { ModelControlPill } from '../components/ModelControlPill';
+import { selectEnginesInUse } from '../store/engines-in-use-selector';
 import type { LayoutContext } from '../components/layout';
 import type { TtsLifecycle } from '../lib/use-tts-lifecycle';
 
@@ -22,12 +23,16 @@ import type { TtsLifecycle } from '../lib/use-tts-lifecycle';
    (today: the cross-book Generate title regression test that bypasses
    the Layout wrapper). Inert state, no-op handlers. Real call sites
    always come through Layout → outlet context. */
-const INERT_TTS_LIFECYCLE: TtsLifecycle = {
-  state: 'unreachable',
-  evictionNotice: null,
-  loadErrorNotice: null,
+const INERT_ENGINE_LIFECYCLE = {
+  state: 'unreachable' as const,
   onLoad: async () => {},
   onStop: async () => {},
+};
+const INERT_TTS_LIFECYCLE: TtsLifecycle = {
+  coqui: INERT_ENGINE_LIFECYCLE,
+  kokoro: INERT_ENGINE_LIFECYCLE,
+  evictionNotice: null,
+  loadErrorNotice: null,
   dismissNotices: () => {},
 };
 import { ConfirmDialog } from '../modals/confirm-dialog';
@@ -464,6 +469,7 @@ export function GenerationView({
      poll fires. Real call sites always come through Layout. */
   const outletCtx = useOutletContext<LayoutContext | null>();
   const ttsLifecycle: TtsLifecycle = outletCtx?.ttsLifecycle ?? INERT_TTS_LIFECYCLE;
+  const enginesInUse = useAppSelector(selectEnginesInUse);
 
   /* Sub-chapter "lines synthesised" counter so the user has a tangible
      "something is happening" signal at every tick (real backend emits one
@@ -509,17 +515,34 @@ export function GenerationView({
             <span>
               Engine: <span className="font-medium text-ink/70">{engineLabel}</span>
             </span>
-            <ModelControlPill
-              kind="tts"
-              state={ttsLifecycle.state}
-              unreachableLabel="Sidecar process not running"
-              onLoad={() => {
-                void ttsLifecycle.onLoad();
-              }}
-              onStop={() => {
-                void ttsLifecycle.onStop();
-              }}
-            />
+            {enginesInUse.has('kokoro') && (
+              <ModelControlPill
+                kind="tts"
+                engineLabel="Kokoro"
+                state={ttsLifecycle.kokoro.state}
+                unreachableLabel="Sidecar process not running"
+                onLoad={() => {
+                  void ttsLifecycle.kokoro.onLoad();
+                }}
+                onStop={() => {
+                  void ttsLifecycle.kokoro.onStop();
+                }}
+              />
+            )}
+            {enginesInUse.has('coqui') && (
+              <ModelControlPill
+                kind="tts"
+                engineLabel="Coqui XTTS"
+                state={ttsLifecycle.coqui.state}
+                unreachableLabel="Sidecar process not running"
+                onLoad={() => {
+                  void ttsLifecycle.coqui.onLoad();
+                }}
+                onStop={() => {
+                  void ttsLifecycle.coqui.onStop();
+                }}
+              />
+            )}
           </p>
           {ttsLifecycle.evictionNotice && (
             <p className="mt-2 inline-flex items-center gap-2 text-[11px] text-emerald-700">
