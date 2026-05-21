@@ -608,6 +608,177 @@ describe('synthesiseChapter auto-retry on transient TTS failures', () => {
   });
 });
 
+/* ── Chapter-title beat + leading/trailing silence ───────────────────
+   Production bug: chapter titles were never voiced and chapters
+   concatenated gaplessly. The synth path now prepends
+   `[1.5s silence] + [narrator voicing the title] + [1.5s silence]`
+   when the caller supplies a `chapterTitleNarration`. These tests pin
+   the contract: title is narrator-voiced, silences bracket it at the
+   title's sample rate, body segments stay monotonic after the prepend,
+   and the legacy no-title path keeps the original zero-padding shape. */
+describe('synthesiseChapter chapter-title beat', () => {
+  it('prepends a narrator-voiced title segment with leading + trailing silence', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+      { id: 'keefe', name: 'Keefe', gender: 'male', attributes: ['witty'] },
+    ];
+    const provider = makeProvider();
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'keefe', 'Body line one.')],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      chapterTitleNarration: 'Chapter 2. Moolark.',
+    });
+
+    /* Two provider calls: title first, then body. The title's voiceName
+       comes from the narrator bucket — confirms the narrator routing
+       runs for the synthetic title beat the same way it runs for the
+       narrator's own sentences. */
+    expect(provider.calls).toHaveLength(2);
+    expect(provider.calls[0].text).toBe('Chapter 2. Moolark.');
+    expect(GEMINI_NARRATOR_VOICES, `title voiced by ${provider.calls[0].voiceName}`).toContain(
+      provider.calls[0].voiceName,
+    );
+
+    /* Title segment lands first with kind: 'title', empty sentenceIds[],
+       and starts AFTER the 1.5s leading silence. */
+    expect(result.segments[0].kind).toBe('title');
+    expect(result.segments[0].characterId).toBe('narrator');
+    expect(result.segments[0].sentenceIds).toEqual([]);
+    expect(result.segments[0].startSec).toBeCloseTo(1.5, 3);
+
+    /* Body segment starts AFTER the title beat + the 1.5s post-title
+       silence. The fake provider returns a 1-sample (≈ 41.7 µs at
+       24 kHz) PCM for the title, so titleEndSec ≈ 1.5 + 0.0000417 and
+       body startSec ≈ 1.5 + 0.0000417 + 1.5 ≈ 3.0. */
+    expect(result.segments[1].kind).toBeUndefined();
+    expect(result.segments[1].characterId).toBe('keefe');
+    expect(result.segments[1].startSec).toBeCloseTo(3.0, 2);
+  });
+
+  it('skips the title beat AND silence when chapterTitleNarration is empty/blank', async () => {
+    /* Legacy path: callers that don't opt in get the original zero-padding
+       shape. Body segment starts at t=0 exactly. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+    ];
+    const provider = makeProvider();
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'Body only.')],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      chapterTitleNarration: '   ',
+    });
+
+    expect(provider.calls).toHaveLength(1);
+    expect(result.segments).toHaveLength(1);
+    expect(result.segments[0].startSec).toBe(0);
+    expect(result.segments[0].kind).toBeUndefined();
+  });
+
+  it('anchors the chapter sample rate on the title response (Kokoro/Coqui co-cast with title)', async () => {
+    /* When a title is prepended, the title's sampleRate becomes the chapter
+       anchor — NOT the first body group's. Pin: title at 24 kHz, body at
+       22.05 kHz → the final concatenated buffer stays at 24 kHz throughout
+       (the body group gets resampled). Catches a future refactor that
+       accidentally lets the body loop re-anchor mid-chapter. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+      { id: 'elwin', name: 'Elwin', gender: 'male', attributes: ['caring'] },
+    ];
+    let callIndex = 0;
+    const provider: TtsProvider = {
+      async synthesize(_input: SynthesizeInput): Promise<SynthesizeOutput> {
+        const sampleRate = callIndex++ === 0 ? 24000 : 22050;
+        const pcm = Buffer.alloc(10 * 2);
+        for (let i = 0; i < 10; i++) pcm.writeInt16LE(1000 + i * 100, i * 2);
+        return { pcm, sampleRate, mimeType: 'audio/pcm' };
+      },
+    };
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'elwin', 'Body line at a mismatched rate.')],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      chapterTitleNarration: 'Chapter 1.',
+    });
+
+    expect(result.sampleRate).toBe(24000);
+    /* Two segments: title (kind: 'title') + one body group. Both timed
+       against the 24 kHz anchor. */
+    expect(result.segments).toHaveLength(2);
+    expect(result.segments[0].kind).toBe('title');
+    expect(result.segments[1].startSec).toBeGreaterThanOrEqual(result.segments[0].endSec);
+  });
+
+  it('fires onTitleStart and onTitleComplete around the title synth call', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+    ];
+    const events: string[] = [];
+    const provider: TtsProvider = {
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        events.push(`synth:${input.text}`);
+        return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'Body.')],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      chapterTitleNarration: 'Chapter 1.',
+      onTitleStart: () => events.push('title-start'),
+      onTitleComplete: ({ accumulatedSec }) => events.push(`title-complete:${accumulatedSec > 1 ? 'past-leading-silence' : 'too-early'}`),
+    });
+
+    /* Ordering: onTitleStart fires BEFORE the title synth (so the SSE
+       stall timer resets), onTitleComplete fires AFTER. Body synth
+       follows. The accumulatedSec at title-complete must be past the
+       1.5 s leading silence — sanity-check that the silence padding
+       actually contributed to runningBytes. */
+    expect(events[0]).toBe('title-start');
+    expect(events[1]).toBe('synth:Chapter 1.');
+    expect(events[2]).toBe('title-complete:past-leading-silence');
+    expect(events[3]).toBe('synth:Body.');
+  });
+
+  it('uses the fallback narrator hint when the cast has no narrator row', async () => {
+    /* Defensive: a cast without a `narrator` row still gets a narrator-bucket
+       voice for the title beat. The fallback character is constructed inline
+       with no gender/age hints; pickVoiceForEngine routes that to the
+       narrator-cool bucket (which IS what we want for chapter titles). */
+    const cast: CastCharacter[] = [
+      { id: 'keefe', name: 'Keefe', gender: 'male', attributes: ['witty'] },
+    ];
+    const provider = makeProvider();
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'keefe', 'Body.')],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      chapterTitleNarration: 'Chapter 1.',
+    });
+
+    expect(provider.calls).toHaveLength(2);
+    expect(GEMINI_NARRATOR_VOICES, `title voiced by ${provider.calls[0].voiceName}`).toContain(
+      provider.calls[0].voiceName,
+    );
+  });
+});
+
 /* ── plan 70d — buildSentenceGroups emits one group per sentence ─────
    Earlier code folded consecutive same-speaker sentences into one
    synth call to cut HTTP roundtrips. That folding produced a 207-
