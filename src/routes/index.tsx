@@ -39,6 +39,7 @@ import { ConfirmMetadataView } from '../views/confirm-metadata';
 import { ChangeLogView } from '../views/change-log';
 import { AccountView } from '../views/account';
 import { RestructureView } from '../views/restructure';
+import { WorktreesView } from '../views/worktrees';
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 import type { Character, Stage, View } from '../lib/types';
@@ -282,6 +283,14 @@ function VoicesRoute() {
 function AccountRoute() {
   useHydrateStage({ kind: 'account' }, []);
   return <AccountView />;
+}
+
+/* Plan 86 — dev-only worktree dashboard. The route exists in all builds
+   (so the back-button doesn't crash if a user manually types it) but the
+   top-bar entry is hidden in production and the server route 404s. */
+function WorktreesRoute() {
+  useHydrateStage({ kind: 'worktrees' }, []);
+  return <WorktreesView />;
 }
 
 export function ChangelogRoute() {
@@ -810,6 +819,7 @@ export const router = createHashRouter([
       { path: 'voices', element: <VoicesRoute /> },
       { path: 'log', element: <ChangelogRoute /> },
       { path: 'account', element: <AccountRoute /> },
+      { path: 'worktrees', element: <WorktreesRoute /> },
       { path: 'books/:bookId/analysing', element: <AnalysingRoute /> },
       { path: 'books/:bookId/confirm', element: <ConfirmRoute /> },
       { path: 'books/:bookId/:view', element: <ReadyRoute /> },
