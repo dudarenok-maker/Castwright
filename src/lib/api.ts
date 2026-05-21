@@ -290,6 +290,15 @@ export interface StreamArgs {
     characters: Record<string, string>;
   }>;
   onTick: (ev: GenerationTick & { type: GenerationTick['type'] }) => void;
+  /** Mock-only: number of chapters to keep in-flight in parallel. Mirrors the
+      server's `GEN_CHAPTER_CONCURRENCY` (default 2 — see plan 87 archive). The
+      real `streamGeneration` ignores this; the mock uses it to interleave SSE
+      events across K chapters so browser-level specs can pin the parallel-SSE
+      contract. Defaults to 2 when unset, capped by the number of queued
+      chapters at tick time. Vitest callers pass through the StreamArgs object;
+      the e2e harness can additionally seed `window.__mockGenConcurrency` to
+      override without touching the middleware. */
+  mockGenConcurrency?: number;
 }
 export interface AudioArgs {
   bookId: string;
@@ -827,35 +836,94 @@ function safeOnTick(onTick: StreamArgs['onTick']): StreamArgs['onTick'] {
   };
 }
 
-function mockStreamGeneration({ getChapters, onTick: rawOnTick }: StreamArgs): () => void {
+function mockStreamGeneration({
+  getChapters,
+  onTick: rawOnTick,
+  mockGenConcurrency,
+}: StreamArgs): () => void {
   const onTick = safeOnTick(rawOnTick);
-  /* Mock the real server's "one progress tick per same-speaker group" cadence
-     well enough that the Generate view's line / character counters tick
-     visibly. Two behaviours that matter:
+  /* Mock the real server's parallel-chapter SSE cadence (plan 87 archive,
+     `GEN_CHAPTER_CONCURRENCY`, default 2). The server keeps K chapters
+     in-flight on a bounded worker pool, so progress / chapter_complete
+     events for multiple chapters interleave on the wire — each keyed by
+     `chapterId`. Three behaviours that matter:
 
-     1. Auto-promote: when the active chapter completes, advance the next
-        queued chapter into in_progress on the next tick — the real server
-        does this implicitly by emitting a `progress` tick for chapter N+1
-        right after chapter N's complete. Without this, the mock just
-        emits `idle` forever once chapter 1 is done, the heartbeat goes
-        cold, and the stall banner pops up while the queue still has work.
-     2. Cycle characters: rotate the active character every few ticks so
-        the per-character `in_progress` pill actually moves through the
-        cast, the active-speaker caption updates, and the user gets a
-        steady "something is happening" signal even before chapter %
-        ticks visibly. */
+     1. K-wide in-flight set: every tick advances every chapter that is
+        currently `in_progress` and emits a `progress` or `chapter_complete`
+        event keyed by that chapter's id. The serial-loop assumption
+        (singular `active`) was the gap plan 87 broke server-side and the
+        reason the parallel SSE orchestration was only server-vitest-pinned,
+        not browser-e2e-pinned.
+     2. Auto-promote on completion: when an in-flight chapter crosses
+        progress >= 1 (chapter_complete), pull the next queued chapter into
+        the set in the SAME tick with its initial 0.01 progress event so
+        the K-wide capacity stays saturated. Without this, the heartbeat
+        goes cold between chapter N's complete and chapter N+1's first
+        progress event and the stall banner pops up while the queue still
+        has work.
+     3. Cycle characters: rotate the active character per chapter every
+        few ticks so the per-character `in_progress` pill walks through
+        the cast and the active-speaker caption updates.
+
+     `mockGenConcurrency` (default 2) caps the in-flight set width and
+     mirrors `GEN_CHAPTER_CONCURRENCY` on the server. Browser-level e2e
+     specs can seed `window.__mockGenConcurrency` to force the value
+     deterministically without re-plumbing the middleware. */
+  const requestedK =
+    mockGenConcurrency ??
+    (typeof window !== 'undefined'
+      ? (window as unknown as { __mockGenConcurrency?: number }).__mockGenConcurrency
+      : undefined) ??
+    2;
+  const targetK = Math.max(1, Math.floor(requestedK));
+
   const tick = () => {
     const chapters = getChapters?.() ?? [];
-    const active = chapters.find((c) => c.state === 'in_progress');
-    if (!active) {
-      const nextUp = chapters.find((c) => c.state === 'queued');
-      if (!nextUp) {
-        onTick({ type: 'idle' });
-        return;
-      }
-      /* Bootstrap the next chapter with a tiny non-zero progress so the
-         live `chapter.state` flips to in_progress on the slice and our
-         next tick finds it. */
+    const inFlight = chapters.filter((c) => c.state === 'in_progress');
+    const queued = chapters.filter((c) => c.state === 'queued');
+
+    if (inFlight.length === 0 && queued.length === 0) {
+      onTick({ type: 'idle' });
+      return;
+    }
+
+    /* Advance every chapter currently in-flight. Track which ones complete
+       on this tick so we can backfill the K-wide set from `queued` in the
+       same tick. */
+    let completedThisTick = 0;
+    for (const active of inFlight) {
+      const totalLines = active.totalLines || 600;
+      const nextProgress = Math.min(1, (active.progress || 0) + 0.02);
+      const currentLine = Math.round(totalLines * nextProgress);
+      const cast = Object.keys(active.characters).filter(
+        (k) => active.characters[k] !== 'skipped',
+      );
+      const characterId =
+        cast.length > 0
+          ? cast[Math.min(cast.length - 1, Math.floor(nextProgress * cast.length))]
+          : null;
+      if (nextProgress >= 1) completedThisTick += 1;
+      onTick({
+        type: nextProgress >= 1 ? 'chapter_complete' : 'progress',
+        chapterId: active.id,
+        characterId,
+        progress: nextProgress,
+        currentLine,
+        totalLines,
+      });
+    }
+
+    /* Backfill the in-flight set up to K. Two paths land here:
+       1. Cold start: nothing was in-flight (`inFlight.length === 0`), pull
+          min(K, queued.length) chapters in.
+       2. Steady state: a chapter completed this tick, pull `completedThisTick`
+          replacements in (still capped by remaining queue).
+       Both paths emit an initial 0.01 `progress` event per pulled chapter,
+       interleaved with the in-flight ticks already emitted above. */
+    const stillInFlight = inFlight.length - completedThisTick;
+    const slotsToFill = Math.max(0, targetK - stillInFlight);
+    const toPromote = queued.slice(0, Math.min(slotsToFill, queued.length));
+    for (const nextUp of toPromote) {
       onTick({
         type: 'progress',
         chapterId: nextUp.id,
@@ -864,27 +932,7 @@ function mockStreamGeneration({ getChapters, onTick: rawOnTick }: StreamArgs): (
         currentLine: 0,
         totalLines: nextUp.totalLines || 600,
       });
-      return;
     }
-    const totalLines = active.totalLines || 600;
-    const nextProgress = Math.min(1, (active.progress || 0) + 0.02);
-    const currentLine = Math.round(totalLines * nextProgress);
-    /* Pick a non-skipped character to surface as the live speaker, cycling
-       proportionally with progress so the per-character pill walks through
-       the cast in roughly the order they appear. */
-    const cast = Object.keys(active.characters).filter((k) => active.characters[k] !== 'skipped');
-    const characterId =
-      cast.length > 0
-        ? cast[Math.min(cast.length - 1, Math.floor(nextProgress * cast.length))]
-        : null;
-    onTick({
-      type: nextProgress >= 1 ? 'chapter_complete' : 'progress',
-      chapterId: active.id,
-      characterId,
-      progress: nextProgress,
-      currentLine,
-      totalLines,
-    });
   };
   const handle = setInterval(tick, 1200);
   return () => clearInterval(handle);
