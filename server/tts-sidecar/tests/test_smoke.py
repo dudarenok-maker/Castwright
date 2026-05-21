@@ -67,6 +67,13 @@ class _FakeEngine(main.CoquiEngine):
 def client(monkeypatch):
     fake = _FakeEngine(sleep_sec=0.0)
     monkeypatch.setitem(main.ENGINES, "coqui", fake)
+    # Remove the real Kokoro engine before TestClient triggers the startup
+    # event — the eager preload (`_preload_default_engines` in main.py) would
+    # otherwise flip `kokoro_loaded`/`kokoro_loading` to True and break the
+    # "fresh sidecar" invariant the assertions below pin. The Kokoro health
+    # path handles a missing engine by returning False/False, which matches
+    # what test_health_smoke asserts.
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
     with TestClient(main.app) as c:
         # Attach fake so tests can inspect calls.
         c.app_state_fake_engine = fake  # type: ignore[attr-defined]
