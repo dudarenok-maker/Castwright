@@ -49,7 +49,15 @@ Source: net-new (2026-05-20). Captured during planning of the next full version 
 
 ## Should — important, not blocking ship
 
-(empty — Should #2 verify-cache fast shipped in plan 54 on 2026-05-19.)
+### 1. Manuscript view virtualisation
+
+Source: net-new (2026-05-21). Spun off from the perf-tuning survey at `~/.claude/plans/want-to-focus-this-bright-donut.md` (item C1). Explicitly demoted from MUST during the survey lock — current feel is bearable, but the manuscript view is the frontend's worst offender (renders every sentence/segment as DOM nodes with per-boundary listeners) and chapters above ~300 sentences feel janky during boundary drag.
+
+- _What:_ Wrap the segment list in `src/views/manuscript.tsx:507-1040` with a virtualiser (`@tanstack/react-virtual`). Render only segments in the viewport plus a buffer. Adjust the boundary-drag PointerEvent handler at `:524-530` for absolute scroll offsets, and route the inspector's "scroll to selected sentence" through `virtualiser.scrollToIndex`.
+- _Acceptance:_ a 500-sentence chapter mounts with ~20 DOM nodes (not 500) plus the surrounding buffer. Boundary drag stays smooth at any chapter size. The "scroll to selected sentence" affordance still lands on the right sentence with the inspector open. New Vitest cases for virtualised boundary behaviour + one e2e for scroll-to-selected.
+- _Key files:_ `src/views/manuscript.tsx` (segment list + boundary handler); `package.json` (new dep); new Vitest in `src/views/manuscript.test.ts`; new Playwright spec under `e2e/`.
+- _Depends on:_ none.
+- _Benefit (user):_ unblocks long chapters in the manuscript view — today the worst frontend pain point. Pairs with Could #25 (confirm-cast + listen-chapter virtualisation) which reuses the same dep.
 
 ---
 
@@ -253,6 +261,66 @@ Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
 - _Key files:_ grep `src/**/*.tsx` for `group-hover:` / `peer-hover:` / `hover:opacity-0`; apply per-component judgement.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances.
+
+### 21. Within-chapter sentence parallelism
+
+Source: net-new (2026-05-21). Spun off from the perf-tuning survey at `~/.claude/plans/want-to-focus-this-bright-donut.md` (item A2). Stacks on plan 87.
+
+- _What:_ Inside `synthesiseChapter`, dispatch K sentence groups concurrently to the sidecar `/synthesize` (currently 1 at a time per plan 70d). Per-engine determinism + voice non-drift must be re-pinned in `server/tts-sidecar/tests/test_concurrent_synthesis.py`; per-group `onGroupStart` heartbeats must still reset the 30 s stall detector correctly; emitted PCM order preserved by indexing.
+- _Acceptance:_ K parallel sentence groups inside one chapter render with no audible drift artefacts on Coqui (XTTS more drift-prone than Kokoro per plan 70d's findings); the stall watchdog still trips correctly on an actual stall; PCM order matches single-threaded baseline. Pytest pin + Vitest server pin both green.
+- _Key files:_ `server/src/synthesise-chapter.ts:138-145`; `server/tts-sidecar/tests/test_concurrent_synthesis.py` (additional cases).
+- _Depends on:_ plan 87 shipped + measurement showing GPU headroom remains under default chapter concurrency.
+- _Benefit (user):_ another ~2× per chapter on top of plan 87 (so 4× headline if GPU survives). Only worth pursuing once plan 87's envelope is known.
+
+### 22. Both TTS engines resident (Kokoro + XTTS)
+
+Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item A3).
+
+- _What:_ Drop the eviction wiring between Kokoro and XTTS; keep both engines loaded. Per-character voice profiles already carry `overrideTtsVoices: { coqui?, kokoro? }` per CLAUDE.md — pick at synth time. VRAM math (Kokoro 1 GB + XTTS 3 GB + Ollama analyzer ~7 GB = 11 GB on an 8 GB GPU) requires Ollama auto-eviction during generation, with the existing "TTS / Analyzer unloaded to free VRAM" banner.
+- _Acceptance:_ A mixed-engine book (Coqui voice on character A, Kokoro on character B) renders without engine-swap latency between sentences. First XTTS use no longer pays the ~30 s cold-load. Ollama auto-eviction surfaces a clear banner during generation; re-loads on analysis trigger.
+- _Key files:_ `server/tts-sidecar/main.py` (eviction wiring removal); `src/components/model-control-pill.tsx`; analyzer eviction at `server/src/analyzer/ollama.ts:92`.
+- _Depends on:_ none structural. Speed gain conditional on mixed-engine casts.
+- _Benefit (user):_ eliminates the 30 s XTTS cold-load on first use for mixed-engine books; enables fluid engine mixing per character.
+
+### 23. Speculative per-chapter Phase 1 (analyzer)
+
+Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item B2).
+
+- _What:_ Drop the global roster gate at `server/src/routes/analysis.ts:2031-2055`. Once chapter N's Phase 0 completes, fire its Phase 1 against the chapter-local roster; reconcile global character ids at the end by rewriting attributions whose character was a duplicate of one in the merged roster.
+- _Acceptance:_ A long book starts producing attribution results visibly earlier than today (no Phase 0 → Phase 1 wall). Duplicate-character normalisation across chapters (e.g. "Mom" in ch1 == "Mother" in ch7) is correct. Manual cowork flow (`server/handoff/`) still works or is explicitly opt-out.
+- _Key files:_ `server/src/routes/analysis.ts:2031-2055`; `server/src/analyzer/cache.ts` (invalidation rules).
+- _Depends on:_ plan 88 shipped (per-phase analyzer split must land first to keep cache shapes simple).
+- _Benefit (user):_ ~30% end-to-end faster on long books. High regression surface — pursue only if plan 88 leaves attribution latency biting.
+
+### 24. Per-call local→Gemini analyzer overflow
+
+Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item B4).
+
+- _What:_ Extend `FallbackAnalyzer` (`server/src/analyzer/index.ts:159-210`) to route partial load to Gemini when local Ollama is slow (not just unreachable). Different from plan 88's per-phase split — this is per-call. Roster names + attribution patterns must normalise across the mixed-analyzer run to avoid duplicate characters.
+- _Acceptance:_ With both local Ollama and Gemini configured, long-book analysis bursts overflow to Gemini under local slowness; the final roster contains no duplicates from cross-analyzer name variants.
+- _Key files:_ `server/src/analyzer/index.ts:159-210`; `server/src/analyzer/select-analyzer.ts`.
+- _Depends on:_ plan 88 shipped (its per-phase plumbing is the seam this builds on).
+- _Benefit (user):_ uses idle Gemini quota when local is the bottleneck. Lower priority than plan 88's bucketed split.
+
+### 25. Confirm-cast + listen-chapter list virtualisation
+
+Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C4).
+
+- _What:_ Apply Should #1's `@tanstack/react-virtual` pattern to `src/views/confirm-cast.tsx:187-205` and `src/components/listen/listen-player-region.tsx:93-117`. Same virtualiser dep + helper shape.
+- _Acceptance:_ Books with >40 characters mount without confirm-cast jank; books with >40 chapters mount without listen-region jank. Existing tests still green.
+- _Key files:_ `src/views/confirm-cast.tsx`; `src/components/listen/listen-player-region.tsx`; shared dep from Should #1.
+- _Depends on:_ Should #1 (shares the virtualiser dep + helper — pair to amortise dep adoption).
+- _Benefit (user):_ only matters above ~40 rows. Most books are below the threshold today.
+
+### 26. Waveform memoisation
+
+Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C6).
+
+- _What:_ In `src/components/waveform.tsx`, stabilise the 48-bar `useMemo` (memo key invariant against re-mount) and lift the animation interval to the parent so it ticks once per listen-view mount (not per waveform instance).
+- _Acceptance:_ Listen view with N visible waveforms ticks on one shared interval (not N intervals); the rendered output is visually unchanged from today.
+- _Key files:_ `src/components/waveform.tsx`; parent in `src/components/listen/listen-player-region.tsx`.
+- _Depends on:_ none.
+- _Benefit (technical):_ avoids 480+ DOM mutations per 800 ms when many waveforms are visible simultaneously. Low real-world impact today (rare to see >3 waveforms at once).
 
 ---
 
