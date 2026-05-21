@@ -336,11 +336,10 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
       showError,
       pushToast: vi.fn(),
       ttsLifecycle: {
-        state: 'unreachable',
+        coqui: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
+        kokoro: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
         evictionNotice: null,
         loadErrorNotice: null,
-        onLoad: vi.fn(async () => {}),
-        onStop: vi.fn(async () => {}),
         dismissNotices: vi.fn(),
       },
     };
@@ -455,11 +454,10 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
       showError,
       pushToast: vi.fn(),
       ttsLifecycle: {
-        state: 'unreachable',
+        coqui: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
+        kokoro: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
         evictionNotice: null,
         loadErrorNotice: null,
-        onLoad: vi.fn(async () => {}),
-        onStop: vi.fn(async () => {}),
         dismissNotices: vi.fn(),
       },
     };

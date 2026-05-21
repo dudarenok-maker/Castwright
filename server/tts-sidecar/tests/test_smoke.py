@@ -74,10 +74,11 @@ def client(monkeypatch):
 
 
 def test_health_smoke(client: TestClient) -> None:
-    """/health returns the engines registry + load state. The new
-    model_loaded/loading/device fields drive the in-app Load/Stop pill —
-    if they drift, the UI can't tell idle from ready and the button gets
-    stuck on the wrong action."""
+    """/health returns the engines registry + load state. The
+    model_loaded/loading/device fields drive the Coqui pill;
+    kokoro_loaded/kokoro_loading drive the Kokoro pill. Both must surface
+    from the same single response so the consolidated frontend hook stays
+    on one /health poll per tick (see useTtsLifecycle invariant)."""
     r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
@@ -87,6 +88,10 @@ def test_health_smoke(client: TestClient) -> None:
     assert body["model_loaded"] is False
     assert body["loading"] is False
     assert body["device"] is None
+    # Kokoro fields must be present (False/False on a fresh sidecar where
+    # the eager preload hook hasn't fired — same shape the frontend reads).
+    assert body["kokoro_loaded"] is False
+    assert body["kokoro_loading"] is False
 
 
 def test_health_reflects_loaded_state(client: TestClient) -> None:

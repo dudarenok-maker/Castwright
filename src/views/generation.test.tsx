@@ -11,6 +11,7 @@ import { uiSlice } from '../store/ui-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { castSlice } from '../store/cast-slice';
 import { librarySlice } from '../store/library-slice';
+import { accountSlice } from '../store/account-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { generationStreamMiddleware } from '../store/generation-stream-middleware';
 import { GenerationView } from './generation';
@@ -169,8 +170,14 @@ function makeStore() {
       changeLog: changeLogSlice.reducer,
       cast: castSlice.reducer,
       library: librarySlice.reducer,
+      /* Account slice powers the engines-in-use selector that determines
+         which engine pill(s) render in the Generate header. Defaults to
+         the same Coqui modelKey the view receives so the existing button-
+         routing assertions ("Load model (tts model)") still find the pill. */
+      account: accountSlice.reducer,
     },
   });
+  store.dispatch(accountSlice.actions.setDefaultTtsModelKey('coqui-xtts-v2'));
   store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
   store.dispatch(
     manuscriptSlice.actions.hydrateFromAnalysis({
