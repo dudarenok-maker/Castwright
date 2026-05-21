@@ -546,3 +546,55 @@ describe('ConfirmCastView — mobile + tablet layout (plan 81 wave 3)', () => {
     expect(actionRow.className).toMatch(/sm:flex-row/);
   });
 });
+
+/* Plan 93 — character-list virtualisation threshold. Below 40 rows the
+   flat-render path stays for short casts (where windowing is overhead);
+   above it, useWindowVirtualizer takes over. jsdom can't measure layout
+   so we only pin the gate's two paths via the `confirm-cast-virtual-container`
+   testid; the actual windowed render is covered by manuscript's e2e
+   pattern (`window.__store__` injection) — list-virt's e2e equivalent
+   is in the existing responsive coverage spec. */
+describe('ConfirmCastView — virtualisation threshold (plan 93)', () => {
+  function manyCharacters(n: number): Character[] {
+    return Array.from({ length: n }, (_, i) => ({
+      id: `c${i + 1}`,
+      name: `Char ${i + 1}`,
+      role: 'Lead',
+      color: 'slot-4',
+      lines: 10,
+      scenes: 2,
+      attributes: ['warm'],
+      voiceState: 'generated',
+      gender: 'female',
+      ageRange: 'adult',
+    }));
+  }
+
+  function renderWithCount(n: number) {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+    return render(
+      <Provider store={store}>
+        <ConfirmCastView
+          characters={manyCharacters(n)}
+          library={[]}
+          title="Big Cast Book"
+          onOpenProfile={() => {}}
+          onConfirm={() => {}}
+          onReanalyse={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('renders the flat character list below the 40-row threshold', () => {
+    renderWithCount(20);
+    expect(screen.queryByTestId('confirm-cast-virtual-container')).toBeNull();
+    /* Sanity — sample row mounted. */
+    expect(screen.getByRole('heading', { name: 'Char 1' })).toBeInTheDocument();
+  });
+
+  it('switches to the virtualised container at or above the threshold', () => {
+    renderWithCount(60);
+    expect(screen.getByTestId('confirm-cast-virtual-container')).toBeInTheDocument();
+  });
+});
