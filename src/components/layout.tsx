@@ -706,6 +706,11 @@ export function Layout() {
         onOpenVoices={() => dispatch(uiActions.openVoices())}
         onOpenChangelog={() => dispatch(uiActions.openChangelog())}
         onOpenAccount={() => dispatch(uiActions.openAccount())}
+        /* Plan 86 — dev-only worktree dashboard. Production builds get
+           undefined, which the top-bar treats as "no link". */
+        onOpenWorktrees={
+          import.meta.env.DEV ? () => dispatch(uiActions.openWorktrees()) : undefined
+        }
         userDisplayName={userDisplayName}
       />
 

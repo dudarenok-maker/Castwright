@@ -153,6 +153,8 @@ app.use('/cert', certRootRouter); // plan 81 — mounts /root.crt (mkcert root C
 app.use('/api/books', shareRouter); // mounts /:bookId/share (POST — mint a slugged share URL — plan 67)
 app.use('/', sharePublicRouter); // mounts /share/:slug (public-facing M4B proxy — plan 67)
 app.use('/api/books', revisionsRouter); // mounts /:bookId/revisions (drift diff over segments snapshots)
+import { worktreesRouter } from './routes/worktrees.js';
+app.use('/api', worktreesRouter); // plan 86 — dev-only GET /worktrees (404s in production)
 app.use('/api/voices', voicesRouter); // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter); // mounts POST /:voiceId/sample
 app.use('/api/sidecar', sidecarHealthRouter); // mounts GET /health

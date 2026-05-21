@@ -3248,6 +3248,26 @@ const real = {
     }
     return res.json();
   },
+  /* Plan 86 — dev-only worktree dashboard backing. The server route 404s
+     in production; the api caller surfaces that as a thrown Error so the
+     view shows a "dev-only" message. */
+  getWorktrees: async (): Promise<{
+    worktrees: Array<{
+      path: string;
+      branch: string | null;
+      head: string | null;
+      ports: Record<string, string>;
+      vitePort: number;
+      alive: boolean;
+    }>;
+  }> => {
+    const res = await fetch('/api/worktrees');
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Worktrees fetch failed (${res.status}): ${detail || res.statusText}`);
+    }
+    return res.json();
+  },
 };
 
 const mock = {
@@ -3316,6 +3336,20 @@ const mock = {
   acceptChapterRevision: mockAcceptChapterRevision,
   rejectChapterRevision: mockRejectChapterRevision,
   pollRevisions: mockPollRevisions,
+  /* Plan 86 — mock returns an empty worktrees list. Production gets
+     this same shape via the real api when NODE_ENV !== 'production'. */
+  getWorktrees: async (): Promise<{
+    worktrees: Array<{
+      path: string;
+      branch: string | null;
+      head: string | null;
+      ports: Record<string, string>;
+      vitePort: number;
+      alive: boolean;
+    }>;
+  }> => {
+    return { worktrees: [] };
+  },
 };
 
 export const api = USE_MOCKS ? mock : real;
