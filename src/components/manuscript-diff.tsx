@@ -18,12 +18,16 @@
 
 import { useEffect, useMemo, useRef } from 'react';
 import { type SentenceDiff, charDiff, summariseDiff } from '../lib/manuscript-diff';
+import { type OverrideConflict } from '../lib/chapter-override-conflict';
 import { IconClose } from '../lib/icons';
 
 interface ManuscriptDiffModalProps {
   open: boolean;
   bookTitle: string | null;
   diff: SentenceDiff[];
+  /* Plan 84 — renamed-chapter conflicts surfaced by detectOverrideConflicts.
+     Optional for older call sites; render a banner when non-empty. */
+  overrideConflicts?: OverrideConflict[];
   onApply: () => void;
   onDiscard: () => void;
 }
@@ -32,6 +36,7 @@ export function ManuscriptDiffModal({
   open,
   bookTitle,
   diff,
+  overrideConflicts,
   onApply,
   onDiscard,
 }: ManuscriptDiffModalProps) {
@@ -102,6 +107,45 @@ export function ManuscriptDiffModal({
                 <span className="font-semibold text-ink">{counts.added}</span> added,{' '}
                 <span className="font-semibold text-ink">{counts.removed}</span> removed
               </p>
+              {overrideConflicts && overrideConflicts.length > 0 && (
+                <div
+                  className="mt-3 rounded-xl border border-amber-300/60 bg-amber-50 px-4 py-3 text-xs text-amber-900"
+                  data-testid="diff-override-conflicts"
+                >
+                  <p className="font-semibold">
+                    {overrideConflicts.length} renamed{' '}
+                    {overrideConflicts.length === 1 ? 'chapter does' : 'chapters do'} not match
+                    the new manuscript
+                  </p>
+                  <p className="mt-1 leading-relaxed">
+                    Your manual chapter rename
+                    {overrideConflicts.length === 1 ? ' will be cleared' : 's will be cleared'}{' '}
+                    when you apply — the new manuscript&apos;s parsed titles will win. Re-apply
+                    the rename
+                    {overrideConflicts.length === 1 ? '' : 's'} from the chapter list afterward
+                    if you still want{overrideConflicts.length === 1 ? ' it' : ' them'}.
+                  </p>
+                  <ul className="mt-2 space-y-1 list-disc pl-4">
+                    {overrideConflicts.slice(0, 5).map((c) => (
+                      <li key={c.oldChapterId}>
+                        <span className="font-medium">
+                          Chapter {c.oldChapterId}: &ldquo;{c.oldTitle}&rdquo;
+                        </span>
+                        {c.newChapterId === -1 ? (
+                          <> &rarr; removed</>
+                        ) : (
+                          <> &rarr; now &ldquo;{c.newTitle}&rdquo;</>
+                        )}
+                      </li>
+                    ))}
+                    {overrideConflicts.length > 5 && (
+                      <li className="text-amber-700">
+                        and {overrideConflicts.length - 5} more
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
             </div>
             <button
               onClick={onDiscard}
