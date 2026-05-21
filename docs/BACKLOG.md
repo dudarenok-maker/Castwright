@@ -45,16 +45,6 @@ Source: net-new (2026-05-20). Captured during planning of the next full version 
 - _Depends on:_ none structural. Reuses the existing sidecar load/unload + analyzer auto-eviction pattern (`POST /api/sidecar/{load,unload}` + `POST /api/ollama/unload` per `server/src/analyzer/ollama.ts:92`), the half-extended `BaseVoice.language` field, the per-engine `overrideTtsVoices` cast map, the tag-filter intersection at `src/store/library-slice.ts:111`, Vitest + RTL + Playwright harnesses, and the Kokoro install script as the shape reference for the new Qwen3 installer.
 - _Benefit (user / architectural):_ unlocks Russian (and arbitrary future languages) as a first-class concept — Russian books play Russian audio with Russian voices, no cross-language artefacts. The BCP-47-string contract (vs. closed enum) makes adding Spanish / German / etc. a UI-list change rather than a contract migration. Engine choice (Qwen3 over XTTS) preserves the option to monetize: XTTS's CPML is non-commercial-only; Qwen3-TTS is Apache 2.0. Critical for the next full version update per user direction.
 
-### 2. Mobile + tablet support (LAN-accessible over HTTPS)
-
-Source: net-new (2026-05-20). User-flagged as the next big change: "make app mobile and tablet friendly, as currently most of it does not work on these devices; when server is running on local machine I should be able to use the rest of mobile screen or my tablet." Full plan + wave decomposition in [`features/81-mobile-tablet-support.md`](features/81-mobile-tablet-support.md).
-
-- _What:_ Six-wave round. **(1) LAN + HTTPS baseline** — `npm run dev:lan` + `npm run start:lan` + `npm run install:cert-mobile` scripts; `LAN_HTTPS=1` Node env flag flips to `https.createServer` with mkcert-generated certs; new `GET /api/lan-urls` + `GET /cert/root.crt` routes; `vite-plugin-mkcert` for dev HMR; Playwright `projects` array extends to three (`chromium` + `mobile-chrome` Pixel 7 + `tablet-chrome` iPad Pro 11) with visual-snapshot baselines per project. **(2) Responsive shell** — `src/components/layout.tsx` top-bar overflow menu under `md:`, `src/components/mini-player.tsx` sticky-bottom-bar on mobile, `src/modals/` infrastructure makes modals full-screen on phone / dialog on tablet+, touch-target audit (≥44×44 for all primary controls). **(3) Per-view responsive (6 parallel agents on isolated worktrees)** — `src/views/manuscript.tsx` 3-pane → drawer-based on mobile; `src/views/cast.tsx` 8-col table → card-list on mobile, library aside → bottom sheet; `src/views/listen.tsx` + 3 sub-components stack vertically; `src/views/confirm-cast.tsx` fixed 340px cards → fluid; `src/views/generation.tsx` add `md:` middle state; `src/views/books.tsx` 1/2/3-col responsive. **(4) Touch affordances** — tap-to-assign voice (additive to drag-and-drop), tap-revealed Split/Merge buttons on manuscript boundaries (additive to boundary drag), hover-reveal audit (`@media (hover: none)` fallback). **(5) Full e2e mobile coverage** — `e2e/responsive-coverage.spec.ts` runs every view × every project + asserts no horizontal overflow. **(6) Ship** — status → stable, BACKLOG entries removed, plan moves to archive, CLAUDE.md gains mobile-testing protocol section.
-- _Acceptance:_ Cold-install on a clean dev box: `mkcert -install` succeeds → `npm install` → `npm run dev:lan` prints `Network: https://192.168.x.x:5174` → no browser warning on dev box. `npm run install:cert-mobile` prints QR + per-OS instructions → user installs root CA on phone → `https://192.168.x.x:5174` from phone Safari/iOS shows lock icon, no warning. Phone (portrait 375×667 + landscape 667×375) and tablet (portrait 768×1024 + landscape 1024×768) drive every view (Books → Upload → Analysing → Confirm cast → Cast → Manuscript → Generation → Listen) with no horizontal scroll, ≥44×44 tap targets, and the existing concurrent-multibook invariant honoured (analysis pill + generation pill visible regardless of which book's view is active, even when collapsed into the top-bar overflow menu). Drag-and-drop voice + boundary drag still work on desktop (zero regression); tap-to-assign + Split/Merge buttons work on mobile. Three Playwright projects pass `npm run test:e2e` green with per-view visual snapshots blessed. `npm run verify` stays under 5 min on warm cache (if mobile + tablet e2e blows the budget, fall back to `npm run test:e2e:full` for the full battery + keep `test:e2e` desktop-only in pre-push).
-- _Key files:_ `vite.config.ts` (+`vite-plugin-mkcert`), `server/src/index.ts` (+`https.createServer` gate, +`/api/lan-urls` route, +`/cert/root.crt` static route, `enumerateLanUrls` emits `https://...:8443` under `LAN_HTTPS=1`), `playwright.config.ts:60` (projects array), `package.json` (3 new scripts), new `scripts/print-cert-install-instructions.mjs`. Per-view: `src/views/{manuscript,cast,listen,confirm-cast,generation,upload,books}.tsx`, `src/components/listen/*.tsx`, `src/components/voice-library-panel.tsx`. Chrome: `src/components/layout.tsx`, `src/components/mini-player.tsx`, `src/modals/` enumeration. Docs: `docs/features/81-mobile-tablet-support.md`, `docs/features/INDEX.md`, `docs/BACKLOG.md`, `CLAUDE.md` (Wave 6 — Mobile testing protocol section).
-- _Depends on:_ none structural. Reuses `enumerateLanUrls` (already exists in `server/src/index.ts`), the existing `hidden md:block` Tailwind idiom (`src/components/mini-player.tsx:77`), `playwright.config.ts:45` per-platform snapshot template (extends with `{project}` segment), Vitest + RTL + Playwright harnesses, and the existing drag-and-drop infrastructure in `src/views/cast.tsx:52-58` + `src/views/manuscript.tsx`. Wave 3's parallel-agent reconciliation pattern matches plan 70b's multi-part feature bundle.
-- _Benefit (user / architectural):_ unblocks "drive the app from a tablet while the server runs on the dev box" — the next big UX gate before alpha distribution. Architectural: establishes the responsive breakpoint contract + touch-equivalence rule that future view work follows by convention. Technical: Playwright mobile + tablet projects mean every future PR is auto-gated on mobile regressions, not ship-and-pray.
-
 ---
 
 ## Should — important, not blocking ship
@@ -262,6 +252,66 @@ Source: net-new (2026-05-20). Spun off from plan 78 chapter-rename × plan 74 ma
 - _Key files:_ `src/components/manuscript-diff.tsx` (modal UI); `src/store/manuscript-slice.ts` (`previewReuploadDiff` / `applyReupload`); maybe a new `src/lib/chapter-override-conflict.ts` helper; `server/src/routes/book-state.ts` (PUT state path that lands the resolved overrides).
 - _Depends on:_ plan 74 shipped, plan 78 shipped.
 - _Benefit (user):_ closes the long-tail edge case where a re-upload silently mis-attributes a user's manual rename. Today an override on chapter 2 of the old manuscript stays attached to "chapter id 2" of the new one, which may be entirely different content.
+
+### 20. Non-blocking GH Actions workflow for `npm run test:e2e:mobile`
+
+Source: net-new (2026-05-21). Spun off from plan 81 wave 5 (PR #92).
+
+- _What:_ Add a `.github/workflows/e2e-mobile.yml` job that runs `npm run test:e2e:mobile` on every PR targeting `main`, set `continue-on-error: true` so it shows status without blocking merges. Visibility-only — the pre-push gate stays chromium-only (under the 5 min budget that plan 81 set).
+- _Acceptance:_ A PR that breaks mobile-chrome layout shows a red but non-blocking check on the PR page. A PR that doesn't touch UI shows green. Failure status surfaces in the merge UI as "Mobile e2e — failing (non-blocking)".
+- _Key files:_ new `.github/workflows/e2e-mobile.yml` mirroring `verify.yml`'s setup (node, npm cache, chromium install) but invoking `npm run test:e2e:mobile` instead of `npm run verify`. Concurrency `cancel-in-progress` per PR ref to avoid stacking runs.
+- _Depends on:_ plan 81 shipped (which added the `test:e2e:mobile` script).
+- _Benefit (technical):_ catches mobile regressions in PRs without blowing the pre-push budget. Two-tier gate — mobile is opt-in for local iteration but mandatory-visibility in CI.
+
+### 21. Bless mobile + tablet visual-snapshot baselines per Playwright project
+
+Source: net-new (2026-05-21). Plan 81 wave 5 follow-up.
+
+- _What:_ Run `npx playwright test --update-snapshots --project=mobile-chrome` + `--project=tablet-chrome` to capture per-project visual baselines for the six `visual.spec.ts` views (library, upload, analysing, confirm, ready/manuscript, listen). Commit them under `e2e/win32/visual.spec.ts/<project>/<view>.png` per the existing snapshot-path template. Promote `visual.spec.ts` to assert against the captured baselines on all three projects (today it only runs at chromium).
+- _Acceptance:_ `npm run test:e2e:mobile` captures + diffs visual snapshots; a layout drift at any viewport fails the assertion. Per-platform per-project paths: `e2e/win32/visual.spec.ts/mobile-chrome/library.png` etc.
+- _Key files:_ `e2e/visual.spec.ts` (remove the chromium-only assumption; gate test.skip on the per-project baseline dir per the existing `BASELINE_DIR` pattern); regenerated PNGs in `e2e/{win32,linux,darwin}/visual.spec.ts/{mobile-chrome,tablet-chrome}/`; `playwright.config.ts:45` `snapshotPathTemplate` already includes `{platform}` — extend to `{platform}/{project}` if needed.
+- _Depends on:_ plan 81 shipped.
+- _Benefit (technical):_ pixel-level mobile/tablet regression net. Today the no-overflow assertion catches layout breakage but not visual drift; this entry closes that gap.
+
+### 22. Mobile Playwright worker count tuning (browser-launch contention fix)
+
+Source: net-new (2026-05-21). Surfaced during plan 81 wave 5 development.
+
+- _What:_ Running 3 Playwright projects in parallel with the default worker count (~CPU/2) exhausted process slots on the dev box and caused browser-launch timeouts on mobile/tablet specs (real failures: 3 hard, 7 flaky on retry). Reduce `workers` to 1 or 2 for the mobile suite specifically — either via `playwright.config.ts` per-project `workers` override (if Playwright supports per-project workers; if not, via a separate config file invoked by `test:e2e:mobile`).
+- _Acceptance:_ `npm run test:e2e:mobile` runs end-to-end with no browser-launch timeouts on the dev box (current state: ~3/24 fail with `TimeoutError: browserType.launch: Timeout 180000ms exceeded`). Total wall-clock may increase slightly but reliability is more important here than speed for the mobile suite.
+- _Key files:_ `playwright.config.ts` (workers field, or per-project workers if 1.40+ supports it); maybe a new `playwright.mobile.config.ts` if a separate config is cleaner.
+- _Depends on:_ plan 81 shipped.
+- _Benefit (technical):_ unblocks #20 — the non-blocking CI workflow needs reliable mobile e2e to be useful as a signal source.
+
+### 23. In-app LAN HTTPS banner under dev settings
+
+Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
+
+- _What:_ Account settings card showing the current LAN HTTPS URL (from `GET /api/export/lan` when LAN_HTTPS=1) with one-click "Copy URL" + "Install cert on phone" links. The latter opens a doc / route that shows the QR code that `npm run install:cert-mobile` prints to the terminal today. Dev-mode only — hidden in production single-user environments.
+- _Acceptance:_ When LAN_HTTPS=1 is set on the server, the Account view shows a "LAN access" card with the live HTTPS URL + a QR code linking to `/cert/root.crt`. Tapping "Copy URL" puts the URL in the clipboard.
+- _Key files:_ new `src/components/lan-access-card.tsx`; `src/views/account.tsx` (or wherever account settings render) to mount the card; `src/lib/api.ts` to wrap `GET /api/export/lan` if not already wrapped.
+- _Depends on:_ plan 81 shipped.
+- _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
+
+### 24. Broad hover-affordance audit with `coarse-pointer:` Tailwind variant
+
+Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
+
+- _What:_ Plan 81 wave 4 shipped a `coarse-pointer:` Tailwind variant (matches `@media (pointer: coarse)`) for touch devices that don't expose hover. First consumer is the manuscript boundary handle label. Sweep `src/` for all uses of `group-hover:` / `peer-hover:` / `hover:opacity-0` and apply the variant where the hover-revealed content is functional (e.g. action buttons), not purely decorative (e.g. card lift transitions).
+- _Acceptance:_ All action-revealing hover patterns in cast, manuscript, voices, listen, generation views get a `coarse-pointer:opacity-100` (or appropriate) fallback. A test confirms `(pointer: coarse)` simulation reveals the same buttons hover would.
+- _Key files:_ grep `src/**/*.tsx` for `group-hover:` / `peer-hover:` / `hover:opacity-0`; apply per-component judgement.
+- _Depends on:_ plan 81 shipped.
+- _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances.
+
+### 25. Pre-existing pre-commit hook bug — bump-version test leaks GIT_DIR/GIT_WORK_TREE in worktree contexts
+
+Source: net-new (2026-05-21). Surfaced during plan 81 wave 3 cast agent's pre-commit attempts.
+
+- _What:_ `scripts/tests/bump-version.test.mjs` runs `execFileSync('git', ['init', ...])` inside a tempdir, but when the test runs from inside a husky pre-commit hook in a worktree context, git's hook-invocation machinery exports GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE / GIT_PREFIX to every child process. The child `git init` then operates on the parent repo's git directory, polluting the parent branch with "chore: seed" + "drift" commits and failing the assertion "nothing to commit on branch X". Fix: scrub the GIT_* env namespace before every `execFileSync` / `spawnSync` call in this test. An initial fix attempt (build `cleanGitEnv` once at module load, thread `env: cleanGitEnv` into every spawn) compiled but did not fully resolve — the failure persists when the hook actually fires in real conditions. Needs deeper investigation: probably the `bump-version.mjs` script itself (which the test spawns as a child node process) is the actual leak point, since the test scrub doesn't propagate through bump-version's own subprocess invocations.
+- _Acceptance:_ Open a worktree against the repo, make a non-trivial change, run `git commit` — pre-commit hook runs `test:hooks` step including `bump-version.test.mjs` and passes. Currently fails in this scenario.
+- _Key files:_ `scripts/tests/bump-version.test.mjs` (test) and likely also `scripts/bump-version.mjs` (the script under test, which also shells out to git and may need the same scrub).
+- _Depends on:_ none.
+- _Benefit (technical):_ unblocks parallel-worktree development. Today every worktree commit can fail this test, forcing the developer to either re-attempt from the main checkout or bypass with `--no-verify`. Both workarounds are friction.
 
 ---
 
