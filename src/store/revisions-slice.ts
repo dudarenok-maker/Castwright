@@ -1,6 +1,6 @@
 /* Revisions slice — pending A/B diffs awaiting accept/reject, plus drift events. */
 
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { createSelector, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { Revision, DriftEvent, RevisionsResponse, TimelineEntry } from '../lib/types';
 
 export interface RevisionsState {
@@ -252,25 +252,162 @@ function nowIso(): string {
 
 export const revisionsActions = revisionsSlice.actions;
 
+/* `createSelector` input — the flat drift array. Both grouped selectors
+   memoise on this reference, so any reducer that returns a fresh array
+   (applyPoll, dismissDrift, hydrate) invalidates the cache; reducers
+   that don't touch drift keep the cached result. */
+const selectDriftArray = (state: { revisions: RevisionsState }) => state.revisions.drift;
+
 /* Selector: group drift events by `bookId` for the multi-book Drift
    Report. Returns an ordered array so the modal can render one section
    per book. Books with no events are absent. The order preserves the
    first appearance of each bookId in the flat `drift` list — a tiny
    stability detail that keeps the modal from re-shuffling when a poll
-   completes for a different book mid-render. */
-export function selectDriftByBook(state: { revisions: RevisionsState }): Array<{
-  bookId: string;
-  events: DriftEvent[];
-}> {
-  const seen = new Map<string, DriftEvent[]>();
-  for (const event of state.revisions.drift) {
-    const bid = event.bookId ?? '';
-    let bucket = seen.get(bid);
-    if (!bucket) {
-      bucket = [];
-      seen.set(bid, bucket);
+   completes for a different book mid-render. Memoised via createSelector
+   so unrelated re-renders don't rebuild the Map every time (perf — a
+   300-event modal hangs the browser otherwise). */
+export const selectDriftByBook = createSelector(
+  [selectDriftArray],
+  (drift): Array<{ bookId: string; events: DriftEvent[] }> => {
+    const seen = new Map<string, DriftEvent[]>();
+    for (const event of drift) {
+      const bid = event.bookId ?? '';
+      let bucket = seen.get(bid);
+      if (!bucket) {
+        bucket = [];
+        seen.set(bid, bucket);
+      }
+      bucket.push(event);
     }
-    bucket.push(event);
-  }
-  return Array.from(seen.entries()).map(([bookId, events]) => ({ bookId, events }));
+    return Array.from(seen.entries()).map(([bookId, events]) => ({ bookId, events }));
+  },
+);
+
+/* A drift-card group bundles every chapter affected by the same
+   `(bookId, characterId, snapshot)` triple under one card. The compare
+   table at the top of the card is the diff between this snapshot and
+   the current cast profile — by definition identical for every event in
+   the group, so it renders once instead of N times. Per-chapter regen /
+   listen / dismiss controls live in the expandable strip at the bottom
+   of the card. */
+export interface DriftGroup {
+  groupId: string;
+  bookId: string;
+  characterId: string;
+  /** Profile the character had at chapter-render time. Shared by every
+      event in this group (same JSON fingerprint). */
+  snapshot: DriftEvent['snapshot'];
+  /** Live profile from the latest cast. Shared by every event in this
+      group; the modal renders the snapshot→current diff once. */
+  current: DriftEvent['current'];
+  /** Max severity across the group's events — drives the group's pill. */
+  topSeverity: DriftEvent['severity'];
+  severityCounts: Record<DriftEvent['severity'], number>;
+  /** Union of `factor` strings across events in the group — surface what
+      triggered the drift in factor-chip form. */
+  factors: string[];
+  /** Per-chapter events, sorted by chapterId ascending. */
+  events: DriftEvent[];
+  /** True iff every event in the group is `autoQueueable`. Controls the
+      "Auto-regen all" bulk action's availability. */
+  allAutoQueueable: boolean;
 }
+
+const severityRank: Record<DriftEvent['severity'], number> = {
+  severe: 3,
+  moderate: 2,
+  mild: 1,
+};
+
+/* Stable fingerprint of a drift snapshot — same fields the compare card
+   reads. JSON.stringify with sorted keys keeps fingerprints
+   deterministic across reducer runs (Set / Object key order vary). A
+   missing snapshot collapses to a sentinel so older events still group
+   sanely. */
+function snapshotKey(snap: DriftEvent['snapshot']): string {
+  if (!snap) return '∅';
+  const tone = snap.tone ?? {};
+  const attrs = (snap.attributes ?? []).slice().sort().join(',');
+  return [
+    snap.voiceId ?? '',
+    snap.voiceEngine ?? '',
+    snap.gender ?? '',
+    snap.ageRange ?? '',
+    tone.warmth ?? '',
+    tone.pace ?? '',
+    tone.authority ?? '',
+    tone.emotion ?? '',
+    attrs,
+  ].join('|');
+}
+
+/* Collapse a flat list of drift events into `(book × character ×
+   snapshot)` groups. Pure helper — also reused by tests that need to
+   build a `groupsByBook` prop without going through redux. */
+export function groupDriftEvents(events: DriftEvent[]): DriftGroup[] {
+  const byGroupId = new Map<string, DriftGroup>();
+  for (const event of events) {
+    const bid = event.bookId ?? '';
+    const gid = `${bid}|${event.characterId}|${snapshotKey(event.snapshot)}`;
+    let group = byGroupId.get(gid);
+    if (!group) {
+      group = {
+        groupId: gid,
+        bookId: bid,
+        characterId: event.characterId,
+        snapshot: event.snapshot,
+        current: event.current,
+        topSeverity: event.severity,
+        severityCounts: { severe: 0, moderate: 0, mild: 0 },
+        factors: [],
+        events: [],
+        allAutoQueueable: true,
+      };
+      byGroupId.set(gid, group);
+    }
+    group.events.push(event);
+    group.severityCounts[event.severity] = (group.severityCounts[event.severity] ?? 0) + 1;
+    if (severityRank[event.severity] > severityRank[group.topSeverity]) {
+      group.topSeverity = event.severity;
+    }
+    if (event.factor && !group.factors.includes(event.factor)) {
+      group.factors.push(event.factor);
+    }
+    if (!event.autoQueueable) group.allAutoQueueable = false;
+    /* Adopt the freshest `current` projection — server stamps it from
+       the live cast on every emit, so the last-seen wins. Snapshot is
+       immutable per groupId by construction. */
+    if (event.current) group.current = event.current;
+  }
+  /* Sort each group's events by chapterId so the affected-chapters
+     strip reads in order. */
+  return Array.from(byGroupId.values()).map((g) => ({
+    ...g,
+    events: g.events.slice().sort((a, b) => a.chapterId - b.chapterId),
+  }));
+}
+
+/* Selector: collapse the flat drift list into `(book × character ×
+   snapshot)` groups. Replaces the per-event card render in the Drift
+   Report modal — 300 events typically collapse to ~6–18 groups because
+   the same cast edit affects every chapter the character voiced.
+   Memoised via createSelector. */
+export const selectDriftGroupsByBook = createSelector(
+  [selectDriftArray],
+  (drift): Array<{ bookId: string; groups: DriftGroup[] }> => {
+    const byBook = new Map<string, DriftEvent[]>();
+    for (const event of drift) {
+      const bid = event.bookId ?? '';
+      let bucket = byBook.get(bid);
+      if (!bucket) {
+        bucket = [];
+        byBook.set(bid, bucket);
+      }
+      bucket.push(event);
+    }
+    return Array.from(byBook.entries()).map(([bookId, events]) => ({
+      bookId,
+      groups: groupDriftEvents(events),
+    }));
+  },
+);
