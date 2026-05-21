@@ -8,6 +8,15 @@ import { rm } from 'node:fs/promises';
 import { Router, type Request, type Response } from 'express';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { selectAnalyzer, type AnalyzerSelection } from '../analyzer/index.js';
+import {
+  selectAnalyzerForPhase,
+  isPerPhaseModelSelectionActive,
+} from '../analyzer/select-analyzer.js';
+import {
+  createPhaseWatermark,
+  createSequentialWatermark,
+  type PhaseWatermark,
+} from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
@@ -65,6 +74,40 @@ function humanModel(modelId: string | undefined): string {
     which is fine, Ollama tags are already human-readable. */
 function engineLabel(engine: 'local' | 'gemini', modelId: string): string {
   return engine === 'local' ? `Ollama (${modelId})` : humanModel(modelId);
+}
+
+/* Plan 88 — pipelined two-model analyzer.
+   Read the minimum-lag knob from env with a default of 10 chapters.
+   The lag is the user's "keep 10 chapters between Gemma and Gemini"
+   requirement: Phase 1 chapter K dispatches when Phase 0's watermark
+   reaches `K + ANALYZER_PHASE1_MIN_LAG_CHAPTERS`. Set to `0` to release
+   the lag (pipelining still happens; Gemini just dispatches as soon
+   as the per-chapter roster snapshot exists for its chapter).
+   Negative or non-numeric values fall back to the default. */
+const DEFAULT_PHASE1_MIN_LAG_CHAPTERS = 10;
+function readPhase1MinLagChapters(): number {
+  const raw = process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS;
+  if (raw === undefined || raw === null || raw.trim() === '') {
+    return DEFAULT_PHASE1_MIN_LAG_CHAPTERS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_PHASE1_MIN_LAG_CHAPTERS;
+  return Math.floor(parsed);
+}
+
+/* Per-job watermark factory. Real watermark when the per-phase env
+   vars are active AND we're not in legacy manual mode. Otherwise the
+   sequential stub (Phase 1 waits for `markPhase0AllDone()` exactly
+   like today's hard phase gate). Exported for unit testing. */
+export function createWatermarkForJob(): PhaseWatermark {
+  /* Manual cowork loop can't pipeline because it waits for human
+     input between phases — short-circuit to the sequential stub
+     regardless of any per-phase env vars. */
+  const manual = process.env.ANALYZER === 'manual';
+  if (manual || !isPerPhaseModelSelectionActive()) {
+    return createSequentialWatermark();
+  }
+  return createPhaseWatermark({ minLagChapters: readPhase1MinLagChapters() });
 }
 
 /* Front-end palette has 30 character slots (see src/lib/colors.ts
@@ -1398,12 +1441,22 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      response until res.end() is called explicitly (by endJob() inside
      runMainAnalyzerJob), so the response stays open and continues to
      receive broadcast events for the lifetime of the job. */
-  void runMainAnalyzerJob(job, record, selection, { requestedFresh, allowStage1Shrink });
+  void runMainAnalyzerJob(job, record, selection, {
+    requestedFresh,
+    allowStage1Shrink,
+    requestedModel,
+  });
 });
 
 interface MainAnalyzerJobOpts {
   requestedFresh: boolean;
   allowStage1Shrink: boolean;
+  /* Plan 88 — when the route layer received an explicit `model` in the
+     request body, the per-phase env vars are bypassed (UI dropdown
+     wins). Carry this signal through so the job knows whether to ask
+     `selectAnalyzerForPhase` for a Phase-1-specific analyzer or just
+     reuse the main one. */
+  requestedModel: string | undefined;
 }
 
 /* Detached analyzer loop body. Runs as a background promise spawned
@@ -1425,6 +1478,45 @@ async function runMainAnalyzerJob(
   const recordRef = record;
   const activeModelId = selection.model;
   const analyzerLabel = engineLabel(selection.engine, activeModelId);
+
+  /* Plan 88 — pipelined two-model analyzer.
+     When `ANALYZER_PHASE1_MODEL` is set, Phase 1 attribution runs on a
+     DIFFERENT analyzer than Phase 0 cast detection — split the load
+     across two independent free-tier rate-limit buckets. Without a
+     per-request override (`requestedModel` already handled inside
+     `selectAnalyzer`), `selectAnalyzerForPhase('phase1')` honours the
+     env var. Falls back to the same `selection.analyzer` so the legacy
+     single-model path keeps working.
+
+     The watermark seam decides the dispatch contract:
+       - Pipelined mode (per-phase env vars set, not manual): Phase 1
+         worker awaits `markPhase0ChapterComplete(K + LAG)` before
+         dispatching chapter K. Back-pressure semaphore enforced.
+       - Sequential mode (legacy / manual): Phase 1 worker awaits
+         `markPhase0AllDone()` — equivalent to today's hard phase gate.
+     The current route still runs Phase 0 → Phase 0b → Phase 1
+     serially at the code level; the awaits resolve trivially as Phase
+     0b completes. The seam is in place so a follow-up can launch the
+     two pools concurrently without re-plumbing this layer. */
+  const phase1Selection: AnalyzerSelection = opts.requestedModel
+    ? selection
+    : selectAnalyzerForPhase({ phase: 'phase1' });
+  const phase1Analyzer = phase1Selection.analyzer;
+  const phase1ModelId = phase1Selection.model;
+  const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
+  const pipelinedPerPhase =
+    !opts.requestedModel &&
+    isPerPhaseModelSelectionActive() &&
+    process.env.ANALYZER !== 'manual';
+  if (pipelinedPerPhase) {
+    console.log(
+      `[analysis] manuscript=${manuscriptId} pipelined ` +
+        `phase0=${selection.engine}:${selection.model} ` +
+        `phase1=${phase1Selection.engine}:${phase1Selection.model} ` +
+        `lag=${readPhase1MinLagChapters()}`,
+    );
+  }
+  const watermark: PhaseWatermark = createWatermarkForJob();
 
   const send = (payload: unknown) => {
     broadcastToJob(job, payload);
@@ -1930,6 +2022,15 @@ async function runMainAnalyzerJob(
         chapterCast[ch.id] = result.characters;
         completedCast.add(i);
         cache.chapterCast = chapterCast;
+        /* Plan 88 — advance the Phase 0 watermark on each successful
+           per-chapter completion. The watermark is monotonic and
+           tolerates out-of-order completions (worker for chapter N+2
+           may finish before worker for chapter N). With the sequential
+           stub watermark (legacy / manual mode), this is a no-op. With
+           the real watermark (pipelined mode), it releases any parked
+           Phase 1 waiter whose chapter is within `LAG` of the new
+           value. */
+        watermark.markPhase0ChapterComplete(i);
         /* A previously-failed chapter just succeeded on resume — clear it
            from the durable failed-id list AND notify the live view so the
            Retry row disappears immediately, not just on the next book-state
@@ -2123,6 +2224,13 @@ async function runMainAnalyzerJob(
       );
     }
     send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
+    /* Plan 88 — Phase 0b consolidation has produced the final roster
+       (`stage1.characters` above). Release any remaining Phase 1
+       waiters parked on the back-pressure semaphore — they'll dispatch
+       against the final roster regardless of where Gemma's watermark
+       was when they queued. With the sequential stub watermark this is
+       the trigger that lets Phase 1 begin at all. */
+    watermark.markPhase0AllDone();
 
     /* ── Phase 1: parsing and attribution (handoff stage 2, per chapter).
        We split stage 2 by chapter so each call fits well inside the model's
@@ -2134,7 +2242,7 @@ async function runMainAnalyzerJob(
     const totalChapters = record.chapterHints.length;
     log(
       1,
-      `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${analyzerLabel}, one at a time…`,
+      `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${phase1AnalyzerLabel}, one at a time…`,
     );
     log(1, `Estimated stage time: ~${humanSeconds(stage2EstMs)} (based on stage 1 rate)`);
     if (cachedChapterCount > 0) {
@@ -2292,6 +2400,29 @@ async function runMainAnalyzerJob(
 
     async function runChapter(i: number): Promise<void> {
       const ch = recordRef.chapterHints[i];
+      /* Plan 88 — back-pressure semaphore.
+         In sequential mode this resolves on the next microtask because
+         `markPhase0AllDone()` already fired above. In pipelined mode
+         (per-phase env vars set) it blocks until Phase 0's watermark
+         has advanced to `i + ANALYZER_PHASE1_MIN_LAG_CHAPTERS`, OR
+         Phase 0b consolidation has signalled all-done — whichever
+         comes first. If Gemini ever catches up to within `LAG` of
+         Gemma's watermark, this is where the user's "keep 10 chapters
+         between them" rule enforces a wait. */
+      const dispatchWaitStart = Date.now();
+      await watermark.awaitPhase1Dispatch(i);
+      const dispatchWaitMs = Date.now() - dispatchWaitStart;
+      if (dispatchWaitMs > 250) {
+        /* Surface the back-pressure wait so the user can tell Gemini
+           is being deliberately throttled to preserve roster context
+           (rather than mistaking the pause for a stalled model). The
+           >250ms guard avoids spamming logs with sub-second microtask
+           hops in the sequential path. */
+        log(
+          1,
+          `Chapter ${i + 1}/${totalChapters} — held back ${humanSeconds(dispatchWaitMs)} to preserve ${readPhase1MinLagChapters()}-chapter roster lag.`,
+        );
+      }
       const chapterEstMs = chapterEstMsFor(ch.body.length);
       const loggedOverages = new Set<number>();
       const loggedHeartbeats = new Set<number>();
@@ -2339,10 +2470,16 @@ async function runMainAnalyzerJob(
 
       log(
         1,
-        `Chapter ${i + 1}/${totalChapters} — ${ch.title} (${ch.body.length.toLocaleString()} chars, ~${humanSeconds(chapterEstMs)}) via ${analyzerLabel}…`,
+        `Chapter ${i + 1}/${totalChapters} — ${ch.title} (${ch.body.length.toLocaleString()} chars, ~${humanSeconds(chapterEstMs)}) via ${phase1AnalyzerLabel}…`,
       );
       let chapterLastHeartbeatAt = 0;
-      const result = await analyzer.runStage2Chapter(
+      /* Plan 88 — Phase 1 attribution runs on `phase1Analyzer`.
+         In pipelined mode this is a separate model (e.g. Gemini Flash
+         while Phase 0 used Gemma); in legacy / manual mode it's the
+         same instance as `analyzer` so behaviour is unchanged. The
+         throttle event carries the Phase-1 model id so the UI can
+         label the rate-limit pause correctly. */
+      const result = await phase1Analyzer.runStage2Chapter(
         manuscriptId,
         ch.id,
         buildStage2ChapterInbox(manuscriptId, recordRef.title, stage1, ch),
@@ -2373,7 +2510,7 @@ async function runMainAnalyzerJob(
               kind: 'throttle',
               phaseId: 1,
               chapterIndex: i + 1,
-              model: activeModelId,
+              model: phase1ModelId,
               waitMs,
               reason,
             });
