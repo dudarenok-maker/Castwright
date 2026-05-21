@@ -50,6 +50,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [05 — Manual handoff analyzer](05-analyzer-manual-handoff.md) — `ANALYZER=manual` file-drop cowork loop.
 - [06 — Gemini analyzer](06-analyzer-gemini.md) — `ANALYZER=gemini` direct-API mode (also the fallback when local is unreachable).
 - [29 — Local Ollama analyzer + fallback](29-analyzer-ollama-local.md) — `ANALYZER=local` default; auto-fallback to Gemini only when daemon is unreachable.
+- [88 — Analyzer per-phase model](88-analyzer-per-phase-model.md) — Phase 0 / Phase 1 use independent models with a chapter-index warm-up window; `ANALYZER_PHASE{0,1}_MODEL` + `ANALYZER_PHASE1_WARMUP_CHAPTERS` env knobs; rate-limit buckets already per-model.
 - [07 — Audio tag vocabulary](07-audio-tag-vocabulary.md) — `[tag]` vocabulary UI ↔ parser sync.
 - [08 — Audio tag auto-detection](08-audio-tag-auto-detection.md) — Server-side auto-tagging from punctuation/markdown/HTML.
 
@@ -87,6 +88,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [31 — Sticky generation across navigation](31-sticky-generation.md) — Generation survives every navigation except an explicit Stop or queue drain; local-analyzer triggers prompt for pause-and-analyse when a run is alive.
 - [32 — Sticky analysis across navigation](32-sticky-analysis.md) — Analysis survives every navigation except `/pause` or `fresh:true` displacement; server-owned job + multi-subscriber catch-up replay; `AnalysisPill` in the top-bar mirrors the generation pill.
 - [35 — Per-chapter engine drift detection](35-engine-drift-detection.md) — Stamp each rendered chapter with its TTS engine; surface drift when the project's active engine differs.
+- [87 — Parallel chapter synthesis](87-parallel-chapter-synth.md) — Bounded worker pool over chapters via `GEN_CHAPTER_CONCURRENCY` (default 2); per-chapter SSE tracks; sidecar `/synthesize` already concurrent per plan 70d.
 
 ### H. Playback & listen
 
@@ -121,6 +123,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [44 — Pull request hygiene](44-pr-hygiene.md) — PR template + PR-title lint workflow + merge-commit-only / delete-branch-on-merge repo settings; codifies the Summary / Test plan shape PRs #1-#4 already use.
 - [85 — `wt-merge.mjs` reconciliation helper](85-wt-merge-helper.md) — One-command driver for CONTRIBUTING.md "Reconciliation pattern": cut `integration/<date>` off `main`, merge each agent branch in sequence, `npm run verify` between merges, abort on conflict (exit 2) or verify failure (exit 3) with a suggested follow-up that drops the offending branch. Idempotent re-runs; `--dry-run` previews the plan.
 - [86 — Live worktree dashboard](86-worktree-dashboard.md) — Dev-only `#/worktrees` view + `GET /api/worktrees` route. Lists every git worktree visible to `git worktree list --porcelain` with its branch, ports, and a live TCP probe of each VITE_PORT. Click a green row → opens that worktree's dev URL in a new tab. Top-bar `wt` chip gated on `import.meta.env.DEV`; server route 404s in production.
+- [89 — Frontend perf pass](89-frontend-perf-pass.md) — Broadcast-middleware diffing + `useAppSelector` shallowEqual sweep + `React.lazy` route splitting; preserves plan 63 narrow-scope BroadcastChannel rule.
 - [45 — Vitest pool tuning + one-retry policy](45-vitest-pool-tuning.md) — Caps the server-suite forks pool at 4 and turns on `retry: 1` on both Vitest configs so transient tinypool "Worker exited unexpectedly" failures no longer force a full pre-push re-run.
 - [46 — Lint, format, a11y baseline](archive/46-lint-format-a11y.md) — ESLint 8 + Prettier 3 + axe-core on four core views; lint prepended to `verify`. Shipped 2026-05-18.
 - [48 — Global toast surface](archive/48-toast-surface.md) — `notifications` slice + `<ToastStack/>`; stream-middleware halts + export 5xx dispatch through it; dedupe-by-key collapses repeats; auto-dismiss 6 s. Shipped 2026-05-18.
