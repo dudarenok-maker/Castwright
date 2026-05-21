@@ -14,6 +14,7 @@ import {
   IconPencil,
 } from '../lib/icons';
 import { SectionLabel, MixedHeading, Pill, ColorDot } from '../components/primitives';
+import { Stat } from '../components/stat-tiles';
 import { ModelControlPill } from '../components/ModelControlPill';
 import type { LayoutContext } from '../components/layout';
 import type { TtsLifecycle } from '../lib/use-tts-lifecycle';
@@ -822,28 +823,11 @@ function ActivityRow({ event }: { event: ChangeLogEvent }) {
   );
 }
 
-export function Stat({
-  label,
-  value,
-  danger,
-  small,
-}: {
-  label: string;
-  value: number | string;
-  danger?: boolean;
-  small?: boolean;
-}) {
-  return (
-    <div>
-      <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-1">{label}</p>
-      <p
-        className={`${small ? 'text-base' : 'text-2xl'} font-bold tabular-nums ${danger && typeof value === 'number' && value > 0 ? 'text-magenta' : 'text-ink'}`}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
+/* Plan 89 C5 — Stat moved to `src/components/stat-tiles.tsx` so sibling
+   components can statically import it without keeping this view in the
+   eager graph. The view still uses Stat internally (chapter-row stats);
+   re-exporting from here also keeps any external call sites working. */
+export { Stat } from '../components/stat-tiles';
 
 interface ChapterRowProps {
   chapter: Chapter;
