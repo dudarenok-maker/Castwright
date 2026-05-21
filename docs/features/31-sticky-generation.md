@@ -58,6 +58,15 @@ Regenerate stays as displacement: a POST with `chapterIds + force`
 aborts the existing job before starting a fresh one with the new
 spec.
 
+The catch-up `chapter_complete` replay skips any chapter in the
+current run's scope (force-regen targets whose audio still exists on
+disk because the synthesis loop hasn't overwritten it yet). Emitting
+a "complete" tick for an in-scope chapter would race the live run and
+snap the row back to "Done" before the first live progress tick
+lands — exactly the failure mode that made the regen look like a
+no-op pre-fix. Pinned by `generation.test.ts > catch-up replay skips
+in-scope chapters so a force-regen does not snap back to "Done"`.
+
 2. **The `chapters.activeStream` snapshot is the source of truth for
    the global header pill.** It is set on `openHandle`, refreshed on
    every non-idle `applyGenerationTick`, and cleared on `closeHandle`.
