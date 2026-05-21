@@ -6,7 +6,7 @@ owner: null
 
 # Listen view
 
-> Status: stable — header, metadata editor, chapter playback, cover Replace/Regenerate, export-queue Copy/Remove, and five of seven listener-app tiles wired end-to-end. Remaining gaps (download tiles, queue Retry/Download, Apple Books, Plex, real waveform peaks) all tracked as discrete BACKLOG Could entries (#31 / #32 / #33 / #34 / #35).
+> Status: stable — header, metadata editor, chapter playback, cover Replace/Regenerate, export-queue Copy/Remove/Retry/Download, and five of seven listener-app tiles wired end-to-end. Remaining gaps (download tiles, Apple Books, Plex, real waveform peaks) tracked as discrete BACKLOG Could entries. Retry + Download row actions shipped 2026-05-21 via plan 82.
 > Key files: `src/views/listen.tsx`, `src/views/listen.test.tsx`, `src/store/book-meta-slice.ts`, `src/store/book-meta-slice.test.ts`, `src/components/waveform.tsx`, `src/components/mini-player.tsx`, `src/lib/api.ts` (`getChapterAudio`), `src/data/export-queue.ts`, `src/data/listener-apps.ts`, `server/src/routes/chapter-audio.ts`
 > URL surface: `#/books/:bookId/listen`
 > OpenAPI ops: `GET /api/books/:bookId/chapters/:chapterId/audio` (JSON meta) + `audio.mp3` (file with range support, served via `server/src/routes/chapter-audio.ts`); `PUT /api/books/:bookId/state` slice='state' carries editable metadata

@@ -25,6 +25,26 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const bumpScript = resolve(here, '..', 'bump-version.mjs');
 
+// Strip GIT_* env vars before spawning git in a throwaway repo. When this
+// test runs from a git hook context (e.g. pre-commit via husky), the parent
+// `git commit` sets GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE / GIT_PREFIX,
+// which child processes inherit. Without sanitising, the test's `git commit`
+// would write into the PARENT worktree's git instead of the temp fixture —
+// silently creating bogus commits on whatever branch invoked the hook.
+function cleanGitEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_')) delete env[key];
+  }
+  return env;
+}
+
+// Wrap execFileSync to always pass the sanitised env. Every git invocation
+// in this test goes through this helper.
+function gitExec(args, opts = {}) {
+  return execFileSync('git', args, { ...opts, env: cleanGitEnv() });
+}
+
 function mkLockfile(name, version) {
   return JSON.stringify(
     {
@@ -66,11 +86,14 @@ function setupRepo(startVersion) {
   writeFileSync(resolve(dir, 'scripts', 'bump-version.mjs'), readFileSync(bumpScript, 'utf8'));
 
   // Init throwaway git repo with a local identity so commits work in CI.
-  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
-  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
-  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir });
-  execFileSync('git', ['add', '.'], { cwd: dir });
-  execFileSync('git', ['commit', '-q', '-m', 'chore: seed'], { cwd: dir });
+  // env: cleanGitEnv() so a parent git-hook context doesn't redirect these
+  // commits into the calling worktree (see cleanGitEnv() above).
+  const env = cleanGitEnv();
+  gitExec( ['init', '-q', '-b', 'main'], { cwd: dir, env });
+  gitExec( ['config', 'user.email', 'test@example.com'], { cwd: dir, env });
+  gitExec( ['config', 'user.name', 'Test'], { cwd: dir, env });
+  gitExec( ['add', '.'], { cwd: dir, env });
+  gitExec( ['commit', '-q', '-m', 'chore: seed'], { cwd: dir, env });
   return dir;
 }
 
@@ -82,6 +105,7 @@ function runBump(dir, args) {
   return spawnSync('node', [resolve(dir, 'scripts', 'bump-version.mjs'), ...args], {
     cwd: dir,
     encoding: 'utf8',
+    env: cleanGitEnv(),
   });
 }
 
@@ -96,7 +120,7 @@ test('bump-version --dry-run prints the plan and does not mutate', () => {
     // Nothing mutated.
     assert.equal(readVersion(dir, 'package.json'), '1.0.0');
     assert.equal(readVersion(dir, 'server/package.json'), '1.0.0');
-    const tags = execFileSync('git', ['tag', '--list'], { cwd: dir, encoding: 'utf8' });
+    const tags = gitExec( ['tag', '--list'], { cwd: dir, encoding: 'utf8' });
     assert.equal(tags.trim(), '');
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -113,13 +137,13 @@ test('bump-version --level patch advances both versions, commits, tags', () => {
     assert.equal(readVersion(dir, 'package-lock.json'), '1.2.4');
     assert.equal(readVersion(dir, 'server/package-lock.json'), '1.2.4');
 
-    const subject = execFileSync('git', ['log', '-1', '--pretty=%s'], {
+    const subject = gitExec( ['log', '-1', '--pretty=%s'], {
       cwd: dir,
       encoding: 'utf8',
     }).trim();
     assert.equal(subject, 'chore: bump version to 1.2.4');
 
-    const tags = execFileSync('git', ['tag', '--list'], { cwd: dir, encoding: 'utf8' }).trim();
+    const tags = gitExec( ['tag', '--list'], { cwd: dir, encoding: 'utf8' }).trim();
     assert.equal(tags, 'v1.2.4');
 
     const annotation = execFileSync(
@@ -166,8 +190,8 @@ test('bump-version refuses lockstep drift', () => {
       resolve(dir, 'server', 'package.json'),
       JSON.stringify({ name: 'fixture-server', version: '1.0.1', private: true }, null, 2),
     );
-    execFileSync('git', ['add', 'server/package.json'], { cwd: dir });
-    execFileSync('git', ['commit', '-q', '-m', 'drift'], { cwd: dir });
+    gitExec( ['add', 'server/package.json'], { cwd: dir });
+    gitExec( ['commit', '-q', '-m', 'drift'], { cwd: dir });
 
     const out = runBump(dir, ['--level', 'patch']);
     assert.notEqual(out.status, 0);
