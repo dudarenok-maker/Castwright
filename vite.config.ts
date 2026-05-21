@@ -44,6 +44,49 @@ export default defineConfig(({ mode }) => {
         '/audio': { target: `http://localhost:${apiPort}`, changeOrigin: true },
       },
     },
-    build: { outDir: 'dist', sourcemap: true },
+    build: {
+      outDir: 'dist',
+      sourcemap: true,
+      /* Plan 89 C5 — route code-split via React.lazy in src/routes/index.tsx
+         already produces per-view chunks. The manualChunks groups below
+         pull big shared vendor libs into their own chunks so lazy view
+         chunks stay small and a warm browser cache can keep vendor code
+         pinned across navigations. Touching this list? Run
+         `npm run build` and inspect `dist/assets/` — the listen / cast /
+         manuscript bundles should NOT pull in the manuscript editor's
+         transitive deps when they themselves don't import it. */
+      rollupOptions: {
+        output: {
+          /* Plan 89 C5 — collapse the react runtime + everything that
+             transitively depends on it into a single `react` chunk so the
+             vendor↔react cross-references can't form a circular chunk
+             graph. The smaller per-view bundles depend on this chunk
+             stably across navigations. `vendor` carries the long tail
+             of utility libs that don't reach into the react runtime. */
+          manualChunks: (id) => {
+            if (!id.includes('node_modules')) return undefined;
+            if (
+              id.includes('node_modules/react/') ||
+              id.includes('node_modules/react-dom/') ||
+              id.includes('node_modules/react-is') ||
+              id.includes('node_modules/react-router') ||
+              id.includes('node_modules/react-redux') ||
+              id.includes('node_modules/scheduler') ||
+              id.includes('node_modules/use-sync-external-store') ||
+              id.includes('node_modules/@reduxjs/toolkit') ||
+              id.includes('node_modules/redux/') ||
+              id.includes('node_modules/redux-thunk') ||
+              id.includes('node_modules/redux-persist') ||
+              id.includes('node_modules/immer/') ||
+              id.includes('node_modules/reselect') ||
+              id.includes('node_modules/hoist-non-react-statics')
+            ) {
+              return 'react';
+            }
+            return 'vendor';
+          },
+        },
+      },
+    },
   };
 });

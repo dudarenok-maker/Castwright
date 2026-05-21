@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { SectionLabel, MixedHeading, VoiceSwatch } from '../components/primitives';
+import { StatTile } from '../components/stat-tiles';
 import { VoiceCard } from '../components/voice-library-panel';
 import { IconPlay } from '../lib/icons';
 import type { BaseVoice, Character, TtsEngine, TtsModelKey, Voice } from '../lib/types';
@@ -872,11 +873,7 @@ function TtsEngineModelPicker({ modelKey, onChange }: TtsEngineModelPickerProps)
   );
 }
 
-export function StatTile({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div className="bg-white rounded-2xl border border-ink/10 p-4">
-      <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">{label}</p>
-      <p className="text-2xl font-bold text-ink tabular-nums mt-1">{value}</p>
-    </div>
-  );
-}
+/* Plan 89 C5 — StatTile moved to `src/components/stat-tiles.tsx` so
+   sibling components can statically import it without keeping this view
+   in the eager graph. Re-export keeps existing call sites working. */
+export { StatTile } from '../components/stat-tiles';
