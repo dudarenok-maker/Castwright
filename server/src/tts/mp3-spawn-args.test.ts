@@ -84,4 +84,58 @@ describe('encodePcmToAudio spawn args', () => {
     expect(args[afIndex + 1]).toBe('loudnorm=I=-16:LRA=11:TP=-1.5:linear=true');
     expect(args[afIndex + 1]).not.toContain('measured_');
   });
+
+  /* Regression for the ffmpeg 8.x loudnorm sample-rate drift (5 Exile
+     chapters corrupted on 2026-05-21 — 3.05x duration MP3s on 24 kHz
+     Kokoro PCM). The loudnorm filter resamples internally to 192 kHz;
+     ffmpeg 7.x followed the input rate at the filter output, 8.x did
+     not. Fix: every codec builder must emit an explicit output `-ar`
+     AFTER the `-af` flag, BEFORE the `-c:a` flag, so the encoder
+     receives stream metadata pinned to the input rate regardless of
+     filter-chain behaviour. */
+  describe.each([
+    {
+      format: 'mp3' as const,
+      codec: 'libmp3lame',
+    },
+    {
+      format: 'aac-m4a' as const,
+      codec: /^(libfdk_aac|aac)$/,
+    },
+    {
+      format: 'opus' as const,
+      codec: 'libopus',
+    },
+  ])('$format loudnorm output rate pinning', ({ format, codec }) => {
+    it('emits an output -ar matching the input rate between -af and -c:a', async () => {
+      const { encodePcmToAudio } = await import('./mp3.js');
+      const sampleRate = 24_000;
+      await encodePcmToAudio(Buffer.alloc(2), sampleRate, {
+        format,
+        quality: 2,
+        loudnorm: { target: -16, lra: 11, tp: -1.5, twoPass: false },
+      });
+
+      const args = spawnMock.mock.calls[0][1] as string[];
+      const afIndex = args.indexOf('-af');
+      const caIndex = args.indexOf('-c:a');
+      expect(afIndex).toBeGreaterThanOrEqual(0);
+      expect(caIndex).toBeGreaterThan(afIndex);
+
+      /* The output `-ar` that fixes the bug lives between `-af` and `-c:a`.
+         There is also an input `-ar` BEFORE the `-i pipe:0` flag; that one
+         must NOT be confused for the output one. We look for `-ar` strictly
+         in the (afIndex, caIndex) window. */
+      let outputArIdx = -1;
+      for (let i = afIndex + 2; i < caIndex; i += 1) {
+        if (args[i] === '-ar') {
+          outputArIdx = i;
+          break;
+        }
+      }
+      expect(outputArIdx, 'output -ar missing between -af and -c:a').toBeGreaterThan(-1);
+      expect(args[outputArIdx + 1]).toBe(String(sampleRate));
+      expect(args[caIndex + 1]).toMatch(codec);
+    });
+  });
 });

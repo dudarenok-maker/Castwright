@@ -132,6 +132,13 @@ function buildMp3FfmpegArgs(opts: FfmpegBuildOpts): string[] {
     '-i',
     'pipe:0',
     ...(opts.loudnormFilter ? ['-af', opts.loudnormFilter] : []),
+    /* Pin the output sample rate. The loudnorm filter resamples internally
+       to 192 kHz; ffmpeg 8.x stopped resampling back to the input rate at
+       the filter output, which left libmp3lame encoding at the wrong rate
+       and produced 3.05x duration MP3s on 24 kHz Kokoro PCM. Explicit
+       output `-ar` constrains the encoder regardless of filter behaviour. */
+    '-ar',
+    String(opts.sampleRate),
     '-c:a',
     'libmp3lame',
     '-q:a',
@@ -167,6 +174,11 @@ function buildAacFfmpegArgs(opts: FfmpegBuildOpts): string[] {
     '-i',
     'pipe:0',
     ...(opts.loudnormFilter ? ['-af', opts.loudnormFilter] : []),
+    /* See buildMp3FfmpegArgs for the rationale — pin output `-ar` so the
+       loudnorm filter's 192 kHz internal stream doesn't reach the encoder
+       at the wrong rate under ffmpeg 8.x. */
+    '-ar',
+    String(opts.sampleRate),
     ...(useFdk ? ['-c:a', 'libfdk_aac', '-vbr', '4'] : ['-c:a', 'aac', '-b:a', '128k']),
     /* Fragmented mp4 so the muxer can stream to stdout: `empty_moov`
        skips the seek-back-and-write-moov dance; `frag_keyframe` starts a
@@ -200,6 +212,12 @@ function buildOpusFfmpegArgs(opts: FfmpegBuildOpts): string[] {
     '-i',
     'pipe:0',
     ...(opts.loudnormFilter ? ['-af', opts.loudnormFilter] : []),
+    /* See buildMp3FfmpegArgs for the rationale — pin output `-ar`. libopus
+       only accepts 8/12/16/24/48 kHz internally and will resample as
+       needed; the explicit `-ar` keeps the filter chain from pushing
+       192 kHz samples into the encoder unannounced. */
+    '-ar',
+    String(opts.sampleRate),
     '-c:a',
     'libopus',
     '-b:a',
