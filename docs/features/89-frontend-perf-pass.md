@@ -55,8 +55,8 @@ Three independent micro-optimisations on the frontend that share a deployment sh
 ## Out of scope
 
 - **C1 — Manuscript view virtualisation** → BACKLOG Should #1. Explicitly demoted from MUST in the survey — current feel is bearable, but >300 sentences during boundary drag is the next-priority frontend item.
-- **C4 — Confirm-cast + listen-chapter list virtualisation** → BACKLOG Could #25. Only matters above ~40 rows; depends on Should #1 to amortise the `@tanstack/react-virtual` dep.
-- **C6 — Waveform memoisation** → BACKLOG Could #26. Low real-world impact today.
+- **C4 — Confirm-cast + listen-chapter list virtualisation** → BACKLOG Could #24. Only matters above ~40 rows; depends on Should #1 to amortise the `@tanstack/react-virtual` dep.
+- **C6 — Waveform memoisation** → BACKLOG Could #25. Low real-world impact today.
 - **A1 — Parallel chapter synthesis** → plan 87 (parallel branch).
 - **B1 — Per-phase analyzer model** → plan 88 (parallel branch).
 
