@@ -312,6 +312,16 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C6).
 - _Depends on:_ none.
 - _Benefit (technical):_ avoids 480+ DOM mutations per 800 ms when many waveforms are visible simultaneously. Low real-world impact today (rare to see >3 waveforms at once).
 
+### 27. Interleaved SSE in `mockStreamGeneration` for parallel-chapter e2e
+
+Source: net-new (2026-05-21). Deferred from plan 87 implementation — server side shipped, mock-mode e2e not landed.
+
+- _What:_ Teach `mockStreamGeneration` (`src/lib/api.ts`) to advance multiple chapters concurrently when the generate POST would have been parallel server-side (i.e. when more than one chapter is in `queued` state at start). Today the mock advances exactly one chapter at a time and only flips to the next queued chapter when the active one completes — that hard-codes a serial-loop assumption the real backend no longer holds (plan 87). Then add `e2e/generation-parallel.spec.ts` asserting that chapter 2 emits `chapter:start` BEFORE chapter 1 emits `chapter:done`.
+- _Acceptance:_ in mock mode with K queued chapters, the Generate view's chapter rows show two simultaneous "Generating" pills (not just one). E2e spec passes.
+- _Key files:_ `src/lib/api.ts` (`mockStreamGeneration`); new `e2e/generation-parallel.spec.ts`.
+- _Depends on:_ plan 87 server-side worker pool (shipped).
+- _Benefit (user/technical):_ closes the mock/real parity gap so the parallel SSE wire shape is visually exercised in dev mode and CI gates regressions. Today the parallel orchestration is only pinned at the server vitest layer.
+
 ---
 
 ## Won't (this round) — explicitly parked

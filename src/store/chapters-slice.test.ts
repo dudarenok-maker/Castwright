@@ -1094,3 +1094,213 @@ describe('chaptersSlice — clearOverrides (plan 84)', () => {
     expect(next.chapters[0].titleOverridden).toBe(false);
   });
 });
+
+/* Plan 87 — bounded parallel-chapter synthesis. With the server's worker
+   pool running K chapters concurrently, the SSE wire now interleaves
+   progress / chapter_assembling / chapter_complete ticks across chapters.
+   `applyGenerationTick` already routes by `chapterId`, but the parallel
+   path is a previously-unexercised seam: a tick for chapter B that lands
+   between two of chapter A's ticks MUST mutate B's row without disturbing
+   A's. These cases pin that contract. */
+describe('chaptersSlice — applyGenerationTick (plan 87 interleaved chapter routing)', () => {
+  it('interleaved progress ticks from chapter A and chapter B each mutate only their own row', () => {
+    const start = baseState([
+      makeChapter(1, {
+        state: 'queued',
+        characters: { narrator: 'queued', halloran: 'queued' },
+      }),
+      makeChapter(2, {
+        state: 'queued',
+        characters: { narrator: 'queued', eliza: 'queued' },
+      }),
+    ]);
+    /* Wire order: ch1 0.01 → ch2 0.01 → ch1 0.3 → ch2 0.5 → ch1 0.7 */
+    const t1 = chaptersSlice.reducer(
+      start,
+      chaptersActions.applyGenerationTick(
+        tick({
+          type: 'progress',
+          chapterId: 1,
+          characterId: 'narrator',
+          progress: 0.01,
+          currentLine: 0,
+          totalLines: 100,
+        }),
+      ),
+    );
+    const t2 = chaptersSlice.reducer(
+      t1,
+      chaptersActions.applyGenerationTick(
+        tick({
+          type: 'progress',
+          chapterId: 2,
+          characterId: 'narrator',
+          progress: 0.01,
+          currentLine: 0,
+          totalLines: 50,
+        }),
+      ),
+    );
+    const t3 = chaptersSlice.reducer(
+      t2,
+      chaptersActions.applyGenerationTick(
+        tick({
+          type: 'progress',
+          chapterId: 1,
+          characterId: 'halloran',
+          progress: 0.3,
+          currentLine: 30,
+          totalLines: 100,
+        }),
+      ),
+    );
+    const t4 = chaptersSlice.reducer(
+      t3,
+      chaptersActions.applyGenerationTick(
+        tick({
+          type: 'progress',
+          chapterId: 2,
+          characterId: 'eliza',
+          progress: 0.5,
+          currentLine: 25,
+          totalLines: 50,
+        }),
+      ),
+    );
+    const t5 = chaptersSlice.reducer(
+      t4,
+      chaptersActions.applyGenerationTick(
+        tick({
+          type: 'progress',
+          chapterId: 1,
+          characterId: 'narrator',
+          progress: 0.7,
+          currentLine: 70,
+          totalLines: 100,
+        }),
+      ),
+    );
+    /* Each row carries its own progress / currentLine — no cross-talk. */
+    expect(t5.chapters[0].id).toBe(1);
+    expect(t5.chapters[0].progress).toBeCloseTo(0.7);
+    expect(t5.chapters[0].currentLine).toBe(70);
+    expect(t5.chapters[0].totalLines).toBe(100);
+    expect(t5.chapters[0].state).toBe('in_progress');
+    expect(t5.chapters[0].characters.narrator).toBe('in_progress');
+    expect(t5.chapters[0].characters.halloran).toBe('queued');
+
+    expect(t5.chapters[1].id).toBe(2);
+    expect(t5.chapters[1].progress).toBeCloseTo(0.5);
+    expect(t5.chapters[1].currentLine).toBe(25);
+    expect(t5.chapters[1].totalLines).toBe(50);
+    expect(t5.chapters[1].state).toBe('in_progress');
+    expect(t5.chapters[1].characters.narrator).toBe('queued');
+    expect(t5.chapters[1].characters.eliza).toBe('in_progress');
+  });
+
+  it('chapter_complete for B mid-stream does not clobber A still in_progress', () => {
+    /* The parallel pool finishes a fast short chapter B while a long
+       chapter A is still synthesising. Routing B's chapter_complete must
+       NOT touch A's row. */
+    const start = baseState([
+      makeChapter(1, {
+        state: 'in_progress',
+        progress: 0.4,
+        currentLine: 40,
+        totalLines: 100,
+        characters: { narrator: 'in_progress', halloran: 'queued' },
+      }),
+      makeChapter(2, {
+        state: 'in_progress',
+        progress: 0.9,
+        currentLine: 45,
+        totalLines: 50,
+        characters: { narrator: 'in_progress' },
+      }),
+    ]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.applyGenerationTick(
+        tick({ type: 'chapter_complete', chapterId: 2, totalLines: 50 }),
+      ),
+    );
+    /* Chapter 1 — completely unchanged. */
+    expect(next.chapters[0].state).toBe('in_progress');
+    expect(next.chapters[0].progress).toBeCloseTo(0.4);
+    expect(next.chapters[0].currentLine).toBe(40);
+    expect(next.chapters[0].characters.narrator).toBe('in_progress');
+    expect(next.chapters[0].characters.halloran).toBe('queued');
+    /* Chapter 2 — flipped to done; non-skipped characters all done. */
+    expect(next.chapters[1].state).toBe('done');
+    expect(next.chapters[1].progress).toBe(1);
+    expect(next.chapters[1].characters.narrator).toBe('done');
+  });
+
+  it('chapter_failed for B mid-stream does not flip A, even when A is in_progress', () => {
+    /* Without per-chapter routing, the stream-level (no chapterId) failure
+       path would flip the live in-progress chapter. We have to verify the
+       per-chapter form leaves the OTHER in-progress chapter alone. */
+    const start = baseState([
+      makeChapter(1, { state: 'in_progress', progress: 0.5 }),
+      makeChapter(2, { state: 'in_progress', progress: 0.5 }),
+    ]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.applyGenerationTick(
+        tick({
+          type: 'chapter_failed',
+          chapterId: 2,
+          errorReason: 'TTS sidecar hiccup',
+        }),
+      ),
+    );
+    expect(next.chapters[0].state).toBe('in_progress');
+    expect(next.chapters[0].progress).toBeCloseTo(0.5);
+    expect(next.chapters[0].errorReason).toBeUndefined();
+    expect(next.chapters[1].state).toBe('failed');
+    expect(next.chapters[1].errorReason).toBe('TTS sidecar hiccup');
+    /* Stream-level lastError is for the no-chapterId form only. */
+    expect(next.lastError).toBe(null);
+  });
+
+  it('two parallel chapters both reach in_progress and both can be tracked simultaneously', () => {
+    /* Pre-pool, only one chapter was ever in_progress at a time. With
+       K>=2 the slice must tolerate multiple in_progress rows at once
+       without any global "active chapter" assumption tripping over. */
+    const start = baseState([
+      makeChapter(1, { state: 'queued' }),
+      makeChapter(2, { state: 'queued' }),
+      makeChapter(3, { state: 'queued' }),
+    ]);
+    let s: ChaptersState = start;
+    s = chaptersSlice.reducer(
+      s,
+      chaptersActions.applyGenerationTick(
+        tick({
+          type: 'progress',
+          chapterId: 1,
+          characterId: 'narrator',
+          progress: 0.05,
+          currentLine: 0,
+          totalLines: 10,
+        }),
+      ),
+    );
+    s = chaptersSlice.reducer(
+      s,
+      chaptersActions.applyGenerationTick(
+        tick({
+          type: 'progress',
+          chapterId: 2,
+          characterId: 'narrator',
+          progress: 0.05,
+          currentLine: 0,
+          totalLines: 10,
+        }),
+      ),
+    );
+    const inProgress = s.chapters.filter((c) => c.state === 'in_progress');
+    expect(inProgress.map((c) => c.id).sort()).toEqual([1, 2]);
+    expect(s.chapters[2].state).toBe('queued');
+  });
+});
