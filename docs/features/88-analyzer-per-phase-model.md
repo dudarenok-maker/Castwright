@@ -6,8 +6,8 @@ owner: null
 
 # Pipelined two-model analyzer (Gemma cast + Gemini attribution, 10-chapter lag)
 
-> Status: draft
-> Key files: `server/src/analyzer/index.ts:106-210`, `server/src/analyzer/select-analyzer.ts`, `server/src/routes/analysis.ts:1323-1328`, `server/src/routes/analysis.ts:2031-2055`, `server/src/analyzer/rate-limit.ts:122`, new `server/src/analyzer/phase-watermark.ts`, `server/.env.example`, `docs/features/06-analyzer-gemini.md`
+> Status: active (pipelining live; see Implementation status below)
+> Key files: `server/src/analyzer/select-analyzer.ts`, `server/src/analyzer/phase-watermark.ts`, `server/src/routes/analysis.ts` (`runMainAnalyzerJob`, `runPhase0Pool`, `runPhase1Pool`, `getPhase1Stage1Snapshot`), `server/src/routes/analysis-pipelining.test.ts`, `server/src/analyzer/rate-limit.ts:122`, `server/.env.example`, `docs/features/06-analyzer-gemini.md`
 > URL surface: indirect — `#/books/<id>/analysing`; SSE stream emitted by `POST /api/books/:bookId/analyse`
 > OpenAPI ops: none — env-var driven
 
@@ -81,10 +81,12 @@ If Gemma identifies a character first in chapter 20, Gemini's chapter 5 (dispatc
   - Phase 0 work always returns the Phase-0 analyzer.
   - Phase 1 work always returns the Phase-1 analyzer.
   - Legacy single-model `ANALYZER=…` env keeps working when none of the new vars are set (regression).
-- Vitest server (`server/src/routes/analysis.test.ts`, extend):
-  - End-to-end pipelined flow on a mock book — Phase 0 watermark advances, Phase 1 workers fire as their lag is satisfied, final consolidation runs, all Phase 1 chapters complete.
-  - Rolling roster snapshot: Gemini worker for chapter 5 reads a snapshot containing Gemma's chapters 0–14 (snapshot taken at dispatch time when watermark=15).
-  - Manual handoff regression: `ANALYZER=manual` collapses to sequential phase gate (watermark seam short-circuited).
+- Vitest server (`server/src/routes/analysis-pipelining.test.ts`, new — landed in the follow-up commit on the same branch):
+  - **(1) Interleaved execution under default LAG=10** on a 20-chapter mock book: Phase 1 chapter 0 dispatches after Phase 0 chapter 9 completes but BEFORE Phase 0 chapter 12 starts (interleaved trace, not strictly serial).
+  - **(2) Rolling roster snapshot:** Phase 1 chapter 5's `runStage2Chapter` inbox embeds a JSON roster containing characters from Phase 0 chapters 1..16 (folded by the time watermark reaches 15) but NOT from chapter 17+ (held pending). The snapshot is structured-cloned so a later Phase 0 merge can't retroactively mutate the Phase 1 worker's view.
+  - **(3) Back-pressure under stall:** holding Phase 0 chapter 13 caps the watermark at 11. Phase 1 chapters 1, 2 dispatch (watermark satisfies their LAG); Phase 1 chapter 3 (needs watermark≥12) PARKS. Releasing chapter 13 advances the watermark and Phase 1 chapter 3 unblocks. This proves the back-pressure semaphore engages in PRODUCTION code paths — not just in the watermark unit tests.
+  - **(4) Manual handoff regression:** `ANALYZER=manual` short-circuits to the sequential stub watermark; every Phase 1 dispatch occurs strictly AFTER every Phase 0 dispatch in the trace (no interleaving).
+  - **(5) Concurrent pool interleaving:** the trace must contain at least one Phase 1 entry whose start index in the call list is BEFORE the last Phase 0 entry — the interleave signature impossible in strictly-serial mode. Uses LAG=3 and concurrency=2 to make the overlap visible on a 15-chapter mock book.
 - Vitest server (`server/src/analyzer/rate-limit.test.ts`, extend if needed): limiter counters split correctly when both models are in flight simultaneously (Gemma + Gemini concurrent calls); two independent buckets advance without cross-decrement.
 
 ### Manual acceptance walkthrough
@@ -110,13 +112,15 @@ If Gemma identifies a character first in chapter 20, Gemini's chapter 5 (dispatc
 - **A1 — parallel chapter synthesis** → plan 87 (parallel branch).
 - **C2/C3/C5 — frontend perf bundle** → plan 89 (parallel branch).
 
-## v1 status note (2026-05-21)
+## Implementation status (2026-05-21)
 
-The watermark + per-phase analyzer modules land here with the route layer fully wired to call `markPhase0ChapterComplete(K)` on every cast completion, `markPhase0AllDone()` after Phase 0b consolidation, and `await watermark.awaitPhase1Dispatch(K)` before every Phase 1 chapter dispatch. The Phase 1 worker pool also uses a SEPARATE analyzer instance keyed to `ANALYZER_PHASE1_MODEL` when set — so the quota split (Gemma 1,500 RPD bucket for Phase 0, Gemini 500 RPD bucket for Phase 1) is real and active today.
+The watermark + per-phase analyzer + concurrent-pool execution are all live. `runMainAnalyzerJob` (`server/src/routes/analysis.ts`) wraps Phase 0 (cast detection) and Phase 1 (attribution) in two sibling async functions launched via `Promise.all([runPhase0Pool(), runPhase1Pool()])`. The Phase 0 worker pool calls `markPhase0ChapterComplete(K)` on every chapter completion, folds the cast into a rolling roster, and finalises with `markPhase0AllDone()` after Phase 0b consolidation. Phase 1 workers `await watermark.awaitPhase1Dispatch(K)` before dispatching their attribution call and take a `structuredClone(rollingRoster())` snapshot at dispatch time — so Phase 1 chapter K attributes against a roster reflecting Phase 0 chapters 0..K+LAG-1.
 
-The route layer still runs Phase 0 → Phase 0b → Phase 1 serially at the code-flow level; the `awaitPhase1Dispatch` waiters all resolve trivially as Phase 0b completes (the watermark already passed every chapter's lag horizon before Phase 1 dispatches begin). The seam is in place to launch the two pools concurrently — a follow-up PR can wrap the Phase 0 cast pool in a Promise and dispatch Phase 1's pool in parallel, at which point the back-pressure semaphore activates end-to-end and Phase 1 starts attributing chapter 0 ~10 chapters into Phase 0's run.
+Quota split (Gemma 1,500 RPD bucket for Phase 0, Gemini 500 RPD bucket for Phase 1) is real because the Phase 1 analyzer instance comes from `selectAnalyzerForPhase('phase1')` and the per-model limiter at `server/src/analyzer/rate-limit.ts:122` keeps the buckets independent. Both buckets advance simultaneously while both pools are in flight.
 
-Track the follow-up under `docs/BACKLOG.md` "Pipelined Phase 0+1 concurrent execution" (Could bucket).
+Manual handoff (`ANALYZER=manual`) short-circuits to the sequential stub watermark in `createWatermarkForJob()` — Phase 1 workers park on `awaitPhase1Dispatch` until `markPhase0AllDone()` fires, which only happens after Phase 0b consolidation. Pipelining is observably off in that mode (no parallel pool overlap; the file-drop cowork loop fundamentally can't pipeline).
+
+The `cast_incomplete` failure gate at the end of Phase 0 (chapters that failed cast detection after retry) moved from an inline `endJob() + return` to a `phase0FailedCount` flag set inside `runPhase0Pool`. After `Promise.all` settles, the outer code emits the SSE `cast_incomplete` error if the flag is set. Phase 1 workers released by `markPhase0AllDone` in the failure branch check the flag after `awaitPhase1Dispatch` and exit cleanly without dispatching — so failed-Phase-0 runs don't bleed Gemini quota on partial-roster attribution.
 
 ## Ship notes
 
