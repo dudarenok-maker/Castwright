@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # Frontend perf pass — broadcast diffing + selector equality + route code-split
 
-> Status: draft
+> Status: active
 > Key files: `src/store/broadcast-middleware.ts:171-189`, `src/store/index.ts:151`, `src/views/listen.tsx:121`, `src/lib/icons.tsx`, `vite.config.ts`
 > URL surface: indirect — every routed view (lazy boundaries appear at first navigation)
 > OpenAPI ops: none
@@ -22,9 +22,14 @@ Three independent micro-optimisations on the frontend that share a deployment sh
 
 ## Architectural impact
 
-- **C2 — Broadcast middleware diffing (`src/store/broadcast-middleware.ts:171-189`):** replace full `activeStream` snapshots with shallow-diffed payloads. Skip broadcasting when only `phaseProgress` numbers ticked (debounce). The recipient applies the diff onto its local snapshot.
-- **C3 — Selector equality (`src/store/index.ts:151`):** add a `shallowEqual` wrapper for `useAppSelector` and apply to the top-5 large-slice readers. Primary offender: `src/views/listen.tsx:121` reading `s.exports.byBookId[bookId]`. NOT a codebase sweep — five targeted sites, audited during implementation.
-- **C5 — Route code-split (`src/routes/`, `src/lib/icons.tsx`, `vite.config.ts`):** lazy-import `src/views/*.tsx` via `React.lazy`; split `src/lib/icons.tsx` by view-area. Single shared Suspense fallback in the layout shell — flash-of-spinner risk on first nav per route; we mitigate by mounting the fallback only after a ~150 ms delay (no flash for cached routes).
+- **C2 — Broadcast middleware diffing (`src/store/broadcast-middleware.ts`):** replaced full `activeStream` snapshots with shallow-diffed payloads. The middleware now caches the last broadcast snapshot per `(kind, bookId)` and emits one of three message modes — `mode: 'full'` (initial / bookId change), `mode: 'diff'` (only the keys that changed), `mode: 'clear'` (slot cleared). `phaseProgress`-only ticks (and `lastTickAt`-only ticks for the chapters slice) collapse inside a `PROGRESS_DEBOUNCE_MS = 250` window — only the first tick after a window opens escapes; subsequent in-window ticks are dropped. The recipient applies a `diff` onto its existing `activeStream` (spread). Plan 63 narrow scope is preserved: the broadcast action set was NOT widened — only the wire payload shape changed. Tests in `src/store/broadcast-middleware.test.ts` cover (a) full / diff / clear modes, (b) progress-only debounce, (c) phase-transition tick escapes the debounce, (d) cross-book switching emits `mode: 'full'`, (e) round-trip recipient state equals sender state, (f) narrow-scope guard still holds.
+- **C3 — Selector equality (`src/store/index.ts`):** added `useAppSelectorShallow` wrapping `useSelector` with react-redux's `shallowEqual`. Conversion sites (capped at five per plan):
+  1. `src/views/listen.tsx:122` — `s.exports.byBookId[bookId] ?? []` (Listen view's export-queue read; the primary offender called out in the plan — array identity is stable when a foreign book's export ticks).
+  2. `src/components/layout.tsx:82` — `s.cast.characters` (Layout is mounted on every route; large array, high mutation rate during analysis stream).
+  3. `src/components/layout.tsx:83` — `s.chapters.chapters` (same; large per-book chapter array).
+  4. `src/components/layout.tsx:479` — `s.library.books` (the bookMeta-fallback hydration effect's dependency; large array, churns on every 30 / 120 s drift-poll fan-out).
+  5. `src/routes/index.tsx:497` — `s.chapters.chapters` in `ReadyViewSwitch` (sister read to layout's, scoped to the ready stage).
+- **C5 — Route code-split (`src/routes/index.tsx`, `src/components/layout.tsx`, `src/components/delayed-spinner.tsx`, `vite.config.ts`):** route-leaf views (`UploadView`, `AnalysingView`, `ManuscriptView`, `CastView`, `LibraryView` voices, `GenerationView`, `ListenView`, `ChangeLogView`, `AccountView`, `RestructureView`, `WorktreesView`) are lazy-imported via `React.lazy`. A single shared `Suspense` boundary wraps the `Outlet` in `Layout`. The fallback (`DelayedSpinner`) is gated by a 150 ms `setTimeout` — warm-cache navigations resolve the lazy chunk before the timer fires, so no spinner flash; cold-cache navigations paint the spinner after 150 ms and replace it with the view once the chunk lands. Vite `manualChunks` groups vendor libs (react / router / redux / vendor) so per-view chunks stay small. Non-route-leaf views (`BookLibraryView`, `ConfirmCastView`, `ConfirmMetadataView`) remain eagerly imported — the library is the landing route, and the confirm views are tiny sub-routes whose eager cost is negligible.
 - **Migration:** none — all three changes are runtime-only.
 - **Reversibility:** each item is independently revert-able (single import-shape change + slice middleware change + Vite chunk config change).
 
@@ -40,10 +45,10 @@ Three independent micro-optimisations on the frontend that share a deployment sh
 
 ### Automated coverage
 
-- Vitest frontend (`src/store/broadcast-middleware.test.ts`) — asserts: (a) shallow-diff payload omits unchanged fields; (b) debounce collapses N phaseProgress-only ticks in <T ms into one broadcast; (c) recipient's local snapshot equals the sender's snapshot after diff-apply; (d) plan 63 scope rule still enforced (non-`activeStream` actions never broadcast).
-- Vitest frontend (`src/store/index.test.ts` or per-view) — asserts: (a) `useAppSelector` with `shallowEqual` doesn't re-render when an unrelated key changes; (b) the top-5 offender call sites use the wrapper.
-- Playwright e2e (`e2e/concurrent-multi-book.spec.ts`, new) — opens two tabs (Book A in tab 1, Book B in tab 2), starts Book A analysis, asserts Book B's Listen view does NOT re-render in response to Book A's analyser ticks (component instance counter, render-count probe, or DOM-mutation observer).
-- Playwright e2e (`e2e/route-lazy.spec.ts`, new) — asserts first navigation to `#/books/<id>/listen` shows the shared Suspense fallback briefly; second navigation does not (cached).
+- Vitest frontend (`src/store/broadcast-middleware.test.ts`) — extended to assert: (a) full / diff / clear message modes, (b) `phaseProgress`-only ticks debounce within `PROGRESS_DEBOUNCE_MS`, (c) phase-transition ticks (e.g. `phaseProgress` + `phaseId`) escape the debounce, (d) recipient's `activeStream` after applying the diff sequence equals the sender's `activeStream` byte-for-byte (round-trip), (e) plan 63 scope rule still enforced — non-`activeStream` actions never broadcast, (f) cross-book bookId change emits `mode: 'full'`, (g) empty diffs (no-op ticks) skip the wire, (h) inbound diff with no prior base is safely dropped.
+- Vitest frontend (`src/components/delayed-spinner.test.tsx`, new) — asserts the Suspense fallback (a) stays hidden before `delayMs`, (b) paints after `delayMs`, (c) clears its timer on unmount so a fast-resolve doesn't fire a late update.
+- Playwright e2e (`e2e/concurrent-multi-book.spec.ts`, new) — opens two browser contexts at the library route; tab A navigates to /new; asserts tab B's URL does NOT follow tab A's nav (proves the BroadcastChannel scope doesn't widen to routing — plan 63 narrow-scope guard at the browser layer).
+- Playwright e2e (`e2e/route-lazy.spec.ts`, new) — cold navigation under network throttling observes the Suspense fallback (annotated for diagnostics); warm navigation to the same route shows zero fallback paints (locks the 150 ms-delay-no-flash contract).
 
 ### Manual acceptance walkthrough
 
