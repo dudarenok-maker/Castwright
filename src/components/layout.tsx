@@ -8,7 +8,7 @@ import { fetchAccountSettings } from '../store/account-slice';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
-import { revisionsActions, selectDriftByBook } from '../store/revisions-slice';
+import { revisionsActions, selectDriftGroupsByBook } from '../store/revisions-slice';
 import { libraryActions } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
 import { changeLogActions } from '../store/change-log-slice';
@@ -97,7 +97,7 @@ export function Layout() {
   const chapters = useAppSelectorShallow((s) => s.chapters.chapters);
   const activeStream = useAppSelector((s) => s.chapters.activeStream);
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
-  const driftByBookId = useAppSelector(selectDriftByBook);
+  const driftGroupsByBook = useAppSelector(selectDriftGroupsByBook);
   const bookMetaSaved = useAppSelector((s) => s.bookMeta.saved);
   const pending = useAppSelector((s) => s.revisions.pending);
   const manuscript = useAppSelector((s) => s.manuscript);
@@ -122,6 +122,22 @@ export function Layout() {
   const profileCharacter = openProfileId
     ? (characters.find((c) => c.id === openProfileId) ?? null)
     : null;
+
+  /* Zip the slice-level grouped drift selection with book titles + the
+     active book's cast for the modal's `groupsByBook` prop. Memoised so
+     unrelated re-renders don't break referential equality (the modal's
+     `DriftGroupCard` is React.memo-wrapped — a stable group reference
+     here is what lets it skip a render). */
+  const driftGroupsByBookView = useMemo(
+    () =>
+      driftGroupsByBook.map((g) => ({
+        bookId: g.bookId,
+        bookTitle: bookMetaSaved[g.bookId]?.title || g.bookId,
+        characters: g.bookId === bookId ? characters : [],
+        groups: g.groups,
+      })),
+    [driftGroupsByBook, bookMetaSaved, characters, bookId],
+  );
   const profileVoice = profileCharacter
     ? (voices.find((v) => v.id === profileCharacter.voiceId) ?? null)
     : null;
@@ -939,16 +955,13 @@ export function Layout() {
       )}
       {ui.showDriftReport && (
         <DriftReportModal
-          /* Multi-book grouping: each entry in driftByBookId becomes a
-             section under its book's title. Cast slice only carries the
-             active book's characters today — cross-book events fall back
-             to the embedded `event.current.name` for display. */
-          eventsByBook={driftByBookId.map((g) => ({
-            bookId: g.bookId,
-            bookTitle: bookMetaSaved[g.bookId]?.title || g.bookId,
-            characters: g.bookId === bookId ? characters : [],
-            events: g.events,
-          }))}
+          /* Multi-book grouping: each entry in driftGroupsByBook is one
+             book's pre-grouped (character × snapshot) drift cards. Cast
+             slice only carries the active book's characters today —
+             cross-book groups fall back to the embedded
+             `group.current.name` for display. Memoised so referential
+             equality survives unrelated re-renders. */
+          groupsByBook={driftGroupsByBookView}
           voices={voices}
           onClose={() => dispatch(uiActions.setShowDriftReport(false))}
           onRegenerateChapter={(_evBookId, charId, chapterId) => {
