@@ -45,6 +45,12 @@ interface Props {
      unreachable") so the unreachable state can be specific without
      duplicating the rest of the state machine in the parent. */
   unreachableLabel?: string;
+  /* Per-engine label override (e.g. "Kokoro", "Coqui XTTS") for the
+     pill text. When set, the state line reads "Kokoro idle / ready /
+     unavailable" instead of the generic "TTS model …". Aria + button
+     labels stay tied to `kind` so screen-reader semantics don't drift
+     when multiple per-engine pills mount side by side. */
+  engineLabel?: string;
 }
 
 interface Tone {
@@ -92,11 +98,13 @@ function labelFor(
   state: ModelControlState,
   detail?: StreamingDetail,
   unreachableLabel?: string,
+  engineLabel?: string,
 ): ReactNode {
-  if (state === 'idle') return `${kindNoun(kind)} idle`;
-  if (state === 'loading') return `Loading ${kindNoun(kind).toLowerCase()}…`;
-  if (state === 'ready') return `${kindNoun(kind)} ready`;
-  if (state === 'unreachable') return unreachableLabel ?? `${kindNoun(kind)} unavailable`;
+  const noun = engineLabel ?? kindNoun(kind);
+  if (state === 'idle') return `${noun} idle`;
+  if (state === 'loading') return `Loading ${noun.toLowerCase()}…`;
+  if (state === 'ready') return `${noun} ready`;
+  if (state === 'unreachable') return unreachableLabel ?? `${noun} unavailable`;
   /* state === 'streaming' */
   if (!detail) return 'Streaming live';
   const sinceText =
@@ -136,10 +144,13 @@ export function ModelControlPill({
   onLoad,
   onStop,
   unreachableLabel,
+  engineLabel,
 }: Props) {
   const tone = TONES[state];
   const action = actionFor(state);
-  const ariaLabel = `${kindNoun(kind)} ${state}`;
+  const ariaLabel = engineLabel
+    ? `${engineLabel} ${state}`
+    : `${kindNoun(kind)} ${state}`;
   const dotStyle: CSSProperties | undefined = tone.pulse ? undefined : undefined;
   return (
     <span className="inline-flex items-center gap-2 flex-wrap" role="group" aria-label={ariaLabel}>
@@ -151,7 +162,7 @@ export function ModelControlPill({
           style={dotStyle}
           aria-hidden="true"
         />
-        <span>{labelFor(kind, state, streamingDetail, unreachableLabel)}</span>
+        <span>{labelFor(kind, state, streamingDetail, unreachableLabel, engineLabel)}</span>
       </span>
       <button
         type="button"

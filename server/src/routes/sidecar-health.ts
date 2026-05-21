@@ -27,6 +27,12 @@ interface SidecarHealthBody {
   engines?: string[];
   model_loaded?: boolean;
   loading?: boolean;
+  /* Kokoro mirrors the Coqui pair. Distinct names (not a generic map) so
+     the frontend's per-engine pill state reads flat properties off a single
+     /health response — preserves the consolidated useTtsLifecycle hook's
+     one-poll-per-tick invariant. */
+  kokoro_loaded?: boolean;
+  kokoro_loading?: boolean;
   device?: string | null;
 }
 
@@ -54,6 +60,8 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       engines: Array.isArray(body.engines) ? body.engines : undefined,
       modelLoaded: body.model_loaded === true,
       loading: body.loading === true,
+      kokoroLoaded: body.kokoro_loaded === true,
+      kokoroLoading: body.kokoro_loading === true,
       device: typeof body.device === 'string' ? body.device : null,
     });
   } catch (e) {
@@ -79,9 +87,13 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
 
 /* POST /api/sidecar/load — proxies to the sidecar's /load endpoint with a
    90s ceiling (vs. /health's 2s) because a cold XTTS load actually does take
-   that long. Idempotent on the sidecar side: a second call while the model
+   that long (Kokoro is ~1s but reuses the same ceiling — over-budgeted is
+   safe). Idempotent on the sidecar side: a second call while the model
    is loaded returns `ready` immediately, so the UI can fire this on every
-   screen entry without burning compute. */
+   screen entry without burning compute.
+
+   Body: `{ engine?: 'coqui' | 'kokoro', model?: string }`. Forwarded
+   verbatim — see the sidecar's /load route for default-resolution logic. */
 sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
   const url = getResolvedSidecarUrl();
   const target = `${url}/load`;
@@ -116,17 +128,26 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
   }
 });
 
-/* POST /api/sidecar/unload — drops the loaded XTTS model and frees GPU
+/* POST /api/sidecar/unload — drops a TTS engine's loaded model and frees GPU
    memory. Fast path on the sidecar side (no model load to await), so the
    2s probe budget suffices. Idempotent: returns `idle` whether or not the
-   sidecar had a model resident. */
-sidecarHealthRouter.post('/unload', async (_req: Request, res: Response) => {
+   sidecar had a model resident.
+
+   Body: `{ engine?: 'coqui' | 'kokoro' }`, default `'coqui'`. We forward
+   the full body so the sidecar can dispatch — the Kokoro Stop pill sets
+   `engine: 'kokoro'` here. */
+sidecarHealthRouter.post('/unload', async (req: Request, res: Response) => {
   const url = getResolvedSidecarUrl();
   const target = `${url}/unload`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
-    const upstream = await fetch(target, { method: 'POST', signal: controller.signal });
+    const upstream = await fetch(target, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body ?? {}),
+    });
     clearTimeout(timer);
     const body = (await upstream.json().catch(() => ({}))) as { status?: string };
     if (!upstream.ok) {

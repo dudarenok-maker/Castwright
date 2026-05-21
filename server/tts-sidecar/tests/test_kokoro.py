@@ -368,3 +368,154 @@ def test_synthesize_kokoro_substitutes_foreign_voice(kokoro_client: TestClient) 
     )
     assert r.status_code == 200
     assert r.headers.get("X-Voice-Substituted-From") == "ef_dora"
+
+
+# ── Per-engine /load + /unload + /health (Kokoro pill backing) ───────────
+#
+# These pin the contract behind the new top-bar Kokoro Stop pill: the
+# sidecar must accept `engine: 'kokoro'` on /load and /unload, must report
+# Kokoro's load state in /health under `kokoro_loaded` / `kokoro_loading`,
+# and must keep these orthogonal from Coqui's identically-named pair so
+# the consolidated useTtsLifecycle hook can fan out per-engine state from
+# a single poll without aliasing.
+
+@pytest.fixture
+def kokoro_unloaded_client(monkeypatch, fake_kokoro_module, fake_weight_files):
+    """TestClient with a Kokoro engine that's been reset to unloaded AFTER
+    the lifespan starts. The startup hook (_preload_default_engines) fires
+    when TestClient enters its context manager and would otherwise warm
+    Kokoro out from under these tests — we explicitly unload it again so
+    each test starts from a clean cold-cache state."""
+    engine = main.KokoroEngine()
+    monkeypatch.setitem(main.ENGINES, "kokoro", engine)
+    with TestClient(main.app) as c:
+        engine.unload()
+        engine._loading = False
+        yield c, engine
+
+
+def test_health_reports_kokoro_load_state(kokoro_unloaded_client) -> None:
+    """/health must expose `kokoro_loaded` and `kokoro_loading` as their own
+    fields, distinct from Coqui's `model_loaded` / `loading`. Without this
+    separation the frontend pill would alias Coqui state onto Kokoro and
+    flip the wrong dot when the user clicks Stop on either engine."""
+    client, _engine = kokoro_unloaded_client
+    r = client.get("/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kokoro_loaded"] is False
+    assert body["kokoro_loading"] is False
+    # Coqui fields stay present and distinct.
+    assert "model_loaded" in body
+    assert "loading" in body
+
+
+def test_load_kokoro_engine_warms_kokoro(kokoro_unloaded_client) -> None:
+    """POST /load with `engine: 'kokoro'` warms the Kokoro engine specifically
+    and leaves Coqui alone. The response is the same `{ status: 'ready' }`
+    shape as the existing Coqui path so the frontend treats the two
+    endpoints identically."""
+    client, engine = kokoro_unloaded_client
+    assert engine._kokoro is None
+    r = client.post("/load", json={"engine": "kokoro"})
+    assert r.status_code == 200
+    assert r.json() == {"status": "ready"}
+    assert engine._kokoro is not None
+    # Coqui must NOT have been touched.
+    coqui = main.ENGINES.get("coqui")
+    assert isinstance(coqui, main.CoquiEngine)
+    assert coqui._tts is None
+
+
+def test_load_kokoro_is_idempotent(kokoro_unloaded_client) -> None:
+    """Calling /load twice with engine=kokoro returns ready both times and
+    doesn't recreate the underlying Kokoro instance. Matches Coqui's
+    behaviour — the UI pill can re-fire Load on every screen entry."""
+    client, engine = kokoro_unloaded_client
+    client.post("/load", json={"engine": "kokoro"})
+    first = engine._kokoro
+    r = client.post("/load", json={"engine": "kokoro"})
+    assert r.status_code == 200
+    assert r.json() == {"status": "ready"}
+    assert engine._kokoro is first
+
+
+def test_unload_kokoro_drops_kokoro_and_leaves_coqui(kokoro_unloaded_client) -> None:
+    """POST /unload with engine=kokoro frees Kokoro VRAM without touching
+    Coqui. The reverse must also hold: a default /unload (no engine, or
+    engine=coqui) does NOT unload Kokoro. That pair of asserts is the
+    contract the Kokoro Stop pill ships against."""
+    client, kokoro_engine = kokoro_unloaded_client
+    # Warm Kokoro first.
+    client.post("/load", json={"engine": "kokoro"})
+    assert kokoro_engine._kokoro is not None
+
+    # Targeted Kokoro unload drops it.
+    r = client.post("/unload", json={"engine": "kokoro"})
+    assert r.status_code == 200
+    assert r.json() == {"status": "idle"}
+    assert kokoro_engine._kokoro is None
+
+    # Re-warm and confirm default /unload (Coqui-targeted) does NOT touch it.
+    client.post("/load", json={"engine": "kokoro"})
+    assert kokoro_engine._kokoro is not None
+    r = client.post("/unload", json={})
+    assert r.status_code == 200
+    assert r.json() == {"status": "idle"}
+    assert kokoro_engine._kokoro is not None, (
+        "default /unload (Coqui) leaked into Kokoro — engines must stay isolated"
+    )
+
+
+def test_unload_kokoro_is_idempotent(kokoro_unloaded_client) -> None:
+    """Calling /unload with engine=kokoro when Kokoro is already unloaded
+    is a clean no-op returning `idle`. The pill's optimistic flip relies on
+    this — clicking Stop a second time mustn't 4xx."""
+    client, _engine = kokoro_unloaded_client
+    r = client.post("/unload", json={"engine": "kokoro"})
+    assert r.status_code == 200
+    assert r.json() == {"status": "idle"}
+    r = client.post("/unload", json={"engine": "kokoro"})
+    assert r.status_code == 200
+    assert r.json() == {"status": "idle"}
+
+
+def test_health_after_kokoro_load_unload_cycle(kokoro_unloaded_client) -> None:
+    """End-to-end: cold → load → /health shows kokoro_loaded=true →
+    unload → /health flips back to false. This is what the in-app pill
+    polls every 30 s to render its dot."""
+    client, _engine = kokoro_unloaded_client
+    assert client.get("/health").json()["kokoro_loaded"] is False
+    client.post("/load", json={"engine": "kokoro"})
+    assert client.get("/health").json()["kokoro_loaded"] is True
+    client.post("/unload", json={"engine": "kokoro"})
+    assert client.get("/health").json()["kokoro_loaded"] is False
+
+
+def test_load_unknown_engine_defaults_to_coqui(kokoro_unloaded_client) -> None:
+    """An unrecognised engine value (typo, future engine name) falls back
+    to Coqui rather than 4xx-ing. Matches the back-compat contract on
+    `/load` — existing callers that don't send `engine` at all hit the
+    Coqui path, and a malformed value behaves the same way.
+
+    We pretend Coqui is already loaded so the /load route short-circuits
+    before triggering a real XTTS load (which would hang the test on a
+    multi-GB weight pull). The assertion that matters is Kokoro stays
+    untouched."""
+    client, kokoro_engine = kokoro_unloaded_client
+    coqui = main.ENGINES.get("coqui")
+    assert isinstance(coqui, main.CoquiEngine)
+    sentinel = object()
+    saved_tts = coqui._tts
+    coqui._tts = sentinel
+    try:
+        r = client.post("/load", json={"engine": "nonsense"})
+        assert r.status_code == 200
+        assert r.json() == {"status": "ready"}
+        # Coqui's sentinel is still there — proves we hit the Coqui short
+        # circuit, not the Kokoro path or a 4xx.
+        assert coqui._tts is sentinel
+        # Kokoro must be untouched.
+        assert kokoro_engine._kokoro is None
+    finally:
+        coqui._tts = saved_tts
