@@ -209,6 +209,36 @@ export const castSlice = createSlice({
         c.voiceState = 'reused';
       }
     },
+    /* From POST /api/books/:bookId/cast/:characterId/not-linked-to (plan 101).
+       The user has just declared "these two cross-book characters are
+       intentionally different people" (e.g. teenage Wren vs adult
+       Wren). Server has pair-written the entry to both books' cast.json;
+       on the source side this reducer mirrors the write into redux so
+       the duplicate-candidate detection memo immediately stops surfacing
+       the pair. The OTHER book's redux state lives in a different tab /
+       a foreign-cast cache — that side's write will be picked up the
+       next time its cast hydrates. Idempotent on duplicate dispatch. */
+    applyNotLinked: (
+      s,
+      a: PayloadAction<{
+        characterId: string;
+        otherBookId: string;
+        otherCharacterId: string;
+      }>,
+    ) => {
+      const { characterId, otherBookId, otherCharacterId } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (!c) return;
+      const existing = c.notLinkedTo ?? [];
+      if (
+        existing.some(
+          (p) => p.bookId === otherBookId && p.characterId === otherCharacterId,
+        )
+      ) {
+        return;
+      }
+      c.notLinkedTo = [...existing, { bookId: otherBookId, characterId: otherCharacterId }];
+    },
     /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
        through to matchedFrom so the confirm view's override toggle has a
        stable handle on the library record (POST /api/library-cast/override). */

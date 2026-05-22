@@ -2036,6 +2036,57 @@ async function realLinkPriorCharacter(
   return res.json();
 }
 
+/* POST /api/books/:bookId/cast/:characterId/not-linked-to  (plan 101) — the
+   user has just declared "these two cross-book characters are intentionally
+   different people" (e.g. teenage Wren vs adult Wren). Server pair-writes
+   a symmetric record to both books' cast.json so the voices-view duplicate-
+   candidate detection stops surfacing the pair. Mirror to redux via
+   castActions.applyNotLinked. */
+export interface NotLinkedToArgs {
+  bookId: string;
+  characterId: string;
+  otherBookId: string;
+  otherCharacterId: string;
+}
+export interface NotLinkedToResponse {
+  pair: {
+    a: { bookId: string; characterId: string };
+    b: { bookId: string; characterId: string };
+  };
+}
+
+async function realNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedToResponse> {
+  const { bookId, characterId, ...body } = args;
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/not-linked-to`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Mark-as-variant failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedToResponse> {
+  await wait(80);
+  return {
+    pair: {
+      a: { bookId: args.bookId, characterId: args.characterId },
+      b: { bookId: args.otherBookId, characterId: args.otherCharacterId },
+    },
+  };
+}
+
 async function realAddFromSeriesRoster(
   args: AddFromSeriesRosterArgs,
 ): Promise<AddFromSeriesRosterResponse> {
@@ -3586,6 +3637,7 @@ const real = {
   overrideLibraryCast: realOverrideLibraryCast,
   getSeriesRoster: realGetSeriesRoster,
   linkPriorCharacter: realLinkPriorCharacter,
+  notLinkedTo: realNotLinkedTo,
   addFromSeriesRoster: realAddFromSeriesRoster,
   deleteBook: realDeleteBook,
   reparseBook: realReparseBook,
@@ -3761,6 +3813,7 @@ const mock = {
   overrideLibraryCast: mockOverrideLibraryCast,
   getSeriesRoster: mockGetSeriesRoster,
   linkPriorCharacter: mockLinkPriorCharacter,
+  notLinkedTo: mockNotLinkedTo,
   addFromSeriesRoster: mockAddFromSeriesRoster,
   deleteBook: mockDeleteBook,
   reparseBook: mockReparseBook,
