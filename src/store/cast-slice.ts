@@ -130,6 +130,60 @@ export const castSlice = createSlice({
       if (s.characters.some((c) => c.id === incoming.id)) return;
       s.characters.push(incoming);
     },
+    /* From POST /api/books/:bookId/cast/unlink-alias — split an alias
+       chip off its current character back into its own standalone cast
+       member. Delta-only: strip the alias off the source's aliases list
+       (case-insensitive, trim-tolerant), then append the new character
+       at the end (matches the analyser fold + cast-merge convention of
+       appending freshly-minted entries). No sentence reassignment here
+       — the Reattribute Lines modal handles those via the existing
+       per-sentence picker dispatching manuscriptActions.setSentenceCharacter. */
+    applyUnlinkAlias: (
+      s,
+      a: PayloadAction<{
+        sourceCharacterId: string;
+        aliasName: string;
+        newCharacter: Character;
+      }>,
+    ) => {
+      const { sourceCharacterId, aliasName, newCharacter } = a.payload;
+      const key = aliasName.trim().toLowerCase();
+      const source = s.characters.find((c) => c.id === sourceCharacterId);
+      if (source) {
+        source.aliases = (source.aliases ?? []).filter(
+          (n) => n.trim().toLowerCase() !== key,
+        );
+      }
+      /* Append the new standalone character. Idempotent on id (double-
+         dispatch under network retry leaves the existing entry in place,
+         mirroring addCharacter). Default voiceState to 'generated' so the
+         Cast view's Status column renders a pill rather than blank. */
+      if (!s.characters.some((c) => c.id === newCharacter.id)) {
+        s.characters.push({
+          ...newCharacter,
+          voiceState: newCharacter.voiceState ?? 'generated',
+        });
+      }
+    },
+    /* From POST /api/books/:bookId/cast/add-alias — append a typed name
+       to a character's aliases array. Idempotent (case-insensitive
+       dedup), rejects self-aliases silently (server returns 400 in that
+       case — surfaced as an error toast at the dispatch site). */
+    applyAddAlias: (
+      s,
+      a: PayloadAction<{ characterId: string; aliasName: string }>,
+    ) => {
+      const { characterId, aliasName } = a.payload;
+      const trimmed = aliasName.trim();
+      if (!trimmed) return;
+      const target = s.characters.find((c) => c.id === characterId);
+      if (!target) return;
+      const key = trimmed.toLowerCase();
+      if (key === target.name.trim().toLowerCase()) return;
+      const existing = target.aliases ?? [];
+      if (existing.some((n) => n.trim().toLowerCase() === key)) return;
+      target.aliases = [...existing, trimmed];
+    },
     /* From POST /api/books/:bookId/cast/link-prior — the user just
        manually declared "this character is the same person as that one
        from a prior series book." Single-row analogue of applyVoiceMatches

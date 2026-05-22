@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   IconClose,
   IconWaveform,
@@ -79,6 +79,18 @@ interface Props {
     targetBookId: string,
     targetCharacterId: string,
   ) => Promise<void>;
+  /** Split an alias chip back into its own standalone cast member. The
+      auto-fold step (server/src/analyzer/fold-minor-cast.ts) and the
+      manual merge route are append-only; this is the only reverse path.
+      Layout's handler fires the unlink-alias endpoint, dispatches the
+      delta reducer, and opens the Reattribute Lines modal seeded with
+      the server-returned impacted chapters so the user can move the
+      right sentences to the new character. */
+  onUnlinkAlias?: (sourceCharacterId: string, aliasName: string) => Promise<void>;
+  /** Append a typed name to this character's aliases array. No sentence
+      movement — this is for stitching in a name the analyzer missed.
+      Used by the Profile Drawer's "+ Add alias" affordance. */
+  onAddAlias?: (characterId: string, aliasName: string) => Promise<void>;
 }
 
 export interface PriorMergeCandidate {
@@ -129,6 +141,8 @@ export function ProfileDrawer({
   mergeCandidatesPrior,
   onMerge,
   onLinkPrior,
+  onUnlinkAlias,
+  onAddAlias,
 }: Props) {
   const [tone, setTone] = useState(
     character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 },
@@ -205,6 +219,55 @@ export function ProfileDrawer({
       setMergeError((e as Error).message || 'Merge failed.');
     } finally {
       setMergeBusy(false);
+    }
+  }
+
+  /* Alias chip management. `aliasBusy` gates both the X-on-chip click
+     and the +Add alias submit so a fast double-click can't double-fire.
+     `aliasError` surfaces server errors (e.g. self-alias-rejected) under
+     the chip row without an interruptive modal. `addAliasInput` /
+     `showAddAlias` back the inline "+ Add alias" text input.
+     Imperative focus on input mount mirrors edit-chapter-title.tsx —
+     JSX `autoFocus` would trip jsx-a11y/no-autofocus. */
+  const [aliasBusy, setAliasBusy] = useState(false);
+  const [aliasError, setAliasError] = useState<string | null>(null);
+  const [showAddAlias, setShowAddAlias] = useState(false);
+  const [addAliasInput, setAddAliasInput] = useState('');
+  const addAliasInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (showAddAlias) addAliasInputRef.current?.focus();
+  }, [showAddAlias]);
+
+  async function runUnlinkAlias(aliasName: string) {
+    if (!onUnlinkAlias || aliasBusy) return;
+    setAliasBusy(true);
+    setAliasError(null);
+    try {
+      await onUnlinkAlias(character.id, aliasName);
+    } catch (e) {
+      setAliasError((e as Error).message || 'Unlink failed.');
+    } finally {
+      setAliasBusy(false);
+    }
+  }
+
+  async function runAddAlias() {
+    if (!onAddAlias || aliasBusy) return;
+    const trimmed = addAliasInput.trim();
+    if (!trimmed) {
+      setAliasError('Alias name cannot be empty.');
+      return;
+    }
+    setAliasBusy(true);
+    setAliasError(null);
+    try {
+      await onAddAlias(character.id, trimmed);
+      setAddAliasInput('');
+      setShowAddAlias(false);
+    } catch (e) {
+      setAliasError((e as Error).message || 'Add alias failed.');
+    } finally {
+      setAliasBusy(false);
     }
   }
 
@@ -648,18 +711,83 @@ export function ProfileDrawer({
             <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
               Cast roster
             </p>
-            {character.aliases && character.aliases.length > 0 && (
+            {(character.aliases && character.aliases.length > 0) || onAddAlias ? (
               <div className="mb-3">
                 <p className="text-xs text-ink/55 mb-1.5">Also known as</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {character.aliases.map((a) => (
-                    <Pill key={a} color="library">
-                      {a}
-                    </Pill>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(character.aliases ?? []).map((a) => (
+                    <span
+                      key={a}
+                      className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-[11px] font-medium bg-magenta/12 text-ink min-h-[28px] sm:min-h-0"
+                    >
+                      <span>{a}</span>
+                      {onUnlinkAlias && (
+                        <button
+                          aria-label={`Unlink ${a}`}
+                          disabled={aliasBusy}
+                          onClick={() => void runUnlinkAlias(a)}
+                          className="inline-flex items-center justify-center w-5 h-5 rounded-full text-ink/55 hover:bg-ink/10 hover:text-ink disabled:opacity-50 disabled:cursor-wait coarse-pointer:opacity-100"
+                        >
+                          <IconClose className="w-3 h-3" />
+                        </button>
+                      )}
+                    </span>
                   ))}
+                  {onAddAlias &&
+                    (showAddAlias ? (
+                      <span className="inline-flex items-center gap-1">
+                        <input
+                          ref={addAliasInputRef}
+                          aria-label="New alias name"
+                          value={addAliasInput}
+                          disabled={aliasBusy}
+                          onChange={(e) => {
+                            setAddAliasInput(e.target.value);
+                            if (aliasError) setAliasError(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              void runAddAlias();
+                            }
+                            if (e.key === 'Escape') {
+                              e.preventDefault();
+                              setShowAddAlias(false);
+                              setAddAliasInput('');
+                              setAliasError(null);
+                            }
+                          }}
+                          placeholder="alias name"
+                          className="px-2 py-0.5 rounded-full border border-ink/20 bg-white text-[11px] text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 min-h-[28px] sm:min-h-0"
+                        />
+                        <button
+                          aria-label="Save alias"
+                          disabled={aliasBusy || !addAliasInput.trim()}
+                          onClick={() => void runAddAlias()}
+                          className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-magenta text-white hover:bg-magenta/90 disabled:bg-ink/15 disabled:text-ink/40 disabled:cursor-not-allowed"
+                        >
+                          Save
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        aria-label="Add alias"
+                        onClick={() => {
+                          setShowAddAlias(true);
+                          setAliasError(null);
+                        }}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-dashed border-ink/20 text-ink/55 hover:border-peach hover:text-peach min-h-[28px] sm:min-h-0"
+                      >
+                        <IconPlus className="w-3 h-3" />
+                        Add alias
+                      </button>
+                    ))}
                 </div>
+                {aliasError && (
+                  <p className="mt-1.5 text-[11px] text-red-600/90 font-medium">⚠ {aliasError}</p>
+                )}
               </div>
-            )}
+            ) : null}
             {(() => {
               const inBookCount = onMerge && mergeCandidates?.length ? mergeCandidates.length : 0;
               const priorCount =
