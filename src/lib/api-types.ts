@@ -1627,7 +1627,16 @@ export interface components {
             runInProgress?: number;
             /** @description Only on `chapter_assembling` — number of synthesised same-speaker groups about to land on disk. */
             totalGroups?: number;
-            /** @description Only on `chapter_assembling` — measured audio length about to be written. */
+            /**
+             * @description Measured audio length in seconds. Carried on `chapter_assembling`
+             *     (primary, fires as the PCM is being concatenated → MP3) AND on
+             *     `chapter_complete` (redundant, fires after the MP3 lands on
+             *     disk). The double-carry guards against the assembling tick
+             *     being dropped by the cross-book guard, plan-87 parallel-chapter
+             *     interleave, or a hidden tab — without it the chapter row in
+             *     the Listen view sits at the analysis-seeded `'00:00'` until
+             *     the next page reload.
+             */
             durationSec?: number;
             /**
              * @description Only on `chapter_complete` — the TTS model key that produced
