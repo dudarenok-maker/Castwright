@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { IconCheck, IconClose, IconRefresh, IconSpinner } from '../lib/icons';
+import { IconClose, IconRefresh } from '../lib/icons';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import {
   api,
   AnalysisError,
   type AnalysisLiveInfo,
-  type AnalysisLiveChapter,
   type AnalysisHeartbeat,
   type OllamaHealth,
 } from '../lib/api';
@@ -13,7 +12,9 @@ import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../lib/models';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
-import type { AnalyseResponse, DroppedQuotesResponse } from '../lib/types';
+import { PhaseCard, type ConnState } from '../components/analysing/phase-card';
+import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
+import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
@@ -25,362 +26,11 @@ import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-
    per word total. */
 const MS_PER_WORD = 22;
 
-/* Two log presentations:
-   - active phase: scrollable container capped at ACTIVE_PHASE_LOG_MAX_H so
-     a long stage-2 loop doesn't push the rest of the page off-screen.
-     Auto-scrolls to the bottom on every new line; user can scroll up to
-     review history without losing the auto-pin until they scroll back down.
-   - completed phases: keep only the last N lines as a static summary. No
-     scroll. The "earlier lines" indicator is gone — it confused readers
-     into thinking the log had stalled. */
-const COMPLETED_PHASE_TAIL = 6;
-const ACTIVE_PHASE_LOG_MAX_H = 'max-h-48'; // ≈ 12rem; tuned to fit ~12 lines
-
-/* Live "what's running right now" indicator on the active phase header.
-   Server sends a `live` payload every 500ms with every chapter currently
-   in flight; we render one row per chapter so a slow chapter doesn't
-   visually hide the chapters progressing alongside it. The displayed
-   elapsed is advanced locally between server ticks so the seconds counter
-   never visibly stalls — each row re-anchors to the server's elapsedMs on
-   every update. */
-function LiveChapterRow({
-  chapter,
-  totalChapters,
-}: {
-  chapter: AnalysisLiveChapter;
-  totalChapters: number;
-}) {
-  const [displayMs, setDisplayMs] = useState(chapter.elapsedMs);
-  useEffect(() => {
-    const baseline = Date.now() - chapter.elapsedMs;
-    setDisplayMs(Date.now() - baseline);
-    const id = setInterval(() => setDisplayMs(Date.now() - baseline), 1000);
-    return () => clearInterval(id);
-  }, [chapter.elapsedMs, chapter.chapterIndex]);
-
-  const overBudget = displayMs > chapter.estMs * 1.25;
-  return (
-    <div
-      className={`inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${overBudget ? 'text-amber-700' : 'text-ink/60'}`}
-    >
-      <span className="font-semibold">
-        Chapter {chapter.chapterIndex}/{totalChapters}
-      </span>
-      <span className="text-ink/30">·</span>
-      <span className="truncate max-w-[220px]" title={chapter.chapterTitle}>
-        {chapter.chapterTitle}
-      </span>
-      <span className="text-ink/30">·</span>
-      <span>
-        {humanSecondsCompact(displayMs)} of ~{humanSecondsCompact(chapter.estMs)}
-      </span>
-      {overBudget && <span className="ml-1 font-semibold">over budget</span>}
-    </div>
-  );
-}
-
-function LiveChapterTicker({ live }: { live: AnalysisLiveInfo }) {
-  return (
-    <div className="mt-2 flex flex-col gap-1">
-      {live.chapters.map((ch) => (
-        <LiveChapterRow key={ch.chapterIndex} chapter={ch} totalChapters={live.totalChapters} />
-      ))}
-    </div>
-  );
-}
-
-/* Compact MM:SS / H:MM:SS used in the live ticker. Different format from
-   humanSeconds (which spells out "1m 14s") because the ticker updates every
-   second and a colon-formatted clock is easier to read at a glance. */
-function humanSecondsCompact(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
-}
-
-/* Scrolling log for the active phase. Pins to the bottom on every new line
-   so the user always sees the most recent updates. If the user scrolls up to
-   read history, the pin temporarily releases — we re-pin on the next render
-   once they scroll back near the bottom. The latest line is bolded + ink-
-   coloured so the eye lands on it. */
-function ActivePhaseLog({ lines }: { lines: string[] }) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const pinnedRef = useRef(true);
-
-  /* Track whether the user is currently near the bottom. While they are,
-     new lines auto-scroll; if they scroll up to review, we leave them be. */
-  const onScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    pinnedRef.current = distanceFromBottom < 24; // tolerate small overshoot
-  };
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !pinnedRef.current) return;
-    el.scrollTop = el.scrollHeight;
-  }, [lines.length]);
-
-  return (
-    <div
-      ref={scrollRef}
-      onScroll={onScroll}
-      className={`mt-3 ${ACTIVE_PHASE_LOG_MAX_H} overflow-y-auto pr-2 -mr-2`}
-    >
-      <ul className="space-y-1.5 text-xs font-mono text-ink/70">
-        {lines.map((s, i) => (
-          <li key={i} className={i === lines.length - 1 ? 'tick-up font-semibold text-ink' : ''}>
-            {s}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-/* Live cast preview rendered under Phase 0 — fills in chapter-by-chapter
-   as cast-update events arrive. Order mirrors the running roster from the
-   server (insertion order = chapter discovery order). Names truncate to
-   keep wide casts on a single row at viewport widths the rest of the app
-   supports; full list is always visible on the cast view once stage='confirm'. */
-function LiveCastPreview() {
-  const characters = useAppSelector((s) => s.cast.characters);
-  if (characters.length === 0) return null;
-  return (
-    <div className="mt-3 text-[11px] text-ink/60">
-      <div className="font-semibold text-ink/80">
-        Cast so far · {characters.length} character{characters.length === 1 ? '' : 's'}
-      </div>
-      <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
-        {characters.map((c) => (
-          <span
-            key={c.id}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-ink/[0.04] text-ink/70"
-          >
-            {c.name}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* Series-cast carry-over pill (C3). Visible under Phase 0 whenever the
-   server's one-shot `series-prior` event landed on this manuscript.
-   Tells the user that the analyzer has been pre-seeded with N
-   characters from prior books in the same series, so a re-detected
-   "Wren" / "Marlow" / "Oduvan" in this book inherits the same id
-   (and therefore the same voice profile) instead of being detected
-   as a fresh entity. Detection-time identity carry-over, distinct
-   from the confirm-time voice match (plan 09). */
-function SeriesPriorPill() {
-  /* Defensive read: some test harnesses build a configureStore without
-     the analysis slice (legacy tests pre-dating B2). Production always
-     has it. Optional chain via the type assertion since useAppSelector's
-     state is non-nullable in production. */
-  const seriesPrior = useAppSelector(
-    (s) =>
-      (s as { analysis?: { activeStream?: { seriesPrior?: { count: number; names: string[] } } } })
-        .analysis?.activeStream?.seriesPrior,
-  );
-  if (!seriesPrior || seriesPrior.count === 0) return null;
-  const { count, names } = seriesPrior;
-  const sample = names.slice(0, 3).join(', ');
-  const more = count > names.length ? ` +${count - names.length}` : '';
-  return (
-    <div className="mt-3 text-[11px] text-ink/60" data-testid="series-prior-pill">
-      <div className="font-semibold text-ink/80">
-        Carried in from prior books in this series · {count} character{count === 1 ? '' : 's'}
-      </div>
-      <div className="mt-1 text-ink/60">
-        {sample}
-        {more}
-      </div>
-    </div>
-  );
-}
-
-/* Read-only ledger of evidence quotes the analyser's verifier rejected
-   for not matching the source text. Pulls the latest batch from
-   GET /api/books/:bookId/dropped-quotes and groups entries by
-   characterName. No Restore button in Phase 1 — this view is an audit
-   surface for tuning the verifier prompt; raising/lowering the
-   threshold is a separate workflow. Re-fetches when the run completes
-   so a fresh batch from the just-finished verify pass shows up
-   without a page reload. */
-function DroppedQuotesPanel({
-  bookId,
-  refreshKey,
-}: {
-  bookId: string | null | undefined;
-  refreshKey: number;
-}) {
-  const [file, setFile] = useState<DroppedQuotesResponse | null>(null);
-  useEffect(() => {
-    if (!bookId) return;
-    let cancelled = false;
-    api
-      .getDroppedQuotes(bookId)
-      .then((f) => {
-        if (!cancelled) setFile(f);
-      })
-      .catch((err) => {
-        console.warn('[analysing] dropped-quotes fetch skipped:', err.message);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [bookId, refreshKey]);
-  const latest = file?.batches.length ? file.batches[file.batches.length - 1] : null;
-  if (!latest || latest.entries.length === 0) return null;
-  /* Group entries by characterName so a character with 5 fabricated
-     quotes renders as one collapsible row, not five separate rows. */
-  const grouped = new Map<string, typeof latest.entries>();
-  for (const e of latest.entries) {
-    const list = grouped.get(e.characterName);
-    if (list) list.push(e);
-    else grouped.set(e.characterName, [e]);
-  }
-  const groups = Array.from(grouped.entries());
-  return (
-    <details className="mt-3 text-[11px] text-ink/60">
-      <summary className="cursor-pointer select-none font-semibold text-ink/80">
-        Verifier dropped {latest.totalDropped} quote{latest.totalDropped === 1 ? '' : 's'} across{' '}
-        {latest.affectedCharacters} character{latest.affectedCharacters === 1 ? '' : 's'}
-        <span className="ml-2 font-normal text-ink/50">· latest batch</span>
-      </summary>
-      <ul className="mt-2 space-y-2">
-        {groups.map(([name, entries]) => (
-          <li key={name} className="rounded-2xl border border-ink/[0.08] bg-white/60 px-3 py-2">
-            <div className="font-semibold text-ink/80">{name}</div>
-            <ul className="mt-1 space-y-1.5">
-              {entries.map((e, i) => (
-                <li key={i} className="border-l-2 border-amber-300/70 pl-2">
-                  <div className="font-mono text-ink/70 italic break-words">
-                    "{e.quote}"
-                    {e.truncated && <span className="ml-1 text-ink/40">[truncated]</span>}
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] text-ink/40">
-                    <span>
-                      {e.reason === 'not_in_source' ? 'not in source' : 'empty after normalisation'}
-                    </span>
-                    {e.note && <span>· note: {e.note}</span>}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </li>
-        ))}
-      </ul>
-    </details>
-  );
-}
-
-/* Stall thresholds vary by engine. Cloud (Gemini) streams steadily —
-   any gap >8s is a real problem. qwen3.5:4b under structured-output
-   constrained decoding emits in bursts and routinely sits silent for
-   20-40s while the schema-constraint solver works, which is normal
-   per-chapter behaviour; flagging that as "Stalled" cried wolf and
-   conditioned users to ignore the badge. 60s is well past the longest
-   observed legitimate gap on qwen3.5:4b chapters. */
-const STALL_THRESHOLD_CLOUD_SEC = 8;
-const STALL_THRESHOLD_LOCAL_SEC = 60;
-
-/* Live indicator that the analyzer's LLM call is actively returning bytes.
-   Displays size received, throughput, and seconds since the last chunk —
-   the third value is the most reassuring during long runs because it ticks
-   forward even between server heartbeats (we re-anchor on each event). */
-function HeartbeatRow({
-  hb,
-  receivedAt,
-  stallThresholdSec,
-}: {
-  hb: AnalysisHeartbeat;
-  receivedAt: number;
-  stallThresholdSec: number;
-}) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const sinceLast = Math.max(hb.sinceLastChunkMs, now - receivedAt);
-  const sinceLastSec = Math.round(sinceLast / 1000);
-  const sizeKb = hb.receivedBytes / 1024;
-  const sizeText = sizeKb >= 10 ? `${Math.round(sizeKb)} KB` : `${sizeKb.toFixed(1)} KB`;
-  const stalled = sinceLastSec > stallThresholdSec;
-  return (
-    <div
-      className={`mt-2 inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${stalled ? 'text-amber-700' : 'text-emerald-700'}`}
-    >
-      <span
-        className={`w-1.5 h-1.5 rounded-full ${stalled ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`}
-      />
-      <span className="font-semibold">{stalled ? 'Stalled' : 'Receiving response'}</span>
-      <span className="text-ink/30">·</span>
-      <span>{sizeText}</span>
-      {hb.charsPerSec > 0 && (
-        <>
-          <span className="text-ink/30">·</span>
-          <span>{hb.charsPerSec.toLocaleString()} chars/s</span>
-        </>
-      )}
-      <span className="text-ink/30">·</span>
-      <span>last chunk {sinceLastSec}s ago</span>
-    </div>
-  );
-}
-
-/* Live pill that replaces the "Receiving response" heartbeat while the
-   server-side limiter is sleeping (RPM/TPM/RPD cap hit, or honoring a
-   Google retry-delay after a 429). Countdown re-renders every second
-   without needing a new SSE event. Auto-hides at `until`, after which
-   the next heartbeat / chapter event takes over the row. */
-function ThrottleRow({
-  until,
-  model,
-  reason,
-}: {
-  until: number;
-  model: string;
-  reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after';
-}) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 250);
-    return () => clearInterval(id);
-  }, []);
-  const remainingSec = Math.max(0, Math.ceil((until - now) / 1000));
-  const modelLabel = MODEL_OPTIONS.find((m) => m.id === model)?.label ?? model;
-  const reasonText = (() => {
-    switch (reason) {
-      case 'rpm':
-        return 'requests-per-minute cap';
-      case 'tpm':
-        return 'tokens-per-minute cap';
-      case 'rpd':
-        return 'daily request cap';
-      case 'retry-after':
-        return 'upstream retry-delay';
-      default:
-        return 'rate limit';
-    }
-  })();
-  return (
-    <div className="mt-2 inline-flex items-center gap-2 text-[11px] font-mono tabular-nums text-amber-700">
-      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-      <span className="font-semibold">Throttling {modelLabel}</span>
-      <span className="text-ink/30">·</span>
-      <span>resuming in {remainingSec}s</span>
-      <span className="text-ink/30">·</span>
-      <span className="text-ink/50">{reasonText}</span>
-    </div>
-  );
-}
+/* PhaseCard, plus the per-phase helpers (HeartbeatRow / ThrottleRow /
+   LiveCastPreview / SeriesPriorPill / DroppedQuotesPanel / ActivePhaseLog),
+   live under `src/components/analysing/phase-card.tsx` — pulled out of this
+   monolith in plan 94 so per-phase UI (model chip + swap) has one obvious
+   seam to land in. */
 
 function ConnPill({ state, sinceLastSec }: { state: ConnState; sinceLastSec: number | null }) {
   const meta = (() => {
@@ -449,8 +99,6 @@ interface Props {
   model?: string;
   onComplete: (payload: AnalyseResponse) => void;
 }
-
-type ConnState = 'idle' | 'connecting' | 'streaming' | 'error' | 'done';
 
 export function AnalysingView({
   manuscriptId,
@@ -1273,9 +921,45 @@ export function AnalysingView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manuscriptId, isLocalAnalyzer, ollamaHealth, pendingAnalyzerPill]);
 
+  const isAnalysisRunning = conn === 'streaming' || conn === 'connecting';
+  /* Single source of truth for the Pause/Resume/Start cycle. Both the
+     original header button (inside the centred column) and the new
+     `<StickyAnalysisBar/>` (which pins on scroll) call this — keeping
+     them in lockstep means there's no chance of one button showing
+     "Pause" while the other shows "Resume". */
+  const handlePauseOrResume = () => {
+    if (isAnalysisRunning) {
+      analysisControllerRef.current?.abort();
+      if (manuscriptId) dispatch(analysisActions.setPaused({ manuscriptId }));
+      setAnalysisStarted(false);
+      setConn('idle');
+    } else {
+      setAnalysisStarted(true);
+      setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
+    }
+  };
+
   return (
-    <div className="relative min-h-[calc(100vh-64px)] flex items-center justify-center px-6 py-16">
+    <div className="relative min-h-[calc(100vh-64px)] flex flex-col items-center px-6 py-16">
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-60 pointer-events-none" />
+      {/* Sticky bar lives only while the SSE is in flight. Outside the
+          streaming/connecting window the inline header button handles
+          Start / Resume — never two surfaces competing for the same
+          affordance. Mounted directly under the outer flex container
+          (not nested inside its own positioned wrapper) so the sticky
+          bar's containing block is the full-height analysing view, not a
+          tiny wrapper — without this, the bar would scroll off because
+          its containing block had nothing left to scroll WITHIN. */}
+      {manuscriptId && isAnalysisRunning && (
+        <StickyAnalysisBar
+          activePhaseId={phase}
+          conn={conn}
+          isRunning={isAnalysisRunning}
+          hasStartedOnce={hasStartedOnceRef.current}
+          isAnalyzerReady={isAnalyzerReady}
+          onPauseOrResume={handlePauseOrResume}
+        />
+      )}
       <div className="relative max-w-2xl w-full">
         <div className="text-center mb-10">
           <SectionLabel>Analysing</SectionLabel>
@@ -1321,40 +1005,21 @@ export function AnalysingView({
               immediately bounce, looking like a broken button to the
               user. For Gemini the button enables as soon as the
               manuscript is loaded (no local lifecycle to wait on). */}
+          {/* Inline Start/Resume button. Hidden while the SSE is in flight —
+              the sticky bar's Pause button takes over once isAnalysisRunning
+              is true (the two surfaces are mutually exclusive by design,
+              never duplicate). */}
           {manuscriptId &&
             conn !== 'done' &&
+            !isAnalysisRunning &&
             (() => {
-              const isRunning = conn === 'streaming' || conn === 'connecting';
-              const label = isRunning
-                ? 'Pause analysis'
-                : isAnalyzerReady
-                  ? hasStartedOnceRef.current
-                    ? 'Resume analysis'
-                    : 'Start analysis'
-                  : 'Waiting for analyzer…';
-              const onClick = () => {
-                if (isRunning) {
-                  /* Imperative abort tears down the per-tab fetch consumer
-                   so conn flips to idle immediately (without waiting on
-                   effect cleanup). Dispatching setPaused additionally
-                   fires the server-side /analysis/pause via the
-                   analysis-stream middleware — post-B1 the server
-                   treats SSE close as "unsubscribe" and won't actually
-                   stop the analyzer without this explicit signal. */
-                  analysisControllerRef.current?.abort();
-                  if (manuscriptId) dispatch(analysisActions.setPaused({ manuscriptId }));
-                  setAnalysisStarted(false);
-                  setConn('idle');
-                } else {
-                  /* Resume after a pause — bump retry.nonce so the effect
-                   re-runs even if analysisStarted is already true (it
-                   isn't here, but bumping is the established idiom for
-                   re-entering the effect, see Try again at the error
-                   panel below). */
-                  setAnalysisStarted(true);
-                  setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
-                }
-              };
+              const isRunning = false;
+              const label = isAnalyzerReady
+                ? hasStartedOnceRef.current
+                  ? 'Resume analysis'
+                  : 'Start analysis'
+                : 'Waiting for analyzer…';
+              const onClick = handlePauseOrResume;
               const disabled = !isRunning && !isAnalyzerReady;
               return (
                 <div className="mt-6 flex flex-col items-center gap-2">
@@ -1384,39 +1049,12 @@ export function AnalysingView({
           {manuscriptId && (
             <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs">
               {!isLocalAnalyzer && <ConnPill state={conn} sinceLastSec={sinceLastSec} />}
-              {/* Live model picker. Changing the model mid-run cancels the
-                  in-flight request and restarts from the first uncached
-                  chapter — completed chapters in the analysis cache survive,
-                  so switching from a flaky Gemma run to Gemini 2.5 Flash
-                  picks up exactly where the user is, with the new model. */}
-              <label className="inline-flex items-center gap-2 text-ink/60">
-                <span className="font-medium">Model</span>
-                <select
-                  value={model ?? MODEL_OPTIONS[0].id}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    if (next === model) return;
-                    dispatch(uiActions.setSelectedModel(next));
-                    /* Bump the retry nonce so the analysis useEffect re-runs
-                       with the new model. fresh stays false — cached
-                       chapters from the previous model are still valid
-                       (the cache key is the manuscript, not the model). */
-                    setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
-                  }}
-                  className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
-                  title="Switch the analysis model. Cancels the in-flight request and resumes from the first uncached chapter."
-                >
-                  {MODEL_OPTION_GROUPS.map((g) => (
-                    <optgroup key={g.engine} label={g.label}>
-                      {g.models.map((m) => (
-                        <option key={m.id} value={m.id} title={m.hint}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </label>
+              {/* Per-phase model chips + swap dropdowns live inside each
+                  PhaseCard (plan 94). The legacy single-`<select>` picker
+                  that used to live here wrote to ui.selectedModel and bumped
+                  the retry nonce on every change; per-phase pickers persist
+                  to UserSettings and take effect from the next chapter, no
+                  in-flight abort. */}
               <button
                 onClick={() => dispatch(uiActions.goHome())}
                 className="text-ink/60 hover:text-ink underline-offset-2 hover:underline"
@@ -1561,103 +1199,23 @@ export function AnalysingView({
         </div>
 
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card divide-y divide-ink/5">
-          {ANALYSIS_PHASES.map((p) => {
-            const isActive = phase === p.id;
-            const isDone = phase > p.id;
-            const phaseLogs = logs[p.id] ?? [];
-            return (
-              <div key={p.id} className="px-6 py-4 flex items-start gap-4">
-                <div className="mt-1 shrink-0">
-                  {isDone && (
-                    <span className="w-7 h-7 rounded-full bg-emerald-100 grid place-items-center">
-                      <IconCheck className="w-4 h-4 text-emerald-700" />
-                    </span>
-                  )}
-                  {isActive && (
-                    <span className="w-7 h-7 rounded-full bg-peach/20 grid place-items-center">
-                      <IconSpinner className="w-4 h-4 text-magenta" />
-                    </span>
-                  )}
-                  {!isDone && !isActive && (
-                    <span className="w-7 h-7 rounded-full border border-ink/15" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className={`font-semibold ${isDone || isActive ? 'text-ink' : 'text-ink/40'}`}>
-                    {p.label}
-                  </p>
-                  <p
-                    className={`text-sm mt-0.5 ${isDone || isActive ? 'text-ink/60' : 'text-ink/30'}`}
-                  >
-                    {p.detail}
-                  </p>
-                  {isActive && (
-                    <>
-                      <div className="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-progress rounded-full"
-                          style={{ width: `${phaseProgress * 100}%` }}
-                        />
-                      </div>
-                      {/* Bridging status while the SSE is open but no log
-                          lines have arrived yet. On a fresh server the
-                          first ~2-3s after clicking Start is spent in
-                          getOrHydrateManuscript re-parsing the EPUB —
-                          silence during that window made the screen look
-                          frozen / the button look broken. */}
-                      {p.id === 0 &&
-                        phaseLogs.length === 0 &&
-                        analysisStarted &&
-                        conn === 'connecting' && (
-                          <p className="mt-3 text-xs font-mono text-ink/50 italic">
-                            Reading the manuscript (parsing chapters)…
-                          </p>
-                        )}
-                      {throttleByPhase[p.id] && throttleByPhase[p.id].until > Date.now() ? (
-                        <ThrottleRow
-                          until={throttleByPhase[p.id].until}
-                          model={throttleByPhase[p.id].model}
-                          reason={throttleByPhase[p.id].reason}
-                        />
-                      ) : (
-                        heartbeatByPhase[p.id] && (
-                          <HeartbeatRow
-                            hb={heartbeatByPhase[p.id].hb}
-                            receivedAt={heartbeatByPhase[p.id].receivedAt}
-                            stallThresholdSec={
-                              isLocalAnalyzer
-                                ? STALL_THRESHOLD_LOCAL_SEC
-                                : STALL_THRESHOLD_CLOUD_SEC
-                            }
-                          />
-                        )
-                      )}
-                      {live && live.chapters.length > 0 && <LiveChapterTicker live={live} />}
-                    </>
-                  )}
-                  {/* Cast roster is Phase 0's outcome — keep it visible after
-                      Phase 0 completes (or is skipped via a cached resume after
-                      a model switch) so the user doesn't lose the detected
-                      cast just because the active phase advanced. */}
-                  {p.id === 0 && <SeriesPriorPill />}
-                  {p.id === 0 && <LiveCastPreview />}
-                  {p.id === 0 && (
-                    <DroppedQuotesPanel bookId={bookId} refreshKey={droppedQuotesRefreshKey} />
-                  )}
-                  {phaseLogs.length > 0 &&
-                    (isActive ? (
-                      <ActivePhaseLog lines={phaseLogs} />
-                    ) : (
-                      <ul className="mt-3 space-y-1.5 text-xs font-mono text-ink/50">
-                        {phaseLogs.slice(-COMPLETED_PHASE_TAIL).map((s, i) => (
-                          <li key={i}>{s}</li>
-                        ))}
-                      </ul>
-                    ))}
-                </div>
-              </div>
-            );
-          })}
+          {ANALYSIS_PHASES.map((p) => (
+            <PhaseCard
+              key={p.id}
+              phase={p}
+              activePhaseId={phase}
+              phaseProgress={phaseProgress}
+              phaseLogs={logs[p.id] ?? []}
+              live={live}
+              heartbeat={heartbeatByPhase[p.id]}
+              throttle={throttleByPhase[p.id]}
+              isLocalAnalyzer={isLocalAnalyzer}
+              analysisStarted={analysisStarted}
+              conn={conn}
+              bookId={bookId}
+              droppedQuotesRefreshKey={droppedQuotesRefreshKey}
+            />
+          ))}
         </div>
 
         {/* Stage 1 shrink-refused banner. The server refused to overwrite
