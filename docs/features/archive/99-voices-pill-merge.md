@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-22
 owner: null
 ---
 
 # Merge cast duplicates from the Voices selection pill
 
-> Status: active
+> Status: stable
 > Key files: `src/views/voices.tsx`, `src/lib/voice-character-link.ts`, `src/styles.css`
 > URL surface: `#/voices` (global) and `#/books/<id>/library` (per-book)
 > OpenAPI ops: reuses `POST /api/books/{bookId}/cast/merge` (defined for plan 10's profile-drawer flow)
@@ -36,7 +36,7 @@ owner: null
 ### Automated coverage
 
 - Vitest unit (`src/lib/voice-character-link.test.ts` — `describe('pickMergeSurvivor')`) — covers substring rule, longer-name rule, and the stable tiebreaker.
-- Vitest unit (`src/views/voices.test.tsx` — `describe('LibraryView merge-cast-duplicates affordance (plan 98)')`) — covers:
+- Vitest unit (`src/views/voices.test.tsx` — `describe('LibraryView merge-cast-duplicates affordance (plan 99)')`) — covers:
   - Merge button appears with `Merge into <longer-name>` label on 2× same-voice same-book selection.
   - Merge button hidden on a cross-book pair (even with same base voice).
   - Merge button hidden on a different-base-voice pair.
@@ -65,4 +65,8 @@ Run in mock mode (`VITE_USE_MOCKS=true`) at `#/voices` for the global path, or `
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+- **Shipped:** 2026-05-22 via PR #167, merge commit `77a9a89`.
+- **No spec delta from the active plan.** Survivor heuristic, pill gating, dark-mode descendant CSS, and all five voices.test.tsx cases shipped exactly as drafted.
+- **Bundled bug fix:** the `.floating-pill-inverse` dark-mode descendant overrides land in the same commit. The bug existed since plan 96 introduced the shell class; was tolerated until the Voices view added a third button (Merge) and the user pointed at the contrast on the existing Compare/Clear pair.
+- **Tests landed and green:** 3 new cases in `src/lib/voice-character-link.test.ts` (`pickMergeSurvivor`), 5 new cases in `src/views/voices.test.tsx` (`describe('LibraryView merge-cast-duplicates affordance (plan 99)')`). Full battery `npm run verify` green on Linux CI; the two flaky Windows-only baselines (`analysing-dark.png`, `confirm-dark.png`) cleared per [feedback_visual_baselines_flaky_on_windows.md].
+- **No follow-up surfaced.** Out-of-scope items (e2e spec, undo, three-way merge, renaming survivor to a typed third name) remain explicitly out of scope; none has appeared on the BACKLOG.
