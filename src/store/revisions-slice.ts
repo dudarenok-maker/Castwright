@@ -300,17 +300,46 @@ export interface DriftGroup {
   /** Live profile from the latest cast. Shared by every event in this
       group; the modal renders the snapshot→current diff once. */
   current: DriftEvent['current'];
-  /** Max severity across the group's events — drives the group's pill. */
+  /** Max severity across the group's chapters — drives the group's pill. */
   topSeverity: DriftEvent['severity'];
+  /** Per-chapter top-severity counts. NOT per-event — the server emits
+      one DriftEvent per drift factor (voice / tone / attributes / …), so
+      a chapter that fires 3 factors would otherwise inflate these counts
+      3×. Pre-correction (plan 91 archive) this counted events. */
   severityCounts: Record<DriftEvent['severity'], number>;
   /** Union of `factor` strings across events in the group — surface what
       triggered the drift in factor-chip form. */
   factors: string[];
-  /** Per-chapter events, sorted by chapterId ascending. */
+  /** Raw per-event list, sorted by chapterId ascending. Used by
+      bulk-dismiss (every factor-event must be dismissed individually so
+      the chapter doesn't reappear on the next poll). */
   events: DriftEvent[];
+  /** Per-chapter rollup. The modal's chapter strip renders ONE row per
+      chapter — multi-factor events on the same chapter collapse here.
+      Sorted by chapterId ascending. */
+  chapters: DriftChapterEntry[];
   /** True iff every event in the group is `autoQueueable`. Controls the
       "Auto-regen all" bulk action's availability. */
   allAutoQueueable: boolean;
+}
+
+/* One row in the chapter strip. Aggregates every drift event the group
+   has for `chapterId` so the strip can show one row even when multiple
+   factors fired on the same chapter. */
+export interface DriftChapterEntry {
+  chapterId: number;
+  chapterTitle: string;
+  topSeverity: DriftEvent['severity'];
+  /** Union of factor strings that fired on this chapter. */
+  factors: string[];
+  /** True iff every underlying event is autoQueueable. */
+  autoQueueable: boolean;
+  /** Every underlying event id. Dismiss-one-row loops over these so a
+      single click takes down every factor-event for the chapter. */
+  eventIds: string[];
+  /** Top-severity event for this chapter — fed to DriftListenWidget
+      (which takes a single event) and used for stable test ids. */
+  representativeEvent: DriftEvent;
 }
 
 const severityRank: Record<DriftEvent['severity'], number> = {
@@ -343,9 +372,19 @@ function snapshotKey(snap: DriftEvent['snapshot']): string {
 
 /* Collapse a flat list of drift events into `(book × character ×
    snapshot)` groups. Pure helper — also reused by tests that need to
-   build a `groupsByBook` prop without going through redux. */
+   build a `groupsByBook` prop without going through redux.
+
+   The grouping key intentionally OMITS `factor` — the server emits one
+   event per drift factor (voice / gender / ageRange / 4 tone metrics /
+   attributes), and all factor-events for the same `(book, character,
+   snapshot)` share one compare card. The same omission means multiple
+   factor-events for the same chapter must be folded into one
+   `DriftChapterEntry` so the chapter strip doesn't duplicate rows. */
 export function groupDriftEvents(events: DriftEvent[]): DriftGroup[] {
-  const byGroupId = new Map<string, DriftGroup>();
+  const byGroupId = new Map<
+    string,
+    DriftGroup & { _byChapter: Map<number, DriftChapterEntry> }
+  >();
   for (const event of events) {
     const bid = event.bookId ?? '';
     const gid = `${bid}|${event.characterId}|${snapshotKey(event.snapshot)}`;
@@ -361,12 +400,13 @@ export function groupDriftEvents(events: DriftEvent[]): DriftGroup[] {
         severityCounts: { severe: 0, moderate: 0, mild: 0 },
         factors: [],
         events: [],
+        chapters: [],
         allAutoQueueable: true,
+        _byChapter: new Map(),
       };
       byGroupId.set(gid, group);
     }
     group.events.push(event);
-    group.severityCounts[event.severity] = (group.severityCounts[event.severity] ?? 0) + 1;
     if (severityRank[event.severity] > severityRank[group.topSeverity]) {
       group.topSeverity = event.severity;
     }
@@ -378,13 +418,62 @@ export function groupDriftEvents(events: DriftEvent[]): DriftGroup[] {
        the live cast on every emit, so the last-seen wins. Snapshot is
        immutable per groupId by construction. */
     if (event.current) group.current = event.current;
+
+    /* Per-chapter rollup. First event for a chapter seeds the entry;
+       subsequent events for the same chapter raise top-severity, union
+       factors, AND autoQueueable, push the eventId, and swap the
+       representative event when a more-severe one arrives. */
+    let entry = group._byChapter.get(event.chapterId);
+    if (!entry) {
+      entry = {
+        chapterId: event.chapterId,
+        chapterTitle: event.chapterTitle,
+        topSeverity: event.severity,
+        factors: event.factor ? [event.factor] : [],
+        autoQueueable: event.autoQueueable ?? false,
+        eventIds: [event.id],
+        representativeEvent: event,
+      };
+      group._byChapter.set(event.chapterId, entry);
+    } else {
+      entry.eventIds.push(event.id);
+      if (event.factor && !entry.factors.includes(event.factor)) {
+        entry.factors.push(event.factor);
+      }
+      if (!event.autoQueueable) entry.autoQueueable = false;
+      if (severityRank[event.severity] > severityRank[entry.topSeverity]) {
+        entry.topSeverity = event.severity;
+        entry.representativeEvent = event;
+      }
+      /* Prefer the freshest non-empty chapterTitle (server stamps it
+         per-event; older events occasionally fall through to "Chapter
+         N" — let later events upgrade). */
+      if (event.chapterTitle && !entry.chapterTitle.trim()) {
+        entry.chapterTitle = event.chapterTitle;
+      }
+    }
   }
-  /* Sort each group's events by chapterId so the affected-chapters
-     strip reads in order. */
-  return Array.from(byGroupId.values()).map((g) => ({
-    ...g,
-    events: g.events.slice().sort((a, b) => a.chapterId - b.chapterId),
-  }));
+  /* Final pass: sort events + chapters by chapterId, derive
+     per-chapter severityCounts (NOT per-event — see DriftGroup doc),
+     drop the private _byChapter Map from the returned shape. */
+  return Array.from(byGroupId.values()).map((g) => {
+    const chapters = Array.from(g._byChapter.values()).sort(
+      (a, b) => a.chapterId - b.chapterId,
+    );
+    const severityCounts: Record<DriftEvent['severity'], number> = {
+      severe: 0,
+      moderate: 0,
+      mild: 0,
+    };
+    for (const ch of chapters) severityCounts[ch.topSeverity] += 1;
+    const { _byChapter: _unused, ...rest } = g;
+    return {
+      ...rest,
+      events: g.events.slice().sort((a, b) => a.chapterId - b.chapterId),
+      chapters,
+      severityCounts,
+    };
+  });
 }
 
 /* Selector: collapse the flat drift list into `(book × character ×

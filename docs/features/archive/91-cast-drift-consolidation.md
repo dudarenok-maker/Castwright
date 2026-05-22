@@ -25,7 +25,6 @@ owner: null
   - `DriftBookGroupView` exported from `src/modals/drift-report.tsx` for layout-level callers.
   - Snapshot fingerprint format (private `snapshotKey` in `revisions-slice.ts`) — derived from the same fields the compare card reads; changing the compare card's fields means the fingerprint must extend in lockstep.
 - **Invariants preserved**:
-  - Modal header chapter count remains *per-event*, not per-card (matches today's "N chapters flagged" surface).
   - Severity buckets (severe → moderate → mild) still order cards within a book.
   - Per-chapter Regen / Listen / Dismiss surfaces are preserved one-for-one; `onRegenerateChapter`, `onAutoQueueRegenerate`, `onDismiss` callbacks unchanged.
   - First-appearance bookId ordering preserved (anti-flicker for mid-render polls — plan 83 invariant).
@@ -37,7 +36,7 @@ owner: null
 - `selectDriftByBook` in `src/store/revisions-slice.ts:269` remains exported and stable-referenced — the slice's unit tests pin both the grouping behaviour and the reference-equality memoisation. Don't remove or break it.
 - `groupDriftEvents` produces deterministic `groupId` strings — `(bookId, characterId, snapshotKey)` joined by `|`. Tests rely on this being a stable string the testids can substring-match.
 - `DriftGroupCard` is wrapped in `React.memo` (`src/modals/drift-report.tsx`); its props must remain referentially stable across unrelated re-renders. The memoised `driftGroupsByBookView` in `layout.tsx` is what enforces this.
-- Single-chapter groups skip the expand toggle and render the action row inline. Multi-chapter groups always render the toggle + bulk actions. The behavioural distinction is `group.events.length === 1`.
+- Single-chapter groups skip the expand toggle and render the action row inline. Multi-chapter groups always render the toggle + bulk actions. The behavioural distinction is `group.chapters.length === 1` (was `group.events.length === 1` pre-correction — see "Post-ship correction" below).
 - The detailed `ProfileCompareCard` content stays visible by default at the top of every card — never hide it behind expand. The user explicitly called this out as the surface that makes drift detection meaningful.
 - **Book-title resolution** for the per-section "BOOK" header (`src/components/layout.tsx`'s `driftGroupsByBookView` memo): fall through `bookMeta.saved[bookId]?.title` → `library.books.find(b => b.bookId === bookId)?.title` → raw `bookId`. The middle step is what keeps cross-book drift cards (book never opened this session, so `bookMeta.saved` is empty) from leaking the workspace slug into the header. Don't collapse the chain — the saved-meta step has to win when present (it carries user-edited title overrides), and the raw-bookId tail catches any book whose library entry has been pruned. Pinned by `Layout — drift modal book-title fallback (plan 91)` in `src/components/layout.test.tsx`.
 - **Per-character entry scopes the modal**: clicking the amber drift pill on a cast row opens the modal scoped to that single character — both `src/views/cast.tsx` per-row click handlers (table + card layouts) dispatch `uiActions.openDriftReportForCharacter(c.id)` instead of the unscoped `setShowDriftReport(true)`. The top "Voice drift detected in N chapters" banner stays unscoped (calls `onShowDrift()` with no argument). The modal honours `filterCharacterId` by pruning each book's groups to that one character + surfaces a "Showing X · Show all characters" banner that calls `onClearFilter` to drop the filter without closing. `setShowDriftReport(false)` clears the filter so the next top-banner open starts on the full list. Race-condition guard: when the filter points at a character with zero events (drift dismissed between dispatch and render), the modal returns null instead of an empty shell. Pinned by `DriftReportModal — per-character filter (pill-click entry)` (3 cases) in `src/modals/drift-report.test.tsx` and `CastView drift pill — per-character entry to the Voice Drift Detector` in `src/views/cast.test.tsx`.
@@ -63,7 +62,7 @@ owner: null
   - `Regenerate all` fires `onRegenerateChapter` once per chapter in the group.
   - `Auto-regen all` only present when every event is `autoQueueable`; fires once per chapter when present.
   - `Dismiss all` fires `onDismiss` once per event in the group.
-  - Header "N chapters flagged" still counts every event, not every card.
+  - Header "N chapters flagged" counts unique chapters (post-correction — see "Post-ship correction" below; the original plan shipped per-event counts and was corrected later the same day).
 - **Playwright e2e** (`e2e/drift-report-multibook.spec.ts`): extended with a second case that opens the modal, asserts the consolidated Eliza card with `Show 4 chapters` toggle + bulk Regen-all + exactly one toggle (since Halloran and Marcus are single-chapter groups). Fixture extended in `src/data/drift.ts` with 3 more Eliza events sharing one snapshot — exercises the real-world bug being fixed.
 - **Book-title fallback** (`src/components/layout.test.tsx`, PR #141): 1 case `Layout — drift modal book-title fallback (plan 91)` seeds two drift books — one with both `bookMeta.saved` + `library.books`, one with library-only — asserts saved-meta wins for the first book, library-title surfaces for the second, neither raw bookId leaks into the modal as a title.
 - **Per-character filter** (`src/modals/drift-report.test.tsx`, PR #145): 3 cases under `DriftReportModal — per-character filter (pill-click entry)`: (a) `filterCharacterId` prunes non-matching cards + the banner names the filtered character + header count reflects the filtered view, (b) the "Show all characters" button calls `onClearFilter` exactly once, (c) returns null (not an empty modal shell) when the filter points at a character with zero events (race-condition guard).
@@ -113,3 +112,23 @@ Plan 91 shipped in three increments. The original consolidation landed first; bo
 - **PR #145** (merge `d2fac41`, 2026-05-22): per-character pill scope. Clicking the amber drift pill on a cast row used to open the full unscoped modal — user had to scroll to find the character. Added `ui.driftReportCharacterFilter` state field + `openDriftReportForCharacter` / `clearDriftReportCharacterFilter` actions; `DriftReportModal` now accepts `filterCharacterId` + `onClearFilter`; an in-modal "Showing X · Show all characters" banner is the escape hatch. Closing the modal also clears the filter. Invariant added under "Invariants to preserve"; 4 paired cases across `src/modals/drift-report.test.tsx` (3) + `src/views/cast.test.tsx` (1).
 
 No behaviour delta vs. the plan body — both follow-ups landed as additive invariants under the plan's original "Invariants to preserve" section, not as scope changes.
+
+## Post-ship correction (2026-05-22)
+
+The original plan preserved one invariant that turned out to be wrong: *"Modal header chapter count remains per-event, not per-card."* The server emits one `DriftEvent` per drift factor (voice / gender / ageRange / 4 tone metrics / attributes), so a single chapter that fires three factors produced three events. The "{N} chapters flagged" label was counting those events — a Keefe chapter with `voice + warmth + attributes` drift contributed +3 to the banner. The chapter strip also rendered one row per event, so the same CH NN appeared three times in a row.
+
+User-visible bug: the Voice Drift Detector showed "30 chapters flagged across 2 books" when only ~10 unique chapters were actually flagged, and the per-character "Show chapters" expander listed each chapter 2-3× depending on how many factors fired.
+
+Correction:
+
+- `groupDriftEvents` now derives a `chapters: DriftChapterEntry[]` rollup per group — one entry per unique `chapterId`, with the underlying factor-events folded into `eventIds[]`, `factors[]`, per-chapter `topSeverity`, and a `representativeEvent` for the listen-back probe.
+- The chapter strip renders `group.chapters.map(...)` instead of `group.events.map(...)`.
+- Modal banner total, per-book "{N} flagged" badge, card chapter count, and the Show/Hide toggle label all switch to `group.chapters.length`.
+- `group.severityCounts` is now per-chapter top-severity counts (so a single severe+moderate+mild chapter contributes +1 to "severe", not +1 to every bucket).
+- `single`-chapter optimisation uses `group.chapters.length === 1`, not `events.length`.
+- Regen-all + Auto-regen-all loop over `group.chapters` (was `group.events`) — one regen per chapter, not per factor.
+- Dismiss-all still loops over `group.events` because every factor-event must be dismissed individually so the chapter doesn't resurface on the next poll. Per-row Dismiss now does the same loop internally via `entry.eventIds`.
+- `group.events[]` stays exported — used by Dismiss-all and by any future surface that wants the raw event stream.
+- Per-factor labels remain visible at the card scope via the existing `group.factors` chip strip.
+
+Pinned by 4 new cases in `src/store/revisions-slice.test.ts` (`selectDriftGroupsByBook — per-chapter rollup (multi-factor dedup)`) + 2 new cases in `src/modals/drift-report.test.tsx` (`dedupes multi-factor events on the same chapter to one row + unique-chapter header count` and `single-row Dismiss on a multi-factor chapter dismisses every underlying factor-event`).
