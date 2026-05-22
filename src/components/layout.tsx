@@ -132,11 +132,18 @@ export function Layout() {
     () =>
       driftGroupsByBook.map((g) => ({
         bookId: g.bookId,
-        bookTitle: bookMetaSaved[g.bookId]?.title || g.bookId,
+        /* bookMeta.saved is sparse (only books the user has actively
+           opened/edited this session); library.books always carries a
+           clean workspace-scan title. Fall through saved → library →
+           raw bookId so cross-book drift cards don't show the slug. */
+        bookTitle:
+          bookMetaSaved[g.bookId]?.title ||
+          library.books.find((b) => b.bookId === g.bookId)?.title ||
+          g.bookId,
         characters: g.bookId === bookId ? characters : [],
         groups: g.groups,
       })),
-    [driftGroupsByBook, bookMetaSaved, characters, bookId],
+    [driftGroupsByBook, bookMetaSaved, library.books, characters, bookId],
   );
   const profileVoice = profileCharacter
     ? (voices.find((v) => v.id === profileCharacter.voiceId) ?? null)
