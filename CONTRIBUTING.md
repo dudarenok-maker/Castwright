@@ -334,6 +334,20 @@ soft enforcement plus the PR-title workflow. When the repo flips to GitHub
 Pro or goes public, enable branch protection on `main` and require the PR
 title check.
 
+### Doc-only PR fast-path
+
+A PR whose changed-file set lives entirely under `docs/**`, root-level
+`*.md` (`README.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `CHANGELOG.md`), or
+`.github/*.md` (e.g. `.github/pull_request_template.md`) skips both
+[`verify.yml`](.github/workflows/verify.yml) and
+[`e2e-mobile.yml`](.github/workflows/e2e-mobile.yml) via `paths-ignore`.
+The PR still requires a valid title (`pr-title-lint.yml` runs on every
+PR) and GitHub's native `mergeable` status still surfaces conflicts —
+the gate stays "PR required + title valid + no conflicts", just without
+the 10–15 min full battery. The moment a non-doc file is touched in the
+same PR, the full verify runs as normal. Rationale and the exact glob
+list: [docs/features/100-docs-only-ci-skip.md](docs/features/100-docs-only-ci-skip.md).
+
 ## When you ship a change
 
 The full checklist lives in [CLAUDE.md → "Before-shipping checklist"](CLAUDE.md#before-shipping-checklist).
