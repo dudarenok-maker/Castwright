@@ -36,6 +36,7 @@ function makeStore({
     showRevisionPlayer: false,
     revisionHistoryFor: null,
     showDriftReport: false,
+    driftReportCharacterFilter: null,
     previewMode: false,
     selectedModel: DEFAULT_MODEL,
     ttsModelKey: DEFAULT_TTS_MODEL,
