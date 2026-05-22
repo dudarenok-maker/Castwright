@@ -409,7 +409,8 @@
 
 /* Floating-pill-inverse — bespoke utility for surfaces that want to read
    as a dark capsule in BOTH light AND dark mode (e.g. the cast-view
-   selection bar at `src/views/cast.tsx:439`). The original implementation
+   selection bar at `src/views/cast.tsx:439`, the voices-view selection
+   pill with Compare + Merge + Clear). The original implementation
    reached for "dark in both modes" via `bg-ink text-canvas`, which was
    only a light-mode coincidence: in dark mode `--ink` inverts to cream
    and `--canvas` inverts to dark, so the pill flipped to cream and all
@@ -417,7 +418,14 @@
    button enabled-state fill, divider) painted dark-on-cream and washed
    out — making the Compare button's enabled state visually identical to
    its `disabled:opacity-40` state. This class pins the intended look
-   under both themes so the inner overlays stay readable in both. */
+   under both themes so the inner overlays stay readable in both.
+
+   The descendant overrides below pin literal cream onto the inner
+   `text-canvas` / `bg-canvas/N` Tailwind utilities, which otherwise win
+   the cascade against the pill's own `color: #f4efec` rule and flip to
+   dark-on-dark under [data-theme='dark']. Plan 98 added these
+   overrides + the hover\:bg-canvas\/25 entry for the Compare/Merge
+   buttons' hover state. */
 .floating-pill-inverse {
   background-color: var(--ink);
   color: var(--canvas);
@@ -425,6 +433,27 @@
 [data-theme='dark'] .floating-pill-inverse {
   background-color: #14110f; /* canvas literal — stays dark when --canvas flips */
   color: #f4efec; /* ink literal — stays cream when --ink flips */
+}
+[data-theme='dark'] .floating-pill-inverse .text-canvas {
+  color: #f4efec;
+}
+[data-theme='dark'] .floating-pill-inverse .text-canvas\/60 {
+  color: rgba(244, 239, 236, 0.6);
+}
+[data-theme='dark'] .floating-pill-inverse .text-canvas\/70 {
+  color: rgba(244, 239, 236, 0.7);
+}
+[data-theme='dark'] .floating-pill-inverse .hover\:text-canvas:hover {
+  color: #f4efec;
+}
+[data-theme='dark'] .floating-pill-inverse .bg-canvas\/15 {
+  background-color: rgba(244, 239, 236, 0.15);
+}
+[data-theme='dark'] .floating-pill-inverse .bg-canvas\/20 {
+  background-color: rgba(244, 239, 236, 0.2);
+}
+[data-theme='dark'] .floating-pill-inverse .hover\:bg-canvas\/25:hover {
+  background-color: rgba(244, 239, 236, 0.25);
 }
 
 /* Page chrome -------------------------------------------------------------- */

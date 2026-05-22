@@ -13,7 +13,6 @@
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import {
-  mkdtempSync,
   rmSync,
   mkdirSync,
   writeFileSync,
@@ -21,6 +20,7 @@ import {
   existsSync,
   copyFileSync,
 } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +37,10 @@ let app: Express;
 let bookId: string;
 
 beforeAll(async () => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-changelog-test-'));
+  /* BACKLOG Could #33 — async mkdtemp yields the event loop during
+     Windows AV/OneDrive tmpdir contention so other workers can interleave
+     instead of blocking on a sync syscall. */
+  workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-changelog-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
   const [{ bookStateRouter }, { makeBookId }] = await Promise.all([

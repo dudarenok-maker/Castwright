@@ -1,0 +1,89 @@
+name: E2E Mobile
+
+# BACKLOG Should #3 — non-blocking mobile + tablet e2e check on every PR.
+# Runs `npm run test:e2e:mobile` (mobile-chrome + tablet-chrome projects)
+# so layout regressions at 412x915 / 834x1194 viewports show up in the
+# PR status checks. Marked `continue-on-error` so a red signal is visible
+# but doesn't block merge — the gate is informational, mirroring the
+# pre-push budget decision in plan 81: mobile is opt-in for local
+# iteration and mandatory-visibility in CI.
+#
+# Mirrors verify.yml's setup (Node 24, ffmpeg, npm + Playwright caches)
+# so the warm-cache path matches. The differentiating bit is the command
+# (`test:e2e:mobile` not `verify`) plus the continue-on-error step.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Cancel an in-flight run when the PR is updated; the new commit's run
+# supersedes any prior one for the same PR.
+concurrency:
+  group: e2e-mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-mobile:
+    name: npm run test:e2e:mobile
+    runs-on: ubuntu-latest
+    # Mobile e2e is bounded by 17 spec runs across two viewport projects
+    # at --workers=2; ~30 s warm, ~3 min cold. 15 min cap matches verify.yml
+    # so a runaway run can't hang a PR forever.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      # ffmpeg needed because `npm ci` runs the server's pretest hook on
+      # any subsequent test invocation; bringing it onto PATH up front
+      # avoids surprises if the test:e2e command path ever shells out.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install server deps
+        run: npm --prefix server ci
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      # `continue-on-error: true` keeps the check non-blocking — the PR
+      # status badge shows red, but the workflow doesn't fail the
+      # required-checks gate. Promote to blocking once the e2e:mobile
+      # baselines stabilise.
+      - name: E2E Mobile
+        continue-on-error: true
+        run: npm run test:e2e:mobile
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-mobile
+          path: playwright-report/
+          retention-days: 7

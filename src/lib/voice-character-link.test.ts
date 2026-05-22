@@ -6,7 +6,11 @@
    findCharacterForVoice fixes both call sites. */
 
 import { describe, expect, it } from 'vitest';
-import { findVoiceForCharacter, findCharacterForVoice } from './voice-character-link';
+import {
+  findVoiceForCharacter,
+  findCharacterForVoice,
+  pickMergeSurvivor,
+} from './voice-character-link';
 import type { Character, Voice } from './types';
 
 const makeChar = (id: string, voiceId?: string): Character => ({
@@ -75,5 +79,53 @@ describe('findCharacterForVoice', () => {
     const v = makeVoice('v_orphan', 'Orphan');
     const characters = [makeChar('Marlow')];
     expect(findCharacterForVoice(v, characters)).toBeUndefined();
+  });
+});
+
+describe('pickMergeSurvivor', () => {
+  const makeNamedChar = (id: string, name: string): Character => ({
+    id,
+    name,
+    role: 'role',
+    color: id,
+    voiceState: 'generated',
+  });
+
+  it('picks the containing name as the survivor (substring rule, case-insensitive)', () => {
+    const Wren = makeNamedChar('Wren', 'Wren');
+    const WrenFoster = makeNamedChar('Wren-foster', 'Wren Sparrow');
+    const r1 = pickMergeSurvivor(Wren, WrenFoster);
+    expect(r1.target.id).toBe('Wren-foster');
+    expect(r1.source.id).toBe('Wren');
+    const r2 = pickMergeSurvivor(WrenFoster, Wren);
+    expect(r2.target.id).toBe('Wren-foster');
+    expect(r2.source.id).toBe('Wren');
+    const r3 = pickMergeSurvivor(
+      makeNamedChar('a', 'Wren'),
+      makeNamedChar('b', 'Wren Sparrow'),
+    );
+    expect(r3.target.id).toBe('b');
+  });
+
+  it('falls back to longer trimmed name when neither name contains the other', () => {
+    const a = makeNamedChar('a', 'Marlow');
+    const b = makeNamedChar('b', 'Edda Redek');
+    const r = pickMergeSurvivor(a, b);
+    expect(r.target.id).toBe('b');
+    expect(r.source.id).toBe('a');
+  });
+
+  it('keeps the first-selected character as survivor on a length tie (stable tiebreaker)', () => {
+    const a = makeNamedChar('a', 'Maelor');
+    const b = makeNamedChar('b', 'Castor');
+    /* Equal trimmed length (5 vs 6 → not a tie; use real tie) */
+    const a2 = makeNamedChar('a2', 'Maelor');
+    const b2 = makeNamedChar('b2', 'Bram');
+    const r = pickMergeSurvivor(a2, b2);
+    expect(r.target.id).toBe('a2');
+    expect(r.source.id).toBe('b2');
+    /* Sanity: different lengths still resolve to the longer one */
+    const r2 = pickMergeSurvivor(a, b);
+    expect(r2.target.id).toBe('b');
   });
 });

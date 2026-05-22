@@ -12,7 +12,8 @@
    ticks for assertions. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -67,7 +68,8 @@ function parseTicks(body: string): ParsedTick[] {
 }
 
 beforeAll(async () => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-generation-test-'));
+  /* BACKLOG Could #33 — async mkdtemp under Windows tmpdir contention. */
+  workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-generation-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
   /* Plan 87 — default test concurrency is K=1 so the existing assertions
      stay byte-identical to the pre-pool serial loop. The new parallel
