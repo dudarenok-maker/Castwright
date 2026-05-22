@@ -4,11 +4,12 @@
 // repo without fighting over :5173 / :8080 / :9000 / :5174.
 //
 // Usage:
-//   node scripts/wt-new.mjs <type>/<scope>-<slug> [--from <base-branch>]
+//   node scripts/wt-new.mjs <type>/<scope>-<slug> [--from <base-branch>] [--no-install]
 //
 // Example:
 //   node scripts/wt-new.mjs feat/server-batch-retry
 //   node scripts/wt-new.mjs fix/frontend-toolbar --from main
+//   node scripts/wt-new.mjs chore/frontend-tidy --no-install
 //
 // What it does:
 //   1. Validates the branch name (CONTRIBUTING.md "Branch naming").
@@ -16,7 +17,11 @@
 //   3. Creates ../wt-<slug> via `git worktree add -b <branch> <path> <base>`.
 //   4. Writes <worktree>/.env.local with VITE_PORT / PORT / VITE_API_PORT /
 //      LOCAL_TTS_PORT / PLAYWRIGHT_PORT for this slot.
-//   5. Prints a copy-pasteable launch block.
+//   5. Runs `npm install` (root, which also activates husky hooks via the
+//      `prepare` script) + `npm install --prefix server` inside the worktree
+//      so it's ready for `npm run dev` / `npm run verify` immediately. Pass
+//      `--no-install` to skip both — falls back to printing the commands.
+//   6. Prints a copy-pasteable launch block.
 //
 // See CONTRIBUTING.md "Running multiple Claude Code conversations" for the
 // scope-discipline + GPU-coordination caveats.
@@ -49,13 +54,15 @@ function usage(extra) {
   return lines.join('\n');
 }
 
-function parseArgs(argv) {
-  const args = { branch: null, from: 'main' };
+export function parseArgs(argv) {
+  const args = { branch: null, from: 'main', install: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--from') {
       args.from = argv[++i];
       if (!args.from) throw new Error('--from requires a value');
+    } else if (a === '--no-install') {
+      args.install = false;
     } else if (a === '-h' || a === '--help') {
       args.help = true;
     } else if (a.startsWith('--')) {
@@ -121,9 +128,37 @@ function repoRoot() {
   return gitOrThrow(['rev-parse', '--show-toplevel']).trim();
 }
 
-function renderLaunchBlock({ worktreePath, branch, ports, slot }) {
+export function buildInstallCommands(worktreePath) {
+  const cmds = [
+    { label: 'root', args: ['install'], cwd: worktreePath },
+  ];
+  if (existsSync(join(worktreePath, 'server', 'package.json'))) {
+    cmds.push({ label: 'server', args: ['install', '--prefix', 'server'], cwd: worktreePath });
+  }
+  return cmds;
+}
+
+function runInstalls(worktreePath) {
+  const cmds = buildInstallCommands(worktreePath);
+  for (const { label, args, cwd } of cmds) {
+    process.stdout.write(`[wt-new] ${label} install: npm ${args.join(' ')} (in ${cwd})\n`);
+    const result = spawnSync('npm', args, {
+      cwd,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    });
+    if (result.error) {
+      throw new Error(`npm ${label} install failed to spawn: ${result.error.message}`);
+    }
+    if (result.status !== 0) {
+      throw new Error(`npm ${label} install exited ${result.status}`);
+    }
+  }
+}
+
+export function renderLaunchBlock({ worktreePath, branch, ports, slot, install }) {
   const winPath = worktreePath.replace(/\//g, '\\');
-  return [
+  const lines = [
     ``,
     `[wt-new] slot ${slot} → ports VITE=${ports.VITE_PORT} API=${ports.PORT} TTS=${ports.LOCAL_TTS_PORT} E2E=${ports.PLAYWRIGHT_PORT}`,
     `[wt-new] worktree created at ${worktreePath}`,
@@ -132,12 +167,16 @@ function renderLaunchBlock({ worktreePath, branch, ports, slot }) {
     `Next steps — paste into a new terminal:`,
     ``,
     `  cd "${winPath}"`,
-    `  npm install        # first time in a new worktree only`,
-    `  npm run dev        # frontend :${ports.VITE_PORT}, server :${ports.PORT}`,
-    `  # in another tab:`,
-    `  claude             # launch a parallel Claude Code session here`,
-    ``,
-  ].join('\n');
+  ];
+  if (install === false) {
+    lines.push(`  npm install                  # root deps + husky hooks (skipped: --no-install)`);
+    lines.push(`  npm install --prefix server  # server-side deps (skipped: --no-install)`);
+  }
+  lines.push(`  npm run dev        # frontend :${ports.VITE_PORT}, server :${ports.PORT}`);
+  lines.push(`  # in another tab:`);
+  lines.push(`  claude             # launch a parallel Claude Code session here`);
+  lines.push(``);
+  return lines.join('\n');
 }
 
 export async function main(argv) {
@@ -186,7 +225,22 @@ export async function main(argv) {
   writeFileSync(envPath, renderEnvLocal({ slot, branch: args.branch, ports }), 'utf8');
   process.stdout.write(`[wt-new] wrote ${envPath}\n`);
 
-  process.stdout.write(renderLaunchBlock({ worktreePath, branch: args.branch, ports, slot }));
+  if (args.install) {
+    try {
+      runInstalls(worktreePath);
+    } catch (err) {
+      process.stderr.write(`[wt-new] install step failed: ${err.message}\n`);
+      process.stderr.write(`[wt-new] worktree at ${worktreePath} is created but deps are NOT installed.\n`);
+      process.stderr.write(`[wt-new] resume manually: cd "${worktreePath}" && npm install && npm install --prefix server\n`);
+      return 1;
+    }
+  } else {
+    process.stdout.write(`[wt-new] --no-install: skipping npm install steps\n`);
+  }
+
+  process.stdout.write(
+    renderLaunchBlock({ worktreePath, branch: args.branch, ports, slot, install: args.install }),
+  );
   return 0;
 }
 
