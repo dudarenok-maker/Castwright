@@ -13,6 +13,7 @@ import { computeOverallProgress } from '../lib/analysis-progress';
 import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../lib/models';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import { PhaseCard, type ConnState } from '../components/analysing/phase-card';
+import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -920,9 +921,43 @@ export function AnalysingView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manuscriptId, isLocalAnalyzer, ollamaHealth, pendingAnalyzerPill]);
 
+  const isAnalysisRunning = conn === 'streaming' || conn === 'connecting';
+  /* Single source of truth for the Pause/Resume/Start cycle. Both the
+     original header button (inside the centred column) and the new
+     `<StickyAnalysisBar/>` (which pins on scroll) call this — keeping
+     them in lockstep means there's no chance of one button showing
+     "Pause" while the other shows "Resume". */
+  const handlePauseOrResume = () => {
+    if (isAnalysisRunning) {
+      analysisControllerRef.current?.abort();
+      if (manuscriptId) dispatch(analysisActions.setPaused({ manuscriptId }));
+      setAnalysisStarted(false);
+      setConn('idle');
+    } else {
+      setAnalysisStarted(true);
+      setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
+    }
+  };
+
   return (
-    <div className="relative min-h-[calc(100vh-64px)] flex items-center justify-center px-6 py-16">
+    <div className="relative min-h-[calc(100vh-64px)] flex flex-col items-center px-6 py-16">
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-60 pointer-events-none" />
+      {/* Sticky bar lives only while the SSE is in flight. Outside the
+          streaming/connecting window the inline header button handles
+          Start / Resume — there is never a moment with both surfaces
+          competing for the same affordance. */}
+      {manuscriptId && isAnalysisRunning && (
+        <div className="relative w-full max-w-2xl">
+          <StickyAnalysisBar
+            activePhaseId={phase}
+            conn={conn}
+            isRunning={isAnalysisRunning}
+            hasStartedOnce={hasStartedOnceRef.current}
+            isAnalyzerReady={isAnalyzerReady}
+            onPauseOrResume={handlePauseOrResume}
+          />
+        </div>
+      )}
       <div className="relative max-w-2xl w-full">
         <div className="text-center mb-10">
           <SectionLabel>Analysing</SectionLabel>
@@ -968,40 +1003,21 @@ export function AnalysingView({
               immediately bounce, looking like a broken button to the
               user. For Gemini the button enables as soon as the
               manuscript is loaded (no local lifecycle to wait on). */}
+          {/* Inline Start/Resume button. Hidden while the SSE is in flight —
+              the sticky bar's Pause button takes over once isAnalysisRunning
+              is true (the two surfaces are mutually exclusive by design,
+              never duplicate). */}
           {manuscriptId &&
             conn !== 'done' &&
+            !isAnalysisRunning &&
             (() => {
-              const isRunning = conn === 'streaming' || conn === 'connecting';
-              const label = isRunning
-                ? 'Pause analysis'
-                : isAnalyzerReady
-                  ? hasStartedOnceRef.current
-                    ? 'Resume analysis'
-                    : 'Start analysis'
-                  : 'Waiting for analyzer…';
-              const onClick = () => {
-                if (isRunning) {
-                  /* Imperative abort tears down the per-tab fetch consumer
-                   so conn flips to idle immediately (without waiting on
-                   effect cleanup). Dispatching setPaused additionally
-                   fires the server-side /analysis/pause via the
-                   analysis-stream middleware — post-B1 the server
-                   treats SSE close as "unsubscribe" and won't actually
-                   stop the analyzer without this explicit signal. */
-                  analysisControllerRef.current?.abort();
-                  if (manuscriptId) dispatch(analysisActions.setPaused({ manuscriptId }));
-                  setAnalysisStarted(false);
-                  setConn('idle');
-                } else {
-                  /* Resume after a pause — bump retry.nonce so the effect
-                   re-runs even if analysisStarted is already true (it
-                   isn't here, but bumping is the established idiom for
-                   re-entering the effect, see Try again at the error
-                   panel below). */
-                  setAnalysisStarted(true);
-                  setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
-                }
-              };
+              const isRunning = false;
+              const label = isAnalyzerReady
+                ? hasStartedOnceRef.current
+                  ? 'Resume analysis'
+                  : 'Start analysis'
+                : 'Waiting for analyzer…';
+              const onClick = handlePauseOrResume;
               const disabled = !isRunning && !isAnalyzerReady;
               return (
                 <div className="mt-6 flex flex-col items-center gap-2">
