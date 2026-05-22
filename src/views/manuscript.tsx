@@ -189,6 +189,17 @@ export function ManuscriptView({
     return m;
   }, [sentences, currentChapterId]);
 
+  /* Order the Detected sidebar by line count in the current chapter so
+     the user lands on the busiest speakers first — no scroll past silent
+     characters to filter / reassign the chapter's actual dialogue. Roster
+     order is the stable tiebreaker, so equal-count rows (notably the
+     zero-count tail) keep their original order. */
+  const sortedDetectedCharacters = useMemo(() => {
+    const indexed = characters.map((c, i) => ({ c, i, n: counts[c.id] ?? 0 }));
+    indexed.sort((a, b) => b.n - a.n || a.i - b.i);
+    return indexed.map((x) => x.c);
+  }, [characters, counts]);
+
   /* Sentences scoped to the current chapter — used by the low-confidence
      stat. Keep separate from the segments loop so memo invalidation is
      granular. */
@@ -508,7 +519,7 @@ export function ManuscriptView({
       currentChapterId={currentChapterId}
       onChapterPick={handleChapterPick}
       chapterRowRefs={chapterRowRefs}
-      characters={characters}
+      characters={sortedDetectedCharacters}
       counts={counts}
       filterChar={filterChar}
       setFilterChar={setFilterChar}
@@ -960,10 +971,15 @@ function SidebarPanels({
             {characters.map((c) => {
               const active = filterChar === c.id;
               const cc = CHAR_COLORS[c.color as CharColor] ?? CHAR_COLORS.narrator;
+              /* Silent in this chapter — dim but still clickable so
+                 cross-chapter reassignment / filter targeting still
+                 reaches characters who never speak here. */
+              const silent = !active && (counts[c.id] ?? 0) === 0;
               return (
                 <li key={c.id}>
                   <div
-                    className={`group/char relative w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'}`}
+                    data-character-id={c.id}
+                    className={`group/char relative w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'} ${silent ? 'opacity-60' : ''}`}
                     style={
                       active
                         ? { background: cc.tint, boxShadow: `inset 0 0 0 1px ${cc.ring}` }
