@@ -198,7 +198,7 @@ Per [[feedback_parallel_vs_sequential_agents]] and [[feedback_worktree_when_para
 
 - Non-blocking GitHub Actions workflow running `test:e2e:mobile` on every PR so the mobile coverage matrix gets visibility without blowing the pre-push budget.
 - Bless mobile + tablet visual baselines per Playwright project once layouts stabilise — `visual.spec.ts` is chromium-only today.
-- Investigate the browser-launch contention surfaced when 3 Playwright projects run in parallel locally (the timeout errors during Wave 5 dev were resource-pressure failures, not real layout bugs — reducing worker count for the mobile suite likely fixes it).
+- ~~Investigate the browser-launch contention surfaced when 3 Playwright projects run in parallel locally (the timeout errors during Wave 5 dev were resource-pressure failures, not real layout bugs — reducing worker count for the mobile suite likely fixes it).~~ **Shipped 2026-05-22** via PR `fix/e2e-and-mobile-workers` — `test:e2e:mobile` now passes `--workers=2` (`package.json:32`), capping concurrent browser launches below the dev box's process-slot ceiling. See `docs/features/archive/37-e2e-playwright.md#reliability-addendum-2026-05-22` for the full story.
 - In-app dev-settings LAN banner with one-click "Copy LAN URL" + "Install cert on phone" link.
 - Broad hover-affordance audit (sweep all `group-hover:`/`peer-hover:`/`hover:opacity-0` usages with the new `coarse-pointer:` Tailwind variant Wave 4 shipped).
 - Pre-existing pre-commit hook bug in `scripts/tests/bump-version.test.mjs` (GIT_DIR/GIT_WORK_TREE inheritance in worktree contexts).

@@ -28,6 +28,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
+import { waitForRouteReady } from './helpers';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -71,6 +72,7 @@ test.describe('plan 58 — binary upload (mock)', () => {
       }
 
       await page.goto('/#/new');
+      await waitForRouteReady(page);
       await expect(page).toHaveURL(/#\/new$/);
 
       /* Locate the hidden file input. The Upload view's <input> has
