@@ -268,7 +268,13 @@ export function UploadView() {
             value={selectedModel}
             disabled={busy}
             onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
-            className="w-full sm:w-auto min-h-[44px] px-3 py-1.5 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 focus:outline-none focus:border-peach disabled:opacity-50"
+            /* `sm:max-w-md min-w-0` keeps the natural-width select from
+               blowing past the container at tablet (834 px) — option
+               text like "Qwen3.5 4B (local) — Recommended default …"
+               otherwise pushes intrinsic width to ~720 px and exceeds
+               the max-w-3xl wrapper plus sm:px-6. Phone (`<sm`) stays
+               w-full per the original responsive intent. */
+            className="w-full sm:w-auto sm:max-w-md min-w-0 min-h-[44px] px-3 py-1.5 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 focus:outline-none focus:border-peach disabled:opacity-50 truncate"
           >
             {MODEL_OPTION_GROUPS.map((g) => (
               <optgroup key={g.engine} label={g.label}>
