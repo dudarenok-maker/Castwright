@@ -1849,7 +1849,7 @@ export interface components {
          *     filter. Mirrors `LoudnormSidecarJson` in
          *     `server/src/tts/loudnorm.ts`; field names are stable contract
          *     with the on-disk sidecar JSON (do not rename without bumping the
-         *     sidecar schema). See `docs/features/71-audio-loudness-normalization.md`.
+         *     sidecar schema). See `docs/features/archive/71-audio-loudness-normalization.md`.
          */
         ChapterLoudness: {
             /**
