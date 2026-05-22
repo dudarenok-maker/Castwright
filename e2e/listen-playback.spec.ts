@@ -10,6 +10,7 @@
  * Pairs with docs/features/37-e2e-playwright.md. */
 
 import { test, expect } from '@playwright/test';
+import { waitForListenViewReady } from './helpers';
 
 /* Plan 58 — un-quarantined 2026-05-19. The earlier quarantine was a
    parallel-worker contention problem: the audio.currentTime poll
@@ -27,18 +28,11 @@ test.describe('listen view + mini-player', () => {
     await page.goto('/#/books/sb/listen');
     await expect(page).toHaveURL(/#\/books\/sb\/listen/);
 
-    /* Header is "Loading…" until book-meta hydrates. Wait for the real
-       title so the playlist below is also hydrated. */
-    await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 })).toBeVisible({
-      timeout: 5_000,
-    });
+    /* Both signals (title + Play button enabled) — BACKLOG Should #12
+       per-view hydration helper. */
+    await waitForListenViewReady(page, /Solway Bay/i);
 
-    /* "Play from the start" enables once `listenable.length > 0` —
-       i.e. once mockGetBookState's seeded chapters have hydrated into
-       the chapters slice and the cross-book guard sees them. */
     const playButton = page.getByRole('button', { name: /Play from the start/i });
-    await expect(playButton).toBeVisible({ timeout: 5_000 });
-    await expect(playButton).toBeEnabled({ timeout: 5_000 });
     await playButton.click();
 
     /* Clicking play mounts the MiniPlayer in the Layout (see
