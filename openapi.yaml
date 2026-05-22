@@ -931,6 +931,105 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/VoiceMatchResponse' }
 
+  /api/queue:
+    get:
+      summary: Read the workspace-level chapter-generation queue
+      operationId: getQueue
+      description: |
+        Single-file workspace queue persisted to `<workspace>/.queue.json`.
+        Aggregated across all books — entries from different books interleave
+        based on `order`. Drains FIFO, one entry at a time. Read on app cold
+        boot to restore the queue across reloads. See plan
+        `docs/features/102-global-queue-modal.md`.
+      responses:
+        '200':
+          description: Queue snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueListResponse' }
+
+  /api/queue/enqueue:
+    post:
+      summary: Append entries to the workspace queue
+      operationId: enqueueQueueEntries
+      description: |
+        Appends one or more entries to the bottom of the queue. The frontend
+        pre-expands `scope: 'forward'` (regenerate chapter N + all subsequent)
+        into per-chapter ids before posting, so this route only sees scoped
+        entries that map 1:1 to a chapter id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QueueEnqueueRequest' }
+      responses:
+        '200':
+          description: Resulting queue snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueListResponse' }
+
+  /api/queue/reorder:
+    post:
+      summary: Reorder the workspace queue (excluding the in-flight pinned entry)
+      operationId: reorderQueue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QueueReorderRequest' }
+      responses:
+        '200':
+          description: Resulting queue snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueListResponse' }
+        '409':
+          description: Order list doesn't match current non-pinned entries (e.g. stale view after a concurrent enqueue).
+
+  /api/queue/pause:
+    post:
+      summary: Toggle queue-global pause
+      operationId: setQueuePaused
+      description: |
+        Sets the queue-global `paused` flag. When true, the dispatcher waits
+        at the next chapter boundary — the currently in-flight chapter runs
+        to completion, then the queue stops. Resume by POSTing `{ paused:
+        false }`. Persists to `<workspace>/.queue.json`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paused]
+              properties:
+                paused: { type: boolean }
+      responses:
+        '200':
+          description: Resulting queue snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueListResponse' }
+
+  /api/queue/{entryId}:
+    delete:
+      summary: Cancel (remove) a queued entry
+      operationId: cancelQueueEntry
+      description: |
+        Removes the entry from the queue. Refuses with 409 if the entry is
+        currently `in_progress` — the user must Pause first.
+      parameters:
+        - { in: path, name: entryId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Resulting queue snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueListResponse' }
+        '409':
+          description: Entry is in_progress; pause the queue first.
+
   /api/books/{bookId}/generation:
     post:
       summary: Generate chapter audio with progress streaming
@@ -941,7 +1040,12 @@ paths:
         analysis`). Each `data: <json>` payload follows the GenerationTick
         schema. Synthesises chapters one at a time; per-chapter completion
         writes `audio/<chapterSlug>.mp3` + `audio/<chapterSlug>.segments.json`
-        into the workspace book directory.
+        into the workspace book directory. On every new subscriber (cold
+        connect AND post-reconnect during dev `tsx watch` restarts or
+        production server bounce), the server emits a `resume_from` ack as
+        the first event carrying the snapshot of completed chapter ids for
+        the active queue entry so the reconnect doesn't replay. See plan
+        `docs/features/102-global-queue-modal.md`.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       requestBody:
@@ -2200,12 +2304,17 @@ components:
       properties:
         type:
           type: string
-          enum: [progress, chapter_assembling, chapter_complete, chapter_failed, idle]
+          enum: [progress, chapter_assembling, chapter_complete, chapter_failed, idle, resume_from]
           description: |
             `chapter_assembling` is emitted between the last per-group synthesis
             tick and `chapter_complete`, while the server concatenates the PCM,
             writes the MP3 + segments JSON, and updates state.json. Surfaces
             the disk-write phase so the UI doesn't look stalled at 99 %.
+            `resume_from` is emitted as the FIRST event on every new subscriber
+            (cold connect AND reconnect after `tsx watch` restart or server
+            bounce) and carries a snapshot of completed chapter ids for the
+            active queue entry so the reconnect doesn't replay completed work.
+            See plan `docs/features/102-global-queue-modal.md`.
         chapterId: { type: integer }
         characterId:
           type: string
@@ -2259,6 +2368,113 @@ components:
             engine-drift badge appear only after page navigation). See
             `docs/features/35-engine-drift-detection.md`.
         errorReason: { type: string, nullable: true }
+        queueEntryId:
+          type: string
+          description: |
+            On `progress`, `chapter_assembling`, `chapter_complete`,
+            `chapter_failed`, and `resume_from` — the workspace queue entry
+            this tick belongs to. Lets the frontend map ticks to the right
+            queue row even when entries from different books interleave.
+            Optional for backward compat — older servers (pre-plan-102) omit
+            it and the frontend falls back to (bookId, chapterId) matching.
+        resumeFromCompletedChapterIds:
+          type: array
+          items: { type: integer }
+          description: |
+            Only on `resume_from` — list of chapter ids already complete on
+            disk for the active queue entry's containing run, so the frontend
+            can skip replaying `chapter_complete` ticks for them when the
+            server catches a new subscriber up.
+
+    # --- Generation queue ------------------------------------------
+
+    QueueEntry:
+      type: object
+      required: [id, bookId, chapterId, scope, addedAt, status, order]
+      properties:
+        id:
+          type: string
+          description: Stable unique entry id. Frontend-minted at enqueue time.
+        bookId: { type: string }
+        chapterId: { type: integer }
+        scope:
+          type: string
+          enum: [this, character]
+          description: |
+            `this` = (re)generate the named chapter. `character` = regenerate
+            the named character's lines in this chapter only. `forward` scope
+            (regenerate chapter N + all subsequent) is expanded by the
+            frontend at enqueue time into one `this` entry per affected
+            chapter — the slice never carries `forward` as a single row, so
+            every queue entry maps 1:1 to a chapter and the user can reorder
+            each chapter in a forward range individually.
+        characterId:
+          type: string
+          nullable: true
+          description: Required when scope === 'character'; null otherwise.
+        addedAt:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp the entry was enqueued. Drives FIFO ordering when ties on `order` occur during concurrent enqueues.
+        status:
+          type: string
+          enum: [queued, in_progress, paused, done, failed]
+          description: |
+            `queued` = waiting. `in_progress` = currently synthesising
+            (pinned; non-draggable in the modal). `paused` = queue-global
+            pause flipped; still ordered, drains on resume. `done` = audio
+            on disk for this entry's chapter. `failed` = synthesis errored;
+            surfaces in the modal with a retry affordance.
+        order:
+          type: integer
+          description: Cross-book ordinal within the workspace queue. 0 = first to drain. Renumbered on every reorder.
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Per-entry render progress (0..1), mirrored from the active GenerationTick.
+        errorReason:
+          type: string
+          nullable: true
+          description: Populated when status === 'failed'.
+
+    QueueListResponse:
+      type: object
+      required: [entries, paused]
+      properties:
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/QueueEntry' }
+          description: All workspace queue entries, sorted by `order` ascending.
+        paused:
+          type: boolean
+          description: Queue-global pause flag. When true, the dispatcher waits at the next chapter boundary.
+
+    QueueEnqueueRequest:
+      type: object
+      required: [bookId, chapterIds]
+      properties:
+        bookId: { type: string }
+        chapterIds:
+          type: array
+          items: { type: integer }
+          description: One or more chapter ids to enqueue. The frontend pre-expands `forward` scope into per-chapter ids before posting.
+        scope:
+          type: string
+          enum: [this, character]
+          default: this
+        characterId:
+          type: string
+          description: Required when scope === 'character'.
+
+    QueueReorderRequest:
+      type: object
+      required: [order]
+      properties:
+        order:
+          type: array
+          items: { type: string }
+          description: Full list of entry ids in the desired final order. Server validates the list matches the current queue minus the in-flight pinned entry; mismatch returns 409 (concurrent enqueue happened; client refetches and retries).
 
     # --- Voice samples ---------------------------------------------
     VoiceSampleRequest:
