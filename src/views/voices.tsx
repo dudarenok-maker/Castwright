@@ -3,7 +3,14 @@ import { SectionLabel, MixedHeading, VoiceSwatch } from '../components/primitive
 import { StatTile } from '../components/stat-tiles';
 import { VoiceCard } from '../components/voice-library-panel';
 import { IconPlay } from '../lib/icons';
-import type { BaseVoice, Character, TtsEngine, TtsModelKey, Voice } from '../lib/types';
+import type {
+  BaseVoice,
+  Character,
+  LibraryBook,
+  TtsEngine,
+  TtsModelKey,
+  Voice,
+} from '../lib/types';
 import {
   TTS_ENGINES,
   engineForModelKey,
@@ -21,6 +28,15 @@ import { playBaseVoiceSampleWithAutoLoad } from '../lib/play-sample-with-auto-lo
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { findCharacterForVoice, pickMergeSurvivor } from '../lib/voice-character-link';
 import { CompareCastModal } from '../modals/compare-cast-modal';
+import {
+  DuplicateReviewModal,
+  type DuplicateReviewPair,
+} from '../modals/duplicate-review-modal';
+import {
+  detectDuplicateCandidates,
+  type BookSeriesInfo,
+  type DuplicateCandidate,
+} from '../lib/cross-book-duplicates';
 
 type Tab = 'all' | 'current' | 'library' | 'base';
 
@@ -69,6 +85,12 @@ const ENGINE_LABEL: Record<TtsEngine, string> = {
   kokoro: 'Kokoro',
 };
 
+/* Plan 101 — module-level empty list for the defensive library-books
+   selector below. Lives outside the component so the selector returns
+   the SAME reference across renders when the slice is missing, keeping
+   useMemo deps stable in tests that don't register the library slice. */
+const EMPTY_LIBRARY_BOOKS: LibraryBook[] = [];
+
 /* Bucket / narrator ids the pill's Merge action refuses to act on. Mirrors
    the guards profile-drawer.tsx uses for its own merge picker — merging
    into or out of a standing background bucket would corrupt the
@@ -105,6 +127,9 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   );
   const [globalCastFailed, setGlobalCastFailed] = useState<Set<string>>(() => new Set());
   const [globalCastFetching, setGlobalCastFetching] = useState<Set<string>>(() => new Set());
+  /* Plan 101 — DuplicateReviewModal state. `duplicatePair` is the pair
+     currently under review; null when the modal is closed. */
+  const [duplicatePair, setDuplicatePair] = useState<DuplicateReviewPair | null>(null);
   const dispatch = useAppDispatch();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const baseVoices = useAppSelector((s) => s.voices.baseVoices);
@@ -118,6 +143,19 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null,
   );
   const characters = useAppSelector((s) => s.cast.characters);
+  /* Plan 101 — series metadata per bookId for cross-book duplicate
+     detection. The library slice carries the (author, series,
+     isStandalone) trio for every book; combining it with `globalCastCache`
+     + redux `characters` gives us enough to compute pairwise duplicate
+     candidates client-side without any new fetches.
+
+     Defensive read: existing test stores composed before plan 101 don't
+     register the library slice — fall back to an empty list so the memo
+     simply emits zero candidates and nothing breaks. The real app store
+     always carries it (registered in `src/store/index.ts`). */
+  const libraryBooks = useAppSelector(
+    (s) => (s as { library?: { books?: LibraryBook[] } }).library?.books ?? EMPTY_LIBRARY_BOOKS,
+  );
   const playback = useSamplePlayback();
   const activeEngine = engineForModelKey(ttsModelKey);
 
@@ -254,6 +292,74 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     mergeTarget,
     mergeDisabledReason,
   } = compareDerivations;
+
+  /* Plan 101 — pure duplicate-candidate derivation. Same-series same-base-
+     voice cross-book pairs whose normalised names dedup-match (per the
+     `series-prior-dedup` rule) and that aren't already linked via aliases
+     or marked as variants via `notLinkedTo`. Hydrated context sources:
+     library slice (series metadata), redux cast (open book), foreign-cast
+     cache (other books fetched on demand). When a book's cast isn't
+     loaded yet the auto-flag still surfaces (better mild false-positive
+     than silent miss); the filter kicks in as casts hydrate. */
+  const duplicateCandidates = useMemo<DuplicateCandidate[]>(() => {
+    if (library.length < 2 || libraryBooks.length === 0) return [];
+    const seriesByBookId = new Map<string, BookSeriesInfo>();
+    for (const b of libraryBooks) {
+      seriesByBookId.set(b.bookId, {
+        author: b.author,
+        series: b.series,
+        isStandalone: b.isStandalone,
+      });
+    }
+    const charactersByBookId = new Map<string, Character[]>(globalCastCache);
+    if (currentBookId) charactersByBookId.set(currentBookId, characters);
+    return detectDuplicateCandidates({
+      library,
+      seriesByBookId,
+      charactersByBookId,
+    });
+  }, [library, libraryBooks, currentBookId, characters, globalCastCache]);
+
+  /* Group candidates by family key so each family card knows how many to
+     surface in its ⚠ pill. Single-pass map build to keep the family
+     render path O(N) on the candidate count. */
+  const candidatesByFamily = useMemo(() => {
+    const map = new Map<string, DuplicateCandidate[]>();
+    for (const c of duplicateCandidates) {
+      const list = map.get(c.voiceKey) ?? [];
+      list.push(c);
+      map.set(c.voiceKey, list);
+    }
+    return map;
+  }, [duplicateCandidates]);
+
+  /* When the selection-pill shows a cross-book same-base-voice pair, is
+     there a duplicate candidate matching that exact pair? If yes, the
+     pill replaces the disabled "Cross-book merges aren't supported"
+     Merge button with a "Review duplicate ↗" button that opens the
+     modal pre-populated. */
+  const selectionDuplicateCandidate = useMemo<DuplicateCandidate | null>(() => {
+    if (selectedVoices.length !== 2 || badge !== 'same') return null;
+    const [v0, v1] = selectedVoices;
+    if (v0.bookId === v1.bookId) return null;
+    return (
+      duplicateCandidates.find(
+        (c) =>
+          (c.a.voice.id === v0.id && c.b.voice.id === v1.id) ||
+          (c.a.voice.id === v1.id && c.b.voice.id === v0.id),
+      ) ?? null
+    );
+  }, [selectedVoices, badge, duplicateCandidates]);
+
+  /* Open the DuplicateReviewModal for the given candidate. Also clears
+     the selection pill so the user lands back on the families grid
+     after the modal closes (mirrors the post-merge UX). */
+  function openDuplicateReview(candidate: DuplicateCandidate) {
+    setDuplicatePair({
+      a: { voice: candidate.a.voice, character: candidate.a.character },
+      b: { voice: candidate.b.voice, character: candidate.b.character },
+    });
+  }
 
   /* Plan 60 + plan 96 — on-demand foreign-cast hydrate. Pure-fetch
      helper: writes the cast into `globalCastCache` on success, records
@@ -539,6 +645,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               onOpenCharacter={onOpenCharacter}
               selectedVoiceIds={selectedVoiceIds}
               onToggleSelect={toggleSelect}
+              duplicateCandidates={candidatesByFamily.get(f.key) ?? []}
+              onReviewDuplicate={openDuplicateReview}
             />
           ))}
         </div>
@@ -618,6 +726,20 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                   : mergeTarget
                     ? `Merge into ${mergeTarget.name}`
                     : 'Merge'}
+              </button>
+            )}
+            {selectionDuplicateCandidate && (
+              /* Plan 101 — cross-book same-base-voice pair selected and
+                 the duplicate-detector recognises them as a likely match.
+                 The cross-book Merge button stays hidden (its server
+                 transport is same-book only); we surface the new
+                 DuplicateReviewModal instead. */
+              <button
+                onClick={() => openDuplicateReview(selectionDuplicateCandidate)}
+                title="Same person across books — review and link, or mark as intentional variant"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 max-w-[14rem] truncate"
+              >
+                Review duplicate ↗
               </button>
             )}
             <button
@@ -730,6 +852,15 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             />
           );
         })()}
+
+      {/* Plan 101 — duplicate-review modal. Opens from family-card ⚠
+          pill OR from the Review duplicate ↗ pill button. */}
+      <DuplicateReviewModal
+        open={duplicatePair !== null}
+        pair={duplicatePair}
+        onClose={() => setDuplicatePair(null)}
+        onResolved={() => setSelectedVoiceIds([])}
+      />
     </div>
   );
 }
@@ -838,6 +969,11 @@ interface FamilyProps {
   onOpenCharacter?: (voice: Voice) => void;
   selectedVoiceIds: string[];
   onToggleSelect: (v: Voice) => void;
+  /* Plan 101 — auto-detected cross-book duplicate candidates within this
+     family. The header renders a small ⚠ pill summarising the count;
+     clicking it opens the DuplicateReviewModal for the first candidate. */
+  duplicateCandidates: DuplicateCandidate[];
+  onReviewDuplicate: (candidate: DuplicateCandidate) => void;
 }
 function VoiceFamilySection({
   family,
@@ -849,6 +985,8 @@ function VoiceFamilySection({
   onOpenCharacter,
   selectedVoiceIds,
   onToggleSelect,
+  duplicateCandidates,
+  onReviewDuplicate,
 }: FamilyProps) {
   const seriesGroups = family.seriesGroups;
   const isBusy = status?.key === family.key;
@@ -890,6 +1028,21 @@ function VoiceFamilySection({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {duplicateCandidates.length > 0 && (
+            <button
+              type="button"
+              onClick={() => onReviewDuplicate(duplicateCandidates[0])}
+              title={
+                duplicateCandidates.length === 1
+                  ? `Possible duplicate: "${duplicateCandidates[0].a.voice.character}" and "${duplicateCandidates[0].b.voice.character}" share this base voice across books in the same series.`
+                  : `${duplicateCandidates.length} cross-book duplicate candidates on this base voice — review the first.`
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold hover:bg-amber-200 transition-colors"
+            >
+              ⚠ {duplicateCandidates.length} duplicate{' '}
+              {duplicateCandidates.length === 1 ? 'candidate' : 'candidates'}
+            </button>
+          )}
           {isBusy && (
             <span className="text-[11px] text-ink/60 italic" aria-live="polite">
               {status?.label}

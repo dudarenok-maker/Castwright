@@ -2070,6 +2070,20 @@ export interface components {
              *     in a series detect the character under a different form.
              */
             aliases?: string[];
+            /**
+             * @description Cross-book pairs this character has been explicitly marked as
+             *     NOT the same person — e.g. teenage Sophie vs adult Sophie in
+             *     the same series, both routed to the same base TTS voice but
+             *     intentionally separate cast members. Written symmetrically by
+             *     the `POST /api/books/:bookId/cast/:characterId/not-linked-to`
+             *     route (both books' cast.json carry the matching entry). Used
+             *     by the voices-view duplicate-candidate detection to suppress
+             *     future "same character?" suggestions for the pair. Plan 101.
+             */
+            notLinkedTo?: {
+                bookId: string;
+                characterId: string;
+            }[];
             tone?: {
                 warmth?: number;
                 pace?: number;
