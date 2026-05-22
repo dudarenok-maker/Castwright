@@ -5,7 +5,7 @@ import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primiti
 import { api } from '../lib/api';
 import type { UploadArgs } from '../lib/api';
 import { SAMPLE_MANUSCRIPT_MD } from '../mocks/canned-data';
-import { MODEL_OPTION_GROUPS } from '../lib/models';
+import { AnalysisModelPicker } from '../components/analysis-model-picker';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -256,37 +256,19 @@ export function UploadView() {
           )}
         </div>
 
-        {/* Stacks vertically on phone (≤sm) — the select otherwise wraps mid-row
-            and the label drifts above; explicit `flex-col sm:flex-row` keeps both
-            stable. min-h on the select hits the ≥44px touch-target rule. */}
+        {/* Stacks vertically on phone (≤sm) — the picker trigger otherwise
+            wraps mid-row and the label drifts above; explicit `flex-col
+            sm:flex-row` keeps both stable. The picker owns its own
+            `min-h-[44px]` touch-target rule. */}
         <div className="mb-5 flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2 sm:gap-3 text-sm">
           <label htmlFor="model-select" className="text-ink/60 text-center sm:text-left">
             Analysis model
           </label>
-          <select
-            id="model-select"
-            value={selectedModel}
+          <AnalysisModelPicker
+            selectedModel={selectedModel}
+            onChange={(id) => dispatch(uiActions.setSelectedModel(id))}
             disabled={busy}
-            onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
-            /* `sm:max-w-md min-w-0` keeps the natural-width select from
-               blowing past the container at tablet (834 px) — option
-               text like "Qwen3.5 4B (local) — Recommended default …"
-               otherwise pushes intrinsic width to ~720 px and exceeds
-               the max-w-3xl wrapper plus sm:px-6. Phone (`<sm`) stays
-               w-full per the original responsive intent. */
-            className="w-full sm:w-auto sm:max-w-md min-w-0 min-h-[44px] px-3 py-1.5 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 focus:outline-none focus:border-peach disabled:opacity-50 truncate"
-          >
-            {MODEL_OPTION_GROUPS.map((g) => (
-              <optgroup key={g.engine} label={g.label}>
-                {g.models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                    {m.hint ? ` — ${m.hint}` : ''}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+          />
         </div>
 
         <div

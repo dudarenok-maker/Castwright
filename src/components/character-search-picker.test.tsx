@@ -84,7 +84,7 @@ describe('CharacterSearchPicker', () => {
 
   it('focuses the search input on mount', () => {
     renderPicker();
-    expect(screen.getByLabelText('Search character')).toHaveFocus();
+    expect(screen.getByPlaceholderText('Search character…')).toHaveFocus();
   });
 
   it('renders local cast on top + roster group below under separator', () => {
@@ -246,5 +246,34 @@ describe('CharacterSearchPicker', () => {
     const picker = screen.getByRole('dialog');
     fireEvent.mouseDown(picker);
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  /* ── onPickRosterEntry opt-in (added with the searchable-picker
+       extraction; the Profile Drawer merge picker uses it). ────────── */
+
+  it('onPickRosterEntry wins over onAddFromSeriesRoster on roster picks', async () => {
+    const user = userEvent.setup();
+    const onPickRosterEntry = vi.fn();
+    renderPicker({ onPickRosterEntry });
+    const picker = screen.getByRole('dialog');
+    const alinaRow = within(picker).getByRole('option', { name: /Councillor Alina/ });
+    await user.click(alinaRow);
+    expect(onPickRosterEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'councillor-alina', bookId: 'kotlc-1' }),
+    );
+    expect(onAddFromSeriesRoster).not.toHaveBeenCalled();
+    expect(onPick).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('local picks still call onPick when onPickRosterEntry is present', async () => {
+    const user = userEvent.setup();
+    const onPickRosterEntry = vi.fn();
+    renderPicker({ onPickRosterEntry });
+    const picker = screen.getByRole('dialog');
+    const sophieRow = within(picker).getByRole('option', { name: /Sophie/ });
+    await user.click(sophieRow);
+    expect(onPick).toHaveBeenCalledWith('sophie');
+    expect(onPickRosterEntry).not.toHaveBeenCalled();
   });
 });
