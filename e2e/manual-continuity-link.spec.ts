@@ -80,21 +80,26 @@ test.describe('manual continuity link', () => {
     await expect(mergeBtn).toBeVisible({ timeout: 5_000 });
     await mergeBtn.click();
 
-    /* Step 9: the select renders both optgroups. Mock MOCK_SERIES_ROSTER
-       contributes Captain James Halloran + Mae Vance under the prior
-       optgroup. The current-book group has the three other cast members
-       (Narrator / Eliza / Marcus, excluding Halloran himself). */
-    const select = page.getByRole('combobox', { name: /Merge target/i });
-    await expect(select).toBeVisible();
+    /* Step 9: the merge target trigger opens the searchable picker
+       popover (portal-rendered to document.body). MOCK_SERIES_ROSTER
+       contributes Captain James Halloran + Mae Vance under the prior-
+       books group; the current-book group has the three other cast
+       members (Narrator / Eliza / Marcus, excluding Halloran himself). */
+    await page.getByRole('button', { name: /Merge target/i }).click();
+    const dialog = page.getByRole('dialog', { name: /Reassign speaker/i });
+    await expect(dialog).toBeVisible();
     await expect(
-      select.getByRole('option', { name: /Captain James Halloran.*Solway Bay/i }),
+      dialog.getByRole('option', { name: /Captain James Halloran.*Solway Bay/i }),
     ).toHaveCount(1);
-    await expect(select.getByRole('option', { name: /Mae Vance.*Solway Bay/i })).toHaveCount(1);
-    await expect(select.getByRole('option', { name: 'Eliza Gray' })).toHaveCount(1);
+    await expect(dialog.getByRole('option', { name: /Mae Vance.*Solway Bay/i })).toHaveCount(1);
+    await expect(dialog.getByRole('option', { name: /^Eliza Gray$/ })).toHaveCount(1);
 
-    /* Step 10: pick the canonical prior — "Captain James Halloran" is
-       index 0 in MOCK_SERIES_ROSTER → option value "prior:0". */
-    await select.selectOption('prior:0');
+    /* Step 10: pick the canonical prior — click the row. The picker
+       routes prior-book picks through the merge handler's
+       onPickRosterEntry callback which writes prior:0 to mergeTargetId. */
+    await dialog
+      .getByRole('option', { name: /Captain James Halloran.*Solway Bay/i })
+      .click();
 
     /* Step 11: confirmation copy shifts to the link wording (the prior
        branch of ProfileDrawer's selected-row text). */
