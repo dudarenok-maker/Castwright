@@ -12,7 +12,6 @@ import {
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import {
   IconChevR,
-  IconChevL,
   IconPlus,
   IconCheck,
   IconClose,
@@ -33,6 +32,7 @@ import { manuscriptActions } from '../store/manuscript-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { uiActions } from '../store/ui-slice';
 import { RestructureChaptersButton } from '../components/restructure-chapters-button';
+import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
 
@@ -188,6 +188,22 @@ export function ManuscriptView({
     }
     return m;
   }, [sentences, currentChapterId]);
+
+  /* Cross-chapter low-confidence aggregate — feeds the per-chapter amber
+     count badge in the sidebar so the user can scan the chapter list and
+     pick which chapters need triage attention without opening each one.
+     Same 0.75 threshold as the header pill + SegmentRow pill + chapter
+     low-conf navigator (see plan 90 invariant #4). O(N) over all
+     sentences; runs once per sentences change. */
+  const lowConfCountsByChapter = useMemo(() => {
+    const m: Record<number, number> = {};
+    for (const s of sentences) {
+      if (s.confidence != null && s.confidence < 0.75) {
+        m[s.chapterId] = (m[s.chapterId] ?? 0) + 1;
+      }
+    }
+    return m;
+  }, [sentences]);
 
   /* Sentences scoped to the current chapter — used by the low-confidence
      stat. Keep separate from the segments loop so memo invalidation is
@@ -510,6 +526,7 @@ export function ManuscriptView({
       chapterRowRefs={chapterRowRefs}
       characters={characters}
       counts={counts}
+      lowConfCountsByChapter={lowConfCountsByChapter}
       filterChar={filterChar}
       setFilterChar={setFilterChar}
       onOpenProfile={onOpenProfile}
@@ -607,75 +624,21 @@ export function ManuscriptView({
               )}
             </div>
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink/60">
-            {currentChapter.excluded ? (
-              <span className="text-ink/55">
-                Excluded at import — not analyzed, no audio will be generated.
-              </span>
-            ) : (
-              <>
-                <span>{segments.length} segments</span>
-                <span className="hidden sm:inline">·</span>
-                <span>{Object.keys(counts).length} speakers</span>
-                <span className="hidden sm:inline">·</span>
-                {/* Plan: low-confidence-triage-polish — active navigator
-                    pill. ▲ / ▼ jump to prev / next low-confidence
-                    sentence (wraps around). J / K do the same via the
-                    window-level keydown handler above. Disabled when
-                    the count is 0. */}
-                {lowConfidenceSentenceIds.length === 0 ? (
-                  <span className="text-ink/40">0 low-confidence</span>
-                ) : (
-                  <span
-                    className="inline-flex items-center gap-1 text-amber-700"
-                    role="group"
-                    aria-label="Low-confidence navigation"
-                  >
-                    <span className="tabular-nums">
-                      {lowConfidenceSentenceIds.length} low-confidence
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => jumpToLowConfidence(-1)}
-                      title="Previous low-confidence (K)"
-                      aria-label="Previous low-confidence sentence"
-                      className="inline-flex items-center justify-center min-w-7 min-h-7 px-1.5 rounded border border-amber-700/30 bg-white hover:bg-amber-50 text-amber-700 text-xs leading-none"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => jumpToLowConfidence(1)}
-                      title="Next low-confidence (J)"
-                      aria-label="Next low-confidence sentence"
-                      className="inline-flex items-center justify-center min-w-7 min-h-7 px-1.5 rounded border border-amber-700/30 bg-white hover:bg-amber-50 text-amber-700 text-xs leading-none"
-                    >
-                      ▼
-                    </button>
-                  </span>
-                )}
-              </>
-            )}
-            <span className="ml-auto flex items-center gap-1">
-              <button
-                onClick={() => prevChapter && setCurrentChapterId(prevChapter.id)}
-                disabled={!prevChapter}
-                aria-label="Previous chapter"
-                className="px-3 min-h-11 min-w-11 py-1 rounded-lg border border-ink/10 bg-white text-ink/70 hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1 text-xs font-medium"
-              >
-                <IconChevL className="w-3.5 h-3.5" /> Prev
-              </button>
-              <button
-                onClick={() => nextChapter && setCurrentChapterId(nextChapter.id)}
-                disabled={!nextChapter}
-                aria-label="Next chapter"
-                className="px-3 min-h-11 min-w-11 py-1 rounded-lg border border-ink/10 bg-white text-ink/70 hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1 text-xs font-medium"
-              >
-                Next <IconChevR className="w-3.5 h-3.5" />
-              </button>
-            </span>
-          </div>
         </div>
+        {/* Plan 98 — sticky stats bar lifted out of the header card so it
+            sticks for the entire manuscript scroll (not just within the
+            short header card's height). Same row content as before:
+            segments · speakers · low-confidence ▲ ▼ · Prev/Next. */}
+        <ManuscriptStickyStatsBar
+          currentChapter={currentChapter}
+          segmentCount={segments.length}
+          speakerCount={Object.keys(counts).length}
+          lowConfCount={lowConfidenceSentenceIds.length}
+          prevChapter={prevChapter}
+          nextChapter={nextChapter}
+          onJumpLowConf={jumpToLowConfidence}
+          onPickChapter={setCurrentChapterId}
+        />
 
         {currentChapter.excluded ? (
           <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 md:p-10 text-center">
@@ -841,6 +804,10 @@ interface SidebarPanelsProps {
   chapterRowRefs: RefObject<Map<number, HTMLButtonElement>>;
   characters: Character[];
   counts: Record<string, number>;
+  /* Plan 98 — per-chapter low-confidence count, keyed by chapter id.
+     Used to render the amber count badge on chapter rows so users can
+     scan the chapter list for which chapters need triage attention. */
+  lowConfCountsByChapter: Record<number, number>;
   filterChar: string | null;
   setFilterChar: (v: string | null) => void;
   onOpenProfile?: (id: string) => void;
@@ -856,6 +823,7 @@ function SidebarPanels({
   chapterRowRefs,
   characters,
   counts,
+  lowConfCountsByChapter,
   filterChar,
   setFilterChar,
   onOpenProfile,
@@ -888,6 +856,7 @@ function SidebarPanels({
           {filteredChapters.map((ch) => {
             const active = currentChapterId === ch.id;
             const excluded = !!ch.excluded;
+            const lowConfCount = lowConfCountsByChapter[ch.id] ?? 0;
             const titleCls = excluded
               ? 'font-medium text-ink/40 line-through decoration-1'
               : active
@@ -924,6 +893,16 @@ function SidebarPanels({
                       {excluded ? 'Excluded' : ch.duration}
                     </span>
                   </span>
+                  {!excluded && lowConfCount > 0 && (
+                    <span
+                      data-testid={`chapter-low-conf-badge-${ch.id}`}
+                      className="shrink-0 inline-flex items-center justify-center min-w-[20px] h-[18px] px-1.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-semibold tabular-nums"
+                      title={`${lowConfCount} low-confidence sentence${lowConfCount === 1 ? '' : 's'} in this chapter`}
+                      aria-label={`${lowConfCount} low-confidence`}
+                    >
+                      {lowConfCount}
+                    </span>
+                  )}
                   {!excluded && ch.state === 'in_progress' && (
                     <IconSpinner className="w-3 h-3 text-magenta shrink-0" />
                   )}
