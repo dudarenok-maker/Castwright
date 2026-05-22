@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p .",
     "pretest": "node ../scripts/preflight-ffmpeg.cjs",
     "test": "vitest run",
+    "test:slow": "vitest run --config vitest.config.slow.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
