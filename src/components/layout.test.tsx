@@ -56,6 +56,9 @@ vi.mock('../lib/api', () => ({
     /* The 30 s pollRevisions interval. Resolve to empty so it doesn't
        overwrite the slice between hydrate and the test's assertions. */
     pollRevisions: (...args: unknown[]) => pollRevisionsMock(...args),
+    /* Background bulk-poll fan-out across all known books — stub to
+       empty so the per-render fetch doesn't crash the test harness. */
+    pollRevisionsBulk: vi.fn(async () => ({ byBookId: {} })),
     /* useTtsLifecycle polls /health on mount; resolve to unreachable so
        no pending pill state lands. */
     getSidecarHealth: vi.fn(async () => ({ status: 'unreachable', url: '(test)' })),
@@ -77,6 +80,9 @@ vi.mock('../lib/api', () => ({
 
 import { Layout } from './layout';
 import { uiActions } from '../store/ui-slice';
+import { revisionsActions } from '../store/revisions-slice';
+import { bookMetaActions } from '../store/book-meta-slice';
+import type { DriftEvent, LibraryBook, LibraryResponse } from '../lib/types';
 
 function makeStore() {
   return configureStore({
@@ -322,5 +328,119 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       expect(s.revisions.pending).toEqual([]);
       expect(s.revisions.drift).toEqual([]);
     });
+  });
+});
+
+/* Pairs with docs/features/91-cast-drift-consolidation.md — the multi-book
+   drift modal's BOOK header must resolve titles through a saved → library
+   → bookId chain so cross-book groups (book never opened this session, so
+   bookMeta.saved is empty) don't fall back to the raw workspace slug. */
+describe('Layout — drift modal book-title fallback (plan 91)', () => {
+  function makeLibraryBook(over: Partial<LibraryBook> & Pick<LibraryBook, 'bookId' | 'title'>): LibraryBook {
+    return {
+      author: 'Shannon Messenger',
+      series: 'Keeper of the Lost Cities',
+      seriesPosition: 1,
+      isStandalone: false,
+      status: 'complete',
+      chapterCount: 1,
+      completedChapters: 1,
+      characterCount: 1,
+      voiceCount: 1,
+      lastWorkedOn: 'today',
+      coverGradient: ['#000', '#fff'],
+      tags: [],
+      ...over,
+    } as LibraryBook;
+  }
+
+  function makeDriftEvent(over: Partial<DriftEvent> & Pick<DriftEvent, 'id' | 'bookId'>): DriftEvent {
+    return {
+      characterId: 'eliza',
+      chapterId: 1,
+      chapterTitle: 'Chapter 1',
+      severity: 'severe',
+      factor: 'voice',
+      factorLabel: 'Voice',
+      description: 'Voice changed.',
+      autoQueueable: true,
+      detected: '2026-01-01T00:00:00Z',
+      suggestedAction: 'regenerate_chapter',
+      snapshot: { voiceId: 'old', tone: { warmth: 40, pace: 50 }, attributes: [] },
+      current: { voiceId: 'new', tone: { warmth: 40, pace: 50 }, attributes: [] },
+      ...over,
+    } as DriftEvent;
+  }
+
+  it('falls through bookMeta.saved → library.books → bookId for the BOOK header', async () => {
+    const store = makeStore();
+
+    /* Two-book seed: book-A has BOTH bookMeta.saved AND library.books;
+       book-B has ONLY library.books. The new fallback is what surfaces
+       the clean "Exile" title for book-B; before the fix, book-B's
+       header rendered the raw "book-B-slug" string. */
+    const library: LibraryResponse = {
+      authors: [
+        {
+          name: 'Shannon Messenger',
+          series: [
+            {
+              name: 'Keeper of the Lost Cities',
+              books: [
+                makeLibraryBook({ bookId: 'book-A-slug', title: 'Library title — Keeper' }),
+                makeLibraryBook({ bookId: 'book-B-slug', title: 'Exile' }),
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    store.dispatch(librarySlice.actions.hydrate(library));
+
+    /* book-A has a saved-meta entry with a distinct title so we can
+       assert saved beats library (the priority chain's first step). */
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'book-A-slug',
+        state: { title: 'Saved title — Keeper', author: 'Shannon Messenger', series: 'KotLC' },
+      }),
+    );
+
+    /* One drift event per book, each carrying its own bookId so the
+       selector buckets them into two book entries. bookCount > 1 is
+       what makes drift-report.tsx render the BOOK header at all. */
+    store.dispatch(
+      revisionsActions.hydrateFromBookState({
+        drift: [
+          makeDriftEvent({ id: 'drift:book-A-slug:1:eliza:voice', bookId: 'book-A-slug' }),
+          makeDriftEvent({ id: 'drift:book-B-slug:1:eliza:voice', bookId: 'book-B-slug' }),
+        ],
+      }),
+    );
+
+    store.dispatch(uiActions.setShowDriftReport(true));
+
+    const { findByText, queryByText } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* book-A: saved meta wins over library entry. */
+    expect(await findByText('Saved title — Keeper')).toBeTruthy();
+    /* book-B: library title surfaces (the fix). Without it the header
+       would render the raw "book-B-slug". */
+    expect(await findByText('Exile')).toBeTruthy();
+    /* Neither raw bookId leaks into the modal as a title. */
+    expect(queryByText('book-A-slug')).toBeNull();
+    expect(queryByText('book-B-slug')).toBeNull();
+    /* The library entry's "Library title — Keeper" must NOT win for
+       book-A; the saved-meta short-circuit guards against a regression
+       that flipped the priority order. */
+    expect(queryByText('Library title — Keeper')).toBeNull();
   });
 });

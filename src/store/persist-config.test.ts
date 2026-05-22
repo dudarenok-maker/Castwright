@@ -46,6 +46,7 @@ describe('UI_PERSIST_WHITELIST', () => {
       'staleAudio',
       'showRevisionPlayer',
       'showDriftReport',
+      'driftReportCharacterFilter',
       'previewMode',
       'reuploadingBookId',
     ];

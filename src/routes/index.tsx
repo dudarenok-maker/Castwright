@@ -591,7 +591,13 @@ function ReadyViewSwitch({
           onShowMatchDetail={(id) => dispatch(uiActions.setMatchDetailFor(id))}
           onBatchRegenerate={(ids) => dispatch(uiActions.setBatchRegenIds(ids))}
           driftEvents={drift}
-          onShowDrift={() => dispatch(uiActions.setShowDriftReport(true))}
+          onShowDrift={(characterId) =>
+            dispatch(
+              characterId
+                ? uiActions.openDriftReportForCharacter(characterId)
+                : uiActions.setShowDriftReport(true),
+            )
+          }
         />
       );
     case 'library':

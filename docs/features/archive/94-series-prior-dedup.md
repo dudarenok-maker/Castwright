@@ -56,6 +56,6 @@ owner: null
 
 ## Ship notes
 
-Shipped: 2026-05-22 (commit SHA filled in at merge).
+Shipped: 2026-05-22 — commit `4d80397`, merged via [PR #137](https://github.com/dudarenok-maker/AudioBook-Generator/pull/137) as merge commit `cb69843`.
 
 Behaviour delta vs. the original Phase 0a series-prior implementation (plan 04 §series-cast prior bullet): the prompt and the pill both saw raw per-book rows; this plan inserts `dedupSeriesPrior` between the producer and both consumers so the pill reflects unique-character count and the prompt carries one row per character. The producer and the Profile Drawer's continuity-link picker route were intentionally left raw.
