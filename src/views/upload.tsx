@@ -256,9 +256,10 @@ export function UploadView() {
           )}
         </div>
 
-        {/* Stacks vertically on phone (≤sm) — the select otherwise wraps mid-row
-            and the label drifts above; explicit `flex-col sm:flex-row` keeps both
-            stable. min-h on the select hits the ≥44px touch-target rule. */}
+        {/* Stacks vertically on phone (≤sm) — the picker trigger otherwise
+            wraps mid-row and the label drifts above; explicit `flex-col
+            sm:flex-row` keeps both stable. The picker owns its own
+            `min-h-[44px]` touch-target rule. */}
         <div className="mb-5 flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2 sm:gap-3 text-sm">
           <label htmlFor="model-select" className="text-ink/60 text-center sm:text-left">
             Analysis model
