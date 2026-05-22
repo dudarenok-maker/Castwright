@@ -326,6 +326,36 @@ Source: net-new (2026-05-22). Deferred from the picker-autocomplete bundle — t
 - _Depends on:_ none.
 - _Benefit (user):_ shortens the "scrolled past 40 Kokoro voices, want to hear three before committing" flow from "pick → close → preview from drawer → pick another" to "▶ in-row, ▶ in-row, pick the one I like." Pairs with the autocomplete added in this bundle — search narrows the list, in-row preview judges the few remaining options.
 
+### 34. Profile-drawer "Possible duplicate of …" chip
+
+Source: net-new (2026-05-22). Deferred from plan 101 — voices-view ⚠ pill + selection-pill swap are the v1 surfaces; this is the per-character drawer-side discoverability fix.
+
+- _What:_ When a character has at least one auto-detected cross-book duplicate candidate (same predicate as `src/lib/cross-book-duplicates.ts`), render a small `⚠ Possible duplicate of "<other.name>" (<other-book-title>) →` chip near the top of `src/modals/profile-drawer.tsx`. Click → opens the same `DuplicateReviewModal` pre-populated with the pair. Layout.tsx computes the candidate at drawer mount and passes it as a new optional prop.
+- _Acceptance:_ With the mock unlinked Eliza Gray (ns) + Eliza (sb) pair, open Eliza Gray's profile drawer → chip visible with "Possible duplicate of Eliza (Solway Bay) →". Click → modal opens with both rows. Same modal handles link / variant. After resolving, the chip disappears on the next drawer open.
+- _Key files:_ `src/modals/profile-drawer.tsx` (new optional props + chip render), `src/components/layout.tsx` (compute candidate, mount modal alongside drawer), `src/modals/profile-drawer.test.tsx` (paired cases).
+- _Depends on:_ plan 101 v1 already merged (this round). No server changes — reuses the v1 transport.
+- _Benefit (user):_ closes the cast-side discoverability gap. Today (post-v1) a duplicate is only surfaced on `#/voices`; users who live in the cast view don't see the affordance until they navigate to voices. The chip pulls the same signal into the drawer they're already looking at.
+
+### 35. Bulk cross-book duplicate review (one modal per series)
+
+Source: net-new (2026-05-22). Deferred from plan 101 — v1 is one-pair-at-a-time; this is the bulk-walkthrough enhancement.
+
+- _What:_ A `Review all duplicates in <Series Name>` button on the voices view (e.g. above the family grid) that opens a single modal walking through every detected pair in that series. User chooses link / variant / skip per pair; "Next" advances. Useful for the post-import case where the analyzer missed a recurring character across 3-4 books in a long series and the user wants to clean up in one sitting.
+- _Acceptance:_ With a workspace containing N duplicate candidates across one series, click `Review all duplicates in …` → modal opens at pair 1 of N → choose an action → modal advances to pair 2 → … → final pair → modal closes. Each action persists via the existing v1 routes.
+- _Key files:_ `src/modals/bulk-duplicate-review.tsx` (new — wraps `DuplicateReviewModal`'s actions with a queue), `src/views/voices.tsx` (entry button).
+- _Depends on:_ plan 101 v1 already merged.
+- _Benefit (user):_ reduces the cost of cleaning up an N-book series from N modal opens to 1. Useful exactly once per series after the user enables auto-detection or imports a long backlog of books.
+
+### 36. Undo for "different on purpose" decisions
+
+Source: net-new (2026-05-22). Deferred from plan 101 — the variant decision is currently durable but lacks a reverse path.
+
+- _What:_ When the user accidentally marks a pair as "Different on purpose" and wants to re-surface the duplicate-candidate suggestion, today there's no UI to remove the `notLinkedTo` entry. Add a "Show ignored duplicate suggestions" toggle on the voices view that surfaces every previously-variant-marked pair with an "Unmark" action. Server route gains `DELETE` semantics (or `{ remove: true }` in the body) for symmetric pair-removal.
+- _Acceptance:_ Mark a pair as variant. Click the new toggle → variant-marked pair appears in an "Ignored" section with an Unmark button. Click Unmark → the pair re-appears as a duplicate-candidate on its family card.
+- _Key files:_ `server/src/routes/cast-not-linked-to.ts` (extend with DELETE), `src/views/voices.tsx` (toggle + ignored section), paired tests.
+- _Depends on:_ plan 101 v1 already merged.
+- _Benefit (user):_ reversibility. The variant decision should be as easy to undo as to set — without this, a misclick is permanent until the user opens cast.json by hand.
+
 ---
 
 ## Won't (this round) — explicitly parked

@@ -9,6 +9,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice } from '../store/voices-slice';
+import { librarySlice } from '../store/library-slice';
 import { LibraryView } from './voices';
 import type { BaseVoice, BookStateResponse, Character, Sentence, Voice } from '../lib/types';
 
@@ -992,6 +993,226 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
     });
     /* Pill collapses on success — Selected label is gone. */
     expect(screen.queryByText(/^Selected$/)).toBeNull();
+  });
+});
+
+describe('LibraryView cross-book duplicate review (plan 101)', () => {
+  /* Local library + characters for plan-100 tests. Two books in the same
+     series, both contain an "Eliza"-ish character on the Kore voice; the
+     duplicate-detection memo should flag the pair and surface the
+     ⚠ pill on the Kore family card. */
+  const elizaNs = makeVoice({
+    id: 'v_eliza',
+    character: 'Eliza Gray',
+    bookId: 'b1',
+    bookTitle: 'Book One',
+    source: 'current',
+    ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' },
+  });
+  const elizaSb = makeVoice({
+    id: 'v_eliza_sb',
+    character: 'Eliza',
+    bookId: 'b2',
+    bookTitle: 'Book Two',
+    source: 'library',
+    ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' },
+  });
+  const libraryWithDuplicate: Voice[] = [elizaNs, elizaSb];
+
+  /* Plan 101 requires the library slice for series metadata, so this
+     test suite uses a custom store that registers the slice. */
+  function renderWithLibrarySlice(extraCharacters: Character[] = []) {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        library: librarySlice.reducer,
+      },
+    });
+    store.dispatch(castSlice.actions.setCharacters(extraCharacters));
+    store.dispatch(
+      librarySlice.actions.hydrate({
+        authors: [
+          {
+            name: 'Test Author',
+            series: [
+              {
+                name: 'Test Series',
+                books: [
+                  {
+                    bookId: 'b1',
+                    title: 'Book One',
+                    author: 'Test Author',
+                    series: 'Test Series',
+                    seriesPosition: 1,
+                    isStandalone: false,
+                    status: 'complete',
+                    chapterCount: 0,
+                    completedChapters: 0,
+                    characterCount: 0,
+                    voiceCount: 0,
+                    lastWorkedOn: '2026-01-01',
+                    coverGradient: ['#000', '#fff'],
+                    tags: [],
+                  },
+                  {
+                    bookId: 'b2',
+                    title: 'Book Two',
+                    author: 'Test Author',
+                    series: 'Test Series',
+                    seriesPosition: 2,
+                    isStandalone: false,
+                    status: 'complete',
+                    chapterCount: 0,
+                    completedChapters: 0,
+                    characterCount: 0,
+                    voiceCount: 0,
+                    lastWorkedOn: '2026-01-02',
+                    coverGradient: ['#000', '#fff'],
+                    tags: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    return render(
+      <Provider store={store}>
+        <LibraryView library={libraryWithDuplicate} />
+      </Provider>,
+    );
+  }
+
+  it('surfaces a ⚠ pill on the family card with a cross-book candidate pair', async () => {
+    renderWithLibrarySlice();
+    await act(async () => {});
+    const pill = screen.getByRole('button', { name: /1 duplicate candidate/i });
+    expect(pill).toBeInTheDocument();
+    expect(pill).toHaveTextContent(/⚠/);
+  });
+
+  it('clicking the ⚠ pill opens the duplicate-review modal pre-populated', async () => {
+    renderWithLibrarySlice();
+    await act(async () => {});
+    const pill = screen.getByRole('button', { name: /1 duplicate candidate/i });
+    fireEvent.click(pill);
+    /* The modal header says "Same person across books?" — unique on
+       the page so we use it as the modal-mounted assertion. */
+    expect(screen.getByText(/Same person across books\?/)).toBeInTheDocument();
+    /* And the modal CTA appears. */
+    expect(
+      screen.getByRole('button', { name: /Same character — link them/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("selection pill swaps to 'Review duplicate ↗' button when the cross-book duplicate pair is hand-selected", async () => {
+    renderWithLibrarySlice();
+    await act(async () => {});
+    /* Click both Eliza voice cards' radio circles. */
+    const elizaGrayCard = screen.getByText('Eliza Gray').closest('div.group');
+    const elizaCard = screen.getByText('Eliza').closest('div.group');
+    expect(elizaGrayCard).toBeTruthy();
+    expect(elizaCard).toBeTruthy();
+    const grayCheckbox = within(elizaGrayCard as HTMLElement).getByLabelText(
+      /Select voice for compare/i,
+    );
+    const elizaCheckbox = within(elizaCard as HTMLElement).getByLabelText(
+      /Select voice for compare/i,
+    );
+    fireEvent.click(grayCheckbox);
+    fireEvent.click(elizaCheckbox);
+    /* The cross-book pair should show the Review-duplicate button. */
+    expect(screen.getByRole('button', { name: /Review duplicate/i })).toBeInTheDocument();
+    /* And NOT the same-book plan-99 Merge button. */
+    expect(screen.queryByRole('button', { name: /Merge into/i })).toBeNull();
+  });
+
+  it('suppresses the pill when one side has the other in notLinkedTo (variant case)', async () => {
+    /* Set ui.stage to ready/b1 so the redux cast resolves to the b1
+       book — the memo only injects redux characters when currentBookId
+       is set (real prod behaviour, matches `/voices` opened from inside
+       a book). */
+    const variantMarked: Character[] = [
+      {
+        id: 'v_eliza',
+        name: 'Eliza Gray',
+        role: 'character',
+        color: 'unset',
+        notLinkedTo: [{ bookId: 'b2', characterId: 'v_eliza_sb' }],
+      } as Character,
+    ];
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        library: librarySlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'complete' }));
+    store.dispatch(castSlice.actions.setCharacters(variantMarked));
+    store.dispatch(
+      librarySlice.actions.hydrate({
+        authors: [
+          {
+            name: 'Test Author',
+            series: [
+              {
+                name: 'Test Series',
+                books: [
+                  {
+                    bookId: 'b1',
+                    title: 'Book One',
+                    author: 'Test Author',
+                    series: 'Test Series',
+                    seriesPosition: 1,
+                    isStandalone: false,
+                    status: 'complete',
+                    chapterCount: 0,
+                    completedChapters: 0,
+                    characterCount: 0,
+                    voiceCount: 0,
+                    lastWorkedOn: '2026-01-01',
+                    coverGradient: ['#000', '#fff'],
+                    tags: [],
+                  },
+                  {
+                    bookId: 'b2',
+                    title: 'Book Two',
+                    author: 'Test Author',
+                    series: 'Test Series',
+                    seriesPosition: 2,
+                    isStandalone: false,
+                    status: 'complete',
+                    chapterCount: 0,
+                    completedChapters: 0,
+                    characterCount: 0,
+                    voiceCount: 0,
+                    lastWorkedOn: '2026-01-02',
+                    coverGradient: ['#000', '#fff'],
+                    tags: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    render(
+      <Provider store={store}>
+        <LibraryView library={libraryWithDuplicate} />
+      </Provider>,
+    );
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: /duplicate candidate/i })).toBeNull();
   });
 });
 
