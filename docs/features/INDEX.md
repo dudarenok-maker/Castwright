@@ -47,7 +47,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 ### C. Analysis pipeline
 
 - [04 — Analysing view & SSE progress](04-analysing-view-progress.md) — Stream rendering, live ETA, model selection, "Start fresh."
-- [94 — Analysing-stage multi-model UI + sticky bar](94-analysing-multi-model-ui.md) — Per-phase model chip + swap inside each PhaseCard; CSS-only sticky status bar pins Pause + active-model under the topbar as the page scrolls. Consumes the per-phase defaults shipped in plan 88 / PR #118. Extracts `PhaseCard` from the 1,300-line `src/views/analysing.tsx` monolith.
+- [95 — Analysing-stage multi-model UI + sticky bar](archive/95-analysing-multi-model-ui.md) — Per-phase model chip + swap inside each PhaseCard; CSS-only sticky status bar pins Pause + active-model under the topbar as the page scrolls. Consumes the per-phase defaults shipped in plan 88 / PR #118. Extracts `PhaseCard` from the 1,769-line `src/views/analysing.tsx` monolith. Shipped 2026-05-22 via PR #138.
 - [05 — Manual handoff analyzer](05-analyzer-manual-handoff.md) — `ANALYZER=manual` file-drop cowork loop.
 - [06 — Gemini analyzer](06-analyzer-gemini.md) — `ANALYZER=gemini` direct-API mode (also the fallback when local is unreachable).
 - [29 — Local Ollama analyzer + fallback](29-analyzer-ollama-local.md) — `ANALYZER=local` default; auto-fallback to Gemini only when daemon is unreachable.

@@ -1,4 +1,4 @@
-/* Plan 94 — analysing-stage multi-model UI + sticky status bar.
+/* Plan 95 — analysing-stage multi-model UI + sticky status bar.
  *
  * Boots a fresh book through the upload flow, lands on /analysing, kicks
  * off the mock analysis stream, and asserts:
@@ -48,13 +48,13 @@ async function bootFreshBookIntoAnalysing(page: Page) {
   await page
     .locator('textarea')
     .fill(
-      '# The Plan 94 Book\n\n# Chapter 1\n\nA tiny chapter.\n\n# Chapter 2\n\nAnother.\n',
+      '# The Plan 95 Book\n\n# Chapter 1\n\nA tiny chapter.\n\n# Chapter 2\n\nAnother.\n',
     );
   await page.getByRole('button', { name: /Upload pasted text/i }).click();
   await expect(page.getByRole('button', { name: /Save book and start analysis/i })).toBeVisible({
     timeout: 5_000,
   });
-  await page.getByPlaceholder(/Ursula K\. Le Guin/i).fill('Plan 94 Author');
+  await page.getByPlaceholder(/Ursula K\. Le Guin/i).fill('Plan 95 Author');
   await page.getByRole('button', { name: /Save book and start analysis/i }).click();
   await expect(page).toHaveURL(/#\/books\/.+\/analysing$/, { timeout: 5_000 });
   await expect(page.getByRole('button', { name: /Start analysis/i })).toBeVisible({
@@ -62,7 +62,7 @@ async function bootFreshBookIntoAnalysing(page: Page) {
   });
 }
 
-test.describe('plan 94 — analysing multi-model UI + sticky bar', () => {
+test.describe('plan 95 — analysing multi-model UI + sticky bar', () => {
   test('both phase-model chips are visible on the analysing view', async ({ page }) => {
     await bootFreshBookIntoAnalysing(page);
     await page.getByRole('button', { name: /Start analysis/i }).click();
@@ -124,7 +124,7 @@ test.describe('plan 94 — analysing multi-model UI + sticky bar', () => {
       .poll(async () => (await readAnalysisStream(page))?.state, { timeout: 5_000 })
       .toBe('paused');
 
-    /* The sticky bar unmounts once isAnalysisRunning is false (see plan 94
+    /* The sticky bar unmounts once isAnalysisRunning is false (see plan 95
        mutual-exclusivity invariant in src/views/analysing.tsx). The inline
        Resume button takes over. */
     await expect(page.getByTestId('sticky-pause-button')).toHaveCount(0);

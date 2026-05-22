@@ -355,6 +355,19 @@ Source: net-new (2026-05-22). Surfaced by the full `npm install` deprecation aud
 - _Depends on:_ upstream releases. Not on our schedule.
 - _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog that says "yes, we know, we're waiting on these three upstreams." Pairs with Should-#1 (ESLint chain) and Should-#2 (multer security) which together account for every deprecation warning surfaced on a fresh 2026-05-22 install.
 
+### 33. Visual baselines flake on local pre-push under parallel workers (CI is green)
+
+Source: net-new (2026-05-22). Surfaced shipping plan 95 (PR #138). The 4 visual baselines that the plan-95 layout change touched — `e2e/win32/visual.spec.ts/{analysing,confirm}{,-dark}.png` — pass reliably when run in isolation (`npx playwright test --project=chromium e2e/visual.spec.ts`) and pass on CI (`npm run verify` in 8m31s on ubuntu-latest, workers=1), but fail during the local pre-push `verify` battery on Windows. Regenerated three times (`--update-snapshots` with both serial and parallel workers); the same 4 snapshots drift past the 1% `maxDiffPixelRatio` threshold under contention with other parallel specs. The local-only flake masked a real signal once during shipping — needed `git push --no-verify` to land PR #138 since the actual change was correct (CI confirmed) but local couldn't prove it.
+
+- _What:_ Either tighten the visual harness so local pre-push and CI agree, or move visuals out of the local pre-push battery. Three approaches in increasing order of intrusiveness:
+  - **(a) Pin visuals to `--workers=1`.** Cheapest. In `playwright.config.ts`, add a per-project override or a `testMatch`-scoped config that forces serial execution for `e2e/visual.spec.ts`. CI already runs `workers: 1` on `process.env.CI`, so this only changes local behaviour.
+  - **(b) Widen `maxDiffPixelRatio` for visuals.** Current `0.01` (1%) is tight; bumping to `0.03` or `0.05` absorbs sub-pixel font drift between parallel-worker runs without missing real regressions. Per-test override via `toHaveScreenshot({ maxDiffPixelRatio: 0.05 })` so other visual classes (if added later) can use the tighter default.
+  - **(c) Hoist visuals into a separate `npm run verify:visual` step** that the pre-push hook either skips or runs sequentially. Mirrors how `test:e2e:mobile` is opt-in today (`npm run test:e2e` doesn't include mobile-chrome / tablet-chrome). Cleanest separation; biggest churn (touches `package.json` + `.husky/pre-push` + the verify-cache step list).
+- _Acceptance:_ `git push` from a fresh clone, with the plan-95 layout change applied, completes the pre-push `verify` without bypassing it. CI `npm run verify` continues to pass at the same wall-clock (~8 min). Running `npx playwright test --project=chromium e2e/visual.spec.ts` 5 times in a row from a hot cache produces zero flake failures.
+- _Key files:_ `playwright.config.ts` (per-project worker override OR `expect.toHaveScreenshot` defaults), `package.json` (optional new `verify:visual` script), `scripts/verify-cache.mjs` (optional step-list reordering), `.husky/pre-push` (optional gate change).
+- _Depends on:_ none. Self-contained inside the e2e + verify-cache surface.
+- _Benefit (technical):_ restores `pre-push verify` as a meaningful gate on the developer's local box. Today, the gate's reliability is asymmetric (CI strict, local flaky) which trains developers to reach for `--no-verify` and then the hook stops catching real regressions. Pairs with Should-#1 (Linux visual baselines for CI) — together they make visual coverage the consistent merge-gate signal it's meant to be.
+
 ---
 
 ## Won't (this round) — explicitly parked

@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-22
 owner: null
 ---
 
-# 94 — Analysing-stage multi-model UI + sticky status bar
+# 95 — Analysing-stage multi-model UI + sticky status bar
 
-> Status: active (commits landed on `feat/frontend-analysing-multi-model-ui`; PR pending)
+> Status: stable. Shipped 2026-05-22 via PR #138 (merge commit `2a0081d`).
 > Key files: `src/views/analysing.tsx`, `src/components/analysing/phase-card.tsx`, `src/components/analysing/phase-model-chip.tsx`, `src/components/analysing/phase-model-swap.tsx`, `src/components/analysing/sticky-analysis-bar.tsx`, `src/store/account-slice.ts`, `src/store/analysis-slice.ts`
 > URL surface: `#/books/<id>/analysing`
 > OpenAPI ops: none (purely a frontend surfacing of state already persisted via `PUT /api/user/settings` per plan 88)
@@ -76,4 +76,22 @@ Mock mode (`VITE_USE_MOCKS=true`). All steps assume a fresh import + Start click
 
 ## Ship notes
 
-_(Filled in when status flips to `stable`.)_
+**Shipped 2026-05-22 via PR #138** (merge commit `2a0081d` on `main`). Six commits on `feat/frontend-analysing-multi-model-ui`:
+
+1. `517a023` — docs(docs): plan 95 (originally landed as 94 — renumbered post-merge to deconflict with PR #137's plan 94, "series-prior roster dedup") + HTML mockup at `mockups/analysing-multi-model.html`
+2. `8a9905a` — refactor(frontend): extract `PhaseCard` from `src/views/analysing.tsx` (behaviour-neutral, ~340 LOC moved out of the 1,769-line monolith)
+3. `f9fd182` — feat(frontend): per-phase model chip + swap + new account-slice selectors
+4. `0922bb7` — feat(frontend): sticky status bar on analysing scroll
+5. `2abe7a5` — test(frontend): e2e spec at `e2e/analysing-multi-model.spec.ts` (4 cases) + plan flip to `active`
+6. `d2906c7` — test(frontend): refresh analysing + confirm visual baselines (`e2e/win32/visual.spec.ts/{analysing,confirm}{,-dark}.png`) for the outer-flex layout shift
+
+**Delta vs the original spec:**
+
+- The plan recommended option (A) — extract `PhaseCard` now — and that's what shipped. The orchestrator dropped from 1,769 to ~1,400 lines; per-phase model UI lives in one obvious place.
+- The plan called for the sticky bar to mount as a sibling of the centred column via a `<div className="relative w-full max-w-2xl">` wrapper. That broke `position: sticky` because the wrapper was only as tall as the bar itself — sticky elements pin within their containing block, and the wrapper had nothing to scroll within. The shipped fix drops the wrapper and adds `self-stretch` to the sticky bar so it spans the outer flex column's full width directly. Documented in commit `2abe7a5`.
+- The outer container also flipped from `flex items-center justify-center` to `flex flex-col items-center` so the sticky bar can sit above the centred column on its own row. Visible diff: the pre-start "No manuscript loaded" card no longer vertically-centres; it now anchors to the top inside the `py-16` padding. Visual baselines regenerated to match (`d2906c7`).
+- A new **mutual-exclusivity invariant** emerged during commit 4: when `isAnalysisRunning`, the sticky bar mounts AND the inline header Start/Resume button hides; when idle/paused, the sticky bar unmounts AND the inline button shows. No moment with duplicate Pause/Start buttons in the DOM — kept the 42 existing `analysing.test.tsx` tests' `findByRole('button', { name: /pause|start|resume/i })` selectors single-match and unchanged.
+
+**Tests:** 18 unit cases (5 chip + 4 swap + 5 sticky + 4 e2e) added; all 42 existing `src/views/analysing.test.tsx` cases pass unchanged after registering the account slice in every store factory.
+
+**CI / verify note:** Local pre-push verify flagged 4 visual baselines (analysing + confirm, light + dark) as drifting past the 1% `maxDiffPixelRatio` threshold when run in the full e2e battery (parallel workers), even though the same snapshots pass reliably in isolation. CI's `npm run verify` (ubuntu-latest, workers=1) passed in 8m31s with all 4 visuals green. The local-only flake is captured as a Could-bucket item in `docs/BACKLOG.md` so a future round can address it (most likely a `--workers=1` flag on the visual subset, a wider `toHaveScreenshot` tolerance, or hoisting visuals out of the pre-push battery into a separate `npm run verify:visual` step).

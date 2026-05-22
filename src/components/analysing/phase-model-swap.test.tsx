@@ -1,4 +1,4 @@
-// Pairs with docs/features/94-analysing-multi-model-ui.md
+// Pairs with docs/features/archive/95-analysing-multi-model-ui.md
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
