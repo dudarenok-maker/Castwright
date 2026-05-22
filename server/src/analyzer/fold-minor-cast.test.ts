@@ -1,7 +1,14 @@
-/* Pairs with docs/features/06-analyzer-gemini.md — minor-cast fold pass. */
+/* Pairs with docs/features/06-analyzer-gemini.md — minor-cast fold pass.
+   Protected-role-exemption coverage added per
+   docs/features/97-narrator-only-named-characters.md. */
 
 import { describe, it, expect } from 'vitest';
-import { foldMinorCast, isDescriptorName } from './fold-minor-cast.js';
+import {
+  foldMinorCast,
+  isDescriptorName,
+  matchesProtectedRole,
+  PROTECTED_ROLES_DEFAULT,
+} from './fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 
 function makeChar(id: string, overrides: Partial<CharacterOutput> = {}): CharacterOutput {
@@ -518,5 +525,203 @@ describe('foldMinorCast', () => {
     /* First-name-wins, case-insensitive dedup against the survivor's
        aliases AND own name. */
     expect(bucket.aliases).toEqual(['Garrow']);
+  });
+
+  /* ── Protected-role narrator-mention exemption (plan 97) ──────────────── */
+
+  it('protects a narrator-mention character with a protected role from the zero-line drop', () => {
+    /* Sela-in-Saltgrave worked example: detected with detectionSource:
+       narrator-mention, role: 'Bodyguard', 0 attributed dialogue lines.
+       Without the exemption she would be dropped by the zero-line rule. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('Wren', { name: 'Wren', gender: 'female' }),
+      makeChar('Sela', {
+        name: 'Sela',
+        gender: 'female',
+        role: 'Bodyguard',
+        detectionSource: 'narrator-mention',
+      }),
+    ];
+    const sentences = makeSentences([
+      [1, 'Wren'],
+      [1, 'Wren'],
+      [1, 'Wren'],
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+
+    expect(result.rewrites).toEqual({});
+    expect(result.summary.droppedSilent).toBe(0);
+    expect(result.dropped).toEqual([]);
+    /* Sela survives intact, no fold. Referential identity preserved
+       on the no-op path (same as the existing "no character qualifies"
+       case at line 47) — caller still sees the original char, line-count
+       recomputation only happens when something actually folds. */
+    expect(result.characters).toBe(chars);
+    expect(result.characters.find((c) => c.id === 'Sela')).toBeDefined();
+  });
+
+  it('protects a narrator-mention character with a protected role from the line-count fold', () => {
+    /* Garrow-in-Saltgrave worked example: 1 chapter of dialogue is below
+       the minLines threshold and would normally fold into unknown-male.
+       With detectionSource: narrator-mention + Bodyguard role, the
+       exemption applies and Garrow survives with his single line. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('Garrow', {
+        name: 'Garrow',
+        gender: 'male',
+        role: 'Goblin Bodyguard',
+        detectionSource: 'narrator-mention',
+      }),
+    ];
+    const sentences = makeSentences([
+      [1, 'narrator'],
+      [1, 'narrator'],
+      [1, 'narrator'],
+      [5, 'Garrow'], // single line — would fold without protection
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+
+    expect(result.rewrites).toEqual({});
+    expect(result.characters.find((c) => c.id === 'Garrow')).toBeDefined();
+    /* No bucket synthesised — nothing folded. The single Garrow sentence
+       retains its attribution (no rewrite to unknown-male). */
+    expect(result.characters.find((c) => c.id === 'unknown-male')).toBeUndefined();
+    expect(result.sentences.filter((s) => s.characterId === 'Garrow').length).toBe(1);
+  });
+
+  it('still folds a protected-role character with detectionSource: dialogue + too few lines (targeted exemption, not blanket)', () => {
+    /* This is the negative case: protection is for narrator-mention only.
+       A bodyguard the analyzer detected via real dialogue but who only
+       speaks once is still folded by the normal line-count rule. The
+       intent of the exemption is to recover characters who would never
+       cross the dialogue-detection threshold, NOT to keep every
+       protected-role character regardless of line count. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('Garrow', {
+        name: 'Garrow',
+        gender: 'male',
+        role: 'Bodyguard',
+        detectionSource: 'dialogue',
+      }),
+    ];
+    const sentences = makeSentences([
+      [1, 'narrator'],
+      [1, 'narrator'],
+      [1, 'narrator'],
+      [5, 'Garrow'], // single line, detectionSource=dialogue → still folds
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+
+    expect(result.rewrites).toEqual({ Garrow: 'unknown-male' });
+    expect(result.characters.find((c) => c.id === 'Garrow')).toBeUndefined();
+  });
+
+  it('does NOT protect a narrator-mention character whose role is not in the protected list', () => {
+    /* Only Bodyguard / Mentor / Family Member are protected by default.
+       A character with detectionSource: narrator-mention + role:
+       'Background Speaker' is NOT exempt — they fold/drop normally. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('extra', {
+        name: 'Background Extra',
+        gender: 'male',
+        role: 'Background Speaker',
+        detectionSource: 'narrator-mention',
+      }),
+    ];
+    const sentences = makeSentences([[1, 'narrator']]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+
+    /* 0-line + not-descriptor + not-protected → dropped entirely. */
+    expect(result.summary.droppedSilent).toBe(1);
+    expect(result.dropped).toEqual(['Background Extra']);
+    expect(result.characters.find((c) => c.id === 'extra')).toBeUndefined();
+  });
+
+  it('descriptor-name fold still wins over the protected-role exemption', () => {
+    /* A character named "Unknown Bodyguard" with detectionSource:
+       narrator-mention is still a descriptor and folds. The Unknown
+       prefix is a stronger signal that no proper voice profile is
+       warranted than the role-based exemption is to keep it. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('unknown-bodyguard', {
+        name: 'Unknown Bodyguard',
+        gender: 'male',
+        role: 'Bodyguard',
+        detectionSource: 'narrator-mention',
+      }),
+    ];
+    const sentences = makeSentences([[1, 'unknown-bodyguard']]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+
+    expect(result.rewrites).toEqual({ 'unknown-bodyguard': 'unknown-male' });
+    const bucket = result.characters.find((c) => c.id === 'unknown-male')!;
+    expect(bucket.aliases).toEqual(['Unknown Bodyguard']);
+  });
+
+  it('honours a custom protectedRoles: [] — disables the exemption entirely', () => {
+    /* The fold's default protectedRoles list is overridable. Empty list
+       means the exemption never fires; the existing zero-line drop
+       rules apply across the board. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('Sela', {
+        name: 'Sela',
+        gender: 'female',
+        role: 'Bodyguard',
+        detectionSource: 'narrator-mention',
+      }),
+    ];
+    const sentences = makeSentences([[1, 'narrator']]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3, protectedRoles: [] });
+
+    /* With the exemption off, the 0-line drop fires. */
+    expect(result.summary.droppedSilent).toBe(1);
+    expect(result.dropped).toEqual(['Sela']);
+  });
+
+  it('PROTECTED_ROLES_DEFAULT lists the three canonical roles', () => {
+    expect(PROTECTED_ROLES_DEFAULT).toEqual(['Bodyguard', 'Mentor', 'Family Member']);
+  });
+});
+
+describe('matchesProtectedRole', () => {
+  it('matches case-insensitively', () => {
+    expect(matchesProtectedRole('Bodyguard', ['Bodyguard'])).toBe(true);
+    expect(matchesProtectedRole('bodyguard', ['Bodyguard'])).toBe(true);
+    expect(matchesProtectedRole('BODYGUARD', ['bodyguard'])).toBe(true);
+  });
+
+  it('matches via substring — "Goblin Bodyguard" matches "Bodyguard"', () => {
+    /* The role string often includes a species/style qualifier
+       ('Goblin Bodyguard', 'Ogre Bodyguard'); the protection list keeps
+       the base noun and the matcher tolerates qualifiers. */
+    expect(matchesProtectedRole('Goblin Bodyguard', ['Bodyguard'])).toBe(true);
+    expect(matchesProtectedRole('Ogre Bodyguard', ['Bodyguard'])).toBe(true);
+    expect(matchesProtectedRole('Family Member (mother)', ['Family Member'])).toBe(true);
+  });
+
+  it('does not match when no entry is a substring', () => {
+    expect(matchesProtectedRole('Antagonist', ['Bodyguard', 'Mentor'])).toBe(false);
+    expect(matchesProtectedRole('Background Speaker', ['Bodyguard'])).toBe(false);
+  });
+
+  it('returns false for missing/empty role', () => {
+    expect(matchesProtectedRole(undefined, ['Bodyguard'])).toBe(false);
+    expect(matchesProtectedRole('', ['Bodyguard'])).toBe(false);
+  });
+
+  it('returns false on empty protected list', () => {
+    expect(matchesProtectedRole('Bodyguard', [])).toBe(false);
   });
 });
