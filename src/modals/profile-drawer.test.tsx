@@ -197,12 +197,13 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
     const onMerge = vi.fn().mockResolvedValueOnce(undefined);
     renderDrawer(Wren, { mergeCandidates: [WrenFoster, Marlow], onMerge });
 
-    /* Toggle the picker. */
+    /* Toggle the merge card open. */
     fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
 
-    /* Pick the target and submit. */
-    const select = screen.getByRole('combobox', { name: /Merge target/i }) as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: 'Wren-foster' } });
+    /* Open the SearchablePicker popover off the merge-target trigger. */
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    /* Pick the survivor by clicking its row inside the portalled dialog. */
+    fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/i }));
     /* Confirmation sentence appears once a target is picked. */
     expect(screen.getByText(/folded into/i)).toBeTruthy();
 
@@ -216,14 +217,32 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
     const onMerge = vi.fn().mockRejectedValueOnce(new Error('Server said no.'));
     renderDrawer(Wren, { mergeCandidates: [WrenFoster], onMerge });
     fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
-    fireEvent.change(screen.getByRole('combobox', { name: /Merge target/i }), {
-      target: { value: 'Wren-foster' },
-    });
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
     /* Let the rejected promise settle before assertions. */
     await Promise.resolve();
     await Promise.resolve();
     expect(await screen.findByText(/Server said no\./)).toBeTruthy();
+  });
+
+  it('typeahead narrows the picker list to the searched character', async () => {
+    const onMerge = vi.fn().mockResolvedValueOnce(undefined);
+    renderDrawer(Wren, { mergeCandidates: [WrenFoster, Marlow], onMerge });
+    fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    const searchInput = screen.getByPlaceholderText('Search character…');
+    fireEvent.change(searchInput, { target: { value: 'foster' } });
+    /* Scope to the picker dialog — the drawer also renders native
+       <select>s (gender, age) whose <option>s share the option role. */
+    const dialog = screen.getByRole('dialog');
+    const options = within(dialog).getAllByRole('option');
+    expect(options).toHaveLength(1);
+    expect(options[0]).toHaveTextContent(/Wren Sparrow/i);
+    fireEvent.click(options[0]);
+    fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
+    await Promise.resolve();
+    expect(onMerge).toHaveBeenCalledWith('Wren', 'Wren-foster');
   });
 });
 
@@ -267,7 +286,7 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
     ).toBeTruthy();
   });
 
-  it('renders both groups as labeled optgroups when both sets are non-empty', () => {
+  it('renders both groups under the prior-books separator when both sets are non-empty', () => {
     renderDrawer(Hartwell, {
       mergeCandidates: [inBookSibling],
       mergeCandidatesPrior: [priorDex],
@@ -275,16 +294,14 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
       onLinkPrior: vi.fn(),
     });
     fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
-    const select = screen.getByRole('combobox', { name: /Merge target/i });
-    /* Both optgroup labels present. */
-    const groups = within(select).getAllByRole('group');
-    const labels = groups.map((g) => (g as HTMLOptGroupElement).label);
-    expect(labels).toContain('From this book');
-    expect(labels).toContain('From prior books in this series');
-    /* Both options reachable. */
-    expect(within(select).getByRole('option', { name: 'Wren Sparrow' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    const dialog = screen.getByRole('dialog');
+    /* The prior-books separator labels the second group. */
+    expect(within(dialog).getByText('From prior books in this series')).toBeInTheDocument();
+    /* Both options reachable inside the portalled popover. */
+    expect(within(dialog).getByRole('option', { name: /Wren Sparrow/ })).toBeTruthy();
     expect(
-      within(select).getByRole('option', { name: /Hart.*The Hollow Tide/i }),
+      within(dialog).getByRole('option', { name: /Hart.*The Hollow Tide/i }),
     ).toBeTruthy();
   });
 
@@ -297,9 +314,10 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
       onLinkPrior,
     });
     fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
-    const select = screen.getByRole('combobox', { name: /Merge target/i }) as HTMLSelectElement;
-    /* Pick the second prior — discriminator value is 'prior:1' (index 1). */
-    fireEvent.change(select, { target: { value: 'prior:1' } });
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    /* Click the second prior row (Marlow) — picker fires onPickRosterEntry
+       which writes `prior:1` to mergeTargetId. */
+    fireEvent.click(screen.getByRole('option', { name: /Marlow.*The Hollow Tide/i }));
     /* Confirmation copy shifts to the link wording when a prior is picked. */
     expect(screen.getByText(/linked as the same person as/i)).toBeTruthy();
     /* Button label flips from "Merge" to "Link" when a prior is selected. */
@@ -318,9 +336,8 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
       onLinkPrior,
     });
     fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
-    fireEvent.change(screen.getByRole('combobox', { name: /Merge target/i }), {
-      target: { value: 'Wren-foster' },
-    });
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
     await Promise.resolve();
     expect(onMerge).toHaveBeenCalledWith('Hartwell-alvin-Vale', 'Wren-foster');
@@ -344,9 +361,8 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
       onLinkPrior,
     });
     fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
-    fireEvent.change(screen.getByRole('combobox', { name: /Merge target/i }), {
-      target: { value: 'prior:0' },
-    });
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Hart.*The Hollow Tide/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Link$/i }));
     await Promise.resolve();
     await Promise.resolve();
@@ -565,18 +581,13 @@ describe('ProfileDrawer model-voice override picker', () => {
     { engine: 'gemini', name: 'Charon' },
   ];
 
-  it('renders engine tabs (one per available engine) and shows the Coqui catalog by default', async () => {
+  it('renders engine tabs (one per available engine) and labels the Auto trigger with the resolved voice', async () => {
     renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
-    const picker = await screen.findByRole('combobox', { name: /Model voice override/i });
-    /* Auto option labelled with the resolved voice so the user can
-       compare what they'd be moving away from. */
-    expect(picker).toHaveValue('auto');
-    expect(
-      within(picker).getByRole('option', { name: /Auto — currently Coqui · Aaron Dreschner/i }),
-    ).toBeTruthy();
-    /* Coqui tab is active by default (matches the project's engine);
-       Gemini tab is also present. The tabs swap which engine's voices
-       the select shows; the single combobox is enough to pin behaviour. */
+    const trigger = await screen.findByRole('button', { name: /Model voice override/i });
+    /* The trigger button shows the Auto label until the user picks an
+       explicit override — same content the legacy <select>'s auto
+       <option> carried. */
+    expect(trigger).toHaveTextContent(/Auto — currently Coqui · Aaron Dreschner/i);
     expect(screen.getByRole('tab', { name: /Coqui/i })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /Gemini/i })).toBeTruthy();
   });
@@ -584,8 +595,9 @@ describe('ProfileDrawer model-voice override picker', () => {
   it('persists an override via api.setVoiceOverride when the user picks a base voice', async () => {
     setVoiceOverride.mockClear();
     renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
-    const picker = await screen.findByRole('combobox', { name: /Model voice override/i });
-    fireEvent.change(picker, { target: { value: 'coqui|Asya Anara' } });
+    const trigger = await screen.findByRole('button', { name: /Model voice override/i });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('option', { name: /Asya Anara/ }));
     await waitFor(() => {
       expect(setVoiceOverride).toHaveBeenCalledWith('v_Brann', {
         engine: 'coqui',
@@ -601,9 +613,12 @@ describe('ProfileDrawer model-voice override picker', () => {
       overrideTtsVoices: { coqui: { name: 'Asya Anara' } },
     };
     renderDrawer(Brann, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
-    const picker = await screen.findByRole('combobox', { name: /Model voice override/i });
-    expect(picker).toHaveValue('coqui|Asya Anara');
-    fireEvent.change(picker, { target: { value: 'auto' } });
+    const trigger = await screen.findByRole('button', { name: /Model voice override/i });
+    expect(trigger).toHaveTextContent(/Asya Anara/);
+    fireEvent.click(trigger);
+    /* Auto row is always first in the popover; clicking it clears the
+       override (passes null to setVoiceOverride). */
+    fireEvent.click(screen.getByRole('option', { name: /Auto — currently Coqui/i }));
     await waitFor(() => {
       expect(setVoiceOverride).toHaveBeenCalledWith('v_Brann', null);
     });
@@ -623,21 +638,25 @@ describe('ProfileDrawer model-voice override picker', () => {
     expect(geminiTab.querySelector('.bg-magenta')).toBeTruthy();
   });
 
-  it("switching tabs swaps which engine's catalog the select shows", async () => {
+  it("switching tabs swaps which engine's catalog the picker shows", async () => {
     renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
-    /* Default tab (Coqui) — only Coqui voices listed (besides Auto). */
-    const coquiPicker = await screen.findByRole('combobox', {
+    /* Default tab (Coqui) — open the picker, only Coqui voices listed
+       (besides Auto). */
+    const coquiTrigger = await screen.findByRole('button', {
       name: /Model voice override.*coqui/i,
     });
-    expect(within(coquiPicker).queryByRole('option', { name: 'Charon' })).toBeNull();
-    expect(within(coquiPicker).getByRole('option', { name: 'Asya Anara' })).toBeTruthy();
-    /* Switch to Gemini tab — picker now lists Gemini's catalog. */
+    fireEvent.click(coquiTrigger);
+    expect(screen.queryByRole('option', { name: 'Charon' })).toBeNull();
+    expect(screen.getByRole('option', { name: /Asya Anara/ })).toBeTruthy();
+    /* Close the popover, switch to Gemini tab, re-open. */
+    fireEvent.click(coquiTrigger);
     fireEvent.click(screen.getByRole('tab', { name: /Gemini/i }));
-    const geminiPicker = await screen.findByRole('combobox', {
+    const geminiTrigger = await screen.findByRole('button', {
       name: /Model voice override.*gemini/i,
     });
-    expect(within(geminiPicker).getByRole('option', { name: 'Charon' })).toBeTruthy();
-    expect(within(geminiPicker).queryByRole('option', { name: 'Asya Anara' })).toBeNull();
+    fireEvent.click(geminiTrigger);
+    expect(screen.getByRole('option', { name: /Charon/ })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Asya Anara' })).toBeNull();
   });
 });
 
