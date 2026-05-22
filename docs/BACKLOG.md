@@ -335,6 +335,16 @@ Source: net-new (2026-05-22). Surfaced by the full `npm install` deprecation aud
 - _Depends on:_ upstream releases. Not on our schedule.
 - _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog that says "yes, we know, we're waiting on these three upstreams." Pairs with Should #9 (ESLint 8 → 9 chain) and Should #10 (Multer 1 → 2 security) which together account for every deprecation warning surfaced on a fresh 2026-05-22 install.
 
+### 33. Per-voice row sample-preview button inside `<VoiceOverridePicker>`
+
+Source: net-new (2026-05-22). Deferred from the picker-autocomplete bundle — the model-voice override picker now uses the shared `<SearchablePicker>` primitive but renders each voice row as just `name`. The original plan reserved a tiny `▶` slot on each row for in-list auditioning so the user can preview a voice without committing the override; v1 ships with the row label only, matching the legacy `<select>` parity.
+
+- _What:_ Add a per-row Play button that routes through `playSampleWithAutoLoad` (same helper the existing "Preview voice" / cast-row swatch use). Hover/focus reveals the icon on pointer devices; `coarse-pointer:opacity-60` keeps it faintly visible on touch. Sample text comes from the same drawer-level `previewText` the candidate-preview block uses. Single-row in-flight gate (the helper already coalesces concurrent clicks).
+- _Acceptance:_ Open the Profile Drawer's voice-override picker on the Kokoro tab. Click the `▶` next to a voice → that voice's sample plays without changing the current override. Pick the voice → override commits. Concurrent rapid clicks across rows fire one synth at a time.
+- _Key files:_ `src/components/voice-override-picker.tsx` (renderItem extension), `src/lib/play-sample-with-auto-load.ts` (reuse as-is), no test churn beyond a new wrapper test for the play affordance.
+- _Depends on:_ none.
+- _Benefit (user):_ shortens the "scrolled past 40 Kokoro voices, want to hear three before committing" flow from "pick → close → preview from drawer → pick another" to "▶ in-row, ▶ in-row, pick the one I like." Pairs with the autocomplete added in this bundle — search narrows the list, in-row preview judges the few remaining options.
+
 ---
 
 ## Won't (this round) — explicitly parked

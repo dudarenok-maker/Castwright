@@ -88,10 +88,11 @@ test.describe('profile drawer → voice preview while editing', () => {
     expect(secondName).not.toBe(firstName);
     await secondButton.click();
 
-    /* The override-picker select value is the assignment-of-record. It
-       must NOT have changed during preview auditioning. */
-    const overrideSelect = page.getByLabel(/Model voice override/i).first();
-    await expect(overrideSelect).toHaveValue('auto');
+    /* The override-picker trigger button label is the assignment-of-
+       record. It must NOT have changed during preview auditioning —
+       still reads "Auto — currently …" rather than a picked voice. */
+    const overrideTrigger = page.getByRole('button', { name: /Model voice override/i }).first();
+    await expect(overrideTrigger).toHaveText(/Auto/);
 
     /* Re-opening the drawer keeps the sample text — persisted to
        localStorage. Close and re-open the same character's profile. */

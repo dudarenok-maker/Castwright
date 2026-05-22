@@ -20,6 +20,7 @@ persist path. This plan owns the upload UI surface only.
 - Word count = `text.trim().split(/\s+/).filter(Boolean).length`. Byte size = `file.size` for files, `new Blob([text]).size` for paste. These are computed client-side for preview; the server may recompute its own canonical value.
 - The view never imports `mockXxx`/`realXxx` directly — it goes through `api.uploadManuscript` only (see `23-mock-toggle.md`).
 - On successful upload, dispatches `manuscriptUploaded({ bookId, manuscriptId })` which transitions stage `'upload' → 'analysing'` (guarded by `ui-slice.ts:61-64`).
+- **Analysis-model picker** — the "Analysis model" dropdown above the dropzone uses `<AnalysisModelPicker>` (`src/components/analysis-model-picker.tsx`), which wraps the shared `<SearchablePicker>` primitive. Trigger button shows the resolved label + chevron; clicking opens a portal popover with a "Search model…" autocomplete input and the same Gemini-then-Local Ollama groups (`MODEL_OPTION_GROUPS` from `src/lib/models.ts`) the legacy `<select>` + `<optgroup>` carried. Picks dispatch `uiActions.setSelectedModel(id)`. Touch-target rule (≥44 px on phone, plan 81) baked into the trigger button.
 
 ## Acceptance walkthrough
 
