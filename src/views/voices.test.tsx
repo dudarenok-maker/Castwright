@@ -31,6 +31,12 @@ const seriesPatchCharacter =
       failed: Array<{ bookId: string; bookTitle: string; error: string }>;
     }>
   >();
+const mergeCharactersMock =
+  vi.fn<
+    (args: { bookId: string; sourceId: string; targetId: string }) => Promise<{
+      characters: Character[];
+    }>
+  >();
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -43,6 +49,8 @@ vi.mock('../lib/api', () => ({
       characterId: string;
       patch: Record<string, unknown>;
     }) => seriesPatchCharacter(args),
+    mergeCharacters: (args: { bookId: string; sourceId: string; targetId: string }) =>
+      mergeCharactersMock(args),
   },
 }));
 
@@ -134,6 +142,7 @@ beforeEach(() => {
   getBookState.mockReset();
   getBookState.mockResolvedValue(null);
   seriesPatchCharacter.mockReset();
+  mergeCharactersMock.mockReset();
 });
 
 describe('LibraryView voice-family grouping', () => {
@@ -768,6 +777,221 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
         toasts.some((t) => t.kind === 'error' && t.message === 'Save failed — try again.'),
       ).toBe(true);
     });
+  });
+});
+
+describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
+  /* Cast carries a Wren + Wren Sparrow duplicate pair in book b1, both
+     resolving to the same Charon base voice — the substring-containment
+     case the user described. A third Wren clone lives in book b2 so we
+     can also assert the cross-book guard. */
+  const charactersB1: Character[] = [
+    { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator', voiceId: 'narrator' },
+    { id: 'Wren', name: 'Wren', role: 'Lead', color: 'peach', voiceId: 'Wren' },
+    {
+      id: 'Wren-foster',
+      name: 'Wren Sparrow',
+      role: 'Lead',
+      color: 'peach',
+      voiceId: 'Wren-foster',
+    },
+    { id: 'Oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', voiceId: 'Oduvan' },
+  ];
+
+  const libraryB1: Voice[] = [
+    makeVoice({
+      id: 'narrator',
+      character: 'Narrator',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+    }),
+    makeVoice({
+      id: 'Wren',
+      character: 'Wren',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
+    }),
+    makeVoice({
+      id: 'Wren-foster',
+      character: 'Wren Sparrow',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
+    }),
+    makeVoice({
+      id: 'Oduvan',
+      character: 'Oduvan',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' },
+    }),
+  ];
+
+  /* The cross-book guard test needs a second "Wren" living in a
+     different book. Kept out of the default fixture because two
+     "Wren" text matches would defeat plain getByText lookups in
+     every other test. */
+  const WrenFromBookTwo: Voice = makeVoice({
+    id: 'Wren-b2',
+    character: 'Wren',
+    bookId: 'b2',
+    bookTitle: 'Book Two',
+    source: 'library',
+    ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
+  });
+
+  function makeMergeStore(stageBookId: string = 'b1') {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+    });
+    store.dispatch(castSlice.actions.setCharacters(charactersB1));
+    store.dispatch(uiSlice.actions.openBook({ id: stageBookId, status: 'cast_pending' }));
+    store.dispatch(uiSlice.actions.confirmCast());
+    return store;
+  }
+
+  function renderMerge(lib: Voice[] = libraryB1) {
+    return render(
+      <Provider store={makeMergeStore()}>
+        <LibraryView library={lib} />
+      </Provider>,
+    );
+  }
+
+  function selectCard(label: string) {
+    fireEvent.click(
+      screen
+        .getByText(label)
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+  }
+
+  it('shows a "Merge into <longer-name>" button when 2 same-voice same-book duplicates are selected', () => {
+    renderMerge();
+    selectCard('Wren');
+    selectCard('Wren Sparrow');
+    /* Substring containment picks "Wren Sparrow" as the survivor. */
+    expect(
+      screen.getByRole('button', { name: 'Merge into Wren Sparrow' }),
+    ).toBeInTheDocument();
+  });
+
+  it('hides the Merge button for 2 same-voice DIFFERENT-book duplicates (cross-book guard)', async () => {
+    /* "Wren" lives in both b1 (id=Wren) and b2 (id=Wren-b2). Pick
+       the two same-name cards in different books — Compare stays
+       enabled because plan-96 allows cross-book pairs, but Merge must
+       be hidden because the server has no transport for it. */
+    getBookState.mockResolvedValue({
+      state: {
+        bookId: 'b2',
+        manuscriptId: '',
+        title: '',
+        author: '',
+        series: '',
+        seriesPosition: null,
+        isStandalone: false,
+        manuscriptFile: '',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#000'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      cast: {
+        characters: [{ id: 'Wren-b2', name: 'Wren', role: 'Lead', color: 'peach' }],
+      },
+      manuscript: null,
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: undefined,
+      changeLog: null,
+      analysis: undefined,
+    });
+    renderMerge([...libraryB1, WrenFromBookTwo]);
+    /* Two "Wren" labels exist (one per book) — disambiguate via closest
+       book section. Wren-b1 stays the first match; Wren-b2 is the
+       second. */
+    const WrenCards = screen.getAllByText('Wren');
+    fireEvent.click(
+      WrenCards[0]
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+    fireEvent.click(
+      WrenCards[1]
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+    expect(screen.queryByRole('button', { name: /^Merge into/ })).toBeNull();
+  });
+
+  it('hides the Merge button for 2 DIFFERENT-base-voice selections', () => {
+    renderMerge();
+    selectCard('Wren');
+    selectCard('Oduvan');
+    expect(screen.getByText('different base voices')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Merge into/ })).toBeNull();
+  });
+
+  it('hides the Merge button when a narrator/bucket id is one of the two selected', () => {
+    /* Narrator + Wren are both b1, but Charon ≠ Charon for narrator
+       in our test fixture (narrator carries the default ttsVoice in
+       makeVoice — Charon). Force the same-base check by re-selecting
+       Wren-foster + narrator: same provider, both Charon — but
+       narrator is a forbidden id. */
+    renderMerge();
+    selectCard('Narrator');
+    selectCard('Wren Sparrow');
+    /* Same base voice ✓ badge appears, but Merge is hidden because
+       narrator is in UNMERGEABLE_IDS. Compare button stays present. */
+    expect(screen.getByText('same base voice ✓')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Merge into/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Compare' })).toBeInTheDocument();
+  });
+
+  it('dispatches api.mergeCharacters with source=shorter-name, target=longer-name, then clears selection', async () => {
+    mergeCharactersMock.mockResolvedValue({
+      characters: [
+        { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+        {
+          id: 'Wren-foster',
+          name: 'Wren Sparrow',
+          role: 'Lead',
+          color: 'peach',
+          aliases: ['Wren'],
+        },
+        { id: 'Oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta' },
+      ],
+    });
+    renderMerge();
+    selectCard('Wren');
+    selectCard('Wren Sparrow');
+    const mergeBtn = screen.getByRole('button', { name: 'Merge into Wren Sparrow' });
+    fireEvent.click(mergeBtn);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mergeCharactersMock).toHaveBeenCalledTimes(1);
+    expect(mergeCharactersMock).toHaveBeenCalledWith({
+      bookId: 'b1',
+      sourceId: 'Wren',
+      targetId: 'Wren-foster',
+    });
+    /* Pill collapses on success — Selected label is gone. */
+    expect(screen.queryByText(/^Selected$/)).toBeNull();
   });
 });
 
