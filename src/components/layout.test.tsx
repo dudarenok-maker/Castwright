@@ -407,8 +407,10 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
     );
 
     /* One drift event per book, each carrying its own bookId so the
-       selector buckets them into two book entries. bookCount > 1 is
-       what makes drift-report.tsx render the BOOK header at all. */
+       selector buckets them into two book entries. Each book section
+       in drift-report.tsx always renders a BOOK header (PR #165), so
+       both `view.bookTitle` values must resolve correctly via the
+       saved → library → bookId priority chain. */
     store.dispatch(
       revisionsActions.hydrateFromBookState({
         drift: [
