@@ -162,7 +162,7 @@ test.describe('visual baselines', () => {
  * one-frame light flash.
  *
  * Same regenerate command as the light pass:
- *   npm run test:e2e -- --update-snapshots visual.spec.ts
+ *   npm run test:e2e:visual -- --update-snapshots
  */
 test.describe('visual baselines (dark theme)', () => {
   test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
