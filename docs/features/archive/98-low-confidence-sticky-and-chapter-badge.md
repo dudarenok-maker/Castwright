@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-22
 owner: null
 ---
 
 # Sticky low-confidence nav + per-chapter low-confidence chapter-list badge
 
-> Status: active.
+> Status: stable (shipped 2026-05-22 via PR #159, merge commit `74698a5`).
 > Key files: `src/views/manuscript.tsx`, `src/components/manuscript/sticky-stats-bar.tsx`, `src/views/low-confidence-nav.test.tsx`, `e2e/manuscript-low-confidence-triage.spec.ts`, `e2e/responsive/coverage.spec.ts`.
 > URL surface: indirect — exercised inside `#/books/:bookId/manuscript`.
 > OpenAPI ops: none.
@@ -79,6 +79,6 @@ Run on the canonical end-to-end manuscript (`C:\Users\dudar\Downloads\Bonus Keef
 
 ## Ship notes
 
-(Filled in when status flips to `stable`. Append: shipped date, commit SHA, any
-behaviour delta vs. the original spec. Once filled, the plan becomes eligible
-for archive — move to `docs/features/archive/` in the same PR as the ship.)
+- **Shipped:** 2026-05-22 via PR #159, merge commit `74698a5`.
+- **Behaviour delta vs. original spec:** none. Both pieces landed exactly as specified — sticky bar at `top-16` with backdrop blur extracted into `ManuscriptStickyStatsBar`, amber count badge on chapter rows skipped at count 0.
+- **CI note:** the Windows pre-push gate flagged the `e2e/visual.spec.ts` baselines (light + dark for library / upload / confirm / ready / listen / generate). Pushed with `--no-verify` per `feedback_visual_baselines_flaky_on_windows.md`; Linux CI cleared them on first attempt (11m17s, exit 0). The new sticky bar IS a real visual change to the manuscript view but the existing visual baseline tolerance absorbed it.
