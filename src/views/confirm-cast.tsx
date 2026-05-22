@@ -36,6 +36,17 @@ interface Props {
 
 type Decision = 'match' | 'generate';
 
+/* Bulk-apply auto-ticks the "Sync profile" checkbox only for matches
+   whose confidence is strictly below this threshold. A high-quality
+   match (≥ 0.9) means the library record is already a good fit for
+   this character; merging this manuscript's profile back into the
+   library record stays a deliberate per-card opt-in. Undefined
+   confidence is treated as low-confidence (defensive — older
+   voice-match payloads omitted the field). The Reuse-decision flip
+   is unchanged: every eligible row still gets `decisions[id] = 'match'`
+   on bulk apply regardless of confidence. */
+const SYNC_AUTO_THRESHOLD = 0.9;
+
 export function ConfirmCastView({
   characters,
   library,
@@ -66,25 +77,32 @@ export function ConfirmCastView({
   /* Plan 41 — bulk-apply matches + library sync. Mirrors the per-card
      `canOverrideLibrary` predicate (the `!!onOverrideLibrary` guard hides
      the pill in mock environments where the per-card checkbox is itself
-     hidden). The apply path flips both the Reuse decision AND the
-     sync-from-library override in one click — the per-card sync checkbox
-     only renders when `decision === 'match'`, so without the decision
-     flip the pill produces no visible effect on cards the user had
-     toggled to "Generate". The existing `handleConfirm` batch is still
-     the only POST path. */
+     hidden). The apply path flips the Reuse decision for every eligible
+     card AND ticks the sync-from-library override for low-confidence
+     rows (< SYNC_AUTO_THRESHOLD) — high-confidence matches keep the
+     sync checkbox as a deliberate per-card opt-in because the library
+     record is already a good fit. The per-card sync checkbox only
+     renders when `decision === 'match'`, so without the decision flip
+     the pill produces no visible effect on cards the user had toggled
+     to "Generate". The existing `handleConfirm` batch is still the
+     only POST path. */
+  const characterById = new Map(characters.map((c) => [c.id, c]));
   const eligibleIds = characters
     .filter((c) => !!onOverrideLibrary && !!c.matchedFrom?.bookId && !!c.matchedFrom?.characterId)
     .map((c) => c.id);
-  const allApplied =
-    eligibleIds.length > 0 &&
-    eligibleIds.every((id) => decisions[id] === 'match' && overrides[id]);
+  /* High-confidence rows count as "applied" once their decision is
+     'match' (override is irrelevant — apply-all won't write it). Low-
+     confidence rows still need override === true to be applied. */
+  const shouldAutoSync = (id: string) =>
+    (characterById.get(id)?.matchedFrom?.confidence ?? 0) < SYNC_AUTO_THRESHOLD;
+  const isApplied = (id: string) =>
+    decisions[id] === 'match' && (shouldAutoSync(id) ? !!overrides[id] : true);
+  const allApplied = eligibleIds.length > 0 && eligibleIds.every(isApplied);
   /* N is the count of currently-unapplied eligible characters — the size
      of the apply action's effect. After bulk-apply + per-card untick of
-     one sync, the pill flips back to "Apply 1 match" (the user is one
-     click away from fully applied again). */
-  const unappliedCount = eligibleIds.filter(
-    (id) => decisions[id] !== 'match' || !overrides[id],
-  ).length;
+     one low-confidence sync, the pill flips back to "Apply 1 match"
+     (the user is one click away from fully applied again). */
+  const unappliedCount = eligibleIds.filter((id) => !isApplied(id)).length;
   const bulkApplyLabel = allApplied
     ? 'Clear all syncs'
     : `Apply all ${unappliedCount} ${unappliedCount === 1 ? 'match' : 'matches'}`;
@@ -92,8 +110,11 @@ export function ConfirmCastView({
      clobber the bulk set. */
   const handleBulkApply = () => {
     if (allApplied) {
-      // Clear-syncs path: only untick overrides; do NOT revert decisions
-      // (would be destructive — user explicitly picked Reuse).
+      // Clear-syncs path: untick overrides for every eligible row,
+      // including any high-confidence rows the user manually ticked.
+      // Symmetric with how those rows were ticked manually in the
+      // first place. Decisions stay on Reuse (reverting would be
+      // destructive — user explicitly picked Reuse).
       setOverrides((prev) => {
         const next = { ...prev };
         for (const id of eligibleIds) next[id] = false;
@@ -101,9 +122,9 @@ export function ConfirmCastView({
       });
       return;
     }
-    // Apply-all path: flip decision to Reuse AND tick override for every
-    // eligible character. Single button covers the whole "use the
-    // matched library voices and sync profiles" intent.
+    // Apply-all path: flip decision to Reuse for every eligible row.
+    // Auto-tick override ONLY for low-confidence rows; high-confidence
+    // rows are not written (any prior manual tick is preserved).
     setDecisions((prev) => {
       const next = { ...prev };
       for (const id of eligibleIds) next[id] = 'match';
@@ -111,7 +132,9 @@ export function ConfirmCastView({
     });
     setOverrides((prev) => {
       const next = { ...prev };
-      for (const id of eligibleIds) next[id] = true;
+      for (const id of eligibleIds) {
+        if (shouldAutoSync(id)) next[id] = true;
+      }
       return next;
     });
   };
