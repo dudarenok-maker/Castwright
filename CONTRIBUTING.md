@@ -346,7 +346,7 @@ PR) and GitHub's native `mergeable` status still surfaces conflicts —
 the gate stays "PR required + title valid + no conflicts", just without
 the 10–15 min full battery. The moment a non-doc file is touched in the
 same PR, the full verify runs as normal. Rationale and the exact glob
-list: [docs/features/100-docs-only-ci-skip.md](docs/features/100-docs-only-ci-skip.md).
+list: [docs/features/archive/101-docs-only-ci-skip.md](docs/features/archive/101-docs-only-ci-skip.md).
 
 ## When you ship a change
 
