@@ -157,6 +157,26 @@ Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.
 - _Depends on:_ none. Pure dep bump + small middleware adaptation.
 - _Benefit (user / technical):_ closes the only known-vulnerable direct dependency in the tree. Multer 1.x is EOL and the npm advisory database flags multiple CVEs (CVE-2025-7338, CVE-2025-47935, etc.) that 2.x patches. Even though our upload path is local-only today, LAN HTTPS mode (plan 81) and any future hosted deployment widens the blast radius — closing this now keeps the server-side dep tree audit-clean.
 
+### 11. Mobile/tablet "Chapters" heading not visible in `responsive/coverage.spec.ts`
+
+Source: net-new (2026-05-22). Surfaced during validation of PR #136 (`fix/e2e-and-mobile-workers`, Should-tier mobile worker tuning). After the `--workers=2` cap eliminated the 7 launch-timeout flakes, 3 hard failures in `e2e/responsive/coverage.spec.ts` remain. These were the "3 hard" referenced in the original Should #4 backlog text — present on `origin/main` regardless of worker count, but invisible until the launch-timeout flake was cleared.
+
+- _What:_ Three responsive cases fail at smaller viewports: `manuscript view — Solway Bay fixture` at both `mobile-chrome` (412×915) and `tablet-chrome` (834×1194), plus `upload view` at `tablet-chrome`. All fail on the same assertion: `page.getByRole('heading', { name: /^Chapters$/, level: 2 })` is not visible inside the 5 s budget. The spec comment says "On mobile the sidebar is a drawer so the heading may live behind the hamburger; matchers are scoped on the heading role so either position resolves" — but in practice the role lookup does NOT resolve when the drawer is closed at responsive viewports. Either the heading isn't rendered at all (drawer DOM-hidden, not just CSS-hidden) or the lookup misses it inside the hamburger trigger's collapsed state. Fix paths: (a) auto-open the chapters drawer when the manuscript route mounts at responsive viewports, (b) move the heading outside the drawer so it's always rendered, (c) update the spec to open the drawer before asserting (lift the chapter-sidebar hydration signal to a more robust selector).
+- _Acceptance:_ `npm run test:e2e:mobile` runs end-to-end with **zero failures** (today: 17 passed + 3 failed + 0 launch timeouts). Each spec passes on first attempt within the 5 s budget; retry budget is the safety net, not the primary path.
+- _Key files:_ `e2e/responsive/coverage.spec.ts:72-82` (manuscript case), `e2e/responsive/coverage.spec.ts:53-69` (upload case); `src/views/manuscript.tsx` (mobile drawer wiring); `src/views/upload.tsx` (tablet layout).
+- _Depends on:_ PR #136 shipped (the `--workers=2` cap exposed these as the next-tier reliability gap).
+- _Benefit (technical):_ closes the post-fix-mobile-workers gap so `test:e2e:mobile` becomes 100% green and ready for Should #3 (non-blocking `e2e-mobile.yml` GitHub Actions workflow). Today's persistent 3-failure floor masks any new mobile/tablet regression that would land on top.
+
+### 12. Local pre-push e2e contention beyond the 4 cited specs (run-2 retry-recovered pattern)
+
+Source: net-new (2026-05-22). Surfaced during validation of PR #136 (`fix/e2e-and-mobile-workers`, Should #1 fix for the original 4 cited flaky specs). After applying `waitForRouteReady` to the 4 cited specs, run 2 of `npm run test:e2e` showed 5 OTHER specs flake-on-first-attempt and pass on retry: `concurrent-multi-book`, `listen-playback`, `listen-rename-chapter`, `visual.spec.ts confirm-dark`, `voice-preview-while-editing`. Different failure mode from Should #1's cited symptom (test-level 30 s timeout on inner assertions, not first-mount `toBeVisible` at the route boundary).
+
+- _What:_ Local pre-push runs still show retry-recovered flakes on 5 specs that aren't first-mount-bounded. The `waitForRouteReady` helper from PR #136 only waits for the route-level Suspense fallback to detach; it doesn't address contention that starves in-flight Vite chunk responses for already-mounted views (chapters-list hydration in listen-playback, audio-src binding in mini-player, drawer animations in voice-preview-while-editing). Three avenues: (a) extend the helper with per-view hydration signals (e.g. `waitForListenViewReady` that also waits for `data-testid="chapters-list"` non-empty), (b) cap local workers below the default `~CPU/2` in `playwright.config.ts` (the "sledgehammer" option deliberately deferred in Should #1's fix), (c) tighten individual specs' wait logic case-by-case.
+- _Acceptance:_ Two consecutive `npm run test:e2e` runs on a clean local Windows checkout complete with **zero flakes** — every spec passes on first attempt, retry budget unused. Today's state: run 1 89/0/2 clean, run 2 84/5-flaky/2-skipped (both exit 0 because retries pass, but the retry count is noise that masks underlying contention).
+- _Key files:_ `e2e/concurrent-multi-book.spec.ts`, `e2e/listen-playback.spec.ts`, `e2e/listen-rename-chapter.spec.ts`, `e2e/visual.spec.ts:173` (confirm-dark visual baseline), `e2e/voice-preview-while-editing.spec.ts`; possibly `playwright.config.ts` (`workers` cap for local) and `e2e/helpers.ts` (helper extension for per-view hydration signals).
+- _Depends on:_ PR #136 shipped (this is the second tier of pre-push reliability work that follows it).
+- _Benefit (dev / technical):_ removes residual retry-mask noise from the pre-push gate. Today the retry budget makes the suite look greener than it really is; a clean two-runs-in-a-row would be the durable signal that the e2e harness is genuinely contention-resistant. Pairs with Should #11 (responsive coverage) — together they would turn `npm run verify` into a deterministic pass/fail on the local box.
+
 ---
 
 ## Could — nice to have, low-cost wins
@@ -353,7 +373,17 @@ Source: net-new (2026-05-22). Surfaced by the full `npm install` deprecation aud
 - _Acceptance:_ each time a direct dep is bumped (jsdom, archiver, or @google/genai), re-run the audit and tick off the resolved chain in this entry. Entry is removed from BACKLOG when all three resolve.
 - _Key files:_ `package.json` (jsdom + archiver direct), `server/package.json` (@google/genai direct). No source changes — purely a dep-bump tracking item.
 - _Depends on:_ upstream releases. Not on our schedule.
-- _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog that says "yes, we know, we're waiting on these three upstreams." Pairs with Should-#1 (ESLint chain) and Should-#2 (multer security) which together account for every deprecation warning surfaced on a fresh 2026-05-22 install.
+- _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog that says "yes, we know, we're waiting on these three upstreams." Pairs with Should #9 (ESLint 8 → 9 chain) and Should #10 (Multer 1 → 2 security) which together account for every deprecation warning surfaced on a fresh 2026-05-22 install.
+
+### 33. Server-side `gemini.test.ts` "abort signal fires" once-seen timing race
+
+Source: net-new (2026-05-22). Surfaced once during local `npm run verify` after PR #136 (`fix/e2e-and-mobile-workers`) landed. Did not recur in the pre-commit `verify:fast` or the pre-push full `verify` runs of the same battery on the same machine. Filed for tracking in case it returns.
+
+- _What:_ The test `server/src/analyzer/gemini.test.ts > GeminiAnalyzer.generateWithLimiter — retry policy > stream watchdog + abort > aborts in-flight stream and throws AnalysisAbortedError when caller signal fires` failed once with `expected "spy" to be called 1 times, but got 0 times` on the `generateContentStream` mock. The test confirms caller-abort is NOT retried (exactly one upstream call). The race suggests the caller's abort signal fires before the first `generateContentStream` call resolves — the spy never observes the call. Passes in isolation (12/12 in ~18 s) and on all subsequent retried runs of the full server battery.
+- _Acceptance:_ Repeated full-suite runs of `npm run test:server` (e.g. 5x in a row on a clean checkout) show this test passing every time. If reproducible, tighten the test's signal-fire timing (await the first call before triggering the abort) OR widen the spy assertion to allow the rare 0-call path.
+- _Key files:_ `server/src/analyzer/gemini.test.ts:380-389` (the abort test); `server/src/analyzer/gemini.ts` (the SUT — `generateWithLimiter`, `AnalysisAbortedError` handling).
+- _Depends on:_ none — purely a tracking item until reproduced.
+- _Benefit (dev / technical):_ removes one residual pre-push flake risk. Low priority since once-seen; entry is removed from BACKLOG if a month elapses without recurrence.
 
 ---
 
