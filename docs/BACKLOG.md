@@ -324,6 +324,16 @@ Source: net-new (2026-05-21). Surfaced while smoke-testing PR #107 — a `tsx` r
 - _Depends on:_ none. Self-contained inside the streaming surface.
 - _Benefit (dev / technical):_ no more false "stalled" banners during interactive development. Same fix incidentally covers production crash-recovery (Node OOM, manual restart) so users running long books survive a sidecar/server bounce without losing the visible progress thread.
 
+### 31. Investigate post-plan-89 e2e contention pattern on local pre-push
+
+Source: net-new (2026-05-22, surfaced during v1.4.0 ship). Two consecutive `npm run verify` pre-push runs failed with different specs flaking each time (`account-analyzer-knobs`, `account-models`, `bulk-sync-library`, `binary-upload`); each failing spec assertion timed out at 10 s waiting on a `getByTestId(...)` while the page yaml showed the route-level Suspense `Loading…` fallback. Same code, same machine: PR #122 CI verify on Ubuntu green (80/80 specs), worktree run at `wt-release-v1-4-0` green (80/80), each failing spec re-run in isolation green (`account-analyzer-knobs.spec.ts` → 5/5 in 28.7 s). v1.4.0 shipped via a one-shot `--no-verify` push with the release.yml cross-OS verify matrix as the safety net.
+
+- _What:_ Diagnose why the local Windows pre-push run flakes when 80+ specs share one Vite dev-server, while the same harness on a fresh GitHub Actions runner doesn't. Two hypotheses worth pulling on: (a) plan 89's route-level `React.lazy` + delayed-spinner Suspense fallback made first-paint sensitive to contention — lazy chunk requests can queue behind other tests' fetches long enough to bust the 10 s `toBeVisible` budget; (b) the local box runs heavier OS-level competing processes (browser tabs, indexers) than a fresh CI VM. Fix options to consider: lift the 10 s timeout for any first-mount `toBeVisible` on lazy-loaded routes (cleanest, lowest-risk), pre-warm the route bundle at suite start (effective but couples specs), or cap playwright workers below the default ~50% CPU on local Windows boxes (sledgehammer).
+- _Acceptance:_ either (a) raise per-spec first-mount timeouts so two consecutive `npm run verify` runs on the local box never flake on a clean checkout, or (b) document the contention threshold and codify the `--workers=N` cap in `playwright.config.ts` so the local pre-push gate matches CI behaviour. The release-day workaround (`--no-verify` plus release.yml cross-OS safety net) should not be the standard answer for a non-release push.
+- _Key files:_ `playwright.config.ts` (worker count, default test timeout), `src/components/layout.tsx` (route-level Suspense boundary added in plan 89), `src/components/delayed-spinner.tsx` (the delay knob that's racing the assertion budget), `e2e/account-analyzer-knobs.spec.ts` + `e2e/account-models.spec.ts` + `e2e/bulk-sync-library.spec.ts` + `e2e/binary-upload.spec.ts` (the flaky specs seen in the v1.4.0 push attempts).
+- _Depends on:_ none.
+- _Benefit (dev / technical):_ removes the local-only false-positive pattern that forced a release-day `--no-verify` bypass. Keeps the pre-push gate trustworthy as the suite grows past 80 specs — without this, every future minor release risks the same dance.
+
 ---
 
 ## Won't (this round) — explicitly parked
