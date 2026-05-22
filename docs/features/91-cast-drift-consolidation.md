@@ -39,6 +39,7 @@ owner: null
 - `DriftGroupCard` is wrapped in `React.memo` (`src/modals/drift-report.tsx`); its props must remain referentially stable across unrelated re-renders. The memoised `driftGroupsByBookView` in `layout.tsx` is what enforces this.
 - Single-chapter groups skip the expand toggle and render the action row inline. Multi-chapter groups always render the toggle + bulk actions. The behavioural distinction is `group.events.length === 1`.
 - The detailed `ProfileCompareCard` content stays visible by default at the top of every card — never hide it behind expand. The user explicitly called this out as the surface that makes drift detection meaningful.
+- **Book-title resolution** for the per-section "BOOK" header (`src/components/layout.tsx`'s `driftGroupsByBookView` memo): fall through `bookMeta.saved[bookId]?.title` → `library.books.find(b => b.bookId === bookId)?.title` → raw `bookId`. The middle step is what keeps cross-book drift cards (book never opened this session, so `bookMeta.saved` is empty) from leaking the workspace slug into the header. Don't collapse the chain — the saved-meta step has to win when present (it carries user-edited title overrides), and the raw-bookId tail catches any book whose library entry has been pruned. Pinned by `Layout — drift modal book-title fallback (plan 91)` in `src/components/layout.test.tsx`.
 
 ## Test plan
 
