@@ -233,6 +233,35 @@
 [data-theme='dark'] .bg-emerald-100 {
   background-color: rgba(16, 185, 129, 0.18);
 }
+/* Translucent /50 variant used by the generation-view "Done" chapter card
+   tint (`src/views/generation.tsx` stateConfig.done.tint). Same selector
+   caveat as the `.bg-rose-50\/N` overrides above — Tailwind compiles
+   `.bg-emerald-50\/50` as its own selector, so the bare `.bg-emerald-50`
+   redirect doesn't reach it. Without this the card paints 50% opacity of
+   the near-white `#ecfdf5` over the dark canvas, reading as a muddy cream
+   wash rather than a green "done" cue. Alpha sits one step above
+   `.bg-rose-50\/50` (the Failed tint at 0.06) since Done is the resting
+   state most chapters dwell in, one step below the un-multiplied
+   `.bg-emerald-50` base (0.10). */
+[data-theme='dark'] .bg-emerald-50\/50 {
+  background-color: rgba(16, 185, 129, 0.08);
+}
+/* Saturated emerald shades used by the generation-view progress bars:
+   `.bg-emerald-200` / `.bg-emerald-500` are the ChapterProgressBar track
+   + fill for the done state, `.bg-emerald-400` is the per-character
+   "fullyDone" sliver in CharStatusBar. Bare Tailwind values hold up on
+   the dark canvas but read as oversaturated next to the soft card tint
+   above; drop to alpha-form emerald so the elevation step matches the
+   rose / amber companions. */
+[data-theme='dark'] .bg-emerald-200 {
+  background-color: rgba(16, 185, 129, 0.22);
+}
+[data-theme='dark'] .bg-emerald-400 {
+  background-color: rgba(16, 185, 129, 0.55);
+}
+[data-theme='dark'] .bg-emerald-500 {
+  background-color: rgba(16, 185, 129, 0.7);
+}
 [data-theme='dark'] .bg-amber-50 {
   background-color: rgba(245, 158, 11, 0.1);
 }
