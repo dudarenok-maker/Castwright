@@ -944,19 +944,21 @@ export function AnalysingView({
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-60 pointer-events-none" />
       {/* Sticky bar lives only while the SSE is in flight. Outside the
           streaming/connecting window the inline header button handles
-          Start / Resume — there is never a moment with both surfaces
-          competing for the same affordance. */}
+          Start / Resume — never two surfaces competing for the same
+          affordance. Mounted directly under the outer flex container
+          (not nested inside its own positioned wrapper) so the sticky
+          bar's containing block is the full-height analysing view, not a
+          tiny wrapper — without this, the bar would scroll off because
+          its containing block had nothing left to scroll WITHIN. */}
       {manuscriptId && isAnalysisRunning && (
-        <div className="relative w-full max-w-2xl">
-          <StickyAnalysisBar
-            activePhaseId={phase}
-            conn={conn}
-            isRunning={isAnalysisRunning}
-            hasStartedOnce={hasStartedOnceRef.current}
-            isAnalyzerReady={isAnalyzerReady}
-            onPauseOrResume={handlePauseOrResume}
-          />
-        </div>
+        <StickyAnalysisBar
+          activePhaseId={phase}
+          conn={conn}
+          isRunning={isAnalysisRunning}
+          hasStartedOnce={hasStartedOnceRef.current}
+          isAnalyzerReady={isAnalyzerReady}
+          onPauseOrResume={handlePauseOrResume}
+        />
       )}
       <div className="relative max-w-2xl w-full">
         <div className="text-center mb-10">

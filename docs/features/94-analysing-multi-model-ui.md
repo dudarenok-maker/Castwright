@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # 94 — Analysing-stage multi-model UI + sticky status bar
 
-> Status: draft
+> Status: active (commits landed on `feat/frontend-analysing-multi-model-ui`; PR pending)
 > Key files: `src/views/analysing.tsx`, `src/components/analysing/phase-card.tsx`, `src/components/analysing/phase-model-chip.tsx`, `src/components/analysing/phase-model-swap.tsx`, `src/components/analysing/sticky-analysis-bar.tsx`, `src/store/account-slice.ts`, `src/store/analysis-slice.ts`
 > URL surface: `#/books/<id>/analysing`
 > OpenAPI ops: none (purely a frontend surfacing of state already persisted via `PUT /api/user/settings` per plan 88)
