@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-22
 owner: null
 ---
 
-# Cast Drift modal — consolidation by `(book × character × snapshot)`
+# Cast Drift modal — consolidation + book-title + per-character scope
 
-> Status: active
+> Status: stable
 > Key files: `src/modals/drift-report.tsx`, `src/store/revisions-slice.ts`, `src/components/layout.tsx`, `src/data/drift.ts`
 > URL surface: drift banner on `#/books/<id>/cast` → modal overlay
 > OpenAPI ops: `GET /api/revisions?bookIds=…` (consumed; this plan does not change the contract)
@@ -65,6 +65,9 @@ owner: null
   - `Dismiss all` fires `onDismiss` once per event in the group.
   - Header "N chapters flagged" still counts every event, not every card.
 - **Playwright e2e** (`e2e/drift-report-multibook.spec.ts`): extended with a second case that opens the modal, asserts the consolidated Eliza card with `Show 4 chapters` toggle + bulk Regen-all + exactly one toggle (since Halloran and Marcus are single-chapter groups). Fixture extended in `src/data/drift.ts` with 3 more Eliza events sharing one snapshot — exercises the real-world bug being fixed.
+- **Book-title fallback** (`src/components/layout.test.tsx`, PR #141): 1 case `Layout — drift modal book-title fallback (plan 91)` seeds two drift books — one with both `bookMeta.saved` + `library.books`, one with library-only — asserts saved-meta wins for the first book, library-title surfaces for the second, neither raw bookId leaks into the modal as a title.
+- **Per-character filter** (`src/modals/drift-report.test.tsx`, PR #145): 3 cases under `DriftReportModal — per-character filter (pill-click entry)`: (a) `filterCharacterId` prunes non-matching cards + the banner names the filtered character + header count reflects the filtered view, (b) the "Show all characters" button calls `onClearFilter` exactly once, (c) returns null (not an empty modal shell) when the filter points at a character with zero events (race-condition guard).
+- **Pill dispatch shape** (`src/views/cast.test.tsx`, PR #145): 1 case `CastView drift pill — per-character entry to the Voice Drift Detector` renders the amber drift pill in both responsive layouts (desktop table + mobile card) and asserts both invoke `onShowDrift(characterId)` — the unscoped form `onShowDrift()` is reserved for the top-banner entry.
 
 ### Manual acceptance walkthrough
 
@@ -81,6 +84,18 @@ Run `npm start` (or `npm run dev` for HMR) in mock mode (`VITE_USE_MOCKS=true`, 
 9. Click **Regenerate all** on the Eliza card. The modal closes; the regen flow handles each chapter.
 10. **Scale stress test**: extend the fixture to 300 events (or hit a real backend that has accumulated drift), reopen the modal. Interactions should feel responsive — no multi-second freezes. Chrome DevTools Performance panel: no scripting blocks > 50 ms on a modern laptop.
 
+**Per-character pill scope (PR #145).** From the same cast view as step 3 above:
+
+11. On the cast table row for Eliza (or any character with a drift count), an amber pill renders next to the name showing the chapter count. Title attribute reads "N chapters with voice drift".
+12. Click the pill (NOT the top banner). Modal opens with an amber banner at the top reading **"Showing drift for Eliza only · Show all characters"**. Only Eliza's card is visible — Halloran and Marcus do NOT render.
+13. Click **Show all characters**. The amber banner disappears; the unfiltered descriptive paragraph returns; all three cards become visible.
+14. Close the modal (X or backdrop), then click the top banner again. Modal opens unscoped — no per-character banner, full list visible. The filter does NOT persist across close/reopen.
+
+**Book-title fallback (PR #141).** Requires a multi-book session with drift events spanning at least two books, ideally one that hasn't been opened in this session:
+
+15. Open any book whose drift modal has events from BOTH the active book AND another book the user hasn't visited this session (e.g. via cross-book bulk poll). Trigger the modal via the top banner.
+16. The per-section **BOOK** headers render the workspace-scan title (e.g. "The Hollow Tide") for both books — neither shows the raw slug `shannon-messenger__keeper-of-the-lost-cities__keeper-of-the-lost-ci…`. If the active book has user-edited title overrides in `bookMeta.saved`, those win over the library scan title.
+
 ## Out of scope
 
 - Manuscript view virtualisation (Backlog Should #1) — separate plan / branch.
@@ -91,5 +106,10 @@ Run `npm start` (or `npm run dev` for HMR) in mock mode (`VITE_USE_MOCKS=true`, 
 
 ## Ship notes
 
-(Filled in when status flips to `stable`. Append: shipped date, commit SHA, any
-behaviour delta vs. the original spec.)
+Plan 91 shipped in three increments. The original consolidation landed first; book-title and per-character scope landed as two follow-up PRs after user-surfaced bugs, in line with the plan's extension invariants under "Invariants to preserve".
+
+- **PR #119** (merge `fd9c218`, 2026-05-21): the original consolidation — `selectDriftGroupsByBook` + `groupDriftEvents` + the `(book × character × snapshot)` card collapse. DOM-node count for a 300-event modal dropped from ~7,200 to ~200. Detailed `ProfileCompareCard` preserved per the user's load-bearing-content callout. Behaviour matched the plan body as written.
+- **PR #141** (merge `b6537e5`, 2026-05-22): book-title fallback fix. The per-section "BOOK" header was rendering the raw workspace slug for cross-book drift cards when the book wasn't in this session's `bookMeta.saved`. Resolved by adding the `library.books` middle step in `src/components/layout.tsx`'s `driftGroupsByBookView` memo. Invariant added under "Invariants to preserve"; case in `src/components/layout.test.tsx`.
+- **PR #145** (merge `d2fac41`, 2026-05-22): per-character pill scope. Clicking the amber drift pill on a cast row used to open the full unscoped modal — user had to scroll to find the character. Added `ui.driftReportCharacterFilter` state field + `openDriftReportForCharacter` / `clearDriftReportCharacterFilter` actions; `DriftReportModal` now accepts `filterCharacterId` + `onClearFilter`; an in-modal "Showing X · Show all characters" banner is the escape hatch. Closing the modal also clears the filter. Invariant added under "Invariants to preserve"; 4 paired cases across `src/modals/drift-report.test.tsx` (3) + `src/views/cast.test.tsx` (1).
+
+No behaviour delta vs. the plan body — both follow-ups landed as additive invariants under the plan's original "Invariants to preserve" section, not as scope changes.
