@@ -91,5 +91,5 @@ The canonical e2e manuscript for cross-book matching is `~/Downloads/the Coalfal
 ## Out of scope
 
 - Cross-book voice cloning / sample re-rendering — covered by `22-voice-library.md` and the TTS plans.
-- Bulk-accept-all UI — v1 is per-character review.
+- ~~Bulk-accept-all UI — v1 is per-character review.~~ **Shipped 2026-05-18** as plan 41 (`archive/41-bulk-library-sync.md`). Top-of-view "Apply all N matches" pill flips Reuse + auto-ticks the library-sync checkbox for low-confidence (< 0.9) rows (Bug C 2026-05-19 + Bug D 2026-05-22 refinements). Per-card untick still handles exceptions.
 - Fuzzy name match beyond token Jaccard (e.g. Levenshtein on misspellings). Add when a real failure case shows up.
