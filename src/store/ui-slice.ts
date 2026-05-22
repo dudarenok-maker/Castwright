@@ -49,6 +49,13 @@ export interface UiState {
       can scope its list. */
   revisionHistoryFor: { chapterId: number | null } | null;
   showDriftReport: boolean;
+  /** When set, scopes the Voice Drift Detector modal to one character —
+      pill clicks from a cast row open the modal with only that
+      character's cards visible. null (the default) renders the full
+      cross-character/cross-book list (top-banner entry path). The
+      "Show all characters" affordance in the modal header clears this
+      back to null without closing. */
+  driftReportCharacterFilter: string | null;
   previewMode: boolean;
   selectedModel: string;
   ttsModelKey: TtsModelKey;
@@ -87,6 +94,7 @@ const initialState: UiState = {
   showRevisionPlayer: false,
   revisionHistoryFor: null,
   showDriftReport: false,
+  driftReportCharacterFilter: null,
   previewMode: false,
   selectedModel: DEFAULT_MODEL,
   ttsModelKey: DEFAULT_TTS_MODEL,
@@ -227,6 +235,24 @@ export const uiSlice = createSlice({
     },
     setShowDriftReport: (s, a: PayloadAction<boolean>) => {
       s.showDriftReport = a.payload;
+      /* Closing the modal also clears any per-character scope so the
+         next top-banner open starts on the full list. The "Show all
+         characters" affordance is the in-modal escape hatch. */
+      if (!a.payload) s.driftReportCharacterFilter = null;
+    },
+    /* Pill click on a cast row — open the modal scoped to that
+       character. One dispatch covers both the open + filter so the
+       modal mounts on the right view without a flash of the full
+       list. */
+    openDriftReportForCharacter: (s, a: PayloadAction<string>) => {
+      s.driftReportCharacterFilter = a.payload;
+      s.showDriftReport = true;
+    },
+    /* "Show all characters" affordance — drop the filter without
+       closing so the user can navigate from one character's drift to
+       the full picture without re-opening. */
+    clearDriftReportCharacterFilter: (s) => {
+      s.driftReportCharacterFilter = null;
     },
     setPreviewMode: (s, a: PayloadAction<boolean>) => {
       s.previewMode = a.payload;

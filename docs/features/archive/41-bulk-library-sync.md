@@ -1,11 +1,32 @@
 ---
 status: stable
 shipped: 2026-05-18
-amended: 2026-05-19
+amended: 2026-05-22
 owner: dudarenok-maker
 ---
 
 # Bulk-apply library sync on confirm-cast
+
+> **Bug D amendment (2026-05-22):** the sync-checkbox auto-tick is now
+> gated on match confidence. Apply All flips Reuse for every eligible
+> row (Bug C behaviour unchanged), but auto-ticks the "Sync profile
+> with `<book>`" checkbox **only for rows where `matchedFrom.confidence
+> < 0.9`**. High-confidence matches (≥ 0.9) keep the sync checkbox as
+> a deliberate per-card opt-in because the library record is already a
+> good fit; the user shouldn't have to untick every confident match
+> after a one-click bulk. Threshold lives at module top of
+> `src/views/confirm-cast.tsx` as `SYNC_AUTO_THRESHOLD = 0.9`;
+> undefined confidence is treated as low-confidence (defensive — older
+> voice-match payloads omitted the field). The unapplied count `N`
+> changes shape: a row is "applied" once its decision is Reuse AND
+> (the row is high-conf OR its override is on). A cast of only
+> high-confidence matches reaches "Clear all syncs" on first render
+> with zero checkboxes ticked. Clear-syncs path still sweeps every
+> eligible override off (including any high-conf manual ticks) —
+> symmetric escape hatch. See `src/views/confirm-cast.test.tsx` (the
+> four "Bug D" cases) for the regression lock and
+> `e2e/bulk-sync-library.spec.ts` for the browser-level golden path
+> exercising the 0.94 / 0.89 / 0.86 fixture confidences.
 
 > **Bug C amendment (2026-05-19):** the pill now flips Reuse decision
 > AND ticks sync overrides in one click. The original behaviour (sync
@@ -19,7 +40,9 @@ owner: dudarenok-maker
 > N is the count of currently-unapplied eligible cards (decision !=
 > match OR override off). See `src/views/confirm-cast.test.tsx`
 > ("flips Reuse decision on cards previously toggled to Generate") for
-> the regression lock.
+> the regression lock. *(Note: the Bug-D amendment above further
+> tightens the override half — high-confidence rows are no longer
+> ticked by Apply All.)*
 
 > Status: stable
 > Key files: `src/views/confirm-cast.tsx`, new `src/views/confirm-cast.test.tsx`, new `e2e/bulk-sync-library.spec.ts`
@@ -44,13 +67,17 @@ owner: dudarenok-maker
 
 ## Invariants to preserve
 
-1. The pill appears **only** when at least one character has `c.matchedFrom?.bookId && c.matchedFrom?.characterId` (the same predicate `confirm-cast.tsx:117-121` uses for `canOverrideLibrary`). When zero characters are eligible, the pill is hidden entirely.
-2. The pill toggles **only eligible characters**. Characters whose `decision[c.id] !== 'match'` (user declined the auto-match) are not affected; the bulk action is "sync everyone the matcher matched," not "match everyone."
-3. The pill text reflects the **target state**, not the current state: "Sync N profiles from library" until every eligible character is ticked, then "Clear all syncs". `N` is the count of eligible characters (constant), not the count of currently-unticked ones — so the user sees the scope of the bulk action up-front.
-4. Per-character toggles continue to work after a bulk tick — the user can untick exceptions before clicking "Confirm cast", and the pill text immediately reflects the new state (back to "Sync 1 profile from library" if one exception was unticked).
-5. Existing `handleConfirm` batch in `confirm-cast.tsx:62-86` is the only path to `POST /api/library-cast/override`. The pill does NOT fire requests directly — it only updates local state. This keeps "Confirm cast" as the single commit point.
+*(Invariants 3 + 4 below were rewritten on 2026-05-22 to reflect Bug C + Bug D — the original v1 wording referred to a "Sync N profiles from library" label and a constant-N count that no longer exist. The Bug C + Bug D amend notes at the top of this file are the authoritative changelog.)*
+
+1. The pill appears **only** when at least one character has `c.matchedFrom?.bookId && c.matchedFrom?.characterId` (the same predicate `confirm-cast.tsx` uses for `canOverrideLibrary`). When zero characters are eligible, the pill is hidden entirely.
+2. The pill toggles **only eligible characters**. Characters whose `matchedFrom` is missing the bookId/characterId handle (older voice-match payloads, unmatched-from-the-start cards) are not affected; the bulk action is "sync everyone the matcher matched," not "match everyone."
+3. The pill label is **"Apply all N matches"** / **"Clear all syncs"** (Bug C) where `N` is the count of currently-unapplied eligible cards — *dynamic*, not constant. After Bug D, "applied" splits by confidence: a low-confidence row (`< SYNC_AUTO_THRESHOLD = 0.9`) is applied iff `decision === 'match' && overrides[id]`; a high-confidence row is applied iff `decision === 'match'` (the override is irrelevant because Apply All doesn't write it). A cast of only high-confidence matches reads "Clear all syncs" from first render.
+4. Per-character toggles continue to work after a bulk apply — the user can untick a low-conf row's sync exception, or manually tick a high-conf row's sync, and the pill label immediately reflects the new state. Manual ticks on high-conf rows are preserved across Apply All clicks (not force-cleared).
+5. Existing `handleConfirm` batch in `confirm-cast.tsx` is the only path to `POST /api/library-cast/override`. The pill does NOT fire requests directly — it only updates local state. This keeps "Confirm cast" as the single commit point.
 
 ## Test plan
+
+> **Historical — superseded.** This section describes the v1 test scope as planned before ship. Bug C (2026-05-19) widened the apply path to also flip Reuse, and Bug D (2026-05-22) gated the override auto-tick on confidence. The current canonical coverage lives in the bulk-apply pill describe block of `src/views/confirm-cast.test.tsx` (35 cases including the four "Bug D" cases) and the asymmetric e2e assertions in `e2e/bulk-sync-library.spec.ts`. The wording below is preserved as an artefact of how the v1 plan was scoped, not as a current spec.
 
 ### Automated coverage
 
@@ -64,6 +91,8 @@ owner: dudarenok-maker
 - If `src/mocks/canned-data.ts` only seeds one pre-matched character today (ANALYSIS_NORTHERN_STAR), extend the fixture to seed two more so the bulk button's count is meaningful in tests — currently Halloran is the only one with `matchedFrom` set on the canned response.
 
 ### Manual acceptance walkthrough
+
+> **Historical — superseded.** Steps 4–7 below assume the v1 "Sync N profiles from library" label and the original tick-everything behaviour. Bug C renamed the pill and widened the apply path to include the Reuse decision; Bug D narrowed the auto-tick to confidence `< 0.9`. For a current walkthrough, see Verification step 3 in `~/.claude/plans/twinkling-wobbling-stonebraker.md` (or simply run the seeded mock cast — Narrator 0.94 / Eliza 0.89 / Marcus 0.86 — and observe that Apply All leaves Narrator's sync unticked).
 
 Run in mock mode (`npm run dev` + `VITE_USE_MOCKS=true`).
 
@@ -80,7 +109,7 @@ Run in mock mode (`npm run dev` + `VITE_USE_MOCKS=true`).
 ## Out of scope
 
 - Defaulting per-character "Sync profile" checkbox to on. Considered and rejected — discoverability of an explicit pill beats a hidden default flip, and the override silently overwrites analyzer-generated descriptions.
-- Score-floor filtering on the bulk. The matcher's `voice-match.ts::scoreOne` floor already gates which characters carry `matchedFrom`; adding a second threshold in the UI would silently exclude legitimate matches.
+- Score-floor filtering on the bulk **for the Reuse decision** — the matcher's `voice-match.ts::scoreOne` floor already gates which characters carry `matchedFrom`; adding a second threshold in the UI would silently exclude legitimate matches. *(Note: Bug D (2026-05-22) introduced a confidence threshold for the **sync-checkbox auto-tick only** — every eligible row still gets its Reuse decision flipped, so this out-of-scope item still holds for the decision half. See the Bug D amend at top.)*
 - Server-side batch endpoint. The existing per-character POST loop in `handleConfirm` is fast enough at N=20 (~1s wall-clock total) and the request fan-out simplifies error reporting per character. A batch endpoint would be premature optimisation.
 - Persisting bulk-tick state across sessions. `overrides` is intentionally local (`useState`); confirm-cast is a one-shot view, not a returning surface.
 

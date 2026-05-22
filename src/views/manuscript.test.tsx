@@ -405,6 +405,153 @@ describe('ManuscriptView — cross-chapter reassign isolation', () => {
   });
 });
 
+/* Post-ship polish on plan 90 (CharacterSearchPicker). The picker now
+   portal-renders to document.body, so the inspector's `overflow-y-auto`
+   middle no longer clips the dropdown — every character in the book is
+   pickable, regardless of cast length or scroll position. Click-outside
+   replaces the row-level `onMouseLeave` that used to close the popover
+   as soon as the user moved the cursor off the row.
+
+   These cases pin both regressions. They DO drive the picker via
+   `screen.getByRole('dialog')` because the picker portals out of the
+   parent tree; jsdom honours createPortal natively. */
+describe('ManuscriptView — reassign picker (post-90 portal + dismissal polish)', () => {
+  it('reassigns a segment to a character that sits past the inspector\'s visible scroll height (no clipping)', async () => {
+    const user = userEvent.setup();
+    /* 30-character cast — large enough that, pre-portal, the bottom of
+       the picker spilled past the inspector card and the user couldn't
+       reach the last names. "Sela" sits at index 29 so it would have
+       been outside the visible bound. */
+    const wideCast: Character[] = [
+      { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+      ...Array.from({ length: 28 }, (_, i) => ({
+        id: `c${i + 1}`,
+        name: `Char ${i + 1}`,
+        role: 'Cast' as const,
+        color: 'narrator' as const,
+      })),
+      { id: 'Sela', name: 'Sela', role: 'Cast', color: 'magenta' },
+    ];
+    const chapter: Chapter = {
+      id: 1,
+      title: 'Ch 1',
+      duration: '10:00',
+      state: 'done',
+      progress: 1,
+      characters: {},
+    };
+    const sentence: Sentence = {
+      id: 1,
+      chapterId: 1,
+      characterId: 'narrator',
+      text: 'A line of dialogue.',
+    };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: {
+          bookId: null,
+          manuscriptId: null,
+          title: null,
+          format: null,
+          wordCount: 0,
+          sourceText: null,
+          sentences: [sentence],
+          importCandidate: null,
+          pendingReupload: null,
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={wideCast}
+          chapters={[chapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[sentence]}
+        />
+      </Provider>,
+    );
+
+    await user.click(screen.getByText('A line of dialogue.'));
+    await user.click(screen.getByText(/Change…/));
+    const picker = screen.getByRole('dialog', { name: /reassign speaker/i });
+    /* Sela sits at the end of a 30-row list. Pre-fix it was clipped
+       below the inspector card; with the portal it's reachable. */
+    const Sela = within(picker).getByRole('option', { name: /^Sela$/ });
+    await user.click(Sela);
+
+    expect(store.getState().manuscript.sentences[0].characterId).toBe('Sela');
+  });
+
+  it('row Reassign popover stays open when the pointer leaves the segment row', async () => {
+    const user = userEvent.setup();
+    const cast: Character[] = [
+      { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+      { id: 'eliza', name: 'Eliza', role: 'Cast', color: 'magenta' },
+    ];
+    const chapter: Chapter = {
+      id: 1,
+      title: 'Ch 1',
+      duration: '10:00',
+      state: 'done',
+      progress: 1,
+      characters: {},
+    };
+    const sentence: Sentence = {
+      id: 1,
+      chapterId: 1,
+      characterId: 'narrator',
+      text: 'A line of dialogue.',
+    };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={cast}
+          chapters={[chapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[sentence]}
+        />
+      </Provider>,
+    );
+
+    /* Hover the row to surface the Reassign button (it's `opacity-0`
+       until the row is hovered or selected), then click to open. */
+    const rowText = screen.getByText('A line of dialogue.');
+    const rowContainer = rowText.closest('.group') as HTMLElement;
+    expect(rowContainer).not.toBeNull();
+    await user.hover(rowContainer);
+    /* Two Reassign buttons exist in the tree (row + inspector) once the
+       segment is selected — we want the row-level one. The row's button
+       is the FIRST occurrence (sibling to the sentence text), but we
+       haven't clicked-to-select yet so only the row button is in the
+       DOM. */
+    await user.click(screen.getByRole('button', { name: /^Reassign$/ }));
+
+    /* Picker open: it's portalled so the standalone dialog query works. */
+    const picker = screen.getByRole('dialog', { name: /reassign speaker/i });
+    expect(picker).toBeInTheDocument();
+
+    /* Move pointer off the row — the OLD onMouseLeave-on-row dismissal
+       closed the popover here, breaking "move into the picker to click
+       a row". The fix: dismissal is click-outside-only, so the picker
+       must remain mounted. */
+    await user.unhover(rowContainer);
+    expect(screen.queryByRole('dialog', { name: /reassign speaker/i })).toBeInTheDocument();
+  });
+});
+
 /* Plan 81 Wave 3 — mobile/tablet responsive scaffolding.
 
    jsdom doesn't honour Tailwind breakpoints (no real layout engine), so

@@ -35,7 +35,10 @@ interface Props {
   onShowMatchDetail: (id: string) => void;
   onBatchRegenerate: (ids: string[]) => void;
   driftEvents: DriftEvent[];
-  onShowDrift: () => void;
+  /* When called with no argument, opens the modal on the full list
+     (top-banner entry). When called with a characterId, scopes the
+     modal to that character — pill click on a cast row. */
+  onShowDrift: (characterId?: string) => void;
 }
 
 export function CastView({
@@ -278,7 +281,7 @@ export function CastView({
 
         {totalDriftEvents > 0 && (
           <button
-            onClick={onShowDrift}
+            onClick={() => onShowDrift()}
             className="w-full mb-4 p-4 rounded-3xl border border-amber-200 bg-amber-50/60 hover:bg-amber-50 transition-colors flex items-center gap-4 text-left"
           >
             <span className="w-10 h-10 rounded-full bg-amber-100 grid place-items-center text-amber-700 shrink-0">
@@ -387,7 +390,7 @@ export function CastView({
                           title={`${driftByChar(c.id).length} chapter${driftByChar(c.id).length === 1 ? '' : 's'} with voice drift`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            onShowDrift();
+                            onShowDrift(c.id);
                           }}
                           className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold"
                         >
@@ -579,7 +582,7 @@ export function CastView({
                           title={`${driftByChar(c.id).length} chapter${driftByChar(c.id).length === 1 ? '' : 's'} with voice drift`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            onShowDrift();
+                            onShowDrift(c.id);
                           }}
                           className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold"
                         >
