@@ -6,11 +6,23 @@ name: Verify
 # + build) on a clean Ubuntu runner. The release workflow (release.yml)
 # already covers cross-OS verify on tag push; keeping this workflow
 # Ubuntu-only keeps PR CI fast and cheap.
+#
+# Plan 100 — doc-only PR fast-path. The `paths-ignore` block below skips
+# this workflow entirely when EVERY changed file in the PR matches one of
+# the doc globs. The moment a non-doc file is touched, the full battery
+# runs as before. `pr-title-lint.yml` runs unconditionally, and GitHub's
+# native mergeable check still surfaces conflicts — so doc PRs keep the
+# "PR required + title valid + no conflicts" gate without the 10–15 min
+# verify cost. See docs/features/100-docs-only-ci-skip.md.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.github/*.md'
 
 permissions:
   contents: read
