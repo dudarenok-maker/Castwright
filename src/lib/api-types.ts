@@ -1084,6 +1084,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/gpu/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GPU semaphore state for the top-bar pill
+         * @description Returns the live state of the server's GpuSemaphore — the FIFO
+         *     queue that serialises GPU-heavy operations (Ollama analyzer
+         *     chat completions + sidecar /synthesize) so two parallel Claude
+         *     Code sessions don't fight over VRAM on an 8 GB GPU.
+         *
+         *     Polled by `useTtsLifecycle()` on the same 30 s cadence as
+         *     `/api/sidecar/health`. When `depth > 0` the frontend prefixes
+         *     the top-bar pill label with `"Queued (N ahead) ·"` so the
+         *     waiting session can see why it's not starting.
+         *
+         *     `max` is the configured `GPU_CONCURRENCY` ceiling (default 1,
+         *     configurable via server env var). `inFlight` is bounded by
+         *     `max`; `depth` is the number of waiters queued behind. The
+         *     endpoint is cheap (no I/O) and safe to poll.
+         */
+        get: operations["getGpuQueueState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/export/lan": {
         parameters: {
             query?: never;
@@ -2252,6 +2285,14 @@ export interface components {
              */
             protocol: "http" | "https";
             urls: string[];
+        };
+        GpuQueueState: {
+            /** @description Number of acquires waiting in the FIFO queue behind the in-flight ops. The frontend pill renders 'Queued (N ahead) ·' when this is > 0. */
+            depth: number;
+            /** @description Number of GPU ops currently holding a slot (analyzer + sidecar combined). Capped at `max`. */
+            inFlight: number;
+            /** @description Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU. */
+            max: number;
         };
     };
     responses: never;
@@ -3947,6 +3988,26 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getGpuQueueState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description GPU queue state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GpuQueueState"];
+                };
             };
         };
     };

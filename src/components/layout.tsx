@@ -703,8 +703,26 @@ export function Layout() {
      room for per-character engine overrides without churning consumers.
      Gemini has no Stop pill (cloud, no VRAM to free). */
   const enginesInUse = useAppSelector(selectEnginesInUse);
+  /* GPU semaphore queue badge — prefixes the TTS pill cluster with
+     "Queued (N ahead) ·" when this session is waiting behind another
+     session's analyzer / sidecar call. Hidden when depth is 0 or
+     undefined (older server that doesn't expose /api/gpu/queue). The
+     server-side semaphore in server/src/gpu/semaphore.ts serialises
+     GPU-heavy ops at GPU_CONCURRENCY=1 so two parallel Claude Code
+     sessions don't thrash an 8 GB GPU's VRAM. */
+  const gpuQueueDepth = ttsLifecycle.gpuQueueDepth;
+  const showGpuQueueBadge =
+    typeof gpuQueueDepth === 'number' && gpuQueueDepth > 0;
   const ttsPillElement = showGlobalTtsPill ? (
     <span className="inline-flex items-center gap-2 flex-wrap">
+      {showGpuQueueBadge && (
+        <span
+          className="text-xs text-ink/70 tabular-nums"
+          aria-label={`GPU queue: ${gpuQueueDepth} ahead`}
+        >
+          Queued ({gpuQueueDepth} ahead) ·
+        </span>
+      )}
       {enginesInUse.has('kokoro') && (
         <ModelControlPill
           kind="tts"

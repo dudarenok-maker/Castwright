@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const { mocks } = vi.hoisted(() => ({
   mocks: {
     getSidecarHealth: vi.fn(),
+    getGpuQueueState: vi.fn(),
     getOllamaHealth: vi.fn(),
     unloadAnalyzer: vi.fn(),
     loadSidecar: vi.fn(),
@@ -38,6 +39,10 @@ beforeEach(() => {
     kokoroLoaded: false,
     kokoroLoading: false,
   });
+  /* GPU semaphore queue probe — runs on the same 30 s tick as /health.
+     Default to an empty queue so the "Queued (N ahead) ·" pill prefix
+     stays hidden in tests that don't exercise contention. */
+  mocks.getGpuQueueState.mockResolvedValue({ depth: 0, inFlight: 0, max: 1 });
   mocks.getOllamaHealth.mockResolvedValue({
     status: 'reachable',
     modelResident: true,
@@ -249,6 +254,31 @@ describe('useTtsLifecycle', () => {
       resolveUnload({ status: 'idle' });
       await stopPromise;
     });
+  });
+
+  it('exposes the GPU semaphore queue depth from /api/gpu/queue on the same tick', async () => {
+    /* Hook polls /api/gpu/queue alongside /api/sidecar/health so the
+       top-bar pill can prefix "Queued (N ahead) ·". When depth > 0 the
+       hook surfaces it on TtsLifecycle.gpuQueueDepth; consumer
+       (layout.tsx) decides whether to render the prefix. */
+    mocks.getGpuQueueState.mockResolvedValueOnce({ depth: 2, inFlight: 1, max: 1 });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.gpuQueueDepth).toBe(2));
+    expect(result.current.gpuInFlight).toBe(1);
+  });
+
+  it('clears gpuQueueDepth to undefined when /api/gpu/queue rejects (older server graceful-degrade)', async () => {
+    /* A partial deploy where the Node server is older than the
+       frontend (no /api/gpu/queue route) shouldn't surface as a
+       user-facing error — the pill just drops back to its default
+       label. */
+    mocks.getGpuQueueState.mockRejectedValueOnce(new Error('HTTP 404'));
+    const { result } = renderHook(() => useTtsLifecycle());
+    /* First wait for the sidecar probe to settle so the hook is past
+       its initial mount before we assert on the queue field. */
+    await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
+    expect(result.current.gpuQueueDepth).toBeUndefined();
+    expect(result.current.gpuInFlight).toBeUndefined();
   });
 
   it('dismissNotices clears both banner strings without calling the API', async () => {

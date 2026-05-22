@@ -69,6 +69,10 @@ vi.mock('../lib/api', () => ({
         modelResident: true,
       }),
     getSidecarHealth: () => Promise.resolve({ status: 'unreachable', url: '(test)' }),
+    /* useTtsLifecycle also polls /api/gpu/queue on the same tick. Stub
+       to an empty queue so the "Queued (N ahead) ·" prefix stays
+       hidden in these tests. */
+    getGpuQueueState: () => Promise.resolve({ depth: 0, inFlight: 0, max: 1 }),
     loadSidecar: () => Promise.resolve({ status: 'idle' }),
     unloadSidecar: () => Promise.resolve({ status: 'idle' }),
     loadAnalyzer: () => Promise.resolve({ status: 'ready' }),
