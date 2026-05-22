@@ -107,6 +107,20 @@ test.describe('visual baselines', () => {
     await page.waitForTimeout(300);
     await expect(page).toHaveScreenshot('listen.png');
   });
+
+  test('generate', async ({ page }) => {
+    /* Solway Bay hydrates with all 18 chapters in `done` state
+       (`src/lib/api.ts` buildSolwayBayMockState + hydrateFromBookState),
+       so `#/books/sb/generate` paints every chapter row with the
+       `bg-emerald-50/50` "Done" tint and no live SSE motion. Anchors the
+       Generate-view baseline that the suite was previously missing, and
+       the dark-mode companion below pins the emerald-50/50 override. */
+    await page.goto('/#/books/sb/generate');
+    /* "CH 01" only renders once the chapters slice has hydrated. */
+    await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 5_000 });
+    await page.waitForTimeout(300);
+    await expect(page).toHaveScreenshot('generate.png');
+  });
 });
 
 /* Plan 41 — dark-theme baselines.
@@ -181,5 +195,18 @@ test.describe('visual baselines (dark theme)', () => {
     });
     await page.waitForTimeout(300);
     await expect(page).toHaveScreenshot('listen-dark.png');
+  });
+
+  test('generate (dark)', async ({ page }) => {
+    /* Pins the dark-mode "Done" chapter tint. Without the
+       `.bg-emerald-50\/50` dark override in src/styles.css the chapter
+       cards would paint a muddy cream wash over the dark canvas; the
+       override drops to a low-alpha emerald so the green hue stays
+       recognisable. This baseline catches any future regression that
+       removes / weakens the override. */
+    await page.goto('/#/books/sb/generate');
+    await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 5_000 });
+    await page.waitForTimeout(300);
+    await expect(page).toHaveScreenshot('generate-dark.png');
   });
 });
