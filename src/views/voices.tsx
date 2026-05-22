@@ -19,7 +19,7 @@ import { api } from '../lib/api';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playBaseVoiceSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { gradientForTtsVoice } from '../lib/voice-palette';
-import { findCharacterForVoice } from '../lib/voice-character-link';
+import { findCharacterForVoice, pickMergeSurvivor } from '../lib/voice-character-link';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 
 type Tab = 'all' | 'current' | 'library' | 'base';
@@ -69,6 +69,13 @@ const ENGINE_LABEL: Record<TtsEngine, string> = {
   kokoro: 'Kokoro',
 };
 
+/* Bucket / narrator ids the pill's Merge action refuses to act on. Mirrors
+   the guards profile-drawer.tsx uses for its own merge picker — merging
+   into or out of a standing background bucket would corrupt the
+   bucket semantics, and the narrator is unique by definition. Kept in
+   sync with `src/modals/profile-drawer.tsx:110-112`. */
+const UNMERGEABLE_IDS = new Set(['narrator', 'unknown-male', 'unknown-female']);
+
 export function LibraryView({ library, onOpenCharacter }: Props) {
   const [tab, setTab] = useState<Tab>('all');
   const [draggingVoiceId, setDraggingVoiceId] = useState<string | null>(null);
@@ -82,6 +89,10 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      `POST /cast/:characterId/series-patch`). */
   const [selectedVoiceIds, setSelectedVoiceIds] = useState<string[]>([]);
   const [compareIds, setCompareIds] = useState<[string, string] | null>(null);
+  /* Guards the Merge action so a fast double-click can't double-fire the
+     mergeCharacters POST while the first response is still in flight.
+     Mirrors profile-drawer.tsx's mergeBusy state. */
+  const [mergeBusy, setMergeBusy] = useState(false);
   /* Plan 60 — foreign-book casts resolve via on-demand
      `api.getBookState(bookId)`; cached per-component-mount so re-opens
      within the same view-mount are instant. `globalCastFailed` records
@@ -161,6 +172,14 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     }
     let compareDisabledReason: string | null = null;
     let canCompare = false;
+    /* Merge derivations are computed alongside Compare so the pill renders
+       both buttons off a single memo. `mergeSource` / `mergeTarget` are
+       only populated when canMerge is true; the Merge button reads
+       `mergeTarget.name` for its label. */
+    let canMerge = false;
+    let mergeSource: Character | null = null;
+    let mergeTarget: Character | null = null;
+    let mergeDisabledReason: string | null = null;
     if (selectedVoices.length !== 2) {
       compareDisabledReason = 'Select exactly 2 voices';
     } else {
@@ -187,13 +206,54 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             compareDisabledReason = 'Selected voice is no longer linked to a character';
           } else {
             canCompare = true;
+            /* Merge eligibility — strictly tighter than Compare: same
+               base voice, same bookId (server only knows how to merge
+               within one cast.json), neither side a narrator or
+               background bucket. Mirrors the guard list in
+               profile-drawer.tsx:204-205. Cross-book duplicates are
+               still useful to Compare for tuning continuity, but
+               merging them is the wrong shape — that's what the
+               manual link-prior flow is for. */
+            const [chA, chB] = linkedCharacters as [Character, Character];
+            if (badge !== 'same') {
+              mergeDisabledReason = 'Merge needs the same base voice on both sides';
+            } else if (sideBookIds[0] !== sideBookIds[1]) {
+              mergeDisabledReason = 'Cross-book merges aren’t supported';
+            } else if (UNMERGEABLE_IDS.has(chA.id) || UNMERGEABLE_IDS.has(chB.id)) {
+              mergeDisabledReason = 'Narrator and bucket roles can’t be merged';
+            } else if (chA.id === chB.id) {
+              mergeDisabledReason = 'Already the same character';
+            } else {
+              const picked = pickMergeSurvivor(chA, chB);
+              mergeTarget = picked.target;
+              mergeSource = picked.source;
+              canMerge = true;
+            }
           }
         }
       }
     }
-    return { selectedVoices, badge, canCompare, compareDisabledReason };
+    return {
+      selectedVoices,
+      badge,
+      canCompare,
+      compareDisabledReason,
+      canMerge,
+      mergeSource,
+      mergeTarget,
+      mergeDisabledReason,
+    };
   }, [selectedVoiceIds, library, currentBookId, characters, globalCastCache, globalCastFailed]);
-  const { selectedVoices, badge, canCompare, compareDisabledReason } = compareDerivations;
+  const {
+    selectedVoices,
+    badge,
+    canCompare,
+    compareDisabledReason,
+    canMerge,
+    mergeSource,
+    mergeTarget,
+    mergeDisabledReason,
+  } = compareDerivations;
 
   /* Plan 60 + plan 96 — on-demand foreign-cast hydrate. Pure-fetch
      helper: writes the cast into `globalCastCache` on success, records
@@ -290,6 +350,42 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       if (results.some((r) => r === null)) return;
       setCompareIds([voicePair[0].id, voicePair[1].id]);
     })();
+  }
+
+  /* Reuses the same transport profile-drawer.tsx uses
+     (layout.tsx:1071-1072): POST /api/books/:bookId/cast/merge → server
+     returns the full updated character list, applyMerge writes it into
+     the cast slice, preserving local-only voiceId / matchedFrom /
+     voiceState on the survivor. The source character's `name` lands on
+     the survivor's `aliases[]` per the OpenAPI schema. Selection is
+     cleared on success so the pill collapses and the user lands back on
+     the families grid with the duplicate gone. */
+  async function runMerge(source: Character, target: Character, bookId: string) {
+    if (mergeBusy) return;
+    setMergeBusy(true);
+    try {
+      const res = await api.mergeCharacters({ bookId, sourceId: source.id, targetId: target.id });
+      dispatch(castActions.applyMerge({ characters: res.characters }));
+      setSelectedVoiceIds([]);
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'info',
+          message: `Merged "${source.name}" into "${target.name}".`,
+          dedupeKey: `voices-merge:${bookId}:${target.id}`,
+        }),
+      );
+    } catch (err) {
+      console.error('[voices] merge failed', err);
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: `Couldn’t merge "${source.name}" into "${target.name}". Try again.`,
+          dedupeKey: `voices-merge-error:${bookId}:${target.id}`,
+        }),
+      );
+    } finally {
+      setMergeBusy(false);
+    }
   }
 
   function togglePin(voice: Voice) {
@@ -498,6 +594,32 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             >
               {globalCastFetching.size > 0 ? 'Loading…' : 'Compare'}
             </button>
+            {selectedVoiceIds.length === 2 && badge === 'same' && (
+              /* Merge folds the shorter-named duplicate into the longer
+                 one (e.g. Sophie → Sophie Foster). The button is hidden
+                 unless both sides resolve to the same base voice; same-
+                 book + non-bucket guards live in mergeDisabledReason so
+                 the user can see WHY we refuse via the tooltip. */
+              <button
+                onClick={() => {
+                  if (!canMerge || !mergeSource || !mergeTarget) return;
+                  void runMerge(mergeSource, mergeTarget, selectedVoices[0].bookId);
+                }}
+                disabled={!canMerge || mergeBusy}
+                title={
+                  canMerge && mergeTarget
+                    ? `Merge "${mergeSource?.name}" into "${mergeTarget.name}" — keeps "${mergeTarget.name}" as the survivor and stores "${mergeSource?.name}" as an alias`
+                    : (mergeDisabledReason ?? undefined)
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed max-w-[14rem] truncate"
+              >
+                {mergeBusy
+                  ? 'Merging…'
+                  : mergeTarget
+                    ? `Merge into ${mergeTarget.name}`
+                    : 'Merge'}
+              </button>
+            )}
             <button
               onClick={() => setSelectedVoiceIds([])}
               className="text-xs text-canvas/70 hover:text-canvas font-medium"
