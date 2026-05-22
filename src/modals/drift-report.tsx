@@ -5,7 +5,7 @@ import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { api } from '../lib/api';
 import { useAppSelector } from '../store';
-import type { DriftGroup } from '../store/revisions-slice';
+import type { DriftGroup, DriftChapterEntry } from '../store/revisions-slice';
 import type { DriftEvent, Character, CharColor, Voice } from '../lib/types';
 
 /* The modal renders one card per `(book × character × snapshot)` group
@@ -107,12 +107,17 @@ export function DriftReportModal({
   const filterCharacterName = filterCharacterId
     ? findFilterCharacterName(groupsByBook, filterCharacterId)
     : null;
+  /* Total = unique flagged chapters across every visible group. Pre-
+     correction (plan 91 archive) this counted per-factor events, which
+     inflated the "{N} chapters flagged" label whenever the server
+     emitted multiple drift factors for the same chapter (voice + tone
+     + attributes on the same Marlow chapter → 3× count). */
   const totalCount = visibleGroupsByBook.reduce(
-    (acc, g) => acc + g.groups.reduce((sub, gr) => sub + gr.events.length, 0),
+    (acc, g) => acc + g.groups.reduce((sub, gr) => sub + gr.chapters.length, 0),
     0,
   );
   /* Edge case: filter is set but the matching character has zero
-     events (race between dispatch + drift slice update). Render
+     chapters (race between dispatch + drift slice update). Render
      nothing rather than an empty modal — same null-return contract as
      the unfiltered empty case below. */
   if (totalCount === 0) return null;
@@ -214,7 +219,7 @@ function DriftBookSection({
     return acc;
   }, [view.groups]);
   const totalChapters = useMemo(
-    () => view.groups.reduce((acc, g) => acc + g.events.length, 0),
+    () => view.groups.reduce((acc, g) => acc + g.chapters.length, 0),
     [view.groups],
   );
   const findChar = (id: string) => view.characters.find((c) => c.id === id);
@@ -289,7 +294,7 @@ const DriftGroupCard = memo(function DriftGroupCard({
   const displayName = character?.name || current?.name || group.characterId;
   const colorKey = (character?.color as CharColor | undefined) || 'narrator';
   const rowVoice = voices?.find((v) => v.id === character?.voiceId);
-  const single = group.events.length === 1;
+  const single = group.chapters.length === 1;
   const [expanded, setExpanded] = useState(single);
 
   /* Highlight any row whose snapshot ≠ current — the consolidated card
@@ -311,7 +316,7 @@ const DriftGroupCard = memo(function DriftGroupCard({
             <h4 className="text-sm font-bold text-ink">{displayName}</h4>
             <span className="text-xs text-ink/50">·</span>
             <span className="text-xs font-semibold text-ink tabular-nums">
-              {group.events.length} chapter{group.events.length === 1 ? '' : 's'}
+              {group.chapters.length} chapter{group.chapters.length === 1 ? '' : 's'}
             </span>
             {!single && (
               <span className="text-[10px] text-ink/45 tabular-nums">
@@ -345,8 +350,9 @@ const DriftGroupCard = memo(function DriftGroupCard({
           />
 
           {single ? (
-            <ChapterRow
-              event={group.events[0]}
+            <ChapterEntryRow
+              entry={group.chapters[0]}
+              characterId={group.characterId}
               bookId={bookId}
               character={character}
               voice={rowVoice}
@@ -367,17 +373,21 @@ const DriftGroupCard = memo(function DriftGroupCard({
                 />
                 {expanded
                   ? 'Hide chapters'
-                  : `Show ${group.events.length} chapter${group.events.length === 1 ? '' : 's'}`}
+                  : `Show ${group.chapters.length} chapter${group.chapters.length === 1 ? '' : 's'}`}
               </button>
               {expanded && (
                 <ul
                   className="mt-2 divide-y divide-ink/5 rounded-xl border border-ink/10 overflow-hidden"
                   data-testid={`drift-group-chapters-${group.groupId}`}
                 >
-                  {group.events.map((e) => (
-                    <li key={e.id} className="p-2 bg-white">
-                      <ChapterRow
-                        event={e}
+                  {group.chapters.map((entry) => (
+                    <li
+                      key={`${bookId}|${group.characterId}|${entry.chapterId}`}
+                      className="p-2 bg-white"
+                    >
+                      <ChapterEntryRow
+                        entry={entry}
+                        characterId={group.characterId}
                         bookId={bookId}
                         character={character}
                         voice={rowVoice}
@@ -394,8 +404,8 @@ const DriftGroupCard = memo(function DriftGroupCard({
                 {group.allAutoQueueable && onAutoQueueRegenerate && (
                   <button
                     onClick={() => {
-                      for (const e of group.events) {
-                        onAutoQueueRegenerate(bookId, e.characterId, e.chapterId);
+                      for (const ch of group.chapters) {
+                        onAutoQueueRegenerate(bookId, group.characterId, ch.chapterId);
                       }
                     }}
                     data-testid={`drift-group-auto-regen-all-${group.groupId}`}
@@ -406,8 +416,8 @@ const DriftGroupCard = memo(function DriftGroupCard({
                 )}
                 <button
                   onClick={() => {
-                    for (const e of group.events) {
-                      onRegenerateChapter(bookId, e.characterId, e.chapterId);
+                    for (const ch of group.chapters) {
+                      onRegenerateChapter(bookId, group.characterId, ch.chapterId);
                     }
                   }}
                   data-testid={`drift-group-regen-all-${group.groupId}`}
@@ -417,6 +427,9 @@ const DriftGroupCard = memo(function DriftGroupCard({
                 </button>
                 <button
                   onClick={() => {
+                    /* Dismiss-all still loops over EVERY event (every
+                       factor-event must be dismissed individually so a
+                       chapter doesn't reappear on the next poll). */
                     for (const e of group.events) onDismiss(e.id);
                   }}
                   data-testid={`drift-group-dismiss-all-${group.groupId}`}
@@ -437,9 +450,17 @@ const DriftGroupCard = memo(function DriftGroupCard({
    the expanded chapter strip (smaller rows + reduced metadata); the
    non-compact form is the single-chapter optimisation that renders
    inline at the bottom of the card. Both render the same Regen / Listen
-   / Dismiss surface. */
-function ChapterRow({
-  event,
+   / Dismiss surface.
+
+   Takes a `DriftChapterEntry` (one per unique chapter — multi-factor
+   events on the same chapter are pre-aggregated upstream in
+   `groupDriftEvents`), not a single `DriftEvent`. Dismiss loops over
+   every underlying eventId so a one-click dismiss takes down every
+   factor-event for the chapter; otherwise the chapter would resurface
+   on the next poll for any factor still flagging. */
+function ChapterEntryRow({
+  entry,
+  characterId,
   bookId,
   character,
   voice,
@@ -448,7 +469,8 @@ function ChapterRow({
   onDismiss,
   compact,
 }: {
-  event: DriftEvent;
+  entry: DriftChapterEntry;
+  characterId: string;
   bookId: string;
   character?: Character;
   voice?: Voice;
@@ -457,21 +479,28 @@ function ChapterRow({
   onDismiss: (eventId: string) => void;
   compact?: boolean;
 }) {
+  /* Substring-stable test ids — the original per-event ids stay valid
+     for existing tests (a one-factor chapter still matches
+     `drift-event-drift:book-A:1:eliza:voice`). A new per-chapter id
+     lets dedup-aware tests assert on chapter-scoped selectors. */
+  const eventTestId = entry.representativeEvent.id;
+  const chapterTestId = `drift-chapter-${bookId}-${characterId}-${entry.chapterId}`;
   return (
     <div
       className={`flex items-center gap-2 flex-wrap ${compact ? '' : 'mt-3'}`}
-      data-testid={`drift-event-${event.id}`}
+      data-testid={`drift-event-${eventTestId}`}
+      data-chapter-testid={chapterTestId}
     >
       <span className="text-xs font-semibold text-ink tabular-nums">
-        CH {String(event.chapterId).padStart(2, '0')}
+        CH {String(entry.chapterId).padStart(2, '0')}
       </span>
       <span className="text-xs text-ink/70 flex-1 min-w-0 truncate">
-        {stripChapterPrefix(event.chapterTitle)}
+        {stripChapterPrefix(entry.chapterTitle)}
       </span>
-      {event.autoQueueable && onAutoQueueRegenerate ? (
+      {entry.autoQueueable && onAutoQueueRegenerate ? (
         <button
-          onClick={() => onAutoQueueRegenerate(bookId, event.characterId, event.chapterId)}
-          data-testid={`drift-auto-regen-${event.id}`}
+          onClick={() => onAutoQueueRegenerate(bookId, characterId, entry.chapterId)}
+          data-testid={`drift-auto-regen-${eventTestId}`}
           title="Skip the confirmation modal — auto-queue this regeneration"
           className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-peach text-ink text-[11px] font-semibold hover:bg-peach/85"
         >
@@ -479,19 +508,26 @@ function ChapterRow({
         </button>
       ) : (
         <button
-          onClick={() => onRegenerateChapter(bookId, event.characterId, event.chapterId)}
-          data-testid={`drift-regen-${event.id}`}
+          onClick={() => onRegenerateChapter(bookId, characterId, entry.chapterId)}
+          data-testid={`drift-regen-${eventTestId}`}
           className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-ink text-canvas text-[11px] font-semibold hover:bg-ink-soft"
         >
           <IconRefresh className="w-3 h-3" /> Regenerate
         </button>
       )}
       {voice && (
-        <DriftListenWidget event={event} bookId={bookId} voice={voice} character={character} />
+        <DriftListenWidget
+          event={entry.representativeEvent}
+          bookId={bookId}
+          voice={voice}
+          character={character}
+        />
       )}
       <button
-        onClick={() => onDismiss(event.id)}
-        data-testid={`drift-dismiss-${event.id}`}
+        onClick={() => {
+          for (const id of entry.eventIds) onDismiss(id);
+        }}
+        data-testid={`drift-dismiss-${eventTestId}`}
         className="text-[11px] font-medium text-ink/50 hover:text-ink/80"
       >
         Dismiss

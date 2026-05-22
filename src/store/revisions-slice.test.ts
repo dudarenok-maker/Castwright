@@ -662,6 +662,140 @@ describe('selectDriftGroupsByBook — (book × character × snapshot) consolidat
   });
 });
 
+describe('selectDriftGroupsByBook — per-chapter rollup (multi-factor dedup)', () => {
+  /* Regression for the Voice Drift Detector "duplicated chapter rows"
+     bug: the server emits one DriftEvent per drift factor (voice / tone
+     metrics / attributes / …), and the modal's chapter strip must
+     collapse those to one row per chapter. The slice's `chapters[]`
+     derivation is where that collapse happens. */
+  const snapA: DriftEvent['snapshot'] = {
+    voiceId: 'old-voice',
+    tone: { warmth: 40, pace: 50 },
+    attributes: ['warm'],
+  };
+  const cur: DriftEvent['current'] = {
+    voiceId: 'new-voice',
+    tone: { warmth: 80, pace: 50 },
+    attributes: ['warm', 'tense'],
+  };
+
+  it('collapses N factor-events on the same chapter into one chapters[] entry', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          drift('drift:book-A:3:Marlow:voice', {
+            bookId: 'book-A',
+            chapterId: 3,
+            characterId: 'Marlow',
+            snapshot: snapA,
+            current: cur,
+            factor: 'voice',
+            severity: 'severe',
+          }),
+          drift('drift:book-A:3:Marlow:warmth', {
+            bookId: 'book-A',
+            chapterId: 3,
+            characterId: 'Marlow',
+            snapshot: snapA,
+            current: cur,
+            factor: 'warmth',
+            severity: 'moderate',
+          }),
+          drift('drift:book-A:3:Marlow:attributes', {
+            bookId: 'book-A',
+            chapterId: 3,
+            characterId: 'Marlow',
+            snapshot: snapA,
+            current: cur,
+            factor: 'attributes',
+            severity: 'moderate',
+          }),
+        ],
+      }),
+    );
+    const g = selectDriftGroupsByBook({ revisions: s })[0].groups[0];
+    /* events[] keeps every factor-event (dismiss-all loops over them). */
+    expect(g.events).toHaveLength(3);
+    /* chapters[] dedupes to one row for the chapter. */
+    expect(g.chapters).toHaveLength(1);
+    const entry = g.chapters[0];
+    expect(entry.chapterId).toBe(3);
+    expect(entry.eventIds.sort()).toEqual([
+      'drift:book-A:3:Marlow:attributes',
+      'drift:book-A:3:Marlow:voice',
+      'drift:book-A:3:Marlow:warmth',
+    ]);
+    expect(entry.factors.sort()).toEqual(['attributes', 'voice', 'warmth']);
+    /* Top severity of the chapter is the max across its events. */
+    expect(entry.topSeverity).toBe('severe');
+    /* Representative event is the top-severity one (drives the
+       DriftListenWidget audio probe). */
+    expect(entry.representativeEvent.id).toBe('drift:book-A:3:Marlow:voice');
+  });
+
+  it('chapters[] sorts by chapterId ascending even when events arrive out of order', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          drift('d-c5', { bookId: 'book-A', chapterId: 5, snapshot: snapA, current: cur, factor: 'voice' }),
+          drift('d-c2-v', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur, factor: 'voice' }),
+          drift('d-c2-w', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur, factor: 'warmth' }),
+          drift('d-c9', { bookId: 'book-A', chapterId: 9, snapshot: snapA, current: cur, factor: 'voice' }),
+        ],
+      }),
+    );
+    const g = selectDriftGroupsByBook({ revisions: s })[0].groups[0];
+    expect(g.chapters.map((c) => c.chapterId)).toEqual([2, 5, 9]);
+    /* Chapter 2 has two factors collapsed; 5 and 9 have one each. */
+    expect(g.chapters[0].eventIds).toHaveLength(2);
+    expect(g.chapters[1].eventIds).toHaveLength(1);
+    expect(g.chapters[2].eventIds).toHaveLength(1);
+  });
+
+  it('per-chapter autoQueueable is the AND over its events; group.allAutoQueueable is the AND over chapters', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          /* CH 1: voice severe (auto) + warmth moderate (NOT auto) → chapter NOT auto. */
+          drift('d1v', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, factor: 'voice', autoQueueable: true }),
+          drift('d1w', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, factor: 'warmth', autoQueueable: false }),
+          /* CH 2: voice severe (auto only) → chapter IS auto. */
+          drift('d2v', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur, factor: 'voice', autoQueueable: true }),
+        ],
+      }),
+    );
+    const g = selectDriftGroupsByBook({ revisions: s })[0].groups[0];
+    expect(g.chapters[0].autoQueueable).toBe(false);
+    expect(g.chapters[1].autoQueueable).toBe(true);
+    /* Group rolls up to false because CH 1 isn't all-auto. */
+    expect(g.allAutoQueueable).toBe(false);
+  });
+
+  it('severityCounts counts CHAPTERS (top-severity per chapter), not raw events', () => {
+    /* Pre-correction (plan 91 archive) severityCounts summed events,
+       so a chapter that fired severe+moderate+mild contributed +1 to
+       each bucket. Post-correction it contributes only to the chapter's
+       top bucket ("severe"). */
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          drift('d1s', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, factor: 'voice', severity: 'severe' }),
+          drift('d1mod', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, factor: 'warmth', severity: 'moderate' }),
+          drift('d1mild', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, factor: 'attributes', severity: 'mild' }),
+          drift('d2mod', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur, factor: 'voice', severity: 'moderate' }),
+        ],
+      }),
+    );
+    const g = selectDriftGroupsByBook({ revisions: s })[0].groups[0];
+    /* CH 1 top = severe; CH 2 top = moderate. */
+    expect(g.severityCounts).toEqual({ severe: 1, moderate: 1, mild: 0 });
+  });
+});
+
 describe('revisionsSlice — enqueuePending', () => {
   it('appends a new pending revision', () => {
     const start = revisionsSlice.reducer(
