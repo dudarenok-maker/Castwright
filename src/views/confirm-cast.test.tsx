@@ -302,23 +302,31 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
   });
 });
 
-/* Plan 41 + Bug C — bulk-apply pill above the cast-card grid.
-   The apply path flips both the Reuse decision AND the "Sync profile from
-   library" override in one click; eligibility mirrors `canOverrideLibrary`
-   per card. The clear-syncs path only unchecks the syncs (does not revert
-   Reuse → Generate; that would be destructive when the user explicitly
-   picked Reuse). The label reflects the unapplied count, where unapplied
-   means "decision !== 'match' OR override is off". */
+/* Plan 41 + Bug C + Bug D — bulk-apply pill above the cast-card grid.
+   The apply path flips the Reuse decision for every eligible row AND
+   ticks the "Sync profile from library" override only for low-confidence
+   matches (< SYNC_AUTO_THRESHOLD = 0.9). High-confidence matches keep
+   the sync checkbox as a deliberate per-card opt-in. Eligibility mirrors
+   `canOverrideLibrary` per card. The clear-syncs path unchecks every
+   eligible override (including any high-confidence rows the user
+   manually ticked) without reverting Reuse → Generate (that would be
+   destructive when the user explicitly picked Reuse). The label reflects
+   the unapplied count, where unapplied means "decision !== 'match' OR
+   (low-conf row AND override is off)". */
 describe('ConfirmCastView — bulk apply pill', () => {
   /* Three matched characters with full library handles (bookId + characterId)
      and two unmatched characters. Mirrors what hydrateFromAnalysis +
      applyVoiceMatches feeds the view in mock mode after the plan 41
-     fixture seed in src/data/characters.ts + match-factors.ts. */
+     fixture seed in src/data/characters.ts + match-factors.ts. Default
+     confidence 0.85 sits below SYNC_AUTO_THRESHOLD so the existing
+     "Apply all → every sync ticks" assertions hold; tests that want to
+     exercise the high-confidence (≥ 0.9) path pass confidence explicitly. */
   const makeMatched = (
     id: string,
     name: string,
     bookId: string,
     characterId: string,
+    confidence = 0.85,
   ): Character => ({
     id,
     name,
@@ -333,7 +341,7 @@ describe('ConfirmCastView — bulk apply pill', () => {
       bookTitle: 'Solway Bay',
       bookId,
       characterId,
-      confidence: 0.9,
+      confidence,
     },
   });
   const makeUnmatched = (id: string, name: string): Character => ({
@@ -477,6 +485,113 @@ describe('ConfirmCastView — bulk apply pill', () => {
       </Provider>,
     );
     expect(screen.queryByRole('button', { name: /Apply all .* match/ })).toBeNull();
+  });
+
+  /* Bug D — confidence-gated auto-tick. The Sync checkbox auto-ticks only
+     when match confidence is < 0.9; high-confidence matches still flip the
+     Reuse decision but their sync stays a per-card opt-in. */
+  it('Bug D: Apply All ticks the low-conf row\'s sync but leaves the high-conf row\'s sync untouched', () => {
+    const lowConf = makeMatched('low', 'LowConf', 'sb', 'low_sb', 0.85);
+    const highConf = makeMatched('high', 'HighConf', 'sb', 'high_sb', 0.95);
+    renderBulkView([lowConf, highConf]);
+
+    const checkboxesBefore = screen.getAllByRole('checkbox', { name: /Sync profile/i });
+    expect(checkboxesBefore).toHaveLength(2);
+    for (const cb of checkboxesBefore) expect((cb as HTMLInputElement).checked).toBe(false);
+
+    /* At first render, the high-conf row is already "applied" by the new
+       count semantics (decision='match' from the useState initialiser
+       and shouldAutoSync=false skips the override requirement). Only the
+       low-conf row needs an override tick. N=1. */
+    fireEvent.click(screen.getByRole('button', { name: /Apply all 1 match/ }));
+
+    /* Match cards by their character name so we don't rely on render order. */
+    const lowRow = screen.getByRole('heading', { name: 'LowConf' }).closest('article')!;
+    const highRow = screen.getByRole('heading', { name: 'HighConf' }).closest('article')!;
+    const lowSync = within(lowRow).getByRole('checkbox', { name: /Sync profile/i });
+    const highSync = within(highRow).getByRole('checkbox', { name: /Sync profile/i });
+    expect((lowSync as HTMLInputElement).checked).toBe(true);
+    expect((highSync as HTMLInputElement).checked).toBe(false);
+
+    /* After Apply All, both rows count as applied (low via decision+override,
+       high via decision alone), so the pill flips to "Clear all syncs". */
+    expect(screen.getByRole('button', { name: 'Clear all syncs' })).toBeInTheDocument();
+  });
+
+  it('Bug D: a cast of only high-conf matches reaches "Clear all syncs" with zero sync checkboxes ticked', () => {
+    const highOnly = [
+      makeMatched('h1', 'H1', 'sb', 'h1_sb', 0.93),
+      makeMatched('h2', 'H2', 'sb', 'h2_sb', 0.97),
+    ];
+    renderBulkView(highOnly);
+    /* N=2 (both rows start with decision='match' already, but in the bulk
+       sense they're still "unapplied" because neither has been Apply-All'd
+       through the pill yet — the post-click state must read as fully
+       applied so the pill flips). Actually all matched cards start with
+       decision='match' by default per the useState initialiser, so
+       isApplied is already true for both high-conf rows. The pill flips
+       to "Clear all syncs" on first render — no click needed. */
+    expect(screen.getByRole('button', { name: 'Clear all syncs' })).toBeInTheDocument();
+    const checkboxes = screen.getAllByRole('checkbox', { name: /Sync profile/i });
+    expect(checkboxes).toHaveLength(2);
+    for (const cb of checkboxes) expect((cb as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('Bug D: Apply All preserves a manually-pre-ticked sync on a high-conf row (does not force-clear)', () => {
+    const lowConf = makeMatched('low', 'LowConf', 'sb', 'low_sb', 0.85);
+    const highConf = makeMatched('high', 'HighConf', 'sb', 'high_sb', 0.95);
+    renderBulkView([lowConf, highConf]);
+
+    /* Manually tick the high-conf row's sync BEFORE clicking Apply All. */
+    const highRowBefore = screen.getByRole('heading', { name: 'HighConf' }).closest('article')!;
+    fireEvent.click(within(highRowBefore).getByRole('checkbox', { name: /Sync profile/i }));
+
+    /* Pill still says "Apply all 1 match" — the low-conf row is the only
+       remaining unapplied one (high-conf became applied via the manual
+       tick, but more importantly it's applied as soon as its decision is
+       Reuse regardless of override). */
+    fireEvent.click(screen.getByRole('button', { name: /Apply all 1 match/ }));
+
+    /* After Apply All, both rows' syncs are ticked — low because the
+       bulk auto-ticked it, high because the manual tick was preserved. */
+    const lowRow = screen.getByRole('heading', { name: 'LowConf' }).closest('article')!;
+    const highRow = screen.getByRole('heading', { name: 'HighConf' }).closest('article')!;
+    expect(
+      (within(lowRow).getByRole('checkbox', { name: /Sync profile/i }) as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(
+      (within(highRow).getByRole('checkbox', { name: /Sync profile/i }) as HTMLInputElement).checked,
+    ).toBe(true);
+  });
+
+  it('Bug D: Clear all syncs sweeps both auto-ticked and manually-ticked overrides off every eligible row', () => {
+    const lowConf = makeMatched('low', 'LowConf', 'sb', 'low_sb', 0.85);
+    const highConf = makeMatched('high', 'HighConf', 'sb', 'high_sb', 0.95);
+    renderBulkView([lowConf, highConf]);
+
+    /* Manually tick high-conf, then click Apply All (which auto-ticks low). */
+    const highRowSetup = screen.getByRole('heading', { name: 'HighConf' }).closest('article')!;
+    fireEvent.click(within(highRowSetup).getByRole('checkbox', { name: /Sync profile/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Apply all 1 match/ }));
+    /* Both syncs now on. */
+    expect(screen.getByRole('button', { name: 'Clear all syncs' })).toBeInTheDocument();
+
+    /* Clear all syncs. */
+    fireEvent.click(screen.getByRole('button', { name: /Clear all syncs/ }));
+
+    const lowRow = screen.getByRole('heading', { name: 'LowConf' }).closest('article')!;
+    const highRow = screen.getByRole('heading', { name: 'HighConf' }).closest('article')!;
+    expect(
+      (within(lowRow).getByRole('checkbox', { name: /Sync profile/i }) as HTMLInputElement).checked,
+    ).toBe(false);
+    expect(
+      (within(highRow).getByRole('checkbox', { name: /Sync profile/i }) as HTMLInputElement).checked,
+    ).toBe(false);
+    /* Continuity footers still render for both (decisions stayed at Reuse). */
+    expect(screen.getAllByText(/Continuity preserved/)).toHaveLength(2);
+    /* Pill: low-conf row lost its override so it's unapplied again (N=1);
+       high-conf row is still applied via decision alone. */
+    expect(screen.getByRole('button', { name: 'Apply all 1 match' })).toBeInTheDocument();
   });
 });
 

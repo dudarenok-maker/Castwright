@@ -621,3 +621,87 @@ describe('DriftReportModal — consolidated (book × character × snapshot) grou
     expect(screen.getAllByTestId(/^drift-group-/).length).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe('DriftReportModal — per-character filter (pill-click entry)', () => {
+  /* Two characters in the same book, each with drift on a different
+     chapter. Filter on Eliza → only Eliza's card renders; Sten's card
+     is dropped. The "Show all characters" affordance is the in-modal
+     escape hatch so the user can drop the filter without re-opening. */
+  const elizaEvent = makeEvent({ id: 'drift:book-A:1:eliza:voice', characterId: 'eliza', chapterId: 1 });
+  const stenEvent = makeEvent({ id: 'drift:book-A:2:sten:voice', characterId: 'sten', chapterId: 2 });
+
+  it('renders only the filtered character\'s card when filterCharacterId is set', () => {
+    render(
+      <DriftReportModal
+        groupsByBook={[group([elizaEvent, stenEvent])]}
+        filterCharacterId="eliza"
+        onClearFilter={vi.fn()}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    /* Eliza card present, Sten card absent — the filter pruned the
+       group before render reached DriftBookSection. */
+    expect(screen.getByTestId('drift-event-drift:book-A:1:eliza:voice')).toBeInTheDocument();
+    expect(screen.queryByTestId('drift-event-drift:book-A:2:sten:voice')).toBeNull();
+    /* Header chapter count reflects the filtered view, not the
+       cross-character total. */
+    expect(screen.getByText(/1 chapter flagged/)).toBeInTheDocument();
+    /* Banner names the filtered character + surfaces the escape
+       hatch. Scope the name lookup to the banner so we don't false-
+       positive against the card avatar / heading. */
+    const banner = screen.getByTestId('drift-report-character-filter-banner');
+    expect(banner).toBeInTheDocument();
+    expect(banner).toHaveTextContent('Eliza');
+  });
+
+  it('Show all characters button calls onClearFilter', () => {
+    const onClearFilter = vi.fn();
+    render(
+      <DriftReportModal
+        groupsByBook={[group([elizaEvent, stenEvent])]}
+        filterCharacterId="eliza"
+        onClearFilter={onClearFilter}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('drift-report-clear-character-filter'));
+    expect(onClearFilter).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the unfiltered descriptive paragraph when no filter is set', () => {
+    render(
+      <DriftReportModal
+        groupsByBook={[group([elizaEvent, stenEvent])]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('drift-report-character-filter-banner')).toBeNull();
+    /* Both character cards are visible — no filter is applied. */
+    expect(screen.getByTestId('drift-event-drift:book-A:1:eliza:voice')).toBeInTheDocument();
+    expect(screen.getByTestId('drift-event-drift:book-A:2:sten:voice')).toBeInTheDocument();
+  });
+
+  it('returns null (no empty modal) when the filter points at a character with zero events', () => {
+    /* Race-condition guard: the dispatch order is filter-then-open,
+       but a fast drift-poll could dismiss the matching events between
+       the two. We render nothing rather than an empty-state modal so
+       the user doesn\'t see a stub. */
+    const { container } = render(
+      <DriftReportModal
+        groupsByBook={[group([elizaEvent, stenEvent])]}
+        filterCharacterId="nonexistent-character"
+        onClearFilter={vi.fn()}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+});
