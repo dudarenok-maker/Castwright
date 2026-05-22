@@ -24,13 +24,16 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-function fakeFfmpegChild(): {
+function fakeFfmpegChild(
+  opts: { stderr?: string } = {},
+): {
   on: ReturnType<typeof vi.fn>;
   stdin: { on: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
   stdout: { on: ReturnType<typeof vi.fn> };
   stderr: { on: ReturnType<typeof vi.fn> };
 } {
   let closeHandler: ((code: number) => void) | null = null;
+  let stderrDataHandler: ((chunk: Buffer) => void) | null = null;
   return {
     on: vi.fn((event: string, handler: (code: number) => void) => {
       if (event === 'close') closeHandler = handler;
@@ -39,12 +42,21 @@ function fakeFfmpegChild(): {
       on: vi.fn(),
       end: vi.fn(() => {
         /* Resolve on next microtask so the encoder's awaited Promise has
-           attached its .then chain before we fire 'close'. */
-        queueMicrotask(() => closeHandler?.(0));
+           attached its .then chain before we fire stderr / 'close'. */
+        queueMicrotask(() => {
+          if (opts.stderr && stderrDataHandler) {
+            stderrDataHandler(Buffer.from(opts.stderr, 'utf8'));
+          }
+          closeHandler?.(0);
+        });
       }),
     },
     stdout: { on: vi.fn() },
-    stderr: { on: vi.fn() },
+    stderr: {
+      on: vi.fn((event: string, handler: (chunk: Buffer) => void) => {
+        if (event === 'data') stderrDataHandler = handler;
+      }),
+    },
   };
 }
 
@@ -137,5 +149,138 @@ describe('encodePcmToAudio spawn args', () => {
       expect(args[outputArIdx + 1]).toBe(String(sampleRate));
       expect(args[caIndex + 1]).toMatch(codec);
     });
+  });
+});
+
+/* Two-pass sidecar payload coverage (2026-05-22 LUFS-drift fix). Both passes
+   are spawned through node:child_process; we mock both:
+   - First spawn = analysis pass. Returns a valid first-pass JSON in stderr
+     so the encoder progresses to the second pass.
+   - Second spawn = encode pass. Its stderr is what `parseLoudnormSecondPassJson`
+     consumes. We vary it per case to exercise success + fallback paths.
+
+   These tests assert the sidecar payload shape (onLoudnessMeasured callback
+   value) rather than the args. They live in the spawn-args file because they
+   need the same mocked-spawn primitive. */
+describe('encodePcmToAudio two-pass sidecar payload', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  /* A complete first-pass JSON block (input_* only — no output_*). Stable
+     real-shape input that makes isMeasurementUseable return true and lets
+     the encoder progress to the second pass. */
+  const firstPassStderr = `[Parsed_loudnorm @ 0x1] \n` +
+    `{\n` +
+    `        "input_i" : "-22.50",\n` +
+    `        "input_tp" : "-2.13",\n` +
+    `        "input_lra" : "9.40",\n` +
+    `        "input_thresh" : "-32.50",\n` +
+    `        "target_offset" : "6.45"\n` +
+    `}\n`;
+
+  /* Real-shape second-pass JSON. output_i is the post-normalisation value
+     we want persisted into the sidecar. */
+  const secondPassStderr = `[Parsed_loudnorm @ 0x1] \n` +
+    `{\n` +
+    `        "input_i" : "-22.50",\n` +
+    `        "input_tp" : "-2.13",\n` +
+    `        "input_lra" : "9.40",\n` +
+    `        "input_thresh" : "-32.50",\n` +
+    `        "output_i" : "-16.02",\n` +
+    `        "output_tp" : "-1.51",\n` +
+    `        "output_lra" : "8.40",\n` +
+    `        "output_thresh" : "-26.10",\n` +
+    `        "normalization_type" : "linear",\n` +
+    `        "target_offset" : "6.45"\n` +
+    `}\n`;
+
+  it('writes output_i to the sidecar when the second-pass stderr is parseable', async () => {
+    spawnMock
+      .mockImplementationOnce(() => fakeFfmpegChild({ stderr: firstPassStderr }))
+      .mockImplementationOnce(() => fakeFfmpegChild({ stderr: secondPassStderr }));
+
+    const { encodePcmToAudio } = await import('./mp3.js');
+    let sidecar: { i: number; lra: number; tp: number; twoPass: boolean; target: number } | null = null;
+    await encodePcmToAudio(Buffer.alloc(2), 24_000, {
+      quality: 2,
+      loudnorm: { target: -16, lra: 11, tp: -1.5, twoPass: true },
+      onLoudnessMeasured: (s) => {
+        sidecar = s;
+      },
+    });
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(sidecar).not.toBeNull();
+    expect(sidecar!.twoPass).toBe(true);
+    expect(sidecar!.target).toBe(-16);
+    /* The fix: i is output_i (-16.02), NOT input_i (-22.50). */
+    expect(sidecar!.i).toBe(-16.02);
+    expect(sidecar!.lra).toBe(8.4);
+    expect(sidecar!.tp).toBe(-1.51);
+  });
+
+  it('falls back to input_i when the second-pass stderr lacks a JSON block', async () => {
+    /* Simulates ffmpeg builds / log levels that suppress the loudnorm
+       summary. The encode still succeeded (MP3 bytes are on disk) — we
+       just persist the pre-filter measurement and log a warning, rather
+       than corrupting the sidecar with NaN or failing the encode. */
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      spawnMock
+        .mockImplementationOnce(() => fakeFfmpegChild({ stderr: firstPassStderr }))
+        .mockImplementationOnce(() => fakeFfmpegChild({ stderr: 'no json here, just text' }));
+
+      const { encodePcmToAudio } = await import('./mp3.js');
+      let sidecar: { i: number; twoPass: boolean } | null = null;
+      await encodePcmToAudio(Buffer.alloc(2), 24_000, {
+        quality: 2,
+        loudnorm: { target: -16, lra: 11, tp: -1.5, twoPass: true },
+        onLoudnessMeasured: (s) => {
+          sidecar = s;
+        },
+      });
+
+      expect(sidecar).not.toBeNull();
+      expect(sidecar!.twoPass).toBe(true);
+      /* Fallback path: persist input_i so the sidecar carries SOMETHING
+         rather than nothing. UI pill will look stale but the MP3 plays. */
+      expect(sidecar!.i).toBe(-22.5);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/second-pass stderr did not include a JSON block/),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('falls back to input_i when the second-pass JSON is missing output_i', async () => {
+    /* Same fallback path, different trigger: stderr DOES have a JSON block
+       (e.g. ffmpeg only printed the first-pass-shape summary) but it
+       lacks the output_* fields parseLoudnormSecondPassJson requires. */
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      spawnMock
+        .mockImplementationOnce(() => fakeFfmpegChild({ stderr: firstPassStderr }))
+        .mockImplementationOnce(() => fakeFfmpegChild({ stderr: firstPassStderr }));
+
+      const { encodePcmToAudio } = await import('./mp3.js');
+      let sidecar: { i: number; twoPass: boolean } | null = null;
+      await encodePcmToAudio(Buffer.alloc(2), 24_000, {
+        quality: 2,
+        loudnorm: { target: -16, lra: 11, tp: -1.5, twoPass: true },
+        onLoudnessMeasured: (s) => {
+          sidecar = s;
+        },
+      });
+
+      expect(sidecar).not.toBeNull();
+      expect(sidecar!.i).toBe(-22.5);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/failed to parse second-pass stderr JSON/),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

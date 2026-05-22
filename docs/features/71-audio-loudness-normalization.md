@@ -72,9 +72,9 @@ Persisted at `<bookDir>/audio/<chapterSlug>.lufs.json` after every chapter encod
 
 Fields:
 
-- `i` — measured integrated loudness (LUFS) of the rendered chapter. In two-pass mode this is the FIRST-PASS measurement of the source PCM; in single-pass mode it's the nominal target (single-pass doesn't re-measure post-filter).
-- `lra` — measured loudness range (LU). Same caveat as `i` for single-pass.
-- `tp` — measured true peak (dBTP). Same caveat as `i` for single-pass.
+- `i` — measured integrated loudness (LUFS) of the rendered chapter. In two-pass mode this is the POST-normalisation `output_i` parsed from the second-pass loudnorm filter's stderr JSON (per the 2026-05-22 correction below) — i.e. what the chapter actually sounds like after the gain pass, NOT the pre-filter input. In single-pass mode it's the nominal target (single-pass doesn't re-measure post-filter; consumers gate on `twoPass`).
+- `lra` — measured loudness range (LU). Post-normalisation `output_lra` in two-pass mode; nominal target in single-pass.
+- `tp` — measured true peak (dBTP). Post-normalisation `output_tp` in two-pass mode; nominal target in single-pass.
 - `target` — target integrated loudness used for normalisation. Matches `LoudnormOptions.target`.
 - `twoPass` — `true` when the measure-then-apply flow ran; `false` when single-pass streaming normalisation ran. Consumers MUST check this before treating `i`/`lra`/`tp` as ground truth — single-pass values are nominal.
 - `measuredAt` — ISO-8601 timestamp the measurement was taken (encode time).
@@ -106,7 +106,9 @@ The chapter still lands on disk; only the `.lufs.json` sidecar is missing. Real-
 - `server/src/tts/loudnorm.test.ts` — pure unit + real-ffmpeg integration:
   - `parseLoudnormFirstPassJson` — real-shape ffmpeg JSON, missing fields throw, `-inf` is coerced to `-Infinity` (not thrown), non-numeric non-inf strings throw.
   - `isMeasurementUseable` — true on finite stats, false on `-Infinity` (silent source).
-  - `buildSecondPassFilterString` — exact filter string format with all `measured_*` fields + `linear=true:print_format=summary`.
+  - `buildSecondPassFilterString` — exact filter string format with all `measured_*` fields + `linear=true:print_format=json` (the JSON form is what `encodePcmToAudio` parses post-encode to persist `output_i` into the sidecar — see 2026-05-22 correction).
+  - `parseLoudnormSecondPassJson` — input + output stat fields from a real-shape second-pass JSON block, missing `output_i` throws, `-inf` is coerced, missing `normalization_type` (string field) throws.
+  - `isSecondPassMeasurementUseable` — true on finite output stats, false on `-Infinity` (degenerate second pass).
   - `buildSinglePassFilterString` — no `measured_*` fields (single-pass needs no analysis).
   - `runLoudnormFirstPass` (real ffmpeg) — returns finite stats for a non-silent input.
   - `encodePcmToAudio` two-pass (real ffmpeg) — normalised encode is closer to target than baseline encode of the same PCM; `onLoudnessMeasured` fires with `twoPass: true` after a successful encode.
@@ -136,7 +138,7 @@ Requires a real chapter generation against a live sidecar (or the cached PCM tri
 
 - **Per-book toggle UI.** v1 is env-var only. Future surface area: a checkbox in the book-meta modal that overrides the env default per book.
 - **LUFS report card frontend.** Wave 2 (plan 77 when scaffolded) reads the sidecar JSON and renders a "Loudness drift" card on the listen view. This plan only ships the writer side.
-- **Single-pass measurement.** Single-pass mode records the nominal target in the sidecar, not a post-filter re-measurement. If the report card needs accurate single-pass values, Wave 2 must add a post-encode ebur128 pass — out of scope here.
+- **Single-pass measurement.** Single-pass mode records the nominal target in the sidecar, not a post-filter re-measurement. Two-pass mode now captures `output_i` from the encoder's stderr JSON (see the 2026-05-22 post-ship correction); single-pass would need a separate post-encode ebur128 pass — out of scope here.
 - **Voice-sample normalisation.** Voice samples (auditions) stay unnormalised — would add ~20 % latency to every Play-sample click for no listening benefit.
 
 ## Ship notes
@@ -154,3 +156,27 @@ Fix: explicit output `-ar String(opts.sampleRate)` in `server/src/tts/mp3.ts` `b
 Regression test: `server/src/tts/mp3-spawn-args.test.ts` adds three parameterised cases (mp3 / aac-m4a / opus) asserting an output `-ar` flag exists strictly between `-af` and `-c:a` and carries the input sample rate. Contract-level rather than ffprobe-end-to-end because the bug only manifests on real-speech PCM with non-trivial dynamic range — synthetic sine / noise PCM does not reproduce the 3× stretch even on the broken pipeline.
 
 Backfill: re-synthesize the 5 affected Exile chapters (`03-chapter-one-one`, `04-chapter-two-two`, `05-chapter-three-three`, `06-chapter-four-four`, `08-chapter-six-six`) and delete their stale `.previous.mp3` rollback files (same corrupted bytes — accepting a rollback would replay the bug). Discovery rule for any future audit: broken iff `ffprobe duration / segments.json durationSec > 1.5`.
+
+### Post-ship correction (2026-05-22) — sidecar `i` was input loudness, not output
+
+Bug: regenerating a chapter shifted its per-chapter LUFS pill (e.g. -21.9 → -21.5 across sibling chapters of a single book) even though every chapter was normalised to -16 LUFS on disk. User-visible symptom: the Loudness Report card flagged every chapter as drifting by ~6 LU from the -16 LUFS target, and the same chapter regenerated twice showed different pill values within ±1 LU.
+
+Root cause: `encodePcmToAudio`'s two-pass branch wrote `stats.input_i` (the pre-filter measurement of the raw PCM) into the `<slug>.lufs.json` sidecar as the `i` field. The second-pass loudnorm filter was correctly normalising the encoded MP3 to ~-16 LUFS, but the sidecar carried the un-normalised input loudness — so the pill displayed the loudness the chapter *would have had* without normalisation, not what it actually sounds like. Per-regen drift was just variance in the per-render synth PCM (different per-sentence gain, silence-gap distribution, VAD trims) — the on-disk MP3 was correct each time.
+
+The bug was acknowledged in this doc's own field definitions ("In two-pass mode this is the FIRST-PASS measurement") and in the Out of scope ("Wave 2 must add a post-encode ebur128 pass") — but Wave 2 plan 77 shipped the report card UI without the post-encode measurement, so the report card classified every chapter as off-target.
+
+Fix: switch the second-pass filter from `print_format=summary` to `print_format=json` and capture the encoder's stderr during the encode. After a successful encode, parse the trailing JSON block via the new `parseLoudnormSecondPassJson` and persist its `output_i` / `output_lra` / `output_tp` (post-normalisation values reported by the filter) into the sidecar. Zero extra ffmpeg invocations — the second-pass encode already runs `loudnorm` end-to-end, we just consume the existing summary output. On any parse failure (missing JSON block, missing `output_i`, non-finite output), the sidecar falls back to the input-side measurement and a `console.warn` fires — the MP3 is already on disk, a parse failure must not fail the encode.
+
+Required adjustment: `loudnorm` filter only emits its summary at `info` log level. The encode builders previously passed `-loglevel error`; with the fix in place we now pass `-loglevel info -nostats` when `loudnormFilter` is set. `-nostats` suppresses the per-frame progress noise that would otherwise drown the JSON block.
+
+Regression tests:
+- `loudnorm.test.ts` adds `parseLoudnormSecondPassJson` / `isSecondPassMeasurementUseable` unit coverage and a real-ffmpeg integration test (`sidecar i carries the post-normalisation output loudness near the target`) asserting the sidecar value lands within ±2 LU of -16 (rather than 6+ LU off).
+- `mp3-spawn-args.test.ts` adds three two-pass sidecar payload tests: parseable second-pass JSON → sidecar carries `output_i`; malformed stderr (no JSON block) → sidecar falls back to `input_i` with a warning; first-pass-shape JSON (no `output_i`) → same fallback path with a different warning.
+
+Backfill: existing chapters on disk still carry the wrong (input-loudness) sidecar value. The MP3 itself is correct — only the displayed pill is wrong on legacy chapters. `scripts/relufs-existing.mjs` (new in this PR) walks `<workspace>/<bookId>/audio/*.mp3`, runs a one-pass ebur128 measurement on each (cheap — ~3 s per chapter, measurement only, no re-encode), and atomically rewrites the sibling `.lufs.json`. Run once after this fix lands:
+
+```
+node scripts/relufs-existing.mjs            # rewrites every book under the configured workspace
+node scripts/relufs-existing.mjs --dry-run  # prints planned rewrites without touching disk
+node scripts/relufs-existing.mjs --book <bookId>  # restrict to one book
+```
