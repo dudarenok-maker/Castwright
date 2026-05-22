@@ -510,3 +510,56 @@ describe('CastView wave-4 tap-to-assign', () => {
     expect(assignPills[0].className).toMatch(/min-w-\[44px\]/);
   });
 });
+
+describe('CastView drift pill — per-character entry to the Voice Drift Detector', () => {
+  /* The per-row drift pill (amber badge next to the character name)
+     must call onShowDrift WITH the character id, so the modal opens
+     scoped to that one character. The top-banner button still calls
+     onShowDrift with no argument — that one stays unscoped. */
+  it('per-row drift pill click dispatches onShowDrift(characterId)', () => {
+    const onShowDrift = vi.fn();
+    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const driftedNarrator: Character = {
+      ...narrator,
+      id: 'narrator',
+    };
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[driftedNarrator, Marrow]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          onBatchRegenerate={() => {}}
+          driftEvents={[
+            {
+              id: 'd1',
+              bookId: 'b1',
+              characterId: 'narrator',
+              chapterId: 2,
+              chapterTitle: 'Chapter 2',
+              severity: 'severe',
+              factor: 'voice',
+              factorLabel: 'Voice',
+              description: 'Voice changed.',
+              autoQueueable: true,
+              detected: '2026-01-01T00:00:00Z',
+              suggestedAction: 'regenerate_chapter',
+            } as unknown as never,
+          ]}
+          onShowDrift={onShowDrift}
+        />
+      </Provider>,
+    );
+    /* Pill is rendered twice in the DOM — once in the desktop table
+       layout and once in the mobile card layout. Either click should
+       fire the same handler with the same characterId. */
+    const pills = screen.getAllByTitle(/1 chapter with voice drift/);
+    expect(pills.length).toBeGreaterThan(0);
+    fireEvent.click(pills[0]);
+    expect(onShowDrift).toHaveBeenCalledTimes(1);
+    expect(onShowDrift).toHaveBeenCalledWith('narrator');
+  });
+});
