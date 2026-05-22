@@ -60,7 +60,15 @@ export interface LoudnormFirstPassStats {
 
 /** Persistent record of a chapter's measured loudness, written next to the
  *  audio as `<chapterSlug>.lufs.json`. Plan 77 (Wave 2 — LUFS report card UI)
- *  reads this back; field names are stable contract. */
+ *  reads this back; field names are stable contract.
+ *
+ *  In two-pass mode `i` / `lra` / `tp` are the POST-normalisation values
+ *  ffmpeg's second-pass loudnorm filter reports as `output_*` — i.e. what
+ *  the chapter actually sounds like after the gain pass, not what the raw
+ *  PCM measured before. In single-pass mode they are the nominal target
+ *  (single-pass doesn't re-measure post filter); consumers MUST check
+ *  `twoPass === true` before treating these fields as ground truth
+ *  (`loudness-report.tsx:classifyDrift`). */
 export interface LoudnormSidecarJson {
   /** Measured integrated loudness (LUFS) of the rendered chapter. */
   i: number;
@@ -76,10 +84,42 @@ export interface LoudnormSidecarJson {
   measuredAt: string;
 }
 
+/** Shape of the JSON block ffmpeg's second-pass `loudnorm` writes to stderr
+ *  when invoked with `print_format=json`. ffmpeg emits BOTH the input_* and
+ *  output_* sides on the second pass; the persisted sidecar uses only the
+ *  output side (post-normalisation), the input side is surfaced here for
+ *  diagnostic logging. */
+export interface LoudnormSecondPassStats {
+  /** Pre-filter input integrated loudness (LUFS) as re-reported by the
+   *  second-pass invocation. Same value as `LoudnormFirstPassStats.input_i`
+   *  from the analysis pass; useful for log copy / drift diagnostics. */
+  input_i: number;
+  input_lra: number;
+  input_tp: number;
+  input_thresh: number;
+  /** Post-filter integrated loudness (LUFS) — what the encoded chapter
+   *  actually sounds like. Persisted to the sidecar as `i`. */
+  output_i: number;
+  /** Post-filter loudness range (LU). Persisted to the sidecar as `lra`. */
+  output_lra: number;
+  /** Post-filter true peak (dBTP). Persisted to the sidecar as `tp`. */
+  output_tp: number;
+  output_thresh: number;
+  /** "linear" | "dynamic" — loudnorm's mode classifier. Linear means a
+   *  single gain offset was applied (preferred — preserves the source
+   *  envelope); dynamic means it had to compress on the fly. Not surfaced
+   *  to the UI today; captured here for log copy. */
+  normalization_type: string;
+  /** Gain offset (LU) actually applied to reach the target. */
+  target_offset: number;
+}
+
 /** Extract the trailing JSON object from ffmpeg stderr. ffmpeg prints
  *  loudnorm's `print_format=json` block at the end of stderr after any
- *  warnings / per-frame logging — we scan for the LAST balanced `{ ... }`. */
-function extractTrailingJsonBlock(stderr: string): string | null {
+ *  warnings / per-frame logging — we scan for the LAST balanced `{ ... }`.
+ *  Exported so `mp3.ts` can reuse the same primitive when parsing the
+ *  second-pass encode's stderr. */
+export function extractTrailingJsonBlock(stderr: string): string | null {
   let depth = 0;
   let lastEnd = -1;
   let lastStart = -1;
@@ -234,8 +274,10 @@ export async function runLoudnormFirstPass(
 /** Build the second-pass `-af` filter string that consumes the first-pass
  *  measurements. `linear=true` requests linear-mode normalisation (a single
  *  gain adjustment derived from the measurement) which preserves the source
- *  envelope. `print_format=summary` makes ffmpeg log a one-line summary on
- *  the second pass — useful when debugging but not parsed by the encoder. */
+ *  envelope. `print_format=json` makes ffmpeg log the full input/output stat
+ *  block on the second pass — `mp3.ts` parses it to persist the actual
+ *  post-normalisation loudness (rather than the pre-filter input value) in
+ *  the chapter sidecar. */
 export function buildSecondPassFilterString(
   stats: LoudnormFirstPassStats,
   opts: LoudnormOptions,
@@ -247,7 +289,65 @@ export function buildSecondPassFilterString(
     `:measured_TP=${stats.input_tp}` +
     `:measured_thresh=${stats.input_thresh}` +
     `:offset=${stats.target_offset}` +
-    `:linear=true:print_format=summary`
+    `:linear=true:print_format=json`
+  );
+}
+
+/** Parse a second-pass loudnorm JSON block (string form) into the post-
+ *  normalisation stats shape. Same trailing-JSON convention as the first
+ *  pass; the field set is the union of `input_*` (re-reported pre-filter)
+ *  and `output_*` (the post-filter values we actually want).
+ *
+ *  Behaviour on non-numeric / non-inf values mirrors `parseLoudnormFirstPassJson`
+ *  — non-finite floats parse to `±Infinity`, missing fields throw. The
+ *  caller (`encodePcmToAudio` in `mp3.ts`) treats a thrown / unparseable
+ *  block as "fall back to writing the first-pass input as the sidecar
+ *  value" rather than failing the encode, since the MP3 is already on disk
+ *  by the time we get here. */
+export function parseLoudnormSecondPassJson(jsonBlock: string): LoudnormSecondPassStats {
+  const raw = JSON.parse(jsonBlock) as Record<string, unknown>;
+  const numericField = (key: string): number => {
+    const v = raw[key];
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (trimmed === '-inf' || trimmed === '-Infinity') return -Infinity;
+      if (trimmed === '+inf' || trimmed === 'inf' || trimmed === 'Infinity') return Infinity;
+      const n = Number(trimmed);
+      if (Number.isFinite(n)) return n;
+      throw new Error(`loudnorm: non-numeric "${key}" value "${v}" in second-pass JSON`);
+    }
+    throw new Error(`loudnorm: missing or non-numeric "${key}" in second-pass JSON`);
+  };
+  const stringField = (key: string): string => {
+    const v = raw[key];
+    if (typeof v === 'string') return v;
+    throw new Error(`loudnorm: missing or non-string "${key}" in second-pass JSON`);
+  };
+  return {
+    input_i: numericField('input_i'),
+    input_lra: numericField('input_lra'),
+    input_tp: numericField('input_tp'),
+    input_thresh: numericField('input_thresh'),
+    output_i: numericField('output_i'),
+    output_lra: numericField('output_lra'),
+    output_tp: numericField('output_tp'),
+    output_thresh: numericField('output_thresh'),
+    normalization_type: stringField('normalization_type'),
+    target_offset: numericField('target_offset'),
+  };
+}
+
+/** True iff every numeric field on `stats` is finite — i.e. ffmpeg's second
+ *  pass produced a usable post-normalisation measurement. Degenerate
+ *  output (output_i = -inf — would happen if the second pass silenced
+ *  everything) falls back to persisting the input-side measurement. */
+export function isSecondPassMeasurementUseable(stats: LoudnormSecondPassStats): boolean {
+  return (
+    Number.isFinite(stats.output_i) &&
+    Number.isFinite(stats.output_lra) &&
+    Number.isFinite(stats.output_tp) &&
+    Number.isFinite(stats.output_thresh)
   );
 }
 
