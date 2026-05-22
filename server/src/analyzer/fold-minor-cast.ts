@@ -49,6 +49,22 @@ export interface FoldOptions {
       which is correct mid-Phase-0. The final post-stage-2 pass runs
       without this flag to apply the full set of rules. */
   nameOnly?: boolean;
+  /** Roles whose narrator-only-detected characters are exempt from the
+      line-count fold AND the zero-line drop. Default
+      `PROTECTED_ROLES_DEFAULT`. Match is case-insensitive substring —
+      `'Goblin Bodyguard'` matches the `'Bodyguard'` entry, `'Family
+      Member (mother)'` matches `'Family Member'`. The protection only
+      fires when `c.detectionSource === 'narrator-mention'` AND the
+      role matches, so a chatty bodyguard with `detectionSource:
+      'dialogue'` + 1 line still folds (the protection is targeted at
+      narrator-mention characters, not blanket role-keep). Reason for
+      the protection: bodyguards / mentors / family who are mentioned
+      heavily in narration but rarely quote dialogue (e.g. Sela and
+      Garrow in Lost Cities Saltgrave — see
+      docs/features/97-narrator-only-named-characters.md) would
+      otherwise be silently dropped or bucketed into
+      unknown-male/female. */
+  protectedRoles?: string[];
 }
 
 export interface FoldResult {
@@ -68,9 +84,27 @@ export interface FoldResult {
 
 const MIN_LINES_DEFAULT = 3;
 
+/* Default roles that are exempt from the line-count fold + zero-line drop
+   when detectionSource === 'narrator-mention'. See FoldOptions.protectedRoles
+   for the matching rule (case-insensitive substring). Kept narrow on
+   purpose: roles that are canonical scene presence but produce minimal
+   dialogue. Extending this list adds protected categories — only add when
+   real corpus data shows a class of character being silently erased. */
+export const PROTECTED_ROLES_DEFAULT = ['Bodyguard', 'Mentor', 'Family Member'];
+
 export const MALE_BUCKET_ID = 'unknown-male';
 export const FEMALE_BUCKET_ID = 'unknown-female';
 const NARRATOR_ID = 'narrator';
+
+/* Returns true if `role` matches any entry in `protectedRoles` via
+   case-insensitive substring. `'Goblin Bodyguard'` matches `'Bodyguard'`;
+   `'Family Member (mother)'` matches `'Family Member'`. Empty list or
+   missing role yields false. Exported for the test. */
+export function matchesProtectedRole(role: string | undefined, protectedRoles: string[]): boolean {
+  if (!role) return false;
+  const normalised = role.toLowerCase();
+  return protectedRoles.some((protectedRole) => normalised.includes(protectedRole.toLowerCase()));
+}
 
 /* Generic-role nouns that, when they appear as the LAST word of a
    character name preceded by at least one other word, indicate a
@@ -157,6 +191,7 @@ export function foldMinorCast(
 ): FoldResult {
   const minLines = opts.minLines ?? MIN_LINES_DEFAULT;
   const nameOnly = opts.nameOnly === true;
+  const protectedRoles = opts.protectedRoles ?? PROTECTED_ROLES_DEFAULT;
 
   /* Count attributed lines per character id. In nameOnly mode the count
      is unused (line-count rules are off) — keep the map empty rather
@@ -177,7 +212,18 @@ export function foldMinorCast(
      the unknown-male/female buckets (existing behaviour) so a single
      one-off bystander doesn't get its own voice profile. In nameOnly
      mode neither the line-count fold nor the zero-line drop fires —
-     only the descriptor-name fold remains active. */
+     only the descriptor-name fold remains active.
+
+     Protected-role exemption: when `c.detectionSource === 'narrator-mention'`
+     AND `c.role` matches `protectedRoles`, the character bypasses BOTH the
+     zero-line drop and the <minLines fold — the descriptor-name fold still
+     applies (a "Tall Bodyguard" with detectionSource: narrator-mention
+     still reads as a descriptor and folds). Reason: canonical-but-rarely-
+     quoted bodyguards / mentors / family otherwise get silently erased.
+     The protection is targeted, not blanket: a bodyguard with
+     detectionSource: 'dialogue' + 1 line still folds, because that's
+     a real dialogue character who genuinely has too few lines for a
+     voice profile. */
   const rewrites: Record<string, string> = {};
   const foldedSources: CharacterOutput[] = [];
   const droppedIds = new Set<string>();
@@ -187,11 +233,16 @@ export function foldMinorCast(
     if (c.id === MALE_BUCKET_ID || c.id === FEMALE_BUCKET_ID) continue;
     const isDescriptor = isDescriptorName(c.name);
     const lines = lineCount.get(c.id) ?? 0;
-    if (!nameOnly && lines === 0 && !isDescriptor) {
+    const isProtected =
+      c.detectionSource === 'narrator-mention' &&
+      matchesProtectedRole(c.role, protectedRoles) &&
+      !isDescriptor;
+    if (!nameOnly && lines === 0 && !isDescriptor && !isProtected) {
       droppedIds.add(c.id);
       droppedNames.push(c.name);
       continue;
     }
+    if (isProtected) continue;
     const triggered = isDescriptor || (!nameOnly && lines < minLines);
     if (!triggered) continue;
     const target = pickBucket(c);
