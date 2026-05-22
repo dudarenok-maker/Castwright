@@ -11,7 +11,7 @@ owner: null
 > URL surface: `#/books/<id>/listen` (card is rendered inside the player region, between the chapter list and the share-clip modal)
 > OpenAPI ops: extends `getChapterAudio` response with `lufs` field; book-state response gains a per-chapter `chapterLufs` map (hand-written type — book-state has no OpenAPI binding)
 > Paired tests: `src/components/loudness-report.test.tsx`, `src/components/listen/listen-player-region.test.tsx`, `src/store/chapters-slice.test.ts` (hydration), `server/src/routes/chapter-audio.test.ts` (loudness sidecar section), `server/src/routes/book-state.test.ts` (chapterLufs section), `e2e/listen-loudness-report.spec.ts`
-> Cross-links: [71 — Audio loudness normalization](71-audio-loudness-normalization.md) (the writer this plan consumes), [28 — Audio output format](28-chapter-audio-format.md)
+> Cross-links: [71 — Audio loudness normalization](archive/71-audio-loudness-normalization.md) (the writer this plan consumes), [28 — Audio output format](28-chapter-audio-format.md)
 
 ## Benefit / Rationale
 
