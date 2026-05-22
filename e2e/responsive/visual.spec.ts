@@ -55,11 +55,14 @@ import { goToAnalysing, goToConfirm, waitForConfirmViewReady, waitForListenViewR
    `e2e/linux/responsive/visual.spec.ts/`). Linux baselines are tracked
    as Should #1 in docs/BACKLOG.md. */
 const BASELINE_DIR = resolve(process.cwd(), 'e2e', process.platform, 'responsive', 'visual.spec.ts');
-/* Don't skip while we're being asked to BLESS new baselines — the regen
-   workflow can't seed an initial Linux directory if the skip fires
-   before --update-snapshots gets a chance to write any PNGs. */
-const IS_UPDATING_SNAPSHOTS = process.argv.includes('--update-snapshots');
-const SHOULD_SKIP_VISUAL = !IS_UPDATING_SNAPSHOTS && !existsSync(BASELINE_DIR);
+/* The regen workflow at `.github/workflows/regen-visual-baselines.yml`
+   pre-creates this directory before invoking playwright, so the skip
+   doesn't fire on the initial Linux regen run. For local regen on an
+   un-blessed platform: `mkdir -p e2e/<platform>/responsive/visual.spec.ts`
+   first, then `npm run verify:visual -- --update-snapshots`.
+   (Playwright's worker `process.argv` does NOT include the CLI's
+   `--update-snapshots` flag — checking it here was tried in PR #178
+   and silently no-op'd; the mkdir bootstrap is the supported pathway.) */
 const SKIP_REASON =
   `No visual baselines committed for ${process.platform}. ` +
   `Run \`npm run verify:visual -- --update-snapshots\` to bless on this platform.`;
@@ -87,7 +90,7 @@ test.describe.configure({ mode: 'serial' });
 const VISUAL_DIFF_OPTS = { maxDiffPixelRatio: 0.05 } as const;
 
 test.describe('visual baselines', () => {
-  test.skip(SHOULD_SKIP_VISUAL, SKIP_REASON);
+  test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
   test('library', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
@@ -170,7 +173,7 @@ test.describe('visual baselines', () => {
  *   npm run test:e2e:visual -- --update-snapshots
  */
 test.describe('visual baselines (dark theme)', () => {
-  test.skip(SHOULD_SKIP_VISUAL, SKIP_REASON);
+  test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
 
   test.beforeEach(async ({ context }) => {
     /* Seed the redux-persist 'persist:ui' blob before any page in this
