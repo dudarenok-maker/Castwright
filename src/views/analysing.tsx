@@ -1031,39 +1031,12 @@ export function AnalysingView({
           {manuscriptId && (
             <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs">
               {!isLocalAnalyzer && <ConnPill state={conn} sinceLastSec={sinceLastSec} />}
-              {/* Live model picker. Changing the model mid-run cancels the
-                  in-flight request and restarts from the first uncached
-                  chapter — completed chapters in the analysis cache survive,
-                  so switching from a flaky Gemma run to Gemini 2.5 Flash
-                  picks up exactly where the user is, with the new model. */}
-              <label className="inline-flex items-center gap-2 text-ink/60">
-                <span className="font-medium">Model</span>
-                <select
-                  value={model ?? MODEL_OPTIONS[0].id}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    if (next === model) return;
-                    dispatch(uiActions.setSelectedModel(next));
-                    /* Bump the retry nonce so the analysis useEffect re-runs
-                       with the new model. fresh stays false — cached
-                       chapters from the previous model are still valid
-                       (the cache key is the manuscript, not the model). */
-                    setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
-                  }}
-                  className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
-                  title="Switch the analysis model. Cancels the in-flight request and resumes from the first uncached chapter."
-                >
-                  {MODEL_OPTION_GROUPS.map((g) => (
-                    <optgroup key={g.engine} label={g.label}>
-                      {g.models.map((m) => (
-                        <option key={m.id} value={m.id} title={m.hint}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </label>
+              {/* Per-phase model chips + swap dropdowns live inside each
+                  PhaseCard (plan 94). The legacy single-`<select>` picker
+                  that used to live here wrote to ui.selectedModel and bumped
+                  the retry nonce on every change; per-phase pickers persist
+                  to UserSettings and take effect from the next chapter, no
+                  in-flight abort. */}
               <button
                 onClick={() => dispatch(uiActions.goHome())}
                 className="text-ink/60 hover:text-ink underline-offset-2 hover:underline"
