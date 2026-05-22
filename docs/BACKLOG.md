@@ -128,16 +128,6 @@ Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
 
-### 7. Cross-book voice compare
-
-Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
-
-- _What:_ Lift the cross-book guard. When the two selected voices belong to different `bookId`s, fetch each book's cast (one of them may be the open book — short-circuit) and pass both characters into `CompareCastModal`. Decide and document: do we route saves back to each character's source book's cast slice, or refuse the save and surface a "viewing only" banner?
-- _Acceptance:_ The Compare button enables for cross-book pairs; the modal opens with both characters; the Save behaviour is documented and tested. The e2e gains a cross-book pair assertion.
-- _Key files:_ `src/views/voices.tsx`; `src/store/cast-slice.ts` (Save routing); `src/modals/compare-cast-modal.tsx` (if the viewing-only banner is needed).
-- _Depends on:_ plan 60 shipped (same on-demand fetch machinery is already in place; this entry lifts the cross-book guard and decides foreign-book save routing).
-- _Benefit (user):_ enables A/B for users who reuse the same TTS voice across books — e.g. comparing the same narrator across two books in a series to spot drift.
-
 ### 8. Streaming audio for live playback during chapter generation
 
 Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
