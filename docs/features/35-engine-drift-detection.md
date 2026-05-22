@@ -202,7 +202,10 @@ description. Three follow-up bugs landed together:
    `bookId` for rendering (one section per book, book title pulled
    from `selectEffectiveMeta(bookId)` in layout.tsx) and the header
    summary reads "{N} chapter(s) flagged across {M} books" when M > 1.
-   See `selectDriftByBook` in `revisions-slice.ts`.
+   See `selectDriftByBook` in `revisions-slice.ts`. The per-book
+   `Book / <title>` sub-header always renders — even when only one
+   book has drift — because the modal can be opened from any view and
+   the title bar doesn't name the source book.
 
 3. **Side-by-side profile comparison.** Each event carries `snapshot`
    (CharacterSnapshot at render time, from `<slug>.segments.json`) and

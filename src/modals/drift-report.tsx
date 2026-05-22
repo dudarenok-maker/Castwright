@@ -171,7 +171,6 @@ export function DriftReportModal({
               <DriftBookSection
                 key={view.bookId}
                 view={view}
-                showBookHeader={bookCount > 1}
                 voices={voices}
                 onRegenerateChapter={onRegenerateChapter}
                 onAutoQueueRegenerate={onAutoQueueRegenerate}
@@ -192,14 +191,12 @@ export function DriftReportModal({
 
 function DriftBookSection({
   view,
-  showBookHeader,
   voices,
   onRegenerateChapter,
   onAutoQueueRegenerate,
   onDismiss,
 }: {
   view: DriftBookGroupView;
-  showBookHeader: boolean;
   voices?: Voice[];
   onRegenerateChapter: (bookId: string, characterId: string, chapterId: number) => void;
   onAutoQueueRegenerate?: (bookId: string, characterId: string, chapterId: number) => void;
@@ -224,17 +221,16 @@ function DriftBookSection({
 
   return (
     <section className="space-y-4">
-      {showBookHeader && (
-        <header className="flex items-center gap-3 pb-2 border-b border-ink/10">
-          <span className="text-[10px] uppercase tracking-widest text-ink/45 font-semibold">
-            Book
-          </span>
-          <h4 className="text-sm font-bold text-ink leading-tight flex-1 truncate">
-            {view.bookTitle}
-          </h4>
-          <span className="text-xs text-ink/50 tabular-nums">{totalChapters} flagged</span>
-        </header>
-      )}
+      <header className="flex items-center gap-3 pb-2 border-b border-ink/10">
+        <span className="text-[10px] uppercase tracking-widest text-ink/45 font-semibold">
+          Book
+        </span>
+        <h4 className="text-sm font-bold text-ink leading-tight flex-1 truncate">
+          {view.bookTitle}
+        </h4>
+        <span className="text-xs text-ink/50 tabular-nums">{totalChapters} flagged</span>
+      </header>
+
       {severityOrder.map((sev) => {
         const items = bySeverity[sev];
         if (!items || items.length === 0) return null;
