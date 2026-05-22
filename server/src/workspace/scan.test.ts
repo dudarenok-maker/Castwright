@@ -441,6 +441,9 @@ describe('scanLibrary backfills audioModelKey from segments.json', () => {
     for (const ch of before.chapters) {
       ch.audioModelKey = 'xtts_v2';
       ch.audioRenderedAt = '2026-04-01T00:00:00.000Z';
+      /* Stamp duration too so the new duration-backfill leg doesn't
+         trigger a rewrite — same "everything already migrated" shape. */
+      ch.duration = '01:00';
     }
     await fs.writeFile(statePath, JSON.stringify(before));
     const beforeContent = await fs.readFile(statePath, 'utf-8');
@@ -452,5 +455,75 @@ describe('scanLibrary backfills audioModelKey from segments.json', () => {
        repeat" property of the migration helper. */
     const afterContent = await fs.readFile(statePath, 'utf-8');
     expect(afterContent).toBe(beforeContent);
+  });
+
+  /* Regression for the duration-backfill bug: chapters whose audio rendered
+     before the per-chapter `duration` state.json write block landed (or
+     under a code path that updates audioModelKey/audioRenderedAt without
+     duration — see scan.ts lazy migration) sit at the analysis-seeded
+     '00:00' string even though the segments file beside the MP3 carries
+     the real PCM duration. The Listen view chapter rows pick that up
+     from state.json on hydrate and display 00:00 next to a fully-rendered
+     chapter. Backfill closes the loop on the next scan. */
+  it('backfills chapter.duration from segments.json when 00:00 / missing', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Zero-Duration Book', {
+      castConfirmed: true,
+      chapters: [
+        { id: 1, slug: 'zd-01' },
+        { id: 2, slug: 'zd-02' },
+      ],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeSegments(audioRoot, 'zd-01', 490.048); // → '08:10'
+    writeSegments(audioRoot, 'zd-02', 768); // → '12:48'
+    writeFileSync(join(audioRoot, 'zd-01.mp3'), '');
+    writeFileSync(join(audioRoot, 'zd-02.mp3'), '');
+
+    /* Pre-stamp duration='00:00' on ch1, leave ch2 with duration undefined.
+       Both should be backfilled — the bug case from the field had a mix of
+       these two unset shapes. */
+    const fs = await import('node:fs/promises');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const before = JSON.parse(await fs.readFile(statePath, 'utf-8'));
+    before.chapters[0].duration = '00:00';
+    /* ch2 has no `duration` field at all — bookSkeleton omits it by default */
+    await fs.writeFile(statePath, JSON.stringify(before));
+
+    await flatten();
+
+    const after = JSON.parse(await fs.readFile(statePath, 'utf-8'));
+    expect(after.chapters[0].duration).toBe('08:10');
+    expect(after.chapters[1].duration).toBe('12:48');
+  });
+
+  it('leaves a chapter with a real duration alone — segments.json must not overwrite a user-visible value', async () => {
+    /* Regression: if a chapter's state.json `duration` is a non-placeholder
+       string ('11:14') and its segments.json carries a slightly different
+       durationSec (e.g. encode-vs-PCM rounding could make these differ by
+       a few seconds in either direction), backfill must NOT clobber the
+       state.json value. The duration field is sticky once written —
+       regeneration is the only path allowed to change it. */
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Sticky-Duration Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'sd-01' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeSegments(audioRoot, 'sd-01', 670); // segments would format as '11:10'
+    writeFileSync(join(audioRoot, 'sd-01.mp3'), '');
+
+    const fs = await import('node:fs/promises');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const before = JSON.parse(await fs.readFile(statePath, 'utf-8'));
+    before.chapters[0].duration = '11:14'; // user-visible value, different from segments
+    before.chapters[0].audioModelKey = 'kokoro-v1';
+    before.chapters[0].audioRenderedAt = '2026-05-22T00:00:00.000Z';
+    await fs.writeFile(statePath, JSON.stringify(before));
+
+    await flatten();
+
+    const after = JSON.parse(await fs.readFile(statePath, 'utf-8'));
+    expect(after.chapters[0].duration).toBe('11:14');
   });
 });
