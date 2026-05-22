@@ -31,6 +31,12 @@ const seriesPatchCharacter =
       failed: Array<{ bookId: string; bookTitle: string; error: string }>;
     }>
   >();
+const mergeCharactersMock =
+  vi.fn<
+    (args: { bookId: string; sourceId: string; targetId: string }) => Promise<{
+      characters: Character[];
+    }>
+  >();
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -43,6 +49,8 @@ vi.mock('../lib/api', () => ({
       characterId: string;
       patch: Record<string, unknown>;
     }) => seriesPatchCharacter(args),
+    mergeCharacters: (args: { bookId: string; sourceId: string; targetId: string }) =>
+      mergeCharactersMock(args),
   },
 }));
 
@@ -134,6 +142,7 @@ beforeEach(() => {
   getBookState.mockReset();
   getBookState.mockResolvedValue(null);
   seriesPatchCharacter.mockReset();
+  mergeCharactersMock.mockReset();
 });
 
 describe('LibraryView voice-family grouping', () => {
@@ -768,6 +777,221 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
         toasts.some((t) => t.kind === 'error' && t.message === 'Save failed — try again.'),
       ).toBe(true);
     });
+  });
+});
+
+describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
+  /* Cast carries a Sophie + Sophie Foster duplicate pair in book b1, both
+     resolving to the same Charon base voice — the substring-containment
+     case the user described. A third Sophie clone lives in book b2 so we
+     can also assert the cross-book guard. */
+  const charactersB1: Character[] = [
+    { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator', voiceId: 'narrator' },
+    { id: 'sophie', name: 'Sophie', role: 'Lead', color: 'peach', voiceId: 'sophie' },
+    {
+      id: 'sophie-foster',
+      name: 'Sophie Foster',
+      role: 'Lead',
+      color: 'peach',
+      voiceId: 'sophie-foster',
+    },
+    { id: 'elwin', name: 'Elwin', role: 'Healer', color: 'magenta', voiceId: 'elwin' },
+  ];
+
+  const libraryB1: Voice[] = [
+    makeVoice({
+      id: 'narrator',
+      character: 'Narrator',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+    }),
+    makeVoice({
+      id: 'sophie',
+      character: 'Sophie',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
+    }),
+    makeVoice({
+      id: 'sophie-foster',
+      character: 'Sophie Foster',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
+    }),
+    makeVoice({
+      id: 'elwin',
+      character: 'Elwin',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' },
+    }),
+  ];
+
+  /* The cross-book guard test needs a second "Sophie" living in a
+     different book. Kept out of the default fixture because two
+     "Sophie" text matches would defeat plain getByText lookups in
+     every other test. */
+  const sophieFromBookTwo: Voice = makeVoice({
+    id: 'sophie-b2',
+    character: 'Sophie',
+    bookId: 'b2',
+    bookTitle: 'Book Two',
+    source: 'library',
+    ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
+  });
+
+  function makeMergeStore(stageBookId: string = 'b1') {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+    });
+    store.dispatch(castSlice.actions.setCharacters(charactersB1));
+    store.dispatch(uiSlice.actions.openBook({ id: stageBookId, status: 'cast_pending' }));
+    store.dispatch(uiSlice.actions.confirmCast());
+    return store;
+  }
+
+  function renderMerge(lib: Voice[] = libraryB1) {
+    return render(
+      <Provider store={makeMergeStore()}>
+        <LibraryView library={lib} />
+      </Provider>,
+    );
+  }
+
+  function selectCard(label: string) {
+    fireEvent.click(
+      screen
+        .getByText(label)
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+  }
+
+  it('shows a "Merge into <longer-name>" button when 2 same-voice same-book duplicates are selected', () => {
+    renderMerge();
+    selectCard('Sophie');
+    selectCard('Sophie Foster');
+    /* Substring containment picks "Sophie Foster" as the survivor. */
+    expect(
+      screen.getByRole('button', { name: 'Merge into Sophie Foster' }),
+    ).toBeInTheDocument();
+  });
+
+  it('hides the Merge button for 2 same-voice DIFFERENT-book duplicates (cross-book guard)', async () => {
+    /* "Sophie" lives in both b1 (id=sophie) and b2 (id=sophie-b2). Pick
+       the two same-name cards in different books — Compare stays
+       enabled because plan-96 allows cross-book pairs, but Merge must
+       be hidden because the server has no transport for it. */
+    getBookState.mockResolvedValue({
+      state: {
+        bookId: 'b2',
+        manuscriptId: '',
+        title: '',
+        author: '',
+        series: '',
+        seriesPosition: null,
+        isStandalone: false,
+        manuscriptFile: '',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#000'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      cast: {
+        characters: [{ id: 'sophie-b2', name: 'Sophie', role: 'Lead', color: 'peach' }],
+      },
+      manuscript: null,
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: undefined,
+      changeLog: null,
+      analysis: undefined,
+    });
+    renderMerge([...libraryB1, sophieFromBookTwo]);
+    /* Two "Sophie" labels exist (one per book) — disambiguate via closest
+       book section. Sophie-b1 stays the first match; Sophie-b2 is the
+       second. */
+    const sophieCards = screen.getAllByText('Sophie');
+    fireEvent.click(
+      sophieCards[0]
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+    fireEvent.click(
+      sophieCards[1]
+        .closest('div.group')!
+        .querySelector('[aria-label="Select voice for compare"]')!,
+    );
+    expect(screen.queryByRole('button', { name: /^Merge into/ })).toBeNull();
+  });
+
+  it('hides the Merge button for 2 DIFFERENT-base-voice selections', () => {
+    renderMerge();
+    selectCard('Sophie');
+    selectCard('Elwin');
+    expect(screen.getByText('different base voices')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Merge into/ })).toBeNull();
+  });
+
+  it('hides the Merge button when a narrator/bucket id is one of the two selected', () => {
+    /* Narrator + Sophie are both b1, but Charon ≠ Charon for narrator
+       in our test fixture (narrator carries the default ttsVoice in
+       makeVoice — Charon). Force the same-base check by re-selecting
+       sophie-foster + narrator: same provider, both Charon — but
+       narrator is a forbidden id. */
+    renderMerge();
+    selectCard('Narrator');
+    selectCard('Sophie Foster');
+    /* Same base voice ✓ badge appears, but Merge is hidden because
+       narrator is in UNMERGEABLE_IDS. Compare button stays present. */
+    expect(screen.getByText('same base voice ✓')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Merge into/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Compare' })).toBeInTheDocument();
+  });
+
+  it('dispatches api.mergeCharacters with source=shorter-name, target=longer-name, then clears selection', async () => {
+    mergeCharactersMock.mockResolvedValue({
+      characters: [
+        { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+        {
+          id: 'sophie-foster',
+          name: 'Sophie Foster',
+          role: 'Lead',
+          color: 'peach',
+          aliases: ['Sophie'],
+        },
+        { id: 'elwin', name: 'Elwin', role: 'Healer', color: 'magenta' },
+      ],
+    });
+    renderMerge();
+    selectCard('Sophie');
+    selectCard('Sophie Foster');
+    const mergeBtn = screen.getByRole('button', { name: 'Merge into Sophie Foster' });
+    fireEvent.click(mergeBtn);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mergeCharactersMock).toHaveBeenCalledTimes(1);
+    expect(mergeCharactersMock).toHaveBeenCalledWith({
+      bookId: 'b1',
+      sourceId: 'sophie',
+      targetId: 'sophie-foster',
+    });
+    /* Pill collapses on success — Selected label is gone. */
+    expect(screen.queryByText(/^Selected$/)).toBeNull();
   });
 });
 
