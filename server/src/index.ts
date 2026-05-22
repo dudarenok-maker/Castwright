@@ -26,6 +26,7 @@ import { manuscriptsRouter } from './routes/manuscripts.js';
 import { analysisRouter } from './routes/analysis.js';
 import { voiceMatchRouter } from './routes/voice-match.js';
 import { castMergeRouter } from './routes/cast-merge.js';
+import { castAliasesRouter } from './routes/cast-aliases.js';
 import { castLinkPriorRouter } from './routes/cast-link-prior.js';
 import { castSeriesPatchRouter } from './routes/cast-series-patch.js';
 import { castAddFromRosterRouter } from './routes/cast-add-from-roster.js';
@@ -140,6 +141,7 @@ app.use('/api/books', bookStateRouter); // mounts /:bookId/state (GET/PUT)
 app.use('/api/books', coverRouter); // mounts /:bookId/cover{,/candidates} (OpenLibrary covers)
 app.use('/api/books', voiceMatchRouter); // mounts /:bookId/voice-match
 app.use('/api/books', castMergeRouter); // mounts /:bookId/cast/merge
+app.use('/api/books', castAliasesRouter); // mounts /:bookId/cast/{unlink-alias,add-alias} (editable alias chips on the profile drawer)
 app.use('/api/books', castLinkPriorRouter); // mounts /:bookId/cast/link-prior (manual continuity link to a prior series book)
 app.use('/api/books', castSeriesPatchRouter); // mounts /:bookId/cast/:characterId/series-patch (cross-book Compare save propagation, BACKLOG #7)
 app.use('/api/books', castAddFromRosterRouter); // mounts /:bookId/cast/add-from-roster (new local character pulled from a prior series-mate)
