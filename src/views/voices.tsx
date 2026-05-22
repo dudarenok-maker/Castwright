@@ -73,35 +73,36 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const [tab, setTab] = useState<Tab>('all');
   const [draggingVoiceId, setDraggingVoiceId] = useState<string | null>(null);
   const [familyStatus, setFamilyStatus] = useState<{ key: string; label: string } | null>(null);
-  /* Compare affordance (plan 22a + plan 60). Selection is local-only
-     (mirrors `cast.tsx`'s ephemeral selection state); the pill at the
-     bottom mounts `CompareCastModal` when the user has exactly 2
-     selected that resolve to a same-`bookId` pair. Cross-book compare
-     is a documented follow-up (BACKLOG #17). */
+  /* Compare affordance (plan 22a + plan 60 + plan 96). Selection is
+     local-only (mirrors `cast.tsx`'s ephemeral selection state); the
+     pill at the bottom mounts `CompareCastModal` when the user has
+     exactly 2 selected. Cross-book pairs are now supported — saves
+     propagate to every series-sibling cast.json row that the dedup rule
+     recognises as the same person (plan 96, server route
+     `POST /cast/:characterId/series-patch`). */
   const [selectedVoiceIds, setSelectedVoiceIds] = useState<string[]>([]);
   const [compareIds, setCompareIds] = useState<[string, string] | null>(null);
-  /* Plan 60 — same-book pairs accessed from the global `#/voices` tab
-     resolve their characters via an on-demand `api.getBookState(bookId)`
-     fetch (the foreign book's cast is NOT in redux when no book is
-     open). Cached in this component-local map for the modal session so
-     re-opens within the same view-mount are instant; the cache resets
-     when the user navigates away. `globalCastFailed` records bookIds
-     whose fetch failed so the Compare button stays disabled
-     retroactively without retrying on every render. */
+  /* Plan 60 — foreign-book casts resolve via on-demand
+     `api.getBookState(bookId)`; cached per-component-mount so re-opens
+     within the same view-mount are instant. `globalCastFailed` records
+     bookIds whose fetch failed so the Compare button stays disabled
+     retroactively without retrying on every render. Plan 96 promotes
+     `globalCastFetching` to a Set so per-side parallel fetches for a
+     cross-book pair don't clobber each other's in-flight state. */
   const [globalCastCache, setGlobalCastCache] = useState<Map<string, Character[]>>(
     () => new Map(),
   );
   const [globalCastFailed, setGlobalCastFailed] = useState<Set<string>>(() => new Set());
-  const [globalCastFetching, setGlobalCastFetching] = useState<string | null>(null);
+  const [globalCastFetching, setGlobalCastFetching] = useState<Set<string>>(() => new Set());
   const dispatch = useAppDispatch();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const baseVoices = useAppSelector((s) => s.voices.baseVoices);
   const baseVoicesLoaded = useAppSelector((s) => s.voices.baseVoicesLoaded);
-  /* Open book id (null on the global `#/voices` tab). Used to gate Compare:
-     v1 only supports comparing voices that belong to the currently-open
-     book, because that's the only book whose cast is hydrated in the
-     redux store. Cross-book + same-book-from-global Compare are
-     follow-ups tracked in `docs/BACKLOG.md` (Could bucket). */
+  /* Open book id (null on the global `#/voices` tab). Drives the
+     cast-source picker — characters from the open book read from redux,
+     all others read from the foreign-cast cache (hydrated on demand by
+     `hydrateForeignCast` below). Plan 96 lifted the gate that
+     constrained Compare to same-book pairs. */
   const currentBookId = useAppSelector((s) =>
     s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null,
   );
@@ -143,10 +144,11 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
 
   /* Compare derivations. Memoised so a transient render doesn't recompute
      the same-base / different-base lookup or the disabled-reason string.
-     `sharedBookId` is non-null when both selected voices share the same
-     `bookId` — it picks which cast source to consult when resolving
-     `Voice → Character` (redux for the open book, `globalCastCache`
-     otherwise per plan 60). */
+     Plan 96 lifted the cross-book guard — per-side `castSourceA` /
+     `castSourceB` resolve from redux (open book) or the per-bookId
+     foreign-cast cache (plan 60). `canCompare` is true once both sides
+     have a cast source OR the missing cast is fetchable (the Compare
+     click handler triggers the fetch). */
   const compareDerivations = useMemo(() => {
     const selectedVoices = selectedVoiceIds
       .map((id) => library.find((v) => v.id === id))
@@ -159,57 +161,71 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     }
     let compareDisabledReason: string | null = null;
     let canCompare = false;
-    let sharedBookId: string | null = null;
     if (selectedVoices.length !== 2) {
       compareDisabledReason = 'Select exactly 2 voices';
-    } else if (selectedVoices[0].bookId !== selectedVoices[1].bookId) {
-      /* Cross-book compare is BACKLOG #17 — depends on this plan but
-         deferred. The disabled tooltip stays the same as plan 22a. */
-      compareDisabledReason = 'Cross-book compare not supported yet';
     } else {
-      sharedBookId = selectedVoices[0].bookId;
-      /* Pick the cast source:
-         - `bookId === currentBookId` → redux cast (open book is hydrated).
-         - Otherwise → component-local foreign-cast cache (plan 60).
-         The global `#/voices` tab (`currentBookId === null`) always
-         lands in the second branch; the per-book tab lands here too if
-         the user happens to select two voices from a *different* book. */
-      const castSource =
-        sharedBookId === currentBookId ? characters : globalCastCache.get(sharedBookId);
-      if (globalCastFailed.has(sharedBookId)) {
+      const sideBookIds = selectedVoices.map((v) => v.bookId);
+      const failedBookId = sideBookIds.find((id) => globalCastFailed.has(id));
+      if (failedBookId) {
         compareDisabledReason = 'Could not load that book — try again later';
-      } else if (!castSource) {
-        /* No cast yet for this foreign book — the Compare click triggers
-           the fetch. The button is *enabled* here so the click can run;
-           gating only re-asserts once the cast resolves. */
-        canCompare = true;
       } else {
-        const linkedCharacters = selectedVoices.map((v) => findCharacterForVoice(v, castSource));
-        if (linkedCharacters.some((c) => !c)) {
-          compareDisabledReason = 'Selected voice is no longer linked to a character';
-        } else {
+        /* Resolve a cast source per side. Missing-and-fetchable is a
+           valid `canCompare` state because the Compare click handler
+           triggers the hydrate; per-side link checks only fire once a
+           cast source is in hand. */
+        const perSideSources = sideBookIds.map((bookId) =>
+          bookId === currentBookId ? characters : globalCastCache.get(bookId) ?? null,
+        );
+        const anyMissing = perSideSources.some((s) => s === null);
+        if (anyMissing) {
           canCompare = true;
+        } else {
+          const linkedCharacters = selectedVoices.map((v, i) =>
+            findCharacterForVoice(v, perSideSources[i] as Character[]),
+          );
+          if (linkedCharacters.some((c) => !c)) {
+            compareDisabledReason = 'Selected voice is no longer linked to a character';
+          } else {
+            canCompare = true;
+          }
         }
       }
     }
-    return { selectedVoices, badge, canCompare, compareDisabledReason, sharedBookId };
+    return { selectedVoices, badge, canCompare, compareDisabledReason };
   }, [selectedVoiceIds, library, currentBookId, characters, globalCastCache, globalCastFailed]);
-  const { selectedVoices, badge, canCompare, compareDisabledReason, sharedBookId } =
-    compareDerivations;
+  const { selectedVoices, badge, canCompare, compareDisabledReason } = compareDerivations;
 
-  /* Plan 60 — on-demand foreign-cast hydrate for same-book Compare from
-     the global tab. Resolves `api.getBookState(bookId)` once per session;
-     a hit populates `globalCastCache` and immediately opens the modal;
-     a miss pushes a toast and adds the bookId to `globalCastFailed` so
-     the gate stays closed without retrying on every render. The fetch
-     is gated on `globalCastFetching` so a double-click on Compare can't
-     fire two parallel requests. */
-  async function fetchAndOpenForeignCast(
-    bookId: string,
-    voicePair: [string, string],
-  ): Promise<void> {
-    if (globalCastFetching === bookId) return;
-    setGlobalCastFetching(bookId);
+  /* Plan 60 + plan 96 — on-demand foreign-cast hydrate. Pure-fetch
+     helper: writes the cast into `globalCastCache` on success, records
+     the bookId in `globalCastFailed` + pushes a toast on failure, and
+     returns the cast (or null) so callers can sequence one or two
+     parallel hydrations and then open the Compare modal once both
+     sides resolve. `globalCastFetching` is a Set so concurrent
+     per-side fetches for a cross-book pair don't clobber each
+     other's in-flight state. */
+  async function hydrateForeignCast(bookId: string): Promise<Character[] | null> {
+    const cached = globalCastCache.get(bookId);
+    if (cached) return cached;
+    if (globalCastFailed.has(bookId)) return null;
+    if (globalCastFetching.has(bookId)) {
+      /* Another caller is already fetching — wait for it to land in the
+         cache (or fail) by polling a microtask cycle. Simpler than a
+         per-bookId promise registry and the wait is bounded by the
+         single in-flight request. */
+      await new Promise<void>((resolve) => {
+        const tick = () => {
+          if (globalCastCache.get(bookId) || globalCastFailed.has(bookId)) resolve();
+          else setTimeout(tick, 25);
+        };
+        tick();
+      });
+      return globalCastCache.get(bookId) ?? null;
+    }
+    setGlobalCastFetching((prev) => {
+      const next = new Set(prev);
+      next.add(bookId);
+      return next;
+    });
     try {
       const res = await api.getBookState(bookId);
       const cast = res?.cast?.characters ?? null;
@@ -221,7 +237,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         next.set(bookId, cast);
         return next;
       });
-      setCompareIds(voicePair);
+      return cast;
     } catch (err) {
       console.error('[voices] foreign cast fetch failed', err);
       setGlobalCastFailed((prev) => {
@@ -237,9 +253,43 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
           dedupeKey: `voices-compare-fetch:${bookId}`,
         }),
       );
+      return null;
     } finally {
-      setGlobalCastFetching(null);
+      setGlobalCastFetching((prev) => {
+        if (!prev.has(bookId)) return prev;
+        const next = new Set(prev);
+        next.delete(bookId);
+        return next;
+      });
     }
+  }
+
+  /* Resolve both selected voices' casts (parallel) then open the
+     Compare modal. Source for each side: redux when its bookId matches
+     the open book; foreign-cast cache otherwise (lazy-hydrated). Aborts
+     opening if any hydrate fails — the failure-side toast fired from
+     `hydrateForeignCast` is the user-facing surface.
+
+     Same-bookId pairs (e.g. two voices from one foreign book) dedupe
+     to a single fetch — calling hydrateForeignCast twice in the same
+     microtask tick can't see its own globalCastFetching set update yet,
+     so we collapse upstream. Pairs that are entirely within the open
+     book take the synchronous fast-path — no microtask, no await — so
+     a Compare click immediately mounts the modal in tests and avoids
+     a needless render cycle. */
+  function openCompareModal(voicePair: [Voice, Voice]): void {
+    const foreignBookIds = Array.from(
+      new Set(voicePair.map((v) => v.bookId).filter((id) => id !== currentBookId)),
+    );
+    if (foreignBookIds.length === 0) {
+      setCompareIds([voicePair[0].id, voicePair[1].id]);
+      return;
+    }
+    void (async () => {
+      const results = await Promise.all(foreignBookIds.map(hydrateForeignCast));
+      if (results.some((r) => r === null)) return;
+      setCompareIds([voicePair[0].id, voicePair[1].id]);
+    })();
   }
 
   function togglePin(voice: Voice) {
@@ -400,7 +450,14 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
 
       {selectedVoiceIds.length > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 fade-in">
-          <div className="bg-ink text-canvas rounded-full shadow-float px-4 py-2 flex items-center gap-3">
+          {/* Plan 96 — adopt the .floating-pill-inverse shell that
+              cast.tsx uses so the pill stays dark in dark mode. The
+              earlier raw `bg-ink text-canvas` flipped to cream-on-dark
+              because --ink/--canvas swap; bg-canvas/15 overlays inside
+              washed out, making the count badge + Compare button hard
+              to read. See styles.css:401-416 for the documented
+              failure mode. */}
+          <div className="floating-pill-inverse rounded-full shadow-float px-4 py-2 flex items-center gap-3">
             <span className="text-xs text-canvas/60">Selected</span>
             <span className="px-2 py-0.5 rounded-full bg-canvas/15 text-canvas font-bold text-sm tabular-nums">
               {selectedVoiceIds.length}
@@ -408,7 +465,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             {badge === 'same' && (
               <span
                 role="status"
-                className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 text-[11px] font-semibold"
+                className="px-2 py-0.5 rounded-full bg-emerald-500/30 text-emerald-100 text-[11px] font-semibold"
                 title="Both selected voices resolve to the same base TTS speaker — the highest-signal compare case"
               >
                 same base voice ✓
@@ -417,7 +474,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             {badge === 'different' && (
               <span
                 role="status"
-                className="px-2 py-0.5 rounded-full bg-amber-400/25 text-amber-100 text-[11px] font-semibold"
+                className="px-2 py-0.5 rounded-full bg-amber-400/35 text-amber-50 text-[11px] font-semibold"
                 title="The selected voices route to different base TTS speakers — comparing across families is allowed; same-voice characters are the core tuning case"
               >
                 different base voices
@@ -426,26 +483,12 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             <span className="w-px h-5 bg-canvas/20" />
             <button
               onClick={() => {
-                if (!canCompare || selectedVoiceIds.length !== 2 || !sharedBookId) return;
-                /* Path A — pair belongs to the open book: redux cast is
-                   hydrated, no fetch needed. Path B — same-book pair from
-                   the global tab (or a foreign book inside the per-book
-                   tab): consult the cache; if missing, fetch on demand
-                   per plan 60. */
-                const needsFetch =
-                  sharedBookId !== currentBookId && !globalCastCache.has(sharedBookId);
-                if (needsFetch) {
-                  void fetchAndOpenForeignCast(sharedBookId, [
-                    selectedVoiceIds[0],
-                    selectedVoiceIds[1],
-                  ]);
-                } else {
-                  setCompareIds([selectedVoiceIds[0], selectedVoiceIds[1]]);
-                }
+                if (!canCompare || selectedVoiceIds.length !== 2) return;
+                openCompareModal([selectedVoices[0], selectedVoices[1]]);
               }}
-              disabled={!canCompare || globalCastFetching !== null}
+              disabled={!canCompare || globalCastFetching.size > 0}
               title={
-                globalCastFetching
+                globalCastFetching.size > 0
                   ? 'Loading book cast…'
                   : canCompare
                     ? 'Compare these two voices'
@@ -453,7 +496,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               }
               className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {globalCastFetching ? 'Loading…' : 'Compare'}
+              {globalCastFetching.size > 0 ? 'Loading…' : 'Compare'}
             </button>
             <button
               onClick={() => setSelectedVoiceIds([])}
@@ -471,31 +514,96 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
           const va = selectedVoices.find((v) => v.id === aId);
           const vb = selectedVoices.find((v) => v.id === bId);
           if (!va || !vb) return null;
-          /* Pick the cast list to resolve against — redux for the open
-             book, the plan-60 foreign-cast cache otherwise. */
-          const castSource =
+          /* Plan 96 — per-side cast-source resolution. Each voice
+             reads from redux when its bookId matches the open book,
+             from the plan-60 foreign-cast cache otherwise. Cross-book
+             pairs are now allowed and each side resolves independently. */
+          const castSourceA =
             va.bookId === currentBookId ? characters : globalCastCache.get(va.bookId);
-          if (!castSource) return null;
-          const charA = findCharacterForVoice(va, castSource);
-          const charB = findCharacterForVoice(vb, castSource);
+          const castSourceB =
+            vb.bookId === currentBookId ? characters : globalCastCache.get(vb.bookId);
+          if (!castSourceA || !castSourceB) return null;
+          const charA = findCharacterForVoice(va, castSourceA);
+          const charB = findCharacterForVoice(vb, castSourceB);
           if (!charA || !charB) return null;
-          /* Saves only route to redux when the pair belongs to the open
-             book; foreign-book edits aren't persisted yet (BACKLOG #17
-             owns the cross-book save story). The modal-side onSaveSide
-             is still called so the in-modal draft stays consistent. */
-          const isForeign = va.bookId !== currentBookId;
           return (
             <CompareCastModal
               characters={[charA, charB]}
               library={library}
               ttsModelKey={ttsModelKey}
-              onSaveSide={(next) => {
-                if (!isForeign) dispatch(castActions.updateCharacter(next));
+              propagatesAcrossSeries
+              onSaveSide={async (next) => {
+                /* Plan 96 — saves always route through the server. The
+                   endpoint applies the patch to the source character
+                   AND every series-sibling cast.json row that matches
+                   the dedup rule; the response tells us which books
+                   actually changed so we can mirror those writes into
+                   redux (open book) and the foreign-cast cache
+                   (everything else). */
+                const sideVoice = next.id === charA.id ? va : vb;
+                try {
+                  const res = await api.seriesPatchCharacter({
+                    bookId: sideVoice.bookId,
+                    characterId: next.id,
+                    patch: {
+                      gender: next.gender,
+                      ageRange: next.ageRange,
+                      tone: next.tone,
+                    },
+                  });
+                  for (const u of res.updated) {
+                    if (u.bookId === currentBookId) {
+                      dispatch(castActions.updateCharacter(next));
+                    } else {
+                      setGlobalCastCache((prev) => {
+                        const cached = prev.get(u.bookId);
+                        if (!cached) return prev;
+                        const merged = cached.map((c) =>
+                          c.id === u.characterId
+                            ? { ...c, gender: next.gender, ageRange: next.ageRange, tone: next.tone }
+                            : c,
+                        );
+                        const map = new Map(prev);
+                        map.set(u.bookId, merged);
+                        return map;
+                      });
+                    }
+                  }
+                  dispatch(
+                    notificationsActions.pushToast({
+                      kind: 'info',
+                      message:
+                        res.updated.length === 1
+                          ? 'Saved.'
+                          : `Saved to ${res.updated.length} books in this series.`,
+                      dedupeKey: `voices-compare-save:${sideVoice.bookId}:${next.id}`,
+                    }),
+                  );
+                  if (res.failed.length > 0) {
+                    const titles = res.failed.map((f) => f.bookTitle).join(', ');
+                    dispatch(
+                      notificationsActions.pushToast({
+                        kind: 'error',
+                        message: `Could not save to: ${titles}`,
+                        dedupeKey: `voices-compare-save-failed:${sideVoice.bookId}:${next.id}`,
+                      }),
+                    );
+                  }
+                } catch (err) {
+                  console.error('[voices] series-patch save failed', err);
+                  dispatch(
+                    notificationsActions.pushToast({
+                      kind: 'error',
+                      message: 'Save failed — try again.',
+                      dedupeKey: `voices-compare-save-error:${sideVoice.bookId}:${next.id}`,
+                    }),
+                  );
+                }
               }}
               onClose={() => setCompareIds(null)}
               onOpenProfile={(id) => {
                 setCompareIds(null);
-                if (!isForeign) dispatch(uiActions.setOpenProfileId(id));
+                dispatch(uiActions.setOpenProfileId(id));
               }}
             />
           );
