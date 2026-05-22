@@ -28,8 +28,12 @@ import { computePeaks } from '../audio/compute-peaks.js';
 import {
   buildSecondPassFilterString,
   buildSinglePassFilterString,
+  extractTrailingJsonBlock,
   isMeasurementUseable,
+  isSecondPassMeasurementUseable,
+  parseLoudnormSecondPassJson,
   runLoudnormFirstPass,
+  type LoudnormFirstPassStats,
   type LoudnormOptions,
   type LoudnormSidecarJson,
 } from './loudnorm.js';
@@ -115,14 +119,23 @@ interface FfmpegBuildOpts {
   loudnormFilter?: string | null;
 }
 
+/** Loudnorm's `print_format=json` summary is logged at info level — at the
+ *  default `error` level the encoder's stderr stays empty and the sidecar
+ *  parser has nothing to consume (2026-05-22 fix). When a loudnorm filter
+ *  is present we bump to `info` and add `-nostats` to suppress the per-
+ *  frame progress noise that would otherwise drown the JSON block. */
+function ffmpegLogArgs(opts: FfmpegBuildOpts): string[] {
+  if (opts.loudnormFilter) return ['-loglevel', 'info', '-nostats'];
+  return ['-loglevel', 'error'];
+}
+
 /** Build the ffmpeg arg list for the MP3 (libmp3lame) path. The v1
  *  invocation — preserved byte-identical so existing chapters re-encode
  *  identically — was extracted out of `encodePcmToAudio` when format
  *  dispatch landed. */
 function buildMp3FfmpegArgs(opts: FfmpegBuildOpts): string[] {
   return [
-    '-loglevel',
-    'error',
+    ...ffmpegLogArgs(opts),
     '-f',
     's16le',
     '-ar',
@@ -163,8 +176,7 @@ function buildMp3FfmpegArgs(opts: FfmpegBuildOpts): string[] {
 function buildAacFfmpegArgs(opts: FfmpegBuildOpts): string[] {
   const useFdk = hasLibFdkAac();
   return [
-    '-loglevel',
-    'error',
+    ...ffmpegLogArgs(opts),
     '-f',
     's16le',
     '-ar',
@@ -201,8 +213,7 @@ function buildAacFfmpegArgs(opts: FfmpegBuildOpts): string[] {
  *  the same codec with broader compatibility. */
 function buildOpusFfmpegArgs(opts: FfmpegBuildOpts): string[] {
   return [
-    '-loglevel',
-    'error',
+    ...ffmpegLogArgs(opts),
     '-f',
     's16le',
     '-ar',
@@ -243,15 +254,31 @@ export async function encodePcmToAudio(
      `twoPass: true`, run an analysis pass first then feed the measurements
      into the encode filter; when `twoPass: false`, append a single-pass
      loudnorm filter inline. The composed filter string is threaded into
-     all three codec builders via `FfmpegBuildOpts.loudnormFilter`. */
+     all three codec builders via `FfmpegBuildOpts.loudnormFilter`.
+
+     Two-pass post-encode flow (2026-05-22 fix): the second-pass filter
+     uses `print_format=json` and emits the post-normalisation `output_i`
+     in stderr after the encode. We parse that block below and persist
+     the OUTPUT loudness (what the chapter actually sounds like) into the
+     sidecar rather than the pre-filter input measurement. Falls back to
+     the input measurement if the stderr JSON is missing or malformed —
+     the MP3 is already on disk by then, so a sidecar parse failure must
+     not fail the encode. */
   let loudnormFilter: string | null = null;
-  let measuredStats: LoudnormSidecarJson | null = null;
+  /* Pre-encode sidecar payload. For two-pass: provisional, gets overridden
+     by the parsed output_* stats after the encode succeeds. For single-pass:
+     final (nominal target, no post-encode re-measure). */
+  let pendingSidecar: LoudnormSidecarJson | null = null;
+  let twoPassFirstStats: LoudnormFirstPassStats | null = null;
   if (opts.loudnorm) {
     if (opts.loudnorm.twoPass) {
       const stats = await runLoudnormFirstPass(pcm, sampleRate, opts.loudnorm);
       if (isMeasurementUseable(stats)) {
         loudnormFilter = buildSecondPassFilterString(stats, opts.loudnorm);
-        measuredStats = {
+        twoPassFirstStats = stats;
+        /* Provisional — overridden below with output_* values from the
+           second-pass stderr JSON if parsing succeeds. */
+        pendingSidecar = {
           i: stats.input_i,
           lra: stats.input_lra,
           tp: stats.input_tp,
@@ -271,7 +298,7 @@ export async function encodePcmToAudio(
          Report the target as the (assumed-achieved) measurement so the
          sidecar JSON shape is consistent across modes; record `twoPass:
          false` so consumers know the i/lra/tp are nominal not measured. */
-      measuredStats = {
+      pendingSidecar = {
         i: opts.loudnorm.target,
         lra: opts.loudnorm.lra,
         tp: opts.loudnorm.tp,
@@ -301,54 +328,101 @@ export async function encodePcmToAudio(
     }
   }
 
-  const encoded = await new Promise<Buffer>((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+  const encodeResult = await new Promise<{ encoded: Buffer; stderr: string }>(
+    (resolve, reject) => {
+      const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
 
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
 
-    child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
-    child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
+      child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
+      child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
 
-    child.on('error', (err) => {
-      /* spawn failure: ffmpeg not on PATH. Surface a friendly hint — the
-         preflight in start-app.ps1 should normally prevent this. */
-      reject(
-        new Error(
-          `Failed to spawn ffmpeg: ${err.message}. ` +
-            `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
-        ),
-      );
-    });
+      child.on('error', (err) => {
+        /* spawn failure: ffmpeg not on PATH. Surface a friendly hint — the
+           preflight in start-app.ps1 should normally prevent this. */
+        reject(
+          new Error(
+            `Failed to spawn ffmpeg: ${err.message}. ` +
+              `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
+          ),
+        );
+      });
 
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve(Buffer.concat(stdoutChunks));
-      } else {
-        const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
-        reject(new Error(`ffmpeg exited with code ${code}: ${stderr || '(no stderr)'}`));
+      child.on('close', (code) => {
+        const stderr = Buffer.concat(stderrChunks).toString('utf8');
+        if (code === 0) {
+          resolve({ encoded: Buffer.concat(stdoutChunks), stderr });
+        } else {
+          reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim() || '(no stderr)'}`));
+        }
+      });
+
+      child.stdin.on('error', (err) => {
+        /* EPIPE if ffmpeg dies before we finish writing the PCM. The 'close'
+           handler will report the real reason via stderr; swallow here so the
+           promise doesn't reject twice. */
+        if ((err as NodeJS.ErrnoException).code !== 'EPIPE') reject(err);
+      });
+
+      child.stdin.end(pcm);
+    },
+  );
+
+  /* Two-pass post-encode upgrade: parse the second-pass loudnorm JSON from
+     stderr and replace the provisional sidecar's input_i value with the
+     actual post-normalisation output_i. On any parse failure we log a
+     warning and keep the provisional input-based sidecar — the chapter
+     plays fine; the UI pill is just less accurate until the next regen. */
+  if (pendingSidecar && twoPassFirstStats && opts.loudnorm?.twoPass) {
+    const jsonBlock = extractTrailingJsonBlock(encodeResult.stderr);
+    if (jsonBlock) {
+      try {
+        const secondPass = parseLoudnormSecondPassJson(jsonBlock);
+        if (isSecondPassMeasurementUseable(secondPass)) {
+          pendingSidecar = {
+            i: secondPass.output_i,
+            lra: secondPass.output_lra,
+            tp: secondPass.output_tp,
+            target: opts.loudnorm.target,
+            twoPass: true,
+            measuredAt: pendingSidecar.measuredAt,
+          };
+        } else {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[loudnorm] second-pass output stats are not finite (output_i=${secondPass.output_i}); ` +
+              `persisting input-side measurement (${twoPassFirstStats.input_i.toFixed(2)} LUFS) ` +
+              `as sidecar value.`,
+          );
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[loudnorm] failed to parse second-pass stderr JSON (${(e as Error).message}); ` +
+            `persisting input-side measurement (${twoPassFirstStats.input_i.toFixed(2)} LUFS) ` +
+            `as sidecar value.`,
+        );
       }
-    });
-
-    child.stdin.on('error', (err) => {
-      /* EPIPE if ffmpeg dies before we finish writing the PCM. The 'close'
-         handler will report the real reason via stderr; swallow here so the
-         promise doesn't reject twice. */
-      if ((err as NodeJS.ErrnoException).code !== 'EPIPE') reject(err);
-    });
-
-    child.stdin.end(pcm);
-  });
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[loudnorm] second-pass stderr did not include a JSON block; ` +
+          `persisting input-side measurement (${twoPassFirstStats.input_i.toFixed(2)} LUFS) ` +
+          `as sidecar value.`,
+      );
+    }
+  }
 
   /* Loudness-stats callback fires AFTER the encode succeeds — that way a
      failed encode doesn't leave a `.lufs.json` sidecar describing audio
      that never landed on disk. Awaited so caller-supplied write errors
      surface as rejections from this function rather than unhandled. */
-  if (measuredStats && opts.onLoudnessMeasured) {
-    await opts.onLoudnessMeasured(measuredStats);
+  if (pendingSidecar && opts.onLoudnessMeasured) {
+    await opts.onLoudnessMeasured(pendingSidecar);
   }
 
-  return encoded;
+  return encodeResult.encoded;
 }
 
 /** Map an `EncodePcmAudioFormat` to the on-disk file extension generation
