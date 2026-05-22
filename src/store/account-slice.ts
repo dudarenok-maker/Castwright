@@ -143,3 +143,25 @@ export const accountSlice = createSlice({
 });
 
 export const accountActions = accountSlice.actions;
+
+/* Frontend mirror of the server-side per-phase-model precedence chain
+   (server/src/analyzer/select-analyzer.ts:11–21). The server reads env
+   first, then user-settings, then a hardcoded default — the frontend
+   can't see process env, so this only covers the user-settings →
+   default fallthrough. The defaults match plan 88 and the docstrings
+   on the Account-tab pickers in src/views/account.tsx:329, 353. */
+export const PHASE0_MODEL_DEFAULT = 'gemma-4-31b-it';
+export const PHASE1_MODEL_DEFAULT = 'gemini-3.1-flash-lite';
+export const PHASE1_MIN_LAG_DEFAULT = 10;
+
+export function selectAnalyzerPhase0Model(account: AccountState): string {
+  return account.analyzerPhase0Model ?? PHASE0_MODEL_DEFAULT;
+}
+
+export function selectAnalyzerPhase1Model(account: AccountState): string {
+  return account.analyzerPhase1Model ?? PHASE1_MODEL_DEFAULT;
+}
+
+export function selectAnalyzerPhase1MinLag(account: AccountState): number {
+  return account.analyzerPhase1MinLagChapters ?? PHASE1_MIN_LAG_DEFAULT;
+}

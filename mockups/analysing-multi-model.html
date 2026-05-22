@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plan 94 — Analysing-stage multi-model UI mockup</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              canvas: 'var(--canvas)',
+              ink: 'var(--ink)',
+              peach: 'var(--peach)',
+              'peach-soft': 'var(--peach-soft)',
+              magenta: 'var(--magenta)',
+              'purple-deep': 'var(--purple-deep)',
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      :root {
+        --canvas: #fffdfb;
+        --ink: #0f0e0d;
+        --peach: #f79a83;
+        --peach-soft: #fcded7;
+        --magenta: #a43c6c;
+        --purple-deep: #3c194f;
+        --gradient-progress: linear-gradient(90deg, #3c194f, #a43c6c 60%, #f79a83);
+        --gradient-hero-wash: linear-gradient(to right, rgba(247, 154, 131, 0.3), rgba(252, 222, 215, 0.2) 35%, rgba(252, 222, 215, 0.2) 67%, rgba(247, 154, 131, 0.3));
+        --shadow-card: 0 1px 2px rgba(15, 14, 13, 0.04), 0 8px 24px rgba(15, 14, 13, 0.06);
+      }
+      body {
+        font-family: 'General Sans', 'Neue Montreal', system-ui, sans-serif;
+        background: #f4eee9;
+      }
+      .mono {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+      }
+      .hero-wash {
+        background: var(--gradient-hero-wash);
+      }
+      .progress-fill {
+        background: var(--gradient-progress);
+      }
+      .shadow-card {
+        box-shadow: var(--shadow-card);
+      }
+      /* Faux scroll-snap separator between mockup states */
+      .frame {
+        background: var(--canvas);
+        border: 1px dashed rgba(15, 14, 13, 0.18);
+        border-radius: 24px;
+        margin-bottom: 56px;
+        overflow: hidden;
+        position: relative;
+      }
+      .frame-label {
+        position: absolute;
+        top: 14px;
+        left: 14px;
+        font-size: 11px;
+        font-weight: 600;
+        color: rgba(15, 14, 13, 0.4);
+        background: rgba(255, 253, 251, 0.85);
+        padding: 2px 8px;
+        border-radius: 999px;
+        backdrop-filter: blur(6px);
+        z-index: 5;
+      }
+      /* Mock topbar */
+      .topbar {
+        height: 64px;
+        background: var(--canvas);
+        border-bottom: 1px solid rgba(15, 14, 13, 0.08);
+        display: flex;
+        align-items: center;
+        padding: 0 24px;
+        gap: 12px;
+        position: sticky;
+        top: 0;
+        z-index: 40;
+      }
+      /* Sticky analysis bar */
+      .sticky-bar {
+        position: sticky;
+        top: 64px;
+        z-index: 30;
+        background: rgba(255, 253, 251, 0.85);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid rgba(15, 14, 13, 0.08);
+        padding: 10px 24px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .pill-streaming {
+        background: rgba(16, 185, 129, 0.12);
+        color: #047857;
+      }
+      .pill-paused {
+        background: rgba(245, 158, 11, 0.12);
+        color: #b45309;
+      }
+      .pill-pending {
+        background: rgba(15, 14, 13, 0.06);
+        color: rgba(15, 14, 13, 0.5);
+      }
+      .pill-done {
+        background: rgba(16, 185, 129, 0.12);
+        color: #047857;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+      }
+      .dot-streaming {
+        background: #10b981;
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+      .dot-pending {
+        background: rgba(15, 14, 13, 0.3);
+      }
+      @keyframes pulse {
+        50% { opacity: 0.4; }
+      }
+      .phase-card {
+        background: white;
+        border: 1px solid rgba(15, 14, 13, 0.1);
+        border-radius: 24px;
+        box-shadow: var(--shadow-card);
+      }
+      .phase-row + .phase-row {
+        border-top: 1px solid rgba(15, 14, 13, 0.05);
+      }
+      .swap-select {
+        font-size: 11px;
+        border: 1px solid rgba(15, 14, 13, 0.15);
+        border-radius: 999px;
+        padding: 3px 10px;
+        background: white;
+        font-weight: 500;
+        color: var(--ink);
+      }
+      .btn-ink {
+        background: var(--ink);
+        color: var(--canvas);
+        padding: 8px 20px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .btn-ghost {
+        background: rgba(15, 14, 13, 0.05);
+        color: var(--ink);
+        padding: 6px 14px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .phase-icon-active {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: var(--peach-soft);
+        display: grid;
+        place-items: center;
+        color: var(--magenta);
+      }
+      .phase-icon-done {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: rgba(16, 185, 129, 0.12);
+        display: grid;
+        place-items: center;
+        color: #047857;
+      }
+      .phase-icon-pending {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: 1px solid rgba(15, 14, 13, 0.15);
+      }
+      .phone-frame {
+        max-width: 375px;
+        margin: 0 auto;
+      }
+    </style>
+  </head>
+  <body class="text-ink">
+    <header class="max-w-5xl mx-auto px-6 pt-10 pb-6">
+      <p class="text-xs uppercase tracking-widest text-magenta font-semibold">Plan 94 mockup</p>
+      <h1 class="text-3xl font-semibold mt-2">Analysing-stage multi-model UI + sticky status bar</h1>
+      <p class="mt-3 text-ink/70 max-w-2xl">
+        Three scrolled-state captures of the redesigned analysing view at desktop width, plus a phone-width
+        column at the bottom. Tokens match <code class="mono text-magenta">src/styles.css</code>. Sticky bar is
+        CSS-only (<code class="mono">position: sticky; top: 64px</code>) — no IntersectionObserver, no React state.
+      </p>
+    </header>
+
+    <main class="max-w-5xl mx-auto px-6 pb-24">
+
+      <!-- ====================================================================
+           STATE 1 — Top of page
+           ==================================================================== -->
+      <section class="frame">
+        <span class="frame-label">① Top of page · Phase 0 active</span>
+        <div class="topbar">
+          <div class="w-7 h-7 rounded-full bg-ink/10"></div>
+          <span class="font-semibold text-sm">audiobook</span>
+          <span class="text-ink/30 text-sm">·</span>
+          <span class="text-sm text-ink/60">Neverseen</span>
+          <div class="ml-auto flex items-center gap-3">
+            <span class="pill pill-streaming"><span class="dot dot-streaming"></span>Analysing · ~17 min remaining</span>
+            <div class="w-8 h-8 rounded-full bg-peach/40"></div>
+          </div>
+        </div>
+
+        <div class="hero-wash pt-10 pb-6 px-6">
+          <div class="text-center max-w-2xl mx-auto">
+            <p class="text-[11px] uppercase tracking-widest text-magenta font-semibold">Analysing</p>
+            <h2 class="mt-3 text-4xl">Reading <span class="font-semibold">Neverseen</span></h2>
+            <p class="mt-3 text-ink/70 text-sm">146,406 words — ~17 minutes remaining at the current pace. This is a long one.</p>
+            <button class="btn-ink mt-5">Pause analysis</button>
+            <div class="mt-4 flex items-center justify-center gap-3 text-xs">
+              <span class="pill pill-streaming"><span class="dot dot-streaming"></span>Streaming live</span>
+              <button class="btn-ghost">Back to library</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="px-6 pb-10">
+          <div class="phase-card divide-y divide-ink/5 max-w-2xl mx-auto">
+
+            <!-- Phase 0 — ACTIVE -->
+            <div class="phase-row px-6 py-5 flex items-start gap-4">
+              <span class="phase-icon-active mt-1">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10" stroke-dasharray="20 60"/></svg>
+              </span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between gap-3 flex-wrap">
+                  <p class="font-semibold">Detecting characters</p>
+                  <div class="flex items-center gap-2">
+                    <span class="pill pill-streaming"><span class="dot dot-streaming"></span>gemma-4-31b-it · streaming</span>
+                    <select class="swap-select">
+                      <option>Swap…</option>
+                      <option>(use server default)</option>
+                      <option>Gemma 4 26B</option>
+                      <option>Gemini 3.1 Flash Lite</option>
+                    </select>
+                  </div>
+                </div>
+                <p class="text-sm text-ink/60 mt-1">Named-entity extraction, dialogue attribution, speaker resolution.</p>
+                <div class="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
+                  <div class="h-full progress-fill rounded-full" style="width: 62%"></div>
+                </div>
+                <div class="mt-2 mono text-[11px] text-emerald-700 inline-flex items-center gap-2">
+                  <span class="dot dot-streaming"></span>
+                  <span class="font-semibold">Receiving response</span>
+                  <span class="text-ink/30">·</span>
+                  <span>18.4 KB</span>
+                  <span class="text-ink/30">·</span>
+                  <span>287 chars/s</span>
+                  <span class="text-ink/30">·</span>
+                  <span>last chunk 1s ago</span>
+                </div>
+                <div class="mt-3 text-[11px] text-ink/60">
+                  <div class="font-semibold text-ink/80">Cast so far · 32 characters</div>
+                  <div class="mt-1 flex flex-wrap gap-x-2 gap-y-1">
+                    <span class="px-2 py-0.5 rounded-full bg-ink/[0.04]">Sophie</span>
+                    <span class="px-2 py-0.5 rounded-full bg-ink/[0.04]">Keefe</span>
+                    <span class="px-2 py-0.5 rounded-full bg-ink/[0.04]">Fitz</span>
+                    <span class="px-2 py-0.5 rounded-full bg-ink/[0.04]">Biana</span>
+                    <span class="px-2 py-0.5 rounded-full bg-ink/[0.04]">Dex</span>
+                    <span class="px-2 py-0.5 rounded-full bg-ink/[0.04]">Linh</span>
+                    <span class="px-2 py-0.5 rounded-full bg-ink/[0.04]">Tam</span>
+                    <span class="px-2 py-0.5 rounded-full bg-ink/[0.04]">+25</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Phase 1 — QUEUED -->
+            <div class="phase-row px-6 py-5 flex items-start gap-4">
+              <span class="phase-icon-pending mt-1"></span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between gap-3 flex-wrap">
+                  <p class="font-semibold text-ink/50">Parsing and attribution</p>
+                  <span class="pill pill-pending" title="Warms up after chapter 10">
+                    <span class="dot dot-pending"></span>gemini-3.1-flash-lite · warms up after ch. 10
+                  </span>
+                </div>
+                <p class="text-sm text-ink/40 mt-1">Splitting chapters into sentences and labelling each with its speaker.</p>
+              </div>
+            </div>
+
+            <!-- Phase 2 — QUEUED -->
+            <div class="phase-row px-6 py-5 flex items-start gap-4">
+              <span class="phase-icon-pending mt-1"></span>
+              <div class="flex-1 min-w-0">
+                <p class="font-semibold text-ink/50">Matching library</p>
+                <p class="text-sm text-ink/40 mt-1">Reconciling against voices from your previous books.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           STATE 2 — Mid-scroll: header off, sticky bar pinned
+           ==================================================================== -->
+      <section class="frame">
+        <span class="frame-label">② Mid-scroll · sticky bar pinned, header scrolled off</span>
+        <div class="topbar">
+          <div class="w-7 h-7 rounded-full bg-ink/10"></div>
+          <span class="font-semibold text-sm">audiobook</span>
+          <span class="text-ink/30 text-sm">·</span>
+          <span class="text-sm text-ink/60">Neverseen</span>
+          <div class="ml-auto flex items-center gap-3">
+            <span class="pill pill-streaming"><span class="dot dot-streaming"></span>Analysing · ~14 min remaining</span>
+            <div class="w-8 h-8 rounded-full bg-peach/40"></div>
+          </div>
+        </div>
+
+        <div class="sticky-bar">
+          <span class="pill pill-streaming"><span class="dot dot-streaming"></span>Phase 0 · Detecting characters</span>
+          <span class="pill pill-streaming">gemma-4-31b-it · 287 ch/s</span>
+          <span class="text-ink/30 text-[11px]">streaming · last chunk 1s ago</span>
+          <button class="btn-ink ml-auto" style="padding: 6px 16px; font-size: 12px">Pause analysis</button>
+        </div>
+
+        <div class="px-6 py-8 bg-canvas">
+          <!-- Faux phase-0 log scrolling under the sticky bar -->
+          <div class="max-w-2xl mx-auto phase-card px-6 py-5">
+            <p class="font-semibold mb-2">Detecting characters <span class="text-xs text-ink/40 ml-2">(scrolled into log view)</span></p>
+            <ul class="mono text-[11px] text-ink/70 space-y-1.5">
+              <li>[chapter 24] roster pass: 31 → 32 characters (added "Marella")</li>
+              <li>[chapter 25] roster pass: 32 characters (no change)</li>
+              <li>[chapter 26] roster pass: 32 → 33 characters (added "Wylie")</li>
+              <li>[chapter 27] roster pass: 33 characters (no change)</li>
+              <li>[chapter 28] roster pass: 33 characters (no change)</li>
+              <li>[chapter 29] roster pass: 33 → 34 characters (added "Granite")</li>
+              <li>[chapter 30] roster pass: 34 characters (no change)</li>
+              <li class="font-semibold text-ink">[chapter 31] roster pass: streaming…</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           STATE 3 — Phase 1 active: sticky bar switches model
+           ==================================================================== -->
+      <section class="frame">
+        <span class="frame-label">③ Phase 1 active · sticky bar shows gemini, Phase 0 collapsed to summary</span>
+        <div class="topbar">
+          <div class="w-7 h-7 rounded-full bg-ink/10"></div>
+          <span class="font-semibold text-sm">audiobook</span>
+          <span class="text-ink/30 text-sm">·</span>
+          <span class="text-sm text-ink/60">Neverseen</span>
+          <div class="ml-auto flex items-center gap-3">
+            <span class="pill pill-streaming"><span class="dot dot-streaming"></span>Phase 1 · Parsing attribution</span>
+            <div class="w-8 h-8 rounded-full bg-peach/40"></div>
+          </div>
+        </div>
+
+        <div class="sticky-bar">
+          <span class="pill pill-streaming"><span class="dot dot-streaming"></span>Phase 1 · Parsing and attribution</span>
+          <span class="pill pill-streaming">gemini-3.1-flash-lite · 412 ch/s</span>
+          <span class="text-ink/30 text-[11px]">streaming · chapter 18/87</span>
+          <button class="btn-ink ml-auto" style="padding: 6px 16px; font-size: 12px">Pause analysis</button>
+        </div>
+
+        <div class="px-6 py-8 bg-canvas">
+          <div class="max-w-2xl mx-auto phase-card divide-y divide-ink/5">
+
+            <!-- Phase 0 — DONE / COLLAPSED -->
+            <div class="phase-row px-6 py-5 flex items-start gap-4">
+              <span class="phase-icon-done mt-1">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
+              </span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between gap-3 flex-wrap">
+                  <p class="font-semibold">Detecting characters</p>
+                  <span class="pill pill-done">gemma-4-31b-it · 87s · 134 characters</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Phase 1 — ACTIVE -->
+            <div class="phase-row px-6 py-5 flex items-start gap-4">
+              <span class="phase-icon-active mt-1">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10" stroke-dasharray="20 60"/></svg>
+              </span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between gap-3 flex-wrap">
+                  <p class="font-semibold">Parsing and attribution</p>
+                  <div class="flex items-center gap-2">
+                    <span class="pill pill-streaming"><span class="dot dot-streaming"></span>gemini-3.1-flash-lite · streaming</span>
+                    <select class="swap-select">
+                      <option>Swap…</option>
+                      <option>(use server default)</option>
+                      <option>Gemini 3 Flash</option>
+                      <option>Gemini 2.5 Flash</option>
+                      <option>Gemma 4 31B</option>
+                    </select>
+                  </div>
+                </div>
+                <p class="text-sm text-ink/60 mt-1">Splitting chapters into sentences and labelling each with its speaker.</p>
+                <div class="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
+                  <div class="h-full progress-fill rounded-full" style="width: 21%"></div>
+                </div>
+                <div class="mt-2 mono text-[11px] text-emerald-700 inline-flex items-center gap-2">
+                  <span class="dot dot-streaming"></span>
+                  <span class="font-semibold">Receiving response</span>
+                  <span class="text-ink/30">·</span>
+                  <span>32.1 KB</span>
+                  <span class="text-ink/30">·</span>
+                  <span>412 chars/s</span>
+                  <span class="text-ink/30">·</span>
+                  <span>last chunk 1s ago</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Phase 2 — QUEUED -->
+            <div class="phase-row px-6 py-5 flex items-start gap-4">
+              <span class="phase-icon-pending mt-1"></span>
+              <div class="flex-1 min-w-0">
+                <p class="font-semibold text-ink/50">Matching library</p>
+                <p class="text-sm text-ink/40 mt-1">Reconciling against voices from your previous books.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           Phone column — sticky bar collapses on narrow viewports
+           ==================================================================== -->
+      <section class="frame phone-frame">
+        <span class="frame-label">④ Phone (375px) · sticky bar single-row, chip icon-only</span>
+        <div class="topbar" style="padding: 0 12px">
+          <div class="w-6 h-6 rounded-full bg-ink/10"></div>
+          <span class="font-semibold text-xs">audiobook</span>
+          <div class="ml-auto"><div class="w-7 h-7 rounded-full bg-peach/40"></div></div>
+        </div>
+        <div class="sticky-bar" style="padding: 8px 12px; gap: 8px">
+          <span class="pill pill-streaming" style="padding: 3px 8px"><span class="dot dot-streaming"></span>Ph. 0</span>
+          <span class="pill pill-streaming" style="padding: 3px 8px">gemma · 287/s</span>
+          <button class="btn-ink ml-auto" style="padding: 5px 12px; font-size: 11px">Pause</button>
+        </div>
+        <div class="px-4 py-4">
+          <div class="phase-card px-4 py-4">
+            <p class="font-semibold text-sm">Detecting characters</p>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <span class="pill pill-streaming" style="font-size: 10px"><span class="dot dot-streaming"></span>gemma · 287 ch/s</span>
+              <select class="swap-select" style="font-size: 10px">
+                <option>Swap…</option>
+              </select>
+            </div>
+            <div class="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
+              <div class="h-full progress-fill rounded-full" style="width: 62%"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="text-center text-xs text-ink/40 mt-10">
+        Mockup only — real React lands in commits 2–5 of branch <code class="mono">feat/frontend-analysing-multi-model-ui</code>.
+      </footer>
+    </main>
+  </body>
+</html>
