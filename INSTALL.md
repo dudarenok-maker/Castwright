@@ -211,7 +211,7 @@ The app drives on phone + tablet via LAN HTTPS using `mkcert` so iOS / Android t
 
 ## Updating
 
-A new release is just a new zip — there's no in-app auto-update yet.
+A new release is just a new zip — there's no in-app auto-update yet. Tracked as [`docs/BACKLOG.md`](docs/BACKLOG.md) MUST #1 (in-app upgrade pathway): when that ships, the five-step manual sequence below becomes a single click in the Account tab. For now, work the manual path.
 
 1. `npm run stop:prod` in the existing install folder.
 2. Download the new `audiobook-generator-vX.Y.Z.zip`.
