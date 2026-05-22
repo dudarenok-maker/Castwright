@@ -52,6 +52,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [29 — Local Ollama analyzer + fallback](29-analyzer-ollama-local.md) — `ANALYZER=local` default; auto-fallback to Gemini only when daemon is unreachable.
 - [07 — Audio tag vocabulary](07-audio-tag-vocabulary.md) — `[tag]` vocabulary UI ↔ parser sync.
 - [08 — Audio tag auto-detection](08-audio-tag-auto-detection.md) — Server-side auto-tagging from punctuation/markdown/HTML.
+- [94 — Series-prior roster dedup](94-series-prior-dedup.md) — Collapse per-book rows into one entry per unique character before they reach the analysing-view pill and the Phase 0a prompt.
 
 ### D. Voice matching & cast
 
