@@ -403,6 +403,13 @@ export interface StreamArgs {
       the e2e harness can additionally seed `window.__mockGenConcurrency` to
       override without touching the middleware. */
   mockGenConcurrency?: number;
+  /** Plan 102 — workspace queue entry id this stream is fulfilling. Threaded
+      to the server so it can stamp every tick (including the new `resume_from`
+      ack) with the id, letting the frontend dispatcher correlate ticks back
+      to the right queue row even when entries from different books interleave.
+      Optional for back-compat — pre-plan-102 callers still work, ticks just
+      don't carry the field. */
+  queueEntryId?: string;
 }
 export interface AudioArgs {
   bookId: string;
@@ -2759,23 +2766,54 @@ async function realGetBaseVoiceSample({
 
 /* Real SSE reader for chapter generation. Mirrors the analysis-stream pattern
    above: open a long-running POST, parse `data: <json>` frames, dispatch each
-   payload to onTick. Returns a canceller that aborts the fetch. */
+   payload to onTick. Returns a canceller that aborts the fetch.
+
+   Plan 102 — auto-reconnect on unexpected stream end. Two failure modes today
+   would surface as "Worker has gone quiet" until pause-and-resume: (a) `tsx
+   watch` restarts the Node server during dev, (b) the server bounces in
+   production (Node OOM, manual restart). Both close the SSE without an
+   `idle` tick — the server-side `RunningJob` keeps generating (or restarts
+   from disk state) but the frontend stops listening. The reconnect loop
+   below reopens the same POST so the server emits its `resume_from` ack and
+   the queue keeps draining. Bounded by RECONNECT_MAX_ATTEMPTS and gated on
+   "we never saw an idle tick" — a clean idle is the only signal that the
+   run drained naturally, in which case there's nothing to reconnect to.
+   Absorbs former BACKLOG Should #1. */
+const RECONNECT_MAX_ATTEMPTS = 5;
+const RECONNECT_BACKOFF_MS = [500, 1000, 2000, 4000, 8000];
+
 function realStreamGeneration({
   bookId,
   modelKey,
   chapterIds,
   force,
+  queueEntryId,
   onTick: rawOnTick,
 }: StreamArgs): () => void {
   const onTick = safeOnTick(rawOnTick);
   const controller = new AbortController();
+  let attempt = 0;
+  let sawIdle = false;
+  let sawAnyTick = false;
+  let cancelled = false;
+  /* Track whether the controller has aborted so the inner catch can
+     distinguish "user clicked stop" (AbortError) from "fetch died mid-stream
+     and we want to reconnect". */
+  controller.signal.addEventListener('abort', () => {
+    cancelled = true;
+  });
 
-  void (async () => {
+  const openOnce = async (): Promise<{ shouldReconnect: boolean }> => {
     try {
       const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/generation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ modelKey, chapterIds, force }),
+        body: JSON.stringify({
+          modelKey,
+          chapterIds,
+          force,
+          ...(queueEntryId ? { queueEntryId } : {}),
+        }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -2784,7 +2822,7 @@ function realStreamGeneration({
           type: 'chapter_failed',
           errorReason: `Generation stream failed (${res.status}): ${detail || res.statusText}`,
         });
-        return;
+        return { shouldReconnect: false };
       }
 
       const reader = res.body.getReader();
@@ -2806,21 +2844,53 @@ function realStreamGeneration({
           if (!dataLines.length) continue;
           try {
             const payload = JSON.parse(dataLines.join('\n')) as GenerationTick;
+            sawAnyTick = true;
+            if (payload.type === 'idle') sawIdle = true;
             onTick(payload);
           } catch (e) {
             console.warn('[api] malformed generation tick:', dataLines.join('\n'), e);
           }
         }
       }
+      /* Stream ended cleanly (reader returned done: true). Reconnect only
+         when we haven't seen `idle` yet AND we saw at least one real tick
+         (so we know the server was alive — a 0-tick close is more likely a
+         setup error than a mid-flight bounce). */
+      return { shouldReconnect: !cancelled && !sawIdle && sawAnyTick };
     } catch (e) {
-      /* Aborts surface as DOMException 'AbortError' — that's the canceller
-         doing its job, not a real failure. Anything else is worth surfacing
-         as a failed tick so the UI can show something instead of hanging. */
-      if ((e as { name?: string })?.name === 'AbortError') return;
+      if ((e as { name?: string })?.name === 'AbortError') return { shouldReconnect: false };
+      /* Network error / server bounce mid-stream lands here. If we'd already
+         seen ticks, reconnect — the queue likely still has work. Otherwise
+         the failure is the first POST itself; surface to the caller. */
+      if (sawAnyTick && !sawIdle) {
+        return { shouldReconnect: true };
+      }
       onTick({
         type: 'chapter_failed',
         errorReason: (e as Error).message ?? 'Generation stream failed.',
       });
+      return { shouldReconnect: false };
+    }
+  };
+
+  void (async () => {
+    while (attempt < RECONNECT_MAX_ATTEMPTS) {
+      const { shouldReconnect } = await openOnce();
+      if (!shouldReconnect || cancelled) return;
+      const backoff = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
+      attempt += 1;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          controller.signal.removeEventListener('abort', cancelDuringWait);
+          resolve();
+        }, backoff);
+        const cancelDuringWait = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        controller.signal.addEventListener('abort', cancelDuringWait);
+      });
+      if (cancelled) return;
     }
   })();
 
