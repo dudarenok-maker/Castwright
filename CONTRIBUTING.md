@@ -123,9 +123,13 @@ node scripts/wt-new.mjs feat/server-batch-retry
 
 The helper creates `../wt-batch-retry` on the new branch, writes a
 `.env.local` with this worktree's port assignments (so its `npm run dev`
-doesn't fight the main tree's `:5173` / `:8080` / `:9000` / `:5174`), and
-prints a copy-pasteable block with `cd …` + `npm install` + `npm run dev` +
-`claude` for the new terminal. Slot N gets ports offset by `N * 10`.
+doesn't fight the main tree's `:5173` / `:8080` / `:9000` / `:5174`), then
+runs `npm install` (root, which activates husky hooks via the `prepare`
+script) and `npm install --prefix server` inside the worktree so it's
+immediately ready for `npm run dev` / `npm run verify`. Finally prints a
+copy-pasteable `cd …` + `npm run dev` + `claude` block. Pass `--no-install`
+to skip the installs (the helper then falls back to printing both commands
+in the next-steps block). Slot N gets ports offset by `N * 10`.
 
 **List active worktrees + their port assignments:**
 
