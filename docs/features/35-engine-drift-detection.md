@@ -34,11 +34,19 @@ read, and surface the mismatch in the Generation view.
    `server/src/workspace/scan.ts`. The helper runs on both the library
    scan path and the per-book `findBookBy` lookup, so the first read
    after deployment upgrades the on-disk shape. Once a chapter is
-   stamped the helper is a no-op for it.
+   stamped the helper is a no-op for it. The same loop also backfills
+   the per-chapter `duration` string from `segments.json:durationSec`
+   when state.json's value is missing or `'00:00'` — covers chapters
+   rendered before the generation route's state.json write block landed
+   (or via a code path that updates the engine-drift fields without
+   `duration`). Backfill is sticky: an existing non-placeholder
+   `duration` is never overwritten — regeneration is the only path
+   allowed to change it.
 
 3. **An existing `audioModelKey` is never overwritten by the backfill**
    — only missing fields are filled. The render path is authoritative
-   for fresh writes.
+   for fresh writes. The same applies to `duration`: any non-placeholder
+   value already on the chapter is sticky and wins.
 
 4. **Drift is one-way: the chapter holds the OLD engine, the project
    holds the NEW engine.** The signal fires when those differ. When the
