@@ -287,6 +287,51 @@ export interface AddFromSeriesRosterArgs {
 export interface AddFromSeriesRosterResponse {
   character: import('./types').Character;
 }
+/* POST /api/books/:bookId/cast/unlink-alias — split a misplaced alias
+   chip off its current character and back into its own standalone cast
+   member. Server reads the preserved Phase-0a chapterCast to identify
+   which chapters originally featured the alias, then returns candidate
+   sentence ids (sentences currently attributed to the source character
+   in those chapters) so the frontend's reattribute modal can let the
+   user move the right lines via the existing per-sentence picker.
+   No sentence rewrites happen server-side. */
+export interface UnlinkAliasArgs {
+  bookId: string;
+  sourceCharacterId: string;
+  aliasName: string;
+}
+export interface UnlinkAliasImpactedChapter {
+  chapterId: number;
+  candidateSentenceIds: number[];
+}
+export interface UnlinkAliasResponse {
+  /** The newly-minted standalone character — frontend appends this to
+      the cast slice via a delta reducer rather than replacing the full
+      list. */
+  newCharacter: Character;
+  /** Chapters whose Phase-0a roster originally listed this alias, each
+      with the IDs of sentences currently attributed to the source
+      character so the Reattribute Lines modal can render them. */
+  impactedChapters: UnlinkAliasImpactedChapter[];
+}
+/* POST /api/books/:bookId/cast/add-alias — append a name to a
+   character's aliases list (idempotent; case-insensitive dedup; rejects
+   the character's own name to keep self-aliases out). Future analyzer
+   runs of subsequent books in the series will route the alias to this
+   character via the matcher. */
+export interface AddAliasArgs {
+  bookId: string;
+  characterId: string;
+  aliasName: string;
+}
+export interface AddAliasResponse {
+  /** Echo of the addition: target character + the alias text, plus the
+      `alreadyPresent` flag so the frontend can distinguish a no-op
+      re-add from a fresh append without diffing the cast. */
+  characterId: string;
+  alias: string;
+  alreadyPresent: boolean;
+}
 export interface StreamArgs {
   bookId: string;
   modelKey: TtsModelKey;
@@ -1740,6 +1785,100 @@ async function mockMergeCharacters({
   void sourceId;
   void targetId;
   return { characters: [] };
+}
+
+async function realUnlinkAlias({
+  bookId,
+  sourceCharacterId,
+  aliasName,
+}: UnlinkAliasArgs): Promise<UnlinkAliasResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/unlink-alias`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sourceCharacterId, aliasName }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Unlink alias failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockUnlinkAlias({
+  aliasName,
+}: UnlinkAliasArgs): Promise<UnlinkAliasResponse> {
+  /* Mock mode is stateless on the cast side — the redux store holds the
+     authoritative shape, and the layout's onUnlinkAlias handler dispatches
+     a delta reducer with the response. So all we need to do is mint the
+     standalone-character shape; the reducer applies it locally + prunes
+     the alias off the source it already knows about.
+
+     impactedChapters is intentionally empty: building a meaningful list
+     would require carrying around a parallel chapter-cast snapshot in the
+     mock, which doesn't pay for itself. The Reattribute Lines modal
+     handles the empty-list case gracefully (the Skip / Done buttons are
+     all that's needed). */
+  await wait(60);
+  const displayName = aliasName.trim();
+  if (!displayName) throw new Error('Alias name cannot be empty.');
+  const baseId =
+    displayName
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'unnamed';
+  const newCharacter: Character = {
+    id: baseId,
+    name: displayName,
+    role: 'character',
+    color: 'narrator',
+    voiceState: 'generated',
+  };
+  return { newCharacter, impactedChapters: [] };
+}
+
+async function realAddAlias({
+  bookId,
+  characterId,
+  aliasName,
+}: AddAliasArgs): Promise<AddAliasResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/add-alias`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ characterId, aliasName }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Add alias failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockAddAlias({
+  characterId,
+  aliasName,
+}: AddAliasArgs): Promise<AddAliasResponse> {
+  await wait(60);
+  const trimmed = aliasName.trim();
+  if (!trimmed) {
+    throw new Error('Alias name cannot be empty.');
+  }
+  /* Stateless — the cast-slice reducer dedupes on its own from the live
+     store state. Returning alreadyPresent=false unconditionally is fine;
+     the reducer no-ops when the alias is already there. */
+  return { characterId, alias: trimmed, alreadyPresent: false };
 }
 
 async function realOverrideLibraryCast(
@@ -3327,6 +3466,8 @@ const real = {
   analyseManuscript: realAnalyseManuscript,
   matchVoices: realMatchVoices,
   mergeCharacters: realMergeCharacters,
+  unlinkAlias: realUnlinkAlias,
+  addAlias: realAddAlias,
   overrideLibraryCast: realOverrideLibraryCast,
   getSeriesRoster: realGetSeriesRoster,
   linkPriorCharacter: realLinkPriorCharacter,
@@ -3498,6 +3639,8 @@ const mock = {
   analyseManuscript: mockAnalyseManuscript,
   matchVoices: mockMatchVoices,
   mergeCharacters: mockMergeCharacters,
+  unlinkAlias: mockUnlinkAlias,
+  addAlias: mockAddAlias,
   overrideLibraryCast: mockOverrideLibraryCast,
   getSeriesRoster: mockGetSeriesRoster,
   linkPriorCharacter: mockLinkPriorCharacter,
