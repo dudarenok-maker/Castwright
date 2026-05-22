@@ -24,7 +24,7 @@
    warm independently. Plan 30 explicitly preserves that path. */
 
 import { useEffect, useState } from 'react';
-import { api, type SidecarHealth } from './api';
+import { api, type SidecarHealth, type GpuQueueState } from './api';
 import type { ModelControlState } from '../components/ModelControlPill';
 
 export interface EngineLifecycle {
@@ -50,12 +50,26 @@ export interface TtsLifecycle {
       notice state because both pills share it; either surface clearing it
       should clear it everywhere. */
   dismissNotices: () => void;
+  /** GPU semaphore queue depth — number of GPU ops queued behind the
+      in-flight ones. Drives the "Queued (N ahead) ·" prefix on the
+      top-bar pill so a session waiting on another's analyzer / sidecar
+      call can see why it's not starting. `undefined` when the server
+      doesn't expose `/api/gpu/queue` (older builds / partial deploys)
+      — UI degrades to no prefix in that case. */
+  gpuQueueDepth?: number;
+  /** Companion to `gpuQueueDepth` — number of GPU ops currently
+      holding a slot. Exposed for diagnostics; not currently rendered
+      anywhere but cheap to keep on the shape so future surfaces (a
+      developer-tools view, a metric overlay) can read it without a
+      second poll. */
+  gpuInFlight?: number;
 }
 
 type EngineId = 'coqui' | 'kokoro';
 
 export function useTtsLifecycle(): TtsLifecycle {
   const [sidecarHealth, setSidecarHealth] = useState<SidecarHealth | null>(null);
+  const [gpuQueue, setGpuQueue] = useState<GpuQueueState | null>(null);
   const [healthProbeKey, setHealthProbeKey] = useState(0);
   /* Pending UI override — per-engine, set immediately on Load/Stop click so
      the right pill reports the intended next state while /health catches up.
@@ -82,6 +96,22 @@ export function useTtsLifecycle(): TtsLifecycle {
           setSidecarHealth({ status: 'unreachable', url: '', error: 'Probe failed.' });
           setPendingCoqui(null);
           setPendingKokoro(null);
+        });
+
+      /* GPU queue state — same cadence, separate endpoint. Permissive
+         error handling: an older server (or a transient 404 / 5xx) just
+         clears the depth so the pill drops back to its default label;
+         it does NOT surface as a user-facing error. The semaphore is
+         opportunistic UX, not a hard contract. */
+      api
+        .getGpuQueueState()
+        .then((q) => {
+          if (cancelled) return;
+          setGpuQueue(q);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setGpuQueue(null);
         });
     };
     probe();
@@ -194,5 +224,7 @@ export function useTtsLifecycle(): TtsLifecycle {
     evictionNotice,
     loadErrorNotice,
     dismissNotices,
+    gpuQueueDepth: gpuQueue?.depth,
+    gpuInFlight: gpuQueue?.inFlight,
   };
 }

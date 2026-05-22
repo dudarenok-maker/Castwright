@@ -78,17 +78,7 @@ Source: net-new (2026-05-21). Surfaced while smoke-testing PR #107 — a `tsx` r
 - _Depends on:_ none. Self-contained inside the streaming surface.
 - _Benefit (dev / technical):_ no more false "stalled" banners during interactive development. Same fix incidentally covers production crash-recovery (Node OOM, manual restart) so users running long books survive a sidecar/server bounce without losing the visible progress thread.
 
-### 3. GPU-arbitration semaphore for parallel Claude Code sessions
-
-Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-new.mjs` resolves port collisions but leaves GPU/VRAM contention as a manual-coordination concern documented in CONTRIBUTING.md.
-
-- _What:_ Add a small server-side semaphore around heavy-GPU operations (analyzer's chat completion path + sidecar's `/synthesize`) so concurrent requests from N parallel sessions get serialized rather than fighting over VRAM on an 8 GB GPU. Default concurrency = 1 GPU operation at a time; configurable via `GPU_CONCURRENCY` env var. Surface the queue depth in the existing top-bar pill state so the user sees "Queued (1 ahead)".
-- _Acceptance:_ Two parallel sessions both kick off `/analyse` → second request waits in queue until first completes (no VRAM spill, no silent OOM). The top-bar pill in the waiting session shows "Queued". New server Vitest spec covers the semaphore behaviour; existing tests stay green.
-- _Key files:_ new `server/src/gpu/semaphore.ts`; `server/src/analyzer/ollama.ts` (wrap chat calls); `server/src/routes/sidecar-synth.ts` (wrap synth proxy); `src/components/layout.tsx` (consume queue-depth from existing pill polling).
-- _Depends on:_ none. Pairs with the worktree parallel-sessions tooling — without the semaphore, users must queue heavy operations by hand per the CONTRIBUTING.md "GPU + shared-resource caveats" note.
-- _Benefit (user):_ removes the silent VRAM-spillover-to-RAM slowdown when two sessions hit the analyzer or sidecar concurrently. Today a parallel run can take 5–10× longer than serial because both processes thrash the GPU.
-
-### 4. In-app LAN HTTPS banner under dev settings
+### 3. In-app LAN HTTPS banner under dev settings
 
 Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 
@@ -98,7 +88,7 @@ Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
 
-### 5. Streaming audio for live playback during chapter generation
+### 4. Streaming audio for live playback during chapter generation
 
 Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
 
@@ -107,7 +97,7 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
 - _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
 
-### 6. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
+### 5. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
 
 Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warning on `npm install`; full triage in `~/.claude/plans/fancy-bouncing-lovelace.md`.
 
@@ -117,7 +107,7 @@ Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warnin
 - _Depends on:_ none structural. Pure tooling bump.
 - _Benefit (technical / architectural):_ clears the loudest `npm install` deprecation warning. Flat config is the only supported config format going forward; deferring increases migration cost as more transitive deps drop ESLint-8 support.
 
-### 7. Multer 1.x → 2.x security upgrade (server file uploads)
+### 6. Multer 1.x → 2.x security upgrade (server file uploads)
 
 Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.2: Multer 1.x is impacted by a number of vulnerabilities, which have been patched in 2.x.` on `npm install --prefix server`. Full deprecation audit notes in `~/.claude/plans/fancy-bouncing-lovelace.md`.
 
@@ -127,7 +117,7 @@ Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.
 - _Depends on:_ none. Pure dep bump + small middleware adaptation.
 - _Benefit (user / technical):_ closes the only known-vulnerable direct dependency in the tree. Multer 1.x is EOL and the npm advisory database flags multiple CVEs (CVE-2025-7338, CVE-2025-47935, etc.) that 2.x patches. Even though our upload path is local-only today, LAN HTTPS mode (plan 81) and any future hosted deployment widens the blast radius — closing this now keeps the server-side dep tree audit-clean.
 
-### 8. Merge journal for deterministic alias un-link
+### 7. Merge journal for deterministic alias un-link
 
 Source: plan 95 ship (2026-05-22) — Out of scope. PR [#142](https://github.com/dudarenok-maker/AudioBook-Generator/pull/142) shipped editable cast aliases with a Reattribute Lines modal that uses the preserved Phase-0a `chapterCast` as a lineage proxy to narrow the user's manual reattribution from "whole book" to "these N chapters." It works, but it's not deterministic — a chapter shows up if the alias was in its Phase-0a roster, even when the merge that put the alias on the source character happened mid-book and didn't actually rewrite any chapter-1 sentences. The user has to skim and reassign.
 

@@ -3388,6 +3388,41 @@ async function mockGetExportLanUrls(): Promise<ExportLanInfo> {
   return { urls: ['http://192.168.1.42:8080'], port: 8080, protocol: 'http' };
 }
 
+/* GPU semaphore state — surfaces the depth/inFlight/max triple from the
+   server's GpuSemaphore so the top-bar pill can prefix "Queued (N ahead) ·"
+   when a session is waiting behind another's analyzer / sidecar call.
+   See server/src/gpu/semaphore.ts + server/src/routes/gpu-queue.ts. */
+export interface GpuQueueState {
+  /** Number of acquires waiting in the FIFO queue behind in-flight ops. */
+  depth: number;
+  /** Number of GPU ops currently holding a slot (analyzer + sidecar combined). */
+  inFlight: number;
+  /** Configured concurrency ceiling (GPU_CONCURRENCY env var, default 1). */
+  max: number;
+}
+
+async function realGetGpuQueueState(): Promise<GpuQueueState> {
+  /* Permissive: a 404 / 5xx (older server, partial deploy, hot-reload
+     mid-poll) shouldn't surface as a user-visible failure. The
+     useTtsLifecycle caller treats a rejected promise as "clear the
+     depth" — the pill drops back to its default label. */
+  const res = await fetch('/api/gpu/queue');
+  if (!res.ok) {
+    throw new Error(`GPU queue probe HTTP ${res.status}`);
+  }
+  return (await res.json()) as GpuQueueState;
+}
+
+async function mockGetGpuQueueState(): Promise<GpuQueueState> {
+  /* Mocks don't run a real semaphore — generation is local + synchronous
+     under VITE_USE_MOCKS=true, so the queue is always empty. The shape
+     stays contract-correct so any future visual regression on the pill's
+     "Queued (N ahead) ·" prefix can be exercised by stubbing the api
+     surface in tests. */
+  await wait(20);
+  return { depth: 0, inFlight: 0, max: 1 };
+}
+
 async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   /* Mocks pretend everything's healthy — generation is local and synchronous
      under VITE_USE_MOCKS=true, so there's no real sidecar to probe. */
@@ -3568,6 +3603,7 @@ const real = {
   pauseGeneration: realPauseGeneration,
   pauseAnalysis: realPauseAnalysis,
   getSidecarHealth: realGetSidecarHealth,
+  getGpuQueueState: realGetGpuQueueState,
   getOllamaHealth: realGetOllamaHealth,
   loadSidecar: realLoadSidecar,
   unloadSidecar: realUnloadSidecar,
@@ -3742,6 +3778,7 @@ const mock = {
   pauseGeneration: mockPauseGeneration,
   pauseAnalysis: mockPauseAnalysis,
   getSidecarHealth: mockGetSidecarHealth,
+  getGpuQueueState: mockGetGpuQueueState,
   getOllamaHealth: mockGetOllamaHealth,
   loadSidecar: mockLoadSidecar,
   unloadSidecar: mockUnloadSidecar,
