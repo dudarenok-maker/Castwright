@@ -59,7 +59,15 @@ Source: net-new (2026-05-20). Captured during planning of the next full version 
 
 ## Should — important, not blocking ship
 
-(none currently)
+### 1. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
+
+Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warning on `npm install`; full triage in `~/.claude/plans/fancy-bouncing-lovelace.md`.
+
+- _What:_ Bump `eslint` `^8.57.1` → `^9.x` and rewrite `.eslintrc.cjs` as flat config (`eslint.config.js`). Bump `@typescript-eslint/{eslint-plugin,parser}` `^7.18.0` → `^8.x` (v8 is the first major that supports ESLint 9), `eslint-plugin-react-hooks` `^4.6.2` → `^5.x`, and audit `eslint-plugin-react` + `eslint-plugin-jsx-a11y` + `eslint-config-prettier` for ESLint-9 compatibility. Re-baseline plan 46's autofix snapshot. Removes the `inflight@1.0.6` / `glob@7.2.3` / `rimraf@3.0.2` transitive chain that lives entirely inside ESLint 8's `file-entry-cache` → `flat-cache` plumbing — no direct dependency on our side.
+- _Acceptance:_ `npm install` no longer prints the `deprecated inflight@1.0.6` warning. `npm ls inflight` returns empty. `npm run lint` passes against the migrated flat config with the same rule set (no rule relaxations to make the migration green). `npm run verify` stays green end-to-end. Plan 46's autofix-baseline snapshot is regenerated and committed.
+- _Key files:_ `package.json` (4 devDeps to bump), new `eslint.config.js` (flat config), delete `.eslintrc.cjs` if present, `docs/features/archive/46-lint-format-a11y.md` (note the migration in Ship notes), any tests under `scripts/tests/` that exercise the lint command.
+- _Depends on:_ none structural. Pure tooling bump.
+- _Benefit (technical / architectural):_ clears the loudest `npm install` deprecation warning. Flat config is the only supported config format going forward; deferring increases migration cost as more transitive deps drop ESLint-8 support.
 
 ---
 
