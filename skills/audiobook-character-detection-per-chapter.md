@@ -151,7 +151,8 @@ apology. It hasn't been going well.` → roster entry
 
 The inbox may include a section `## Known characters from prior books
 in this series` with `name`, `aliases`, `description`, and
-`fromBookTitle` per character. **Treat that list as the authoritative
+`fromBookTitles` (an array of every prior book that confirmed this
+character) per character. **Treat that list as the authoritative
 identity pool for this series.** If a speaker in this chapter matches
 a known series character by name or by alias (case-insensitive,
 ignoring punctuation), reuse their `id` **verbatim** — do not invent a
