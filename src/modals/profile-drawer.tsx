@@ -8,7 +8,9 @@ import {
   IconPlus,
   IconPause,
   IconSpinner,
+  IconChevD,
 } from '../lib/icons';
+import type { SeriesRosterEntry } from '../lib/api';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import type { BaseVoice, TtsEngine, TtsModelKey } from '../lib/types';
 import { Avatar, VoiceSwatch, Pill, PrimaryButton } from '../components/primitives';
@@ -23,6 +25,8 @@ import { voicesActions } from '../store/voices-slice';
 import { api } from '../lib/api';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import { VoicePreviewButton } from '../components/voice-preview-button';
+import { VoiceOverridePicker } from '../components/voice-override-picker';
+import { CharacterSearchPicker } from '../components/character-search-picker';
 
 /* Default preview line. Pangram + a short follow-on so the user can
    hear consonant + vowel coverage AND a held sentence at typical
@@ -201,6 +205,11 @@ export function ProfileDrawer({
   const [mergeBusy, setMergeBusy] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [showMergePicker, setShowMergePicker] = useState(false);
+  /* Controls the SearchablePicker popover above the merge-target trigger.
+     Separate from `showMergePicker` (which gates the entire merge card)
+     so the popover can close on row pick while the confirm row stays. */
+  const [mergeTargetPickerOpen, setMergeTargetPickerOpen] = useState(false);
+  const mergeTargetTriggerRef = useRef<HTMLButtonElement>(null);
   const isBucket = character.id === UNKNOWN_MALE_ID || character.id === UNKNOWN_FEMALE_ID;
   const isNarrator = character.id === NARRATOR_ID;
   /* "Downgrade" — fold this character into a standing background bucket.
@@ -830,7 +839,26 @@ export function ProfileDrawer({
               const selectedInBook = !selectedPrior
                 ? inBookCandidates.find((c) => c.id === mergeTargetId)
                 : undefined;
-              const seriesLabel = priorCandidates[0] ? `From prior books in this series` : '';
+              /* PriorMergeCandidate → SeriesRosterEntry adapter. The
+                 character picker accepts the roster shape; merge candidates
+                 omit aliases / voiceId, which are optional in the roster
+                 entry type, so an undefined-fill is safe. The roster
+                 picker keys rows by `${bookId}_${id}`, which makes the
+                 PRIOR_PREFIX index lookup deterministic on pick. */
+              const priorRoster: SeriesRosterEntry[] = priorCandidates.map((p) => ({
+                id: p.id,
+                name: p.name,
+                bookId: p.bookId,
+                bookTitle: p.bookTitle,
+                voiceId: '',
+              }));
+              /* Trigger button label: the resolved survivor name, or the
+                 placeholder when nothing's picked yet. */
+              const triggerLabel = selectedInBook
+                ? selectedInBook.name
+                : selectedPrior
+                  ? `${selectedPrior.name} — ${selectedPrior.bookTitle}`
+                  : '— pick a character —';
               return (
                 <div className="rounded-2xl bg-canvas border border-ink/10 p-3">
                   <label
@@ -839,37 +867,53 @@ export function ProfileDrawer({
                   >
                     Keep which character as the survivor?
                   </label>
-                  <select
+                  <button
                     id="profile-merge-target"
+                    ref={mergeTargetTriggerRef}
+                    type="button"
                     aria-label="Merge target"
-                    value={mergeTargetId}
+                    aria-haspopup="listbox"
+                    aria-expanded={mergeTargetPickerOpen}
                     disabled={mergeBusy}
-                    onChange={(e) => {
-                      setMergeTargetId(e.target.value);
-                      setMergeError(null);
-                    }}
-                    className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+                    onClick={() => setMergeTargetPickerOpen((v) => !v)}
+                    className="w-full inline-flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink hover:border-ink/30 focus:outline-none focus:ring-2 focus:ring-magenta/30 disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
                   >
-                    <option value="">— pick a character —</option>
-                    {inBookCandidates.length > 0 && (
-                      <optgroup label="From this book">
-                        {inBookCandidates.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {priorCandidates.length > 0 && (
-                      <optgroup label={seriesLabel}>
-                        {priorCandidates.map((p, i) => (
-                          <option key={`${PRIOR_PREFIX}${i}`} value={`${PRIOR_PREFIX}${i}`}>
-                            {p.name} — {p.bookTitle}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
+                    <span
+                      className={`truncate text-left flex-1 ${mergeTargetId ? '' : 'text-ink/50'}`}
+                    >
+                      {triggerLabel}
+                    </span>
+                    <IconChevD className="w-3.5 h-3.5 text-ink/50 shrink-0" />
+                  </button>
+                  {mergeTargetPickerOpen && (
+                    <CharacterSearchPicker
+                      characters={inBookCandidates}
+                      priorRoster={priorRoster.length > 0 ? priorRoster : undefined}
+                      currentCharacterId=""
+                      onPick={(id) => {
+                        setMergeTargetId(id);
+                        setMergeError(null);
+                        setMergeTargetPickerOpen(false);
+                      }}
+                      onPickRosterEntry={(entry) => {
+                        /* Resolve the PRIOR_PREFIX${idx} encoding so the
+                           submit handler's selectedPrior branch reaches
+                           the right PriorMergeCandidate. */
+                        const idx = priorCandidates.findIndex(
+                          (p) => p.id === entry.id && p.bookId === entry.bookId,
+                        );
+                        if (idx >= 0) {
+                          setMergeTargetId(`${PRIOR_PREFIX}${idx}`);
+                          setMergeError(null);
+                        }
+                        setMergeTargetPickerOpen(false);
+                      }}
+                      onClose={() => setMergeTargetPickerOpen(false)}
+                      anchorRef={mergeTargetTriggerRef}
+                      placement="bottom-start"
+                      minWidth={320}
+                    />
+                  )}
                   {selectedInBook && (
                     <p className="mt-2 text-[11px] text-ink/65 leading-relaxed">
                       <span className="font-semibold text-ink">{character.name}</span> will be
@@ -1275,37 +1319,16 @@ function ModelVoiceOverridePicker({
           })}
         </div>
       )}
-      <select
-        id={`override-${voiceId}`}
-        aria-label={`Model voice override (${engineTab})`}
-        value={selectedValue}
-        disabled={!baseVoicesLoaded}
-        onChange={(e) => {
-          const raw = e.target.value;
-          if (raw === AUTO) {
-            void onChange(null);
-            return;
-          }
-          const [engine, ...rest] = raw.split('|');
-          const name = rest.join('|');
-          void onChange({ engine: engine as TtsEngine, name });
-        }}
-        className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
-      >
-        <option value={AUTO}>
-          {engineTab === autoVoiceEngine
-            ? `Auto — currently ${capitalise(autoVoiceEngine)} · ${autoVoiceName}`
-            : `Auto for ${capitalise(engineTab)} — attribute-driven`}
-        </option>
-        {voicesForTab.map((bv) => (
-          <option key={`${bv.engine}|${bv.name}`} value={`${bv.engine}|${bv.name}`}>
-            {bv.name}
-          </option>
-        ))}
-      </select>
-      {!baseVoicesLoaded && (
-        <p className="mt-2 text-[11px] text-ink/50">Loading base voice catalog…</p>
-      )}
+      <VoiceOverridePicker
+        voiceId={voiceId}
+        engineTab={engineTab}
+        autoVoiceEngine={autoVoiceEngine}
+        autoVoiceName={autoVoiceName}
+        voicesForTab={voicesForTab}
+        selectedValue={selectedValue}
+        baseVoicesLoaded={baseVoicesLoaded}
+        onChange={(next) => void onChange(next)}
+      />
       {error && <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {error}</p>}
       <p className="mt-2 text-[11px] text-ink/50">
         Each engine has its own voice slot — switching the project's engine picks up the
