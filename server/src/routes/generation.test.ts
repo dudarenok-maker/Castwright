@@ -165,6 +165,18 @@ describe('POST /api/books/:bookId/generation', () => {
     expect(ticks.some((t) => t.type === 'chapter_complete' && t.chapterId === 1)).toBe(true);
     expect(ticks.some((t) => t.type === 'chapter_complete' && t.chapterId === 2)).toBe(true);
     expect(ticks[ticks.length - 1].type).toBe('idle');
+    /* chapter_complete must carry durationSec — belt-and-suspenders with
+       chapter_assembling so the Listen view chapter row never lags at
+       '00:00' when the assembling tick is dropped (cross-book guard,
+       parallel-chapter coalesce, hidden tab). Matches the synthesise
+       impl in beforeEach which returns durationSec: 1. */
+    const liveCompletes = ticks.filter(
+      (t) => t.type === 'chapter_complete' && typeof t.runTotal === 'number',
+    );
+    expect(liveCompletes.length).toBeGreaterThan(0);
+    for (const tick of liveCompletes) {
+      expect(tick.durationSec).toBe(1);
+    }
   });
 
   it('rejects an unsupported modelKey with a stream-level chapter_failed and ends', async () => {

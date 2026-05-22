@@ -367,11 +367,13 @@ export const chaptersSlice = createSlice({
         ch.progress = ev.progress ?? 0.995;
         if (ev.currentLine != null) ch.currentLine = ev.currentLine;
         if (ev.totalLines != null) ch.totalLines = ev.totalLines;
-        /* The assembling tick is the only place `durationSec` is carried —
-           capture it here so the row shows the real audio length the moment
-           chapter_complete lands. Without this the chapter sits at the
-           '00:00' seed from analysis until the next page reload (when
-           hydrateFromBookState reads state.json). */
+        /* The assembling tick is the primary carrier of `durationSec` —
+           capture it here so the row shows the real audio length while the
+           disk-write phase is still ticking. chapter_complete carries the
+           same value as a belt-and-suspenders fallback (see below) so the
+           row never sits at the '00:00' seed when the assembling tick is
+           dropped (cross-book guard, parallel-chapter coalesce, hidden
+           tab). */
         if (ev.durationSec != null) ch.duration = formatDuration(ev.durationSec);
         return;
       }
@@ -392,6 +394,13 @@ export const chaptersSlice = createSlice({
            is tolerated (older server before this field landed) — the
            chapter stays at its previously-hydrated value. */
         if (ev.audioModelKey) ch.audioModelKey = ev.audioModelKey;
+        /* Duration fallback: chapter_assembling is the primary carrier,
+           but it can be dropped between the server and this reducer
+           (cross-book guard at line 309, plan-87 parallel-chapter
+           coalesce, hidden-tab throttling). Re-applying the same value
+           on chapter_complete is idempotent when assembling already
+           landed and load-bearing when it didn't. */
+        if (ev.durationSec != null) ch.duration = formatDuration(ev.durationSec);
         return;
       }
 
