@@ -40,6 +40,7 @@ import { importRouter } from './routes/import.js';
 import { bookStateRouter } from './routes/book-state.js';
 import { coverRouter } from './routes/cover.js';
 import { generationRouter } from './routes/generation.js';
+import { queueRouter } from './routes/queue.js';
 import { chapterAudioRouter } from './routes/chapter-audio.js';
 import { clipRouter } from './routes/clip.js';
 import { chaptersRestructureRouter } from './routes/chapters-restructure.js';
@@ -151,6 +152,7 @@ app.use('/api/books', castAddFromRosterRouter); // mounts /:bookId/cast/add-from
 app.use('/api/books', seriesRosterRouter); // mounts /:bookId/series-roster (prior-book characters in the same series)
 app.use('/api', libraryCastOverrideRouter); // mounts /library-cast/override (cross-book; not under /:bookId)
 app.use('/api/books', generationRouter); // mounts /:bookId/generation (SSE)
+app.use('/api/queue', queueRouter); // plan 102 — workspace-level cross-book chapter-generation queue
 app.use('/api/books', chapterAudioRouter); // mounts /:bookId/chapters/:chapterId/audio(.mp3)
 app.use('/api/books', clipRouter); // mounts /:bookId/chapters/:chapterId/clip (plan 69 — share-clip download)
 app.use('/api/books', chaptersRestructureRouter); // mounts /:bookId/chapters/{merge,split,reorder} (plan 51)

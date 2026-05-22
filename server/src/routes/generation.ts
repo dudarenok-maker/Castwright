@@ -85,6 +85,12 @@ interface RunningJob {
   controller: AbortController;
   subscribers: Set<Subscriber>;
   bookId: string;
+  /** Plan 102 — workspace queue entry id this job is processing. Carried
+      back on every broadcast tick (including `resume_from`) so the
+      frontend dispatcher can correlate ticks to the right queue row even
+      when entries from different books interleave. Null when this job
+      started outside the queue surface (legacy callers; back-compat). */
+  queueEntryId: string | null;
   /** The chapter the loop is currently synthesising. Set at the top of
       each loop iteration and cleared on chapter_complete / break. Used
       by the catch-up replay so a post-reload subscriber's UI immediately
@@ -135,7 +141,11 @@ function broadcast(job: RunningJob, ev: unknown): void {
      Done = chapters that were already on disk at job-start (not in
      scope for this run) PLUS chapters this run has completed.
      InProgress = chapters between first synthesise tick and
-     chapter_complete / chapter_failed. */
+     chapter_complete / chapter_failed.
+
+     Plan 102 — also stamp `queueEntryId` on every tick (when this job is
+     queue-driven) so the frontend dispatcher can correlate ticks back to
+     the queue row regardless of which book the user is currently viewing. */
   const enriched =
     ev && typeof ev === 'object'
       ? {
@@ -143,6 +153,7 @@ function broadcast(job: RunningJob, ev: unknown): void {
           runDone: job.runDoneBase + job.completedThisRun.size,
           runTotal: job.runTotal,
           runInProgress: job.runInProgress.size,
+          ...(job.queueEntryId ? { queueEntryId: job.queueEntryId } : {}),
         }
       : ev;
   for (const sub of job.subscribers) {
@@ -179,6 +190,13 @@ interface GenerationRequestBody {
   modelKey?: unknown;
   chapterIds?: unknown;
   force?: unknown;
+  /** Plan 102 — workspace queue entry id this POST is fulfilling. Optional
+      for back-compat (existing callers don't set it; pre-plan-102 servers
+      ignored the field). When present, the server stores it on the
+      RunningJob and stamps every broadcast tick + the resume_from ack
+      with it so the frontend dispatcher can correlate ticks back to the
+      right queue row. */
+  queueEntryId?: unknown;
 }
 
 /* Snapshot of a character's voice-relevant attributes captured at the
@@ -246,6 +264,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const requestedIds = Array.isArray(body.chapterIds)
     ? (body.chapterIds.filter((n) => typeof n === 'number' && Number.isInteger(n)) as number[])
     : null;
+  /* Plan 102 — workspace queue entry id this POST is fulfilling. Optional;
+     null when called outside the queue surface. Stored on the RunningJob
+     and stamped on every broadcast tick + the resume_from ack. */
+  const queueEntryId = typeof body.queueEntryId === 'string' ? body.queueEntryId : null;
 
   let provider;
   try {
@@ -321,6 +343,30 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     return !chapterAudioExists(audioRoot, c.slug);
   });
   const targetIdSet = new Set(targetChapters.map((c) => c.id));
+
+  /* Plan 102 — emit `resume_from` as the FIRST event on every new subscriber
+     (cold connect AND post-reconnect after `tsx watch` restart or production
+     server bounce). Carries the snapshot of already-completed chapter ids in
+     this book so the frontend dispatcher can dedupe the upcoming
+     chapter_complete catch-up replay. When the POST carries a queueEntryId
+     (queue-driven dispatch), it rides along so the frontend can correlate
+     this resume back to the right queue row. For a subscribe-to-existing
+     POST (browser reload mid-run), the existing job's queueEntryId wins —
+     the in-flight job's id is what represents reality. Always emitted, even
+     for back-compat callers without a queueEntryId, so the frontend has a
+     single canonical signal to gate the rest of its catch-up handling. */
+  const existingForResume = inFlightByBook.get(bookId);
+  const effectiveQueueEntryId = existingForResume?.queueEntryId ?? queueEntryId;
+  const onDiskCompleted = state.chapters
+    .filter(
+      (c) => !c.excluded && !targetIdSet.has(c.id) && chapterAudioExists(audioRoot, c.slug),
+    )
+    .map((c) => c.id);
+  send({
+    type: 'resume_from',
+    ...(effectiveQueueEntryId ? { queueEntryId: effectiveQueueEntryId } : {}),
+    resumeFromCompletedChapterIds: onDiskCompleted,
+  });
 
   /* Catch-up replay: emit a chapter_complete for every chapter already on
      disk so a reconnecting client (post-pause, page refresh, etc.) snaps to
@@ -431,6 +477,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     controller,
     subscribers: new Set([{ send, res }]),
     bookId,
+    queueEntryId,
     currentChapterId: null,
     lastProgressTick: null,
     runTotal: nonExcluded.length,
