@@ -245,11 +245,11 @@ core views) — see [docs/features/archive/46-lint-format-a11y.md](docs/features
 for the rulesets, the autofix-baseline shape, and the rationale for each
 relaxed rule.
 
-**CI fast-path for doc-only PRs (plan 100)**: PRs that touch only `docs/**`,
+**CI fast-path for doc-only PRs (plan 101)**: PRs that touch only `docs/**`,
 root-level `*.md`, or `.github/*.md` skip both `verify.yml` and `e2e-mobile.yml`
 via `paths-ignore`. The PR title lint + GitHub's native conflict check still
 apply; any code-touching PR runs the full battery as before.
-See [docs/features/100-docs-only-ci-skip.md](docs/features/100-docs-only-ci-skip.md).
+See [docs/features/archive/101-docs-only-ci-skip.md](docs/features/archive/101-docs-only-ci-skip.md).
 
 Branching model and the full commit convention (allowed types, allowed scopes,
 multi-scope syntax, worktrees for parallel agent work) are documented in

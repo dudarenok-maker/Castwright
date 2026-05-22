@@ -12,10 +12,12 @@ name: E2E Mobile
 # so the warm-cache path matches. The differentiating bit is the command
 # (`test:e2e:mobile` not `verify`) plus the continue-on-error step.
 #
-# Plan 100 — doc-only PR fast-path. Same `paths-ignore` block as
+# Plan 101 — doc-only PR fast-path. Same `paths-ignore` block as
 # verify.yml: skip mobile e2e entirely on PRs that touch only doc paths,
 # since layout regressions can't be caused by markdown edits.
-# See docs/features/100-docs-only-ci-skip.md.
+# See docs/features/archive/101-docs-only-ci-skip.md. (Originally shipped
+# as plan 100; renumbered after a same-day collision with plan 100 GPU-
+# arbitration semaphore.)
 
 on:
   pull_request:

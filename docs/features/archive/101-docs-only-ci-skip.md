@@ -60,4 +60,6 @@ If the repo gains a workflow-lint harness in the future (e.g. `actionlint`), the
 
 ## Ship notes
 
-Shipped 2026-05-22 alongside the `paths-ignore` edits to `.github/workflows/verify.yml` and `.github/workflows/e2e-mobile.yml`. CONTRIBUTING.md grew a "Doc-only PR fast-path" subsection under `## Pull requests`; CLAUDE.md's `## Commit gate` section gained a one-paragraph pointer to this plan. Commit SHA + merged PR # stamped after merge (typical pattern — the merge commit is created by GitHub).
+Shipped 2026-05-22 via PR #173 (merge commit `8c02513`). Adds `paths-ignore: [docs/**, *.md, .github/*.md]` to the `pull_request:` trigger of both `.github/workflows/verify.yml` and `.github/workflows/e2e-mobile.yml`. CONTRIBUTING.md grew a "Doc-only PR fast-path" subsection under `## Pull requests`; CLAUDE.md's `## Commit gate` section gained a one-paragraph pointer to this plan.
+
+Originally drafted and merged as plan 100; renumbered to 101 in a follow-up because the existing [`100-gpu-arbitration-semaphore.md`](100-gpu-arbitration-semaphore.md) had merged via PR #171 → ship-notes #174 while PR #173's CI was running. Same convention as plan 99's renumber-from-98 in 2026-05-22.
