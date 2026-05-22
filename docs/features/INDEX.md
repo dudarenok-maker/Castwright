@@ -60,6 +60,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [10 — Profile drawer](10-profile-drawer.md) — Character edit drawer + sample preview + evidence toggle.
 - [11 — Batch character regenerate](11-batch-character-regenerate.md) — Multi-select character → chapter-range regen.
 - [95 — Editable cast aliases](95-alias-edit.md) — Per-chip X on the Profile Drawer's "Also known as" row splits a misplaced alias back into its own standalone cast member; sibling `+ Add alias` button appends a typed name. Reattribute Lines modal (new) is opened by the X-click and lists candidate sentences in the chapters where the alias originally appeared (derived from the preserved Phase-0a `chapterCast`), reusing `manuscriptActions.setSentenceCharacter` for per-sentence picks. Two new contract-internal POST routes (`cast/unlink-alias`, `cast/add-alias`).
+- [96 — Recover missing character (manual cast script)](96-recover-missing-character.md) — `node scripts/recover-missing-character.mjs <bookDir> --name <Name> --gender <m|f> --role <role>` appends a manually-typed Character entry to the book's `cast.json` and re-attributes any dialogue-tag patterns (`<Name> said/growled/...`) in `manuscript-edits.json` from `narrator` to the new id. Dry-run by default; `--apply` writes. Hotfix path for narrator-only / rarely-speaking named characters that Phase 0a missed (Sela + Garrow in Saltgrave). Paired with [plan 97](97-narrator-only-named-characters.md) which is the analyzer-side systemic fix.
 
 ### E. Manuscript editing
 
