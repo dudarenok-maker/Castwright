@@ -105,13 +105,14 @@ Run `npm start` (or `npm run dev` for HMR) in mock mode (`VITE_USE_MOCKS=true`, 
 
 ## Ship notes
 
-Plan 91 shipped in three increments. The original consolidation landed first; book-title and per-character scope landed as two follow-up PRs after user-surfaced bugs, in line with the plan's extension invariants under "Invariants to preserve".
+Plan 91 shipped in four increments. The original consolidation landed first; book-title fix, per-character scope, and the per-event → per-chapter count correction landed as three follow-up PRs after user-surfaced bugs.
 
 - **PR #119** (merge `fd9c218`, 2026-05-21): the original consolidation — `selectDriftGroupsByBook` + `groupDriftEvents` + the `(book × character × snapshot)` card collapse. DOM-node count for a 300-event modal dropped from ~7,200 to ~200. Detailed `ProfileCompareCard` preserved per the user's load-bearing-content callout. Behaviour matched the plan body as written.
 - **PR #141** (merge `b6537e5`, 2026-05-22): book-title fallback fix. The per-section "BOOK" header was rendering the raw workspace slug for cross-book drift cards when the book wasn't in this session's `bookMeta.saved`. Resolved by adding the `library.books` middle step in `src/components/layout.tsx`'s `driftGroupsByBookView` memo. Invariant added under "Invariants to preserve"; case in `src/components/layout.test.tsx`.
 - **PR #145** (merge `d2fac41`, 2026-05-22): per-character pill scope. Clicking the amber drift pill on a cast row used to open the full unscoped modal — user had to scroll to find the character. Added `ui.driftReportCharacterFilter` state field + `openDriftReportForCharacter` / `clearDriftReportCharacterFilter` actions; `DriftReportModal` now accepts `filterCharacterId` + `onClearFilter`; an in-modal "Showing X · Show all characters" banner is the escape hatch. Closing the modal also clears the filter. Invariant added under "Invariants to preserve"; 4 paired cases across `src/modals/drift-report.test.tsx` (3) + `src/views/cast.test.tsx` (1).
+- **PR #170** (merge `636e23f`, 2026-05-22): per-chapter rollup — see "Post-ship correction" below. `groupDriftEvents` gained `chapters: DriftChapterEntry[]`; the chapter strip dedupes multi-factor events on the same chapter to one row; banner + badge + toggle counts switch from per-event to per-chapter; bulk regen iterates chapters not events; bulk + per-row Dismiss still iterate every factor-event so the chapter doesn't resurface. 4 slice cases + 2 modal cases added. Overturned the original "Modal header chapter count remains per-event" invariant (dropped from the Invariants section).
 
-No behaviour delta vs. the plan body — both follow-ups landed as additive invariants under the plan's original "Invariants to preserve" section, not as scope changes.
+The first three follow-ups were additive (new invariants under "Invariants to preserve"). PR #170 is the only one that retracted an original invariant; its scope is documented under "Post-ship correction" below.
 
 ## Post-ship correction (2026-05-22)
 
@@ -131,4 +132,4 @@ Correction:
 - `group.events[]` stays exported — used by Dismiss-all and by any future surface that wants the raw event stream.
 - Per-factor labels remain visible at the card scope via the existing `group.factors` chip strip.
 
-Pinned by 4 new cases in `src/store/revisions-slice.test.ts` (`selectDriftGroupsByBook — per-chapter rollup (multi-factor dedup)`) + 2 new cases in `src/modals/drift-report.test.tsx` (`dedupes multi-factor events on the same chapter to one row + unique-chapter header count` and `single-row Dismiss on a multi-factor chapter dismisses every underlying factor-event`).
+Pinned by 4 new cases in `src/store/revisions-slice.test.ts` (`selectDriftGroupsByBook — per-chapter rollup (multi-factor dedup)`) + 2 new cases in `src/modals/drift-report.test.tsx` (`dedupes multi-factor events on the same chapter to one row + unique-chapter header count` and `single-row Dismiss on a multi-factor chapter dismisses every underlying factor-event`). Landed via PR #170, merge `636e23f`.
