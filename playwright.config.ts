@@ -44,6 +44,17 @@ export default defineConfig({
      docs/features/37-e2e-playwright.md under "Visual baselines". */
   snapshotPathTemplate: '{snapshotDir}/{platform}/{testFilePath}/{arg}{ext}',
   expect: {
+    /* Default per-assertion budget. Playwright's stock default is 5 s;
+       under sustained local contention (80+ specs sharing one Vite dev
+       server, parallel workers, route-level React.lazy chunks queueing)
+       the first-mount `toBeVisible()` after a `page.goto(...)` can race
+       past 5 s while the Suspense fallback is still painting. Bumping to
+       15 s absorbs the cold-load window without softening the signal for
+       genuine breakage — failures that actually break the UI still trip
+       within the new budget. CI keeps `workers: 1` so the bump is a
+       no-op there; locally it's the safety margin that turns a flake
+       into a reliable pass. Per-spec overrides are still honoured. */
+    timeout: 15_000,
     toHaveScreenshot: {
       animations: 'disabled',
       maxDiffPixelRatio: 0.01,
