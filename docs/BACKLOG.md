@@ -69,6 +69,16 @@ Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warnin
 - _Depends on:_ none structural. Pure tooling bump.
 - _Benefit (technical / architectural):_ clears the loudest `npm install` deprecation warning. Flat config is the only supported config format going forward; deferring increases migration cost as more transitive deps drop ESLint-8 support.
 
+### 2. Multer 1.x → 2.x security upgrade (server file uploads)
+
+Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.2: Multer 1.x is impacted by a number of vulnerabilities, which have been patched in 2.x.` on `npm install --prefix server`. Full deprecation audit notes in `~/.claude/plans/fancy-bouncing-lovelace.md`.
+
+- _What:_ Bump `multer` in `server/package.json` from `^1.4.5-lts.2` to `^2.0.x` and adapt the upload middleware to the 2.x API. The breaking changes are mostly file-size limits + the `req.file` / `req.files` shape (still backwards-compatible on the request-handler side, but `MulterError` codes and middleware error semantics changed). Manuscript upload (`server/src/routes/upload.ts` or similar) and any binary-upload e2e (`e2e/binary-upload.spec.ts`) need a once-over.
+- _Acceptance:_ `npm install --prefix server` no longer prints the `multer@1.4.5-lts.2` deprecation warning. `npm ls multer` returns `multer@^2.x`. Manuscript-upload + binary-upload e2e specs stay green. `server/src/routes/*upload*.ts` Vitest coverage extended to pin the new `MulterError` codes (specifically `LIMIT_FILE_SIZE` and `LIMIT_UNEXPECTED_FILE`, which 2.x renamed/regrouped).
+- _Key files:_ `server/package.json` (dep bump); `server/src/routes/*upload*.ts` (middleware shape); any test under `server/src/routes/*upload*.test.ts`; `e2e/binary-upload.spec.ts` (regression). Migration guide: https://github.com/expressjs/multer/blob/master/UPGRADING.md.
+- _Depends on:_ none. Pure dep bump + small middleware adaptation.
+- _Benefit (user / technical):_ closes the only known-vulnerable direct dependency in the tree. Multer 1.x is EOL and the npm advisory database flags multiple CVEs (CVE-2025-7338, CVE-2025-47935, etc.) that 2.x patches. Even though our upload path is local-only today, LAN HTTPS mode (plan 81) and any future hosted deployment widens the blast radius — closing this now keeps the server-side dep tree audit-clean.
+
 ---
 
 ## Could — nice to have, low-cost wins
@@ -351,6 +361,19 @@ Source: net-new (2026-05-22, surfaced during v1.4.0 ship). Two consecutive `npm 
 - _Key files:_ `playwright.config.ts` (worker count, default test timeout), `src/components/layout.tsx` (route-level Suspense boundary added in plan 89), `src/components/delayed-spinner.tsx` (the delay knob that's racing the assertion budget), `e2e/account-analyzer-knobs.spec.ts` + `e2e/account-models.spec.ts` + `e2e/bulk-sync-library.spec.ts` + `e2e/binary-upload.spec.ts` (the flaky specs seen in the v1.4.0 push attempts).
 - _Depends on:_ none.
 - _Benefit (dev / technical):_ removes the local-only false-positive pattern that forced a release-day `--no-verify` bypass. Keeps the pre-push gate trustworthy as the suite grows past 80 specs — without this, every future minor release risks the same dance.
+
+### 32. Track upstream-blocked deprecation chains (jsdom · archiver · @google/genai)
+
+Source: net-new (2026-05-22). Surfaced by the full `npm install` deprecation audit in `~/.claude/plans/fancy-bouncing-lovelace.md`. Pure tracking item — no direct fix; we wait for upstream majors. Companion to Should-#1 (ESLint 8 → 9, once that lands) and Should-#2 (Multer 1 → 2) which cover the chains we CAN fix today.
+
+- _What:_ Periodically re-run the deprecation audit (`npm install` at root + `npm install --prefix server` on a fresh clone, grep `npm warn deprecated`) and bump direct deps whose upstream majors drop one of these transitives. The currently-unfixable chains (as of 2026-05-22) are:
+  - `jsdom@25 → html-encoding-sniffer + whatwg-encoding@3.1.1` — deprecation says "Use @exodus/bytes". Waiting on jsdom upstream to migrate.
+  - `archiver@7 → archiver-utils → glob@10.5.0` — deprecation says "Old versions of glob are not supported". Waiting on archiver upstream to bump glob to v11+.
+  - `@google/genai@2 → google-auth-library → gaxios → node-fetch → fetch-blob → node-domexception@1.0.0` — deprecation says "Use your platform's native DOMException". Deep transitive via the Gemini SDK; waiting for `node-fetch`/`fetch-blob`/`google-auth-library` upstream to migrate to native DOMException.
+- _Acceptance:_ each time a direct dep is bumped (jsdom, archiver, or @google/genai), re-run the audit and tick off the resolved chain in this entry. Entry is removed from BACKLOG when all three resolve.
+- _Key files:_ `package.json` (jsdom + archiver direct), `server/package.json` (@google/genai direct). No source changes — purely a dep-bump tracking item.
+- _Depends on:_ upstream releases. Not on our schedule.
+- _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog that says "yes, we know, we're waiting on these three upstreams." Pairs with Should-#1 (ESLint chain) and Should-#2 (multer security) which together account for every deprecation warning surfaced on a fresh 2026-05-22 install.
 
 ---
 
