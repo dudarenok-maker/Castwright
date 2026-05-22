@@ -599,10 +599,10 @@ describe('DriftReportModal — consolidated (book × character × snapshot) grou
     expect(onDismiss).toHaveBeenCalledTimes(3);
   });
 
-  it('header summary counts every event across every group (matches today\'s shape)', () => {
-    /* The "{N} chapters flagged" line in the modal header has been the
-       canonical drift-count surface since multi-book landed; the
-       consolidation must not change this number — only the *card* count. */
+  it('header summary counts unique chapters across every group', () => {
+    /* The "{N} chapters flagged" line in the modal header counts unique
+       chapters (post-correction; the pre-correction shape that counted
+       per-factor events is preserved as an archive note on plan 91). */
     render(
       <DriftReportModal
         groupsByBook={[
@@ -622,6 +622,90 @@ describe('DriftReportModal — consolidated (book × character × snapshot) grou
     expect(screen.getByText(/5 chapters flagged/)).toBeInTheDocument();
     /* Only 2 cards though — one per snapshot. */
     expect(screen.getAllByTestId(/^drift-group-/).length).toBeGreaterThanOrEqual(2);
+  });
+
+  /* Regression for the Voice Drift Detector "duplicated chapter rows"
+     bug — multi-factor events on the same chapter must collapse to one
+     row in the chapter strip, and the header count must reflect unique
+     chapters, not per-factor events. */
+  it('dedupes multi-factor events on the same chapter to one row + unique-chapter header count', () => {
+    const onRegenerateChapter = vi.fn();
+    const onDismiss = vi.fn();
+    /* Three chapters × two factors each = 6 events. Expected: 3 chapter
+       rows, header reads "3 chapters flagged", Regen-all fires 3×, but
+       Dismiss-all still fires 6× (one per underlying factor-event). */
+    const events: DriftEvent[] = [];
+    for (const chapterId of [3, 4, 5]) {
+      events.push(
+        makeChapterEvent(chapterId, {
+          id: `drift:book-A:${chapterId}:eliza:voice`,
+          factor: 'voice',
+          severity: 'severe',
+          autoQueueable: true,
+        }),
+        makeChapterEvent(chapterId, {
+          id: `drift:book-A:${chapterId}:eliza:warmth`,
+          factor: 'warmth',
+          severity: 'moderate',
+          autoQueueable: false,
+        }),
+      );
+    }
+    render(
+      <DriftReportModal
+        groupsByBook={[group(events)]}
+        onClose={vi.fn()}
+        onRegenerateChapter={onRegenerateChapter}
+        onDismiss={onDismiss}
+      />,
+    );
+    /* Header: 3 unique chapters, not 6 events. */
+    expect(screen.getByText(/3 chapters flagged/)).toBeInTheDocument();
+    /* Expand the chapter strip and count rows: one per chapter. */
+    fireEvent.click(screen.getByText(/Show 3 chapters/i));
+    const rows = screen.getAllByTestId(/^drift-event-/);
+    /* Each chapter's representative event is the top-severity one
+       (voice → severe). That's the testid we'd see surface. */
+    expect(rows).toHaveLength(3);
+    expect(screen.getByTestId('drift-event-drift:book-A:3:eliza:voice')).toBeInTheDocument();
+    expect(screen.getByTestId('drift-event-drift:book-A:4:eliza:voice')).toBeInTheDocument();
+    expect(screen.getByTestId('drift-event-drift:book-A:5:eliza:voice')).toBeInTheDocument();
+    /* Regen-all → 3 chapter callbacks (was 6 pre-correction). */
+    fireEvent.click(screen.getByTestId(/^drift-group-regen-all-/));
+    expect(onRegenerateChapter).toHaveBeenCalledTimes(3);
+    /* Dismiss-all → 6 event callbacks (every factor-event must be
+       dismissed individually so the chapter doesn't reappear). */
+    fireEvent.click(screen.getByTestId(/^drift-group-dismiss-all-/));
+    expect(onDismiss).toHaveBeenCalledTimes(6);
+  });
+
+  it('single-row Dismiss on a multi-factor chapter dismisses every underlying factor-event', () => {
+    const onDismiss = vi.fn();
+    const events = [
+      makeChapterEvent(3, {
+        id: 'drift:book-A:3:eliza:voice',
+        factor: 'voice',
+        severity: 'severe',
+      }),
+      makeChapterEvent(3, {
+        id: 'drift:book-A:3:eliza:warmth',
+        factor: 'warmth',
+        severity: 'moderate',
+      }),
+    ];
+    render(
+      <DriftReportModal
+        groupsByBook={[group(events)]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={onDismiss}
+      />,
+    );
+    /* Single-chapter (after dedup) → inline action row, no expand. */
+    fireEvent.click(screen.getByTestId('drift-dismiss-drift:book-A:3:eliza:voice'));
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+    expect(onDismiss).toHaveBeenCalledWith('drift:book-A:3:eliza:voice');
+    expect(onDismiss).toHaveBeenCalledWith('drift:book-A:3:eliza:warmth');
   });
 });
 
