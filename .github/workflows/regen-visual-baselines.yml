@@ -86,6 +86,17 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
 
+      # Pre-create the baseline directory so the per-platform skip in
+      # `e2e/responsive/visual.spec.ts:85` + `:168` (which checks
+      # `existsSync(BASELINE_DIR)`) does NOT fire on a fresh Linux runner.
+      # Without this, all 14 visual specs are skipped before
+      # --update-snapshots has any chance to write PNGs, the artifact
+      # upload step finds nothing, and the matrix leg fails. The actual
+      # PNGs land in this same directory once playwright writes them
+      # below.
+      - name: Bootstrap baseline directory
+        run: mkdir -p e2e/linux/responsive/visual.spec.ts/${{ matrix.project }}
+
       # `--update-snapshots` writes the PNGs in-place under
       # `e2e/linux/responsive/visual.spec.ts/<project>/*.png` (per
       # snapshotPathTemplate in playwright.config.ts). `--workers=1` keeps
