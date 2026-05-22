@@ -50,7 +50,10 @@ A JSON object with exactly this shape:
     },
     // ... one entry per speaking character that appears IN THIS CHAPTER,
     //     new or recurring. Always include "narrator" if narrative prose
-    //     is present.
+    //     is present. Narrator-only named characters (bodyguards / mentors
+    //     / family referenced in narration with role markers but without
+    //     quoted dialogue) MAY appear with `detectionSource:
+    //     "narrator-mention"` — see "Narrator-only named characters" below.
   ],
 }
 ```
@@ -84,7 +87,8 @@ Do **NOT** include:
   business, not cast.
 - Characters mentioned by name in narration but who never speak in this
   chapter (a character described, remembered, talked-about, or in the
-  background of a scene without saying anything).
+  background of a scene without saying anything) — **EXCEPT** the
+  narrow class covered by "Narrator-only named characters" below.
 - Inanimate objects, places, abstract concepts, or named items.
 - Entities whose only "lines" are non-verbal sounds (growls, purrs,
   squeaks, hisses, roars) rendered as onomatopoeia. These read aloud
@@ -92,7 +96,63 @@ Do **NOT** include:
 
 Test for inclusion: can you copy a verbatim sentence from this chapter
 that is **spoken or written by** the entity? If no, they do not go on
-the roster. The narrator covers them.
+the roster — unless they qualify under the narrator-only-named-character
+rule below. Otherwise the narrator covers them.
+
+### Narrator-only named characters (canonical scene presence without quoted dialogue)
+
+Some named characters are referenced heavily in narration but rarely or
+never quote dialogue in a given chapter — bodyguards, mentors, family
+members who are physically present and central to the scene but whose
+words are summarised rather than quoted. The classic shape is a chapter
+that describes a character by name with a role/relationship marker but
+does not give them a verbatim utterance.
+
+**Include such a character on the roster** when ALL of the following are
+true:
+
+1. They have a **proper noun name** (not a descriptor — "Grizel", not
+   "the bodyguard").
+2. The name appears **at least twice** in this chapter's narration.
+3. The narration carries a **role or relationship marker** identifying
+   them as a recurring scene presence — e.g. "his bodyguard, Grizel",
+   "Grizel volunteered for the position", "Sandor, Sophie's goblin
+   bodyguard, stepped between them", "her mentor, Mr. Forkle".
+4. They do NOT have any quoted dialogue in this chapter (if they do,
+   the normal "Direct dialogue" rule applies and you skip this block).
+
+When you include such a character, emit them with:
+
+- `detectionSource: "narrator-mention"` (a new optional field — set it
+  exactly to that string).
+- `evidence: []` (no quotes to attribute).
+- All other fields as usual: `id`, `name`, `role`, `color`, `gender`,
+  `ageRange`, optional `tone`, optional `description`.
+
+Worked examples:
+
+- Chapter narration includes "He's now under the protection of Grizel,
+  who volunteered for the position." and later "Grizel and Sandor were
+  also injured during this incident." → emit
+  `{ id: "grizel", name: "Grizel", role: "Bodyguard",
+detectionSource: "narrator-mention", evidence: [] }`. The narrator
+  still covers the narration text; this entry exists so the cast has a
+  voice slot for Grizel that the user can fill later.
+- Chapter narration includes "Mr. Forkle's lessons came back to her at
+  that moment." once, with no other mentions in the chapter and no
+  role marker → DO NOT include (only one mention, no role marker; the
+  narrator covers it).
+
+The default character entry still requires `detectionSource:
+"dialogue"` when emitted via the "Only actual speakers" rule above
+(omit the field — it defaults to dialogue on the server side). The
+field exists so the downstream minor-cast fold can keep canonical
+bodyguards / mentors / family on the roster even when their attributed
+line count would normally fold them into the unknown-male / unknown-female
+buckets. Without this signal, characters like Grizel and Sandor (Lost
+Cities Neverseen — see
+`docs/features/97-narrator-only-named-characters.md`) get silently
+erased from the cast at the post-stage-2 fold pass.
 
 If a character previously had dialogue in an earlier chapter (already on
 the roster) but only appears in narration in _this_ chapter, omit them

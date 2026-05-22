@@ -48,6 +48,18 @@ export const characterSchema = z
       })
       .nullable()
       .optional(),
+    /* How Phase 0a found this character. `'dialogue'` (default): the analyzer
+       observed a verbatim utterance attributed to them. `'narrator-mention'`:
+       the analyzer saw them named by narration with a role/relationship
+       marker ("his bodyguard, Grizel"; "Sandor, Sophie's goblin bodyguard")
+       but no quoted dialogue. The minor-cast fold treats these differently
+       — narrator-mention entries with a protected role survive the
+       <3-lines threshold so canonical-but-rarely-quoted characters
+       (bodyguards / mentors / family) stay on the roster instead of being
+       silently bucketed into unknown-male/unknown-female. Field is
+       optional + additive: existing analyses lack it (undefined treated
+       as 'dialogue' by the fold). */
+    detectionSource: z.enum(['dialogue', 'narrator-mention']).optional(),
   })
   .strict();
 
