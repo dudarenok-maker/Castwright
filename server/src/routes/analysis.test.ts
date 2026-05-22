@@ -1163,14 +1163,16 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
           id: 'Wren',
           name: 'Wren',
           aliases: ['Foster'],
-          fromBookTitle: 'The Hollow Tide',
+          /* Deduped roster: Wren appears in two prior books, so the
+             array carries both titles. */
+          fromBookTitles: ['The Hollow Tide', 'Exile'],
         },
-        { id: 'Marlow', name: 'Marlow', fromBookTitle: 'the Coalfall Commission' },
+        { id: 'Marlow', name: 'Marlow', fromBookTitles: ['the Coalfall Commission'] },
         {
           id: 'Oduvan',
           name: 'Oduvan',
           description: 'A medical professional',
-          fromBookTitle: 'The Hollow Tide',
+          fromBookTitles: ['The Hollow Tide'],
         },
       ],
     );
@@ -1182,6 +1184,11 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
     expect(inbox).toContain('"id": "Oduvan"');
     expect(inbox).toContain('The Hollow Tide');
     expect(inbox).toContain('the Coalfall Commission');
+    /* The plural fromBookTitles renders as an array — important so the
+       model sees that Wren spans two volumes, not just one. */
+    expect(inbox).toMatch(/"fromBookTitles":\s*\[\s*"The Hollow Tide",\s*"Exile"\s*\]/);
+    /* Singular legacy field must NOT appear in the rendered JSON. */
+    expect(inbox).not.toMatch(/"fromBookTitle":/);
     /* And the reuse-verbatim guidance is rendered so the model knows
        NOT to invent a new id when a chapter speaker matches. */
     expect(inbox).toMatch(/reuse their `id` \*\*verbatim\*\*/i);
@@ -1207,13 +1214,17 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
       'Book',
       { id: 1, title: 'Chapter 1', body: 'Body.' },
       [],
-      [{ id: 'lone-wolf', name: 'Lone Wolf', aliases: [], fromBookTitle: 'Earlier Book' }],
+      [{ id: 'lone-wolf', name: 'Lone Wolf', aliases: [], fromBookTitles: ['Earlier Book'] }],
     );
     /* The JSON.stringify-with-undefined trick: empty aliases array maps
        to undefined and disappears from the serialized JSON. Keeps the
        per-chapter prompt small on long series. */
     expect(inbox).toContain('"id": "lone-wolf"');
     expect(inbox).not.toContain('"aliases"');
+    /* Single-entry fromBookTitles still renders as a one-element array,
+       not unwrapped — the model handles either shape but the schema
+       stays consistent for downstream prompt-stability tests. */
+    expect(inbox).toMatch(/"fromBookTitles":\s*\[\s*"Earlier Book"\s*\]/);
   });
 });
 
