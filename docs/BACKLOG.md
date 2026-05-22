@@ -59,7 +59,105 @@ Source: net-new (2026-05-20). Captured during planning of the next full version 
 
 ## Should — important, not blocking ship
 
-### 1. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
+### 1. Investigate post-plan-89 e2e contention pattern on local pre-push
+
+Source: net-new (2026-05-22, surfaced during v1.4.0 ship). Two consecutive `npm run verify` pre-push runs failed with different specs flaking each time (`account-analyzer-knobs`, `account-models`, `bulk-sync-library`, `binary-upload`); each failing spec assertion timed out at 10 s waiting on a `getByTestId(...)` while the page yaml showed the route-level Suspense `Loading…` fallback. Same code, same machine: PR #122 CI verify on Ubuntu green (80/80 specs), worktree run at `wt-release-v1-4-0` green (80/80), each failing spec re-run in isolation green (`account-analyzer-knobs.spec.ts` → 5/5 in 28.7 s). v1.4.0 shipped via a one-shot `--no-verify` push with the release.yml cross-OS verify matrix as the safety net.
+
+- _What:_ Diagnose why the local Windows pre-push run flakes when 80+ specs share one Vite dev-server, while the same harness on a fresh GitHub Actions runner doesn't. Two hypotheses worth pulling on: (a) plan 89's route-level `React.lazy` + delayed-spinner Suspense fallback made first-paint sensitive to contention — lazy chunk requests can queue behind other tests' fetches long enough to bust the 10 s `toBeVisible` budget; (b) the local box runs heavier OS-level competing processes (browser tabs, indexers) than a fresh CI VM. Fix options to consider: lift the 10 s timeout for any first-mount `toBeVisible` on lazy-loaded routes (cleanest, lowest-risk), pre-warm the route bundle at suite start (effective but couples specs), or cap playwright workers below the default ~50% CPU on local Windows boxes (sledgehammer).
+- _Acceptance:_ either (a) raise per-spec first-mount timeouts so two consecutive `npm run verify` runs on the local box never flake on a clean checkout, or (b) document the contention threshold and codify the `--workers=N` cap in `playwright.config.ts` so the local pre-push gate matches CI behaviour. The release-day workaround (`--no-verify` plus release.yml cross-OS safety net) should not be the standard answer for a non-release push.
+- _Key files:_ `playwright.config.ts` (worker count, default test timeout), `src/components/layout.tsx` (route-level Suspense boundary added in plan 89), `src/components/delayed-spinner.tsx` (the delay knob that's racing the assertion budget), `e2e/account-analyzer-knobs.spec.ts` + `e2e/account-models.spec.ts` + `e2e/bulk-sync-library.spec.ts` + `e2e/binary-upload.spec.ts` (the flaky specs seen in the v1.4.0 push attempts).
+- _Depends on:_ none.
+- _Benefit (dev / technical):_ removes the local-only false-positive pattern that forced a release-day `--no-verify` bypass. Keeps the pre-push gate trustworthy as the suite grows past 80 specs — without this, every future minor release risks the same dance.
+
+### 2. Linux visual baselines for CI
+
+Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e/visual.spec.ts` now skips on platforms with no committed baselines so PR Verify can go green, but PR CI then carries zero visual-regression coverage. Until Linux baselines land, only local Windows runs catch chromium drift.
+
+- _What:_ Commit `e2e/linux/visual.spec.ts/*.png` (12 PNGs matching the Win32 set). Two paths: (a) generate locally via Docker / WSL with `playwright test --update-snapshots visual.spec.ts`; (b) add a `workflow_dispatch` GitHub Action that runs `--update-snapshots` on an ubuntu-latest runner and opens a PR with the artefact, so future regen doesn't need a Linux box. The directory-level skip in `e2e/visual.spec.ts` re-enables the spec on Linux automatically the moment the directory exists.
+- _Acceptance:_ Next PR's Verify run is green on all 12 visual specs (no skip messages). `docs/features/archive/37-e2e-playwright.md` "Per-platform skip" subsection loses the "Win32 only" caveat. Bonus: if the workflow_dispatch path is taken, document it under "Regenerate workflow".
+- _Key files:_ `e2e/linux/visual.spec.ts/` (new directory); optional `.github/workflows/regen-visual-baselines.yml`; `docs/features/archive/37-e2e-playwright.md` "Visual baselines" section.
+- _Benefit (technical):_ restores Verify as a real merge gate. Today PR CI's only red signal is "visual baselines missing" — once those land, a red Verify means real regression and reviewers stop ignoring it.
+
+### 3. Generation SSE survives Node hot-reload during dev
+
+Source: net-new (2026-05-21). Surfaced while smoke-testing PR #107 — a `tsx` restart killed the active SSE bridge and the frontend showed "Worker has gone quiet · 67s" while the sidecar kept synthesising in the background.
+
+- _What:_ When the Node server hot-reloads in dev (`tsx watch` triggered by any file change under `server/src/`), the open `/api/generation/stream` SSE connection dies with it. The sidecar keeps synthesising for as long as the in-flight HTTP request is alive, but the frontend's `generation-stream-middleware` sees no more `progress` ticks and surfaces the "Worker has gone quiet" stall banner after `STALL_THRESHOLD_MS`. Auto-reconnect on the SSE consumer side (re-open against the active book's stream endpoint if it drops while a generation is alive) would let the dev keep editing without manually Pause/Resume-ing every time. Two-layer fix: the consumer reopens; the server-side stream emits an idempotent `resume_from` ack so a reconnect doesn't replay completed chapters. Production users hit this rarely — only on crash recovery — but the seam is exactly the same.
+- _Acceptance:_ Edit any file under `server/src/` during a live generation; `tsx` restarts the Node server; within ~3 s the frontend re-establishes the SSE and the chapter list keeps advancing without a "Worker has gone quiet" banner. The book's state.json reflects no double-progress for already-completed chapters.
+- _Key files:_ `src/store/generation-stream-middleware.ts` (reconnect logic — today the middleware treats the EventSource ending as a terminal stop); `src/lib/api.ts` `realStreamGeneration` (handle source error/end events as recoverable when a book is mid-flight); `server/src/routes/generation.ts` (idempotent resume — emit a snapshot of completed chapters first, then resume per-chapter `progress`).
+- _Depends on:_ none. Self-contained inside the streaming surface.
+- _Benefit (dev / technical):_ no more false "stalled" banners during interactive development. Same fix incidentally covers production crash-recovery (Node OOM, manual restart) so users running long books survive a sidecar/server bounce without losing the visible progress thread.
+
+### 4. Mobile Playwright worker count tuning (browser-launch contention fix)
+
+Source: net-new (2026-05-21). Surfaced during plan 81 wave 5 development.
+
+- _What:_ Running 3 Playwright projects in parallel with the default worker count (~CPU/2) exhausted process slots on the dev box and caused browser-launch timeouts on mobile/tablet specs (real failures: 3 hard, 7 flaky on retry). Reduce `workers` to 1 or 2 for the mobile suite specifically — either via `playwright.config.ts` per-project `workers` override (if Playwright supports per-project workers; if not, via a separate config file invoked by `test:e2e:mobile`).
+- _Acceptance:_ `npm run test:e2e:mobile` runs end-to-end with no browser-launch timeouts on the dev box (current state: ~3/24 fail with `TimeoutError: browserType.launch: Timeout 180000ms exceeded`). Total wall-clock may increase slightly but reliability is more important here than speed for the mobile suite.
+- _Key files:_ `playwright.config.ts` (workers field, or per-project workers if 1.40+ supports it); maybe a new `playwright.mobile.config.ts` if a separate config is cleaner.
+- _Depends on:_ plan 81 shipped.
+- _Benefit (technical):_ unblocks Should #5 — the non-blocking CI workflow needs reliable mobile e2e to be useful as a signal source.
+
+### 5. Non-blocking GH Actions workflow for `npm run test:e2e:mobile`
+
+Source: net-new (2026-05-21). Spun off from plan 81 wave 5 (PR #92).
+
+- _What:_ Add a `.github/workflows/e2e-mobile.yml` job that runs `npm run test:e2e:mobile` on every PR targeting `main`, set `continue-on-error: true` so it shows status without blocking merges. Visibility-only — the pre-push gate stays chromium-only (under the 5 min budget that plan 81 set).
+- _Acceptance:_ A PR that breaks mobile-chrome layout shows a red but non-blocking check on the PR page. A PR that doesn't touch UI shows green. Failure status surfaces in the merge UI as "Mobile e2e — failing (non-blocking)".
+- _Key files:_ new `.github/workflows/e2e-mobile.yml` mirroring `verify.yml`'s setup (node, npm cache, chromium install) but invoking `npm run test:e2e:mobile` instead of `npm run verify`. Concurrency `cancel-in-progress` per PR ref to avoid stacking runs.
+- _Depends on:_ plan 81 shipped (which added the `test:e2e:mobile` script); Should #4 (worker tuning) for the signal to be reliable.
+- _Benefit (technical):_ catches mobile regressions in PRs without blowing the pre-push budget. Two-tier gate — mobile is opt-in for local iteration but mandatory-visibility in CI.
+
+### 6. Bless mobile + tablet visual-snapshot baselines per Playwright project
+
+Source: net-new (2026-05-21). Plan 81 wave 5 follow-up.
+
+- _What:_ Run `npx playwright test --update-snapshots --project=mobile-chrome` + `--project=tablet-chrome` to capture per-project visual baselines for the six `visual.spec.ts` views (library, upload, analysing, confirm, ready/manuscript, listen). Commit them under `e2e/win32/visual.spec.ts/<project>/<view>.png` per the existing snapshot-path template. Promote `visual.spec.ts` to assert against the captured baselines on all three projects (today it only runs at chromium).
+- _Acceptance:_ `npm run test:e2e:mobile` captures + diffs visual snapshots; a layout drift at any viewport fails the assertion. Per-platform per-project paths: `e2e/win32/visual.spec.ts/mobile-chrome/library.png` etc.
+- _Key files:_ `e2e/visual.spec.ts` (remove the chromium-only assumption; gate test.skip on the per-project baseline dir per the existing `BASELINE_DIR` pattern); regenerated PNGs in `e2e/{win32,linux,darwin}/visual.spec.ts/{mobile-chrome,tablet-chrome}/`; `playwright.config.ts:45` `snapshotPathTemplate` already includes `{platform}` — extend to `{platform}/{project}` if needed.
+- _Depends on:_ plan 81 shipped; Should #4 (worker tuning) so the snapshot run completes without timeout flake.
+- _Benefit (technical):_ pixel-level mobile/tablet regression net. Today the no-overflow assertion catches layout breakage but not visual drift; this entry closes that gap.
+
+### 7. GPU-arbitration semaphore for parallel Claude Code sessions
+
+Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-new.mjs` resolves port collisions but leaves GPU/VRAM contention as a manual-coordination concern documented in CONTRIBUTING.md.
+
+- _What:_ Add a small server-side semaphore around heavy-GPU operations (analyzer's chat completion path + sidecar's `/synthesize`) so concurrent requests from N parallel sessions get serialized rather than fighting over VRAM on an 8 GB GPU. Default concurrency = 1 GPU operation at a time; configurable via `GPU_CONCURRENCY` env var. Surface the queue depth in the existing top-bar pill state so the user sees "Queued (1 ahead)".
+- _Acceptance:_ Two parallel sessions both kick off `/analyse` → second request waits in queue until first completes (no VRAM spill, no silent OOM). The top-bar pill in the waiting session shows "Queued". New server Vitest spec covers the semaphore behaviour; existing tests stay green.
+- _Key files:_ new `server/src/gpu/semaphore.ts`; `server/src/analyzer/ollama.ts` (wrap chat calls); `server/src/routes/sidecar-synth.ts` (wrap synth proxy); `src/components/layout.tsx` (consume queue-depth from existing pill polling).
+- _Depends on:_ none. Pairs with the worktree parallel-sessions tooling — without the semaphore, users must queue heavy operations by hand per the CONTRIBUTING.md "GPU + shared-resource caveats" note.
+- _Benefit (user):_ removes the silent VRAM-spillover-to-RAM slowdown when two sessions hit the analyzer or sidecar concurrently. Today a parallel run can take 5–10× longer than serial because both processes thrash the GPU.
+
+### 8. In-app LAN HTTPS banner under dev settings
+
+Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
+
+- _What:_ Account settings card showing the current LAN HTTPS URL (from `GET /api/export/lan` when LAN_HTTPS=1) with one-click "Copy URL" + "Install cert on phone" links. The latter opens a doc / route that shows the QR code that `npm run install:cert-mobile` prints to the terminal today. Dev-mode only — hidden in production single-user environments.
+- _Acceptance:_ When LAN_HTTPS=1 is set on the server, the Account view shows a "LAN access" card with the live HTTPS URL + a QR code linking to `/cert/root.crt`. Tapping "Copy URL" puts the URL in the clipboard.
+- _Key files:_ new `src/components/lan-access-card.tsx`; `src/views/account.tsx` (or wherever account settings render) to mount the card; `src/lib/api.ts` to wrap `GET /api/export/lan` if not already wrapped.
+- _Depends on:_ plan 81 shipped.
+- _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
+
+### 9. Cross-book voice compare
+
+Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
+
+- _What:_ Lift the cross-book guard. When the two selected voices belong to different `bookId`s, fetch each book's cast (one of them may be the open book — short-circuit) and pass both characters into `CompareCastModal`. Decide and document: do we route saves back to each character's source book's cast slice, or refuse the save and surface a "viewing only" banner?
+- _Acceptance:_ The Compare button enables for cross-book pairs; the modal opens with both characters; the Save behaviour is documented and tested. The e2e gains a cross-book pair assertion.
+- _Key files:_ `src/views/voices.tsx`; `src/store/cast-slice.ts` (Save routing); `src/modals/compare-cast-modal.tsx` (if the viewing-only banner is needed).
+- _Depends on:_ plan 60 shipped (same on-demand fetch machinery is already in place; this entry lifts the cross-book guard and decides foreign-book save routing).
+- _Benefit (user):_ enables A/B for users who reuse the same TTS voice across books — e.g. comparing the same narrator across two books in a series to spot drift.
+
+### 10. Streaming audio for live playback during chapter generation
+
+Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
+
+- _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
+- _Acceptance:_ Generating a chapter shows audio progress under the play cursor before the chapter completes. Existing per-chapter file is still written atomically at the end.
+- _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
+- _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
+
+### 11. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
 
 Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warning on `npm install`; full triage in `~/.claude/plans/fancy-bouncing-lovelace.md`.
 
@@ -69,7 +167,7 @@ Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warnin
 - _Depends on:_ none structural. Pure tooling bump.
 - _Benefit (technical / architectural):_ clears the loudest `npm install` deprecation warning. Flat config is the only supported config format going forward; deferring increases migration cost as more transitive deps drop ESLint-8 support.
 
-### 2. Multer 1.x → 2.x security upgrade (server file uploads)
+### 12. Multer 1.x → 2.x security upgrade (server file uploads)
 
 Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.2: Multer 1.x is impacted by a number of vulnerabilities, which have been patched in 2.x.` on `npm install --prefix server`. Full deprecation audit notes in `~/.claude/plans/fancy-bouncing-lovelace.md`.
 
@@ -85,26 +183,17 @@ Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.
 
 Ordered roughly: audio-quality magic → multibook invariants → workflow stubs → cast/revisions → voice library → ops & CI → distribution → listener-app handoffs → passive tracking.
 
-### 1. Streaming audio for live playback during chapter generation
-
-Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
-
-- _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
-- _Acceptance:_ Generating a chapter shows audio progress under the play cursor before the chapter completes. Existing per-chapter file is still written atomically at the end.
-- _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
-- _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
-
-### 2. Per-segment regen consumer for `revisions.acceptedSelections`
+### 1. Per-segment regen consumer for `revisions.acceptedSelections`
 
 Source: plan 20 close-out (2026-05-18). The `revisions.acceptedSelections` map is persisted by `revisionsActions.acceptRevision` but no in-app code reads it back — per-segment splicing of accepted takes was explicitly "Out of scope" for plan 20 v1, and remains so in the v1 close-out.
 
 - _What:_ Add a per-segment regen path that consumes `acceptedSelections[revisionId]` to re-render only the segments the user flipped to 'B' (the new take) while preserving 'A' (the original) segments verbatim. This requires (a) a server endpoint that accepts `{ revisionId, segmentSelections }` and dispatches per-segment synth, (b) a segments-manifest merge step that interleaves the two takes on disk, (c) a frontend trigger from the revision-diff player's "Commit selection" action.
 - _Acceptance:_ Open a pending revision, toggle segments 3 + 7 to 'B' (others 'A'), click "Commit selection" → the chapter MP3 is rewritten with segments 3 + 7 re-rendered from the new take, all other segments byte-identical to the preserved (A) take. Server Vitest covers the manifest merge + per-segment synth; frontend Vitest covers the action dispatch shape; e2e covers the audition-then-commit flow.
 - _Key files:_ new `server/src/routes/revisions-commit-segments.ts`; `server/src/tts/synthesise-chapter.ts` (extend for per-segment paths); `src/views/revision-diff.tsx` (dispatch through the new endpoint); `src/store/revisions-slice.ts` (mark the revision as committed once the segment-level synth completes).
-- _Depends on:_ plan 20 shipped (acceptedSelections persistence is already on disk). Pairs with Could #5 (multi-step rollback / snapshot-per-entry) — the timeline becomes meaningful once per-segment commits land separately from full regens.
+- _Depends on:_ plan 20 shipped (acceptedSelections persistence is already on disk). Pairs with Could #2 (multi-step rollback / snapshot-per-entry) — the timeline becomes meaningful once per-segment commits land separately from full regens.
 - _Benefit (user):_ true segment-level revision control. Today accept/reject is whole-revision swap — if the user likes 9 of 10 segments in the new take but wants segment 7 from the original, they have to regenerate the whole chapter under different prompts to recover that one segment. This closes the loop the slice has been quietly capturing since plan 20 v1.
 
-### 3. Multi-step rollback / snapshot-per-entry (revision history)
+### 2. Multi-step rollback / snapshot-per-entry (revision history)
 
 Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ships the read-only history view; this entry covers the multi-step rollback that needs snapshot-per-entry storage.
 
@@ -114,7 +203,7 @@ Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ship
 - _Depends on:_ plan 55 shipped (slice plumbing already on disk).
 - _Benefit (user):_ closes the centerpiece feature from plan 55 — true non-linear undo per chapter. Today the timeline modal is read-only; the user has to walk through accept/reject in the A/B player.
 
-### 4. Batch voice-replace across all books
+### 3. Batch voice-replace across all books
 
 Source: net-new (2026-05-18).
 
@@ -124,46 +213,17 @@ Source: net-new (2026-05-18).
 - _Depends on:_ none.
 - _Benefit (user):_ cross-book voice consistency without per-book re-casting. Common need when switching a recurring narrator across a series.
 
-### 5. Cross-book voice compare
-
-Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
-
-- _What:_ Lift the cross-book guard. When the two selected voices belong to different `bookId`s, fetch each book's cast (one of them may be the open book — short-circuit) and pass both characters into `CompareCastModal`. Decide and document: do we route saves back to each character's source book's cast slice, or refuse the save and surface a "viewing only" banner?
-- _Acceptance:_ The Compare button enables for cross-book pairs; the modal opens with both characters; the Save behaviour is documented and tested. The e2e gains a cross-book pair assertion.
-- _Key files:_ `src/views/voices.tsx`; `src/store/cast-slice.ts` (Save routing); `src/modals/compare-cast-modal.tsx` (if the viewing-only banner is needed).
-- _Depends on:_ plan 60 shipped (same on-demand fetch machinery is already in place; this entry lifts the cross-book guard and decides foreign-book save routing).
-- _Benefit (user):_ enables A/B for users who reuse the same TTS voice across books — e.g. comparing the same narrator across two books in a series to spot drift.
-
-### 6. Linux visual baselines for CI
-
-Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e/visual.spec.ts` now skips on platforms with no committed baselines so PR Verify can go green, but PR CI then carries zero visual-regression coverage. Until Linux baselines land, only local Windows runs catch chromium drift.
-
-- _What:_ Commit `e2e/linux/visual.spec.ts/*.png` (12 PNGs matching the Win32 set). Two paths: (a) generate locally via Docker / WSL with `playwright test --update-snapshots visual.spec.ts`; (b) add a `workflow_dispatch` GitHub Action that runs `--update-snapshots` on an ubuntu-latest runner and opens a PR with the artefact, so future regen doesn't need a Linux box. The directory-level skip in `e2e/visual.spec.ts` re-enables the spec on Linux automatically the moment the directory exists.
-- _Acceptance:_ Next PR's Verify run is green on all 12 visual specs (no skip messages). `docs/features/archive/37-e2e-playwright.md` "Per-platform skip" subsection loses the "Win32 only" caveat. Bonus: if the workflow_dispatch path is taken, document it under "Regenerate workflow".
-- _Key files:_ `e2e/linux/visual.spec.ts/` (new directory); optional `.github/workflows/regen-visual-baselines.yml`; `docs/features/archive/37-e2e-playwright.md` "Visual baselines" section.
-- _Benefit (technical):_ restores Verify as a real merge gate. Today PR CI's only red signal is "visual baselines missing" — once those land, a red Verify means real regression and reviewers stop ignoring it.
-
-### 7. Auto-backup scheduling for `state.json`
+### 4. Auto-backup scheduling for `state.json`
 
 Source: net-new (2026-05-18).
 
 - _What:_ Add a background backup job that on configurable cadence (daily / weekly) writes a snapshot of `<workspace>/<bookId>/.audiobook/state.json` to `<workspace>/.backups/<bookId>/<YYYYMMDD-HHMMSS>.json`. Keep last N (configurable, default 14). Manual "Restore from backup" affordance in workspace settings.
 - _Acceptance:_ Set daily backups → 14 daily snapshots accumulate in `.backups/`, oldest auto-pruned. Restore from snapshot → state.json reverted to that point; library view refreshes. New server Vitest spec covers the cron-like cadence + prune.
-- _Key files:_ new `server/src/workspace/auto-backup.ts`; `server/src/workspace/scan.ts` (initial trigger on server start); new settings affordance under Could #13 power-user panel (or inline in `src/views/library.tsx` if shipped first).
+- _Key files:_ new `server/src/workspace/auto-backup.ts`; `server/src/workspace/scan.ts` (initial trigger on server start); new settings affordance under Could #5 power-user panel (or inline in `src/views/library.tsx` if shipped first).
 - _Depends on:_ none.
 - _Benefit (user):_ disaster recovery without manual intervention. Particularly valuable on Windows where OneDrive sync conflicts can occasionally corrupt `state.json` mid-write.
 
-### 8. GPU-arbitration semaphore for parallel Claude Code sessions
-
-Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-new.mjs` resolves port collisions but leaves GPU/VRAM contention as a manual-coordination concern documented in CONTRIBUTING.md.
-
-- _What:_ Add a small server-side semaphore around heavy-GPU operations (analyzer's chat completion path + sidecar's `/synthesize`) so concurrent requests from N parallel sessions get serialized rather than fighting over VRAM on an 8 GB GPU. Default concurrency = 1 GPU operation at a time; configurable via `GPU_CONCURRENCY` env var. Surface the queue depth in the existing top-bar pill state so the user sees "Queued (1 ahead)".
-- _Acceptance:_ Two parallel sessions both kick off `/analyse` → second request waits in queue until first completes (no VRAM spill, no silent OOM). The top-bar pill in the waiting session shows "Queued". New server Vitest spec covers the semaphore behaviour; existing tests stay green.
-- _Key files:_ new `server/src/gpu/semaphore.ts`; `server/src/analyzer/ollama.ts` (wrap chat calls); `server/src/routes/sidecar-synth.ts` (wrap synth proxy); `src/components/layout.tsx` (consume queue-depth from existing pill polling).
-- _Depends on:_ none. Pairs with the worktree parallel-sessions tooling — without the semaphore, users must queue heavy operations by hand per the CONTRIBUTING.md "GPU + shared-resource caveats" note.
-- _Benefit (user):_ removes the silent VRAM-spillover-to-RAM slowdown when two sessions hit the analyzer or sidecar concurrently. Today a parallel run can take 5–10× longer than serial because both processes thrash the GPU.
-
-### 9. Keyboard shortcuts / power-user tuning panel
+### 5. Keyboard shortcuts / power-user tuning panel
 
 Source: net-new (2026-05-18).
 
@@ -173,7 +233,7 @@ Source: net-new (2026-05-18).
 - _Depends on:_ none.
 - _Benefit (technical / accessibility):_ power-user tuning surfaces today's hardcoded values; keyboard navigation closes an accessibility gap.
 
-### 10. Windows installer (Inno Setup or NSIS) wrapping the release zip
+### 6. Windows installer (Inno Setup or NSIS) wrapping the release zip
 
 Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
 
@@ -183,7 +243,7 @@ Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-pack
 - _Depends on:_ Should #2 shipped (the installer wraps the existing zip — no point building before the zip pipeline exists).
 - _Benefit (user):_ friction-free install for non-developers. Today's Should #2 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
 
-### 11. Docker image + compose file for headless / Linux deployment
+### 7. Docker image + compose file for headless / Linux deployment
 
 Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
 
@@ -193,7 +253,7 @@ Source: net-new (2026-05-18). Deferred follow-up to Should #2 ([`49-release-pack
 - _Depends on:_ Should #2 shipped (reuses the same tag-push trigger and version source); resolving the workspace-mount question.
 - _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
 
-### 12. Apple Books (iOS / macOS) handoff modal
+### 8. Apple Books (iOS / macOS) handoff modal
 
 Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 
@@ -203,17 +263,17 @@ Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 - _Depends on:_ plan 18b shipped.
 - _Benefit (user):_ closes one more "Coming soon" tile.
 
-### 13. Plex (self-hosted media server) handoff modal
+### 9. Plex (self-hosted media server) handoff modal
 
 Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 
 - _What:_ Wire Plex tile with two paths: (a) instructions for manual upload to a Plex server library, (b) optional direct upload via the Plex API if the user has provided a Plex token (settings field). Path (b) is the most-complex of the four — Plex auth + library scan trigger.
 - _Acceptance:_ Click tile → modal shows manual upload steps. If a Plex token is configured, an "Upload directly" button hits the Plex API. Vitest covers both modes.
-- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`; `src/views/settings.tsx` (Plex token field — see Could #13 power-user panel); new `server/src/export/plex.ts` for the optional upload path.
-- _Depends on:_ plan 18b shipped; ideally Could #13 (power-user panel) for the token storage.
+- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`; `src/views/settings.tsx` (Plex token field — see Could #5 power-user panel); new `server/src/export/plex.ts` for the optional upload path.
+- _Depends on:_ plan 18b shipped; ideally Could #5 (power-user panel) for the token storage.
 - _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
 
-### 14. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
+### 10. PocketBook Cloud direct upload OR `@pbsync.com` email gateway
 
 Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 
@@ -222,7 +282,7 @@ Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 - _Key files:_ new tile config in `src/data/listener-apps.ts`; `src/modals/export-audiobook.tsx`; `server/src/export/` for any new transport.
 - _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
 
-### 15. Single-poll TTS lifecycle for a third consumer (tracking)
+### 11. Single-poll TTS lifecycle for a third consumer (tracking)
 
 Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
 
@@ -232,47 +292,7 @@ Source: [`30-global-model-control.md`](features/30-global-model-control.md) "Whe
 - _Depends on:_ an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
 - _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
 
-### 16. Non-blocking GH Actions workflow for `npm run test:e2e:mobile`
-
-Source: net-new (2026-05-21). Spun off from plan 81 wave 5 (PR #92).
-
-- _What:_ Add a `.github/workflows/e2e-mobile.yml` job that runs `npm run test:e2e:mobile` on every PR targeting `main`, set `continue-on-error: true` so it shows status without blocking merges. Visibility-only — the pre-push gate stays chromium-only (under the 5 min budget that plan 81 set).
-- _Acceptance:_ A PR that breaks mobile-chrome layout shows a red but non-blocking check on the PR page. A PR that doesn't touch UI shows green. Failure status surfaces in the merge UI as "Mobile e2e — failing (non-blocking)".
-- _Key files:_ new `.github/workflows/e2e-mobile.yml` mirroring `verify.yml`'s setup (node, npm cache, chromium install) but invoking `npm run test:e2e:mobile` instead of `npm run verify`. Concurrency `cancel-in-progress` per PR ref to avoid stacking runs.
-- _Depends on:_ plan 81 shipped (which added the `test:e2e:mobile` script).
-- _Benefit (technical):_ catches mobile regressions in PRs without blowing the pre-push budget. Two-tier gate — mobile is opt-in for local iteration but mandatory-visibility in CI.
-
-### 17. Bless mobile + tablet visual-snapshot baselines per Playwright project
-
-Source: net-new (2026-05-21). Plan 81 wave 5 follow-up.
-
-- _What:_ Run `npx playwright test --update-snapshots --project=mobile-chrome` + `--project=tablet-chrome` to capture per-project visual baselines for the six `visual.spec.ts` views (library, upload, analysing, confirm, ready/manuscript, listen). Commit them under `e2e/win32/visual.spec.ts/<project>/<view>.png` per the existing snapshot-path template. Promote `visual.spec.ts` to assert against the captured baselines on all three projects (today it only runs at chromium).
-- _Acceptance:_ `npm run test:e2e:mobile` captures + diffs visual snapshots; a layout drift at any viewport fails the assertion. Per-platform per-project paths: `e2e/win32/visual.spec.ts/mobile-chrome/library.png` etc.
-- _Key files:_ `e2e/visual.spec.ts` (remove the chromium-only assumption; gate test.skip on the per-project baseline dir per the existing `BASELINE_DIR` pattern); regenerated PNGs in `e2e/{win32,linux,darwin}/visual.spec.ts/{mobile-chrome,tablet-chrome}/`; `playwright.config.ts:45` `snapshotPathTemplate` already includes `{platform}` — extend to `{platform}/{project}` if needed.
-- _Depends on:_ plan 81 shipped.
-- _Benefit (technical):_ pixel-level mobile/tablet regression net. Today the no-overflow assertion catches layout breakage but not visual drift; this entry closes that gap.
-
-### 18. Mobile Playwright worker count tuning (browser-launch contention fix)
-
-Source: net-new (2026-05-21). Surfaced during plan 81 wave 5 development.
-
-- _What:_ Running 3 Playwright projects in parallel with the default worker count (~CPU/2) exhausted process slots on the dev box and caused browser-launch timeouts on mobile/tablet specs (real failures: 3 hard, 7 flaky on retry). Reduce `workers` to 1 or 2 for the mobile suite specifically — either via `playwright.config.ts` per-project `workers` override (if Playwright supports per-project workers; if not, via a separate config file invoked by `test:e2e:mobile`).
-- _Acceptance:_ `npm run test:e2e:mobile` runs end-to-end with no browser-launch timeouts on the dev box (current state: ~3/24 fail with `TimeoutError: browserType.launch: Timeout 180000ms exceeded`). Total wall-clock may increase slightly but reliability is more important here than speed for the mobile suite.
-- _Key files:_ `playwright.config.ts` (workers field, or per-project workers if 1.40+ supports it); maybe a new `playwright.mobile.config.ts` if a separate config is cleaner.
-- _Depends on:_ plan 81 shipped.
-- _Benefit (technical):_ unblocks #20 — the non-blocking CI workflow needs reliable mobile e2e to be useful as a signal source.
-
-### 19. In-app LAN HTTPS banner under dev settings
-
-Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
-
-- _What:_ Account settings card showing the current LAN HTTPS URL (from `GET /api/export/lan` when LAN_HTTPS=1) with one-click "Copy URL" + "Install cert on phone" links. The latter opens a doc / route that shows the QR code that `npm run install:cert-mobile` prints to the terminal today. Dev-mode only — hidden in production single-user environments.
-- _Acceptance:_ When LAN_HTTPS=1 is set on the server, the Account view shows a "LAN access" card with the live HTTPS URL + a QR code linking to `/cert/root.crt`. Tapping "Copy URL" puts the URL in the clipboard.
-- _Key files:_ new `src/components/lan-access-card.tsx`; `src/views/account.tsx` (or wherever account settings render) to mount the card; `src/lib/api.ts` to wrap `GET /api/export/lan` if not already wrapped.
-- _Depends on:_ plan 81 shipped.
-- _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
-
-### 20. Broad hover-affordance audit with `coarse-pointer:` Tailwind variant
+### 12. Broad hover-affordance audit with `coarse-pointer:` Tailwind variant
 
 Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
 
@@ -282,7 +302,7 @@ Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances.
 
-### 21. Within-chapter sentence parallelism
+### 13. Within-chapter sentence parallelism
 
 Source: net-new (2026-05-21). Spun off from the perf-tuning survey at `~/.claude/plans/want-to-focus-this-bright-donut.md` (item A2). Stacks on plan 87.
 
@@ -292,7 +312,7 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey at `~/.claude
 - _Depends on:_ plan 87 shipped + measurement showing GPU headroom remains under default chapter concurrency.
 - _Benefit (user):_ another ~2× per chapter on top of plan 87 (so 4× headline if GPU survives). Only worth pursuing once plan 87's envelope is known.
 
-### 22. Both TTS engines resident (Kokoro + XTTS)
+### 14. Both TTS engines resident (Kokoro + XTTS)
 
 Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item A3).
 
@@ -302,7 +322,7 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item A3).
 - _Depends on:_ none structural. Speed gain conditional on mixed-engine casts.
 - _Benefit (user):_ eliminates the 30 s XTTS cold-load on first use for mixed-engine books; enables fluid engine mixing per character.
 
-### 23. Per-call local→Gemini analyzer overflow
+### 15. Per-call local→Gemini analyzer overflow
 
 Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item B4).
 
@@ -312,7 +332,7 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item B4).
 - _Depends on:_ plan 88 shipped (its per-phase plumbing is the seam this builds on).
 - _Benefit (user):_ uses idle Gemini quota when local is the bottleneck. Lower priority than plan 88's bucketed split.
 
-### 25. Waveform memoisation
+### 16. Waveform memoisation
 
 Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C6).
 
@@ -322,7 +342,7 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C6).
 - _Depends on:_ none.
 - _Benefit (technical):_ avoids 480+ DOM mutations per 800 ms when many waveforms are visible simultaneously. Low real-world impact today (rare to see >3 waveforms at once).
 
-### 28. Configurable chapter-title silence durations
+### 17. Configurable chapter-title silence durations
 
 Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-up — net-new (2026-05-21). Deferred from PR #101 (`fix/server-voiced-chapter-titles-and-pauses`).
 
@@ -332,7 +352,7 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Depends on:_ none.
 - _Benefit (user):_ lets the user pace chapter breaks to match book length / mood (a tight 0.5 s for a short kids' book, a longer 3 s for a slow-burn novel) without code changes. Today the 3.0 s default is "audiobook-standard" but not universally right.
 
-### 29. Render the chapter-title segment on the Listen view timeline
+### 18. Render the chapter-title segment on the Listen view timeline
 
 Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-up — net-new (2026-05-21). Deferred from PR #101 (`fix/server-voiced-chapter-titles-and-pauses`).
 
@@ -341,26 +361,6 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Key files:_ `openapi.yaml` (ChapterAudio segments shape); `src/lib/api-types.ts` (regenerated); `server/src/routes/chapter-audio.ts` (drop the filter, pass kind through); `src/components/listen/listen-player-region.tsx`.
 - _Depends on:_ none (the on-disk segment shape already carries `kind: 'title'` since PR #101).
 - _Benefit (user):_ visual cue that matches the audible cue — listener sees "you're hearing the title now" before the body segments start. Today the title beat is audible-only.
-
-### 30. Generation SSE survives Node hot-reload during dev
-
-Source: net-new (2026-05-21). Surfaced while smoke-testing PR #107 — a `tsx` restart killed the active SSE bridge and the frontend showed "Worker has gone quiet · 67s" while the sidecar kept synthesising in the background.
-
-- _What:_ When the Node server hot-reloads in dev (`tsx watch` triggered by any file change under `server/src/`), the open `/api/generation/stream` SSE connection dies with it. The sidecar keeps synthesising for as long as the in-flight HTTP request is alive, but the frontend's `generation-stream-middleware` sees no more `progress` ticks and surfaces the "Worker has gone quiet" stall banner after `STALL_THRESHOLD_MS`. Auto-reconnect on the SSE consumer side (re-open against the active book's stream endpoint if it drops while a generation is alive) would let the dev keep editing without manually Pause/Resume-ing every time. Two-layer fix: the consumer reopens; the server-side stream emits an idempotent `resume_from` ack so a reconnect doesn't replay completed chapters. Production users hit this rarely — only on crash recovery — but the seam is exactly the same.
-- _Acceptance:_ Edit any file under `server/src/` during a live generation; `tsx` restarts the Node server; within ~3 s the frontend re-establishes the SSE and the chapter list keeps advancing without a "Worker has gone quiet" banner. The book's state.json reflects no double-progress for already-completed chapters.
-- _Key files:_ `src/store/generation-stream-middleware.ts` (reconnect logic — today the middleware treats the EventSource ending as a terminal stop); `src/lib/api.ts` `realStreamGeneration` (handle source error/end events as recoverable when a book is mid-flight); `server/src/routes/generation.ts` (idempotent resume — emit a snapshot of completed chapters first, then resume per-chapter `progress`).
-- _Depends on:_ none. Self-contained inside the streaming surface.
-- _Benefit (dev / technical):_ no more false "stalled" banners during interactive development. Same fix incidentally covers production crash-recovery (Node OOM, manual restart) so users running long books survive a sidecar/server bounce without losing the visible progress thread.
-
-### 31. Investigate post-plan-89 e2e contention pattern on local pre-push
-
-Source: net-new (2026-05-22, surfaced during v1.4.0 ship). Two consecutive `npm run verify` pre-push runs failed with different specs flaking each time (`account-analyzer-knobs`, `account-models`, `bulk-sync-library`, `binary-upload`); each failing spec assertion timed out at 10 s waiting on a `getByTestId(...)` while the page yaml showed the route-level Suspense `Loading…` fallback. Same code, same machine: PR #122 CI verify on Ubuntu green (80/80 specs), worktree run at `wt-release-v1-4-0` green (80/80), each failing spec re-run in isolation green (`account-analyzer-knobs.spec.ts` → 5/5 in 28.7 s). v1.4.0 shipped via a one-shot `--no-verify` push with the release.yml cross-OS verify matrix as the safety net.
-
-- _What:_ Diagnose why the local Windows pre-push run flakes when 80+ specs share one Vite dev-server, while the same harness on a fresh GitHub Actions runner doesn't. Two hypotheses worth pulling on: (a) plan 89's route-level `React.lazy` + delayed-spinner Suspense fallback made first-paint sensitive to contention — lazy chunk requests can queue behind other tests' fetches long enough to bust the 10 s `toBeVisible` budget; (b) the local box runs heavier OS-level competing processes (browser tabs, indexers) than a fresh CI VM. Fix options to consider: lift the 10 s timeout for any first-mount `toBeVisible` on lazy-loaded routes (cleanest, lowest-risk), pre-warm the route bundle at suite start (effective but couples specs), or cap playwright workers below the default ~50% CPU on local Windows boxes (sledgehammer).
-- _Acceptance:_ either (a) raise per-spec first-mount timeouts so two consecutive `npm run verify` runs on the local box never flake on a clean checkout, or (b) document the contention threshold and codify the `--workers=N` cap in `playwright.config.ts` so the local pre-push gate matches CI behaviour. The release-day workaround (`--no-verify` plus release.yml cross-OS safety net) should not be the standard answer for a non-release push.
-- _Key files:_ `playwright.config.ts` (worker count, default test timeout), `src/components/layout.tsx` (route-level Suspense boundary added in plan 89), `src/components/delayed-spinner.tsx` (the delay knob that's racing the assertion budget), `e2e/account-analyzer-knobs.spec.ts` + `e2e/account-models.spec.ts` + `e2e/bulk-sync-library.spec.ts` + `e2e/binary-upload.spec.ts` (the flaky specs seen in the v1.4.0 push attempts).
-- _Depends on:_ none.
-- _Benefit (dev / technical):_ removes the local-only false-positive pattern that forced a release-day `--no-verify` bypass. Keeps the pre-push gate trustworthy as the suite grows past 80 specs — without this, every future minor release risks the same dance.
 
 ### 32. Track upstream-blocked deprecation chains (jsdom · archiver · @google/genai)
 
