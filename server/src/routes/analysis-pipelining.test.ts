@@ -477,11 +477,14 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
       });
 
       /* Wait until Phase 1 chapter 6 (index 5, needs watermark>=10) has
-         dispatched. Warm-cache local runs land in <600 ms; release.yml's
-         windows-latest runner is the slow leg (v1.4.0 attempt deterministically
-         timed out at 30 s twice, even after the ca4f318 shrink). 30 s inner
-         budget + 90 s per-test budget gives the windows-latest runner room
-         without slowing healthy runs. */
+         dispatched. Warm-cache local runs land in <600 ms; CI cold-start
+         runners are the slow leg. 840194b bumped to 30 s inner + 90 s
+         per-test for release.yml's windows-latest. PR #131 then surfaced
+         the same edge on verify.yml's ubuntu-latest (timed out at exactly
+         90 000 ms; local pre-push observed 90 347 ms). The per-test budget
+         bumps to 180 s here — well above worst-case observed CI runtime
+         on either OS; healthy runs short-circuit via the inner waitFor
+         the moment the trace lands, so no slowdown for warm caches. */
       await waitFor(
         () => fixture.trace.some((t) => t.phase === 1 && t.chapterId === 6),
         30_000,
@@ -507,7 +510,7 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 90_000);
+  }, 180_000);
 });
 
 /* ───────────────────────────────────────────────────────────────────
