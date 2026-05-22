@@ -61,11 +61,11 @@ Source: net-new (2026-05-20). Captured during planning of the next full version 
 
 ### 1. Linux visual baselines for CI
 
-Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e/visual.spec.ts` now skips on platforms with no committed baselines so PR Verify can go green, but PR CI then carries zero visual-regression coverage. Until Linux baselines land, only local Windows runs catch chromium drift.
+Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e/responsive/visual.spec.ts` (relocated from `e2e/visual.spec.ts` 2026-05-22 per Could #34) skips on platforms with no committed baselines so PR Verify can go green, but PR CI then carries zero visual-regression coverage. Until Linux baselines land, only local Windows runs catch chromium drift.
 
-- _What:_ Commit `e2e/linux/visual.spec.ts/*.png` (12 PNGs matching the Win32 set). Two paths: (a) generate locally via Docker / WSL with `playwright test --update-snapshots visual.spec.ts`; (b) add a `workflow_dispatch` GitHub Action that runs `--update-snapshots` on an ubuntu-latest runner and opens a PR with the artefact, so future regen doesn't need a Linux box. The directory-level skip in `e2e/visual.spec.ts` re-enables the spec on Linux automatically the moment the directory exists.
-- _Acceptance:_ Next PR's Verify run is green on all 12 visual specs (no skip messages). `docs/features/archive/37-e2e-playwright.md` "Per-platform skip" subsection loses the "Win32 only" caveat. Bonus: if the workflow_dispatch path is taken, document it under "Regenerate workflow".
-- _Key files:_ `e2e/linux/visual.spec.ts/` (new directory); optional `.github/workflows/regen-visual-baselines.yml`; `docs/features/archive/37-e2e-playwright.md` "Visual baselines" section.
+- _What:_ Commit `e2e/linux/responsive/visual.spec.ts/{chromium,mobile-chrome,tablet-chrome}/*.png` (42 PNGs total — 14 per project across 3 projects, matching the Win32 set). Two paths: (a) generate locally via Docker / WSL with `playwright test --update-snapshots e2e/responsive/visual.spec.ts`; (b) add a `workflow_dispatch` GitHub Action that runs `--update-snapshots` on an ubuntu-latest runner and uploads the PNGs as an artefact (user reviews + commits manually to avoid runaway CI commits), so future regen doesn't need a Linux box. The directory-level skip in `e2e/responsive/visual.spec.ts` re-enables the spec on Linux automatically the moment the directory exists.
+- _Acceptance:_ Next PR's Verify run is green on all 14 visual specs per project (no skip messages). `docs/features/archive/37-e2e-playwright.md` "Per-platform skip" subsection loses the "Win32 only" caveat. Bonus: if the workflow_dispatch path is taken, document it under "Regenerate workflow".
+- _Key files:_ `e2e/linux/responsive/visual.spec.ts/` (new directory tree, per-project subdirs); optional `.github/workflows/regen-visual-baselines.yml`; `docs/features/archive/37-e2e-playwright.md` "Visual baselines" section.
 - _Benefit (technical):_ restores Verify as a real merge gate. Today PR CI's only red signal is "visual baselines missing" — once those land, a red Verify means real regression and reviewers stop ignoring it.
 
 ### 2. Generation SSE survives Node hot-reload during dev
@@ -78,17 +78,7 @@ Source: net-new (2026-05-21). Surfaced while smoke-testing PR #107 — a `tsx` r
 - _Depends on:_ none. Self-contained inside the streaming surface.
 - _Benefit (dev / technical):_ no more false "stalled" banners during interactive development. Same fix incidentally covers production crash-recovery (Node OOM, manual restart) so users running long books survive a sidecar/server bounce without losing the visible progress thread.
 
-### 3. Non-blocking GH Actions workflow for `npm run test:e2e:mobile`
-
-Source: net-new (2026-05-21). Spun off from plan 81 wave 5 (PR #92).
-
-- _What:_ Add a `.github/workflows/e2e-mobile.yml` job that runs `npm run test:e2e:mobile` on every PR targeting `main`, set `continue-on-error: true` so it shows status without blocking merges. Visibility-only — the pre-push gate stays chromium-only (under the 5 min budget that plan 81 set).
-- _Acceptance:_ A PR that breaks mobile-chrome layout shows a red but non-blocking check on the PR page. A PR that doesn't touch UI shows green. Failure status surfaces in the merge UI as "Mobile e2e — failing (non-blocking)".
-- _Key files:_ new `.github/workflows/e2e-mobile.yml` mirroring `verify.yml`'s setup (node, npm cache, chromium install) but invoking `npm run test:e2e:mobile` instead of `npm run verify`. Concurrency `cancel-in-progress` per PR ref to avoid stacking runs.
-- _Depends on:_ plan 81 shipped (which added the `test:e2e:mobile` script); mobile worker tuning shipped (cap at `--workers=2`, see PR `fix/e2e-and-mobile-workers`) so the signal is reliable.
-- _Benefit (technical):_ catches mobile regressions in PRs without blowing the pre-push budget. Two-tier gate — mobile is opt-in for local iteration but mandatory-visibility in CI.
-
-### 4. GPU-arbitration semaphore for parallel Claude Code sessions
+### 3. GPU-arbitration semaphore for parallel Claude Code sessions
 
 Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-new.mjs` resolves port collisions but leaves GPU/VRAM contention as a manual-coordination concern documented in CONTRIBUTING.md.
 
@@ -98,7 +88,7 @@ Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `s
 - _Depends on:_ none. Pairs with the worktree parallel-sessions tooling — without the semaphore, users must queue heavy operations by hand per the CONTRIBUTING.md "GPU + shared-resource caveats" note.
 - _Benefit (user):_ removes the silent VRAM-spillover-to-RAM slowdown when two sessions hit the analyzer or sidecar concurrently. Today a parallel run can take 5–10× longer than serial because both processes thrash the GPU.
 
-### 5. In-app LAN HTTPS banner under dev settings
+### 4. In-app LAN HTTPS banner under dev settings
 
 Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 
@@ -108,7 +98,7 @@ Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
 
-### 6. Streaming audio for live playback during chapter generation
+### 5. Streaming audio for live playback during chapter generation
 
 Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
 
@@ -117,7 +107,7 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
 - _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
 
-### 7. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
+### 6. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
 
 Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warning on `npm install`; full triage in `~/.claude/plans/fancy-bouncing-lovelace.md`.
 
@@ -127,7 +117,7 @@ Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warnin
 - _Depends on:_ none structural. Pure tooling bump.
 - _Benefit (technical / architectural):_ clears the loudest `npm install` deprecation warning. Flat config is the only supported config format going forward; deferring increases migration cost as more transitive deps drop ESLint-8 support.
 
-### 8. Multer 1.x → 2.x security upgrade (server file uploads)
+### 7. Multer 1.x → 2.x security upgrade (server file uploads)
 
 Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.2: Multer 1.x is impacted by a number of vulnerabilities, which have been patched in 2.x.` on `npm install --prefix server`. Full deprecation audit notes in `~/.claude/plans/fancy-bouncing-lovelace.md`.
 
@@ -137,7 +127,7 @@ Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.
 - _Depends on:_ none. Pure dep bump + small middleware adaptation.
 - _Benefit (user / technical):_ closes the only known-vulnerable direct dependency in the tree. Multer 1.x is EOL and the npm advisory database flags multiple CVEs (CVE-2025-7338, CVE-2025-47935, etc.) that 2.x patches. Even though our upload path is local-only today, LAN HTTPS mode (plan 81) and any future hosted deployment widens the blast radius — closing this now keeps the server-side dep tree audit-clean.
 
-### 9. Merge journal for deterministic alias un-link
+### 8. Merge journal for deterministic alias un-link
 
 Source: plan 95 ship (2026-05-22) — Out of scope. PR [#142](https://github.com/dudarenok-maker/AudioBook-Generator/pull/142) shipped editable cast aliases with a Reattribute Lines modal that uses the preserved Phase-0a `chapterCast` as a lineage proxy to narrow the user's manual reattribution from "whole book" to "these N chapters." It works, but it's not deterministic — a chapter shows up if the alias was in its Phase-0a roster, even when the merge that put the alias on the source character happened mid-book and didn't actually rewrite any chapter-1 sentences. The user has to skim and reassign.
 
@@ -345,23 +335,7 @@ Source: net-new (2026-05-22). Surfaced by the full `npm install` deprecation aud
 - _Depends on:_ upstream releases. Not on our schedule.
 - _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog that says "yes, we know, we're waiting on these three upstreams." Pairs with Should #9 (ESLint 8 → 9 chain) and Should #10 (Multer 1 → 2 security) which together account for every deprecation warning surfaced on a fresh 2026-05-22 install.
 
-### 33. Server-side vitest pool contention — timing-sensitive specs time out across multiple files under full-suite load
-
-Source: net-new (2026-05-22, originally filed as gemini-specific). Recurred and broadened while shipping plan 94 (PR #137): four different test files time out under full-suite `npm run test:server` load while each passes cleanly in isolation. The common shape is the same — tests that combine real-time timers / `waitFor` budgets / async dispatch with vitest's default worker pool — and the fix-surface is shared, so they're tracked as one item.
-
-- _What:_ Under full-suite load on Windows, the following tests have failed across recent `npm run test:server` / pre-commit `verify:fast` / pre-push `verify` runs, each time passing in isolation:
-  - `server/src/analyzer/gemini.test.ts > stream watchdog + abort > aborts in-flight stream and throws AnalysisAbortedError when caller signal fires` — `expected "spy" to be called 1 times, but got 0 times` on `generateContentStream`. Caller-abort signal fires before the spied call resolves; passes 12/12 in ~18 s alone.
-  - `server/src/routes/analysis-pipelining.test.ts > rolling roster snapshot > Phase 1 chapter K dispatches with a roster snapshot containing only Phase 0 chapters 1..K+LAG` — `Test timed out in 180000ms`. Plus `back-pressure under stall > Phase 1 chapter id=3 parks while Phase 0 chapter 13 is held; releasing unblocks dispatch` — `waitFor timed out after 10000ms`. Both pass; all 5 tests run in ~4.8 s alone.
-  - `server/src/routes/book-state.test.ts`, `server/src/routes/chapters-restructure.test.ts`, `server/src/routes/generation.test.ts` — `Hook timed out in 10000ms` on `beforeEach` / `beforeAll`, consistent with temp-directory creation racing under pool load. All 139 tests pass in ~9.4 s alone.
-  - Different test files fail on each run (gemini + pipelining on one run; book-state + chapters-restructure + generation on another; pipelining again on the pre-commit retry). Two consecutive `npm run verify` invocations against the same code surfaced different failure sets, confirming the issue is environmental (worker pool contention), not regression.
-  - **2026-05-22 (PR #162):** Fresh reproduction of `analysis-pipelining.test.ts > rolling roster snapshot` timing out at 180,000 ms on a pure-frontend Detected-list sort change (no server-side touchpoints in the diff). Re-ran the same test against `main` (commit `8a8d4cf`, no local changes) — passed in **180,496 ms vs. 180,000 ms budget = 4 ms under the wire**. The test is sitting on the timeout boundary and any background CPU pressure tips it over. Strengthens the case for raising the per-file timeout (180 s → 300 s would absorb that margin); needed `--no-verify` to land PR #162 since the failure could not plausibly be attributed to the frontend change. Second confirmed Windows pre-commit bypass driven by this entry.
-  - Same fix-surface as Could #34: pin selected suites to `--workers=1`, raise per-test timeouts for the affected files, or hoist these specs into a separate `verify:server-slow` step that runs serially. Vitest pool options live in `server/vitest.config.ts`.
-- _Acceptance:_ Five consecutive full `npm run verify` invocations on a clean Windows checkout complete with zero spurious test-file failures. The four named files above each stay green across those runs. If serial execution is the chosen mitigation, document the wall-clock cost in the verify step list — currently a full `test:server` is ~7 min in parallel; a serial pin on the 4 hot files would add ~10-20 s.
-- _Key files:_ `server/vitest.config.ts` (pool concurrency + per-file timeout overrides); `server/src/analyzer/gemini.test.ts:380-389` (the abort test); `server/src/routes/analysis-pipelining.test.ts` (rolling roster + back-pressure tests); `server/src/routes/{book-state,chapters-restructure,generation}.test.ts` (hook-timeout fixtures); `scripts/verify-cache.mjs` (optional new `test:server-slow` step).
-- _Depends on:_ none. Vitest config / per-file timeout decisions are local to the server harness.
-- _Benefit (dev / technical):_ removes the residual pre-push / pre-commit flake risk that today forces operator-driven retries. Today's workflow ("just run verify a second time") is a tax on every push; absorbing the timing pressure once at the config level returns the gate to deterministic green.
-
-### 34. Per-voice row sample-preview button inside `<VoiceOverridePicker>`
+### 33. Per-voice row sample-preview button inside `<VoiceOverridePicker>`
 
 Source: net-new (2026-05-22). Deferred from the picker-autocomplete bundle — the model-voice override picker now uses the shared `<SearchablePicker>` primitive but renders each voice row as just `name`. The original plan reserved a tiny `▶` slot on each row for in-list auditioning so the user can preview a voice without committing the override; v1 ships with the row label only, matching the legacy `<select>` parity.
 

@@ -5,24 +5,51 @@ import { defineConfig } from 'vitest/config';
    to ffmpeg (e.g. mp3.test.ts) need a generous timeout because the encoder
    subprocess spawn + libmp3lame init costs a few hundred ms cold.
 
-   Pool concurrency is capped (maxForks=4) and one retry is allowed: see
+   Pool concurrency is capped (maxForks=2) and one retry is allowed: see
    docs/features/45-vitest-pool-tuning.md for the rationale. The default
    forks pool grows to N=logical-CPUs (16+ on dev boxes); with subprocess-
    spawning tests (ffmpeg, supertest servers, sidecar mocks) that exhausts
    pipe/handle budgets and one worker dies mid-suite ("Worker exited
    unexpectedly"), failing the whole verify. Cap + retry absorbs both the
-   root cause and the residual transients without forcing a full re-push. */
+   root cause and the residual transients without forcing a full re-push.
+
+   BACKLOG Could #33 (2026-05-22) — dropped maxForks 4 → 2 and added
+   explicit hookTimeout: 30_000 after 4 routes test files (book-state,
+   chapters-restructure, generation, plus analyzer/gemini for the timer-
+   based abort race) repeatedly timed out across full-suite load. The
+   common shape: mkdtempSync + module imports in beforeAll racing on
+   Windows tmpdir under maxForks=4. Halving parallel tmpdir pressure
+   eliminates the race; the 30s hook budget covers a slow first import
+   under pool contention (testTimeout: 15_000 doesn't extend hook budgets
+   on its own, so a hook can timeout while the test's per-test override
+   sits unused). The 4 hot files now also run in a separate serial
+   `test:server-slow` step (root package.json) so even when this main
+   parallel run trips, the slow files are independently green. */
+
+/* Mirror invariant: each entry here MUST also appear in
+   vitest.config.slow.ts's SLOW_FILES array. The slow config runs these
+   files serially (maxForks=1) and the main config excludes them so we
+   never double-run. */
+const SLOW_FILES_TO_EXCLUDE = [
+  'src/analyzer/gemini.test.ts',
+  'src/routes/analysis-pipelining.test.ts',
+  'src/routes/book-state.test.ts',
+  'src/routes/chapters-restructure.test.ts',
+  'src/routes/generation.test.ts',
+];
 
 export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
     include: ['src/**/*.{test,spec}.ts'],
+    exclude: ['node_modules/**', 'dist/**', ...SLOW_FILES_TO_EXCLUDE],
     testTimeout: 15_000,
+    hookTimeout: 30_000,
     pool: 'forks',
     poolOptions: {
       forks: {
-        maxForks: 4,
+        maxForks: 2,
         minForks: 1,
       },
     },

@@ -18,7 +18,6 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import {
-  mkdtempSync,
   rmSync,
   mkdirSync,
   writeFileSync,
@@ -26,6 +25,7 @@ import {
   readdirSync,
   existsSync,
 } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -125,7 +125,8 @@ function seedAudio(slug: string): void {
 }
 
 beforeAll(async () => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-restructure-test-'));
+  /* BACKLOG Could #33 — async mkdtemp under Windows tmpdir contention. */
+  workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-restructure-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
   const [{ chaptersRestructureRouter }, { bookStateRouter }, { makeBookId }] = await Promise.all([
