@@ -88,17 +88,7 @@ Source: net-new (2026-05-21). Spun off from plan 81 wave 5 (PR #92).
 - _Depends on:_ plan 81 shipped (which added the `test:e2e:mobile` script); mobile worker tuning shipped (cap at `--workers=2`, see PR `fix/e2e-and-mobile-workers`) so the signal is reliable.
 - _Benefit (technical):_ catches mobile regressions in PRs without blowing the pre-push budget. Two-tier gate — mobile is opt-in for local iteration but mandatory-visibility in CI.
 
-### 4. Bless mobile + tablet visual-snapshot baselines per Playwright project
-
-Source: net-new (2026-05-21). Plan 81 wave 5 follow-up.
-
-- _What:_ Run `npx playwright test --update-snapshots --project=mobile-chrome` + `--project=tablet-chrome` to capture per-project visual baselines for the six `visual.spec.ts` views (library, upload, analysing, confirm, ready/manuscript, listen). Commit them under `e2e/win32/visual.spec.ts/<project>/<view>.png` per the existing snapshot-path template. Promote `visual.spec.ts` to assert against the captured baselines on all three projects (today it only runs at chromium).
-- _Acceptance:_ `npm run test:e2e:mobile` captures + diffs visual snapshots; a layout drift at any viewport fails the assertion. Per-platform per-project paths: `e2e/win32/visual.spec.ts/mobile-chrome/library.png` etc.
-- _Key files:_ `e2e/visual.spec.ts` (remove the chromium-only assumption; gate test.skip on the per-project baseline dir per the existing `BASELINE_DIR` pattern); regenerated PNGs in `e2e/{win32,linux,darwin}/visual.spec.ts/{mobile-chrome,tablet-chrome}/`; `playwright.config.ts:45` `snapshotPathTemplate` already includes `{platform}` — extend to `{platform}/{project}` if needed.
-- _Depends on:_ plan 81 shipped; mobile worker tuning shipped (cap at `--workers=2`, see PR `fix/e2e-and-mobile-workers`) so the snapshot run completes without timeout flake.
-- _Benefit (technical):_ pixel-level mobile/tablet regression net. Today the no-overflow assertion catches layout breakage but not visual drift; this entry closes that gap.
-
-### 5. GPU-arbitration semaphore for parallel Claude Code sessions
+### 4. GPU-arbitration semaphore for parallel Claude Code sessions
 
 Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-new.mjs` resolves port collisions but leaves GPU/VRAM contention as a manual-coordination concern documented in CONTRIBUTING.md.
 
@@ -108,7 +98,7 @@ Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `s
 - _Depends on:_ none. Pairs with the worktree parallel-sessions tooling — without the semaphore, users must queue heavy operations by hand per the CONTRIBUTING.md "GPU + shared-resource caveats" note.
 - _Benefit (user):_ removes the silent VRAM-spillover-to-RAM slowdown when two sessions hit the analyzer or sidecar concurrently. Today a parallel run can take 5–10× longer than serial because both processes thrash the GPU.
 
-### 6. In-app LAN HTTPS banner under dev settings
+### 5. In-app LAN HTTPS banner under dev settings
 
 Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 
@@ -118,7 +108,7 @@ Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
 
-### 8. Streaming audio for live playback during chapter generation
+### 6. Streaming audio for live playback during chapter generation
 
 Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
 
@@ -127,7 +117,7 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
 - _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
 
-### 9. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
+### 7. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
 
 Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warning on `npm install`; full triage in `~/.claude/plans/fancy-bouncing-lovelace.md`.
 
@@ -137,7 +127,7 @@ Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warnin
 - _Depends on:_ none structural. Pure tooling bump.
 - _Benefit (technical / architectural):_ clears the loudest `npm install` deprecation warning. Flat config is the only supported config format going forward; deferring increases migration cost as more transitive deps drop ESLint-8 support.
 
-### 10. Multer 1.x → 2.x security upgrade (server file uploads)
+### 8. Multer 1.x → 2.x security upgrade (server file uploads)
 
 Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.2: Multer 1.x is impacted by a number of vulnerabilities, which have been patched in 2.x.` on `npm install --prefix server`. Full deprecation audit notes in `~/.claude/plans/fancy-bouncing-lovelace.md`.
 
@@ -147,27 +137,7 @@ Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.
 - _Depends on:_ none. Pure dep bump + small middleware adaptation.
 - _Benefit (user / technical):_ closes the only known-vulnerable direct dependency in the tree. Multer 1.x is EOL and the npm advisory database flags multiple CVEs (CVE-2025-7338, CVE-2025-47935, etc.) that 2.x patches. Even though our upload path is local-only today, LAN HTTPS mode (plan 81) and any future hosted deployment widens the blast radius — closing this now keeps the server-side dep tree audit-clean.
 
-### 11. Mobile/tablet "Chapters" heading not visible in `responsive/coverage.spec.ts`
-
-Source: net-new (2026-05-22). Surfaced during validation of PR #136 (`fix/e2e-and-mobile-workers`, Should-tier mobile worker tuning). After the `--workers=2` cap eliminated the 7 launch-timeout flakes, 3 hard failures in `e2e/responsive/coverage.spec.ts` remain. These were the "3 hard" referenced in the original Should #4 backlog text — present on `origin/main` regardless of worker count, but invisible until the launch-timeout flake was cleared.
-
-- _What:_ Three responsive cases fail at smaller viewports: `manuscript view — Solway Bay fixture` at both `mobile-chrome` (412×915) and `tablet-chrome` (834×1194), plus `upload view` at `tablet-chrome`. All fail on the same assertion: `page.getByRole('heading', { name: /^Chapters$/, level: 2 })` is not visible inside the 5 s budget. The spec comment says "On mobile the sidebar is a drawer so the heading may live behind the hamburger; matchers are scoped on the heading role so either position resolves" — but in practice the role lookup does NOT resolve when the drawer is closed at responsive viewports. Either the heading isn't rendered at all (drawer DOM-hidden, not just CSS-hidden) or the lookup misses it inside the hamburger trigger's collapsed state. Fix paths: (a) auto-open the chapters drawer when the manuscript route mounts at responsive viewports, (b) move the heading outside the drawer so it's always rendered, (c) update the spec to open the drawer before asserting (lift the chapter-sidebar hydration signal to a more robust selector).
-- _Acceptance:_ `npm run test:e2e:mobile` runs end-to-end with **zero failures** (today: 17 passed + 3 failed + 0 launch timeouts). Each spec passes on first attempt within the 5 s budget; retry budget is the safety net, not the primary path.
-- _Key files:_ `e2e/responsive/coverage.spec.ts:72-82` (manuscript case), `e2e/responsive/coverage.spec.ts:53-69` (upload case); `src/views/manuscript.tsx` (mobile drawer wiring); `src/views/upload.tsx` (tablet layout).
-- _Depends on:_ PR #136 shipped (the `--workers=2` cap exposed these as the next-tier reliability gap).
-- _Benefit (technical):_ closes the post-fix-mobile-workers gap so `test:e2e:mobile` becomes 100% green and ready for Should #3 (non-blocking `e2e-mobile.yml` GitHub Actions workflow). Today's persistent 3-failure floor masks any new mobile/tablet regression that would land on top.
-
-### 12. Local pre-push e2e contention beyond the 4 cited specs (run-2 retry-recovered pattern)
-
-Source: net-new (2026-05-22). Surfaced during validation of PR #136 (`fix/e2e-and-mobile-workers`, Should #1 fix for the original 4 cited flaky specs). After applying `waitForRouteReady` to the 4 cited specs, run 2 of `npm run test:e2e` showed 5 OTHER specs flake-on-first-attempt and pass on retry: `concurrent-multi-book`, `listen-playback`, `listen-rename-chapter`, `visual.spec.ts confirm-dark`, `voice-preview-while-editing`. Different failure mode from Should #1's cited symptom (test-level 30 s timeout on inner assertions, not first-mount `toBeVisible` at the route boundary).
-
-- _What:_ Local pre-push runs still show retry-recovered flakes on 5 specs that aren't first-mount-bounded. The `waitForRouteReady` helper from PR #136 only waits for the route-level Suspense fallback to detach; it doesn't address contention that starves in-flight Vite chunk responses for already-mounted views (chapters-list hydration in listen-playback, audio-src binding in mini-player, drawer animations in voice-preview-while-editing). Three avenues: (a) extend the helper with per-view hydration signals (e.g. `waitForListenViewReady` that also waits for `data-testid="chapters-list"` non-empty), (b) cap local workers below the default `~CPU/2` in `playwright.config.ts` (the "sledgehammer" option deliberately deferred in Should #1's fix), (c) tighten individual specs' wait logic case-by-case.
-- _Acceptance:_ Two consecutive `npm run test:e2e` runs on a clean local Windows checkout complete with **zero flakes** — every spec passes on first attempt, retry budget unused. Today's state: run 1 89/0/2 clean, run 2 84/5-flaky/2-skipped (both exit 0 because retries pass, but the retry count is noise that masks underlying contention).
-- _Key files:_ `e2e/concurrent-multi-book.spec.ts`, `e2e/listen-playback.spec.ts`, `e2e/listen-rename-chapter.spec.ts`, `e2e/visual.spec.ts:173` (confirm-dark visual baseline), `e2e/voice-preview-while-editing.spec.ts`; possibly `playwright.config.ts` (`workers` cap for local) and `e2e/helpers.ts` (helper extension for per-view hydration signals).
-- _Depends on:_ PR #136 shipped (this is the second tier of pre-push reliability work that follows it).
-- _Benefit (dev / technical):_ removes residual retry-mask noise from the pre-push gate. Today the retry budget makes the suite look greener than it really is; a clean two-runs-in-a-row would be the durable signal that the e2e harness is genuinely contention-resistant. Pairs with Should #11 (responsive coverage) — together they would turn `npm run verify` into a deterministic pass/fail on the local box.
-
-### 13. Merge journal for deterministic alias un-link
+### 9. Merge journal for deterministic alias un-link
 
 Source: plan 95 ship (2026-05-22) — Out of scope. PR [#142](https://github.com/dudarenok-maker/AudioBook-Generator/pull/142) shipped editable cast aliases with a Reattribute Lines modal that uses the preserved Phase-0a `chapterCast` as a lineage proxy to narrow the user's manual reattribution from "whole book" to "these N chapters." It works, but it's not deterministic — a chapter shows up if the alias was in its Phase-0a roster, even when the merge that put the alias on the source character happened mid-book and didn't actually rewrite any chapter-1 sentences. The user has to skim and reassign.
 
@@ -384,6 +354,7 @@ Source: net-new (2026-05-22, originally filed as gemini-specific). Recurred and 
   - `server/src/routes/analysis-pipelining.test.ts > rolling roster snapshot > Phase 1 chapter K dispatches with a roster snapshot containing only Phase 0 chapters 1..K+LAG` — `Test timed out in 180000ms`. Plus `back-pressure under stall > Phase 1 chapter id=3 parks while Phase 0 chapter 13 is held; releasing unblocks dispatch` — `waitFor timed out after 10000ms`. Both pass; all 5 tests run in ~4.8 s alone.
   - `server/src/routes/book-state.test.ts`, `server/src/routes/chapters-restructure.test.ts`, `server/src/routes/generation.test.ts` — `Hook timed out in 10000ms` on `beforeEach` / `beforeAll`, consistent with temp-directory creation racing under pool load. All 139 tests pass in ~9.4 s alone.
   - Different test files fail on each run (gemini + pipelining on one run; book-state + chapters-restructure + generation on another; pipelining again on the pre-commit retry). Two consecutive `npm run verify` invocations against the same code surfaced different failure sets, confirming the issue is environmental (worker pool contention), not regression.
+  - **2026-05-22 (PR #162):** Fresh reproduction of `analysis-pipelining.test.ts > rolling roster snapshot` timing out at 180,000 ms on a pure-frontend Detected-list sort change (no server-side touchpoints in the diff). Re-ran the same test against `main` (commit `8a8d4cf`, no local changes) — passed in **180,496 ms vs. 180,000 ms budget = 4 ms under the wire**. The test is sitting on the timeout boundary and any background CPU pressure tips it over. Strengthens the case for raising the per-file timeout (180 s → 300 s would absorb that margin); needed `--no-verify` to land PR #162 since the failure could not plausibly be attributed to the frontend change. Second confirmed Windows pre-commit bypass driven by this entry.
   - Same fix-surface as Could #34: pin selected suites to `--workers=1`, raise per-test timeouts for the affected files, or hoist these specs into a separate `verify:server-slow` step that runs serially. Vitest pool options live in `server/vitest.config.ts`.
 - _Acceptance:_ Five consecutive full `npm run verify` invocations on a clean Windows checkout complete with zero spurious test-file failures. The four named files above each stay green across those runs. If serial execution is the chosen mitigation, document the wall-clock cost in the verify step list — currently a full `test:server` is ~7 min in parallel; a serial pin on the 4 hot files would add ~10-20 s.
 - _Key files:_ `server/vitest.config.ts` (pool concurrency + per-file timeout overrides); `server/src/analyzer/gemini.test.ts:380-389` (the abort test); `server/src/routes/analysis-pipelining.test.ts` (rolling roster + back-pressure tests); `server/src/routes/{book-state,chapters-restructure,generation}.test.ts` (hook-timeout fixtures); `scripts/verify-cache.mjs` (optional new `test:server-slow` step).

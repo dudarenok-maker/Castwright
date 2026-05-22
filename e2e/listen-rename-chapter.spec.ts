@@ -14,6 +14,7 @@
    modal mount + dispatch + cross-view re-render in a real browser. */
 
 import { test, expect } from '@playwright/test';
+import { waitForListenViewReady } from './helpers';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -24,10 +25,10 @@ test.describe('listen view — rename chapter (plan 78)', () => {
     await page.goto('/#/books/sb/listen');
     await expect(page).toHaveURL(/#\/books\/sb\/listen/);
 
-    // Title hydrates after book-meta lands.
-    await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 })).toBeVisible({
-      timeout: 5_000,
-    });
+    /* BACKLOG Should #12 per-view hydration helper. The chapter rows
+       only mount once listenable.length > 0 — Play-from-start enable is
+       a stronger signal than the title alone. */
+    await waitForListenViewReady(page, /Solway Bay/i);
 
     // Chapter rows are stamped with data-testid=`chapter-row-${id}`. The
     // rename button on each carries `chapter-row-${id}-rename`. We pick
@@ -64,9 +65,7 @@ test.describe('listen view — rename chapter (plan 78)', () => {
 
   test('cancel discards changes — title stays as-is', async ({ page }) => {
     await page.goto('/#/books/sb/listen');
-    await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 })).toBeVisible({
-      timeout: 5_000,
-    });
+    await waitForListenViewReady(page, /Solway Bay/i);
 
     const row = page.getByTestId('chapter-row-2');
     const originalRowText = await row.textContent();
