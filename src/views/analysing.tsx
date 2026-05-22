@@ -29,7 +29,7 @@ const MS_PER_WORD = 22;
 /* PhaseCard, plus the per-phase helpers (HeartbeatRow / ThrottleRow /
    LiveCastPreview / SeriesPriorPill / DroppedQuotesPanel / ActivePhaseLog),
    live under `src/components/analysing/phase-card.tsx` — pulled out of this
-   monolith in plan 94 so per-phase UI (model chip + swap) has one obvious
+   monolith in plan 95 so per-phase UI (model chip + swap) has one obvious
    seam to land in. */
 
 function ConnPill({ state, sinceLastSec }: { state: ConnState; sinceLastSec: number | null }) {
@@ -1050,7 +1050,7 @@ export function AnalysingView({
             <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs">
               {!isLocalAnalyzer && <ConnPill state={conn} sinceLastSec={sinceLastSec} />}
               {/* Per-phase model chips + swap dropdowns live inside each
-                  PhaseCard (plan 94). The legacy single-`<select>` picker
+                  PhaseCard (plan 95). The legacy single-`<select>` picker
                   that used to live here wrote to ui.selectedModel and bumped
                   the retry nonce on every change; per-phase pickers persist
                   to UserSettings and take effect from the next chapter, no
