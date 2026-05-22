@@ -2,7 +2,8 @@
 /* Backfill: re-measure every chapter MP3 in the workspace and rewrite its
    sibling `<slug>.lufs.json` with the actual post-encode loudness. Companion
    to the 2026-05-22 LUFS-drift fix — see
-   `docs/features/71-audio-loudness-normalization.md` for the bug write-up.
+   `docs/features/archive/71-audio-loudness-normalization.md` for the bug
+   write-up.
 
    Pre-fix sidecars carry `i = input_i` (pre-normalisation loudness of the
    raw PCM). The MP3 on disk is already normalised to -16 LUFS, but the
