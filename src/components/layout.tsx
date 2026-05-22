@@ -41,6 +41,7 @@ import { CharacterRegenerateModal } from '../modals/character-regenerate';
 import { BatchCharacterRegenerateModal } from '../modals/batch-character-regenerate';
 import { DriftReportModal } from '../modals/drift-report';
 import { ProfileDrawer } from '../modals/profile-drawer';
+import { ReattributeLinesModal } from '../modals/reattribute-lines';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { ToastStack } from './toast-stack';
 import { RevisionDiffPlayer } from '../views/revision-diff';
@@ -179,6 +180,18 @@ export function Layout() {
     body: ReactNode;
     primaryLabel?: string;
     onPrimary?: () => void;
+  } | null>(null);
+  /* Reattribute Lines modal state — populated by the ProfileDrawer's
+     unlink-alias callback after the server returns its `impactedChapters`
+     payload. The modal renders one card per impacted chapter and reuses
+     `manuscriptActions.setSentenceCharacter` for reassignment. Closing
+     resets to null. */
+  const [reattributeModal, setReattributeModal] = useState<{
+    sourceCharacterId: string;
+    sourceCharacterName: string;
+    newCharacterId: string;
+    aliasName: string;
+    impactedChapters: { chapterId: number; candidateSentenceIds: number[] }[];
   } | null>(null);
   const showInfo: LayoutContext['showInfo'] = (args) =>
     setResultDialog({ open: true, kind: 'info', ...args });
@@ -1072,6 +1085,44 @@ export function Layout() {
                     }
                   : undefined
               }
+              onUnlinkAlias={
+                bookId
+                  ? async (sourceCharacterId, aliasName) => {
+                      const res = await api.unlinkAlias({
+                        bookId,
+                        sourceCharacterId,
+                        aliasName,
+                      });
+                      dispatch(
+                        castActions.applyUnlinkAlias({
+                          sourceCharacterId,
+                          aliasName,
+                          newCharacter: res.newCharacter,
+                        }),
+                      );
+                      /* Open the Reattribute Lines modal so the user can move
+                         the freed-up alias's lines off the source character. The
+                         drawer stays open behind it — closing the modal returns
+                         the user to the drawer where they can confirm the chip
+                         is gone. */
+                      setReattributeModal({
+                        sourceCharacterId,
+                        sourceCharacterName: profileCharacter.name,
+                        newCharacterId: res.newCharacter.id,
+                        aliasName,
+                        impactedChapters: res.impactedChapters,
+                      });
+                    }
+                  : undefined
+              }
+              onAddAlias={
+                bookId
+                  ? async (characterId, aliasName) => {
+                      await api.addAlias({ bookId, characterId, aliasName });
+                      dispatch(castActions.applyAddAlias({ characterId, aliasName }));
+                    }
+                  : undefined
+              }
               onClose={() => dispatch(uiActions.setOpenProfileId(null))}
               onSave={(updated, meta) => {
                 const prior = profileCharacter;
@@ -1140,6 +1191,16 @@ export function Layout() {
             />
           );
         })()}
+      {reattributeModal && (
+        <ReattributeLinesModal
+          sourceCharacterId={reattributeModal.sourceCharacterId}
+          sourceCharacterName={reattributeModal.sourceCharacterName}
+          newCharacterId={reattributeModal.newCharacterId}
+          aliasName={reattributeModal.aliasName}
+          impactedChapters={reattributeModal.impactedChapters}
+          onClose={() => setReattributeModal(null)}
+        />
+      )}
       {ui.showRevisionPlayer && pending[0] && bookId && (
         <RevisionDiffPlayer
           revision={pending[0]}
