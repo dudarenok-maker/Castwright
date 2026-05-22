@@ -2841,6 +2841,23 @@ components:
             "Wren Sparrow" adds "Wren" here). Surfaced to the voice
             matcher so the same person can be recognised when later books
             in a series detect the character under a different form.
+        notLinkedTo:
+          type: array
+          items:
+            type: object
+            required: [bookId, characterId]
+            properties:
+              bookId: { type: string }
+              characterId: { type: string }
+          description: |
+            Cross-book pairs this character has been explicitly marked as
+            NOT the same person — e.g. teenage Wren vs adult Wren in
+            the same series, both routed to the same base TTS voice but
+            intentionally separate cast members. Written symmetrically by
+            the `POST /api/books/:bookId/cast/:characterId/not-linked-to`
+            route (both books' cast.json carry the matching entry). Used
+            by the voices-view duplicate-candidate detection to suppress
+            future "same character?" suggestions for the pair. Plan 101.
         tone:
           type: object
           properties:

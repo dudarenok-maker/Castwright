@@ -32,6 +32,20 @@ export const characterSchema = z
      a duplicate roster entry. Persisted for the voice matcher to pick up
      the same person across books in a series. */
     aliases: z.array(z.string()).optional(),
+    /* Cross-book pairs this character has been explicitly marked as NOT
+     the same person — e.g. teenage Wren vs adult Wren. Written
+     symmetrically by POST /:bookId/cast/:characterId/not-linked-to.
+     Optional + additive so older cast.json files keep validating. Plan 101. */
+    notLinkedTo: z
+      .array(
+        z
+          .object({
+            bookId: z.string().min(1),
+            characterId: z.string().min(1),
+          })
+          .strict(),
+      )
+      .optional(),
     tone: toneSchema.optional(),
     /* Optional voice-shaping hints. The skill prompt asks for these so the
      TTS picker doesn't have to scrape pronouns out of the description. Kept

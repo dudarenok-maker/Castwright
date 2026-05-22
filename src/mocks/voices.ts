@@ -67,6 +67,22 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
       reusable: true,
       ttsVoice: tts('Sulafat', 'Warm'),
     }),
+    /* Plan 101 — cross-book duplicate fixture. "Eliza" (Solway Bay) routes
+       to the same Kore voice as "Eliza Gray" (Northern Star); the
+       voices-view's auto-detection should normalise both to substring-
+       match ('eliza' ⊂ 'elizagray') and flag the pair as a likely
+       duplicate. Triggers the ⚠ pill on the Kore family card and the
+       'Review duplicate ↗' swap when the pair is hand-selected. */
+    withGradient({
+      id: 'v_eliza_sb',
+      character: 'Eliza',
+      bookTitle: 'Solway Bay',
+      bookId: 'sb',
+      attributes: ['Female', 'Alto', 'Working-class London', '20s', 'Defiant'],
+      usedIn: 4,
+      source: 'library',
+      ttsVoice: tts('Kore', 'Firm'),
+    }),
     withGradient({
       id: 'v_keeper',
       character: 'The Lighthouse Keeper',
