@@ -214,6 +214,42 @@ export interface MergeCharactersArgs {
 export interface MergeCharactersResponse {
   characters: Character[];
 }
+/* POST /api/books/:bookId/cast/:characterId/series-patch — cross-book
+   Compare save propagation. Applies the patch to the source character
+   AND every series-sibling cast.json row that the plan-94 dedup rule
+   recognises as the same person (case/punct-insensitive name+alias
+   match). Body is intentionally narrow: voice override + audio-affecting
+   fields are NOT accepted here (those are book-local decisions).
+   Response separates successful writes from failed ones so the caller
+   can surface a per-book error toast alongside the success toast. */
+export interface SeriesPatchCharacterArgs {
+  bookId: string;
+  characterId: string;
+  patch: {
+    gender?: 'male' | 'female' | 'neutral';
+    ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+    tone?: {
+      warmth?: number;
+      pace?: number;
+      authority?: number;
+      emotion?: number;
+    };
+  };
+}
+export interface SeriesPatchTarget {
+  bookId: string;
+  bookTitle: string;
+  characterId: string;
+}
+export interface SeriesPatchFailure {
+  bookId: string;
+  bookTitle: string;
+  error: string;
+}
+export interface SeriesPatchCharacterResponse {
+  updated: SeriesPatchTarget[];
+  failed: SeriesPatchFailure[];
+}
 /* Symmetric "best-of-both" profile merge across the current book and a
    matched library book: both end up with the same merged identity (longest
    description wins, attributes / aliases unioned, source wins on identity
@@ -1740,6 +1776,49 @@ async function mockMergeCharacters({
   void sourceId;
   void targetId;
   return { characters: [] };
+}
+
+async function realSeriesPatchCharacter({
+  bookId,
+  characterId,
+  patch,
+}: SeriesPatchCharacterArgs): Promise<SeriesPatchCharacterResponse> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/series-patch`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    },
+  );
+  /* 200 = all updated; 207 = partial success. Both carry a body with
+     { updated, failed } — the caller decides what to surface. Other
+     non-OK statuses throw so the catch-side error toast fires. */
+  if (res.status !== 200 && res.status !== 207) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Series patch failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockSeriesPatchCharacter({
+  bookId,
+  characterId,
+}: SeriesPatchCharacterArgs): Promise<SeriesPatchCharacterResponse> {
+  /* Mock mode: pretend the patch landed on the source book only. The
+     design-system environment has no persisted workspace to propagate
+     to. Tests that exercise the propagation toast stub this method
+     directly. */
+  await wait(60);
+  return {
+    updated: [{ bookId, bookTitle: bookId, characterId }],
+    failed: [],
+  };
 }
 
 async function realOverrideLibraryCast(
@@ -3327,6 +3406,7 @@ const real = {
   analyseManuscript: realAnalyseManuscript,
   matchVoices: realMatchVoices,
   mergeCharacters: realMergeCharacters,
+  seriesPatchCharacter: realSeriesPatchCharacter,
   overrideLibraryCast: realOverrideLibraryCast,
   getSeriesRoster: realGetSeriesRoster,
   linkPriorCharacter: realLinkPriorCharacter,
@@ -3498,6 +3578,7 @@ const mock = {
   analyseManuscript: mockAnalyseManuscript,
   matchVoices: mockMatchVoices,
   mergeCharacters: mockMergeCharacters,
+  seriesPatchCharacter: mockSeriesPatchCharacter,
   overrideLibraryCast: mockOverrideLibraryCast,
   getSeriesRoster: mockGetSeriesRoster,
   linkPriorCharacter: mockLinkPriorCharacter,
