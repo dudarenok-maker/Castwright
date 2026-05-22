@@ -78,6 +78,18 @@ describe('dark-mode CSS overrides (styles.css)', () => {
        the colours explicitly per mode. Asserted here so a future deletion
        doesn't silently re-introduce the cream-on-cream invisibility. */
     { selector: '.floating-pill-inverse', label: 'floating pill inverse (selection bar)' },
+    /* Generation-view "Done" chapter card tint + companion progress-bar
+       shades. `.bg-emerald-50/50` is the outer card wash in
+       `src/views/generation.tsx` (stateConfig.done.tint); without the
+       override it paints 50% opacity of the near-white `#ecfdf5` over
+       the dark canvas → muddy cream wash instead of a green "done" cue.
+       The -200/-400/-500 shades are the ChapterProgressBar track/fill
+       and the CharStatusBar fullyDone pip — without overrides they hold
+       up but read oversaturated next to the new soft card tint. */
+    { selector: '.bg-emerald-50\\/50', label: 'emerald-50 /50 (Done chapter card tint)' },
+    { selector: '.bg-emerald-200', label: 'emerald-200 (Done progress-bar track)' },
+    { selector: '.bg-emerald-400', label: 'emerald-400 (CharStatusBar fullyDone pip)' },
+    { selector: '.bg-emerald-500', label: 'emerald-500 (Done progress-bar fill)' },
   ])('repaints $label ($selector) under [data-theme=\'dark\']', ({ selector }) => {
     const pattern = new RegExp(
       String.raw`\[data-theme='dark'\][^{]*` +
