@@ -237,7 +237,7 @@ describe('DriftReportModal — fidelity contract (drift-report-fidelity plan)', 
     expect(screen.getByText(/2 chapters flagged across 2 books/)).toBeInTheDocument();
   });
 
-  it('omits the book sub-header when only one book has drift', () => {
+  it('renders the book sub-header even when only one book has drift', () => {
     render(
       <DriftReportModal
         groupsByBook={[group([makeEvent({})], { bookTitle: 'Bonus Keefe Story' })]}
@@ -247,11 +247,14 @@ describe('DriftReportModal — fidelity contract (drift-report-fidelity plan)', 
       />,
     );
     /* Header summary collapses to today's "{N} chapter(s) flagged" form when
-       only one book is involved. */
+       only one book is involved — the "across N books" suffix is still gated
+       on bookCount > 1. */
     expect(screen.getByText(/1 chapter flagged/)).toBeInTheDocument();
-    /* The single-book optimisation hides the redundant sub-header — the modal
-       title bar already names the surface. */
-    expect(screen.queryByText('Bonus Keefe Story')).toBeNull();
+    expect(screen.queryByText(/across .* books/)).toBeNull();
+    /* The book sub-header is always rendered so the user can tell which book
+       any given cast card belongs to — the modal can be opened from any view
+       and may surface drift from a non-active book. */
+    expect(screen.getByText('Bonus Keefe Story')).toBeInTheDocument();
   });
 
   it('renders the side-by-side comparison with both When rendered and Now columns', () => {
