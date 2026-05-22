@@ -179,6 +179,10 @@ Test scaffold extended in lockstep: `src/test/dark-mode-css.test.ts` now pins th
 
 Skipped: bug 5 (bulk-sync flips decisions) and bug 6 generation side — both landed in PR #41 ahead of this bundle. Bug 6 analysis-side mirror lands in this branch as a separate commit (`fix(frontend): mirror cross-book heartbeat for analysis stream`).
 
+### 2026-05-22 follow-up (Generate-view "Done" overlay)
+
+Same `/N` selector-mismatch class as the 2026-05-19 amber-50/60 entry, this time for the emerald palette used by the Generate view's chapter cards. `.bg-emerald-50/50` (the outer wash on `stateConfig.done` rows in `src/views/generation.tsx`) had no dark counterpart, so the cards painted 50% opacity of the near-white `#ecfdf5` over the dark canvas — a muddy cream overlay rather than the green "done" cue the user reads in light mode. Added the override at `src/styles.css` (alpha 0.08 — one step above `.bg-rose-50/50` at 0.06, one step below the un-multiplied `.bg-emerald-50` at 0.10). Same edit also covered the companion progress-bar shades that had been sitting on bare Tailwind values: `.bg-emerald-200` (Done track), `.bg-emerald-400` (CharStatusBar fullyDone pip), `.bg-emerald-500` (Done fill) — all dropped to alpha-form emerald so the elevation step matches the rose / amber companions. Test scaffold extended: four new selectors pinned in `src/test/dark-mode-css.test.ts`, and `e2e/visual.spec.ts` now covers `generate` + `generate-dark` (the Generate view was the one core surface previously missing a visual baseline — picked Solway Bay because `hydrateFromBookState` flips all 18 chapters to `done`, giving a deterministic full-card render with no live SSE motion).
+
 ## Test plan
 
 ### Automated coverage
