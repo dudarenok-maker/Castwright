@@ -222,3 +222,23 @@ describe('CompareCastModal close behaviour', () => {
     expect(props.onClose).toHaveBeenCalled();
   });
 });
+
+describe('CompareCastModal propagation hint (plan 96)', () => {
+  it('hides the "Saves propagate" hint by default (cast.tsx call-site)', () => {
+    /* `cast.tsx` opens Compare for single-book pairs and never sets the
+       prop. The hint must stay hidden so the single-book modal looks
+       identical to before plan 96. */
+    renderModal();
+    expect(screen.queryByText(/Saves propagate to every book in this series/)).toBeNull();
+  });
+
+  it('renders the "Saves propagate" hint on both sides when propagatesAcrossSeries is true', () => {
+    /* `voices.tsx` opens Compare with the prop set — saves go through
+       the series-patch endpoint so the user needs an inline cue that
+       this isn't a book-local edit. */
+    renderModal({ propagatesAcrossSeries: true });
+    const hints = screen.getAllByText(/Saves propagate to every book in this series/);
+    /* One per side — both sides exposed to the same propagation rule. */
+    expect(hints).toHaveLength(2);
+  });
+});
