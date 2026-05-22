@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, waitForConfirmViewReady } from './helpers';
 
 /**
  * Voice-preview-while-editing flow — pairs with
@@ -25,6 +25,10 @@ test.describe('profile drawer → voice preview while editing', () => {
     page,
   }) => {
     await goToConfirm(page);
+    /* BACKLOG Should #12 per-view hydration helper — waits for the
+       first character profile button to mount before we go looking for
+       Captain Halloran specifically. */
+    await waitForConfirmViewReady(page);
 
     /* Open Captain Halloran's profile drawer. */
     const hallCard = page.getByRole('button', { name: /Open profile for Captain Halloran/i });

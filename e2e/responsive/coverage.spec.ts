@@ -52,7 +52,13 @@ test.describe('responsive coverage (all views × all viewports)', () => {
 
   test('upload view', async ({ page }) => {
     await page.goto('/#/new');
-    await expect(page.getByRole('button', { name: /Paste text/i })).toBeVisible({ timeout: 5_000 });
+    /* 10 s budget rather than 5 s — the upload view's mount runs through
+       re-upload-mode detection, library lookup, and the local-analyzer
+       guard before the Paste-text button mounts. Under tablet-chrome
+       parallel contention the 5 s budget was undersized. */
+    await expect(page.getByRole('button', { name: /Paste text/i })).toBeVisible({
+      timeout: 10_000,
+    });
     await page.waitForTimeout(200);
     await expectNoHorizontalScroll(page);
   });
@@ -71,13 +77,13 @@ test.describe('responsive coverage (all views × all viewports)', () => {
 
   test('manuscript view — Solway Bay fixture', async ({ page }) => {
     await page.goto('/#/books/sb/manuscript');
-    /* Chapters sidebar h2 is the canonical hydration signal — only
-       mounts once the chapters slice has the book's chapters loaded.
-       On mobile the sidebar is a drawer so the heading may live behind
-       the hamburger; matchers are scoped on the heading role so either
-       position resolves. */
-    await expect(page.getByRole('heading', { name: /^Chapters$/, level: 2 })).toBeVisible({
-      timeout: 5_000,
+    /* Per-chapter h1 ("Chapter N — Title") is the hydration signal that
+       works at ALL viewports — it mounts when the chapters slice has
+       loaded the current chapter. The original h2 "Chapters" lives
+       inside the SidebarPanels which on `<lg:` only renders inside a
+       closed <Drawer>, so it's not in the DOM at mobile/tablet width. */
+    await expect(page.getByRole('heading', { name: /^Chapter \d+/i, level: 1 })).toBeVisible({
+      timeout: 10_000,
     });
     await page.waitForTimeout(300);
     await expectNoHorizontalScroll(page);

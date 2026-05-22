@@ -36,13 +36,15 @@ export default defineConfig({
   retries: 2,
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
-  /* Per-platform visual-regression baselines. {platform} resolves to
-     'win32' | 'linux' | 'darwin' under Node's process.platform. Without
-     this, Playwright would commingle baselines from different OSes
-     under one path and fail on chromium font-rendering / sub-pixel
-     drift the moment CI on a different OS lands. Documented in
+  /* Per-platform AND per-project visual-regression baselines. {platform}
+     resolves to 'win32' | 'linux' | 'darwin' under Node's process.platform.
+     {projectName} resolves to 'chromium' | 'mobile-chrome' | 'tablet-chrome'.
+     Without {platform}, Playwright would commingle baselines from different
+     OSes and fail on chromium font/sub-pixel drift. Without {projectName},
+     mobile-chrome (Pixel 7) and tablet-chrome (iPad Pro 11) would compete
+     against the desktop chromium baseline and always fail. Documented in
      docs/features/37-e2e-playwright.md under "Visual baselines". */
-  snapshotPathTemplate: '{snapshotDir}/{platform}/{testFilePath}/{arg}{ext}',
+  snapshotPathTemplate: '{snapshotDir}/{platform}/{testFilePath}/{projectName}/{arg}{ext}',
   expect: {
     /* Default per-assertion budget. Playwright's stock default is 5 s;
        under sustained local contention (80+ specs sharing one Vite dev
