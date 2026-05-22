@@ -629,6 +629,114 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the workspace-level chapter-generation queue
+         * @description Single-file workspace queue persisted to `<workspace>/.queue.json`.
+         *     Aggregated across all books — entries from different books interleave
+         *     based on `order`. Drains FIFO, one entry at a time. Read on app cold
+         *     boot to restore the queue across reloads. See plan
+         *     `docs/features/102-global-queue-modal.md`.
+         */
+        get: operations["getQueue"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/queue/enqueue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Append entries to the workspace queue
+         * @description Appends one or more entries to the bottom of the queue. The frontend
+         *     pre-expands `scope: 'forward'` (regenerate chapter N + all subsequent)
+         *     into per-chapter ids before posting, so this route only sees scoped
+         *     entries that map 1:1 to a chapter id.
+         */
+        post: operations["enqueueQueueEntries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/queue/reorder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reorder the workspace queue (excluding the in-flight pinned entry) */
+        post: operations["reorderQueue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/queue/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Toggle queue-global pause
+         * @description Sets the queue-global `paused` flag. When true, the dispatcher waits
+         *     at the next chapter boundary — the currently in-flight chapter runs
+         *     to completion, then the queue stops. Resume by POSTing `{ paused:
+         *     false }`. Persists to `<workspace>/.queue.json`.
+         */
+        post: operations["setQueuePaused"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/queue/{entryId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel (remove) a queued entry
+         * @description Removes the entry from the queue. Refuses with 409 if the entry is
+         *     currently `in_progress` — the user must Pause first.
+         */
+        delete: operations["cancelQueueEntry"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/generation": {
         parameters: {
             query?: never;
@@ -645,7 +753,12 @@ export interface paths {
          *     analysis`). Each `data: <json>` payload follows the GenerationTick
          *     schema. Synthesises chapters one at a time; per-chapter completion
          *     writes `audio/<chapterSlug>.mp3` + `audio/<chapterSlug>.segments.json`
-         *     into the workspace book directory.
+         *     into the workspace book directory. On every new subscriber (cold
+         *     connect AND post-reconnect during dev `tsx watch` restarts or
+         *     production server bounce), the server emits a `resume_from` ack as
+         *     the first event carrying the snapshot of completed chapter ids for
+         *     the active queue entry so the reconnect doesn't replay. See plan
+         *     `docs/features/102-global-queue-modal.md`.
          */
         post: operations["streamGeneration"];
         delete?: never;
@@ -1631,9 +1744,14 @@ export interface components {
              *     tick and `chapter_complete`, while the server concatenates the PCM,
              *     writes the MP3 + segments JSON, and updates state.json. Surfaces
              *     the disk-write phase so the UI doesn't look stalled at 99 %.
+             *     `resume_from` is emitted as the FIRST event on every new subscriber
+             *     (cold connect AND reconnect after `tsx watch` restart or server
+             *     bounce) and carries a snapshot of completed chapter ids for the
+             *     active queue entry so the reconnect doesn't replay completed work.
+             *     See plan `docs/features/102-global-queue-modal.md`.
              * @enum {string}
              */
-            type: "progress" | "chapter_assembling" | "chapter_complete" | "chapter_failed" | "idle";
+            type: "progress" | "chapter_assembling" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from";
             chapterId?: number;
             /** @description null = chapter-wide tick (not character-specific). */
             characterId?: string | null;
@@ -1682,6 +1800,83 @@ export interface components {
              */
             audioModelKey?: "kokoro-v1" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             errorReason?: string | null;
+            /**
+             * @description On `progress`, `chapter_assembling`, `chapter_complete`,
+             *     `chapter_failed`, and `resume_from` — the workspace queue entry
+             *     this tick belongs to. Lets the frontend map ticks to the right
+             *     queue row even when entries from different books interleave.
+             *     Optional for backward compat — older servers (pre-plan-102) omit
+             *     it and the frontend falls back to (bookId, chapterId) matching.
+             */
+            queueEntryId?: string;
+            /**
+             * @description Only on `resume_from` — list of chapter ids already complete on
+             *     disk for the active queue entry's containing run, so the frontend
+             *     can skip replaying `chapter_complete` ticks for them when the
+             *     server catches a new subscriber up.
+             */
+            resumeFromCompletedChapterIds?: number[];
+        };
+        QueueEntry: {
+            /** @description Stable unique entry id. Frontend-minted at enqueue time. */
+            id: string;
+            bookId: string;
+            chapterId: number;
+            /**
+             * @description `this` = (re)generate the named chapter. `character` = regenerate
+             *     the named character's lines in this chapter only. `forward` scope
+             *     (regenerate chapter N + all subsequent) is expanded by the
+             *     frontend at enqueue time into one `this` entry per affected
+             *     chapter — the slice never carries `forward` as a single row, so
+             *     every queue entry maps 1:1 to a chapter and the user can reorder
+             *     each chapter in a forward range individually.
+             * @enum {string}
+             */
+            scope: "this" | "character";
+            /** @description Required when scope === 'character'; null otherwise. */
+            characterId?: string | null;
+            /**
+             * Format: date-time
+             * @description ISO 8601 timestamp the entry was enqueued. Drives FIFO ordering when ties on `order` occur during concurrent enqueues.
+             */
+            addedAt: string;
+            /**
+             * @description `queued` = waiting. `in_progress` = currently synthesising
+             *     (pinned; non-draggable in the modal). `paused` = queue-global
+             *     pause flipped; still ordered, drains on resume. `done` = audio
+             *     on disk for this entry's chapter. `failed` = synthesis errored;
+             *     surfaces in the modal with a retry affordance.
+             * @enum {string}
+             */
+            status: "queued" | "in_progress" | "paused" | "done" | "failed";
+            /** @description Cross-book ordinal within the workspace queue. 0 = first to drain. Renumbered on every reorder. */
+            order: number;
+            /** @description Per-entry render progress (0..1), mirrored from the active GenerationTick. */
+            progress?: number;
+            /** @description Populated when status === 'failed'. */
+            errorReason?: string | null;
+        };
+        QueueListResponse: {
+            /** @description All workspace queue entries, sorted by `order` ascending. */
+            entries: components["schemas"]["QueueEntry"][];
+            /** @description Queue-global pause flag. When true, the dispatcher waits at the next chapter boundary. */
+            paused: boolean;
+        };
+        QueueEnqueueRequest: {
+            bookId: string;
+            /** @description One or more chapter ids to enqueue. The frontend pre-expands `forward` scope into per-chapter ids before posting. */
+            chapterIds: number[];
+            /**
+             * @default this
+             * @enum {string}
+             */
+            scope: "this" | "character";
+            /** @description Required when scope === 'character'. */
+            characterId?: string;
+        };
+        QueueReorderRequest: {
+            /** @description Full list of entry ids in the desired final order. Server validates the list matches the current queue minus the in-flight pinned entry; mismatch returns 409 (concurrent enqueue happened; client refetches and retries). */
+            order: string[];
         };
         VoiceSampleRequest: {
             /**
@@ -3365,6 +3560,136 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["VoiceMatchResponse"];
                 };
+            };
+        };
+    };
+    getQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queue snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+        };
+    };
+    enqueueQueueEntries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QueueEnqueueRequest"];
+            };
+        };
+        responses: {
+            /** @description Resulting queue snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+        };
+    };
+    reorderQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QueueReorderRequest"];
+            };
+        };
+        responses: {
+            /** @description Resulting queue snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+            /** @description Order list doesn't match current non-pinned entries (e.g. stale view after a concurrent enqueue). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setQueuePaused: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    paused: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Resulting queue snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+        };
+    };
+    cancelQueueEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resulting queue snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+            /** @description Entry is in_progress; pause the queue first. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
