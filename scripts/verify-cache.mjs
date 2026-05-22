@@ -75,6 +75,19 @@ export const STEPS = [
     },
   },
   {
+    /* BACKLOG Could #33 — 5 hot files (analyzer/gemini + 4 routes test
+       files) run serially in a separate vitest invocation so their
+       mkdtempSync + module-import contention can't trip the main
+       parallel test:server battery. Cache invalidates on the same
+       inputs since the file list is wholly inside server/src/**. */
+    name: 'test:server-slow',
+    inputs: {
+      globs: ['server/src/**'],
+      extraFiles: ['server/vitest.config.slow.ts', 'server/vitest.config.ts', 'server/tsconfig.json'],
+      includeLockfiles: ['server'],
+    },
+  },
+  {
     name: 'test:scripts',
     inputs: {
       globs: ['scripts/lib/**', 'scripts/tests/**/*.Tests.ps1', 'scripts/tests/**/*.ps1'],
