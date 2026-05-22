@@ -63,6 +63,8 @@ function renderDrawer(
       targetBookId: string,
       targetCharacterId: string,
     ) => Promise<void>;
+    onUnlinkAlias?: (sourceCharacterId: string, aliasName: string) => Promise<void>;
+    onAddAlias?: (characterId: string, aliasName: string) => Promise<void>;
     voice?: Voice;
     baseVoices?: BaseVoice[];
     voices?: Voice[];
@@ -83,6 +85,8 @@ function renderDrawer(
           mergeCandidatesPrior={extra.mergeCandidatesPrior}
           onMerge={extra.onMerge}
           onLinkPrior={extra.onLinkPrior}
+          onUnlinkAlias={extra.onUnlinkAlias}
+          onAddAlias={extra.onAddAlias}
         />
       </Provider>,
     ),
@@ -745,5 +749,114 @@ describe('ProfileDrawer voice-preview while editing', () => {
     expect(window.localStorage.getItem('voice-preview-sample-text')).toBe(
       'Bespoke preview line.',
     );
+  });
+});
+
+describe('ProfileDrawer alias chip editing', () => {
+  const charWithAliases: Character = {
+    ...baseChar,
+    aliases: ['Sior', 'Jurek', 'Sandor', 'Shopkeeper'],
+  };
+
+  it('renders each alias as a chip with an Unlink X button when onUnlinkAlias is provided', () => {
+    renderDrawer(charWithAliases, { onUnlinkAlias: vi.fn().mockResolvedValue(undefined) });
+    /* Aliases section visible. */
+    expect(screen.getByText('Also known as')).toBeTruthy();
+    /* Each alias chip carries its own labelled close button. */
+    expect(screen.getByRole('button', { name: 'Unlink Sior' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Unlink Jurek' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Unlink Sandor' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Unlink Shopkeeper' })).toBeTruthy();
+  });
+
+  it('omits the X button when onUnlinkAlias is not provided (read-only fallback)', () => {
+    /* No onUnlinkAlias → chips render with the names but no buttons,
+       preserving the pre-feature behaviour for surfaces that don't wire
+       the callback. */
+    renderDrawer(charWithAliases);
+    expect(screen.getByText('Sior')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Unlink Sior' })).toBeNull();
+  });
+
+  it('clicking the X dispatches onUnlinkAlias with the chip name', async () => {
+    const onUnlinkAlias = vi.fn().mockResolvedValue(undefined);
+    renderDrawer(charWithAliases, { onUnlinkAlias });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Sandor' }));
+    await waitFor(() => {
+      expect(onUnlinkAlias).toHaveBeenCalledWith('halloran', 'Sandor');
+    });
+  });
+
+  it('disables every X button while an unlink is in flight (no double-fire)', async () => {
+    let resolveIt!: () => void;
+    const onUnlinkAlias = vi.fn(
+      () =>
+        new Promise<void>((r) => {
+          resolveIt = r;
+        }),
+    );
+    renderDrawer(charWithAliases, { onUnlinkAlias });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Sandor' }));
+    /* While the promise is pending, every chip's X is disabled. */
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Unlink Sior' })).toHaveProperty('disabled', true);
+    });
+    resolveIt();
+    /* Re-enabled after settle so the user can chain unlinks. */
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Unlink Sior' })).toHaveProperty(
+        'disabled',
+        false,
+      );
+    });
+  });
+
+  it('surfaces a server error inline without closing the chip row', async () => {
+    const onUnlinkAlias = vi.fn().mockRejectedValue(new Error('Backend exploded'));
+    renderDrawer(charWithAliases, { onUnlinkAlias });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Sandor' }));
+    await screen.findByText(/Backend exploded/);
+    /* Chips still rendered (chip removal is the layout's job via the
+       store dispatch; on error nothing changed). */
+    expect(screen.getByRole('button', { name: 'Unlink Sandor' })).toBeTruthy();
+  });
+
+  it('shows the "+ Add alias" button when onAddAlias is provided', () => {
+    renderDrawer(charWithAliases, { onAddAlias: vi.fn().mockResolvedValue(undefined) });
+    expect(screen.getByRole('button', { name: 'Add alias' })).toBeTruthy();
+  });
+
+  it('clicking + Add alias reveals an input that submits via Enter', async () => {
+    const onAddAlias = vi.fn().mockResolvedValue(undefined);
+    renderDrawer(baseChar, { onAddAlias });
+    fireEvent.click(screen.getByRole('button', { name: 'Add alias' }));
+    const input = screen.getByRole('textbox', { name: 'New alias name' });
+    fireEvent.change(input, { target: { value: 'Captain' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => {
+      expect(onAddAlias).toHaveBeenCalledWith('halloran', 'Captain');
+    });
+  });
+
+  it('Escape cancels the inline add input without dispatching', async () => {
+    const onAddAlias = vi.fn().mockResolvedValue(undefined);
+    renderDrawer(baseChar, { onAddAlias });
+    fireEvent.click(screen.getByRole('button', { name: 'Add alias' }));
+    const input = screen.getByRole('textbox', { name: 'New alias name' });
+    fireEvent.change(input, { target: { value: 'Captain' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    /* Input collapses back to the +Add button; nothing dispatched. */
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Add alias' })).toBeTruthy();
+    });
+    expect(onAddAlias).not.toHaveBeenCalled();
+  });
+
+  it('renders the "Also known as" header + add affordance even when the character has no aliases', () => {
+    /* The Add button needs to be reachable on aliasless characters so the
+       user can stitch in a name the analyzer missed. */
+    renderDrawer(baseChar, { onAddAlias: vi.fn().mockResolvedValue(undefined) });
+    expect(screen.getByText('Also known as')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Add alias' })).toBeTruthy();
   });
 });
