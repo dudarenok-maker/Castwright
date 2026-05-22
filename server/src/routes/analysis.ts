@@ -39,6 +39,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
+import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
 import {
   normaliseForMatch as normaliseForMatchShared,
   matchQuoteInSource,
@@ -771,10 +772,13 @@ export interface SeriesPriorCharacter {
   name?: string;
   aliases?: string[];
   description?: string;
-  /** Display title of the book this character is carried from. The
-      prompt shows it as provenance so the model can disambiguate if
-      the same name appears in two different sibling books. */
-  fromBookTitle?: string;
+  /** Display titles of every prior book in the series whose confirmed
+      cast included this character. Multiple entries when a character
+      recurs across volumes (e.g. Sophie Foster across all of KOTLC);
+      single entry when the character only appears once. The Phase 0a
+      prompt renders this as provenance so the model can disambiguate
+      cross-book name collisions. */
+  fromBookTitles?: string[];
 }
 
 /* Build the per-chapter Phase 0a inbox markdown that drives the manual /
@@ -817,7 +821,7 @@ export function buildStage1ChapterInbox(
             name: p.name,
             aliases: p.aliases?.length ? p.aliases : undefined,
             description: p.description,
-            fromBookTitle: p.fromBookTitle,
+            fromBookTitles: p.fromBookTitles?.length ? p.fromBookTitles : undefined,
           })),
           null,
           2,
@@ -1595,14 +1599,25 @@ export async function runMainAnalyzerJob(
     if (recordRef.bookId) {
       try {
         const siblingRecords = await scanSeriesCharactersForBookId(recordRef.bookId);
-        seriesPrior = siblingRecords.map((r) => ({
-          id: r.character.id,
-          name: r.character.name,
-          aliases: r.character.aliases,
-          /* library-cast-scan strips description from its projection;
-             leaving it undefined is fine -- the prompt renders without
-             it when absent. */
-          fromBookTitle: r.bookTitle,
+        /* Dedup raw per-book rows into one entry per unique character
+           before they reach the prompt and the pill. The producer scan
+           emits one row per character per book, so a recurring regular
+           contributes N rows across N prior books -- without dedup the
+           pill claims an inflated count and the model gets duplicate
+           rows in its "Known characters" section. The Profile Drawer's
+           manual continuity-link picker still hits the un-deduped scan
+           directly (server/src/routes/series-roster.ts) since it
+           legitimately needs per-book provenance. */
+        const merged = dedupSeriesPrior(siblingRecords);
+        seriesPrior = merged.map((m) => ({
+          id: m.id,
+          name: m.name,
+          aliases: m.aliases,
+          /* library-cast-scan strips description from its projection
+             so the merged entry's description is always undefined too;
+             the prompt renders without it when absent. */
+          description: m.description,
+          fromBookTitles: m.fromBookTitles,
         }));
         if (seriesPrior.length > 0) {
           /* Distinct book sources, first three names, surfaced for the
@@ -3304,11 +3319,13 @@ async function runSubsetAnalyzerJob(
     if (record.bookId) {
       try {
         const siblings = await scanSeriesCharactersForBookId(record.bookId);
-        subsetSeriesPrior = siblings.map((r) => ({
-          id: r.character.id,
-          name: r.character.name,
-          aliases: r.character.aliases,
-          fromBookTitle: r.bookTitle,
+        const merged = dedupSeriesPrior(siblings);
+        subsetSeriesPrior = merged.map((m) => ({
+          id: m.id,
+          name: m.name,
+          aliases: m.aliases,
+          description: m.description,
+          fromBookTitles: m.fromBookTitles,
         }));
       } catch (priorErr) {
         console.warn('[analysis-subset] series prior scan failed:', priorErr);
