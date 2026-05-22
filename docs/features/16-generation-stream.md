@@ -43,7 +43,7 @@ Streams chapter audio generation via Server-Sent-Events. The client opens a long
 - `GenerationTick` union: `'progress' | 'chapter_assembling' | 'chapter_complete' | 'chapter_failed' | 'idle'`. Payload fields per type:
   - `progress` → `chapterId, characterId, progress, currentLine, totalLines`. One emitted per same-speaker group; `characterId` is the live speaker.
   - `chapter_assembling` → `chapterId` (required); `totalGroups?`, `durationSec?` carry the run summary about to land on disk. Fired between the last group and the MP3 encode + write (encoder + atomic-rename detail in [plan 28](28-chapter-audio-format.md)).
-  - `chapter_complete` → `chapterId`; `totalLines` optional.
+  - `chapter_complete` → `chapterId`; `totalLines?`, `audioModelKey?`, `durationSec?` optional. `durationSec` is a belt-and-suspenders duplicate of the `chapter_assembling` carry — emitted on every completion (run-time and replay) so the chapter row's duration label flips to the real audio length even when the assembling tick was lost on the wire (hidden tab, cross-book guard, parallel-chapter coalesce). The reducer applies it idempotently: re-stamping the same value the assembling tick already wrote is a no-op.
   - `chapter_failed` → either `chapterId + errorReason` (per-chapter synth failure), OR **no `chapterId`** with `errorReason` (stream-level setup error: modelKey rejected, cast missing, sidecar down). The chapter-less form populates `chaptersState.lastError` and flips the currently in-flight chapter to `failed`.
   - `idle` → no extra fields. Fired when the server has nothing to do.
 - SSE frame format mirrors analysis stream: `data: <json>\n\n`, `\n`-joined multi-line `data:`.

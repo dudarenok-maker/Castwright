@@ -305,6 +305,12 @@ export interface StreamArgs {
     progress?: number;
     totalLines?: number;
     characters: Record<string, string>;
+    /** Hydrated duration string ('MM:SS' / 'HH:MM:SS' / '00:00' placeholder).
+        Mock uses it to back-derive a plausible `durationSec` for the
+        chapter_complete tick so the Listen-view chapter row flips to a
+        real value when the fixture carries one. Empty / '00:00' falls
+        back to a synthetic per-line average. */
+    duration?: string;
   }>;
   onTick: (ev: GenerationTick & { type: GenerationTick['type'] }) => void;
   /** Mock-only: number of chapters to keep in-flight in parallel. Mirrors the
@@ -920,13 +926,24 @@ function mockStreamGeneration({
           ? cast[Math.min(cast.length - 1, Math.floor(nextProgress * cast.length))]
           : null;
       if (nextProgress >= 1) completedThisTick += 1;
+      /* Mirror the real server's contract: chapter_complete carries
+         `durationSec` so the Listen row updates without waiting on the
+         (mock-omitted) chapter_assembling tick. Re-uses the chapter's
+         pre-canned duration when present; falls back to a synthetic
+         ~5 s-per-line value otherwise. */
+      const isComplete = nextProgress >= 1;
+      const mockDurationSec =
+        active.duration && active.duration !== '00:00'
+          ? parseDuration(active.duration)
+          : totalLines * 5;
       onTick({
-        type: nextProgress >= 1 ? 'chapter_complete' : 'progress',
+        type: isComplete ? 'chapter_complete' : 'progress',
         chapterId: active.id,
         characterId,
         progress: nextProgress,
         currentLine,
         totalLines,
+        ...(isComplete ? { durationSec: mockDurationSec } : {}),
       });
     }
 

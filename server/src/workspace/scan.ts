@@ -19,6 +19,7 @@ import {
 import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
+import { formatDuration } from '../audio/format-duration.js';
 
 export type LibraryBookStatus =
   | 'not_analysed'
@@ -638,11 +639,25 @@ export async function backfillAudioModelKeysFromSegments(
         !ch.audioRenderedAt &&
         typeof meta.synthesizedAt === 'string' &&
         meta.synthesizedAt.length > 0;
-      if (needsModelKey || needsRenderedAt) {
+      /* Duration backfill: legacy chapters and chapters rendered via code
+         paths that pre-date generation.ts's state.json update block sit at
+         the analysis-seeded '00:00' even after their MP3 is on disk. The
+         segments file always carries the real PCM-measured durationSec, so
+         the same loop that backfills modelKey + renderedAt can repair
+         duration without an extra read. Treat empty + '00:00' as equally
+         unset — both come from `hydrateFromBookState`'s `c.duration ??
+         '00:00'` fallback and the analysis seed. */
+      const needsDuration =
+        (!ch.duration || ch.duration === '00:00') &&
+        typeof meta.durationSec === 'number' &&
+        Number.isFinite(meta.durationSec) &&
+        meta.durationSec > 0;
+      if (needsModelKey || needsRenderedAt || needsDuration) {
         next[i] = {
           ...ch,
           ...(needsModelKey ? { audioModelKey: meta.modelKey } : {}),
           ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
+          ...(needsDuration ? { duration: formatDuration(meta.durationSec as number) } : {}),
         };
         backfillNeeded = true;
       }

@@ -316,6 +316,56 @@ describe('chaptersSlice — applyGenerationTick', () => {
         eliza: 'skipped',
       });
     });
+
+    /* Regression for the duration='00:00' Listen-view bug: chapter_complete
+       carries durationSec as a belt-and-suspenders fallback to the
+       chapter_assembling tick (which can be dropped by the cross-book
+       guard, parallel-chapter coalesce, or a hidden tab). The reducer
+       must update ch.duration from this fallback so the chapter row
+       flips to its real audio length the moment the Done pill lands. */
+    it('updates ch.duration from durationSec when the chapter is stuck at 00:00', () => {
+      const start = baseState([
+        makeChapter(3, { state: 'in_progress', progress: 0.95, duration: '00:00' }),
+      ]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_complete', chapterId: 3, totalLines: 400, durationSec: 768 }),
+        ),
+      );
+      expect(next.chapters[0].duration).toBe('12:48');
+    });
+
+    it('updates ch.duration even if assembling already set it — idempotent re-stamp', () => {
+      /* When assembling DID land first, the value the chapter_complete
+         tick carries is the same one — re-applying it is a no-op the
+         reducer pays trivially. This pins that the chapter_complete
+         path doesn't gate on "duration looks empty" and silently regress
+         to the assembling-only behavior. */
+      const start = baseState([
+        makeChapter(3, { state: 'in_progress', progress: 0.99, duration: '12:48' }),
+      ]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_complete', chapterId: 3, totalLines: 400, durationSec: 768 }),
+        ),
+      );
+      expect(next.chapters[0].duration).toBe('12:48');
+    });
+
+    it('leaves ch.duration alone when chapter_complete omits durationSec (older server)', () => {
+      const start = baseState([
+        makeChapter(3, { state: 'in_progress', progress: 0.99, duration: '11:14' }),
+      ]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_complete', chapterId: 3, totalLines: 400 }),
+        ),
+      );
+      expect(next.chapters[0].duration).toBe('11:14');
+    });
   });
 
   describe('chapter_failed', () => {
