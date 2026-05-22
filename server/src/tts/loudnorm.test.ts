@@ -11,7 +11,9 @@ import {
   buildSecondPassFilterString,
   buildSinglePassFilterString,
   isMeasurementUseable,
+  isSecondPassMeasurementUseable,
   parseLoudnormFirstPassJson,
+  parseLoudnormSecondPassJson,
   runLoudnormFirstPass,
   DEFAULT_LOUDNORM_OPTIONS,
   type LoudnormFirstPassStats,
@@ -197,11 +199,105 @@ describe('buildSecondPassFilterString', () => {
     };
     const opts: LoudnormOptions = { target: -16, lra: 11, tp: -1.5, twoPass: true };
     const filter = buildSecondPassFilterString(stats, opts);
+    /* print_format=json (not summary) so mp3.ts can parse the post-
+       normalisation output_i out of the encode's stderr. Persisting the
+       output value into the sidecar is the 2026-05-22 LUFS-drift fix. */
     expect(filter).toBe(
       'loudnorm=I=-16:LRA=11:TP=-1.5' +
         ':measured_I=-22.5:measured_LRA=9.4:measured_TP=-2.13' +
-        ':measured_thresh=-32.5:offset=6.45:linear=true:print_format=summary',
+        ':measured_thresh=-32.5:offset=6.45:linear=true:print_format=json',
     );
+  });
+});
+
+describe('parseLoudnormSecondPassJson', () => {
+  /* Fully-populated second-pass JSON block — the input_* fields are the
+     re-reported pre-filter measurement, the output_* fields are the post-
+     filter measurement we actually want to persist. */
+  const realSecondPassJson = `{
+    "input_i" : "-22.50",
+    "input_tp" : "-2.13",
+    "input_lra" : "9.40",
+    "input_thresh" : "-32.50",
+    "output_i" : "-16.02",
+    "output_tp" : "-1.51",
+    "output_lra" : "8.40",
+    "output_thresh" : "-26.10",
+    "normalization_type" : "linear",
+    "target_offset" : "6.45"
+  }`;
+
+  it('parses both input_* and output_* sides into a single stats record', () => {
+    const stats = parseLoudnormSecondPassJson(realSecondPassJson);
+    expect(stats.input_i).toBe(-22.5);
+    expect(stats.input_lra).toBe(9.4);
+    expect(stats.input_tp).toBe(-2.13);
+    expect(stats.output_i).toBe(-16.02);
+    expect(stats.output_lra).toBe(8.4);
+    expect(stats.output_tp).toBe(-1.51);
+    expect(stats.normalization_type).toBe('linear');
+    expect(stats.target_offset).toBe(6.45);
+  });
+
+  it('throws on missing output_i rather than silently fabricating a value', () => {
+    /* The whole point of this fix is to persist the post-normalisation
+       measurement. If the JSON is missing output_i, the caller MUST fall
+       back to the input-side sidecar — not get NaN. */
+    const malformed = `{
+      "input_i": "-22.5", "input_lra": "9.4", "input_tp": "-2.1",
+      "input_thresh": "-32.5", "target_offset": "6.45",
+      "normalization_type": "linear"
+    }`;
+    expect(() => parseLoudnormSecondPassJson(malformed)).toThrow(/output_i/);
+  });
+
+  it('coerces "-inf" output_i to -Infinity (degenerate post-filter case)', () => {
+    /* In practice the second pass should never produce -inf — but if it
+       did, isSecondPassMeasurementUseable returns false and the caller
+       falls back to the input-side sidecar rather than persisting -inf. */
+    const degenerate = `{
+      "input_i": "-22.5", "input_lra": "9.4", "input_tp": "-2.1",
+      "input_thresh": "-32.5",
+      "output_i": "-inf", "output_lra": "0", "output_tp": "-inf",
+      "output_thresh": "-70",
+      "normalization_type": "linear", "target_offset": "6.45"
+    }`;
+    const stats = parseLoudnormSecondPassJson(degenerate);
+    expect(stats.output_i).toBe(-Infinity);
+    expect(isSecondPassMeasurementUseable(stats)).toBe(false);
+  });
+
+  it('throws on missing normalization_type (string field, not numeric)', () => {
+    const noType = `{
+      "input_i": "-22.5", "input_lra": "9.4", "input_tp": "-2.1",
+      "input_thresh": "-32.5",
+      "output_i": "-16", "output_lra": "8", "output_tp": "-1.5",
+      "output_thresh": "-26", "target_offset": "6.45"
+    }`;
+    expect(() => parseLoudnormSecondPassJson(noType)).toThrow(/normalization_type/);
+  });
+});
+
+describe('isSecondPassMeasurementUseable', () => {
+  function fixture(overrides: Partial<{ output_i: number; output_lra: number; output_tp: number; output_thresh: number }>) {
+    return {
+      input_i: -22.5, input_lra: 9.4, input_tp: -2.1, input_thresh: -32.5,
+      output_i: -16, output_lra: 8, output_tp: -1.5, output_thresh: -26,
+      normalization_type: 'linear', target_offset: 6.45,
+      ...overrides,
+    };
+  }
+
+  it('returns true when every output_* field is finite', () => {
+    expect(isSecondPassMeasurementUseable(fixture({}))).toBe(true);
+  });
+
+  it('returns false when output_i is -Infinity', () => {
+    expect(isSecondPassMeasurementUseable(fixture({ output_i: -Infinity }))).toBe(false);
+  });
+
+  it('returns false when output_tp is non-finite', () => {
+    expect(isSecondPassMeasurementUseable(fixture({ output_tp: Infinity }))).toBe(false);
   });
 });
 
@@ -303,6 +399,46 @@ describeIfFfmpeg('encodePcmToAudio with two-pass loudnorm (real ffmpeg)', () => 
     expect(Number.isFinite(stats.tp)).toBe(true);
     expect(typeof stats.measuredAt).toBe('string');
     expect(stats.measuredAt).toMatch(/\dT\d/);
+  }, 60_000);
+
+  /* Regression for the 2026-05-22 LUFS-drift fix: the sidecar payload now
+     carries the POST-normalisation output_i, not the pre-filter input_i.
+     With DEFAULT_LOUDNORM_OPTIONS.target = -16 and twoPass = true, the
+     callback's `i` value must land near the target — not at the raw PCM's
+     pre-filter loudness (which for a -6 dBFS sine is around -9 LUFS). */
+  it('sidecar i carries the post-normalisation output loudness near the target', async () => {
+    const sampleRate = 24_000;
+    /* Two-segment loud+quiet concatenation gives the loudnorm filter
+       enough non-trivial program-loudness variance to settle on a
+       sensible offset; a single uniform sine confuses the gate. */
+    const loud = sinePcm(sampleRate, 2.5, 440, 24000);
+    const quiet = sinePcm(sampleRate, 2.5, 660, 3000);
+    const pcm = Buffer.concat([loud, quiet]);
+
+    /* Capture the un-normalised PCM's input integrated loudness so we can
+       assert the sidecar value is "significantly closer to target than
+       the raw input was" — the literal symptom the user reported. */
+    const firstPass = await runLoudnormFirstPass(pcm, sampleRate, DEFAULT_LOUDNORM_OPTIONS);
+    const rawInputI = firstPass.input_i;
+
+    let sidecar: { i: number; twoPass: boolean; target: number } | null = null;
+    await encodePcmToAudio(pcm, sampleRate, {
+      quality: 2,
+      loudnorm: DEFAULT_LOUDNORM_OPTIONS,
+      onLoudnessMeasured: (s) => {
+        sidecar = s;
+      },
+    });
+    expect(sidecar).not.toBeNull();
+    expect(sidecar!.twoPass).toBe(true);
+    expect(sidecar!.target).toBe(-16);
+    /* Hard contract: the sidecar value is the POST-normalisation reading
+       (within ~2 LU of target — generous to absorb synthetic-sine gate
+       noise), not the pre-filter input. */
+    expect(Math.abs(sidecar!.i - -16)).toBeLessThan(2);
+    /* And the gap from raw-input-to-target must be MUCH wider than the
+       gap from sidecar-to-target — the whole point of the fix. */
+    expect(Math.abs(sidecar!.i - -16)).toBeLessThan(Math.abs(rawInputI - -16) / 2);
   }, 60_000);
 });
 
