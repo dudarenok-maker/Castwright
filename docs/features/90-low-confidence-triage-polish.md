@@ -86,3 +86,53 @@ Run in mock mode (`npm run dev`):
 
 (Filled in when status flips to `stable`. Append: shipped date, commit SHA, any
 behaviour delta vs. the original spec.)
+
+### Post-ship polish — picker portal + dismissal + dark surface
+
+Triaged a fresh manuscript on 2026-05-22 and hit three regressions in this
+component that the original ship missed:
+
+1. **Inspector picker was clipped.** `CharacterSearchPicker` was positioned
+   `absolute` inside the inspector's `overflow-y-auto` middle (`src/views/manuscript.tsx`).
+   On a tall cast (especially with the "From prior books in this series" group
+   below the separator) the bottom rows fell past the inspector card and were
+   unreachable — the user reported "doesn't show all characters in book or
+   series." Fix: portal the picker to `document.body` via `createPortal` and
+   anchor it with `position: fixed` from the trigger's `getBoundingClientRect`.
+   New prop shape: `anchorRef`, `placement`, `minWidth` (replaces the per-caller
+   `className` positioning override). Auto-flips to render above the trigger
+   when it would spill past the viewport bottom; re-positions on `window` scroll
+   (capture phase, catches nested scroll containers) + resize.
+2. **Row-level dropdown closed mid-gesture.** `SegmentRow`'s `onMouseLeave`
+   handler called `setMenuOpen(false)`. The popover lives outside the row's
+   bounding box, so moving the cursor from the trigger into the popover fired
+   the row's `mouseleave` and the menu closed before the user could click a
+   character. Fix: drop the row-level `setMenuOpen(false)` and centralise
+   dismissal inside the picker as a document `mousedown` listener that
+   excludes both the popover and the anchor.
+3. **Dark-mode contrast on the floating surface.** `bg-white` redirected to
+   `#1f1b19` under `[data-theme='dark']`, only Δ12 lighter than `--canvas`.
+   The popover read as bleed-through over manuscript prose. Fix: new
+   `.picker-surface` rule in `src/styles.css` that lifts the dark popover to
+   `#2a2520` with `rgba(244,239,236,0.18)` border, plus `shadow-float` (already
+   defined for elevated overlays) and `z-50` so the popover lands above the
+   inspector's sticky-aside z-stacking.
+
+**Files touched:** `src/components/character-search-picker.tsx`,
+`src/views/manuscript.tsx`, `src/styles.css`.
+
+**New tests:** five additional cases in
+`src/components/character-search-picker.test.tsx` (portal + dismissal),
+two cases in `src/views/manuscript.test.tsx` (Grizel-reachable + row-popover
+survives pointerleave), one entry in `src/test/dark-mode-css.test.ts`
+(`.picker-surface`), and a new Playwright spec
+`e2e/manuscript-reassign-picker.spec.ts` (portal contract + dismissal + dark
+visual baseline).
+
+**Invariant 1 of this plan (kind='local' vs 'roster' row keying)** is unchanged
+— the pick path branches before the portal renders, so the materialise-then-
+assign flow for roster picks is unaffected.
+
+**Reversibility:** drop `createPortal` + the new props; restore the per-caller
+`className` positioning; restore `setMenuOpen(false)` in `onMouseLeave`. No
+on-disk state shape changed.
