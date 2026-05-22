@@ -62,7 +62,7 @@ export function StickyAnalysisBar({
   return (
     <div
       data-testid="sticky-analysis-bar"
-      className="sticky top-16 z-30 -mx-6 px-6 py-2 flex flex-wrap items-center gap-x-3 gap-y-2 bg-canvas/85 backdrop-blur-md border-b border-ink/10"
+      className="sticky top-16 z-30 self-stretch -mx-6 px-6 py-2 flex flex-wrap items-center gap-x-3 gap-y-2 bg-canvas/85 backdrop-blur-md border-b border-ink/10"
     >
       <span
         className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-peach/15 text-[11px] font-semibold text-ink"
