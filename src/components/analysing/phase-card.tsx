@@ -9,6 +9,8 @@ import {
 import { MODEL_OPTIONS } from '../../lib/models';
 import type { AnalysisPhase, DroppedQuotesResponse } from '../../lib/types';
 import { useAppSelector } from '../../store';
+import { PhaseModelChip, type PhaseChipState } from './phase-model-chip';
+import { PhaseModelSwap } from './phase-model-swap';
 
 export type ConnState = 'idle' | 'connecting' | 'streaming' | 'error' | 'done';
 
@@ -360,6 +362,20 @@ export function PhaseCard({
   const isActive = activePhaseId === p.id;
   const isDone = activePhaseId > p.id;
   const throttleActive = throttle && throttle.until > Date.now();
+  /* Chip state derived from activePhaseId. Phase 1 reads "warming" while
+     Phase 0 is still running because attribution can't start until the
+     min-lag watermark (default 10 chapters) releases — surfaced as the
+     "warms up after chapter N" tooltip on the chip. Phase 2 returns null
+     from PhaseModelChip (no model selection), so the state value is
+     ignored there. */
+  const chipState: PhaseChipState = isDone
+    ? 'done'
+    : isActive
+      ? 'streaming'
+      : p.id === 1 && activePhaseId === 0
+        ? 'warming'
+        : 'pending';
+  const hasModelControls = p.id === 0 || p.id === 1;
   return (
     <div className="px-6 py-4 flex items-start gap-4">
       <div className="mt-1 shrink-0">
@@ -378,12 +394,22 @@ export function PhaseCard({
         )}
       </div>
       <div className="flex-1 min-w-0">
-        <p className={`font-semibold ${isDone || isActive ? 'text-ink' : 'text-ink/40'}`}>
-          {p.label}
-        </p>
-        <p className={`text-sm mt-0.5 ${isDone || isActive ? 'text-ink/60' : 'text-ink/30'}`}>
-          {p.detail}
-        </p>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0 flex-1">
+            <p className={`font-semibold ${isDone || isActive ? 'text-ink' : 'text-ink/40'}`}>
+              {p.label}
+            </p>
+            <p className={`text-sm mt-0.5 ${isDone || isActive ? 'text-ink/60' : 'text-ink/30'}`}>
+              {p.detail}
+            </p>
+          </div>
+          {hasModelControls && (
+            <div className="flex items-center gap-2 flex-wrap shrink-0">
+              <PhaseModelChip phaseId={p.id as 0 | 1} state={chipState} />
+              <PhaseModelSwap phaseId={p.id as 0 | 1} isActive={isActive} />
+            </div>
+          )}
+        </div>
         {isActive && (
           <>
             <div className="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
