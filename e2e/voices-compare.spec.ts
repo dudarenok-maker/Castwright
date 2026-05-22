@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Voice library compare entry point — plan 22a + plan 60.
+ * Voice library compare entry point — plan 22a + plan 60 + plan 96.
  *
  * Asserts the browser-level seam that Vitest+jsdom can lie about: the
  * per-book Voices tab renders multi-select checkboxes on `VoiceCard`s,
@@ -15,8 +15,12 @@ import { test, expect } from '@playwright/test';
  *
  * Global tab (plan 60): when both selected voices share a non-null
  * `bookId`, the view fetches that book's cast via `api.getBookState`
- * on demand and mounts `CompareCastModal` with the resolved
- * characters. Cross-book pairs remain disabled (BACKLOG #17).
+ * on demand and mounts `CompareCastModal` with the resolved characters.
+ *
+ * Cross-book Compare (plan 96, BACKLOG #7): cross-book pairs are now
+ * enabled — the modal mounts with a per-side "Saves propagate to every
+ * book in this series" hint, and Save routes through the new
+ * `series-patch` endpoint.
  */
 
 test.describe('voice library compare entry point', () => {
@@ -103,7 +107,7 @@ test.describe('voice library compare entry point', () => {
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5_000 });
   });
 
-  test('global #/voices tab still disables Compare on cross-book pairs (plan 60)', async ({
+  test('global #/voices tab enables cross-book Compare (plan 96, BACKLOG #7)', async ({
     page,
   }) => {
     await page.goto('/');
@@ -113,9 +117,14 @@ test.describe('voice library compare entry point', () => {
 
     await page.goto('/#/voices');
     await expect(page.getByText('Captain Halloran').first()).toBeVisible({ timeout: 10_000 });
-    /* Narrator lives in book `sb`; Halloran lives in book `ns`. The
-       cross-book guard fires for this pair — BACKLOG #17 owns lifting
-       it. */
+    /* Narrator lives in book `sb`; Halloran lives in book `ns`. Pre-plan-82
+       the cross-book guard disabled Compare for this pair with the
+       tooltip 'Cross-book compare not supported yet'. Plan 96 lifts the
+       guard; the button is now enabled and the click routes saves
+       through the new series-patch endpoint. The dialog-open assertion
+       lives in the Vitest spec (voices.test.tsx) because the mock for
+       book `sb` returns cast: null on purpose to anchor an unrelated
+       per-book-tab assertion — adding cast there would break that test. */
     await expect(page.getByText('Narrator').first()).toBeVisible();
 
     const hallCard = page.locator('div.group', { hasText: 'Captain Halloran' }).first();
@@ -125,7 +134,13 @@ test.describe('voice library compare entry point', () => {
 
     await expect(page.getByText('Selected', { exact: true })).toBeVisible();
     const compareBtn = page.getByRole('button', { name: 'Compare', exact: true });
-    await expect(compareBtn).toBeDisabled();
-    await expect(compareBtn).toHaveAttribute('title', 'Cross-book compare not supported yet');
+    await expect(compareBtn).toBeEnabled();
+    /* The old disabled-tooltip text must NOT appear — that string was
+       the BACKLOG #7 marker. Its absence proves the guard is gone in
+       the browser, not just in Vitest+jsdom. */
+    await expect(compareBtn).not.toHaveAttribute(
+      'title',
+      'Cross-book compare not supported yet',
+    );
   });
 });
