@@ -92,7 +92,7 @@ Run `VITE_USE_MOCKS=true`.
 
 ## Out of scope
 
-- **Cross-book compare** — requires caching cast data from non-current books. Tracked in `docs/BACKLOG.md` (Could).
+- **Cross-book compare** — ~~requires caching cast data from non-current books. Tracked in `docs/BACKLOG.md` (Could).~~ **Lifted by [plan 96 — Cross-book voice Compare with series-propagating saves](../96-cross-book-voice-compare.md)** (BACKLOG #7 closed in the same PR). Cross-book pairs now open the modal; Save propagates to every series-sibling cast.json row that matches the source character under the plan-94 dedup rule.
 - **Same-book compare from the global `#/voices` tab** — requires on-demand foreign cast hydrate via `api.getBookState(otherBookId)`. Tracked in `docs/BACKLOG.md` (Could).
 - **Drag-to-compare gesture** (option 2 from the exploration) — overloads the existing drag-to-reassign semantics; deferred.
 - **Per-family-scoped picker** (pure option 3) — superseded by the universal pill + badge; reconsiderable only if the badge proves insufficient signal.

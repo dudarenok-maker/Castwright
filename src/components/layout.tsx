@@ -219,6 +219,19 @@ export function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage]);
 
+  /* Reset window scroll on hash-route change. React Router v6 does not
+     restore scroll for hash routes by default and we never added a
+     <ScrollRestoration>, so without this the scroll position from one
+     view (e.g. the new-book upload form auto-scrolled to a deeper textarea)
+     leaks into the next view's landing (e.g. confirm-cast loaded at
+     scrollY ≈ 157, hiding the "Cast confirmation / Meet the cast" hero).
+     Watches `location.pathname` so view-toggles within a book (manuscript
+     → cast → listen, all under #/books/<id>/*) also re-anchor to the top
+     instead of inheriting the previous view's scroll depth. */
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
+
   /* Account hydration — fetch user-level account settings once on mount so
      the avatar can show the persisted display name and book hydration can
      read defaults from the account slice. Fires once per app boot. */
@@ -983,6 +996,8 @@ export function Layout() {
              equality survives unrelated re-renders. */
           groupsByBook={driftGroupsByBookView}
           voices={voices}
+          filterCharacterId={ui.driftReportCharacterFilter}
+          onClearFilter={() => dispatch(uiActions.clearDriftReportCharacterFilter())}
           onClose={() => dispatch(uiActions.setShowDriftReport(false))}
           onRegenerateChapter={(_evBookId, charId, chapterId) => {
             dispatch(uiActions.setShowDriftReport(false));

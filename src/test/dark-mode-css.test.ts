@@ -90,6 +90,12 @@ describe('dark-mode CSS overrides (styles.css)', () => {
     { selector: '.bg-emerald-200', label: 'emerald-200 (Done progress-bar track)' },
     { selector: '.bg-emerald-400', label: 'emerald-400 (CharStatusBar fullyDone pip)' },
     { selector: '.bg-emerald-500', label: 'emerald-500 (Done progress-bar fill)' },
+    /* Floating reassign picker (CharacterSearchPicker) — `bg-white` alone
+       only redirects to #1f1b19, which sat at nearly the same hue as
+       --canvas (#14110f) and made the popover read as if it had no
+       background over the manuscript view. `.picker-surface` lifts it
+       one more elevation step (#2a2520) and strengthens the border. */
+    { selector: '.picker-surface', label: 'floating picker surface (reassign popover)' },
   ])('repaints $label ($selector) under [data-theme=\'dark\']', ({ selector }) => {
     const pattern = new RegExp(
       String.raw`\[data-theme='dark'\][^{]*` +
