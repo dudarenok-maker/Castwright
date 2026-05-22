@@ -68,6 +68,14 @@ owner: null
 - **Invariant:** any change that touches `src/styles.css`, `tailwind.config.ts`, an icon under `src/lib/icons.tsx`, or layout JSX in the seven baselined surfaces SHOULD regenerate baselines in the same commit. Drift caught by a later unrelated PR muddies blame.
 - **Per-platform skip (2026-05-19, broadened 2026-05-22):** `e2e/responsive/visual.spec.ts` calls `test.skip` at each describe block when `e2e/<process.platform>/responsive/visual.spec.ts/` doesn't exist. Only `e2e/win32/responsive/visual.spec.ts/` is committed today, so PR CI on `ubuntu-latest` skips all 14 specs per project rather than fail with "snapshot doesn't exist, writing actual". The check is directory-level — committing a single PNG re-enables the whole spec for that platform automatically. Tracking landing Linux baselines as Should #1 in `docs/BACKLOG.md`.
 
+### Regenerate baselines (workflow_dispatch)
+
+- **Workflow:** `.github/workflows/regen-visual-baselines.yml` — `workflow_dispatch`-triggered GitHub Action that regenerates the Linux baseline tree on `ubuntu-latest` without needing a Linux box on the dev side. The workflow fans out across the three Playwright projects (chromium / mobile-chrome / tablet-chrome) in a `fail-fast: false` matrix so a flake in one leg doesn't kill the other two.
+- **Invocation:** `gh workflow run regen-visual-baselines.yml --ref main` from any dev box that has the `gh` CLI authenticated against the repo.
+- **What lands:** each matrix leg writes `e2e/linux/responsive/visual.spec.ts/<project>/*.png` (14 per project, 42 total) via Playwright's `--update-snapshots` + the snapshot path template in `playwright.config.ts:47`. A consolidation job downloads all three artifacts back into the working tree, commits them on a fresh `ci/linux-visual-baselines-regen-<run-number>` branch, pushes via `${{ secrets.GITHUB_TOKEN }}`, and opens a PR titled `ci(e2e): regenerate Linux visual baselines (run #N)` against `main`.
+- **Review path:** reviewer merges the auto-PR; the directory-level skip at `e2e/responsive/visual.spec.ts:85` un-skips the Linux visual specs automatically the moment `e2e/linux/responsive/visual.spec.ts/` exists in the merged tree. From the next PR Verify run onward, the visual battery reports `42 passed` instead of `42 skipped`.
+- **When to re-run:** any time an upstream chromium bump causes Linux drift (font hinting changes, system-font path swaps on the runner image), or when a deliberate visual change lands and the Linux baselines need to follow the Windows ones in the same diff. Cheaper than maintaining WSL/Docker on every dev box.
+
 ### Manual acceptance walkthrough
 
 Run from a clean checkout:
