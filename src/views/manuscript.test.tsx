@@ -243,6 +243,127 @@ describe('ManuscriptView — large book sidebar structure', () => {
   });
 });
 
+/* Detected list ordering — characters in the left sidebar's Detected card
+   sort by line count in the currently-selected chapter (descending), with
+   roster order as the stable tiebreaker. Zero-count characters fall to the
+   bottom and dim to 60% opacity so they're still reachable for
+   cross-chapter reassignment but don't compete with the chapter's actual
+   speakers for vertical space. */
+describe('ManuscriptView — Detected list ordering', () => {
+  const orderingCharacters: Character[] = [
+    { id: 'a', name: 'Alice', role: 'Cast', color: 'narrator' },
+    { id: 'b', name: 'Bob', role: 'Cast', color: 'narrator' },
+    { id: 'c', name: 'Carol', role: 'Cast', color: 'narrator' },
+    { id: 'd', name: 'Dave', role: 'Cast', color: 'narrator' },
+  ];
+  const orderingChapters: Chapter[] = [
+    {
+      id: 1,
+      title: 'Chapter One',
+      duration: '10:00',
+      state: 'done',
+      progress: 1,
+      characters: {},
+    },
+    {
+      id: 2,
+      title: 'Chapter Two',
+      duration: '10:00',
+      state: 'done',
+      progress: 1,
+      characters: {},
+    },
+  ];
+  /* Chapter 1: Carol speaks 5 lines, Alice speaks 2; Bob and Dave silent.
+     Chapter 2: Alice speaks 6 lines; everyone else silent. */
+  const orderingSentences: Sentence[] = [
+    ...Array.from({ length: 5 }, (_, i) => ({
+      id: i + 1,
+      chapterId: 1,
+      characterId: 'c',
+      text: `Carol line ${i + 1}.`,
+    })),
+    ...Array.from({ length: 2 }, (_, i) => ({
+      id: i + 6,
+      chapterId: 1,
+      characterId: 'a',
+      text: `Alice line ${i + 1}.`,
+    })),
+    ...Array.from({ length: 6 }, (_, i) => ({
+      id: i + 1,
+      chapterId: 2,
+      characterId: 'a',
+      text: `Alice chapter-two line ${i + 1}.`,
+    })),
+  ];
+
+  function renderOrderingView(currentChapterId: number) {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={orderingCharacters}
+          chapters={orderingChapters}
+          currentChapterId={currentChapterId}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={orderingSentences}
+        />
+      </Provider>,
+    );
+  }
+
+  /* Scope queries to the Detected card so we don't accidentally hit the
+     reassign-list copy of character names inside the inspector. The
+     character rows carry `data-character-id` so order is recoverable
+     without depending on display strings. */
+  function detectedOrder(): string[] {
+    const detectedHeading = screen.getByRole('heading', { name: 'Detected' });
+    const card = detectedHeading.closest('aside');
+    if (!card) throw new Error('Detected card not found');
+    const rows = within(card).getAllByText(/^(Alice|Bob|Carol|Dave)$/);
+    return rows.map((el) => el.textContent ?? '');
+  }
+
+  it('sorts Detected by line count in the current chapter, with roster order as the tiebreaker', () => {
+    renderOrderingView(1);
+    /* Carol (5) > Alice (2) > [Bob (0), Dave (0)] in roster order. */
+    expect(detectedOrder()).toEqual(['Carol', 'Alice', 'Bob', 'Dave']);
+  });
+
+  it('re-sorts when the active chapter changes', () => {
+    renderOrderingView(2);
+    /* Alice (6) > [Bob (0), Carol (0), Dave (0)] in roster order. */
+    expect(detectedOrder()).toEqual(['Alice', 'Bob', 'Carol', 'Dave']);
+  });
+
+  it('dims rows for characters with zero lines in the current chapter while keeping the active speakers loud', () => {
+    renderOrderingView(1);
+    const detectedHeading = screen.getByRole('heading', { name: 'Detected' });
+    const card = detectedHeading.closest('aside');
+    if (!card) throw new Error('Detected card not found');
+    /* Pull each row by its data-character-id so we can assert per-row
+       opacity without depending on display order (already covered above). */
+    function rowFor(id: string): HTMLElement {
+      const node = card!.querySelector(`[data-character-id="${id}"]`);
+      if (!(node instanceof HTMLElement)) {
+        throw new Error(`Detected row for ${id} not found`);
+      }
+      return node;
+    }
+    /* Carol + Alice spoke → not dimmed. */
+    expect(rowFor('c').className).not.toMatch(/opacity-60/);
+    expect(rowFor('a').className).not.toMatch(/opacity-60/);
+    /* Bob + Dave silent in chapter 1 → dimmed. */
+    expect(rowFor('b').className).toMatch(/opacity-60/);
+    expect(rowFor('d').className).toMatch(/opacity-60/);
+  });
+});
+
 /* Right-pane SegmentInspector — same shape of bug as the left sidebar.
    The "Reassign whole segment to" list and the help-text footer used to
    flow without bound, so a 30-character cast pushed the help line below
