@@ -10,7 +10,8 @@ without changing component code.
 - `npm run dev` — Vite dev server (HMR) on `http://localhost:5173`.
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
-- `npm run test:server` — Vitest single-run for the server.
+- `npm run test:server` — Vitest single-run for the server (parallel, excludes the 5 hot files routed to `test:server-slow`).
+- `npm run test:server-slow` — Vitest single-run for 5 timeout-prone server test files (analyzer/gemini + 4 routes test files), pinned to one fork via `server/vitest.config.slow.ts`. Runs in pre-push `verify` after `test:server`; not in `verify:fast` pre-commit. See `docs/features/45-vitest-pool-tuning.md` for the rationale.
 - `npm run test:scripts` — Pester 5 single-run for `scripts/lib/` PowerShell helpers
   (log rotation/pruning). Requires Pester >= 5.0; install once with
   `Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck`.
@@ -18,9 +19,10 @@ without changing component code.
   Uses the sidecar venv at `server/tts-sidecar/.venv\Scripts\python.exe`; emits
   a SKIP banner and exits 0 when the venv isn't bootstrapped yet (fresh clone).
 - `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.
-  Requires one-time `npx playwright install chromium`. See `docs/features/37-e2e-playwright.md`.
+  Requires one-time `npx playwright install chromium`. Excludes the visual baselines (run via `test:e2e:visual` separately). See `docs/features/archive/37-e2e-playwright.md`.
+- `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Lands in pre-push `verify`.
 - `npm run test:fast` — frontend + server only (matches the pre-commit hook).
-- `npm run test:all` — frontend + server + PowerShell-scripts + sidecar tests (no e2e).
+- `npm run test:all` — frontend + server + server-slow + PowerShell-scripts + sidecar tests (no e2e).
 - `npm run verify` — full battery: typecheck + all tests + e2e + build (matches the pre-push hook).
 - `npm run verify:quick` — all tests (no e2e, no typecheck, no build) — alias for `test:all`.
 - `npm run verify:fast` — fast tests only (alias for `test:fast`) — pre-commit gate.
