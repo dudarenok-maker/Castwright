@@ -427,3 +427,136 @@ describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () =
     expect(next.characters).toEqual(start.characters);
   });
 });
+
+describe('castSlice — applyUnlinkAlias (POST /cast/unlink-alias response)', () => {
+  it('strips the alias from the source and appends the new standalone character', () => {
+    const start = baseState([
+      makeChar('Saltgrave-figure', {
+        aliases: ['Sior', 'Jurek', 'Garrow', 'Shopkeeper'],
+        gender: 'male',
+        ageRange: 'adult',
+      }),
+      makeChar('Wren'),
+    ]);
+    const newCharacter: Character = {
+      id: 'Garrow',
+      name: 'Garrow',
+      role: 'character',
+      color: 'narrator',
+      gender: 'male',
+      ageRange: 'adult',
+    } as Character;
+    const next = castSlice.reducer(
+      start,
+      castActions.applyUnlinkAlias({
+        sourceCharacterId: 'Saltgrave-figure',
+        aliasName: 'Garrow',
+        newCharacter,
+      }),
+    );
+    const source = next.characters.find((c) => c.id === 'Saltgrave-figure')!;
+    expect(source.aliases).toEqual(['Sior', 'Jurek', 'Shopkeeper']);
+    /* New character lands at the end of the array, defaults to
+       voiceState='generated' so the Cast view's Status column renders
+       a pill rather than blank. */
+    expect(next.characters[next.characters.length - 1]).toEqual({
+      ...newCharacter,
+      voiceState: 'generated',
+    });
+  });
+
+  it('is case-insensitive and trim-tolerant when matching the alias to strip', () => {
+    const start = baseState([
+      makeChar('Saltgrave-figure', { aliases: ['  Garrow  ', 'Jurek'] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyUnlinkAlias({
+        sourceCharacterId: 'Saltgrave-figure',
+        aliasName: 'Garrow',
+        newCharacter: {
+          id: 'Garrow',
+          name: 'Garrow',
+          role: 'character',
+          color: 'narrator',
+        } as Character,
+      }),
+    );
+    expect(next.characters.find((c) => c.id === 'Saltgrave-figure')!.aliases).toEqual(['Jurek']);
+  });
+
+  it('is idempotent when the new character already exists (network retry safety)', () => {
+    const existing = makeChar('Garrow', { voiceState: 'tuned', voiceId: 'v_Garrow' });
+    const start = baseState([
+      makeChar('Saltgrave-figure', { aliases: ['Garrow'] }),
+      existing,
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyUnlinkAlias({
+        sourceCharacterId: 'Saltgrave-figure',
+        aliasName: 'Garrow',
+        newCharacter: {
+          id: 'Garrow',
+          name: 'Garrow',
+          role: 'character',
+          color: 'narrator',
+        } as Character,
+      }),
+    );
+    /* Existing tuned voice is preserved. */
+    expect(next.characters).toHaveLength(2);
+    expect(next.characters.find((c) => c.id === 'Garrow')).toEqual(existing);
+    expect(next.characters.find((c) => c.id === 'Saltgrave-figure')!.aliases).toEqual([]);
+  });
+});
+
+describe('castSlice — applyAddAlias (POST /cast/add-alias response)', () => {
+  it('appends a new alias to the target character', () => {
+    const start = baseState([
+      makeChar('Wren', { aliases: ['Foster'], name: 'Wren Sparrow' }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyAddAlias({ characterId: 'Wren', aliasName: 'Sofi' }),
+    );
+    expect(next.characters[0].aliases).toEqual(['Foster', 'Sofi']);
+  });
+
+  it('dedupes case-insensitively and trim-tolerantly', () => {
+    const start = baseState([
+      makeChar('Wren', { aliases: ['Foster'], name: 'Wren Sparrow' }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyAddAlias({ characterId: 'Wren', aliasName: '  foster  ' }),
+    );
+    /* Same alias just with different casing/whitespace → no change. */
+    expect(next.characters[0].aliases).toEqual(['Foster']);
+  });
+
+  it('refuses to add the character\'s own name as an alias', () => {
+    const start = baseState([makeChar('Wren', { name: 'Wren Sparrow' })]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyAddAlias({ characterId: 'Wren', aliasName: 'Wren Sparrow' }),
+    );
+    expect(next.characters[0].aliases).toBeUndefined();
+  });
+
+  it('no-ops for an unknown characterId or empty alias', () => {
+    const start = baseState([
+      makeChar('Wren', { aliases: ['Foster'], name: 'Wren Sparrow' }),
+    ]);
+    const r1 = castSlice.reducer(
+      start,
+      castActions.applyAddAlias({ characterId: 'ghost', aliasName: 'Foo' }),
+    );
+    expect(r1).toEqual(start);
+    const r2 = castSlice.reducer(
+      start,
+      castActions.applyAddAlias({ characterId: 'Wren', aliasName: '   ' }),
+    );
+    expect(r2.characters[0].aliases).toEqual(['Foster']);
+  });
+});

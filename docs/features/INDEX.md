@@ -59,6 +59,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [09 — Voice match pipeline](09-voice-match-pipeline.md) — Post-analysis library matching.
 - [10 — Profile drawer](10-profile-drawer.md) — Character edit drawer + sample preview + evidence toggle.
 - [11 — Batch character regenerate](11-batch-character-regenerate.md) — Multi-select character → chapter-range regen.
+- [95 — Editable cast aliases](95-alias-edit.md) — Per-chip X on the Profile Drawer's "Also known as" row splits a misplaced alias back into its own standalone cast member; sibling `+ Add alias` button appends a typed name. Reattribute Lines modal (new) is opened by the X-click and lists candidate sentences in the chapters where the alias originally appeared (derived from the preserved Phase-0a `chapterCast`), reusing `manuscriptActions.setSentenceCharacter` for per-sentence picks. Two new contract-internal POST routes (`cast/unlink-alias`, `cast/add-alias`).
 
 ### E. Manuscript editing
 
