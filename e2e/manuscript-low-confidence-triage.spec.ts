@@ -93,4 +93,63 @@ test.describe('manuscript low-confidence triage', () => {
       page.getByRole('button', { name: /Captain James Halloran/i }).first(),
     ).toBeVisible({ timeout: 5_000 });
   });
+
+  /* Plan 98 — sticky stats bar regression. After scrolling deep into the
+     manuscript body, the ▲/▼ navigator + chapter Prev/Next must stay
+     pinned at the top of the viewport so the user can advance to the
+     next low-conf sentence without scrolling back up. */
+  test('sticky stats bar stays in viewport after scroll, ▼ click still works', async ({
+    page,
+  }) => {
+    await goToConfirm(page);
+    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
+    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+
+    /* Pick chapter 3 (carries the canned low-conf sentence id=13). */
+    const chapter3 = page.getByRole('button', { name: /Cold Galley|Chapter 3/i }).first();
+    if (await chapter3.isVisible().catch(() => false)) {
+      await chapter3.click();
+    }
+
+    const stickyBar = page.getByTestId('manuscript-sticky-stats-bar');
+    await expect(stickyBar).toBeVisible({ timeout: 5_000 });
+
+    /* Scroll to the bottom of the document. The bar should stay pinned. */
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+
+    const viewportHeight = (page.viewportSize() ?? { height: 900 }).height;
+    const box = await stickyBar.boundingBox();
+    expect(box, 'sticky bar has a bounding box after scroll').not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    /* Bar's top must be inside the viewport — leave a 200px slack for
+       the global topbar + the bar's own height. */
+    expect(box!.y).toBeLessThan(viewportHeight - 200);
+
+    /* Clicking the in-bar ▼ from the deep-scrolled position still opens
+       the inspector on the next low-conf sentence. */
+    const nextBtn = stickyBar.getByLabel('Next low-confidence sentence');
+    await nextBtn.click();
+    await expect(page.getByText('Reassign whole segment to').first()).toBeVisible({
+      timeout: 5_000,
+    });
+  });
+
+  /* Plan 98 — sidebar chapter badge surfaces the per-chapter low-conf
+     count so users can scan-and-pick which chapters to triage. Verifies
+     a chapter with low-conf sentences carries the amber count badge. */
+  test('sidebar chapter row shows amber low-conf count badge', async ({ page }) => {
+    await goToConfirm(page);
+    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
+    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+
+    /* Canned data has at least one chapter with confidence < 0.75
+       (chapter 3, sentence 13). The badge should be visible at desktop
+       width inside the sticky left sidebar. */
+    const badges = page.locator('[data-testid^="chapter-low-conf-badge-"]');
+    await expect(badges.first()).toBeVisible({ timeout: 5_000 });
+    /* Count is a positive integer. */
+    const badgeText = await badges.first().textContent();
+    expect(badgeText && /^\d+$/.test(badgeText.trim())).toBe(true);
+    expect(parseInt(badgeText!.trim(), 10)).toBeGreaterThan(0);
+  });
 });
