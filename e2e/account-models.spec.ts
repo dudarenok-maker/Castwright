@@ -6,6 +6,7 @@
  * pull walk through their state machines tick-by-tick. */
 
 import { test, expect } from '@playwright/test';
+import { waitForRouteReady } from './helpers';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -179,10 +180,11 @@ test.describe('plan 61 — in-app multi-model management UX', () => {
     });
 
     await page.goto('/#/account');
+    await waitForRouteReady(page);
 
     /* Step 1 — Models card surfaces. */
     const card = page.getByTestId('account-models-card');
-    await expect(card).toBeVisible({ timeout: 10_000 });
+    await expect(card).toBeVisible();
 
     /* Step 2 — Ollama not detected; click Install. */
     await expect(page.getByTestId('ollama-install-not-detected')).toBeVisible();

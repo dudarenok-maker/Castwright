@@ -59,17 +59,7 @@ Source: net-new (2026-05-20). Captured during planning of the next full version 
 
 ## Should — important, not blocking ship
 
-### 1. Investigate post-plan-89 e2e contention pattern on local pre-push
-
-Source: net-new (2026-05-22, surfaced during v1.4.0 ship). Two consecutive `npm run verify` pre-push runs failed with different specs flaking each time (`account-analyzer-knobs`, `account-models`, `bulk-sync-library`, `binary-upload`); each failing spec assertion timed out at 10 s waiting on a `getByTestId(...)` while the page yaml showed the route-level Suspense `Loading…` fallback. Same code, same machine: PR #122 CI verify on Ubuntu green (80/80 specs), worktree run at `wt-release-v1-4-0` green (80/80), each failing spec re-run in isolation green (`account-analyzer-knobs.spec.ts` → 5/5 in 28.7 s). v1.4.0 shipped via a one-shot `--no-verify` push with the release.yml cross-OS verify matrix as the safety net.
-
-- _What:_ Diagnose why the local Windows pre-push run flakes when 80+ specs share one Vite dev-server, while the same harness on a fresh GitHub Actions runner doesn't. Two hypotheses worth pulling on: (a) plan 89's route-level `React.lazy` + delayed-spinner Suspense fallback made first-paint sensitive to contention — lazy chunk requests can queue behind other tests' fetches long enough to bust the 10 s `toBeVisible` budget; (b) the local box runs heavier OS-level competing processes (browser tabs, indexers) than a fresh CI VM. Fix options to consider: lift the 10 s timeout for any first-mount `toBeVisible` on lazy-loaded routes (cleanest, lowest-risk), pre-warm the route bundle at suite start (effective but couples specs), or cap playwright workers below the default ~50% CPU on local Windows boxes (sledgehammer).
-- _Acceptance:_ either (a) raise per-spec first-mount timeouts so two consecutive `npm run verify` runs on the local box never flake on a clean checkout, or (b) document the contention threshold and codify the `--workers=N` cap in `playwright.config.ts` so the local pre-push gate matches CI behaviour. The release-day workaround (`--no-verify` plus release.yml cross-OS safety net) should not be the standard answer for a non-release push.
-- _Key files:_ `playwright.config.ts` (worker count, default test timeout), `src/components/layout.tsx` (route-level Suspense boundary added in plan 89), `src/components/delayed-spinner.tsx` (the delay knob that's racing the assertion budget), `e2e/account-analyzer-knobs.spec.ts` + `e2e/account-models.spec.ts` + `e2e/bulk-sync-library.spec.ts` + `e2e/binary-upload.spec.ts` (the flaky specs seen in the v1.4.0 push attempts).
-- _Depends on:_ none.
-- _Benefit (dev / technical):_ removes the local-only false-positive pattern that forced a release-day `--no-verify` bypass. Keeps the pre-push gate trustworthy as the suite grows past 80 specs — without this, every future minor release risks the same dance.
-
-### 2. Linux visual baselines for CI
+### 1. Linux visual baselines for CI
 
 Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e/visual.spec.ts` now skips on platforms with no committed baselines so PR Verify can go green, but PR CI then carries zero visual-regression coverage. Until Linux baselines land, only local Windows runs catch chromium drift.
 
@@ -78,7 +68,7 @@ Source: net-new (2026-05-19). Spun off from the visual-baselines CI fix — `e2e
 - _Key files:_ `e2e/linux/visual.spec.ts/` (new directory); optional `.github/workflows/regen-visual-baselines.yml`; `docs/features/archive/37-e2e-playwright.md` "Visual baselines" section.
 - _Benefit (technical):_ restores Verify as a real merge gate. Today PR CI's only red signal is "visual baselines missing" — once those land, a red Verify means real regression and reviewers stop ignoring it.
 
-### 3. Generation SSE survives Node hot-reload during dev
+### 2. Generation SSE survives Node hot-reload during dev
 
 Source: net-new (2026-05-21). Surfaced while smoke-testing PR #107 — a `tsx` restart killed the active SSE bridge and the frontend showed "Worker has gone quiet · 67s" while the sidecar kept synthesising in the background.
 
@@ -88,37 +78,27 @@ Source: net-new (2026-05-21). Surfaced while smoke-testing PR #107 — a `tsx` r
 - _Depends on:_ none. Self-contained inside the streaming surface.
 - _Benefit (dev / technical):_ no more false "stalled" banners during interactive development. Same fix incidentally covers production crash-recovery (Node OOM, manual restart) so users running long books survive a sidecar/server bounce without losing the visible progress thread.
 
-### 4. Mobile Playwright worker count tuning (browser-launch contention fix)
-
-Source: net-new (2026-05-21). Surfaced during plan 81 wave 5 development.
-
-- _What:_ Running 3 Playwright projects in parallel with the default worker count (~CPU/2) exhausted process slots on the dev box and caused browser-launch timeouts on mobile/tablet specs (real failures: 3 hard, 7 flaky on retry). Reduce `workers` to 1 or 2 for the mobile suite specifically — either via `playwright.config.ts` per-project `workers` override (if Playwright supports per-project workers; if not, via a separate config file invoked by `test:e2e:mobile`).
-- _Acceptance:_ `npm run test:e2e:mobile` runs end-to-end with no browser-launch timeouts on the dev box (current state: ~3/24 fail with `TimeoutError: browserType.launch: Timeout 180000ms exceeded`). Total wall-clock may increase slightly but reliability is more important here than speed for the mobile suite.
-- _Key files:_ `playwright.config.ts` (workers field, or per-project workers if 1.40+ supports it); maybe a new `playwright.mobile.config.ts` if a separate config is cleaner.
-- _Depends on:_ plan 81 shipped.
-- _Benefit (technical):_ unblocks Should #5 — the non-blocking CI workflow needs reliable mobile e2e to be useful as a signal source.
-
-### 5. Non-blocking GH Actions workflow for `npm run test:e2e:mobile`
+### 3. Non-blocking GH Actions workflow for `npm run test:e2e:mobile`
 
 Source: net-new (2026-05-21). Spun off from plan 81 wave 5 (PR #92).
 
 - _What:_ Add a `.github/workflows/e2e-mobile.yml` job that runs `npm run test:e2e:mobile` on every PR targeting `main`, set `continue-on-error: true` so it shows status without blocking merges. Visibility-only — the pre-push gate stays chromium-only (under the 5 min budget that plan 81 set).
 - _Acceptance:_ A PR that breaks mobile-chrome layout shows a red but non-blocking check on the PR page. A PR that doesn't touch UI shows green. Failure status surfaces in the merge UI as "Mobile e2e — failing (non-blocking)".
 - _Key files:_ new `.github/workflows/e2e-mobile.yml` mirroring `verify.yml`'s setup (node, npm cache, chromium install) but invoking `npm run test:e2e:mobile` instead of `npm run verify`. Concurrency `cancel-in-progress` per PR ref to avoid stacking runs.
-- _Depends on:_ plan 81 shipped (which added the `test:e2e:mobile` script); Should #4 (worker tuning) for the signal to be reliable.
+- _Depends on:_ plan 81 shipped (which added the `test:e2e:mobile` script); mobile worker tuning shipped (cap at `--workers=2`, see PR `fix/e2e-and-mobile-workers`) so the signal is reliable.
 - _Benefit (technical):_ catches mobile regressions in PRs without blowing the pre-push budget. Two-tier gate — mobile is opt-in for local iteration but mandatory-visibility in CI.
 
-### 6. Bless mobile + tablet visual-snapshot baselines per Playwright project
+### 4. Bless mobile + tablet visual-snapshot baselines per Playwright project
 
 Source: net-new (2026-05-21). Plan 81 wave 5 follow-up.
 
 - _What:_ Run `npx playwright test --update-snapshots --project=mobile-chrome` + `--project=tablet-chrome` to capture per-project visual baselines for the six `visual.spec.ts` views (library, upload, analysing, confirm, ready/manuscript, listen). Commit them under `e2e/win32/visual.spec.ts/<project>/<view>.png` per the existing snapshot-path template. Promote `visual.spec.ts` to assert against the captured baselines on all three projects (today it only runs at chromium).
 - _Acceptance:_ `npm run test:e2e:mobile` captures + diffs visual snapshots; a layout drift at any viewport fails the assertion. Per-platform per-project paths: `e2e/win32/visual.spec.ts/mobile-chrome/library.png` etc.
 - _Key files:_ `e2e/visual.spec.ts` (remove the chromium-only assumption; gate test.skip on the per-project baseline dir per the existing `BASELINE_DIR` pattern); regenerated PNGs in `e2e/{win32,linux,darwin}/visual.spec.ts/{mobile-chrome,tablet-chrome}/`; `playwright.config.ts:45` `snapshotPathTemplate` already includes `{platform}` — extend to `{platform}/{project}` if needed.
-- _Depends on:_ plan 81 shipped; Should #4 (worker tuning) so the snapshot run completes without timeout flake.
+- _Depends on:_ plan 81 shipped; mobile worker tuning shipped (cap at `--workers=2`, see PR `fix/e2e-and-mobile-workers`) so the snapshot run completes without timeout flake.
 - _Benefit (technical):_ pixel-level mobile/tablet regression net. Today the no-overflow assertion catches layout breakage but not visual drift; this entry closes that gap.
 
-### 7. GPU-arbitration semaphore for parallel Claude Code sessions
+### 5. GPU-arbitration semaphore for parallel Claude Code sessions
 
 Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `scripts/wt-new.mjs` resolves port collisions but leaves GPU/VRAM contention as a manual-coordination concern documented in CONTRIBUTING.md.
 
@@ -128,7 +108,7 @@ Source: net-new (2026-05-19). Spun off from the parallel-sessions tooling — `s
 - _Depends on:_ none. Pairs with the worktree parallel-sessions tooling — without the semaphore, users must queue heavy operations by hand per the CONTRIBUTING.md "GPU + shared-resource caveats" note.
 - _Benefit (user):_ removes the silent VRAM-spillover-to-RAM slowdown when two sessions hit the analyzer or sidecar concurrently. Today a parallel run can take 5–10× longer than serial because both processes thrash the GPU.
 
-### 8. In-app LAN HTTPS banner under dev settings
+### 6. In-app LAN HTTPS banner under dev settings
 
 Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 
@@ -138,7 +118,7 @@ Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
 
-### 9. Cross-book voice compare
+### 7. Cross-book voice compare
 
 Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-compare.md) v1 scope cut.
 
@@ -148,7 +128,7 @@ Source: [`22a-voice-library-compare.md`](features/archive/22a-voice-library-comp
 - _Depends on:_ plan 60 shipped (same on-demand fetch machinery is already in place; this entry lifts the cross-book guard and decides foreign-book save routing).
 - _Benefit (user):_ enables A/B for users who reuse the same TTS voice across books — e.g. comparing the same narrator across two books in a series to spot drift.
 
-### 10. Streaming audio for live playback during chapter generation
+### 8. Streaming audio for live playback during chapter generation
 
 Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
 
@@ -157,7 +137,7 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
 - _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
 
-### 11. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
+### 9. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
 
 Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warning on `npm install`; full triage in `~/.claude/plans/fancy-bouncing-lovelace.md`.
 
@@ -167,7 +147,7 @@ Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warnin
 - _Depends on:_ none structural. Pure tooling bump.
 - _Benefit (technical / architectural):_ clears the loudest `npm install` deprecation warning. Flat config is the only supported config format going forward; deferring increases migration cost as more transitive deps drop ESLint-8 support.
 
-### 12. Multer 1.x → 2.x security upgrade (server file uploads)
+### 10. Multer 1.x → 2.x security upgrade (server file uploads)
 
 Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.2: Multer 1.x is impacted by a number of vulnerabilities, which have been patched in 2.x.` on `npm install --prefix server`. Full deprecation audit notes in `~/.claude/plans/fancy-bouncing-lovelace.md`.
 
