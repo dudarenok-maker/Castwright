@@ -13,6 +13,7 @@
 import { writeFile } from 'node:fs/promises';
 import type { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { gpuSemaphore } from '../gpu/semaphore.js';
 import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../handoff/protocol.js';
 import {
   stage1Schema,
@@ -386,118 +387,132 @@ export class OllamaAnalyzer implements Analyzer {
       );
     }
 
-    let response: Response;
-    try {
-      response = await fetch(`${this.url}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal,
-      });
-    } catch (err) {
-      if (signal?.aborted) {
-        throw new AnalysisAbortedError(`Ollama ${this.model} fetch aborted (client disconnected).`);
-      }
-      throw classifyConnectError(err, this.url);
-    }
-
-    if (!response.ok) {
-      /* Reachable but errored — hard-fail. Surface the body verbatim so
-         operator can diagnose ("model not found", "invalid format", …). */
-      const text = await response.text().catch(() => '');
-      throw new Error(
-        `Ollama ${this.url} returned ${response.status} ${response.statusText}: ${text.slice(0, 500)}`,
-      );
-    }
-
-    if (!response.body) {
-      throw new Error(`Ollama ${this.url} returned an empty body (no readable stream).`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let buf = ''; // assembled assistant content
-    let lineBuf = ''; // partial NDJSON line carried across reads
-    let firstByteSeen = false;
-    const start = Date.now();
-    let lastChunkAt = start;
+    /* GPU arbitration — acquire a slot before the fetch so two parallel
+       Claude Code sessions don't fight over VRAM on an 8 GB GPU. The
+       slot is held across the full streamed response (fetch + read
+       loop) and released in the outer `finally` below; that covers
+       abort paths, fetch-throws, non-2xx responses, and mid-stream
+       errors equally well. See server/src/gpu/semaphore.ts. */
+    const releaseGpu = await gpuSemaphore.acquire();
 
     try {
-      for (;;) {
+      let response: Response;
+      try {
+        response = await fetch(`${this.url}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal,
+        });
+      } catch (err) {
         if (signal?.aborted) {
-          /* Caller (the route's req.on('close') handler) aborted while we
-             were mid-stream. Tear down cleanly rather than burning more
-             tokens on output the client will never see. */
           throw new AnalysisAbortedError(
-            `Ollama ${this.model} stream aborted (client disconnected).`,
+            `Ollama ${this.model} fetch aborted (client disconnected).`,
           );
         }
-        let result: { done: boolean; value?: Uint8Array };
-        try {
-          result = await reader.read();
-        } catch (err) {
+        throw classifyConnectError(err, this.url);
+      }
+
+      if (!response.ok) {
+        /* Reachable but errored — hard-fail. Surface the body verbatim so
+           operator can diagnose ("model not found", "invalid format", …). */
+        const text = await response.text().catch(() => '');
+        throw new Error(
+          `Ollama ${this.url} returned ${response.status} ${response.statusText}: ${text.slice(0, 500)}`,
+        );
+      }
+
+      if (!response.body) {
+        throw new Error(`Ollama ${this.url} returned an empty body (no readable stream).`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buf = ''; // assembled assistant content
+      let lineBuf = ''; // partial NDJSON line carried across reads
+      let firstByteSeen = false;
+      const start = Date.now();
+      let lastChunkAt = start;
+
+      try {
+        for (;;) {
           if (signal?.aborted) {
+            /* Caller (the route's req.on('close') handler) aborted while we
+               were mid-stream. Tear down cleanly rather than burning more
+               tokens on output the client will never see. */
             throw new AnalysisAbortedError(
               `Ollama ${this.model} stream aborted (client disconnected).`,
             );
           }
-          /* A connection drop mid-stream — daemon was up, then went away.
-             If we've already seen bytes, this is a partial-stream failure
-             (hard-fail). If we haven't, treat as unreachable. */
-          if (!firstByteSeen) throw classifyConnectError(err, this.url);
-          throw new Error(`Ollama ${this.url} stream interrupted: ${(err as Error).message}`);
-        }
-        if (result.done) break;
-        firstByteSeen = true;
-        lineBuf += decoder.decode(result.value ?? new Uint8Array(), { stream: true });
-
-        let nl: number;
-        while ((nl = lineBuf.indexOf('\n')) >= 0) {
-          const line = lineBuf.slice(0, nl).trim();
-          lineBuf = lineBuf.slice(nl + 1);
-          if (!line) continue;
-
-          let parsed: { message?: { content?: string }; done?: boolean; error?: string };
+          let result: { done: boolean; value?: Uint8Array };
           try {
-            parsed = JSON.parse(line);
-          } catch {
-            /* Skip a corrupted NDJSON line rather than abort the stream —
-               Ollama very occasionally emits keep-alive noise. If the whole
-               stream produces no content, the empty-buffer check below
-               will hard-fail. */
-            continue;
+            result = await reader.read();
+          } catch (err) {
+            if (signal?.aborted) {
+              throw new AnalysisAbortedError(
+                `Ollama ${this.model} stream aborted (client disconnected).`,
+              );
+            }
+            /* A connection drop mid-stream — daemon was up, then went away.
+               If we've already seen bytes, this is a partial-stream failure
+               (hard-fail). If we haven't, treat as unreachable. */
+            if (!firstByteSeen) throw classifyConnectError(err, this.url);
+            throw new Error(`Ollama ${this.url} stream interrupted: ${(err as Error).message}`);
           }
+          if (result.done) break;
+          firstByteSeen = true;
+          lineBuf += decoder.decode(result.value ?? new Uint8Array(), { stream: true });
 
-          if (parsed.error) {
-            throw new Error(`Ollama ${this.url} stream error: ${parsed.error}`);
-          }
+          let nl: number;
+          while ((nl = lineBuf.indexOf('\n')) >= 0) {
+            const line = lineBuf.slice(0, nl).trim();
+            lineBuf = lineBuf.slice(nl + 1);
+            if (!line) continue;
 
-          const piece = parsed.message?.content;
-          if (piece) {
-            buf += piece;
-            const now = Date.now();
-            onChunk?.({
-              receivedBytes: buf.length,
-              receivedText: buf,
-              sinceLastChunkMs: now - lastChunkAt,
-              elapsedMs: now - start,
-            });
-            lastChunkAt = now;
+            let parsed: { message?: { content?: string }; done?: boolean; error?: string };
+            try {
+              parsed = JSON.parse(line);
+            } catch {
+              /* Skip a corrupted NDJSON line rather than abort the stream —
+                 Ollama very occasionally emits keep-alive noise. If the whole
+                 stream produces no content, the empty-buffer check below
+                 will hard-fail. */
+              continue;
+            }
+
+            if (parsed.error) {
+              throw new Error(`Ollama ${this.url} stream error: ${parsed.error}`);
+            }
+
+            const piece = parsed.message?.content;
+            if (piece) {
+              buf += piece;
+              const now = Date.now();
+              onChunk?.({
+                receivedBytes: buf.length,
+                receivedText: buf,
+                sinceLastChunkMs: now - lastChunkAt,
+                elapsedMs: now - start,
+              });
+              lastChunkAt = now;
+            }
           }
         }
+      } finally {
+        try {
+          reader.releaseLock();
+        } catch {
+          /* already released */
+        }
       }
-    } finally {
-      try {
-        reader.releaseLock();
-      } catch {
-        /* already released */
-      }
-    }
 
-    if (!buf) {
-      throw new Error(`Ollama ${this.model} returned an empty response.`);
+      if (!buf) {
+        throw new Error(`Ollama ${this.model} returned an empty response.`);
+      }
+      return buf;
+    } finally {
+      releaseGpu();
     }
-    return buf;
   }
 }
 

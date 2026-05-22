@@ -62,6 +62,11 @@ vi.mock('../lib/api', () => ({
     /* useTtsLifecycle polls /health on mount; resolve to unreachable so
        no pending pill state lands. */
     getSidecarHealth: vi.fn(async () => ({ status: 'unreachable', url: '(test)' })),
+    /* useTtsLifecycle also polls /api/gpu/queue on the same cadence (the
+       GPU semaphore depth that drives the "Queued (N ahead) ·" pill
+       prefix). Stub to an empty queue so the pill renders without the
+       prefix in these tests. */
+    getGpuQueueState: vi.fn(async () => ({ depth: 0, inFlight: 0, max: 1 })),
     /* Voice matching fires on the confirm stage only; we render at
        'ready' here so it shouldn't trigger, but keep a stub so any
        drift in that guard doesn't crash the test. */
