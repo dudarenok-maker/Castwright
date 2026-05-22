@@ -183,3 +183,13 @@ export function coverImagePath(bookDir: string): string {
 export function voicesMetaPath(): string {
   return join(WORKSPACE_ROOT, 'voices.json');
 }
+
+/** Plan 102 — workspace-level chapter-generation queue. ONE file holds the
+    cross-book queue so the user can mix-and-match order across books in a
+    single ordering (e.g. "regenerate these 2 chapters of Book 1, then these
+    5 of Book 5, then all of Book 6") without the server needing to
+    aggregate-and-reconcile on every read. Sibling to voices.json at the
+    workspace root. */
+export function queueJsonPath(): string {
+  return join(WORKSPACE_ROOT, '.queue.json');
+}

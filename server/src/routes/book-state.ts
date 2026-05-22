@@ -21,11 +21,14 @@ import {
   changeLogJsonPath,
   listenProgressJsonPath,
   manuscriptEditsJsonPath,
+  queueJsonPath,
   revisionsJsonPath,
   slug,
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
+import { pruneByBook } from '../workspace/queue-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
@@ -918,6 +921,24 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
     await rm(bookDir, { recursive: true, force: true });
     if (state?.manuscriptId) {
       await clearAnalysisCache(state.manuscriptId);
+    }
+    /* Plan 102 — prune any queue entries that target the just-deleted book.
+       Same write transaction shape (read → mutate → atomic write) as the
+       directory drop above; runs after the directory is gone so a partial
+       failure can't leave orphaned entries pointing at a still-extant book.
+       Best-effort: if the queue write fails, log + continue — the book is
+       already deleted and the stale entries surface on the next read as
+       "book not found" rather than corrupting the queue. */
+    try {
+      const queue = await readQueueFile(queueJsonPath());
+      const pruned = pruneByBook(queue, req.params.bookId);
+      if (pruned.entries.length !== queue.entries.length) {
+        await writeQueueFile(queueJsonPath(), pruned);
+      }
+    } catch (queueErr) {
+      console.warn(
+        `[book-state] queue prune failed for ${req.params.bookId}: ${(queueErr as Error).message}`,
+      );
     }
     res.status(204).end();
   } catch (e) {
