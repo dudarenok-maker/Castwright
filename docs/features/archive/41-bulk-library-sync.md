@@ -1,11 +1,32 @@
 ---
 status: stable
 shipped: 2026-05-18
-amended: 2026-05-19
+amended: 2026-05-22
 owner: dudarenok-maker
 ---
 
 # Bulk-apply library sync on confirm-cast
+
+> **Bug D amendment (2026-05-22):** the sync-checkbox auto-tick is now
+> gated on match confidence. Apply All flips Reuse for every eligible
+> row (Bug C behaviour unchanged), but auto-ticks the "Sync profile
+> with `<book>`" checkbox **only for rows where `matchedFrom.confidence
+> < 0.9`**. High-confidence matches (≥ 0.9) keep the sync checkbox as
+> a deliberate per-card opt-in because the library record is already a
+> good fit; the user shouldn't have to untick every confident match
+> after a one-click bulk. Threshold lives at module top of
+> `src/views/confirm-cast.tsx` as `SYNC_AUTO_THRESHOLD = 0.9`;
+> undefined confidence is treated as low-confidence (defensive — older
+> voice-match payloads omitted the field). The unapplied count `N`
+> changes shape: a row is "applied" once its decision is Reuse AND
+> (the row is high-conf OR its override is on). A cast of only
+> high-confidence matches reaches "Clear all syncs" on first render
+> with zero checkboxes ticked. Clear-syncs path still sweeps every
+> eligible override off (including any high-conf manual ticks) —
+> symmetric escape hatch. See `src/views/confirm-cast.test.tsx` (the
+> four "Bug D" cases) for the regression lock and
+> `e2e/bulk-sync-library.spec.ts` for the browser-level golden path
+> exercising the 0.94 / 0.89 / 0.86 fixture confidences.
 
 > **Bug C amendment (2026-05-19):** the pill now flips Reuse decision
 > AND ticks sync overrides in one click. The original behaviour (sync
@@ -19,7 +40,9 @@ owner: dudarenok-maker
 > N is the count of currently-unapplied eligible cards (decision !=
 > match OR override off). See `src/views/confirm-cast.test.tsx`
 > ("flips Reuse decision on cards previously toggled to Generate") for
-> the regression lock.
+> the regression lock. *(Note: the Bug-D amendment above further
+> tightens the override half — high-confidence rows are no longer
+> ticked by Apply All.)*
 
 > Status: stable
 > Key files: `src/views/confirm-cast.tsx`, new `src/views/confirm-cast.test.tsx`, new `e2e/bulk-sync-library.spec.ts`
