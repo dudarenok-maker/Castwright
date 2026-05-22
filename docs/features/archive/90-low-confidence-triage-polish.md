@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-22
 owner: null
 ---
 
 # Low-confidence triage polish — fast nav, series-roster pickers, typeahead search
 
-> Status: active (BACKLOG Could #32 + #33 + #34 — shipped together as one workflow round; bumped to `stable` on ship and moved to archive)
+> Status: stable (BACKLOG Could #32 + #33 + #34 — shipped together as one workflow round; archived after the picker portal + dismissal polish on PR #148).
 > Key files: `src/views/manuscript.tsx`, `src/components/character-search-picker.tsx`, `src/store/cast-slice.ts` (`addCharacter`), `src/lib/api.ts` (`addFromSeriesRoster`), `src/components/layout.tsx` (`priorRoster` exposed via `LayoutContext`), `src/routes/index.tsx` (ReadyRoute wiring), `server/src/routes/cast-add-from-roster.ts`.
 > URL surface: indirect — exercised inside `#/books/:bookId/manuscript`.
 > OpenAPI ops: new `POST /api/books/:bookId/cast/add-from-roster`.
@@ -84,10 +84,11 @@ Run in mock mode (`npm run dev`):
 
 ## Ship notes
 
-(Filled in when status flips to `stable`. Append: shipped date, commit SHA, any
-behaviour delta vs. the original spec.)
+**Shipped:** 2026-05-22 — initial round (BACKLOG Could #32 + #33 + #34) landed pre-merge-commit-discipline so the original SHA isn't recorded inline; the post-ship polish below lands as merge commit `0a34849` (PR #148, branch `fix/frontend-reassign-picker-portal-and-dark`). Plan flipped from `active` → `stable` in this same docs PR alongside the archive move.
 
-### Post-ship polish — picker portal + dismissal + dark surface
+**Behaviour delta vs. the original spec:** none in the picker contract (typeahead, roster grouping, keyboard nav, dedup all unchanged). The post-ship polish below changes the internals (picker now portal-renders) but the user-visible contract — search-on-mount focus + arrow/Enter/Esc + roster materialise-then-assign — matches the spec.
+
+### Post-ship polish — picker portal + dismissal + dark surface (PR #148, 0a34849)
 
 Triaged a fresh manuscript on 2026-05-22 and hit three regressions in this
 component that the original ship missed:
@@ -126,8 +127,12 @@ component that the original ship missed:
 two cases in `src/views/manuscript.test.tsx` (Grizel-reachable + row-popover
 survives pointerleave), one entry in `src/test/dark-mode-css.test.ts`
 (`.picker-surface`), and a new Playwright spec
-`e2e/manuscript-reassign-picker.spec.ts` (portal contract + dismissal + dark
-visual baseline).
+`e2e/manuscript-reassign-picker.spec.ts` (4 cases — portal contract,
+pointer-crossing dismissal survival, click-outside, dark-surface computed-style
+check). The visual-baseline path was tried first and dropped: the popover's
+width depends on the trigger's `getBoundingClientRect` which varies between
+re-renders, so a computed-style assertion on `background-color` ended up the
+more durable contract for the dark-surface bit.
 
 **Invariant 1 of this plan (kind='local' vs 'roster' row keying)** is unchanged
 — the pick path branches before the portal renders, so the materialise-then-
