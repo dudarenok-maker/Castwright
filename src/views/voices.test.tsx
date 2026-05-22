@@ -20,6 +20,17 @@ const setVoiceOverride = vi.fn();
 const getBookState = vi.fn<(bookId: string) => Promise<BookStateResponse | null>>(() =>
   Promise.resolve(null),
 );
+const seriesPatchCharacter =
+  vi.fn<
+    (args: {
+      bookId: string;
+      characterId: string;
+      patch: Record<string, unknown>;
+    }) => Promise<{
+      updated: Array<{ bookId: string; bookTitle: string; characterId: string }>;
+      failed: Array<{ bookId: string; bookTitle: string; error: string }>;
+    }>
+  >();
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -27,6 +38,11 @@ vi.mock('../lib/api', () => ({
     getBaseVoices: () => getBaseVoices(),
     setVoiceOverride: (...args: unknown[]) => setVoiceOverride(...args),
     getBookState: (bookId: string) => getBookState(bookId),
+    seriesPatchCharacter: (args: {
+      bookId: string;
+      characterId: string;
+      patch: Record<string, unknown>;
+    }) => seriesPatchCharacter(args),
   },
 }));
 
@@ -117,6 +133,7 @@ beforeEach(() => {
   setVoiceOverride.mockClear();
   getBookState.mockReset();
   getBookState.mockResolvedValue(null);
+  seriesPatchCharacter.mockReset();
 });
 
 describe('LibraryView voice-family grouping', () => {
@@ -269,6 +286,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
       },
     });
     store.dispatch(castSlice.actions.setCharacters(charactersB1));
@@ -393,10 +411,40 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
     expect(compareBtn).not.toBeDisabled();
   });
 
-  it('disables Compare on a cross-book pair with the documented tooltip (plan 22a)', () => {
+  it('enables Compare on a cross-book pair and hydrates the foreign cast on click (plan 96, BACKLOG #7)', async () => {
+    /* Narrator (b1, open book) + Keefe (b2, foreign). The plan-82 lift
+       drops the cross-book guard — the button is enabled immediately,
+       and the click triggers an on-demand hydrate of book b2's cast. */
+    getBookState.mockResolvedValueOnce({
+      state: {
+        bookId: 'b2',
+        manuscriptId: '',
+        title: 'Book Two',
+        author: '',
+        series: '',
+        seriesPosition: null,
+        isStandalone: false,
+        manuscriptFile: '',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#000'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      cast: {
+        characters: [
+          { id: 'keefe', name: 'Keefe', role: 'Empath', color: 'peach', voiceId: 'keefe' },
+        ],
+      },
+      manuscript: null,
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: undefined,
+      changeLog: null,
+      analysis: undefined,
+    });
     renderCompare();
-    /* Narrator (b1) + Keefe (b2) — even though both resolve to Charon,
-       the cross-book guard fires first. */
     fireEvent.click(
       screen
         .getByText('Narrator')
@@ -410,8 +458,21 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
         .querySelector('[aria-label="Select voice for compare"]')!,
     );
     const compareBtn = screen.getByRole('button', { name: 'Compare' });
-    expect(compareBtn).toBeDisabled();
-    expect(compareBtn.getAttribute('title')).toBe('Cross-book compare not supported yet');
+    expect(compareBtn).not.toBeDisabled();
+    fireEvent.click(compareBtn);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(getBookState).toHaveBeenCalledWith('b2');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    /* Propagation hint is shown on each side because the parent passes
+       propagatesAcrossSeries=true from the Voices view. */
+    expect(
+      screen.getAllByText(/Saves propagate to every book in this series/).length,
+    ).toBeGreaterThanOrEqual(2);
   });
 
   it('opens the CompareCastModal with both linked characters when Compare is clicked (plan 22a)', () => {
@@ -584,6 +645,128 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       /* Still only one fetch — the second Compare click reads
          `globalCastCache` and short-circuits the fetch path. */
       expect(getBookState).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('series-propagating Save (plan 96)', () => {
+    /* Toasts dispatched by the Save handler land in the notifications
+       slice; the live <ToastStack> isn't mounted here, so assertions
+       read store state directly. */
+    function renderWithStoreExposed() {
+      const store = makeReadyStore('b1');
+      const view = render(
+        <Provider store={store}>
+          <LibraryView library={libraryB1} />
+        </Provider>,
+      );
+      return { ...view, store };
+    }
+
+    async function flush(): Promise<void> {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    function openModal() {
+      fireEvent.click(
+        screen
+          .getByText('Narrator')
+          .closest('div.group')!
+          .querySelector('[aria-label="Select voice for compare"]')!,
+      );
+      fireEvent.click(
+        screen
+          .getByText('Sandor')
+          .closest('div.group')!
+          .querySelector('[aria-label="Select voice for compare"]')!,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+      /* Same-book pair → setCompareIds fires synchronously; modal
+         mounts in the same render cycle. */
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    }
+
+    it("calls api.seriesPatchCharacter with the edited side's patch on Save click", async () => {
+      seriesPatchCharacter.mockResolvedValue({
+        updated: [{ bookId: 'b1', bookTitle: 'Book One', characterId: 'narrator' }],
+        failed: [],
+      });
+      renderWithStoreExposed();
+      openModal();
+      const sideA = screen.getByLabelText(/Side A: Narrator/);
+      fireEvent.change(within(sideA).getByLabelText('Gender for Narrator'), {
+        target: { value: 'female' },
+      });
+      fireEvent.click(within(sideA).getByRole('button', { name: 'Save' }));
+      await flush();
+      expect(seriesPatchCharacter).toHaveBeenCalledTimes(1);
+      const call = seriesPatchCharacter.mock.calls[0][0];
+      expect(call.bookId).toBe('b1');
+      expect(call.characterId).toBe('narrator');
+      expect(call.patch).toMatchObject({ gender: 'female' });
+    });
+
+    it('pushes a "Saved to N books in this series" toast when updated covers multiple books', async () => {
+      seriesPatchCharacter.mockResolvedValue({
+        updated: [
+          { bookId: 'b1', bookTitle: 'Book One', characterId: 'narrator' },
+          { bookId: 'b2', bookTitle: 'Book Two', characterId: 'narrator-b2' },
+          { bookId: 'b3', bookTitle: 'Book Three', characterId: 'narrator-b3' },
+        ],
+        failed: [],
+      });
+      const { store } = renderWithStoreExposed();
+      openModal();
+      const sideA = screen.getByLabelText(/Side A: Narrator/);
+      fireEvent.change(within(sideA).getByLabelText('Gender for Narrator'), {
+        target: { value: 'female' },
+      });
+      fireEvent.click(within(sideA).getByRole('button', { name: 'Save' }));
+      await flush();
+      const toasts = store.getState().notifications.toasts;
+      expect(toasts.some((t) => t.message === 'Saved to 3 books in this series.')).toBe(true);
+    });
+
+    it('pushes a per-failed-book error toast alongside the success toast on partial-success', async () => {
+      seriesPatchCharacter.mockResolvedValue({
+        updated: [{ bookId: 'b1', bookTitle: 'Book One', characterId: 'narrator' }],
+        failed: [{ bookId: 'b2', bookTitle: 'Book Two', error: 'disk full' }],
+      });
+      const { store } = renderWithStoreExposed();
+      openModal();
+      const sideA = screen.getByLabelText(/Side A: Narrator/);
+      fireEvent.change(within(sideA).getByLabelText('Gender for Narrator'), {
+        target: { value: 'female' },
+      });
+      fireEvent.click(within(sideA).getByRole('button', { name: 'Save' }));
+      await flush();
+      const toasts = store.getState().notifications.toasts;
+      expect(toasts.some((t) => t.kind === 'info' && t.message === 'Saved.')).toBe(true);
+      expect(
+        toasts.some(
+          (t) => t.kind === 'error' && t.message === 'Could not save to: Book Two',
+        ),
+      ).toBe(true);
+    });
+
+    it('pushes a "Save failed" toast when the network call throws', async () => {
+      seriesPatchCharacter.mockRejectedValue(new Error('network down'));
+      const { store } = renderWithStoreExposed();
+      openModal();
+      const sideA = screen.getByLabelText(/Side A: Narrator/);
+      fireEvent.change(within(sideA).getByLabelText('Gender for Narrator'), {
+        target: { value: 'female' },
+      });
+      fireEvent.click(within(sideA).getByRole('button', { name: 'Save' }));
+      await flush();
+      const toasts = store.getState().notifications.toasts;
+      expect(
+        toasts.some((t) => t.kind === 'error' && t.message === 'Save failed — try again.'),
+      ).toBe(true);
     });
   });
 });

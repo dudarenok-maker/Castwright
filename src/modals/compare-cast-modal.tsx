@@ -33,6 +33,13 @@ interface Props {
   characters: [Character, Character];
   library: Voice[];
   ttsModelKey: TtsModelKey;
+  /* Plan 96 — when true, render an inline hint per side noting that
+     Save propagates to every book in this series where the character
+     appears. The actual N is reported in the post-save toast; the
+     modal stays cheap by not pre-querying the series for sibling
+     counts. The Voices view passes this true; cast.tsx (single-book
+     Compare) leaves it falsy so the hint is hidden. */
+  propagatesAcrossSeries?: boolean;
   onSaveSide: (next: Character) => void;
   onClose: () => void;
   onOpenProfile: (id: string) => void;
@@ -95,6 +102,7 @@ export function CompareCastModal({
   characters,
   library,
   ttsModelKey,
+  propagatesAcrossSeries = false,
   onSaveSide,
   onClose,
   onOpenProfile,
@@ -278,6 +286,7 @@ export function CompareCastModal({
                 rowState={rowState.a}
                 dirty={dirtyA}
                 disabled={autoRunning && (rowState.b?.loading ?? false)}
+                propagatesAcrossSeries={propagatesAcrossSeries}
                 onPlay={() => playSide('a')}
                 onSave={() => saveSide('a')}
                 onReset={() => resetSide('a')}
@@ -300,6 +309,7 @@ export function CompareCastModal({
                 rowState={rowState.b}
                 dirty={dirtyB}
                 disabled={autoRunning && (rowState.a?.loading ?? false)}
+                propagatesAcrossSeries={propagatesAcrossSeries}
                 onPlay={() => playSide('b')}
                 onSave={() => saveSide('b')}
                 onReset={() => resetSide('b')}
@@ -406,6 +416,7 @@ interface SidePanelProps {
   rowState: { loading?: boolean; error?: string };
   dirty: boolean;
   disabled: boolean;
+  propagatesAcrossSeries: boolean;
   onPlay: () => void;
   onSave: () => void;
   onReset: () => void;
@@ -426,6 +437,7 @@ function SidePanel({
   rowState,
   dirty,
   disabled,
+  propagatesAcrossSeries,
   onPlay,
   onSave,
   onReset,
@@ -466,6 +478,16 @@ function SidePanel({
           Side {side.toUpperCase()}
         </span>
       </header>
+
+      {propagatesAcrossSeries && (
+        <p
+          role="note"
+          className="text-[11px] text-ink/60 leading-snug bg-ink/[0.03] border border-ink/10 rounded-lg px-3 py-2"
+          title="The server propagates this save to every book in the same series whose cast contains a matching character (name or alias)."
+        >
+          Saves propagate to every book in this series where this character appears.
+        </p>
+      )}
 
       <div className="space-y-2 text-sm">
         <DiffRow label="Resolved voice" value={ctx.ttsVoiceName} differs={differsVoice} />
