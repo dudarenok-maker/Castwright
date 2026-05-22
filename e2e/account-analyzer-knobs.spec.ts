@@ -22,6 +22,7 @@
  * tests independently. */
 
 import { test, expect } from '@playwright/test';
+import { waitForRouteReady } from './helpers';
 
 /* The mock layer keeps user-settings in a module-scope object; the
    slice's saveAccountSettings thunk reaches it via the same window-
@@ -38,12 +39,13 @@ async function readAccountSlice(page: import('@playwright/test').Page) {
 test.describe('plan 88 phase-2 — Account Analyzer card', () => {
   test('renders all three knobs with the "(use server default)" sentinel', async ({ page }) => {
     await page.goto('/#/account');
+    await waitForRouteReady(page);
 
     const phase0 = page.getByTestId('account-analyzer-phase0-model');
     const phase1 = page.getByTestId('account-analyzer-phase1-model');
     const minLag = page.getByTestId('account-analyzer-phase1-min-lag');
 
-    await expect(phase0).toBeVisible({ timeout: 10_000 });
+    await expect(phase0).toBeVisible();
     await expect(phase1).toBeVisible();
     await expect(minLag).toBeVisible();
 
@@ -63,12 +65,13 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
 
   test('changing the three knobs + Save round-trips through the slice', async ({ page }) => {
     await page.goto('/#/account');
+    await waitForRouteReady(page);
 
     const phase0 = page.getByTestId('account-analyzer-phase0-model');
     const phase1 = page.getByTestId('account-analyzer-phase1-model');
     const minLag = page.getByTestId('account-analyzer-phase1-min-lag');
 
-    await expect(phase0).toBeVisible({ timeout: 10_000 });
+    await expect(phase0).toBeVisible();
 
     await phase0.selectOption('gemma-4-31b-it');
     await phase1.selectOption('gemini-3.1-flash-lite');
@@ -94,8 +97,9 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
     page,
   }) => {
     await page.goto('/#/account');
+    await waitForRouteReady(page);
     const phase0 = page.getByTestId('account-analyzer-phase0-model');
-    await expect(phase0).toBeVisible({ timeout: 10_000 });
+    await expect(phase0).toBeVisible();
 
     await phase0.selectOption('gemma-4-31b-it');
     await page.getByRole('button', { name: /save changes/i }).click();
@@ -115,12 +119,14 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
        still holds the saved value AND the fetch-on-mount thunk re-
        hydrates from it. */
     await page.goto('/#/books');
+    await waitForRouteReady(page);
     /* Let the library view settle (its own fetch hops fire on mount). */
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.goto('/#/account');
+    await waitForRouteReady(page);
 
     const phase0AfterNav = page.getByTestId('account-analyzer-phase0-model');
-    await expect(phase0AfterNav).toBeVisible({ timeout: 15_000 });
+    await expect(phase0AfterNav).toBeVisible();
     await expect(phase0AfterNav).toHaveValue('gemma-4-31b-it');
   });
 
@@ -128,9 +134,10 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
     page,
   }) => {
     await page.goto('/#/account');
+    await waitForRouteReady(page);
 
     const phase0 = page.getByTestId('account-analyzer-phase0-model');
-    await expect(phase0).toBeVisible({ timeout: 10_000 });
+    await expect(phase0).toBeVisible();
 
     /* Seed a non-null value, save, then flip back to the sentinel
        option (value=""). */
@@ -170,9 +177,10 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
 
   test('min-lag input clamps an out-of-range entry to [0, 50]', async ({ page }) => {
     await page.goto('/#/account');
+    await waitForRouteReady(page);
 
     const minLag = page.getByTestId('account-analyzer-phase1-min-lag');
-    await expect(minLag).toBeVisible({ timeout: 10_000 });
+    await expect(minLag).toBeVisible();
 
     /* The Account view clamps the onChange to [0, 50] so a fat-finger
        Save can't fire a value the server would 400 on. */
