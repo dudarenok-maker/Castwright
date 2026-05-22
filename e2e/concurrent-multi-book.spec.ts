@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { waitForLibraryViewReady } from './helpers';
 
 /* Plan 89 C2 + C3 — concurrent-multi-book invariant in the browser.
    The fix is split between (i) the broadcast middleware diffing (so
@@ -38,16 +39,8 @@ test.describe('concurrent multi-book tabs (plan 89 C2 + C3)', () => {
       /* Mount both tabs at the library route. */
       await Promise.all([pageA.goto('/'), pageB.goto('/')]);
 
-      /* Library route renders the "Start a new book" CTA — wait for it
-         on both tabs. */
-      await Promise.all([
-        expect(pageA.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
-          timeout: 10_000,
-        }),
-        expect(pageB.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
-          timeout: 10_000,
-        }),
-      ]);
+      /* BACKLOG Should #12 per-view hydration helper on both tabs. */
+      await Promise.all([waitForLibraryViewReady(pageA), waitForLibraryViewReady(pageB)]);
 
       /* Capture each tab's URL hash. */
       const hashA0 = await pageA.evaluate(() => window.location.hash);
