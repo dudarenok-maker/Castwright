@@ -18,6 +18,7 @@
  * Pairs with docs/features/archive/41-bulk-library-sync.md (Bug C amend). */
 
 import { test, expect } from '@playwright/test';
+import { waitForRouteReady } from './helpers';
 
 test.describe('bulk-sync library on confirm-cast', () => {
   test('pill renders, click ticks all matched checkboxes, Confirm advances stage', async ({
@@ -25,9 +26,8 @@ test.describe('bulk-sync library on confirm-cast', () => {
   }) => {
     /* Step 1: cold boot to library. */
     await page.goto('/');
-    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
-      timeout: 10_000,
-    });
+    await waitForRouteReady(page);
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible();
 
     /* Step 2: Start a new book. */
     await page
