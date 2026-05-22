@@ -52,6 +52,7 @@ import {
   writeChapterPeaksFile,
 } from '../tts/mp3.js';
 import { DEFAULT_LOUDNORM_OPTIONS, type LoudnormOptions } from '../tts/loudnorm.js';
+import { formatDuration } from '../audio/format-duration.js';
 import {
   synthesiseChapter,
   type CastCharacter,
@@ -784,6 +785,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         currentLine: totalLines,
         totalLines,
         audioModelKey: modelKey,
+        /* Belt-and-suspenders with the assembling tick (see line 616).
+           The assembling tick is the primary carrier, but it can be missed
+           when the page is hidden / the cross-book guard drops it / a
+           plan-87 parallel-chapter race coalesces ticks. Repeating
+           durationSec on chapter_complete guarantees the chapter row in
+           the Listen view shows the real audio length by the time the
+           Done pill flips, even if assembling was lost on the wire. */
+        durationSec: result.durationSec,
       });
     } catch (e) {
       /* AbortError = our own controller fired (regen displacement or
@@ -897,13 +906,3 @@ generationRouter.post('/:bookId/generation/pause', (req: Request, res: Response)
   res.status(200).json({ ok: true, paused: job != null });
 });
 
-/** Format seconds as MM:SS or HH:MM:SS — matches the existing `duration`
-    string convention in state.json (`'00:00'` placeholder from analysis). */
-function formatDuration(totalSec: number): string {
-  const total = Math.max(0, Math.round(totalSec));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-}
