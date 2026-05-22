@@ -377,9 +377,17 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
         .runStage1('m_abort_mid_stream', '# prompt', { signal: controller.signal })
         .catch((e) => e);
 
-      /* Wait one tick so the analyzer starts the stream and consumes the
-         first chunk, then trip the caller's abort. */
-      await new Promise((r) => setTimeout(r, 20));
+      /* BACKLOG Could #33 — wait deterministically for the stream call
+         instead of sleeping 20ms. Under pool contention (or even serial
+         load) a sleep can race the analyzer's microtask scheduling, the
+         abort fires first, generateContentStream is never called, and
+         the spy-count assertion below fails. `vi.waitFor` polls until
+         the spy registers exactly one call, then we abort knowing the
+         "in-flight stream" precondition holds. */
+      await vi.waitFor(() => expect(generateContentStream).toHaveBeenCalledTimes(1), {
+        timeout: 2_000,
+        interval: 5,
+      });
       controller.abort();
 
       const err = await runP;
