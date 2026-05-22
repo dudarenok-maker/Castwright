@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-22
 owner: null
 ---
 
 # 95 — Editable "Also known as" aliases
 
-> Status: active
+> Status: stable
 > Key files: `src/modals/profile-drawer.tsx`, `src/modals/reattribute-lines.tsx`, `src/store/cast-slice.ts`, `src/lib/api.ts`, `server/src/routes/cast-aliases.ts`
 > URL surface: indirect — opens from the Profile Drawer (`src/components/layout.tsx`, mounted at every cast/listen/manuscript route).
 > OpenAPI ops: `POST /api/books/{bookId}/cast/unlink-alias`, `POST /api/books/{bookId}/cast/add-alias` (contract-internal — same convention as `cast/merge`, not part of `openapi.yaml`).
@@ -77,4 +77,8 @@ Originally reported (2026-05-22, screenshot for `Neverseen Figure`): `Sandor`, a
 
 ## Ship notes
 
-_(filled in on flip to stable)_
+Shipped 2026-05-22 in PR [#142](https://github.com/dudarenok-maker/AudioBook-Generator/pull/142) — merge commit `57e082f`, feature commit `42334d8`. Behaviour matches the plan above; no deltas at ship.
+
+Coverage at ship: 10 server vitest cases (`cast-aliases.test.ts`), 9 cast-slice cases, 9 profile-drawer cases, 7 reattribute-lines cases (new file), and 1 Playwright e2e (`cast-alias-edit.spec.ts`). E2e flaked once under the full `npm run verify` battery (passed on retry — same flake profile as the two pre-existing intermittent specs `listen-loudness-report` and `listen-rename-chapter`; covered by plan 45's `retry: 1`); passes cleanly in isolation.
+
+Follow-up parked in `docs/BACKLOG.md`: a merge journal (`{sourceId, sourceName, targetId, affectedSentenceIds}` log written at merge time) would replace the `chapterCast`-as-lineage proxy with deterministic sentence revert — see the BACKLOG Should bucket.

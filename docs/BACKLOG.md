@@ -177,6 +177,16 @@ Source: net-new (2026-05-22). Surfaced during validation of PR #136 (`fix/e2e-an
 - _Depends on:_ PR #136 shipped (this is the second tier of pre-push reliability work that follows it).
 - _Benefit (dev / technical):_ removes residual retry-mask noise from the pre-push gate. Today the retry budget makes the suite look greener than it really is; a clean two-runs-in-a-row would be the durable signal that the e2e harness is genuinely contention-resistant. Pairs with Should #11 (responsive coverage) — together they would turn `npm run verify` into a deterministic pass/fail on the local box.
 
+### 13. Merge journal for deterministic alias un-link
+
+Source: plan 95 ship (2026-05-22) — Out of scope. PR [#142](https://github.com/dudarenok-maker/AudioBook-Generator/pull/142) shipped editable cast aliases with a Reattribute Lines modal that uses the preserved Phase-0a `chapterCast` as a lineage proxy to narrow the user's manual reattribution from "whole book" to "these N chapters." It works, but it's not deterministic — a chapter shows up if the alias was in its Phase-0a roster, even when the merge that put the alias on the source character happened mid-book and didn't actually rewrite any chapter-1 sentences. The user has to skim and reassign.
+
+- _What:_ At every cast-merge call site (manual merge route, fold-minor-cast post-stage-2 pass), append a record to a per-book journal file `<bookDir>/.audiobook/cast-merges.json` of shape `{ ts, kind: 'manual' | 'fold', sourceId, sourceName, targetId, affectedSentenceIds: number[] }`. The unlink-alias route then reads this journal to compute `impactedChapters.candidateSentenceIds` as the exact sentences originally rewritten by the merge — no `chapterCast` heuristic, no per-chapter listing of sentences that may belong to a third party.
+- _Acceptance:_ A book with a single mid-flight merge that touched 12 sentences (all in chapters 7-9) → the unlink-alias modal lists exactly those 12 sentences across chapters 7-9, nothing else. Today's `chapterCast` path would also list chapters 1-6 sentences attributed to the source if the alias name happened to be in their roster too (false positives the user has to skip).
+- _Key files:_ `server/src/routes/cast-merge.ts` (write the journal entry alongside the manuscript-edits rewrite), `server/src/analyzer/fold-minor-cast.ts` (caller-side hook so post-stage-2 folds also log), `server/src/routes/cast-aliases.ts` (replace the `chapterCast` derivation with a journal lookup), `server/src/workspace/paths.ts` (new path helper).
+- _Migration:_ books that pre-date the journal still get the `chapterCast` fallback (today's behaviour); only newly-merged ones benefit. No backfill — the lineage was lost at the old merges and there's no way to reconstruct it.
+- _Benefit (user):_ reattribute modal becomes a precise checklist instead of a scoped review — every row the user sees is provably their merge's work, no third-party sentences to skip over. Big quality-of-life win for series-2-into-1 cleanups where merges pile up.
+
 ---
 
 ## Could — nice to have, low-cost wins
