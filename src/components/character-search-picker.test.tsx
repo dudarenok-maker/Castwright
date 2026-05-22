@@ -1,10 +1,14 @@
 /* Plan: low-confidence-triage-polish — coverage for the shared
    CharacterSearchPicker. Pins: search-on-mount focus, substring filter
    (incl. roster aliases), arrow-key + Enter selection, Esc closes, and
-   the materialise-then-assign flow for series-roster picks. */
+   the materialise-then-assign flow for series-roster picks. Post-ship
+   polish (this PR): the picker is now portal-rendered off an anchor
+   ref, stays open on pointer-leave, and closes on document mousedown
+   outside both the popover and the anchor. */
 
+import { useRef } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { render, screen, within, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CharacterSearchPicker } from './character-search-picker';
 import type { Character } from '../lib/types';
@@ -47,18 +51,35 @@ describe('CharacterSearchPicker', () => {
     onAddFromSeriesRoster = vi.fn(async (e: SeriesRosterEntry) => `${e.id}_local`);
   });
 
-  function renderPicker(props: Partial<React.ComponentProps<typeof CharacterSearchPicker>> = {}) {
-    return render(
-      <CharacterSearchPicker
-        characters={characters}
-        priorRoster={roster}
-        currentCharacterId="narrator"
-        onPick={onPick}
-        onAddFromSeriesRoster={onAddFromSeriesRoster}
-        onClose={onClose}
-        {...props}
-      />,
+  /* Tiny harness that owns an anchor button + the picker. Mirrors the
+     real callers (every caller pairs a trigger button with the picker
+     via an anchorRef). The anchor is wrapped in a tagged div so tests
+     can target "outside the picker but inside the page" for the
+     click-outside case. */
+  function Harness(props: Partial<React.ComponentProps<typeof CharacterSearchPicker>>) {
+    const ref = useRef<HTMLButtonElement>(null);
+    return (
+      <div data-testid="harness-root">
+        <button ref={ref} data-testid="anchor">
+          Anchor
+        </button>
+        <div data-testid="outside-target">Outside</div>
+        <CharacterSearchPicker
+          characters={characters}
+          priorRoster={roster}
+          currentCharacterId="narrator"
+          onPick={onPick}
+          onAddFromSeriesRoster={onAddFromSeriesRoster}
+          onClose={onClose}
+          anchorRef={ref}
+          {...props}
+        />
+      </div>
     );
+  }
+
+  function renderPicker(props: Partial<React.ComponentProps<typeof CharacterSearchPicker>> = {}) {
+    return render(<Harness {...props} />);
   }
 
   it('focuses the search input on mount', () => {
@@ -176,5 +197,54 @@ describe('CharacterSearchPicker', () => {
     expect(screen.queryByText('From prior books in this series')).not.toBeInTheDocument();
     const options = screen.getAllByRole('option');
     expect(options).toHaveLength(3); // local only
+  });
+
+  /* ── Portal + dismissal polish (this PR) ─────────────────────────── */
+
+  it('portals the popover into document.body (escapes parent overflow:hidden)', () => {
+    renderPicker();
+    const picker = screen.getByRole('dialog');
+    const harnessRoot = screen.getByTestId('harness-root');
+    /* Picker must NOT be a descendant of the harness root — it's
+       portalled out so it can escape any `overflow-y-auto` ancestor
+       like the inspector's middle scroll region. */
+    expect(harnessRoot.contains(picker)).toBe(false);
+    expect(picker.parentElement).toBe(document.body);
+    /* `fixed` (Tailwind) gives the popover `position: fixed` so the
+       coords from getBoundingClientRect line up with the viewport. */
+    expect(picker.className).toMatch(/\bfixed\b/);
+  });
+
+  it('does NOT close when pointer leaves the popover boundary', () => {
+    renderPicker();
+    const picker = screen.getByRole('dialog');
+    /* Simulate the user moving the cursor away from the picker — the
+       old onMouseLeave-on-row dismissal closed the menu here, which
+       broke "scroll inside the list to find a character". The portal +
+       click-outside model must NOT close on pointer movement alone. */
+    fireEvent.mouseLeave(picker);
+    fireEvent.mouseLeave(document.body);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes on document mousedown outside both popover and anchor', () => {
+    renderPicker();
+    const outside = screen.getByTestId('outside-target');
+    fireEvent.mouseDown(outside);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('does NOT close on mousedown over the anchor (anchor toggles via its own onClick)', () => {
+    renderPicker();
+    const anchor = screen.getByTestId('anchor');
+    fireEvent.mouseDown(anchor);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does NOT close on mousedown inside the popover (lets the user scroll/select rows)', () => {
+    renderPicker();
+    const picker = screen.getByRole('dialog');
+    fireEvent.mouseDown(picker);
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

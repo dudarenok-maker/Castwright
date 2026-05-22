@@ -132,6 +132,18 @@
   background-color: #1f1b19;
 }
 
+/* Floating popovers (e.g. the reassign CharacterSearchPicker that
+   portals over the manuscript view) need ONE more elevation step than
+   the generic `bg-white` redirect — at #1f1b19 the picker sat at nearly
+   the same hue as the canvas (#14110f), so manuscript text behind it
+   stayed visually legible through the popover. `.picker-surface` pairs
+   with `bg-white` on the popover container; light mode keeps `bg-white`,
+   dark mode this override wins (CSS source order). */
+[data-theme='dark'] .picker-surface {
+  background-color: #2a2520;
+  border-color: rgba(244, 239, 236, 0.18);
+}
+
 /* Translucent variants of bg-white. Tailwind generates `.bg-white\/60`
    / `.bg-white\/70` as `rgb(255 255 255 / 0.X)` — a different selector
    from the bare `.bg-white` rule above, so the dark redirect doesn't
