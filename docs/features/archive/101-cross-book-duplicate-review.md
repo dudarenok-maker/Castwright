@@ -1,12 +1,12 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-05-22
 owner: null
 ---
 
 # Cross-book duplicate cleanup — review surface for escaped continuity-links
 
-> Status: draft
+> Status: stable
 > Key files: `src/views/voices.tsx`, `src/modals/duplicate-review-modal.tsx`, `src/lib/cross-book-duplicates.ts`, `src/store/cast-slice.ts`, `src/lib/api.ts`, `src/mocks/voices.ts`, `server/src/routes/cast-not-linked-to.ts`, `server/src/handoff/schemas.ts`, `openapi.yaml`
 > URL surface: `#/voices` (global) and `#/books/<id>/library` (per-book) — modal opens in place
 > OpenAPI ops: new `POST /api/books/{bookId}/cast/{characterId}/not-linked-to`; reuses `POST /api/books/{bookId}/cast/link-prior` (plan 09)
@@ -91,4 +91,8 @@ Run in mock mode (`VITE_USE_MOCKS=true`) — the the Hollow Tide #1+#2 fixture s
 
 ## Ship notes
 
-(Filled in when status flips to `stable`. Append: shipped date, commit SHA, any behaviour delta vs. the original spec. Once filled, the plan becomes eligible for archive — move to `docs/features/archive/` in the same PR as the ship.)
+- **Shipped:** 2026-05-22 via PR #176, merge commit `477a21d`.
+- **No spec delta from the active plan.** Detector, modal, server route, mock fixture, and all 4 voices-test + 9 modal + 9 server + 15 lib + 1 e2e cases shipped exactly as drafted. `npm run verify` (full pre-push battery) green on first run after rebase.
+- **Renumber on rebase:** drafted as plan 100; renumbered to 101 because PR #171 (GPU-arbitration-semaphore) had archived as `archive/100-gpu-arbitration-semaphore.md` and PR #173 (docs-only CI skip) had archived as `archive/100-docs-only-ci-skip.md` (later renumbered to `archive/101-docs-only-ci-skip.md` in PR #175). When this plan archives, the `archive/101-cross-book-duplicate-review.md` slot will collide with the docs-only-ci-skip archive — same numbering pattern plan 99 set, where two plans can share a number across active/archive boundaries (in-code references stay at original ship-time number for historical accuracy).
+- **Tests landed and green:** 15 new cases in `src/lib/cross-book-duplicates.test.ts`; 9 new cases in `src/modals/duplicate-review-modal.test.tsx`; 9 new cases in `server/src/routes/cast-not-linked-to.test.ts`; 4 new cases in `src/views/voices.test.tsx` (`describe('LibraryView cross-book duplicate review (plan 101)')`); 1 new chromium spec in `e2e/voices-duplicate-review.spec.ts`. Existing 32 voices-view + 88 e2e tests stayed green.
+- **Deferred follow-ups filed:** BACKLOG Could #34 (profile-drawer chip), #35 (bulk per-series review modal), #36 (undo for variant decisions). Each carries a what / acceptance / key-files / depends / benefit per the BACKLOG entry shape.
