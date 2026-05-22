@@ -3,7 +3,7 @@
  * Extracted from `e2e/new-book-flow.spec.ts` so multiple specs can drive
  * the same new-book flow without re-implementing the click chain. Today's
  * callers: `e2e/new-book-flow.spec.ts` (depth assertions) +
- * `e2e/visual.spec.ts` (per-stage baselines).
+ * `e2e/responsive/visual.spec.ts` (per-stage baselines, BACKLOG Could #34).
  *
  * The mock backend in `src/lib/api.ts` is the contract these helpers
  * exercise; if you change the click affordances they target, update the
@@ -72,4 +72,46 @@ export async function waitForRouteReady(page: Page): Promise<void> {
   await page
     .locator('[data-testid="route-suspense-fallback"]')
     .waitFor({ state: 'detached', timeout: 15_000 });
+}
+
+/* Per-view hydration helpers. `waitForRouteReady` proves the React.lazy
+ * chunk swapped in, but each view has its own internal slices that
+ * hydrate AFTER mount (chapters list, cast list, mini-player audio).
+ * Specs that immediately assert on post-hydration state (chapter rows,
+ * character cards, audio src) need to wait for those signals — under
+ * sustained parallel-worker contention the inline 5 s budgets in
+ * several specs are too tight and retry-recover on the second run.
+ * BACKLOG Should #12.
+ *
+ * Each helper picks the cheapest signal that proves the slice is ready:
+ *   - listen: h1 title visible AND "Play from the start" enabled
+ *     (enables once listenable.length > 0 — the chapters slice has
+ *     hydrated and the cross-book guard sees them).
+ *   - confirm: first "Open profile for X" character button visible
+ *     (mounts once the cast list has hydrated).
+ *   - library: "Start a new book" CTA visible (the library route's
+ *     primary mount point — same signal goToAnalysing uses). */
+
+export async function waitForListenViewReady(
+  page: Page,
+  titleRe: RegExp = /./,
+): Promise<void> {
+  await expect(page.getByRole('heading', { name: titleRe, level: 1 })).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(page.getByRole('button', { name: /Play from the start/i })).toBeEnabled({
+    timeout: 10_000,
+  });
+}
+
+export async function waitForConfirmViewReady(page: Page): Promise<void> {
+  await expect(page.getByRole('button', { name: /Open profile for/i }).first()).toBeVisible({
+    timeout: 10_000,
+  });
+}
+
+export async function waitForLibraryViewReady(page: Page): Promise<void> {
+  await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+    timeout: 10_000,
+  });
 }

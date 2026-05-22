@@ -101,6 +101,18 @@ export const STEPS = [
     },
   },
   {
+    /* BACKLOG Could #34 — visual baselines run in a separate serial
+       step so they can't race the parallel test:e2e battery for the
+       Vite dev server. Same `globs` as test:e2e so the cache invalidates
+       whenever a source file or e2e spec changes. */
+    name: 'test:e2e:visual',
+    inputs: {
+      globs: ['src/**', 'e2e/**'],
+      extraFiles: ['playwright.config.ts', 'vite.config.ts', '.env.e2e'],
+      includeLockfiles: ['root'],
+    },
+  },
+  {
     name: 'build',
     inputs: {
       globs: ['src/**', 'server/src/**'],
