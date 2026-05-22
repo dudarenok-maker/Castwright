@@ -179,12 +179,17 @@ git([
 ]);
 git(['commit', '-m', `chore: bump version to ${newVersion}`]);
 
-// Annotated tag.
+// Annotated tag. `--cleanup=verbatim` is load-bearing: git's default
+// cleanup mode for both `-m` and `-F` strips lines starting with `#`
+// as commentary, which silently eats the `## Features` / `## Fixes` /
+// `## Engineering` section headers CONTRIBUTING.md "Release notes"
+// mandates. v1.4.0 shipped with stripped headers and had to be patched
+// in place; preserve them by default from here on.
 info('[STEP] git tag ...');
 if (args.notesFile) {
-  git(['tag', '-a', newTag, '-F', resolve(args.notesFile)]);
+  git(['tag', '--cleanup=verbatim', '-a', newTag, '-F', resolve(args.notesFile)]);
 } else {
-  git(['tag', '-a', newTag, '-m', `Audiobook generator ${newTag}`]);
+  git(['tag', '--cleanup=verbatim', '-a', newTag, '-m', `Audiobook generator ${newTag}`]);
 }
 
 info('');

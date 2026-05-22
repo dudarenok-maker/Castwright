@@ -288,3 +288,42 @@ test('polluted GIT_* env cannot misdirect subprocess from throwaway repo', () =>
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/* Regression for the v1.4.0 ship: the bumper invoked `git tag -a -F` with
+   git's default cleanup mode, which strips lines starting with `#` as
+   commentary. The CONTRIBUTING.md "Release notes" spec mandates `##
+   Features` / `## Fixes` / `## Engineering` section headers; default
+   cleanup silently ate all three on the v1.4.0 tag, so the GitHub
+   Release body rendered as one long blob. Fix is `--cleanup=verbatim`
+   in scripts/bump-version.mjs. This test pins the survival of `##`
+   headers so the regression can't sneak back. */
+test('bump-version preserves ## section headers in the tag annotation', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-headers-${process.pid}-${Date.now()}.md`);
+    writeFileSync(
+      notes,
+      'v1.0.1 — headline\n' +
+        '\nIntro paragraph.\n' +
+        '\n## Features\n' +
+        '\n**Surface area.** Body paragraph.\n' +
+        '\n## Fixes\n' +
+        '\n- Bug fixed.\n' +
+        '\n## Engineering\n' +
+        '\n- Mechanical detail.\n',
+    );
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes]);
+    rmSync(notes, { force: true });
+    assert.equal(out.status, 0, out.stderr);
+
+    const annotation = gitExec(['tag', '-l', '--format=%(contents)', 'v1.0.1'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.match(annotation, /^## Features$/m, 'expected ## Features header to survive');
+    assert.match(annotation, /^## Fixes$/m, 'expected ## Fixes header to survive');
+    assert.match(annotation, /^## Engineering$/m, 'expected ## Engineering header to survive');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
