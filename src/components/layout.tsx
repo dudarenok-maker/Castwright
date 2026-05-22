@@ -970,6 +970,8 @@ export function Layout() {
              equality survives unrelated re-renders. */
           groupsByBook={driftGroupsByBookView}
           voices={voices}
+          filterCharacterId={ui.driftReportCharacterFilter}
+          onClearFilter={() => dispatch(uiActions.clearDriftReportCharacterFilter())}
           onClose={() => dispatch(uiActions.setShowDriftReport(false))}
           onRegenerateChapter={(_evBookId, charId, chapterId) => {
             dispatch(uiActions.setShowDriftReport(false));

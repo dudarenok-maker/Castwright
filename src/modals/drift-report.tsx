@@ -40,6 +40,32 @@ interface Props {
   onAutoQueueRegenerate?: (bookId: string, characterId: string, chapterId: number) => void;
   onDismiss: (eventId: string) => void;
   voices?: Voice[];
+  /* When set, hides every drift card whose characterId doesn't match.
+     Surfaces a "Showing 1 character · Show all" affordance below the
+     header so the user can drop the filter without re-opening. Drives
+     the per-character pill entry path so the user lands directly on
+     the character whose pill they clicked. */
+  filterCharacterId?: string | null;
+  onClearFilter?: () => void;
+}
+
+/* Resolve a display name for the per-character filter banner. The cast
+   slice in the active book is the first source (carries the user-edited
+   name); cross-book filters fall back to whatever the server embedded
+   on the drift event itself (`group.current.name`). Returns null when
+   neither side has a name, so the banner can render a safe "this
+   character" placeholder. */
+function findFilterCharacterName(
+  groupsByBook: DriftBookGroupView[],
+  characterId: string,
+): string | null {
+  for (const view of groupsByBook) {
+    const cast = view.characters.find((c) => c.id === characterId);
+    if (cast?.name) return cast.name;
+    const group = view.groups.find((g) => g.characterId === characterId);
+    if (group?.current?.name) return group.current.name;
+  }
+  return null;
 }
 
 const severityOrder: Array<DriftEvent['severity']> = ['severe', 'moderate', 'mild'];
@@ -61,13 +87,36 @@ export function DriftReportModal({
   onAutoQueueRegenerate,
   onDismiss,
   voices,
+  filterCharacterId,
+  onClearFilter,
 }: Props) {
-  const totalCount = groupsByBook.reduce(
+  /* When a per-character filter is active, prune each book's groups
+     down to that character. Empty books drop out so the section
+     header doesn't render an empty card. Memoised separately from
+     the parent so the unfiltered identity stays stable when the
+     filter is cleared. */
+  const visibleGroupsByBook = useMemo(() => {
+    if (!filterCharacterId) return groupsByBook;
+    const out: DriftBookGroupView[] = [];
+    for (const view of groupsByBook) {
+      const groups = view.groups.filter((g) => g.characterId === filterCharacterId);
+      if (groups.length > 0) out.push({ ...view, groups });
+    }
+    return out;
+  }, [groupsByBook, filterCharacterId]);
+  const filterCharacterName = filterCharacterId
+    ? findFilterCharacterName(groupsByBook, filterCharacterId)
+    : null;
+  const totalCount = visibleGroupsByBook.reduce(
     (acc, g) => acc + g.groups.reduce((sub, gr) => sub + gr.events.length, 0),
     0,
   );
+  /* Edge case: filter is set but the matching character has zero
+     events (race between dispatch + drift slice update). Render
+     nothing rather than an empty modal — same null-return contract as
+     the unfiltered empty case below. */
   if (totalCount === 0) return null;
-  const bookCount = groupsByBook.length;
+  const bookCount = visibleGroupsByBook.length;
 
   return (
     <>
@@ -93,14 +142,32 @@ export function DriftReportModal({
           </div>
 
           <div className="p-6 space-y-8 overflow-y-auto scrollbar-thin">
-            <p className="text-sm text-ink/70 leading-relaxed">
-              We compared each chapter against the character's established voice profile. The "When
-              rendered" column shows the snapshot captured at synthesis time; "Now" shows the live
-              profile. Severe and moderate findings are worth a listen — mild ones are usually
-              within tolerance.
-            </p>
+            {filterCharacterId && onClearFilter ? (
+              <div
+                className="-mt-2 -mx-2 px-3 py-2 rounded-2xl bg-amber-50/70 border border-amber-200 flex items-center gap-3 text-sm"
+                data-testid="drift-report-character-filter-banner"
+              >
+                <span className="text-ink/75">
+                  Showing drift for <span className="font-semibold text-ink">{filterCharacterName ?? 'this character'}</span> only.
+                </span>
+                <button
+                  onClick={onClearFilter}
+                  data-testid="drift-report-clear-character-filter"
+                  className="ml-auto text-xs font-semibold text-ink/70 hover:text-ink"
+                >
+                  Show all characters
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm text-ink/70 leading-relaxed">
+                We compared each chapter against the character's established voice profile. The "When
+                rendered" column shows the snapshot captured at synthesis time; "Now" shows the live
+                profile. Severe and moderate findings are worth a listen — mild ones are usually
+                within tolerance.
+              </p>
+            )}
 
-            {groupsByBook.map((view) => (
+            {visibleGroupsByBook.map((view) => (
               <DriftBookSection
                 key={view.bookId}
                 view={view}
