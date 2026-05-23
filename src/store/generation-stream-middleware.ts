@@ -22,11 +22,12 @@
    dispatcher can open a CROSS-BOOK stream through the same lifecycle. This
    middleware now owns only the OPEN-SIDE DECISION for same-book streams
    (reconcile + the reverse-local-analyzer guard) and the per-tick
-   delegation to `runner.handleTick`. The ways a run stops are unchanged:
-     - chapters/setPaused(true), from the local-analyzer confirm prompt (see
-       src/hooks/use-local-analyzer-guard.tsx) when a local-engine import
-       would compete with TTS for GPU.
+   delegation to `runner.handleTick`. The ways a run stops:
+     - chapters/requestStreamHalt, from the local-analyzer confirm prompt (see
+       src/hooks/use-local-analyzer-guard.tsx) when a local-engine analysis
+       would compete with TTS for GPU — closes the handle immediately.
      - the queue draining (final idle tick from the server → runner closes).
+     - queue.paused gating the open side (replaces the removed chapters.paused).
 
    To keep the global header pill alive while the user is on a different
    book, the runner publishes an out-of-band `chapters.activeStream`
@@ -44,14 +45,14 @@
 
 import type { Middleware } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
-import { chaptersActions } from './chapters-slice';
 import { revisionsActions } from './revisions-slice';
 import { buildPendingRevisionStub } from '../lib/build-pending-revision';
-import type { StreamRunner } from './generation-stream-runner';
+import type { StreamRunner, StreamSpec } from './generation-stream-runner';
 import type { ChaptersState } from './chapters-slice';
 import type { CastState } from './cast-slice';
 import type { UiState } from './ui-slice';
 import type { AnalysisState } from './analysis-slice';
+import type { QueueState } from './queue-slice';
 import type { Chapter, GenerationTick } from '../lib/types';
 
 interface StreamableRootState {
@@ -65,6 +66,50 @@ interface StreamableRootState {
      of a book with both a live local analysis AND queued chapters
      would auto-start a generation behind the user's back. */
   analysis: AnalysisState;
+  /* Plan 102 Should #5 — the open-side gate now reads the queue-global
+     pause flag (replacing the removed chapters.paused). queue.paused = true
+     means the user (or the local-analyzer halt) stopped the drain, so
+     reconcile must not auto-open a stream — including the cold-boot resume
+     path. Optional-at-runtime read keeps legacy test stores (no queue slice)
+     working. */
+  queue: QueueState;
+}
+
+/** Resolve the regen spec (chapterIds + force) from a regenerate action,
+    mirroring each reducer's target-selection so the SSE force-renders exactly
+    the rows the reducer flipped. Returns null when nothing is in scope (e.g. a
+    character-regen on a chapter where the character is skipped) — reconcile
+    then falls back to the plain hasWork resume path. Replaces the removed
+    chapters.pendingRegen field; the spec lives in middleware-local state and
+    is handed straight to the runner. */
+function specFromRegenAction(type: string, payload: unknown, chapters: Chapter[]): StreamSpec | null {
+  let chapterIds: number[] = [];
+  if (type === 'chapters/regenerateChapter') {
+    const { chapterId, scope } = payload as { chapterId: number; scope: 'this' | 'forward' };
+    chapterIds = chapters
+      .filter((c) => c.id === chapterId || (scope === 'forward' && c.id > chapterId))
+      .map((c) => c.id);
+  } else if (type === 'chapters/regenerateChapterIds') {
+    const { chapterIds: ids } = payload as { chapterIds: number[] };
+    const set = new Set(ids);
+    chapterIds = chapters.filter((c) => set.has(c.id) && !c.excluded).map((c) => c.id);
+  } else if (type === 'chapters/regenerateCharacter') {
+    const { characterId, chapterIds: ids } = payload as {
+      characterId: string;
+      chapterIds: number[];
+    };
+    const set = new Set(ids);
+    chapterIds = chapters
+      .filter(
+        (c) => set.has(c.id) && c.characters[characterId] && c.characters[characterId] !== 'skipped',
+      )
+      .map((c) => c.id);
+  } else if (type === 'chapters/batchRegenerateCharacters') {
+    const { chapterIds: ids } = payload as { chapterIds: number[] };
+    const set = new Set(ids);
+    chapterIds = chapters.filter((c) => set.has(c.id)).map((c) => c.id);
+  }
+  return chapterIds.length ? { chapterIds, force: true } : null;
 }
 
 function bookIdFromState(s: StreamableRootState): string | null {
@@ -99,10 +144,11 @@ const TRIGGER_TYPES = new Set<string>([
   'chapters/regenerateChapterIds',
   'chapters/regenerateCharacter',
   'chapters/batchRegenerateCharacters',
-  'chapters/setPaused',
+  'chapters/requestStreamHalt',
   'chapters/applyGenerationTick',
   'chapters/hydrateFromBookState',
   'chapters/setCurrentBookId',
+  'queue/setSnapshot',
   'ui/openBook',
   'ui/goHome',
   'ui/hydrateFromUrl',
@@ -131,86 +177,65 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
   return (store) => {
     const dispatch = store.dispatch;
 
+    /* The regen spec (chapterIds + force) for the next open. Set by the
+       regen-action observer below (replacing the removed chapters.pendingRegen
+       slice field), read + drained by reconcile when it opens. Middleware-
+       local so the slice carries no generation-control state. */
+    let pendingSpec: StreamSpec | null = null;
+
     const reconcile = () => {
       const runner = getRunner();
       const after = store.getState() as StreamableRootState;
       const stageBookId = bookIdFromState(after);
       const modelKey = after.ui.ttsModelKey;
-      const { chapters, paused, pendingRegen, currentBookId } = after.chapters;
-
-      /* Pause is the universal user-initiated stop. It is dispatched only
-         from contexts that mean "stop the active stream": the
-         local-analyzer confirm prompt (handles cross-book pause). Fire an
-         explicit /pause to the server so the run stops server-side (closing
-         the SSE alone is no longer enough — the server now treats SSE close
-         as "unsubscribe this observer", which is what lets a browser reload
-         survive without killing the run), then close our local handle. */
-      if (runner.isOpen() && paused) {
-        const pauseBookId = runner.getBookId();
-        if (pauseBookId) void api.pauseGeneration({ bookId: pauseBookId });
-        runner.close();
-        return;
-      }
+      const { chapters, currentBookId } = after.chapters;
+      /* Defensive read: legacy test stores omit the queue slice. */
+      const queuePaused = (after as { queue?: QueueState }).queue?.paused ?? false;
 
       /* Sticky semantics: once a handle is open for book X, it stays open
          across goHome, openBook(otherBook), changeView, setTtsModelKey, and
-         every other transition. The only termination is pause (above) or
-         queue drain (below, when shouldOpen = false). Notably:
-           - We do NOT close on stageBookId == null. The user is allowed to
-             navigate Books → Voices → Upload while the stream keeps running
-             in the background.
-           - We do NOT close on stageBookId != handle.bookId. The user is
-             allowed to open another book; the slice gets repopulated but the
-             handle keeps streaming for the original book, and the
-             applyGenerationTick reducer's cross-book guard prevents the
-             drift from clobbering the other book's rows.
-           - We do NOT close on modelKey change. Switching the TTS model in
-             Account settings or anywhere else takes effect on the NEXT
-             generation start, not the live one. */
+         every other transition. The only close trigger on THIS side is queue
+         drain (below — when the streaming book has no work left). The hard
+         "halt now" path (local-analyzer guard) closes the handle directly via
+         the requestStreamHalt observer, not here. Notably:
+           - We do NOT close on stageBookId == null / != handle.bookId. The
+             user may navigate away; the handle keeps streaming and the
+             applyGenerationTick cross-book guard protects the other book's
+             rows.
+           - We do NOT close on modelKey change (takes effect next run).
+           - We do NOT close on queue.paused — a queue pause stops the drain
+             of the NEXT entry but lets the in-flight chapter finish (it
+             closes naturally when hasWork goes false on the idle tick). */
       if (runner.isOpen()) {
-        /* Already streaming — nothing to do on the open side. The only
-           remaining close trigger is the queue-drain check the slice runs
-           itself on the final idle tick, which will leave hasWork(chapters)
-           false on the next reconcile pass. */
         if (currentBookId === runner.getBookId()) {
-          const shouldOpen = pendingRegen != null || hasWork(chapters);
+          const shouldOpen = pendingSpec != null || hasWork(chapters);
           if (!shouldOpen) runner.close();
         }
         return;
       }
 
       /* No handle. Open only when the slice and the URL agree on which book
-         we're on, there's work in scope, and the user hasn't paused. */
+         we're on, there's work in scope, and the queue isn't globally paused.
+         The queue.paused gate replaces the removed chapters.paused: a paused
+         queue means "don't drain / don't auto-resume", which must also block
+         the cold-boot reconnect path and any pending regen spec. */
       if (!stageBookId) return;
       if (currentBookId !== stageBookId) return;
-      if (paused) return;
-      const shouldOpen = pendingRegen != null || hasWork(chapters);
+      if (queuePaused) return;
+      const shouldOpen = pendingSpec != null || hasWork(chapters);
       if (!shouldOpen) return;
 
-      /* Plan 32 D2 follow-up: REVERSE-LOCAL-ANALYZER GUARD (implicit
-         path). The D2 hook gates EXPLICIT user-initiated TTS-start
-         callsites (Resume button, Regenerate modal confirms). This
-         block closes the parallel implicit seam: cold-boot rehydration
-         of a book with both `analysis.activeStream.engine === 'local'`
-         (an alive local analysis on the same book) AND a non-empty
-         generation queue would otherwise auto-fire generation behind
-         the user's back, competing for the same GPU.
-         Rule mirrors the hook (use-reverse-local-analyzer-guard.tsx):
-         - engine === 'local' — Gemini analyses don't compete for GPU,
-           so the gate doesn't fire on them.
-         - bookId matches — a local analysis on book A shouldn't block
-           generation on unrelated book B.
-         - state !== 'paused' / 'halted' — a user-paused or halted
-           analysis is already not competing for GPU; respecting that
-           matches the existing sticky-generation contract (the user
-           explicitly stopped the analysis).
-         Refusal mechanism: flip the slice to paused. The user reads
-         the analysis pill, knows what's running, and resumes
-         generation when ready. No new modal — we're not nagging on
-         every navigation, we're refusing to act without consent. */
-      /* Defensive read: a handful of legacy test harnesses build a
-         store without the analysis slice. Production always has it
-         (configured in src/store/index.ts). */
+      /* REVERSE-LOCAL-ANALYZER GUARD (plan 32 D2 → plan 102 pure gate).
+         When a local analysis is alive on this same book, do NOT auto-open a
+         generation stream — the two would fight for the GPU. This used to
+         flip chapters.paused; with that field gone the refusal is simply
+         "don't open this pass". Any pendingSpec stays put and opens once the
+         analysis finishes and a later trigger re-runs reconcile.
+         Rule mirrors use-reverse-local-analyzer-guard.tsx:
+         - engine === 'local' — remote (Gemini) analyses don't compete for GPU.
+         - bookId matches — a local analysis on book A shouldn't block book B.
+         - state !== 'paused' / 'halted' — a stopped analysis isn't competing.
+         Defensive read: legacy test harnesses omit the analysis slice. */
       const analysisSnap =
         (after as { analysis?: { activeStream?: typeof after.analysis.activeStream } }).analysis
           ?.activeStream ?? null;
@@ -221,11 +246,11 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
         analysisSnap.state !== 'paused' &&
         analysisSnap.state !== 'halted'
       ) {
-        dispatch(chaptersActions.setPaused(true));
         return;
       }
 
-      runner.open(stageBookId, modelKey, pendingRegen, { consumePendingRegen: true });
+      runner.open(stageBookId, modelKey, pendingSpec);
+      pendingSpec = null;
     };
 
     return (next) => (action) => {
@@ -236,9 +261,32 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
 
       const runner = getRunner();
 
-      if (REGEN_TYPES.has(type) && runner.isOpen()) {
+      /* Hard "halt now" — the local-analyzer guard fires this when a local
+         analysis is about to start and needs the GPU the in-flight TTS run is
+         holding. Close the handle immediately (+ POST /pause so the server
+         stops the run) and SKIP reconcile — the accompanying setQueuePaused
+         keeps the dispatcher + reconcile from re-opening on the next pass. */
+      if (type === 'chapters/requestStreamHalt') {
+        if (runner.isOpen()) {
+          const haltBookId = runner.getBookId();
+          if (haltBookId) void api.pauseGeneration({ bookId: haltBookId });
+          runner.close();
+        }
+        return result;
+      }
+
+      if (REGEN_TYPES.has(type)) {
         const after = store.getState() as StreamableRootState;
-        if (after.chapters.currentBookId === runner.getBookId()) runner.close();
+        /* Compute the regen spec from the action + post-reducer rows and stash
+           it for reconcile to hand to the runner (replaces chapters.pendingRegen). */
+        const payload = (a as { payload?: unknown }).payload;
+        const spec = specFromRegenAction(type, payload, after.chapters.chapters);
+        if (spec) pendingSpec = spec;
+        /* Defensive close-and-reopen: if a same-book stream is somehow already
+           open when a fresh regen lands, close it so reconcile reopens with
+           the new spec. The queue dispatcher serialises drains (it won't fire
+           a regen while activeStream is set), so this is belt-and-braces. */
+        if (runner.isOpen() && after.chapters.currentBookId === runner.getBookId()) runner.close();
       }
 
       /* Enqueue pending-revision stubs on regen dispatch. One per

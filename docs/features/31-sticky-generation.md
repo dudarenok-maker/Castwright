@@ -2,6 +2,20 @@
 
 **Status:** stable
 
+> **Update — plan 102 Should #5 (2026-05-23).** This plan's prose still
+> describes the pre-queue stop contract built on `chapters.paused`. That field
+> was removed: the SSE handle + lifecycle now live in a shared
+> `generation-stream-runner` (plan 102 Should #6) and the open-side gate reads
+> `queue.paused` instead of `chapters.paused`. The two stop signals split: the
+> user-facing Pause lives in the queue modal (`queue.paused`, stops the drain
+> at the next chapter boundary — in-flight finishes), while the local-analyzer
+> guard's "halt NOW to free the GPU" path is a `haltActiveGeneration` thunk
+> (dispatches `chapters/requestStreamHalt`, which the middleware observes to
+> POST `/pause` + close the open handle immediately, plus `setQueuePaused(true)`).
+> The reverse-local-analyzer guard is now a pure reconcile gate (it refuses to
+> open rather than flipping a flag). Read the sections below with that
+> substitution in mind.
+
 Audio generation, once started, runs to completion (or to the user's
 explicit Stop) regardless of where the user navigates. The previous
 contract — see plan 16 for the pre-v3 history — closed the SSE handle

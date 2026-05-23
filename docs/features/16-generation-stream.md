@@ -1,5 +1,18 @@
 # Generation stream
 
+> **Update — plan 102 Should #5 (2026-05-23).** The slice's generation-control
+> fields were removed: `regenEpoch` (was write-only) is gone; the regen spec is
+> no longer a slice field (`pendingRegen` / `consumePendingRegen`) but a
+> middleware-local `pendingSpec` the generation-stream middleware computes from
+> the regenerate action and hands to the shared `generation-stream-runner`
+> (plan 102 Should #6); and `chapters.paused` is gone — the open-side gate reads
+> `queue.paused`, the user-facing Pause is the queue modal, and the
+> local-analyzer guard halts via a `haltActiveGeneration` thunk
+> (`chapters/requestStreamHalt` + `setQueuePaused(true)`). The §"State shape" and
+> §"Lifecycle" prose below predates that and still names the old fields — the
+> behaviour (force-regen the exact target, drain the spec on open) is unchanged;
+> only the home of the spec moved off the slice.
+
 > Status: stable
 > Key files: `src/store/generation-stream-middleware.ts` (SSE owner — store-scoped so it survives view navigation), `src/views/generation.tsx`, `src/components/layout.tsx` (global header pill via `GenerationPillData`), `src/components/top-bar.tsx` (`GenerationPill`), `src/lib/generation-progress.ts`, `src/store/chapters-slice.ts` (`applyGenerationTick`, `lastTickAt`, `STALL_THRESHOLD_MS`, `regenerateChapter`/`regenerateCharacter`/`batchRegenerateCharacters`), `src/lib/change-log.ts` (event builders), `src/lib/api.ts` (`realStreamGeneration`), `server/src/routes/generation.ts`, `server/src/routes/chapter-audio.ts`, `server/src/tts/synthesise-chapter.ts`, `server/src/tts/mp3.ts`, `server/src/workspace/chapter-audio-file.ts`
 > URL surface: `#/books/:bookId/generate`

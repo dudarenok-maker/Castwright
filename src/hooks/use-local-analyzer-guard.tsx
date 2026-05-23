@@ -35,7 +35,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
-import { chaptersActions } from '../store/chapters-slice';
+import { haltActiveGeneration } from '../store/queue-thunks';
 import { MODEL_OPTIONS } from '../lib/models';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { IconWarning } from '../lib/icons';
@@ -65,7 +65,7 @@ export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}
   const libraryBooks = useAppSelector((s) => s.library.books);
 
   /* Stash the proceed callback in state — the modal needs to call it on
-     confirm, after dispatching setPaused. Null while closed. */
+     confirm, after dispatching the halt. Null while closed. */
   const [pending, setPending] = useState<(() => void) | null>(null);
 
   /* Engine lookup — `local` engines are the only ones that compete for
@@ -111,12 +111,12 @@ export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}
       cancelLabel="Wait"
       variant="default"
       onConfirm={() => {
-        /* setPaused(true) is the universal "stop the stream" signal:
-           generation-stream-middleware closes its handle on the next
-           reconcile, the snapshot clears, and the new analyzer run owns
-           the GPU. The user will see the pill disappear; the run resumes
-           only on an explicit Resume click in Generate. */
-        dispatch(chaptersActions.setPaused(true));
+        /* haltActiveGeneration is the "stop the stream NOW + pause the queue"
+           signal: the generation-stream middleware closes its open SSE handle
+           (and POSTs /pause) immediately so the analyzer owns the GPU within
+           the chapter, and queue.paused stops the dispatcher from re-draining.
+           The user resumes generation from the queue modal afterwards. */
+        void dispatch(haltActiveGeneration());
         const run = pending;
         close();
         run?.();
