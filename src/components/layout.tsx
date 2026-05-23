@@ -1006,7 +1006,22 @@ export function Layout() {
                   ),
                 );
               }
-              dispatch(chaptersActions.regenerateCharacter({ characterId, chapterIds }));
+              if (bookId) {
+                /* Plan 102 — one queue entry per (chapter, character)
+                   tuple so the modal can reorder each independently. */
+                const rand = Math.random().toString(36).slice(2, 8);
+                void dispatch(
+                  enqueueQueueEntries(
+                    chapterIds.map((chId) => ({
+                      id: `regen-char-${bookId}-${characterId}-${chId}-${rand}`,
+                      bookId,
+                      chapterId: chId,
+                      scope: 'character',
+                      characterId,
+                    })),
+                  ),
+                );
+              }
               dispatch(uiActions.changeView('generate'));
             });
           }}
@@ -1034,7 +1049,26 @@ export function Layout() {
                   ),
                 );
               }
-              dispatch(chaptersActions.batchRegenerateCharacters({ characterIds, chapterIds }));
+              if (bookId) {
+                /* Plan 102 — batch character regen → one entry per
+                   (character, chapter) cell. M characters × N chapters
+                   = M*N queue entries; the dispatcher drains them
+                   serially. */
+                const rand = Math.random().toString(36).slice(2, 8);
+                const entries = [];
+                for (const cid of characterIds) {
+                  for (const chId of chapterIds) {
+                    entries.push({
+                      id: `regen-batch-char-${bookId}-${cid}-${chId}-${rand}`,
+                      bookId,
+                      chapterId: chId,
+                      scope: 'character' as const,
+                      characterId: cid,
+                    });
+                  }
+                }
+                if (entries.length) void dispatch(enqueueQueueEntries(entries));
+              }
               dispatch(uiActions.changeView('generate'));
             });
           }}
@@ -1080,12 +1114,24 @@ export function Layout() {
                   ),
                 );
               }
-              dispatch(
-                chaptersActions.regenerateCharacter({
-                  characterId: charId,
-                  chapterIds: [chapterId],
-                }),
-              );
+              if (bookId) {
+                /* Plan 102 — drift auto-queue (severe) now enqueues
+                   instead of dispatching directly. Serialised through
+                   the dispatcher so it can't drop in-flight work
+                   (same fix as the regen-modal path). */
+                const rand = Math.random().toString(36).slice(2, 8);
+                void dispatch(
+                  enqueueQueueEntries([
+                    {
+                      id: `drift-auto-${bookId}-${charId}-${chapterId}-${rand}`,
+                      bookId,
+                      chapterId,
+                      scope: 'character',
+                      characterId: charId,
+                    },
+                  ]),
+                );
+              }
               dispatch(uiActions.changeView('generate'));
             });
           }}
