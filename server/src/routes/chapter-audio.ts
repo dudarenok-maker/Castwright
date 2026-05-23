@@ -60,7 +60,6 @@ async function readPeaksOrEmpty(peaksPath: string): Promise<number[]> {
     if (!file || !Array.isArray(file.peaks)) return [];
     return file.peaks;
   } catch (err) {
-    /* eslint-disable-next-line no-console */
     console.warn(
       `[chapter-audio] failed to read peaks file at ${peaksPath}: ${(err as Error).message}`,
     );
@@ -83,7 +82,6 @@ async function readLufsOrNull(lufsPath: string): Promise<LoudnormSidecarJson | n
     if (!file || typeof file.i !== 'number' || typeof file.target !== 'number') return null;
     return file;
   } catch (err) {
-    /* eslint-disable-next-line no-console */
     console.warn(
       `[chapter-audio] failed to read lufs file at ${lufsPath}: ${(err as Error).message}`,
     );
@@ -372,7 +370,6 @@ chapterAudioRouter.post(
     try {
       await renameWithRetry(previous.path, join(root, `${chapter.slug}.${previous.ext}`));
     } catch (err) {
-      /* eslint-disable-next-line no-console */
       console.error(
         `[chapter-audio] failed to restore previous audio for ${chapter.slug}: ${(err as Error).message}`,
       );

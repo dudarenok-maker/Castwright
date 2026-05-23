@@ -375,7 +375,7 @@ export function ProfileDrawer({
       ageRange: ageRange || character.ageRange,
       tone,
     });
-    // eslint-disable-next-line no-console
+
     console.log('[sample] requesting', { voiceId: sampleVoiceId, modelKey: ttsModelKey });
     try {
       await playSampleWithAutoLoad({
@@ -1383,7 +1383,9 @@ function ModelVoiceOverridePicker({
                       key={key}
                       data-testid={`voice-preview-row-${bv.name}`}
                       className={`flex items-center justify-between gap-3 px-2.5 py-1.5 rounded-xl ${
-                        isCurrent ? 'bg-magenta/5 border border-magenta/30' : 'border border-transparent'
+                        isCurrent
+                          ? 'bg-magenta/5 border border-magenta/30'
+                          : 'border border-transparent'
                       }`}
                     >
                       <span className="text-xs text-ink/75 truncate">

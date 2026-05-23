@@ -33,16 +33,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
 import { clearAnalysisCache } from '../store/analysis-cache.js';
-import type {
-  Analyzer,
-  AnalyzerSelection,
-  StageCall,
-} from '../analyzer/index.js';
-import type {
-  Stage1ChapterOutput,
-  Stage1Output,
-  Stage2ChapterOutput,
-} from '../handoff/schemas.js';
+import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
+import type { Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { ChapterHint } from '../store/manuscripts.js';
 import { putManuscript, removeManuscript } from '../store/manuscripts.js';
 
@@ -127,10 +119,7 @@ function makePipelineFixture(): {
   const holdPhase0 = new Map<number, () => void>();
   const holdPhase1 = new Map<number, () => void>();
 
-  const dispatchHold = (
-    holds: Map<number, () => void>,
-    chapterId: number,
-  ): Promise<void> =>
+  const dispatchHold = (holds: Map<number, () => void>, chapterId: number): Promise<void> =>
     new Promise<void>((resolve) => {
       if (holds.has(chapterId)) {
         holds.set(chapterId, () => {
@@ -289,10 +278,9 @@ function buildStubJob(manuscriptId: string): AnalysisJob {
    reads env-only. We override the analyzer instance directly via
    vi.mock at top of file (sticky for the whole module) — see below. */
 vi.mock('../analyzer/select-analyzer.js', async () => {
-  const actual =
-    await vi.importActual<typeof import('../analyzer/select-analyzer.js')>(
-      '../analyzer/select-analyzer.js',
-    );
+  const actual = await vi.importActual<typeof import('../analyzer/select-analyzer.js')>(
+    '../analyzer/select-analyzer.js',
+  );
   return {
     ...actual,
     /* Routed to the singleton injected by the test via a global hook —
@@ -300,7 +288,6 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
        calling runMainAnalyzerJob; we honour it here for the 'phase1'
        call and fall through to the real implementation otherwise. */
     selectAnalyzerForPhase: (opts: { phase: 'phase0' | 'phase1' }) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const g = globalThis as any;
       if (opts.phase === 'phase1' && g.__test_phase1_selection) {
         return g.__test_phase1_selection;
@@ -308,7 +295,6 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
       return actual.selectAnalyzerForPhase(opts);
     },
     isPerPhaseModelSelectionActive: () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const g = globalThis as any;
       if (g.__test_force_pipelined !== undefined) return g.__test_force_pipelined;
       return actual.isPerPhaseModelSelectionActive();
@@ -321,7 +307,6 @@ function setPipelinedMode(opts: {
   phase1Selection?: AnalyzerSelection;
   minLag?: number;
 }): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const g = globalThis as any;
   g.__test_force_pipelined = opts.pipelined;
   g.__test_phase1_selection = opts.phase1Selection ?? null;
@@ -331,7 +316,6 @@ function setPipelinedMode(opts: {
 }
 
 function clearPipelinedMode(): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const g = globalThis as any;
   delete g.__test_force_pipelined;
   delete g.__test_phase1_selection;
@@ -345,11 +329,7 @@ afterEach(() => {
    uses real timers here (Phase 0 / Phase 1 dispatch hops are real
    microtasks), so polling with `setImmediate`-style waits is the
    right call. */
-async function waitFor(
-  condition: () => boolean,
-  budgetMs = 2000,
-  step = 5,
-): Promise<void> {
+async function waitFor(condition: () => boolean, budgetMs = 2000, step = 5): Promise<void> {
   const start = Date.now();
   while (!condition()) {
     if (Date.now() - start > budgetMs) {
@@ -417,9 +397,7 @@ describe('runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution', () 
          is one beyond the "just barely caught up to LAG" point. Be
          conservative: require that the first Phase 1 dispatch happens
          BEFORE Phase 0 chapter 12 starts. */
-      const phase0Chapter12 = fixture.trace.find(
-        (t) => t.phase === 0 && t.chapterId === 12,
-      );
+      const phase0Chapter12 = fixture.trace.find((t) => t.phase === 0 && t.chapterId === 12);
       if (phase0Chapter12) {
         const phase0Chapter12Index = fixture.trace.indexOf(phase0Chapter12);
         expect(firstPhase1Index).toBeLessThan(phase0Chapter12Index);
@@ -485,14 +463,9 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
          bumps to 180 s here — well above worst-case observed CI runtime
          on either OS; healthy runs short-circuit via the inner waitFor
          the moment the trace lands, so no slowdown for warm caches. */
-      await waitFor(
-        () => fixture.trace.some((t) => t.phase === 1 && t.chapterId === 6),
-        30_000,
-      );
+      await waitFor(() => fixture.trace.some((t) => t.phase === 1 && t.chapterId === 6), 30_000);
 
-      const phase1Chapter6 = fixture.trace.find(
-        (t) => t.phase === 1 && t.chapterId === 6,
-      );
+      const phase1Chapter6 = fixture.trace.find((t) => t.phase === 1 && t.chapterId === 6);
       expect(phase1Chapter6).toBeDefined();
       const roster = phase1Chapter6!.rosterIds ?? [];
       /* Roster contains ch1-char through ch11-char (Phase 0 chapters
@@ -560,10 +533,7 @@ describe('runMainAnalyzerJob — back-pressure under stall', () => {
          Chapter id=3 (index 2) needs watermark>=12, which the held
          chapter 13 prevents — it must NOT dispatch. */
       await waitFor(
-        () =>
-          [1, 2].every((id) =>
-            fixture.trace.some((t) => t.phase === 1 && t.chapterId === id),
-          ),
+        () => [1, 2].every((id) => fixture.trace.some((t) => t.phase === 1 && t.chapterId === id)),
         10_000,
       );
       /* Give the watermark + queue another generous tick to make
@@ -572,19 +542,13 @@ describe('runMainAnalyzerJob — back-pressure under stall', () => {
 
       /* Phase 1 chapter id=3 must NOT have dispatched yet — it needs
          watermark >= 12 (which we're holding chapter 13 to prevent). */
-      const phase1Chapter3 = fixture.trace.find(
-        (t) => t.phase === 1 && t.chapterId === 3,
-      );
+      const phase1Chapter3 = fixture.trace.find((t) => t.phase === 1 && t.chapterId === 3);
       expect(phase1Chapter3).toBeUndefined();
 
       /* Release Phase 0 chapter 13 — watermark advances to 12 once
          chapter 13's completion folds in, releasing chapter id=3. */
       fixture.releasePhase0(13);
-      await waitFor(
-        () =>
-          fixture.trace.some((t) => t.phase === 1 && t.chapterId === 3),
-        10_000,
-      );
+      await waitFor(() => fixture.trace.some((t) => t.phase === 1 && t.chapterId === 3), 10_000);
       await runPromise;
     } finally {
       removeManuscript(manuscriptId);
