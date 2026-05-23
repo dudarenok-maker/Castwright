@@ -12,8 +12,8 @@ import { changeLogSlice } from '../store/change-log-slice';
 import { castSlice } from '../store/cast-slice';
 import { librarySlice } from '../store/library-slice';
 import { accountSlice } from '../store/account-slice';
-import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { generationStreamMiddleware } from '../store/generation-stream-middleware';
+import { queueSlice } from '../store/queue-slice';
 import { GenerationView } from './generation';
 import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
 import type { LayoutContext } from '../components/layout';
@@ -175,6 +175,7 @@ function makeStore() {
       changeLog: changeLogSlice.reducer,
       cast: castSlice.reducer,
       library: librarySlice.reducer,
+      queue: queueSlice.reducer,
       /* Account slice powers the engines-in-use selector that determines
          which engine pill(s) render in the Generate header. Defaults to
          the same Coqui modelKey the view receives so the existing button-
@@ -281,6 +282,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
         library: librarySlice.reducer,
+        queue: queueSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([ch1Done, ch2Queued, ch3Excluded]));
@@ -347,6 +349,7 @@ describe('GenerationView — early-tick render guards (regression)', () => {
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
         library: librarySlice.reducer,
+        queue: queueSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([live]));
@@ -461,6 +464,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
         library: librarySlice.reducer,
+        queue: queueSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([liveChapter]));
@@ -543,6 +547,7 @@ describe('GenerationView — heartbeat / stalled state', () => {
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
         library: librarySlice.reducer,
+        queue: queueSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([live]));
@@ -610,6 +615,7 @@ describe('GenerationView — activity sidebar', () => {
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
         library: librarySlice.reducer,
+        queue: queueSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
@@ -676,6 +682,7 @@ describe('GenerationView — header action once the run is complete', () => {
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
         library: librarySlice.reducer,
+        queue: queueSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([allDone1, allDone2]));
@@ -717,7 +724,11 @@ describe('GenerationView — header action once the run is complete', () => {
     expect(onRegenerateBook).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps Pause/Resume while any chapter is still queued or in progress', () => {
+  it('renders the View queue CTA in the header while work is queued (plan 102)', () => {
+    /* Wave 4a moved Pause/Resume out of the Generate view into the queue
+       modal — what used to be the Pause/Resume slot is now occupied by a
+       "View queue" button that opens the modal. The book-level Regenerate
+       still shows up when allComplete is true (separate test above). */
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -726,6 +737,7 @@ describe('GenerationView — header action once the run is complete', () => {
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
         library: librarySlice.reducer,
+        queue: queueSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
@@ -757,146 +769,15 @@ describe('GenerationView — header action once the run is complete', () => {
       </Provider>,
     );
 
-    expect(screen.getByRole('button', { name: /Resume/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Pause|Resume/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId('generation-view-queue')).toBeInTheDocument();
   });
 });
 
-describe('GenerationView — reverse local-analyzer guard on Resume (D2)', () => {
-  /* When a local analysis is alive somewhere in the workspace, clicking
-     Resume in the Generate view should prompt the user before flipping
-     the slice's paused flag (which the middleware reconciles into a
-     fresh openHandle, competing for the GPU). Pause -> Resume is the
-     explicit user-driven start the reverse guard is supposed to gate;
-     the implicit reconcile path (no user click) is intentionally left
-     alone. */
-
-  function makeStoreWithAnalysis(opts: { engine?: 'local' | 'gemini' } = {}) {
-    const store = configureStore({
-      reducer: {
-        ui: uiSlice.reducer,
-        chapters: chaptersSlice.reducer,
-        manuscript: manuscriptSlice.reducer,
-        changeLog: changeLogSlice.reducer,
-        cast: castSlice.reducer,
-        library: librarySlice.reducer,
-        analysis: analysisSlice.reducer,
-      },
-    });
-    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
-    store.dispatch(
-      manuscriptSlice.actions.hydrateFromAnalysis({
-        bookId: 'b1',
-        characters,
-        chapters: [chapter1, chapter2],
-        sentences,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any),
-    );
-    store.dispatch(
-      analysisActions.setActiveStream({
-        bookId: 'other_book',
-        manuscriptId: 'm_other',
-        bookTitle: 'Other Book Mid-Analysis',
-        engine: opts.engine ?? 'local',
-        phaseId: 0,
-        phaseLabel: 'Detecting characters',
-        phaseProgress: 0.1,
-        remainingMs: null,
-        lastTickAt: Date.now(),
-        state: 'running',
-      }),
-    );
-    return store;
-  }
-
-  it('opens the "Pause analysis to generate?" modal when Resume is clicked with a local analysis alive', () => {
-    const store = makeStoreWithAnalysis({ engine: 'local' });
-    const setPaused = vi.fn();
-
-    render(
-      <Provider store={store}>
-        <HostedGenerationView
-          chapters={[chapter1, chapter2]}
-          characters={characters}
-          paused
-          title="the Coalfall Commission"
-          bookId="b1"
-          modelKey="coqui-xtts-v2"
-          setPaused={setPaused}
-          onRegenerate={() => {}}
-          onRegenerateBook={() => {}}
-          onRegenerateCharacterInChapter={() => {}}
-          onPreview={() => {}}
-        />
-      </Provider>,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /Resume/ }));
-
-    /* Modal renders, setPaused(false) NOT yet called. */
-    expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
-    expect(setPaused).not.toHaveBeenCalled();
-  });
-
-  it('passes through to setPaused(false) without a modal when the analysis is on a remote engine', () => {
-    const store = makeStoreWithAnalysis({ engine: 'gemini' });
-    const setPaused = vi.fn();
-
-    render(
-      <Provider store={store}>
-        <HostedGenerationView
-          chapters={[chapter1, chapter2]}
-          characters={characters}
-          paused
-          title="the Coalfall Commission"
-          bookId="b1"
-          modelKey="coqui-xtts-v2"
-          setPaused={setPaused}
-          onRegenerate={() => {}}
-          onRegenerateBook={() => {}}
-          onRegenerateCharacterInChapter={() => {}}
-          onPreview={() => {}}
-        />
-      </Provider>,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /Resume/ }));
-
-    expect(screen.queryByText('Pause analysis to generate?')).not.toBeInTheDocument();
-    expect(setPaused).toHaveBeenCalledWith(false);
-  });
-
-  it('does NOT prompt when Pause (running -> paused) is clicked, even with a local analysis alive', () => {
-    /* Pausing TTS doesn't compete for GPU — only resuming / starting
-       does. The reverse guard must stay silent on the Pause direction
-       so the user can always stop generation cleanly. */
-    const store = makeStoreWithAnalysis({ engine: 'local' });
-    const setPaused = vi.fn();
-
-    render(
-      <Provider store={store}>
-        <HostedGenerationView
-          chapters={[chapter1, chapter2]}
-          characters={characters}
-          paused={false}
-          title="the Coalfall Commission"
-          bookId="b1"
-          modelKey="coqui-xtts-v2"
-          setPaused={setPaused}
-          onRegenerate={() => {}}
-          onRegenerateBook={() => {}}
-          onRegenerateCharacterInChapter={() => {}}
-          onPreview={() => {}}
-        />
-      </Provider>,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /Pause/ }));
-
-    expect(screen.queryByText('Pause analysis to generate?')).not.toBeInTheDocument();
-    expect(setPaused).toHaveBeenCalledWith(true);
-  });
-});
+/* Plan 102 Wave 4a — the "Reverse local-analyzer guard on Resume" suite
+   that used to live here covered the per-view Resume button which is now
+   in the queue modal. Wave 4b adds the equivalent guard test to the
+   QueueModal pause/resume control where the affordance lives now. */
 
 describe('generationStreamMiddleware — Pause/Resume regenerate loop (regression)', () => {
   beforeEach(() => {
@@ -919,6 +800,7 @@ describe('generationStreamMiddleware — Pause/Resume regenerate loop (regressio
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
         library: librarySlice.reducer,
+        queue: queueSlice.reducer,
       },
       middleware: (gd) => gd().concat(generationStreamMiddleware),
     });
@@ -1076,6 +958,7 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
         library: librarySlice.reducer,
+        queue: queueSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters(chapters));
@@ -1190,6 +1073,7 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
         library: librarySlice.reducer,
+        queue: queueSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters(chapters));
@@ -1384,6 +1268,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
         library: librarySlice.reducer,
+        queue: queueSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2, ch3Excluded]));
@@ -1652,12 +1537,13 @@ describe('GenerationView — phone viewport (375×667, Wave 3)', () => {
     });
   });
 
-  it('header Pause/Resume button declares the ≥44px touch-target class', () => {
+  it('header View queue button declares the ≥44px touch-target class (plan 102)', () => {
+    /* Wave 4a moved Resume/Pause into the queue modal; the header slot
+       now hosts the View queue CTA which must hit the same WCAG 2.5.5
+       touch-target rule. */
     renderView();
-    /* paused=true at render time → button reads "Resume". The min-h-[44px]
-       class is the assertion the touch-target invariant pins on. */
-    const resume = screen.getByRole('button', { name: /resume/i });
-    expect(resume.className).toContain('min-h-[44px]');
+    const viewQueue = screen.getByTestId('generation-view-queue');
+    expect(viewQueue.className).toContain('min-h-[44px]');
   });
 
   it('stats panel uses 2-column grid on phone (collapses below sm:)', () => {

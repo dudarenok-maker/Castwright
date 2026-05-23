@@ -48,6 +48,7 @@ import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
 import { broadcastMiddleware } from './broadcast-middleware';
+import { queueDispatcherMiddleware } from './queue-dispatcher-middleware';
 
 /** Persisted ui-slice keys. Stage so refresh restores the same view +
  *  chapter + drawer; model selectors so the user's per-session picks
@@ -139,6 +140,7 @@ export const store = configureStore({
       generationStreamMiddleware,
       analysisStreamMiddleware,
       broadcastMiddleware,
+      queueDispatcherMiddleware,
     ),
 });
 
