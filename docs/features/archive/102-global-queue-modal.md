@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-23
 owner: null
 ---
 
@@ -102,4 +102,27 @@ Run with the canonical full-pipeline manuscript `C:\Users\dudar\Downloads\Bonus 
 
 ## Ship notes
 
-_(Filled in when status flips to `stable`. Append: shipped date, commit SHAs per merged wave PR, any behaviour delta vs. the original spec.)_
+**Shipped 2026-05-23 across seven PRs (#181-#188):**
+
+- **PR #181** `docs(docs)` — BACKLOG entry filed as Must #3; former Should #1 (SSE hot-reload survival) folded into this plan.
+- **PR #182** `feat(openapi,docs)` — design doc + OpenAPI shape (`QueueEntry`, 5 routes, `resume_from` SSE event). Wave 1.
+- **PR #183** `feat(server)` — `queue-io.ts` mutators, `queue-migrate.ts`, `queue.ts` routes, `generation.ts` `resume_from` ack + `queueEntryId` plumbing, book-delete queue-prune hook. 27 new test cases. Wave 2a.
+- **PR #184** `feat(frontend)` — `queue-slice.ts`, `queue-thunks.ts`, `realStreamGeneration` auto-reconnect with exponential backoff (absorbs former Should #1). 22 new test cases. Wave 2b.
+- **PR #185** `feat(frontend)` — `queue-modal.tsx` (responsive — full-screen sheet on phone, dialog on desktop), top-bar queue chip, Layout mount + mount-time loadQueue. 12 new test cases. Wave 3.
+- **PR #187** (commit `01641c5`) `feat(frontend)` — `queue-dispatcher-middleware.ts` (same-book FIFO drain), Generate view rewire (Resume/Pause → View queue, chapter-row id + scroll consumer), per-chapter Regenerate enqueue. 6 new test cases. Wave 4a.
+- **PR #188** (commit `5867a74`) `feat(frontend)` — dispatcher `scope='character'` branch, rewire of drift bulk regen + CharacterRegenerateModal + BatchCharacterRegenerateModal + drift-report auto-queue + StaleAudioBanner to enqueue. 1 new + 2 updated test cases. Wave 4b.
+- **PR #189 (this PR)** `test(e2e)` — `e2e/queue-modal.spec.ts` (3 cases — chip + count, cancel round-trip, View queue button) + `e2e/responsive/coverage.spec.ts` extended with queue modal viewport test. Wave 5.
+
+**Bug fix verification:** bug #1 (regenerate-during-regenerate drops in-flight progress) closes across all 10 same-book entry points enumerated in the plan. The queue dispatcher serialises every regen action so the in-flight chapter completes before the next one starts.
+
+**Deferred to follow-up plans (filed on BACKLOG):**
+
+- Cross-book dispatcher (bug #2) — dispatcher gates on `chapters.currentBookId === head.bookId`. Cross-book sequencing requires either a cross-book SSE arbitration layer or direct fetch bypass of the existing generation-stream-middleware's gate.
+- `chapters-slice` strip of `pendingRegen` / `regenEpoch` / `paused` — keep until the existing generation-stream-middleware is rewritten to consume queue state directly. Removing prematurely breaks the slice→middleware handshake the dispatcher relies on.
+- Drag-to-reorder in modal — tap-pill (Move up / Move down) covers both desktop and mobile in one path; pointer-event drag is a polish item.
+- Visual baselines for queue modal — Wave 5 didn't regen baselines (Windows host flake per `feedback_visual_baselines_flaky_on_windows.md`). Linux CI run picks them up next push, or trigger explicitly via `npm run test:e2e:visual -- --update-snapshots`.
+
+**Behaviour delta vs. original spec:**
+
+- `forward` scope is expanded into per-chapter entries client-side at enqueue time (as designed) — the server-side queue file never carries a `forward` row, only `'this'` or `'character'`.
+- Dispatcher uses local in-memory `inFlightEntryId` tracking instead of server-side `startEntry` route mutations. Reason: simpler, fewer round-trips, no risk of orphan in_progress state if the SSE closes uncleanly. Server-side `startEntry` / `completeEntry` mutators stay available in `queue-io.ts` for a future cross-book dispatcher that needs them.
