@@ -192,6 +192,37 @@ describe('queue-dispatcher-middleware', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1', { method: 'DELETE' });
   });
 
+  it('dispatches regenerateCharacter when the head entry is scope=character (Wave 4b)', async () => {
+    const store = makeStore();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
+    store.dispatch(
+      chaptersSlice.actions.setChapters([
+        {
+          id: 3,
+          title: 'Chapter 3',
+          state: 'done',
+          progress: 1,
+          duration: '0:30',
+          /* Character must exist on the row for regenerateCharacter to
+             mutate it (the reducer no-ops when the character is missing
+             or 'skipped'). */
+          characters: { narrator: 'done' },
+        },
+      ] as never),
+    );
+    store.dispatch(
+      queueSlice.actions.setSnapshot({
+        entries: [entry({ scope: 'character', characterId: 'narrator' })],
+        paused: false,
+      }),
+    );
+    await flushMicro();
+    /* regenerateCharacter sets pendingRegen the same way regenerateChapter
+       does — the dispatcher's scope branch routes to the right action. */
+    expect(store.getState().chapters.pendingRegen).toEqual({ chapterIds: [3], force: true });
+    expect(store.getState().chapters.chapters[0].characters.narrator).toBe('queued');
+  });
+
   it('waits for the cold-boot snapshot before doing anything', async () => {
     const store = makeStore();
     store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
