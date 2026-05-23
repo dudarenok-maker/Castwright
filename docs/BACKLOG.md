@@ -346,16 +346,6 @@ Source: net-new (2026-05-23). Surfaced during the plan-103 CI cost audit.
 - _Depends on:_ none.
 - _Benefit (technical):_ ~60 billed min/month freed on regen days; tidier workflow.
 
-### 38. Composite setup action to DRY `verify.yml` ↔ `cross-os.yml`
-
-Source: net-new (2026-05-23). Surfaced during plan-103 implementation.
-
-- _What:_ The "checkout + setup-node + node_modules cache + npm ci + ffmpeg + Playwright cache/install" preamble is now near-duplicated across `verify.yml` and `cross-os.yml`. Extract a local composite action (`.github/actions/setup/action.yml`) so the two stay in lockstep and a Node-version or cache-key change lands in one place.
-- _Acceptance:_ Both workflows `uses: ./.github/actions/setup`; a Node-major bump or cache-key change is a one-file edit; both workflows stay green.
-- _Key files:_ new `.github/actions/setup/action.yml`; `.github/workflows/verify.yml`, `.github/workflows/cross-os.yml`.
-- _Depends on:_ plan 103 merged.
-- _Benefit (technical):_ removes drift risk between the two setup paths; no billed-minute change (refactor only).
-
 ### 39. Path-filter `cross-os.yml`'s `mobile-e2e` on frontend/e2e scope
 
 Source: net-new (2026-05-23). Surfaced during plan-103 implementation.
