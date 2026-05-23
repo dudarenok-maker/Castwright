@@ -1,9 +1,13 @@
 /* Chapters slice — generation state per chapter and per character-in-chapter.
 
    Source of truth for the Generate tab: chapter state, per-character status,
-   the assembling sub-phase, the live `pendingRegen` spec that gets forwarded
-   to the server's force/chapterIds payload, and a `lastError` banner for
-   stream-level failures the per-chapter slot can't represent. */
+   the assembling sub-phase, and a `lastError` banner for stream-level
+   failures the per-chapter slot can't represent. The generation control
+   fields (`pendingRegen` / `regenEpoch` / `paused`) were removed in plan 102
+   Should #5 — the queue (queue-slice + dispatcher) and the shared stream
+   runner own scheduling now; the regen spec is computed by the
+   generation-stream middleware from the regen action and passed straight to
+   the runner. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { formatDuration } from '../lib/time';
@@ -31,11 +35,6 @@ import type {
    header pill so the user knows the worker has gone quiet from any view. */
 export const STALL_THRESHOLD_MS = 30_000;
 
-export interface PendingRegenSpec {
-  chapterIds: number[];
-  force: true;
-}
-
 /** Cross-book snapshot of the in-flight generation run. Set by the
     generation-stream middleware on openHandle and updated on every non-idle
     tick; cleared on closeHandle. Decouples the global header pill from
@@ -57,20 +56,12 @@ export interface ActiveStreamSnapshot {
 
 export interface ChaptersState {
   chapters: Chapter[];
-  paused: boolean;
   /** Stream-level error (e.g. modelKey rejected, cast missing, sidecar down).
       Surfaced as a banner; cleared on dismiss or on the next successful tick. */
   lastError: string | null;
   /** Set on the first progress tick of a run; cleared when the queue drains
       (idle tick with no in-flight or queued chapters). Drives the real ETA. */
   generationStartedAt: number | null;
-  /** Forwarded to the next streamGeneration call as `chapterIds + force`.
-      Set by the three regenerate reducers, cleared on `idle` so the spec
-      survives Pause→Resume cycles. */
-  pendingRegen: PendingRegenSpec | null;
-  /** Monotonic counter the Generate view watches as a useEffect dep so it
-      re-opens the SSE when a regenerate is requested. */
-  regenEpoch: number;
   /** Wall-clock of the last non-idle tick. Combined with STALL_THRESHOLD_MS
       it drives the "Stalled" amber pill on the in-progress chapter row and
       the matching variant on the global header pill. Cleared on idle so a
@@ -90,11 +81,8 @@ export interface ChaptersState {
 
 const initialState: ChaptersState = {
   chapters: [],
-  paused: false,
   lastError: null,
   generationStartedAt: null,
-  pendingRegen: null,
-  regenEpoch: 0,
   lastTickAt: null,
   currentBookId: null,
   activeStream: null,
@@ -107,8 +95,16 @@ export const chaptersSlice = createSlice({
     setChapters: (s, a: PayloadAction<Chapter[]>) => {
       s.chapters = a.payload;
     },
-    setPaused: (s, a: PayloadAction<boolean>) => {
-      s.paused = a.payload;
+    /** One-shot "halt the in-flight generation stream NOW" signal. Carries no
+        state — it exists purely so the generation-stream middleware can
+        observe the action and tear down the open SSE handle (+ POST /pause to
+        the server) to free the GPU immediately. Used by the local-analyzer
+        guard when a local analysis is about to start and needs the VRAM that
+        TTS is holding. This is distinct from `queue.paused` (which stops the
+        dispatcher from draining the NEXT entry but lets the in-flight chapter
+        finish); the analyzer can't wait a whole chapter for the GPU. */
+    requestStreamHalt: () => {
+      /* No state mutation — the middleware reacts to the action type. */
     },
     clearLastError: (s) => {
       s.lastError = null;
@@ -156,17 +152,6 @@ export const chaptersSlice = createSlice({
       if (done != null) s.activeStream.done = done;
       if (total != null) s.activeStream.total = total;
       if (inProgress != null) s.activeStream.inProgress = inProgress;
-    },
-
-    /* Called by the Generate view the instant it opens an SSE with a regen
-       spec, so a subsequent Pause → Resume cycle re-resumes "naturally"
-       (no chapterIds, no force) instead of replaying force:true and wiping
-       the just-completed audio. Without this, pendingRegen only clears on
-       the server's `idle` tick — but an aborted SSE never delivers that
-       tick, so the spec sticks around forever and every Resume kicks off
-       a fresh force-regen of the whole target set. */
-    consumePendingRegen: (s) => {
-      s.pendingRegen = null;
     },
 
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
@@ -280,20 +265,7 @@ export const chaptersSlice = createSlice({
       );
       s.lastError = null;
       s.generationStartedAt = null;
-      s.pendingRegen = null;
       s.lastTickAt = null;
-      /* paused is deliberately NOT touched here. Pre-sticky-generation
-         this hydrate flipped paused=true whenever any chapter audio was
-         already on disk, on the assumption that "some progress + page
-         load" meant "user came back from a previous session." That made
-         sense when every reload tore down the SSE; with the post-reload
-         subscribe contract (see plan 31, invariant 1a) the server keeps
-         the run going across reloads, and forcing paused=true here would
-         make the Generate button display Resume + suppress the middleware
-         from auto-attaching to the still-live job. The new contract:
-         paused is ONLY set by an explicit chaptersActions.setPaused —
-         either the Generate-view Stop button or the local-analyzer
-         confirm — never as a side-effect of hydrate. */
     },
 
     applyGenerationTick: (s, a: PayloadAction<GenerationTick>) => {
@@ -323,9 +295,8 @@ export const chaptersSlice = createSlice({
       if (ev.type !== 'idle') s.lastTickAt = Date.now();
 
       if (ev.type === 'idle') {
-        /* End-of-run: drop the regen spec so it doesn't auto-replay, and clear
-           the elapsed clock so the next run starts a fresh ETA. */
-        s.pendingRegen = null;
+        /* End-of-run: clear the elapsed clock so the next run starts a fresh
+           ETA. */
         const stillBusy = s.chapters.some((c) => c.state === 'in_progress' || c.state === 'queued');
         if (!stillBusy) {
           s.generationStartedAt = null;
@@ -469,8 +440,6 @@ export const chaptersSlice = createSlice({
         };
       });
       if (targetIds.length) {
-        s.pendingRegen = { chapterIds: targetIds, force: true };
-        s.regenEpoch += 1;
         s.lastError = null;
         s.generationStartedAt = null;
       }
@@ -506,8 +475,6 @@ export const chaptersSlice = createSlice({
         };
       });
       if (targetIds.length) {
-        s.pendingRegen = { chapterIds: targetIds, force: true };
-        s.regenEpoch += 1;
         s.lastError = null;
         s.generationStartedAt = null;
       }
@@ -534,8 +501,6 @@ export const chaptersSlice = createSlice({
         };
       });
       if (targetIds.length) {
-        s.pendingRegen = { chapterIds: targetIds, force: true };
-        s.regenEpoch += 1;
         s.lastError = null;
         s.generationStartedAt = null;
       }
@@ -632,11 +597,10 @@ export const chaptersSlice = createSlice({
        network round-trip when tab A starts/advances a run.
 
        Scope is intentionally narrow: only `activeStream` is mirrored,
-       NOT `chapters[]` rows / `pendingRegen` / `regenEpoch` / etc.
-       Those are per-tab UI state — duplicating them across tabs would
-       fire chapter-level regen side-effects (the Generate view watches
-       `regenEpoch` to re-open SSE) in every tab simultaneously, which is
-       the racing-writes case explicitly parked as Won't #3.
+       NOT `chapters[]` rows. Those are per-tab UI state — duplicating them
+       across tabs would fire chapter-level regen side-effects in every tab
+       simultaneously, which is the racing-writes case explicitly parked as
+       Won't #3.
 
        Cross-bookId isolation: the snapshot carries its own bookId in the
        payload; we replace `activeStream` verbatim. The reducer never
@@ -678,8 +642,6 @@ export const chaptersSlice = createSlice({
         };
       });
       if (targetIds.length) {
-        s.pendingRegen = { chapterIds: targetIds, force: true };
-        s.regenEpoch += 1;
         s.lastError = null;
         s.generationStartedAt = null;
       }
