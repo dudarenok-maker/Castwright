@@ -345,6 +345,43 @@ def test_kokoro_concurrent_no_cross_request_bleed(kokoro_client: TestClient) -> 
         assert rate == str(_FakeKokoroEngine.NATIVE_SAMPLE_RATE)
 
 
+def test_kokoro_same_input_twice_is_deterministic(kokoro_client: TestClient) -> None:
+    """Same input → identical PCM, twice (plan 107 determinism pin).
+
+    Within-chapter sentence parallelism (server-side, plan 107) fans a single
+    chapter's sentence groups out to concurrent /synthesize calls, then
+    concatenates the PCM back in narrative order. That reorder is only sound
+    if a given (model, voice, text) request always returns byte-identical
+    audio regardless of when or alongside what it runs — otherwise the
+    parallel-vs-serial output could diverge. This pins the contract at the
+    sidecar boundary: the SAME input synthesised twice (here serially, but
+    the engine holds no per-call mutable state, which the parallel
+    no-cross-bleed tests above already exercise) yields identical PCM and the
+    same sample-rate header. A regression that introduced run-to-run
+    nondeterminism (e.g. an unseeded sampler, a shared scratch buffer) would
+    surface here and would silently corrupt parallel chapter audio."""
+    text = "The same line, synthesised twice."
+    first = kokoro_client.post(
+        "/synthesize",
+        json={"engine": "kokoro", "model": "v1", "voice": "af_heart", "text": text},
+    )
+    second = kokoro_client.post(
+        "/synthesize",
+        json={"engine": "kokoro", "model": "v1", "voice": "af_heart", "text": text},
+    )
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.content == second.content, (
+        "same input produced different PCM across two calls — Kokoro synth is "
+        "nondeterministic, which would corrupt plan-107 parallel chapter audio"
+    )
+    assert first.headers.get("x-sample-rate") == second.headers.get("x-sample-rate")
+    # And the PCM actually round-trips back to this request's text (not empty
+    # / not a sibling's) — guards against a degenerate "always returns b''"
+    # engine trivially passing the equality check above.
+    assert _pcm_to_first_char(first.content) == text[0]
+
+
 def test_concurrent_sample_rate_header_matches_per_response(kokoro_client: TestClient) -> None:
     """Sample-rate header is computed per-response from `result.sample_rate`.
     Under parallel load, each request's header must match THAT response's
