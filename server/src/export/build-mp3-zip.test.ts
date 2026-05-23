@@ -240,6 +240,5 @@ describe('sanitiseForZip', () => {
 });
 
 if (!ffmpegPresent) {
-  // eslint-disable-next-line no-console
   console.warn('[build-mp3-zip.test.ts] ffmpeg missing — skipping zip integration tests.');
 }

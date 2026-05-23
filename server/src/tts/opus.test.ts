@@ -95,7 +95,6 @@ describeIfFfmpeg('encodePcmToAudio (format: opus)', () => {
 });
 
 if (!ffmpegPresent) {
-  // eslint-disable-next-line no-console
   console.warn(
     '[opus.test.ts] ffmpeg not found on PATH — skipping encoder integration tests. ' +
       'Install: winget install Gyan.FFmpeg',

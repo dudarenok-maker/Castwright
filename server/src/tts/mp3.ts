@@ -328,46 +328,44 @@ export async function encodePcmToAudio(
     }
   }
 
-  const encodeResult = await new Promise<{ encoded: Buffer; stderr: string }>(
-    (resolve, reject) => {
-      const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+  const encodeResult = await new Promise<{ encoded: Buffer; stderr: string }>((resolve, reject) => {
+    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
 
-      const stdoutChunks: Buffer[] = [];
-      const stderrChunks: Buffer[] = [];
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
 
-      child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
-      child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
+    child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
+    child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
 
-      child.on('error', (err) => {
-        /* spawn failure: ffmpeg not on PATH. Surface a friendly hint — the
+    child.on('error', (err) => {
+      /* spawn failure: ffmpeg not on PATH. Surface a friendly hint — the
            preflight in start-app.ps1 should normally prevent this. */
-        reject(
-          new Error(
-            `Failed to spawn ffmpeg: ${err.message}. ` +
-              `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
-          ),
-        );
-      });
+      reject(
+        new Error(
+          `Failed to spawn ffmpeg: ${err.message}. ` +
+            `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
+        ),
+      );
+    });
 
-      child.on('close', (code) => {
-        const stderr = Buffer.concat(stderrChunks).toString('utf8');
-        if (code === 0) {
-          resolve({ encoded: Buffer.concat(stdoutChunks), stderr });
-        } else {
-          reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim() || '(no stderr)'}`));
-        }
-      });
+    child.on('close', (code) => {
+      const stderr = Buffer.concat(stderrChunks).toString('utf8');
+      if (code === 0) {
+        resolve({ encoded: Buffer.concat(stdoutChunks), stderr });
+      } else {
+        reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim() || '(no stderr)'}`));
+      }
+    });
 
-      child.stdin.on('error', (err) => {
-        /* EPIPE if ffmpeg dies before we finish writing the PCM. The 'close'
+    child.stdin.on('error', (err) => {
+      /* EPIPE if ffmpeg dies before we finish writing the PCM. The 'close'
            handler will report the real reason via stderr; swallow here so the
            promise doesn't reject twice. */
-        if ((err as NodeJS.ErrnoException).code !== 'EPIPE') reject(err);
-      });
+      if ((err as NodeJS.ErrnoException).code !== 'EPIPE') reject(err);
+    });
 
-      child.stdin.end(pcm);
-    },
-  );
+    child.stdin.end(pcm);
+  });
 
   /* Two-pass post-encode upgrade: parse the second-pass loudnorm JSON from
      stderr and replace the provisional sidecar's input_i value with the
@@ -389,7 +387,6 @@ export async function encodePcmToAudio(
             measuredAt: pendingSidecar.measuredAt,
           };
         } else {
-          // eslint-disable-next-line no-console
           console.warn(
             `[loudnorm] second-pass output stats are not finite (output_i=${secondPass.output_i}); ` +
               `persisting input-side measurement (${twoPassFirstStats.input_i.toFixed(2)} LUFS) ` +
@@ -397,7 +394,6 @@ export async function encodePcmToAudio(
           );
         }
       } catch (e) {
-        // eslint-disable-next-line no-console
         console.warn(
           `[loudnorm] failed to parse second-pass stderr JSON (${(e as Error).message}); ` +
             `persisting input-side measurement (${twoPassFirstStats.input_i.toFixed(2)} LUFS) ` +
@@ -405,7 +401,6 @@ export async function encodePcmToAudio(
         );
       }
     } else {
-      // eslint-disable-next-line no-console
       console.warn(
         `[loudnorm] second-pass stderr did not include a JSON block; ` +
           `persisting input-side measurement (${twoPassFirstStats.input_i.toFixed(2)} LUFS) ` +

@@ -175,7 +175,6 @@ describe('AnalysingRoute manuscriptId derivation', () => {
     const store = makeStore();
     store.dispatch(
       manuscriptActions.hydrateFromBookState({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         state: { bookId: 'b1', manuscriptId: 'mns-real', title: 'Bonus Keefe Story' } as any,
         sentences: null,
         wordCount: 2440,
@@ -246,7 +245,6 @@ describe('AnalysingRoute manuscriptId derivation', () => {
     store.dispatch(uiActions.manuscriptUploaded({ bookId: 'b1', manuscriptId: 'mns-from-upload' }));
     store.dispatch(
       manuscriptActions.hydrateFromBookState({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         state: { bookId: 'b1', manuscriptId: 'mns-from-upload', title: 'Bonus Keefe Story' } as any,
         sentences: null,
         wordCount: 2440,
@@ -322,7 +320,6 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     store.dispatch(castActions.setCharacters(staleChars));
     store.dispatch(
       manuscriptActions.hydrateFromBookState({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         state: { bookId: 'b1', manuscriptId: 'mns-real', title: 'Bonus Keefe Story' } as any,
         sentences: null,
         wordCount: 100000,
@@ -347,8 +344,16 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
       showError,
       pushToast: vi.fn(),
       ttsLifecycle: {
-        coqui: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
-        kokoro: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
+        coqui: {
+          state: 'unreachable',
+          onLoad: vi.fn(async () => {}),
+          onStop: vi.fn(async () => {}),
+        },
+        kokoro: {
+          state: 'unreachable',
+          onLoad: vi.fn(async () => {}),
+          onStop: vi.fn(async () => {}),
+        },
         evictionNotice: null,
         loadErrorNotice: null,
         dismissNotices: vi.fn(),
@@ -466,8 +471,16 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
       showError,
       pushToast: vi.fn(),
       ttsLifecycle: {
-        coqui: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
-        kokoro: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
+        coqui: {
+          state: 'unreachable',
+          onLoad: vi.fn(async () => {}),
+          onStop: vi.fn(async () => {}),
+        },
+        kokoro: {
+          state: 'unreachable',
+          onLoad: vi.fn(async () => {}),
+          onStop: vi.fn(async () => {}),
+        },
         evictionNotice: null,
         loadErrorNotice: null,
         dismissNotices: vi.fn(),
@@ -719,7 +732,6 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
        came from the analysing view for Book A. */
     store.dispatch(
       manuscriptActions.hydrateFromBookState({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         state: { bookId: 'b1', manuscriptId: 'mns-a', title: 'Bonus Keefe Story' } as any,
         sentences: null,
         wordCount: 1000,
@@ -747,8 +759,16 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
       showError: vi.fn(),
       pushToast: vi.fn(),
       ttsLifecycle: {
-        coqui: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
-        kokoro: { state: 'unreachable', onLoad: vi.fn(async () => {}), onStop: vi.fn(async () => {}) },
+        coqui: {
+          state: 'unreachable',
+          onLoad: vi.fn(async () => {}),
+          onStop: vi.fn(async () => {}),
+        },
+        kokoro: {
+          state: 'unreachable',
+          onLoad: vi.fn(async () => {}),
+          onStop: vi.fn(async () => {}),
+        },
         evictionNotice: null,
         loadErrorNotice: null,
         dismissNotices: vi.fn(),

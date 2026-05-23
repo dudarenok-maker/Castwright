@@ -10,7 +10,6 @@
 import { createWriteStream, mkdirSync, statSync } from 'node:fs';
 import { dirname, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -272,15 +271,16 @@ async function main() {
   }
 
   info(`[ZIP] writing ${outPath}`);
-  /* Lazy-load archiver via createRequire — archiver v8 exposes only
-     named ESM exports (Archiver / ZipArchive / …), no callable default.
-     CJS interop gives back the original factory function. Keeps this
-     module testable without the dep. */
-  const require = createRequire(import.meta.url);
-  const archiver = require('archiver');
+  /* Lazy-load archiver — v8 is pure ESM and exposes only named class
+     exports (Archiver / ZipArchive / …), with NO callable default
+     factory (the v7 `archiver('zip', …)` signature is gone). Dynamic
+     `import()` keeps the dep out of the module graph so the MANIFEST
+     unit test (scripts/tests/release-manifest.test.mjs) imports this
+     file without needing archiver installed. */
+  const { ZipArchive } = await import('archiver');
   await new Promise((resolveZip, rejectZip) => {
     const output = createWriteStream(outPath);
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = new ZipArchive({ zlib: { level: 9 } });
     output.on('close', resolveZip);
     archive.on('warning', (err) => {
       if (err.code === 'ENOENT') return;

@@ -41,7 +41,6 @@ const hasAzw3 = existsSync(azw3Path);
    verify log shows WHY the suite is empty rather than silently
    producing zero specs. */
 if (!hasMobi || !hasAzw3) {
-  // eslint-disable-next-line no-console
   console.warn(
     '[mobi-real-fixtures] Calibre-generated sample.mobi / sample.azw3 ' +
       'missing — skipping real-binary integration tests. Run ' +
