@@ -49,6 +49,7 @@ import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
 import { broadcastMiddleware } from './broadcast-middleware';
 import { queueDispatcherMiddleware } from './queue-dispatcher-middleware';
+import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
 
 /** Persisted ui-slice keys. Stage so refresh restores the same view +
  *  chapter + drawer; model selectors so the user's per-session picks
@@ -107,6 +108,22 @@ const manuscriptPersistConfig: PersistConfig<ManuscriptState> = {
 const persistedUiReducer = persistReducer(uiPersistConfig, uiSlice.reducer);
 const persistedManuscriptReducer = persistReducer(manuscriptPersistConfig, manuscriptSlice.reducer);
 
+/* Single shared SSE-stream runner (plan 102 Should #6). Both the
+   generation-stream-middleware (same-book opens) and the
+   queue-dispatcher-middleware (cross-book opens) drive ONE runner instance,
+   so the "only one SSE at a time" invariant + the cross-book activeStream
+   snapshot live in exactly one place. The runner needs the store's
+   dispatch/getState, which only exist after configureStore returns — so the
+   middlewares receive a lazy `getStreamRunner` accessor (called at action
+   time, by which point `streamRunnerInstance` is assigned). */
+let streamRunnerInstance: StreamRunner | null = null;
+const getStreamRunner = (): StreamRunner => {
+  if (!streamRunnerInstance) {
+    throw new Error('stream runner accessed before store initialisation');
+  }
+  return streamRunnerInstance;
+};
+
 export const store = configureStore({
   reducer: {
     ui: persistedUiReducer,
@@ -137,12 +154,17 @@ export const store = configureStore({
       },
     }).concat(
       persistenceMiddleware,
-      generationStreamMiddleware,
+      generationStreamMiddleware(getStreamRunner),
       analysisStreamMiddleware,
       broadcastMiddleware,
-      queueDispatcherMiddleware,
+      queueDispatcherMiddleware(getStreamRunner),
     ),
 });
+
+/* Bind the shared runner now that the store (dispatch + getState) exists.
+   Safe before the first action dispatches — middleware bodies only call
+   `getStreamRunner()` at action time. */
+streamRunnerInstance = createStreamRunner(store);
 
 /** Persistor for the store. Wrap the app in `<PersistGate>` from
  *  `redux-persist/integration/react` if you want to delay first render

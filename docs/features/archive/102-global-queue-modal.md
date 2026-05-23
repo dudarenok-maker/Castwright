@@ -117,7 +117,7 @@ Run with the canonical full-pipeline manuscript `C:\Users\dudar\Downloads\the Co
 
 **Deferred to follow-up plans (filed on BACKLOG):**
 
-- Cross-book dispatcher (bug #2) — dispatcher gates on `chapters.currentBookId === head.bookId`. Cross-book sequencing requires either a cross-book SSE arbitration layer or direct fetch bypass of the existing generation-stream-middleware's gate.
+- Cross-book dispatcher (bug #2) — dispatcher gates on `chapters.currentBookId === head.bookId`. Cross-book sequencing requires either a cross-book SSE arbitration layer or direct fetch bypass of the existing generation-stream-middleware's gate. **SHIPPED 2026-05-23 (BACKLOG Should #6):** extracted a shared `generation-stream-runner.ts` driven by both the generation-stream-middleware (same-book) and the queue-dispatcher-middleware (cross-book open), so the same-book gate is lifted and the "one SSE at a time" invariant lives in one place.
 - `chapters-slice` strip of `pendingRegen` / `regenEpoch` / `paused` — keep until the existing generation-stream-middleware is rewritten to consume queue state directly. Removing prematurely breaks the slice→middleware handshake the dispatcher relies on.
 - Drag-to-reorder in modal — tap-pill (Move up / Move down) covers both desktop and mobile in one path; pointer-event drag is a polish item.
 - Visual baselines for queue modal — Wave 5 didn't regen baselines (Windows host flake per `feedback_visual_baselines_flaky_on_windows.md`). Linux CI run picks them up next push, or trigger explicitly via `npm run test:e2e:visual -- --update-snapshots`.

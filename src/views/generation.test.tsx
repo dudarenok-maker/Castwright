@@ -13,6 +13,7 @@ import { castSlice } from '../store/cast-slice';
 import { librarySlice } from '../store/library-slice';
 import { accountSlice } from '../store/account-slice';
 import { generationStreamMiddleware } from '../store/generation-stream-middleware';
+import { createStreamRunner, type StreamRunner } from '../store/generation-stream-runner';
 import { queueSlice } from '../store/queue-slice';
 import { GenerationView } from './generation';
 import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
@@ -784,6 +785,8 @@ describe('generationStreamMiddleware — Pause/Resume regenerate loop (regressio
        dispatch consumePendingRegen immediately after the middleware opens
        the SSE. This regression used to live in the Generate view's effect;
        it now lives in `generationStreamMiddleware`. */
+    let runner: StreamRunner | null = null;
+    const getRunner = (): StreamRunner => runner!;
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -794,8 +797,9 @@ describe('generationStreamMiddleware — Pause/Resume regenerate loop (regressio
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
       },
-      middleware: (gd) => gd().concat(generationStreamMiddleware),
+      middleware: (gd) => gd().concat(generationStreamMiddleware(getRunner)),
     });
+    runner = createStreamRunner(store);
     /* Middleware skips opens unless a book is in scope AND the chapters
        slice has claimed that book via setCurrentBookId (cross-book guard
        requires the pair to agree before reconcile opens or closes). */
