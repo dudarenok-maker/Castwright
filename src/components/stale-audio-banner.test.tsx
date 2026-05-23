@@ -208,7 +208,9 @@ describe('StaleAudioBanner', () => {
 
     const state = sharedStore.getState();
     expect(state.ui.staleAudio).toBeNull();
-    expect(state.chapters.pendingRegen).toBeNull();
+    /* No regenerate dispatched — no chapter row flipped to in_progress. (The
+       old chapters.pendingRegen field was removed in plan 102 Should #5.) */
+    expect(state.chapters.chapters.every((c) => c.state !== 'in_progress')).toBe(true);
     expect(state.changeLog.events.some((e) => e.type === 'regenerate')).toBe(false);
   });
 });

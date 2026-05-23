@@ -114,14 +114,19 @@ describe('queue-dispatcher-middleware', () => {
     /* Cold-boot snapshot — first GET landed, empty queue. */
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: false }));
     await flushMicro();
-    expect(store.getState().chapters.pendingRegen).toBeNull();
+    /* Same-book regen NOT fired → the head chapter row is untouched (still
+       'done'). regenerateChapter would have flipped it to 'in_progress'. */
+    expect(store.getState().chapters.chapters[0].state).toBe('done');
 
     /* Now an entry arrives via setSnapshot — dispatcher should fire. */
     store.dispatch(
       queueSlice.actions.setSnapshot({ entries: [entry()], paused: false }),
     );
     await flushMicro();
-    expect(store.getState().chapters.pendingRegen).toEqual({ chapterIds: [3], force: true });
+    /* Same-book regen fired → regenerateChapter flipped the head row to
+       in_progress. (The stream spec now lives middleware-local in the
+       generation-stream middleware, which this store doesn't include.) */
+    expect(store.getState().chapters.chapters[0].state).toBe('in_progress');
   });
 
   it('does not dispatch when the queue is paused', async () => {
@@ -134,7 +139,9 @@ describe('queue-dispatcher-middleware', () => {
     );
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [entry()], paused: true }));
     await flushMicro();
-    expect(store.getState().chapters.pendingRegen).toBeNull();
+    /* Same-book regen NOT fired → the head chapter row is untouched (still
+       'done'). regenerateChapter would have flipped it to 'in_progress'. */
+    expect(store.getState().chapters.chapters[0].state).toBe('done');
   });
 
   it('opens a CROSS-book entry directly via the runner without dispatching a regenerate (Wave 4b)', async () => {
@@ -162,7 +169,9 @@ describe('queue-dispatcher-middleware', () => {
     await flushMicro();
 
     /* No slice-level regen — book-A's rows are untouched. */
-    expect(store.getState().chapters.pendingRegen).toBeNull();
+    /* Same-book regen NOT fired → the head chapter row is untouched (still
+       'done'). regenerateChapter would have flipped it to 'in_progress'. */
+    expect(store.getState().chapters.chapters[0].state).toBe('done');
     /* The cross-book stream opened with the right spec + entry correlation. */
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
     const args = streamGenerationMock.mock.calls[0]?.[0] as {
@@ -261,7 +270,9 @@ describe('queue-dispatcher-middleware', () => {
     );
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [entry()], paused: false }));
     await flushMicro();
-    expect(store.getState().chapters.pendingRegen).toBeNull();
+    /* Same-book regen NOT fired → the head chapter row is untouched (still
+       'done'). regenerateChapter would have flipped it to 'in_progress'. */
+    expect(store.getState().chapters.chapters[0].state).toBe('done');
   });
 
   it('DELETEs the in-flight entry when the SSE finishes (clearActiveStream)', async () => {
@@ -275,7 +286,7 @@ describe('queue-dispatcher-middleware', () => {
     /* Seed the queue + let dispatcher fire regenerate. */
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [entry()], paused: false }));
     await flushMicro();
-    expect(store.getState().chapters.pendingRegen).not.toBeNull();
+    expect(store.getState().chapters.chapters[0].state).toBe('in_progress');
 
     /* Simulate the existing middleware opening the SSE → setActiveStream. */
     store.dispatch(
@@ -326,9 +337,10 @@ describe('queue-dispatcher-middleware', () => {
       }),
     );
     await flushMicro();
-    /* regenerateCharacter sets pendingRegen the same way regenerateChapter
-       does — the dispatcher's scope branch routes to the right action. */
-    expect(store.getState().chapters.pendingRegen).toEqual({ chapterIds: [3], force: true });
+    /* regenerateCharacter routed via the dispatcher's scope branch flips the
+       character to 'queued' and (since the chapter was done) the row to
+       in_progress. */
+    expect(store.getState().chapters.chapters[0].state).toBe('in_progress');
     expect(store.getState().chapters.chapters[0].characters.narrator).toBe('queued');
   });
 
@@ -345,6 +357,8 @@ describe('queue-dispatcher-middleware', () => {
        dispatcher would do nothing. We assert by checking that just setting
        chapters (which is a trigger type) doesn't fire a regenerate. */
     await flushMicro();
-    expect(store.getState().chapters.pendingRegen).toBeNull();
+    /* Same-book regen NOT fired → the head chapter row is untouched (still
+       'done'). regenerateChapter would have flipped it to 'in_progress'. */
+    expect(store.getState().chapters.chapters[0].state).toBe('done');
   });
 });

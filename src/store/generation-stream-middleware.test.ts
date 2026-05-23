@@ -13,6 +13,7 @@ import { changeLogSlice } from './change-log-slice';
 import { castSlice } from './cast-slice';
 import { revisionsSlice } from './revisions-slice';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
+import { queueSlice } from './queue-slice';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
 import type { Chapter, GenerationTick, Character } from '../lib/types';
@@ -49,6 +50,7 @@ function makeStore() {
       cast: castSlice.reducer,
       revisions: revisionsSlice.reducer,
       analysis: analysisSlice.reducer,
+      queue: queueSlice.reducer,
     },
     middleware: (gd) => gd().concat(generationStreamMiddleware(getRunner)),
   });
@@ -139,19 +141,38 @@ describe('generationStreamMiddleware', () => {
     expect(args.force).toBe(true);
   });
 
-  it('cancels the SSE on setPaused(true) and reopens on setPaused(false)', () => {
+  it('halts the SSE on requestStreamHalt and reopens on a later trigger when the queue is not paused', () => {
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     seedBook(store, 'b1', [ch(1, { state: 'in_progress', progress: 0.1 })]);
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
 
-    store.dispatch(chaptersSlice.actions.setPaused(true));
+    store.dispatch(chaptersSlice.actions.requestStreamHalt());
     expect(cancelMock).toHaveBeenCalledTimes(1);
     /* clearActiveStream fires on close, so the snapshot disappears. */
     expect(store.getState().chapters.activeStream).toBeNull();
 
+    /* requestStreamHalt skips reconcile; a later trigger re-runs it. This
+       store has no queue slice (queue.paused defaults false), so the still
+       in_progress work reopens — proving the reopen gate is queue.paused, not
+       a sticky chapters.paused flag. */
     streamGenerationMock.mockClear();
-    store.dispatch(chaptersSlice.actions.setPaused(false));
+    store.dispatch(uiSlice.actions.changeView('generate'));
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT auto-open when the queue is globally paused (plan 102 Should #5 gate)', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    /* Pause the queue before any work lands. */
+    store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: true }));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' }), ch(2, { state: 'queued' })]);
+    /* Work is in scope (hasWork) and the book agrees, but queue.paused gates
+       the open — the cold-boot resume path is suppressed too. */
+    expect(streamGenerationMock).not.toHaveBeenCalled();
+
+    /* Resume → the snapshot trigger re-runs reconcile and the work opens. */
+    store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: false }));
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
   });
 
@@ -380,7 +401,7 @@ describe('generationStreamMiddleware', () => {
       .getState()
       .changeLog.events.filter((e) => e.type === 'generation_run_complete').length;
 
-    store.dispatch(chaptersSlice.actions.setPaused(true));
+    store.dispatch(chaptersSlice.actions.requestStreamHalt());
 
     const afterRollup = store
       .getState()
@@ -405,8 +426,8 @@ describe('generationStreamMiddleware', () => {
     expect(snap!.total).toBe(3);
     expect(snap!.inProgress).toBe(1);
 
-    /* Stop → snapshot cleared. */
-    store.dispatch(chaptersSlice.actions.setPaused(true));
+    /* Halt → snapshot cleared. */
+    store.dispatch(chaptersSlice.actions.requestStreamHalt());
     expect(store.getState().chapters.activeStream).toBeNull();
   });
 
@@ -631,8 +652,9 @@ describe('generationStreamMiddleware — reverse-local-analyzer guard (plan 32 D
     store.dispatch(analysisActions.setActiveStream(localAnalysisSnap('b1')));
     seedBook(store, 'b1', [ch(1, { state: 'queued' }), ch(2, { state: 'queued' })]);
 
+    /* Pure gate (plan 102 Should #5): the reverse guard simply refuses to
+       open — no chapters.paused flag is set (that field was removed). */
     expect(streamGenerationMock).not.toHaveBeenCalled();
-    expect(store.getState().chapters.paused).toBe(true);
   });
 
   it('does NOT gate when the analysis engine is gemini (cloud — no GPU contention)', () => {
@@ -646,9 +668,7 @@ describe('generationStreamMiddleware — reverse-local-analyzer guard (plan 32 D
     );
     seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
 
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    expect(store.getState().chapters.paused).toBe(false);
-  });
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);  });
 
   it('does NOT gate when the local analysis is already paused (user explicitly stopped it)', () => {
     /* A paused local analysis isn't competing for the GPU — respect
@@ -658,9 +678,7 @@ describe('generationStreamMiddleware — reverse-local-analyzer guard (plan 32 D
     store.dispatch(analysisActions.setActiveStream(localAnalysisSnap('b1', 'paused')));
     seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
 
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    expect(store.getState().chapters.paused).toBe(false);
-  });
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);  });
 
   it('does NOT gate when the local analysis is halted (terminal error state — no longer competing)', () => {
     const store = makeStore();
@@ -668,9 +686,7 @@ describe('generationStreamMiddleware — reverse-local-analyzer guard (plan 32 D
     store.dispatch(analysisActions.setActiveStream(localAnalysisSnap('b1', 'halted')));
     seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
 
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    expect(store.getState().chapters.paused).toBe(false);
-  });
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);  });
 
   it('does NOT gate when the local analysis is on a DIFFERENT book (no GPU contention on this book)', () => {
     /* The reverse-guard rule is per-book: a local analysis running
@@ -683,9 +699,7 @@ describe('generationStreamMiddleware — reverse-local-analyzer guard (plan 32 D
     store.dispatch(analysisActions.setActiveStream(localAnalysisSnap('b_other')));
     seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
 
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    expect(store.getState().chapters.paused).toBe(false);
-  });
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);  });
 });
 
 /* Bug E — cross-book heartbeat + counter refresh. When the user navigates

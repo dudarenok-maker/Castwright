@@ -88,16 +88,6 @@ Source: plan 95 ship (2026-05-22) — Out of scope. PR [#142](https://github.com
 - _Migration:_ books that pre-date the journal still get the `chapterCast` fallback (today's behaviour); only newly-merged ones benefit. No backfill — the lineage was lost at the old merges and there's no way to reconstruct it.
 - _Benefit (user):_ reattribute modal becomes a precise checklist instead of a scoped review — every row the user sees is provably their merge's work, no third-party sentences to skip over. Big quality-of-life win for series-2-into-1 cleanups where merges pile up.
 
-### 4. Strip chapters-slice generation control fields (plan 102 cleanup)
-
-Source: plan 102 ship (2026-05-23) — Out of scope for the v1 ship. The dispatcher relies on the existing `generation-stream-middleware`'s `pendingRegen` consumption path — when the dispatcher fires `chaptersActions.regenerateChapter`, the slice sets `pendingRegen` + bumps `regenEpoch`, and the existing middleware reconciles by opening the SSE. Stripping those fields prematurely would break the slice→middleware handshake the dispatcher relies on.
-
-- _What:_ Rewrite `generation-stream-middleware` to consume queue state directly instead of reading `pendingRegen` off the slice. Then drop `pendingRegen` + `regenEpoch` + `paused` from `chapters-slice` (the `paused` field is duplicated with `queue.paused`; the queue version is canonical now). Touch every slice test that pins those fields. Remove the `REGEN_TYPES` branch in the existing middleware that closes the handle on `regenerateChapter` — the queue path already serialises so the close-and-restart logic is dead code. The dispatcher's local `inFlightEntryId` trick becomes unnecessary too — the middleware's open state IS the source of truth.
-- _Acceptance:_ `chapters-slice.ts` no longer carries `pendingRegen`, `regenEpoch`, or `paused`. `generation-stream-middleware.ts` reads `queue.entries.find(e => e.status === 'in_progress')` (or equivalent) instead of `chapters.pendingRegen`. All existing tests pass after fixture updates. Dispatcher no longer tracks `inFlightEntryId` locally. `src/views/generation.tsx` reads `queue.paused` for the row's "Paused" pill instead of `chapters.paused`.
-- _Key files:_ `src/store/chapters-slice.ts` (strip 3 fields + paired reducers + types); `src/store/generation-stream-middleware.ts` (rewire open-side gate to read queue state); `src/store/queue-dispatcher-middleware.ts` (simplify — no local entry tracking); `src/store/chapters-slice.test.ts` + every test fixture that pins `pendingRegen` (~5-10 places); `src/views/generation.tsx` (`paused` selector flip).
-- _Depends on:_ Should #6 (cross-book dispatcher) shipping first is recommended — once the dispatcher owns the entire open-side path the slice strip is more obviously correct. Could also ship independently if pinned carefully.
-- _Benefit (technical / architectural):_ removes 3 redundant fields from the slice that exist only because of the v1 same-slice-owns-generation contract. The queue slice + dispatcher are the new owners. Reduces the slice→middleware handshake to one direction (queue is authoritative). Cleans up ~60 lines of dead reconcile code in the existing middleware.
-
 ---
 
 ## Could — nice to have, low-cost wins

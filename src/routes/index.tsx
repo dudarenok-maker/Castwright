@@ -523,7 +523,10 @@ function ReadyViewSwitch({
      unrelated slice mutates (e.g. notifications, exports for another book). */
   const characters = useAppSelector((s) => s.cast.characters);
   const chapters = useAppSelectorShallow((s) => s.chapters.chapters);
-  const paused = useAppSelector((s) => s.chapters.paused);
+  /* Plan 102 Should #5 — the Generate view's paused affordances (ETA clock
+     freeze, "Paused" pill, stall suppression) now read the queue-global pause
+     flag; chapters.paused was removed (the queue + dispatcher own scheduling). */
+  const paused = useAppSelector((s) => s.queue.paused);
   /* Cast view shows drift indicators per character, scoped to the
      active book. The slice's `drift` is flat across books since the
      Drift Report became multi-book; filter to bookId here so a
@@ -627,7 +630,6 @@ function ReadyViewSwitch({
           title={projectTitle}
           bookId={bookId}
           modelKey={ui.ttsModelKey}
-          setPaused={(p) => dispatch(chaptersActions.setPaused(p))}
           onRegenerate={(ch) => dispatch(uiActions.setRegenChapter(ch))}
           onRegenerateBook={() => {
             /* Whole-book regenerate: chapter 1 + scope='forward' covers
