@@ -44,7 +44,7 @@ import { ProfileDrawer } from '../modals/profile-drawer';
 import { ReattributeLinesModal } from '../modals/reattribute-lines';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { QueueModalContainer } from '../modals/queue-modal';
-import { loadQueue } from '../store/queue-thunks';
+import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { ToastStack } from './toast-stack';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { RevisionTimelineModal } from './revision-timeline-modal';
@@ -944,9 +944,15 @@ export function Layout() {
                (rendered below) doesn't stack on top of it. */
             dispatch(uiActions.setRegenChapter(null));
             reverseAnalyzerGuard(() => {
-              if (chapter) {
-                const affectedCount =
-                  scope === 'forward' ? chapters.filter((c) => c.id >= chapter.id).length : 1;
+              if (chapter && bookId) {
+                /* Plan 102 — expand 'forward' at enqueue time into one
+                   queue entry per affected chapter so the user can
+                   reorder each one individually in the modal. 'this'
+                   stays a single entry. */
+                const targetIds =
+                  scope === 'forward'
+                    ? chapters.filter((c) => c.id >= chapter.id).map((c) => c.id)
+                    : [chapter.id];
                 dispatch(
                   changeLogActions.appendLogEvent(
                     buildChapterRegenEvent({
@@ -954,11 +960,25 @@ export function Layout() {
                       scope,
                       reason,
                       note,
-                      affectedChapterCount: affectedCount,
+                      affectedChapterCount: targetIds.length,
                     }),
                   ),
                 );
-                dispatch(chaptersActions.regenerateChapter({ chapterId: chapter.id, scope }));
+                /* Server requires unique entry ids. Prefix with source +
+                   chapter id + a short rand suffix so the same chapter
+                   can be enqueued twice from different sessions without
+                   colliding. */
+                const rand = Math.random().toString(36).slice(2, 8);
+                void dispatch(
+                  enqueueQueueEntries(
+                    targetIds.map((chapterId) => ({
+                      id: `regen-modal-${bookId}-${chapterId}-${rand}`,
+                      bookId,
+                      chapterId,
+                      scope: 'this',
+                    })),
+                  ),
+                );
               }
               dispatch(uiActions.changeView('generate'));
             });

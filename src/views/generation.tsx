@@ -43,6 +43,8 @@ import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
+import { uiActions } from '../store/ui-slice';
+import { selectQueueCount } from '../store/queue-slice';
 import { api, AnalysisError } from '../lib/api';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
@@ -117,7 +119,6 @@ export function GenerationView({
   title,
   bookId,
   modelKey,
-  setPaused,
   onRegenerate,
   onRegenerateBook,
   onRegenerateCharacterInChapter,
@@ -130,6 +131,29 @@ export function GenerationView({
   const sentences = useAppSelector((s) => s.manuscript.sentences);
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   const activityEvents = useAppSelector((s) => s.changeLog.events);
+  /* Plan 102 — drives the "View queue · N" pill in the header. Reads the
+     workspace queue mirror so the count tracks cross-book entries (the
+     reason for moving the queue out of the slice in the first place). */
+  const queueCount = useAppSelector(selectQueueCount);
+  /* Plan 102 — Generate view scroll consumer. ui.stage.currentChapterId
+     is set by the queue modal's "Jump to chapter" affordance (modal pushes
+     #/books/<bookId>/generate?chapter=<id>); we scroll the chapter row
+     into view here so the user lands at the right card instead of the
+     top of the chapter list. */
+  const currentChapterId = useAppSelector((s) =>
+    s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null,
+  );
+  useEffect(() => {
+    if (currentChapterId == null) return;
+    const el = document.getElementById(`chapter-${currentChapterId}`);
+    if (!el) return;
+    /* Defer a frame so any layout shift from view-switch settles before
+       the scroll fires; without this, the target row is sometimes still
+       being laid out and the scroll lands a few hundred pixels short. */
+    requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }, [currentChapterId]);
   /* Default analyzer engine used by the subset retry below (un-exclude
      path). Read at click time, not memoised, so a model switch between
      un-excludes is reflected on the next retry. */
@@ -157,10 +181,12 @@ export function GenerationView({
 
   /* Reverse guard (plan 32, D2): when the user explicitly resumes TTS
      generation here AND a local analysis is running somewhere in the
-     workspace, prompt before proceeding. The implicit reconcile-driven
-     path in generation-stream-middleware stays unguarded — the user
-     already consented when they originally started generation. */
-  const { guard: reverseGuard, modal: reverseGuardModal } = useReverseLocalAnalyzerGuard();
+     workspace, prompt before proceeding. The modal-only destructure (no
+     `guard:`) reflects Wave 4a: the local Resume/Pause button moved to
+     the queue modal, so the only caller of `guard` lives there now. The
+     modal mount stays here because the prompt is rendered next to the
+     Generate view's content. */
+  const { modal: reverseGuardModal } = useReverseLocalAnalyzerGuard();
 
   const patchSubset = (chapterId: number, patch: Partial<SubsetProgress>) => {
     setSubsetByChapter((prev) => {
@@ -570,39 +596,31 @@ export function GenerationView({
           )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          {/* Once the queue is fully drained the Pause/Resume toggle has
-              nothing to pause or resume. Swap it for a Regenerate entry-point
-              that opens the existing modal targeted at chapter 1 — the user
-              picks scope="This and all subsequent" there to redo the whole
-              book, or sticks to a single chapter. min-h-[44px] hits the
-              ≥44px touch-target rule on phone. */}
-          {allComplete ? (
+          {/* Plan 102 — header CTAs.
+              - "View queue" replaces the old Resume/Pause toggle; pause moved
+                to the queue modal (it's queue-global now, not per-book-active-
+                handle).
+              - "Regenerate" (allComplete branch) stays — it opens the per-
+                chapter modal scoped to chapter 1 + forward (= whole book),
+                whose onConfirm enqueues each chapter individually.
+              - min-h-[44px] hits the ≥44px touch-target rule on phone. */}
+          <button
+            type="button"
+            onClick={() => dispatch(uiActions.openQueueModal())}
+            data-testid="generation-view-queue"
+            aria-label={
+              queueCount > 0 ? `View queue — ${queueCount} pending` : 'View queue'
+            }
+            className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+          >
+            View queue{queueCount > 0 && <span className="text-magenta">· {queueCount}</span>}
+          </button>
+          {allComplete && (
             <button
               onClick={onRegenerateBook}
               className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
             >
               <IconRefresh className="w-4 h-4" /> Regenerate
-            </button>
-          ) : (
-            <button
-              onClick={() => {
-                /* paused -> running is the explicit "start TTS work"
-                   transition the reverse guard cares about. Running ->
-                   paused is the user choosing to STOP; no guard needed. */
-                if (paused) reverseGuard(() => setPaused(false));
-                else setPaused(true);
-              }}
-              className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
-            >
-              {paused ? (
-                <>
-                  <IconPlay className="w-4 h-4" /> Resume
-                </>
-              ) : (
-                <>
-                  <IconPause className="w-4 h-4" /> Pause
-                </>
-              )}
             </button>
           )}
         </div>
@@ -1004,6 +1022,7 @@ function ChapterRow({
 
   return (
     <div
+      id={`chapter-${chapter.id}`}
       className={`rounded-3xl border border-ink/10 shadow-card overflow-hidden ${stateConfig.tint}`}
     >
       <button

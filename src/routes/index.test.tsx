@@ -18,6 +18,7 @@ import { castSlice, castActions } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
 import { librarySlice, libraryActions } from '../store/library-slice';
+import { queueSlice } from '../store/queue-slice';
 import { revisionsSlice } from '../store/revisions-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { changeLogSlice } from '../store/change-log-slice';
@@ -114,6 +115,7 @@ function makeStore() {
       changeLog: changeLogSlice.reducer,
       account: accountSlice.reducer,
       bookMeta: bookMetaSlice.reducer,
+      queue: queueSlice.reducer,
     },
   });
 }
