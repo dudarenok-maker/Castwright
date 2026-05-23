@@ -4,6 +4,54 @@ Frontend for an audiobook-generation tool. Vite + React 18 + TypeScript +
 Redux Toolkit. Mocked API surface today; designed to swap to a real backend
 without changing component code.
 
+## Working principles
+
+General working style layered on top of the project-specific rules below.
+These bias toward caution over speed; for trivial tasks, use judgment.
+
+### Think before coding
+
+Don't assume, don't hide confusion, surface tradeoffs.
+
+- State your assumptions explicitly. If uncertain, ask before implementing.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop, name what's confusing, and ask.
+
+### Simplicity first
+
+Minimum code that solves the problem — nothing speculative. (Reinforces
+"Out of scope until told otherwise": the v1 surface area is final.)
+
+- No features beyond what was asked; no abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it. Ask: "would a
+  senior engineer call this overcomplicated?" If yes, simplify.
+
+### Surgical changes
+
+Touch only what you must; clean up only your own mess. (Reinforces the
+one-branch-one-cohesive-change rule under "Branching workflow".)
+
+- Don't "improve" adjacent code, comments, or formatting; don't refactor
+  what isn't broken. Match existing style even if you'd do it differently
+  (see "Conventions worth preserving").
+- Remove imports/variables/functions that YOUR changes orphaned — but
+  leave pre-existing dead code alone; mention it rather than deleting it.
+- The test: every changed line traces directly to the user's request.
+
+### Goal-driven execution
+
+Define success criteria, then loop until verified.
+
+- Turn vague tasks into verifiable goals: "fix the bug" → "write a test
+  that reproduces it, then make it pass." (Already mandated under
+  "Testing discipline.")
+- For multi-step tasks, state a brief plan with a verify check per step.
+- Strong success criteria let you loop independently; weak ones ("make it
+  work") force constant clarification.
+
 ## Commands
 
 - `npm start` — frontend + server + TTS sidecar in one shot (plan 43). Server owns the sidecar child-process lifecycle (per-user `autoStartSidecar` preference, default on); Ctrl+C tears the sidecar down via `taskkill /T /F` on Windows.
