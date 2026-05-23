@@ -233,16 +233,6 @@ Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances.
 
-### 13. Within-chapter sentence parallelism
-
-Source: net-new (2026-05-21). Spun off from the perf-tuning survey at `~/.claude/plans/want-to-focus-this-bright-donut.md` (item A2). Stacks on plan 87.
-
-- _What:_ Inside `synthesiseChapter`, dispatch K sentence groups concurrently to the sidecar `/synthesize` (currently 1 at a time per plan 70d). Per-engine determinism + voice non-drift must be re-pinned in `server/tts-sidecar/tests/test_concurrent_synthesis.py`; per-group `onGroupStart` heartbeats must still reset the 30 s stall detector correctly; emitted PCM order preserved by indexing.
-- _Acceptance:_ K parallel sentence groups inside one chapter render with no audible drift artefacts on Coqui (XTTS more drift-prone than Kokoro per plan 70d's findings); the stall watchdog still trips correctly on an actual stall; PCM order matches single-threaded baseline. Pytest pin + Vitest server pin both green.
-- _Key files:_ `server/src/synthesise-chapter.ts:138-145`; `server/tts-sidecar/tests/test_concurrent_synthesis.py` (additional cases).
-- _Depends on:_ plan 87 shipped + measurement showing GPU headroom remains under default chapter concurrency.
-- _Benefit (user):_ another ~2× per chapter on top of plan 87 (so 4× headline if GPU survives). Only worth pursuing once plan 87's envelope is known.
-
 ### 14. Both TTS engines resident (Kokoro + XTTS)
 
 Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item A3).
