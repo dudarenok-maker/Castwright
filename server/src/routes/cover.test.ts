@@ -270,6 +270,40 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
     expect(res.body.kind).toBe('invalid_mime');
   });
 
+  /* Plan 105 — multer 2.x MulterError paths. multer 2.x preserves the
+     1.x `.code` strings (LIMIT_FILE_SIZE / LIMIT_UNEXPECTED_FILE) and
+     still raises a `multer.MulterError` instance, which the route's
+     middleware now gates on via `instanceof` before branching. These
+     two cases pin that the upgraded error semantics still surface as
+     413 (oversize) and 400 (unexpected field). */
+  it('413s with kind="oversize" when the upload exceeds the fileSize limit (LIMIT_FILE_SIZE)', async () => {
+    // MAX_UPLOAD_BYTES is 10 MiB — a 10.5 MiB buffer trips multer's
+    // fileSize limit before validateUpload ever runs.
+    const tooBig = Buffer.alloc(11 * 1024 * 1024, 0x41);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cover/upload`)
+      .attach('image', tooBig, { filename: 'huge.jpg', contentType: 'image/jpeg' });
+    expect(res.status).toBe(413);
+    expect(res.body.kind).toBe('oversize');
+    expect(res.body.error).toMatch(/under/i);
+  });
+
+  it('400s with kind="unexpected_field" when the file rides an unexpected field name (LIMIT_UNEXPECTED_FILE)', async () => {
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    })
+      .jpeg()
+      .toBuffer();
+    // The route configures upload.single('image'); attaching under
+    // 'wrongField' makes multer raise LIMIT_UNEXPECTED_FILE.
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cover/upload`)
+      .attach('wrongField', jpeg, { filename: 'mine.jpg', contentType: 'image/jpeg' });
+    expect(res.status).toBe(400);
+    expect(res.body.kind).toBe('unexpected_field');
+  });
+
   it('400s when the multipart body has no image field', async () => {
     const res = await request(app).post(`/api/books/${bookId}/cover/upload`).send();
     expect(res.status).toBe(400);
