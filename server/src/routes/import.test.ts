@@ -261,6 +261,30 @@ describe('POST /api/import → POST /api/books — excluded chapters round-trip'
   });
 });
 
+/* Plan 105 — multer 2.x guard. The import route mounts
+   `upload.single('file')` with no bespoke MulterError branch, so an
+   upload riding an unexpected field name raises a MulterError
+   (LIMIT_UNEXPECTED_FILE) that propagates to Express's error chain
+   rather than being parsed as a manuscript. This pins that multer 2.x
+   still rejects the wrong-field upload (it never reaches the route
+   handler as a valid `req.file`). */
+describe('POST /api/import — multer 2.x unexpected-field rejection', () => {
+  it('does not 200 a file uploaded under an unexpected field name', async () => {
+    const res = await request(app)
+      .post('/api/import')
+      .attach('notTheFileField', Buffer.from('hello world'), {
+        filename: 'x.txt',
+        contentType: 'text/plain',
+      });
+    /* multer raises LIMIT_UNEXPECTED_FILE → the route never sees a valid
+       req.file or req.body.text, so the request is rejected (Express's
+       default error handler yields 500; the route's own no-file branch
+       would yield 400). Either way it is NOT a 200 parse success. */
+    expect(res.status).not.toBe(200);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  });
+});
+
 /* Bug B: the staging response surfaces `seriesFromTitle` so the
    confirm-metadata view can render the "auto-extracted" chip. */
 describe('POST /api/import — seriesFromTitle plumbing', () => {

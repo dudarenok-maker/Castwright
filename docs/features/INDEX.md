@@ -43,6 +43,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [02 — Upload (paste or file)](02-upload-paste-or-file.md) — `.md/.txt/.epub/.pdf/.mobi/.azw3` upload + paste flow.
 - [03 — Import & confirm metadata](03-import-confirm-metadata.md) — Parse-only import then confirm-write to disk.
+- [105 — Multer 1.x → 2.x security upgrade](105-multer-2-upgrade.md) — Bumps `multer` `^1.4.5-lts.1` → `^2.1.1` (+ `@types/multer` `^2.1.0`, kept external since 2.x ships no bundled types) across the four multipart upload routes (cover / import / manuscripts / portable). API-compatible bump — `memoryStorage` / `upload.single` / `req.file` / `MulterError` codes all preserved; the only declared 2.0.0 breaking change is the Node `>=10.16.0` floor. Closes the `multer@1.4.5-lts.x` deprecation warning + the EOL-1.x CVE string (CVE-2025-47935 / -47944 / -48997 / -7338, CVE-2026-2359 / -3304 / -3520). `cover.ts` error branch hardened to `err instanceof multer.MulterError` with an explicit `LIMIT_UNEXPECTED_FILE` → 400 alongside `LIMIT_FILE_SIZE` → 413; new MulterError test cases in `cover.test.ts` + `import.test.ts`. Shipped 2026-05-23.
 
 ### C. Analysis pipeline
 
