@@ -78,16 +78,6 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
 - _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
 
-### 3. Multer 1.x → 2.x security upgrade (server file uploads)
-
-Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.2: Multer 1.x is impacted by a number of vulnerabilities, which have been patched in 2.x.` on `npm install --prefix server`. Full deprecation audit notes in `~/.claude/plans/fancy-bouncing-lovelace.md`.
-
-- _What:_ Bump `multer` in `server/package.json` from `^1.4.5-lts.2` to `^2.0.x` and adapt the upload middleware to the 2.x API. The breaking changes are mostly file-size limits + the `req.file` / `req.files` shape (still backwards-compatible on the request-handler side, but `MulterError` codes and middleware error semantics changed). Manuscript upload (`server/src/routes/upload.ts` or similar) and any binary-upload e2e (`e2e/binary-upload.spec.ts`) need a once-over.
-- _Acceptance:_ `npm install --prefix server` no longer prints the `multer@1.4.5-lts.2` deprecation warning. `npm ls multer` returns `multer@^2.x`. Manuscript-upload + binary-upload e2e specs stay green. `server/src/routes/*upload*.ts` Vitest coverage extended to pin the new `MulterError` codes (specifically `LIMIT_FILE_SIZE` and `LIMIT_UNEXPECTED_FILE`, which 2.x renamed/regrouped).
-- _Key files:_ `server/package.json` (dep bump); `server/src/routes/*upload*.ts` (middleware shape); any test under `server/src/routes/*upload*.test.ts`; `e2e/binary-upload.spec.ts` (regression). Migration guide: https://github.com/expressjs/multer/blob/master/UPGRADING.md.
-- _Depends on:_ none. Pure dep bump + small middleware adaptation.
-- _Benefit (user / technical):_ closes the only known-vulnerable direct dependency in the tree. Multer 1.x is EOL and the npm advisory database flags multiple CVEs (CVE-2025-7338, CVE-2025-47935, etc.) that 2.x patches. Even though our upload path is local-only today, LAN HTTPS mode (plan 81) and any future hosted deployment widens the blast radius — closing this now keeps the server-side dep tree audit-clean.
-
 ### 5. Merge journal for deterministic alias un-link
 
 Source: plan 95 ship (2026-05-22) — Out of scope. PR [#142](https://github.com/dudarenok-maker/AudioBook-Generator/pull/142) shipped editable cast aliases with a Reattribute Lines modal that uses the preserved Phase-0a `chapterCast` as a lineage proxy to narrow the user's manual reattribution from "whole book" to "these N chapters." It works, but it's not deterministic — a chapter shows up if the alias was in its Phase-0a roster, even when the merge that put the alias on the source character happened mid-book and didn't actually rewrite any chapter-1 sentences. The user has to skim and reassign.
