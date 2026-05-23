@@ -69,11 +69,51 @@ jobs:
       - name: Build
         run: npm run build
 
+  # Cheap (~seconds) probe gating mobile-e2e on the weekly cron (plan 106,
+  # BACKLOG #39). Lists files changed on origin/main in the prior 7 days and
+  # greps for the frontend/e2e path vocabulary (mirrors verify.yml's frontend +
+  # e2e scopes plus the shared root package files). On a manual dispatch this
+  # job still runs but mobile-e2e's `if:` short-circuits on the event name, so
+  # a dispatch ALWAYS runs the mobile suite regardless of this output.
+  changes:
+    name: Detect frontend/e2e change window
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      frontend_e2e: ${{ steps.probe.outputs.frontend_e2e }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so `git log --since` can reach commits up to 7 days
+          # back; a shallow clone would miss most of the window.
+          fetch-depth: 0
+
+      - name: Probe origin/main for frontend/e2e changes (last 7 days)
+        id: probe
+        run: |
+          if git log --since='7 days ago' --name-only --pretty=format: origin/main \
+            | sort -u \
+            | grep -qE '^(src/|e2e/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|playwright\.config\.ts$|package(-lock)?\.json$)'; then
+            echo "frontend_e2e=true" >> "$GITHUB_OUTPUT"
+            echo "frontend/e2e change detected on origin/main in the last 7 days → mobile-e2e WILL run"
+          else
+            echo "frontend_e2e=false" >> "$GITHUB_OUTPUT"
+            echo "no frontend/e2e change on origin/main in the last 7 days → mobile-e2e will be skipped (unless manually dispatched)"
+          fi
+
   # Mobile + tablet viewport e2e (Pixel 7 / iPad Pro 11), formerly the
   # per-PR e2e-mobile.yml. Ubuntu-only; chromium engine covers both viewport
   # presets per playwright.config.ts.
+  #
+  # Gated (plan 106 / #39): a manual workflow_dispatch ALWAYS runs it; the
+  # weekly cron runs it only when `changes` saw a frontend/e2e change on
+  # origin/main in the prior 7 days. cross-os-verify above is NOT gated — the
+  # cross-OS smoke runs every cron/dispatch regardless of scope.
   mobile-e2e:
     name: npm run test:e2e:mobile
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend_e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

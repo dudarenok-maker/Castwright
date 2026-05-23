@@ -346,16 +346,6 @@ Source: net-new (2026-05-23). Surfaced during the plan-103 CI cost audit.
 - _Depends on:_ none.
 - _Benefit (technical):_ ~60 billed min/month freed on regen days; tidier workflow.
 
-### 39. Path-filter `cross-os.yml`'s `mobile-e2e` on frontend/e2e scope
-
-Source: net-new (2026-05-23). Surfaced during plan-103 implementation.
-
-- _What:_ The weekly `cross-os.yml` always runs `mobile-e2e`. When the week's only changes on `main` were server/sidecar/scripts, the mobile-viewport run gains nothing. Gate it (or the whole job) on whether `main` saw any frontend/e2e change since the last cron run — a cheap `git log` window probe. Low priority: the weekly cadence makes the absolute saving small.
-- _Acceptance:_ A cron run on a week with no frontend/e2e changes skips `mobile-e2e` (or no-ops cleanly); a week with frontend changes runs it.
-- _Key files:_ `.github/workflows/cross-os.yml`.
-- _Depends on:_ plan 103 merged.
-- _Benefit (technical):_ trims the rare wasted weekly mobile-e2e run; mostly tidiness.
-
 ---
 
 ## Won't (this round) — explicitly parked
