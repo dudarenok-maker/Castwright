@@ -13,6 +13,7 @@ import { normaliseForTts } from './text-normalize.js';
 import { pcmDurationSec } from './pcm.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry } from './retry.js';
+import { gpuSemaphore } from '../gpu/semaphore.js';
 
 /** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`
     `CastJsonCharacter` and the analyzer's Character output). The hint fields
@@ -170,6 +171,16 @@ export interface SynthesiseChapterOpts {
       duration is the audio time at the end of the title segment (i.e. the
       moment the post-title silence begins). */
   onTitleComplete?: (e: { accumulatedSec: number }) => void;
+  /** How many sentence groups to *attempt* concurrently (plan 107). Each
+      `provider.synthesize` already acquires the global `gpuSemaphore`
+      (`server/src/tts/sidecar.ts`), so this width never oversubscribes the
+      GPU — it only governs how many groups are dispatched before we await
+      results. Defaults to `gpuSemaphore.maxConcurrency` (read from
+      `GPU_CONCURRENCY` once at module load), so at the conservative default
+      `GPU_CONCURRENCY=1` the width is 1 and dispatch is byte-identical to the
+      old serial loop. An explicit value is mainly for tests, which need to
+      exercise width>1 without touching process env. Clamped to >= 1. */
+  sentenceConcurrency?: number;
 }
 
 /** One group per sentence. Plan 70d — earlier code folded consecutive
@@ -249,10 +260,18 @@ export async function synthesiseChapter(
     narratorCharacterId = 'narrator',
     onTitleStart,
     onTitleComplete,
+    sentenceConcurrency = gpuSemaphore.maxConcurrency,
   } = opts;
 
   const castById = new Map(cast.map((c) => [c.id, c]));
   const groups = buildSentenceGroups(sentences);
+
+  /* Pool width — how many groups we *attempt* at once. Real GPU concurrency
+     is still capped by the global `gpuSemaphore` each `synthesize` acquires,
+     so a width > the semaphore cap just queues; it never oversubscribes. At
+     the default `GPU_CONCURRENCY=1` this is 1 → byte-identical to the old
+     serial loop. Clamp to >= 1 (a width of 0 would dispatch nothing). */
+  const poolWidth = Math.max(1, Math.floor(sentenceConcurrency));
 
   const chunks: Buffer[] = [];
   const segments: ChapterSegment[] = [];
@@ -320,15 +339,14 @@ export async function synthesiseChapter(
     onTitleComplete?.({ accumulatedSec: titleEndSec });
   }
 
-  for (const group of groups) {
-    /* Cheap abort check between groups — covers the common case where the
-       outer handler decides to stop (per-bookId mutex, request close, etc.)
-       and the next TTS call would otherwise burn another minute or two of
-       sidecar time. The provider also receives the signal so a mid-call
-       abort is honoured. */
-    if (signal?.aborted) {
-      throw new DOMException('synthesiseChapter aborted', 'AbortError');
-    }
+  /* Per-group synth: pick the voice, fire the stall-resetting `onGroupStart`
+     tick, then run the (auto-retrying) provider call. Factored out of the
+     dispatch loop so the up-front anchor synth (groups[0]) and the worker
+     pool share one code path — and so a future engine-specific tweak lands
+     in exactly one place. Returns the RAW provider result; the caller stores
+     it by index and concatenates later, so this never touches `chunks`,
+     `runningBytes`, or `segments` (which would race under parallel workers). */
+  async function synthGroup(group: SentenceGroup): Promise<{ pcm: Buffer; sampleRate: number }> {
     const character = castById.get(group.characterId) ?? { id: group.characterId };
     const voiceName = pickVoiceForEngine(
       engine,
@@ -340,9 +358,9 @@ export async function synthesiseChapter(
        the client's stall detector only sees inactivity, not "active work on
        a long call" — so without this beat the user sees "Worker has gone
        quiet" for what is actually a healthy in-flight synth. The accumulated
-       time is the running total at the *start* of this group (i.e. the end
-       of the previous group), which is what the UI wants for its "line N of
-       M" caption. */
+       time is a running estimate; the authoritative per-segment timing is
+       computed in the deterministic index-order pass after all groups
+       settle. */
     onGroupStart?.({
       group,
       totalGroups: groups.length,
@@ -382,28 +400,119 @@ export async function synthesiseChapter(
           }),
       },
     );
+    return { pcm: result.pcm, sampleRate: result.sampleRate };
+  }
 
-    /* The chapter's output rate is anchored by the first group's response.
-       Subsequent groups at a mismatched rate get resampled to the anchor —
-       this happens in practice when a chapter mixes Kokoro (24 kHz) and
-       Coqui (22.05 kHz) characters, e.g. after a per-character engine
-       override. Anchoring on the first group keeps the chapter's output
-       rate stable regardless of who speaks first; rewriting the anchor
-       mid-chapter would force us to retroactively resample everything we
-       already concatenated. */
-    let pcmForGroup = result.pcm;
-    if (chunks.length === 0) {
-      sampleRate = result.sampleRate;
-    } else if (result.sampleRate !== sampleRate) {
-      pcmForGroup = resamplePcm16(result.pcm, result.sampleRate, sampleRate);
+  /* Body groups — bounded-concurrency dispatch (plan 107). Replaces the old
+     serial `for (const group of groups)` loop with `poolWidth` workers that
+     pull from a shared cursor (mirrors plan 87's chapter worker pool in
+     `server/src/routes/generation.ts`). The semaphore inside every
+     `provider.synthesize` is the real GPU governor; this pool only governs
+     how many groups are *in flight* at the Node layer.
+
+     Determinism under parallelism rests on three rules, all paired with
+     tests in `synthesise-chapter.test.ts`:
+
+       1. PCM ORDER — each worker writes its raw `synthesize` result into a
+          pre-sized `results[group.index]` slot. We never push to `chunks`
+          from a worker; concat happens in a single index-order pass AFTER
+          all workers settle, so completion order can't reorder the audio.
+       2. SAMPLE-RATE ANCHOR — the anchor is fixed BEFORE dispatch: the title
+          rate when a title beat ran, else `groups[0]`'s rate (lowest index),
+          NOT the first group to complete. The old `chunks.length === 0`
+          "first to finish" rule was non-deterministic the moment two groups
+          could finish in either order, so we synth `groups[0]` first to read
+          its rate, then fan the rest out.
+       3. STALL WATCHDOG — `onGroupStart` fires as each group BEGINS its synth
+          (inside the worker, before the `synthesize` call) so the 30 s client
+          watchdog (`STALL_THRESHOLD_MS`, `src/store/chapters-slice.ts`) keeps
+          resetting. `onGroupComplete` fires per group as it finishes. The
+          final per-segment `startSec`/`endSec` are computed in the index-order
+          pass below — only there is the cumulative offset deterministic. */
+
+  type GroupResult = { pcm: Buffer; sampleRate: number };
+  const results: (GroupResult | undefined)[] = new Array(groups.length);
+  let completedCount = 0;
+
+  /* Anchor the chapter's output rate before dispatch. If a title beat ran,
+     `chunks` already holds the title PCM and `sampleRate` is its rate — keep
+     it (same rule as before this feature). Otherwise synth the lowest-index
+     body group up front so its rate becomes the deterministic anchor,
+     regardless of which group the pool finishes first. */
+  let bodyStartIndex = 0;
+  if (chunks.length === 0 && groups.length > 0) {
+    if (signal?.aborted) {
+      throw new DOMException('synthesiseChapter aborted', 'AbortError');
     }
+    const anchorGroup = groups[0];
+    const result = await synthGroup(anchorGroup);
+    results[anchorGroup.index] = { pcm: result.pcm, sampleRate: result.sampleRate };
+    sampleRate = result.sampleRate;
+    completedCount += 1;
+    onGroupComplete?.({
+      group: anchorGroup,
+      totalGroups: groups.length,
+      accumulatedSec: 0, // recomputed deterministically in the index-order pass.
+    });
+    bodyStartIndex = 1;
+  }
 
+  /* Index-pulling worker pool over the remaining groups. `poolWidth` workers
+     share `nextIndex`; each pulls the next group, synths it, and stores the
+     raw result by `group.index`. At `poolWidth === 1` this is a plain serial
+     walk — byte-identical to the old loop. */
+  let nextIndex = bodyStartIndex;
+  const effectiveWidth = Math.min(poolWidth, Math.max(1, groups.length - bodyStartIndex));
+  const workers: Promise<void>[] = [];
+  for (let w = 0; w < effectiveWidth; w++) {
+    workers.push(
+      (async () => {
+        for (;;) {
+          /* Cheap abort check before claiming the next group — covers the
+             common case where the outer handler decides to stop (per-bookId
+             mutex, request close, etc.) and the next TTS call would otherwise
+             burn another minute or two of sidecar time. The provider also
+             receives the signal so a mid-call abort is honoured. */
+          if (signal?.aborted) {
+            throw new DOMException('synthesiseChapter aborted', 'AbortError');
+          }
+          const i = nextIndex++;
+          if (i >= groups.length) return;
+          const group = groups[i];
+          const result = await synthGroup(group);
+          results[group.index] = { pcm: result.pcm, sampleRate: result.sampleRate };
+          completedCount += 1;
+          onGroupComplete?.({
+            group,
+            totalGroups: groups.length,
+            // recomputed deterministically in the index-order pass below.
+            accumulatedSec: 0,
+          });
+        }
+      })(),
+    );
+  }
+  await Promise.all(workers);
+
+  /* Single index-order pass: walk `results` by group index, resample any
+     mismatched rate to the anchor, append in order, and compute the final
+     per-segment `startSec`/`endSec` against the now-known cumulative offset.
+     This is the ONLY place audio is concatenated, so completion order can
+     never reorder PCM or shuffle segment timing. */
+  for (const group of groups) {
+    const r = results[group.index];
+    /* Defensive: a worker that returned early on abort can leave a hole.
+       The abort would already have thrown out of `Promise.all`, so this is
+       belt-and-braces for a future refactor. */
+    if (!r) continue;
+    let pcmForGroup = r.pcm;
+    if (r.sampleRate !== sampleRate) {
+      pcmForGroup = resamplePcm16(r.pcm, r.sampleRate, sampleRate);
+    }
     const startSec = pcmDurationSec(runningBytes, sampleRate);
-    const groupBytes = pcmForGroup.length;
     chunks.push(pcmForGroup);
-    runningBytes += groupBytes;
+    runningBytes += pcmForGroup.length;
     const endSec = pcmDurationSec(runningBytes, sampleRate);
-
     segments.push({
       groupIndex: group.index,
       characterId: group.characterId,
@@ -411,13 +520,8 @@ export async function synthesiseChapter(
       startSec,
       endSec,
     });
-
-    onGroupComplete?.({
-      group,
-      totalGroups: groups.length,
-      accumulatedSec: endSec,
-    });
   }
+  void completedCount;
 
   const pcm = Buffer.concat(chunks);
   return {

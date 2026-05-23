@@ -838,3 +838,276 @@ describe('buildSentenceGroups (plan 70d — per-sentence)', () => {
     expect(groups[206].text).toBe('Sentence 207.');
   });
 });
+
+/* ── plan 107 — within-chapter sentence parallelism ──────────────────────
+   The body-group dispatch is now a bounded-concurrency worker pool whose
+   width defaults to `gpuSemaphore.maxConcurrency` (1 at the conservative
+   `GPU_CONCURRENCY=1` default, so production behaviour is unchanged). When an
+   operator raises the cap, a single chapter can fan its sentence groups out
+   across idle GPU slots. The semaphore inside every provider.synthesize keeps
+   real GPU work bounded; this pool only governs Node-layer in-flight count.
+
+   These tests pin the three determinism invariants the parallel dispatch must
+   never break, using a deterministic fake provider whose PCM is derived from
+   the input text and which can finish groups OUT OF narrative order. */
+describe('synthesiseChapter within-chapter parallelism (plan 107)', () => {
+  /* Deterministic fake: each call returns PCM derived from the text (one int16
+     LE sample per character) at a fixed sample rate, and can delay completion
+     so later-dispatched groups finish first. Tracks call order vs. completion
+     order so a test can prove the pool actually reordered completion while the
+     output stayed in narrative order. */
+  function makeDeterministicProvider(opts?: {
+    /** Map text → artificial completion delay in ms. Lets a test make group 2
+        finish before group 1, exercising the "completion order != index order"
+        path that a naive `chunks.push` would corrupt. */
+    delayForText?: (text: string) => number;
+    sampleRate?: number;
+  }): TtsProvider & {
+    completionOrder: string[];
+    startOrder: string[];
+    peakInFlight: number;
+  } {
+    const sampleRate = opts?.sampleRate ?? 24000;
+    const completionOrder: string[] = [];
+    const startOrder: string[] = [];
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const provider = {
+      completionOrder,
+      startOrder,
+      get peakInFlight() {
+        return peakInFlight;
+      },
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        startOrder.push(input.text);
+        inFlight += 1;
+        if (inFlight > peakInFlight) peakInFlight = inFlight;
+        const delay = opts?.delayForText?.(input.text) ?? 0;
+        if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+        inFlight -= 1;
+        completionOrder.push(input.text);
+        /* PCM derived from text: one int16 LE sample per char (positive
+           range). Identical text → identical bytes, so a width-2 vs width-1
+           byte comparison is meaningful. */
+        const pcm = Buffer.alloc(input.text.length * 2);
+        for (let i = 0; i < input.text.length; i++) {
+          pcm.writeInt16LE(input.text.charCodeAt(i) & 0x7fff, i * 2);
+        }
+        return { pcm, sampleRate, mimeType: 'audio/pcm' };
+      },
+    };
+    return provider as TtsProvider & {
+      completionOrder: string[];
+      startOrder: string[];
+      peakInFlight: number;
+    };
+  }
+
+  const cast: CastCharacter[] = [
+    { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+  ];
+
+  /* Distinct per-sentence text so each group's PCM is unique — a reorder bug
+     would change byte content, not just length. Different lengths too, so an
+     off-by-one concat would shift the segment timings detectably. */
+  const SENTENCES = [
+    sentence(1, 'narrator', 'First sentence here.'),
+    sentence(2, 'narrator', 'Two.'),
+    sentence(3, 'narrator', 'A noticeably longer third sentence to vary byte length.'),
+    sentence(4, 'narrator', 'Fourth!'),
+    sentence(5, 'narrator', 'Fifth and final sentence of the chapter.'),
+  ];
+
+  it('produces byte-identical PCM at sentenceConcurrency 2 vs 1 even when groups complete out of order', async () => {
+    /* INVARIANT 1 (PCM order) + INVARIANT 2 (deterministic anchor). The delay
+       map makes earlier-index groups finish LAST, so a width-2 run completes
+       in a different order than it dispatched. The output must still match the
+       serial width-1 baseline byte-for-byte: results are collected by
+       group.index and concatenated in index order, never completion order. */
+    const delayForText = (text: string) => {
+      // Longer text → shorter delay, so the long group 3 finishes before the
+      // short groups 2/4 it was dispatched alongside.
+      return Math.max(0, 60 - text.length);
+    };
+
+    const serialProvider = makeDeterministicProvider({ delayForText });
+    const serial = await synthesiseChapter({
+      sentences: SENTENCES,
+      cast,
+      provider: serialProvider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      sentenceConcurrency: 1,
+    });
+
+    const parallelProvider = makeDeterministicProvider({ delayForText });
+    const parallel = await synthesiseChapter({
+      sentences: SENTENCES,
+      cast,
+      provider: parallelProvider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      sentenceConcurrency: 2,
+    });
+
+    /* The parallel run actually overlapped (peak > 1) AND completed at least
+       one group out of dispatch order — otherwise the test wouldn't be
+       exercising the reorder hazard it claims to. */
+    expect(parallelProvider.peakInFlight).toBeGreaterThanOrEqual(2);
+    expect(parallelProvider.completionOrder).not.toEqual(parallelProvider.startOrder);
+
+    /* The headline assertion: byte-identical audio + identical sample rate +
+       identical segment timing regardless of pool width. */
+    expect(parallel.pcm.equals(serial.pcm)).toBe(true);
+    expect(parallel.sampleRate).toBe(serial.sampleRate);
+    expect(parallel.durationSec).toBe(serial.durationSec);
+    expect(parallel.segments).toEqual(serial.segments);
+
+    /* Segments stay in narrative order with monotonic, contiguous timing. */
+    for (let i = 0; i < parallel.segments.length; i++) {
+      expect(parallel.segments[i].groupIndex).toBe(i);
+      expect(parallel.segments[i].sentenceIds).toEqual([SENTENCES[i].id]);
+      if (i > 0) {
+        expect(parallel.segments[i].startSec).toBe(parallel.segments[i - 1].endSec);
+      }
+    }
+  });
+
+  it('anchors the sample rate on the lowest-index group, not the first to complete (deterministic anchor)', async () => {
+    /* INVARIANT 2. groups[0] returns 24 kHz but is made to finish LAST; a
+       later group returns 22.05 kHz and finishes FIRST. The chapter must
+       anchor on groups[0]'s 24 kHz (lowest index), NOT the first completer's
+       22.05 kHz. The old `chunks.length === 0` "first to finish" rule would
+       have anchored on whichever group raced in first. */
+    let callIndex = 0;
+    const provider: TtsProvider = {
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        const myIndex = callIndex++;
+        // group[0] (first dispatched) returns 24k; make it finish last.
+        // group[1] returns 22.05k and finishes first.
+        const sampleRate = myIndex === 0 ? 24000 : 22050;
+        const delay = myIndex === 0 ? 40 : 0;
+        if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+        const pcm = Buffer.alloc(input.text.length * 2);
+        for (let i = 0; i < input.text.length; i++) {
+          pcm.writeInt16LE(1000 + i, i * 2);
+        }
+        return { pcm, sampleRate, mimeType: 'audio/pcm' };
+      },
+    };
+
+    const result = await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'Anchor group at 24k.'),
+        sentence(2, 'narrator', 'Later group at 22050.'),
+      ],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      sentenceConcurrency: 2,
+    });
+
+    /* Anchored on the lowest-index group regardless of completion order. */
+    expect(result.sampleRate).toBe(24000);
+    expect(result.segments).toHaveLength(2);
+    expect(result.segments[0].startSec).toBe(0);
+    expect(result.segments[1].startSec).toBe(result.segments[0].endSec);
+  });
+
+  it('fires onGroupStart for every group at sentenceConcurrency 2', async () => {
+    /* INVARIANT 3 (stall watchdog). Every group must fire onGroupStart as it
+       begins its synth so the 30 s client watchdog keeps resetting — under
+       parallelism just as under the serial loop. */
+    const provider = makeDeterministicProvider();
+    const started: number[] = [];
+    const completed: number[] = [];
+
+    await synthesiseChapter({
+      sentences: SENTENCES,
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      sentenceConcurrency: 2,
+      onGroupStart: ({ group }) => started.push(group.index),
+      onGroupComplete: ({ group }) => completed.push(group.index),
+    });
+
+    /* All five groups fired start AND complete (order may interleave under
+       the pool, so compare as sets). */
+    expect(new Set(started)).toEqual(new Set([0, 1, 2, 3, 4]));
+    expect(new Set(completed)).toEqual(new Set([0, 1, 2, 3, 4]));
+    expect(started).toHaveLength(5);
+    expect(completed).toHaveLength(5);
+  });
+
+  it('throws AbortError when aborted mid-run at sentenceConcurrency 2', async () => {
+    /* INVARIANT 4 (abort). Aborting while the pool is running must reject with
+       AbortError and stop dispatching further groups. */
+    const controller = new AbortController();
+    let calls = 0;
+    const provider: TtsProvider = {
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        calls += 1;
+        // Abort once a couple of groups have started, before all five run.
+        if (calls === 2) controller.abort();
+        await new Promise((r) => setTimeout(r, 5));
+        const pcm = Buffer.alloc(input.text.length * 2);
+        return { pcm, sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+
+    await expect(
+      synthesiseChapter({
+        sentences: SENTENCES,
+        cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+        sentenceConcurrency: 2,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+
+    /* The pool stopped early — not all five groups dispatched. */
+    expect(calls).toBeLessThan(SENTENCES.length);
+  });
+
+  it('keeps the chapter-title beat before the parallel dispatch (anchor = title rate)', async () => {
+    /* INVARIANT 5. The title beat stays ahead of the body dispatch; its
+       sample rate anchors the chapter even when body groups run in parallel
+       at a mismatched rate. */
+    let callIndex = 0;
+    const provider: TtsProvider = {
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        // First call is the title (24k anchor); body groups return 22.05k.
+        const sampleRate = callIndex++ === 0 ? 24000 : 22050;
+        const pcm = Buffer.alloc(input.text.length * 2);
+        for (let i = 0; i < input.text.length; i++) pcm.writeInt16LE(500 + i, i * 2);
+        return { pcm, sampleRate, mimeType: 'audio/pcm' };
+      },
+    };
+
+    const result = await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'Body one.'),
+        sentence(2, 'narrator', 'Body two.'),
+      ],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      chapterTitleNarration: 'Chapter 1.',
+      sentenceConcurrency: 2,
+    });
+
+    /* Title rate wins as the anchor; segments[0] is the title beat. */
+    expect(result.sampleRate).toBe(24000);
+    expect(result.segments[0].kind).toBe('title');
+    expect(result.segments[1].groupIndex).toBe(0);
+    expect(result.segments[2].groupIndex).toBe(1);
+    expect(result.segments[1].startSec).toBeGreaterThanOrEqual(result.segments[0].endSec);
+    expect(result.segments[2].startSec).toBe(result.segments[1].endSec);
+  });
+});
