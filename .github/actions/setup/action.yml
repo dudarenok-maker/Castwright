@@ -1,0 +1,56 @@
+# Composite action — the truly-shared, unconditional setup preamble that was
+# byte-duplicated across verify.yml and cross-os.yml (plan 106, BACKLOG #38).
+#
+# Encapsulates ONLY the three steps every job needs verbatim: setup-node (with
+# the npm download cache), the node_modules actions/cache, and the conditional
+# `npm ci` that skips on a node_modules cache hit. A Node-major bump is now a
+# one-file edit here instead of N call sites.
+#
+# Deliberately NOT folded in (they stay per-workflow):
+#   - actions/checkout — must precede this action (the action file only exists
+#     after checkout) and needs `fetch-depth: 0` in verify.yml for the scope
+#     diff; folding it in would hide that requirement.
+#   - ffmpeg — scope-gated in verify.yml, OS-specific (brew/choco/apt) in
+#     cross-os.yml; a composite would need runner.os branches.
+#   - Playwright — scope-gated in verify.yml; only one cross-os job needs it.
+#
+# See docs/features/106-ci-setup-action-mobile-filter.md.
+name: 'Setup Node + deps'
+description: 'Set up Node, restore the npm + node_modules caches, and install root + server deps on a cache miss.'
+
+inputs:
+  node-version:
+    description: 'Node major version to set up.'
+    required: false
+    default: '24'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        # The npm cache below speeds the cold (cache-miss) `npm ci` path; the
+        # node_modules cache below skips `npm ci` entirely on a warm hit.
+        node-version: ${{ inputs.node-version }}
+        cache: 'npm'
+        cache-dependency-path: |
+          package-lock.json
+          server/package-lock.json
+
+    # Cache the UNPACKED node_modules (root + server) keyed on both lockfiles +
+    # Node major. On a hit the install step below skips entirely (npm ci ~40 s
+    # → 0). A lockfile change busts the key and forces a fresh install.
+    - name: Cache node_modules
+      id: node-modules-cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          node_modules
+          server/node_modules
+        key: ${{ runner.os }}-node24-modules-${{ hashFiles('package-lock.json', 'server/package-lock.json') }}
+
+    - name: Install deps (skip on cache hit)
+      if: steps.node-modules-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: npm ci && npm --prefix server ci
