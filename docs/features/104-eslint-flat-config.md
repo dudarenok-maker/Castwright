@@ -66,6 +66,7 @@ Two of the five plugins (`eslint-plugin-react`, `eslint-plugin-jsx-a11y`) do NOT
 5. **`eslintConfigPrettier` is LAST** in the `tseslint.config(...)` array so it wins the cascade and disables every formatting rule the earlier configs turn on.
 6. **The TS parser is scoped to `**/*.{ts,tsx,mts,cts}` only**, so `scripts/**` CommonJS/ESM files parse with espree (the old `parser: 'espree'` override behaviour).
 7. **`verify.yml`'s `frontend` scope-detector matches `eslint.config.(js|mjs)$`** so a lint-config-only PR still runs the frontend leg in CI.
+8. **`.claude/` stays in the global-ignores object.** The Claude Code harness directory holds settings JSON (not linted) and transient agent worktrees that each carry their own built `dist/` output. Without this ignore, `eslint .` walks into `.claude/worktrees/<agent>/server/dist/` (the root `server/dist/` ignore is relative to repo root and does NOT match the nested copy) and floods thousands of errors, blocking every push while a worktree exists. Added 2026-05-23 after the gap surfaced on an unrelated push.
 
 ## Test plan
 
@@ -113,3 +114,4 @@ Fresh `npm install` at root after the bumps:
 - jsdom 25 → 29 and archiver 7 → 8 both landed (BACKLOG #32 chains cleared); only `@google/genai`'s `node-domexception` chain remains tracked. One frontend spec (jsdom CSS canonicalisation) and one release script (archiver ESM/class API) needed adapting; both pinned by tests.
 - The autofix re-baseline (`eslint . --fix` + targeted `prettier --write` on the touched files) removed dead `eslint-disable` directives across 24 files (ESLint 9 flat config defaults `reportUnusedDisableDirectives` to `warn`; the legacy eslintrc default was `off`). No behaviour change.
 - Companion: re-link plan `docs/features/archive/46-lint-format-a11y.md` Ship notes → this plan.
+- Follow-up 2026-05-23 (branch `chore/frontend-eslint-ignore-worktrees`): added `.claude/` to the global-ignores object (invariant #8). The flat-config migration carried the plan-46 ignores verbatim but those predate agent worktrees living under `.claude/worktrees/`; once such a worktree exists with built `server/dist/` output, `eslint .` walked into it and the `--max-warnings 0` gate blocked every push. The root `server/dist/` entry is repo-root-relative and didn't match the nested path.
