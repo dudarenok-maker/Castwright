@@ -396,16 +396,6 @@ Source: net-new (2026-05-23). Surfaced during plan-103 implementation.
 - _Depends on:_ plan 103 merged.
 - _Benefit (technical):_ trims the rare wasted weekly mobile-e2e run; mostly tidiness.
 
-### 40. Drag-to-reorder for the queue modal (plan 102 polish)
-
-Source: plan 102 ship (2026-05-23) — Out of scope for the v1 ship. The queue modal at `src/modals/queue-modal.tsx` reorders via tap pills (Move up / Move down) which satisfies the touch-equivalence rule from CLAUDE.md plan 81 and works on desktop AND mobile in one code path. Drag-to-reorder is purely additive polish for desktop users with a mouse.
-
-- _What:_ Add a PointerEvent-based drag handle on the left edge of each queue entry row (desktop only — `hidden sm:flex`). Reuses the existing PointerEvent pattern from `src/views/manuscript.tsx:377-451` (paragraph boundary handle). On drop, dispatch `reorderQueue(desiredOrderIds)` which POSTs `/api/queue/reorder` — the same thunk the tap pills already call, just with a different desiredOrder computation. The in-flight (pinned) entry remains non-draggable; the drag handle is suppressed on `entry.status === 'in_progress'` rows.
-- _Acceptance:_ On desktop, hovering a queue row reveals a `⋮⋮` drag handle on the left. Dragging it onto another row reorders the queue via `/api/queue/reorder`. The in-flight row shows no handle. On touch devices, the handle is hidden and the existing tap pills remain the only reorder affordance.
-- _Key files:_ `src/modals/queue-modal.tsx` (PointerEvent listener on each non-pinned row + drop-zone math); `src/modals/queue-modal.test.tsx` (paired Vitest pin for the drag-reorder dispatch shape).
-- _Depends on:_ plan 102 (shipped).
-- _Benefit (user):_ desktop users get a one-gesture reorder instead of multiple tap-pill clicks. Minor — current pill UX is already functional — but a small polish win for users juggling 10+ queue entries.
-
 ---
 
 ## Won't (this round) — explicitly parked
