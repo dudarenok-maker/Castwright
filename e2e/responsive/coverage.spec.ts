@@ -119,4 +119,55 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await page.waitForTimeout(500);
     await expectNoHorizontalScroll(page);
   });
+
+  test('queue modal (plan 102)', async ({ page }) => {
+    /* Intercept /api/queue so the layout's mount-effect loadQueue
+       resolves and the modal can render — mock-mode otherwise has no
+       server-side queue endpoint and the slice stays in unloaded
+       state, which would render an empty modal with no horizontal-
+       overflow risk to assert against. */
+    await page.route('**/api/queue', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          entries: [
+            {
+              id: 'demo-1',
+              bookId: 'sb',
+              chapterId: 1,
+              scope: 'this',
+              addedAt: new Date().toISOString(),
+              status: 'queued',
+              order: 0,
+            },
+            {
+              id: 'demo-2',
+              bookId: 'sb',
+              chapterId: 2,
+              scope: 'this',
+              addedAt: new Date().toISOString(),
+              status: 'queued',
+              order: 1,
+            },
+          ],
+          paused: false,
+        }),
+      }),
+    );
+    await page.goto('/#/books/sb/generate');
+    /* The View queue button mounts inside Generate header; data-testid
+       is the stable hook. */
+    const viewQueue = page.getByTestId('generation-view-queue');
+    await viewQueue.waitFor({ state: 'visible', timeout: 10_000 });
+    await viewQueue.click();
+    /* Modal renders with aria-label="Generation queue" on every
+       viewport (dialog on >= sm, full-screen sheet on phone). */
+    await page.getByRole('dialog', { name: /Generation queue/i }).waitFor({
+      state: 'visible',
+      timeout: 5_000,
+    });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
 });
