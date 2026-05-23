@@ -9,7 +9,7 @@
 
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
-import { chaptersActions } from '../store/chapters-slice';
+import { enqueueQueueEntries } from '../store/queue-thunks';
 import { changeLogActions } from '../store/change-log-slice';
 import { buildCharacterRegenEvent } from '../lib/change-log';
 import { IconRefresh, IconClose } from '../lib/icons';
@@ -18,6 +18,9 @@ export function StaleAudioBanner() {
   const dispatch = useAppDispatch();
   const stale = useAppSelector((s) => s.ui.staleAudio);
   const characters = useAppSelector((s) => s.cast.characters);
+  const bookId = useAppSelector((s) =>
+    s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null,
+  );
   if (!stale) return null;
   const n = stale.chapterIds.length;
   if (n === 0) return null;
@@ -25,7 +28,7 @@ export function StaleAudioBanner() {
   const character = characters.find((c) => c.id === stale.characterId);
 
   function onRegenerate() {
-    if (!stale || !character) return;
+    if (!stale || !character || !bookId) return;
     dispatch(
       changeLogActions.appendLogEvent(
         buildCharacterRegenEvent({
@@ -36,11 +39,21 @@ export function StaleAudioBanner() {
         }),
       ),
     );
-    dispatch(
-      chaptersActions.regenerateCharacter({
-        characterId: stale.characterId,
-        chapterIds: stale.chapterIds,
-      }),
+    /* Plan 102 — stale-audio "Regenerate now" enqueues one
+       per-character entry per stale chapter; the dispatcher drains
+       them serially, so a regen mid-stream can no longer drop the
+       in-flight chapter. */
+    const rand = Math.random().toString(36).slice(2, 8);
+    void dispatch(
+      enqueueQueueEntries(
+        stale.chapterIds.map((chId) => ({
+          id: `stale-audio-${bookId}-${stale.characterId}-${chId}-${rand}`,
+          bookId,
+          chapterId: chId,
+          scope: 'character',
+          characterId: stale.characterId,
+        })),
+      ),
     );
     dispatch(uiActions.clearStaleAudio());
     dispatch(uiActions.changeView('generate'));
