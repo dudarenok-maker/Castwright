@@ -1,25 +1,36 @@
 name: Verify
 
-# Plan 60 — CI verify-on-PR.
-# Runs `npm run verify` on every PR targeting main so red tests block merge.
-# Mirrors the local pre-push gate (typecheck + lint + a11y + all tests + e2e
-# + build) on a clean Ubuntu runner. The release workflow (release.yml)
-# already covers cross-OS verify on tag push; keeping this workflow
-# Ubuntu-only keeps PR CI fast and cheap.
+# Plan 60 — CI verify-on-PR. Plan 103 — per-PR cost reduction.
 #
-# Plan 101 — doc-only PR fast-path. The `paths-ignore` block below skips
-# this workflow entirely when EVERY changed file in the PR matches one of
-# the doc globs. The moment a non-doc file is touched, the full battery
-# runs as before. `pr-title-lint.yml` runs unconditionally, and GitHub's
-# native mergeable check still surfaces conflicts — so doc PRs keep the
-# "PR required + title valid + no conflicts" gate without the 10–15 min
-# verify cost. See docs/features/archive/101-docs-only-ci-skip.md.
-# (Originally shipped as plan 100; renumbered to 101 after a same-day
-# collision with plan 100 GPU-arbitration semaphore.)
+# Runs the verify battery on every PR targeting main so red tests block
+# merge, but only the LEGS whose scope actually changed. A single job does
+# setup once, detects which scopes the PR touched (git diff against the PR
+# base), then gates each expensive leg (server tests, e2e, build, …) behind
+# an `if:` on that scope. A PR that touches only `src/**` skips the server
+# tests; a server-only PR skips the frontend unit suite + Playwright e2e;
+# etc. The local pre-push hook still runs the FULL `npm run verify` battery,
+# so CI only trusts the path-filter for the scoped subset — nothing is
+# permanently un-covered. See docs/features/103-ci-cost-reduction.md.
+#
+# Why one job with conditional steps (not a job-per-leg matrix): GitHub bills
+# each job's wall-clock separately, summed, rounded UP to the minute per job.
+# Parallel jobs would duplicate `npm ci` + pay a 1-min floor each, which
+# INCREASES billed minutes for multi-scope PRs. One job → setup paid once,
+# skipped legs cost ~0.
+#
+# Plan 101 — doc-only PR fast-path. The `paths-ignore` block below skips the
+# whole workflow when EVERY changed file matches a doc glob. The scope
+# detector below is the second tier for non-doc PRs.
+# See docs/features/archive/101-docs-only-ci-skip.md.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # `ready_for_review` is REQUIRED alongside the draft-skip `if:` on the
+    # job: a job skipped by `if:` reports no status, so a draft PR's required
+    # `verify` check would be absent and block merge. Firing on
+    # `ready_for_review` re-triggers the run the moment a draft is promoted,
+    # so the gate appears exactly when the PR becomes mergeable.
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
     paths-ignore:
       - 'docs/**'
@@ -37,51 +48,122 @@ concurrency:
 
 jobs:
   verify:
+    # NOTE: keep this `name:` value EXACTLY "npm run verify" — it is the
+    # branch-protection required status-check name. The job no longer runs
+    # the literal `npm run verify` command (it runs the scoped subset of
+    # legs), but renaming it would silently drop the required check and let
+    # un-verified PRs merge. Do not rename without flipping branch protection.
     name: npm run verify
     runs-on: ubuntu-latest
-    # Cold target: under 10 min (verify-cache plan 50 measures ~120 s cold
-    # locally; e2e is the slowest leg at ~60 s cold per BACKLOG #18). Warm
-    # target: under 5 min — but warm-cache savings only apply when
-    # `.verify-cache.json` survives across runs, which it does not here
-    # (each runner is ephemeral), so every CI run is effectively cold.
-    # We still benefit from npm + Playwright caches keyed on package-lock.
+    # Skip drafts — they re-fire every check on `ready_for_review` (see the
+    # trigger note above), so running on every draft push is pure waste.
+    if: github.event.pull_request.draft == false
     timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history so the scope detector can diff the PR head against
+          # its base commit. A shallow clone wouldn't have the base reachable.
+          fetch-depth: 0
+
+      # Detect which scopes the PR touched by diffing the merge base against
+      # the PR head. Each output is a literal 'true'/'false' string consumed
+      # by the `if:` on every leg below. Pure bash + git — no third-party
+      # action, matching this repo's all-first-party (actions/*) convention.
+      - name: Detect changed scopes
+        id: changes
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          FILES="$(git diff --name-only "$BASE" "$HEAD")"
+          echo "Changed files in this PR:"
+          echo "$FILES"
+          echo "---"
+          match() { echo "$FILES" | grep -qE "$1"; }
+          frontend=false; server=false; sidecar=false
+          e2e=false; scripts=false; hooks=false; shared=false
+          match '^(src/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|\.eslintrc\.cjs$)' && frontend=true
+          match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$)' && server=true
+          match '^server/tts-sidecar/' && sidecar=true
+          match '^(e2e/|playwright\.config\.ts$)' && e2e=true
+          match '^scripts/' && scripts=true
+          match '^(\.husky/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$)' && hooks=true
+          # `shared` = a ROOT dependency manifest changed → treat as global
+          # (a dep/lockfile bump can affect every leg), so run everything.
+          match '^(package\.json|package-lock\.json)$' && shared=true
+          for k in frontend server sidecar e2e scripts hooks shared; do
+            echo "$k=${!k}" >> "$GITHUB_OUTPUT"
+            echo "scope $k=${!k}"
+          done
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          # Bumped 20 → 24 alongside plan 81 / wave 1. The trigger was
-          # vite-plugin-mkcert@2 pulling undici@8 (Node 22+ required for
-          # `webidl.util.markAsUncloneable`); we picked 24 to match the
-          # dev box exactly so "works on my machine" Node-version drift
-          # can't bite us. Node 24 enters LTS in October 2026; until
-          # then it's the Current release line.
+          # Node 24 — matches the dev box (see plan 81 / wave 1). The npm
+          # cache below speeds the cold (cache-miss) `npm ci` path; the
+          # node_modules cache below skips `npm ci` entirely on a warm hit.
           node-version: '24'
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json
             server/package-lock.json
 
-      # The server pretest hook (`scripts/preflight-ffmpeg.cjs`) refuses to
-      # run when ffmpeg isn't on PATH — the MP3 encoder in
-      # `server/src/tts/mp3.ts` shells out to it. Install ffmpeg before
-      # `npm run verify` so the server tests can spawn it.
+      # Cache the UNPACKED node_modules (root + server) keyed on both
+      # lockfiles + Node major. On a hit the install step below skips
+      # entirely (npm ci ~40 s → 0). A lockfile change busts the key and
+      # forces a fresh install. This is the always-paid setup tax shrunk for
+      # every run, including multi-scope PRs that run every leg.
+      - name: Cache node_modules
+        id: node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            server/node_modules
+          key: ${{ runner.os }}-node24-modules-${{ hashFiles('package-lock.json', 'server/package-lock.json') }}
+
+      - name: Install deps (skip on cache hit)
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
+        run: npm ci && npm --prefix server ci
+
+      - name: Lint
+        if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.server == 'true' || steps.changes.outputs.scripts == 'true' || steps.changes.outputs.shared == 'true'
+        run: npm run lint
+
+      - name: Typecheck
+        if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.server == 'true' || steps.changes.outputs.shared == 'true'
+        run: npm run typecheck
+
+      - name: Hooks tests
+        if: steps.changes.outputs.hooks == 'true' || steps.changes.outputs.scripts == 'true' || steps.changes.outputs.shared == 'true'
+        run: npm run test:hooks
+
+      - name: PowerShell-helper tests (Pester)
+        # No-ops with a banner on a runner without Pester 5 (the GitHub
+        # ubuntu image ships pwsh but not Pester 5), exactly as the old
+        # `npm run verify` leg did. Kept gated on `scripts` so it provides
+        # real coverage if/when Pester 5 is bootstrapped on the runner.
+        if: steps.changes.outputs.scripts == 'true'
+        run: npm run test:scripts
+
+      - name: Frontend tests + a11y
+        if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.e2e == 'true' || steps.changes.outputs.shared == 'true'
+        run: npm run test && npm run test:a11y
+
+      # ffmpeg is needed by the server MP3 encoder (server/src/tts/mp3.ts
+      # shells out to it) and by the e2e suite's audio paths. Install it only
+      # when a leg that needs it will run.
       - name: Install ffmpeg
+        if: steps.changes.outputs.server == 'true' || steps.changes.outputs.sidecar == 'true' || steps.changes.outputs.e2e == 'true' || steps.changes.outputs.shared == 'true'
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: Install root deps
-        run: npm ci
+      - name: Server tests (fast + slow)
+        if: steps.changes.outputs.server == 'true' || steps.changes.outputs.sidecar == 'true' || steps.changes.outputs.shared == 'true'
+        run: npm run test:server && npm run test:server-slow
 
-      - name: Install server deps
-        run: npm --prefix server ci
-
-      # Cache the Playwright chromium download (~100 MB) so warm runs skip
-      # the install. Key on the root lockfile hash — `@playwright/test`
-      # version lives there, so a lockfile change invalidates the cache.
       - name: Cache Playwright browsers
+        if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.e2e == 'true' || steps.changes.outputs.shared == 'true'
         id: playwright-cache
         uses: actions/cache@v4
         with:
@@ -91,16 +173,13 @@ jobs:
             ${{ runner.os }}-playwright-
 
       - name: Install Playwright chromium
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        if: (steps.changes.outputs.frontend == 'true' || steps.changes.outputs.e2e == 'true' || steps.changes.outputs.shared == 'true') && steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
 
-      # `npm run verify` is the same battery the pre-push hook runs:
-      # lint + typecheck + test:hooks + test + test:server + test:scripts
-      # + test:sidecar + test:e2e + build. test:scripts (Pester) and
-      # test:sidecar (pytest) skip with a banner when their toolchains
-      # aren't bootstrapped — fresh runners don't have Pester 5 or the
-      # sidecar venv, so both legs no-op cleanly here. The cross-OS
-      # release.yml workflow is the source of truth for those harnesses
-      # on a fully-bootstrapped runner.
-      - name: Verify
-        run: npm run verify
+      - name: E2E (chromium)
+        if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.e2e == 'true' || steps.changes.outputs.shared == 'true'
+        run: npm run test:e2e
+
+      - name: Build
+        if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.server == 'true' || steps.changes.outputs.shared == 'true'
+        run: npm run build

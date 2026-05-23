@@ -246,10 +246,25 @@ for the rulesets, the autofix-baseline shape, and the rationale for each
 relaxed rule.
 
 **CI fast-path for doc-only PRs (plan 101)**: PRs that touch only `docs/**`,
-root-level `*.md`, or `.github/*.md` skip both `verify.yml` and `e2e-mobile.yml`
-via `paths-ignore`. The PR title lint + GitHub's native conflict check still
-apply; any code-touching PR runs the full battery as before.
+root-level `*.md`, or `.github/*.md` skip `verify.yml` via `paths-ignore`. The
+PR title lint + GitHub's native conflict check still apply.
 See [docs/features/archive/101-docs-only-ci-skip.md](docs/features/archive/101-docs-only-ci-skip.md).
+
+**Per-PR path-filtered CI (plan 103)**: for non-doc PRs, `verify.yml` is a
+single `verify` job that detects which scopes the diff touched (`git diff`
+against the PR base) and runs only the matching legs — a frontend-only PR
+skips the server tests, a server-only PR skips the Playwright e2e + frontend
+unit suite, etc. A root `package.json`/`package-lock.json` change runs every
+leg. **The local pre-push hook still runs the FULL `npm run verify` battery**,
+so CI only trusts the path-filter for the scoped subset — nothing is
+permanently un-covered. The job also skips drafts (re-fires on
+`ready_for_review`) and reuses a cached `node_modules`. Cross-OS verify
+(macOS + Windows) and the mobile/tablet e2e left the per-release / per-PR
+pipelines and now live in `.github/workflows/cross-os.yml` (`workflow_dispatch`
++ weekly Sunday cron on `main`) — **fire it manually before announcing any
+release that ships a zip to alpha testers**, since the deployer spread is still
+Windows + macOS + Linux. `release.yml` verifies Ubuntu-only before publish.
+See [docs/features/103-ci-cost-reduction.md](docs/features/103-ci-cost-reduction.md).
 
 Branching model and the full commit convention (allowed types, allowed scopes,
 multi-scope syntax, worktrees for parallel agent work) are documented in
