@@ -30,6 +30,7 @@ import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { exportsSlice } from '../store/exports-slice';
 import { analysisSlice } from '../store/analysis-slice';
+import { queueSlice } from '../store/queue-slice';
 
 const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
@@ -104,6 +105,7 @@ function makeStore() {
       bookMeta: bookMetaSlice.reducer,
       exports: exportsSlice.reducer,
       analysis: analysisSlice.reducer,
+      queue: queueSlice.reducer,
     },
   });
 }
