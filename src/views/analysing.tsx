@@ -918,7 +918,6 @@ export function AnalysingView({
     if (autoLoadFiredRef.current) return; // one-shot per mount
     autoLoadFiredRef.current = true;
     void handleLoadAnalyzer();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manuscriptId, isLocalAnalyzer, ollamaHealth, pendingAnalyzerPill]);
 
   const isAnalysisRunning = conn === 'streaming' || conn === 'connecting';

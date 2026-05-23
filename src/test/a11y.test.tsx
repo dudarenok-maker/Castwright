@@ -5,7 +5,7 @@
 
    Companion plan: docs/features/46-lint-format-a11y.md. The harness
    complements ESLint's static jsx-a11y rules (which we relax in
-   .eslintrc.cjs for inherited debt) by validating the rendered DOM
+   eslint.config.js for inherited debt) by validating the rendered DOM
    against the WCAG ruleset axe-core ships. */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';

@@ -110,7 +110,6 @@ describeIfFfmpeg('encodePcmToAudio', () => {
 });
 
 if (!ffmpegPresent) {
-  // eslint-disable-next-line no-console
   console.warn(
     '[mp3.test.ts] ffmpeg not found on PATH — skipping encoder integration tests. ' +
       'Install: winget install Gyan.FFmpeg',
@@ -237,4 +236,3 @@ describe('writeChapterLufsFile', () => {
     }
   });
 });
-

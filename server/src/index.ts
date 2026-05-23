@@ -47,10 +47,7 @@ import { chaptersRestructureRouter } from './routes/chapters-restructure.js';
 import { exportRouter } from './routes/export.js';
 import { exportLanRouter, enumerateLanUrls, isLanHttpsEnabled } from './routes/export-lan.js';
 import { certRootRouter } from './routes/cert-root.js';
-import {
-  portableExportRouter,
-  portableImportRouter,
-} from './routes/exports-portable.js';
+import { portableExportRouter, portableImportRouter } from './routes/exports-portable.js';
 import { shareRouter, sharePublicRouter } from './routes/share.js';
 import { revisionsRouter, revisionsBulkRouter } from './routes/revisions.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
@@ -182,10 +179,8 @@ app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inF
   const distDir = resolve(__dirname, '..', '..', 'dist');
   const result = mountFrontendStatic(app, distDir);
   if (result.mounted) {
-    // eslint-disable-next-line no-console
     console.log(`[server] serving frontend bundle from ${result.distDir} (${result.reason})`);
   } else if (process.env.NODE_ENV === 'production') {
-    // eslint-disable-next-line no-console
     console.warn(`[server] frontend NOT mounted: ${result.reason}`);
   }
 }
@@ -217,9 +212,9 @@ const LAN_KEY_FILE = resolve(repoRoot, '.run', 'certs', 'lan-key.pem');
 const listenerCallback = () => {
   const protocol: 'http' | 'https' = lanHttps ? 'https' : 'http';
   const listenPort = lanHttps ? LAN_HTTPS_PORT : PORT;
-  // eslint-disable-next-line no-console
+
   console.log(`[server] listening on ${protocol}://localhost:${listenPort}`);
-  // eslint-disable-next-line no-console
+
   console.log(`[server] workspace root: ${WORKSPACE_ROOT}`);
 
   /* Log the LAN URLs so the user can spot which IP to point their phone's
@@ -227,7 +222,6 @@ const listenerCallback = () => {
      binds all interfaces, so every URL here genuinely reaches us. */
   const lan = enumerateLanUrls(listenPort, protocol);
   for (const url of lan.urls) {
-    // eslint-disable-next-line no-console
     console.log(`[server] LAN URL: ${url}`);
   }
 
@@ -286,7 +280,6 @@ const listenerCallback = () => {
 
 if (lanHttps) {
   if (!existsSync(LAN_CERT_FILE) || !existsSync(LAN_KEY_FILE)) {
-    // eslint-disable-next-line no-console
     console.error(
       `[server] LAN_HTTPS=1 set but cert files are missing.\n` +
         `[server] Expected: ${LAN_CERT_FILE}\n` +

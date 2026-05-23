@@ -27,7 +27,7 @@ export const STEPS = [
     name: 'lint',
     inputs: {
       globs: ['**/*.{ts,tsx,js,jsx,cjs,mjs}'],
-      extraFiles: ['.eslintrc.cjs', '.prettierrc', '.prettierignore'],
+      extraFiles: ['eslint.config.js', '.prettierrc', '.prettierignore'],
       includeLockfiles: ['root'],
     },
   },

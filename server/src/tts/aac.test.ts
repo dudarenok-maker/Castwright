@@ -124,7 +124,6 @@ describeIfFfmpeg('encodePcmToAudio (format: aac-m4a)', () => {
 });
 
 if (!ffmpegPresent) {
-  // eslint-disable-next-line no-console
   console.warn(
     '[aac.test.ts] ffmpeg not found on PATH — skipping encoder integration tests. ' +
       'Install: winget install Gyan.FFmpeg',
