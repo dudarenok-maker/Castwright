@@ -429,6 +429,5 @@ describe('GET /api/export/lan', () => {
 });
 
 if (!ffmpegPresent) {
-  // eslint-disable-next-line no-console
   console.warn('[export.test.ts] ffmpeg missing — skipping export integration tests.');
 }

@@ -165,7 +165,6 @@ export class GeminiRateLimiter {
 
     const limits = resolveLimits(model);
 
-    /* eslint-disable no-constant-condition */
     while (true) {
       const s = this.getState(model);
       const now = Date.now();
