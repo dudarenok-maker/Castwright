@@ -1109,7 +1109,7 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
     );
   }
 
-  it('confirm dialog names the source engine, target engine, and dispatches regenerateChapterIds with the full drifted list', () => {
+  it('confirm dialog names the source engine, target engine, and enqueues one queue entry per drifted chapter (plan 102)', async () => {
     const drifted1: Chapter = { ...chapter1, audioModelKey: 'coqui-xtts-v2' };
     const drifted3: Chapter = {
       id: 3,
@@ -1122,6 +1122,24 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
     };
     const store = makeDriftStore([drifted1, chapter2, drifted3]);
     renderDrift(store, [drifted1, chapter2, drifted3]);
+
+    /* Plan 102 — drift bulk regen now POSTs /api/queue/enqueue (one
+       entry per drifted chapter) instead of dispatching
+       regenerateChapterIds. Stub fetch and assert the request body. */
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: () =>
+        Promise.resolve({
+          entries: [
+            { id: 'e1', bookId: 'b1', chapterId: 1, scope: 'this', status: 'queued', order: 0, addedAt: '2026-05-23T00:00:00Z' },
+            { id: 'e2', bookId: 'b1', chapterId: 3, scope: 'this', status: 'queued', order: 1, addedAt: '2026-05-23T00:00:00Z' },
+          ],
+          paused: false,
+        }),
+    } as Response);
+    vi.stubGlobal('fetch', fetchMock);
 
     /* Banner button opens the confirm dialog. */
     const bannerBtn = screen.getByRole('button', { name: /^Regenerate all$/ });
@@ -1137,14 +1155,25 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
     /* Confirm — the button label includes the count for plural cases. */
     fireEvent.click(screen.getByRole('button', { name: /Regenerate all 2/ }));
 
-    /* Slice transitions: head id (1) flips in_progress, second (3)
-       queues; chapter 2 (queued, never drifted) is untouched. */
-    const state = store.getState();
-    expect(state.chapters.pendingRegen).toEqual({ chapterIds: [1, 3], force: true });
-    expect(state.chapters.chapters.find((c) => c.id === 1)?.state).toBe('in_progress');
-    expect(state.chapters.chapters.find((c) => c.id === 2)?.state).toBe('queued');
-    expect(state.chapters.chapters.find((c) => c.id === 3)?.state).toBe('queued');
-    expect(state.chapters.regenEpoch).toBe(1);
+    /* The enqueue thunk fires /api/queue/enqueue with the drifted ids
+       expanded to one queue entry each. Wait a microtask so the thunk's
+       fetch lands before the assertion. */
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/queue/enqueue',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const call = fetchMock.mock.calls.find((c) => c[0] === '/api/queue/enqueue');
+    const body = JSON.parse((call?.[1] as { body: string }).body) as {
+      entries: { bookId: string; chapterId: number; scope: string }[];
+    };
+    expect(body.entries.map((e) => e.chapterId)).toEqual([1, 3]);
+    expect(body.entries.every((e) => e.scope === 'this' && e.bookId === 'b1')).toBe(true);
+    vi.unstubAllGlobals();
   });
 
   it('singular copy when only one chapter is drifted', () => {

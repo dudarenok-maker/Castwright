@@ -10,6 +10,8 @@ import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { changeLogSlice } from '../store/change-log-slice';
+import { queueSlice } from '../store/queue-slice';
+import { notificationsSlice } from '../store/notifications-slice';
 import { StaleAudioBanner } from './stale-audio-banner';
 import type { Character } from '../lib/types';
 
@@ -32,6 +34,8 @@ function makeStore() {
       cast: castSlice.reducer,
       chapters: chaptersSlice.reducer,
       changeLog: changeLogSlice.reducer,
+      queue: queueSlice.reducer,
+      notifications: notificationsSlice.reducer,
     },
   });
 }
@@ -131,7 +135,7 @@ describe('StaleAudioBanner', () => {
     expect(screen.getByText(/1 chapter\b/)).toBeInTheDocument();
   });
 
-  it('Regenerate now dispatches regenerateCharacter + clears banner + switches to generate view', () => {
+  it('Regenerate now enqueues one queue entry per stale chapter + clears banner + switches to generate view (plan 102)', async () => {
     sharedStore.dispatch(
       uiSlice.actions.setStaleAudio({
         characterId: 'halloran',
@@ -139,8 +143,8 @@ describe('StaleAudioBanner', () => {
         chapterIds: [1, 3],
       }),
     );
-    /* Need a ready stage for changeView to actually change anything;
-       set one explicitly. */
+    /* Need a ready stage so bookId resolves + changeView actually moves
+       the stage; the banner aborts if bookId is null. */
     sharedStore.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'complete' }));
     sharedStore.dispatch(
       uiSlice.actions.setStaleAudio({
@@ -150,20 +154,45 @@ describe('StaleAudioBanner', () => {
       }),
     );
 
+    /* Plan 102 — enqueue is the new dispatch path; mock fetch. */
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: () => Promise.resolve({ entries: [], paused: false }),
+    } as Response);
+    vi.stubGlobal('fetch', fetchMock);
+
     renderBanner();
     fireEvent.click(screen.getByRole('button', { name: /Regenerate now/i }));
 
-    const state = sharedStore.getState();
-    /* Slice state confirms the dispatch chain landed: stale cleared,
-       chapters slice carries pendingRegen for the right chapters, change
-       log captured the event. */
-    expect(state.ui.staleAudio).toBeNull();
-    expect(state.chapters.pendingRegen?.chapterIds).toEqual([1, 3]);
-    expect(state.chapters.pendingRegen?.force).toBe(true);
+    /* Banner clears + view switches synchronously; the enqueue thunk's
+       fetch lands one microtask later. */
+    const stateImmediate = sharedStore.getState();
+    expect(stateImmediate.ui.staleAudio).toBeNull();
+    expect((stateImmediate.ui.stage as { view?: string }).view).toBe('generate');
     expect(
-      state.changeLog.events.some((e) => e.type === 'regenerate' && e.title?.includes('Halloran')),
+      stateImmediate.changeLog.events.some(
+        (e) => e.type === 'regenerate' && e.title?.includes('Halloran'),
+      ),
     ).toBe(true);
-    expect((state.ui.stage as { view?: string }).view).toBe('generate');
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/queue/enqueue',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const call = fetchMock.mock.calls.find((c) => c[0] === '/api/queue/enqueue');
+    const body = JSON.parse((call?.[1] as { body: string }).body) as {
+      entries: { bookId: string; chapterId: number; scope: string; characterId?: string }[];
+    };
+    expect(body.entries.map((e) => e.chapterId)).toEqual([1, 3]);
+    expect(body.entries.every((e) => e.scope === 'character' && e.characterId === 'halloran')).toBe(
+      true,
+    );
+    vi.unstubAllGlobals();
   });
 
   it('Dismiss clears the slice flag without dispatching regenerate', () => {
