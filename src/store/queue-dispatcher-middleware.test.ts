@@ -14,6 +14,23 @@ import { chaptersSlice } from './chapters-slice';
 import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
 import { queueDispatcherMiddleware } from './queue-dispatcher-middleware';
+import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
+
+/* The cross-book branch opens the SSE directly via the shared runner, which
+   calls api.streamGeneration. Mock it so we can assert the open args; the
+   DELETE round-trip still goes through the global fetch mock (queue-thunks
+   uses fetch directly, not the api module). */
+const streamGenerationMock = vi.fn();
+const cancelStreamMock = vi.fn();
+vi.mock('../lib/api', () => ({
+  api: {
+    streamGeneration: (args: unknown) => {
+      streamGenerationMock(args);
+      return cancelStreamMock;
+    },
+    pauseGeneration: () => Promise.resolve(),
+  },
+}));
 
 const entry = (overrides: Partial<QueueEntry> = {}): QueueEntry => ({
   id: 'e1',
@@ -31,6 +48,8 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
+  streamGenerationMock.mockClear();
+  cancelStreamMock.mockClear();
 });
 
 afterEach(() => {
@@ -47,7 +66,12 @@ function jsonResp(body: unknown, status = 200): Response {
 }
 
 function makeStore() {
-  return configureStore({
+  /* One runner per store (test isolation). Lazy accessor breaks the
+     store↔runner creation cycle — see src/store/index.ts for the same
+     pattern in production. */
+  let runner: StreamRunner | null = null;
+  const getRunner = (): StreamRunner => runner!;
+  const store = configureStore({
     reducer: {
       ui: uiSlice.reducer,
       queue: queueSlice.reducer,
@@ -55,8 +79,10 @@ function makeStore() {
       notifications: notificationsSlice.reducer,
     },
     middleware: (getDefault) =>
-      getDefault({ serializableCheck: false }).concat(queueDispatcherMiddleware),
+      getDefault({ serializableCheck: false }).concat(queueDispatcherMiddleware(getRunner)),
   });
+  runner = createStreamRunner(store);
+  return store;
 }
 
 /** Helper — flush microtasks (the dispatcher defers tick() via
@@ -111,7 +137,15 @@ describe('queue-dispatcher-middleware', () => {
     expect(store.getState().chapters.pendingRegen).toBeNull();
   });
 
-  it('does not dispatch when the head entry is for a different book (same-book gate)', async () => {
+  it('opens a CROSS-book entry directly via the runner without dispatching a regenerate (Wave 4b)', async () => {
+    /* The user is viewing book-A; the head entry is for book-B. The
+       same-book gate is lifted (Should #6): instead of waiting for the user
+       to navigate, the dispatcher opens the SSE for book-B directly through
+       the shared runner. It must NOT dispatch a regenerate action — that
+       would mutate book-A's rows (the slice holds book-A). So pendingRegen
+       stays null, but streamGeneration fires for book-B with the explicit
+       spec + queueEntryId, and the cross-book activeStream snapshot is
+       seeded so the global pill keeps moving. */
     const store = makeStore();
     store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
     store.dispatch(
@@ -121,12 +155,87 @@ describe('queue-dispatcher-middleware', () => {
     );
     store.dispatch(
       queueSlice.actions.setSnapshot({
-        entries: [entry({ bookId: 'book-B' })],
+        entries: [entry({ id: 'xb1', bookId: 'book-B', chapterId: 7 })],
         paused: false,
       }),
     );
     await flushMicro();
+
+    /* No slice-level regen — book-A's rows are untouched. */
     expect(store.getState().chapters.pendingRegen).toBeNull();
+    /* The cross-book stream opened with the right spec + entry correlation. */
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    const args = streamGenerationMock.mock.calls[0]?.[0] as {
+      bookId?: string;
+      chapterIds?: number[];
+      force?: boolean;
+      queueEntryId?: string;
+    };
+    expect(args.bookId).toBe('book-B');
+    expect(args.chapterIds).toEqual([7]);
+    expect(args.force).toBe(true);
+    expect(args.queueEntryId).toBe('xb1');
+    /* Cross-book snapshot seeded for the streaming book, not the viewed one. */
+    expect(store.getState().chapters.activeStream?.bookId).toBe('book-B');
+  });
+
+  it('does not open a SECOND stream for a cross-book head while one is already in flight', async () => {
+    const store = makeStore();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
+    store.dispatch(
+      chaptersSlice.actions.setChapters([
+        { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
+      ] as never),
+    );
+    /* A stream is already open (some other book's work). */
+    store.dispatch(
+      chaptersSlice.actions.setActiveStream({
+        bookId: 'book-C',
+        modelKey: 'kokoro-v1',
+        done: 0,
+        total: 3,
+        inProgress: 1,
+        lastTickAt: Date.now(),
+        halted: false,
+      } as never),
+    );
+    store.dispatch(
+      queueSlice.actions.setSnapshot({
+        entries: [entry({ id: 'xb2', bookId: 'book-B' })],
+        paused: false,
+      }),
+    );
+    await flushMicro();
+    /* The activeStream gate holds — no second SSE. */
+    expect(streamGenerationMock).not.toHaveBeenCalled();
+  });
+
+  it('DELETEs the cross-book entry when its SSE finishes (idle → clearActiveStream)', async () => {
+    const store = makeStore();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
+    store.dispatch(
+      chaptersSlice.actions.setChapters([
+        { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
+      ] as never),
+    );
+    store.dispatch(
+      queueSlice.actions.setSnapshot({
+        entries: [entry({ id: 'xb3', bookId: 'book-B', chapterId: 7 })],
+        paused: false,
+      }),
+    );
+    await flushMicro();
+    /* Cross-book stream opened + activeStream seeded by the runner. */
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    expect(store.getState().chapters.activeStream?.bookId).toBe('book-B');
+
+    /* SSE drains — runner closes → clearActiveStream. Dispatcher then DELETEs
+       the entry it was tracking (inFlightEntryId = 'xb3'). */
+    fetchMock.mockResolvedValueOnce(jsonResp({ entries: [], paused: false }));
+    store.dispatch(chaptersSlice.actions.clearActiveStream());
+    await flushMicro();
+    await flushMicro();
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/xb3', { method: 'DELETE' });
   });
 
   it('does not dispatch while an SSE handle is open (activeStream non-null)', async () => {

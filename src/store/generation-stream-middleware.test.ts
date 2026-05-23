@@ -14,6 +14,7 @@ import { castSlice } from './cast-slice';
 import { revisionsSlice } from './revisions-slice';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { generationStreamMiddleware } from './generation-stream-middleware';
+import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
 import type { Chapter, GenerationTick, Character } from '../lib/types';
 
 const streamGenerationMock = vi.fn();
@@ -34,7 +35,12 @@ vi.mock('../lib/api', () => ({
 }));
 
 function makeStore() {
-  return configureStore({
+  /* The runner needs the store (dispatch/getState), which only exists after
+     configureStore returns — so the middleware gets a lazy accessor and we
+     bind the runner right after. One runner per store keeps tests isolated. */
+  let runner: StreamRunner | null = null;
+  const getRunner = (): StreamRunner => runner!;
+  const store = configureStore({
     reducer: {
       ui: uiSlice.reducer,
       chapters: chaptersSlice.reducer,
@@ -44,8 +50,10 @@ function makeStore() {
       revisions: revisionsSlice.reducer,
       analysis: analysisSlice.reducer,
     },
-    middleware: (gd) => gd().concat(generationStreamMiddleware),
+    middleware: (gd) => gd().concat(generationStreamMiddleware(getRunner)),
   });
+  runner = createStreamRunner(store);
+  return store;
 }
 
 const ch = (id: number, overrides: Partial<Chapter> = {}): Chapter => ({
