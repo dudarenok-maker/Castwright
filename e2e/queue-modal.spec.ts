@@ -16,11 +16,17 @@
  *     reflects "Paused" in the modal header.
  *   - Generate view "View queue" button opens the modal as an alternate
  *     entry point.
+ *   - Cross-book entries (Should #6): two books' entries render grouped in
+ *     the modal while viewing one book, and the OTHER book's entry can be
+ *     cancelled without navigating to it.
  *
  * Not covered (out of scope for this spec; covered elsewhere):
  *   - SSE reconnect during generation — pinned by api-stream-reconnect.test.ts.
- *   - Dispatcher drain semantics — pinned by queue-dispatcher-middleware.test.ts.
- *   - Cross-book ordering across two real books — same dispatcher tests. */
+ *   - Dispatcher drain semantics (incl. the cross-book open → idle → DELETE
+ *     round-trip) — pinned by queue-dispatcher-middleware.test.ts. Driving a
+ *     real cross-book SSE drain in mock mode is intentionally avoided here
+ *     (the mock stream reads the viewed book's chapters); the dispatcher unit
+ *     tests pin that path deterministically. */
 
 import { test, expect, type Route } from '@playwright/test';
 
@@ -37,8 +43,16 @@ interface QueueEntryShape {
 
 /* Helper: install a per-test in-memory queue + intercept every /api/queue
    route against it. Returns a `state` ref so the spec can mutate the
-   fixture mid-test if needed. */
-function installQueueRoutes(entries: QueueEntryShape[], initialPaused = false) {
+   fixture mid-test if needed.
+
+   Defaults to PAUSED. Since Should #6 lifted the same-book gate, the queue
+   dispatcher drains any UNPAUSED queue with work the moment the snapshot
+   loads — regardless of which view the user is on. These specs inspect the
+   queue UI (chip count, grouping, cancel), not the drain, so a paused
+   fixture keeps the injected entries put. Drain semantics (incl. the
+   cross-book open → idle → DELETE round-trip) are pinned by
+   queue-dispatcher-middleware.test.ts. Pass `false` to exercise draining. */
+function installQueueRoutes(entries: QueueEntryShape[], initialPaused = true) {
   const state = { entries: [...entries], paused: initialPaused };
 
   const respondSnapshot = (route: Route): Promise<void> =>
@@ -133,6 +147,64 @@ test.describe('queue modal (plan 102)', () => {
     await cancelBtn.click();
     /* After the DELETE round-trip the modal re-renders empty. */
     await expect(page.getByText(/Empty/i).first()).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('cross-book entries render grouped and the other book’s entry cancels while viewing one book', async ({
+    page,
+  }) => {
+    /* Should #6 — two books' worth of queue entries injected via page.route.
+       The user is viewing Solway Bay (sb); a Northern Star (ns) entry is also
+       queued. Both render in the modal (grouped by book), and the ns entry —
+       a DIFFERENT book than the one on screen — can be cancelled without
+       navigating to it. This is the cross-book queue surface; the dispatcher
+       unit tests cover the actual cross-book drain. */
+    const { state, respondSnapshot } = installQueueRoutes([
+      {
+        id: 'sb-c1',
+        bookId: 'sb',
+        chapterId: 1,
+        scope: 'this',
+        addedAt: new Date().toISOString(),
+        status: 'queued',
+        order: 0,
+      },
+      {
+        id: 'ns-c3',
+        bookId: 'ns',
+        chapterId: 3,
+        scope: 'this',
+        addedAt: new Date().toISOString(),
+        status: 'queued',
+        order: 1,
+      },
+    ]);
+    await page.route('**/api/queue', respondSnapshot);
+    await page.route('**/api/queue/*', (route) => {
+      if (route.request().method() === 'DELETE') {
+        const id = new URL(route.request().url()).pathname.split('/').pop();
+        state.entries = state.entries.filter((e) => e.id !== id);
+      }
+      void respondSnapshot(route);
+    });
+
+    await page.goto('/#/books/sb/listen');
+    const chip = page.getByTestId('topbar-queue-chip');
+    await chip.waitFor({ state: 'visible', timeout: 10_000 });
+    await expect(chip).toContainText('Queue · 2');
+    await chip.click();
+    await expect(page.getByRole('dialog', { name: /Generation queue/i })).toBeVisible({
+      timeout: 5_000,
+    });
+
+    /* Both books' entries render (grouped by book in the modal). */
+    await expect(page.getByTestId('queue-entry-sb-c1')).toBeVisible();
+    await expect(page.getByTestId('queue-entry-ns-c3')).toBeVisible();
+
+    /* Cancel the OTHER book's entry (ns) while still on sb's listen view. */
+    await page.getByTestId('queue-entry-ns-c3-cancel').click();
+    await expect(page.getByTestId('queue-entry-ns-c3')).toHaveCount(0, { timeout: 5_000 });
+    /* The viewed book's entry is untouched. */
+    await expect(page.getByTestId('queue-entry-sb-c1')).toBeVisible();
   });
 
   test('Generate view "View queue" button opens the modal', async ({ page }) => {
