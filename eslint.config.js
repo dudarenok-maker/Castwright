@@ -32,6 +32,10 @@ export default tseslint.config(
     ignores: [
       'dist/',
       'node_modules/',
+      // Claude Code harness dir: settings JSON (not linted) + transient agent
+      // worktrees that carry their own built `dist/` output. Without this, lint
+      // walks into `.claude/worktrees/<agent>/server/dist/` and floods errors.
+      '.claude/',
       'server/dist/',
       'server/tts-sidecar/.venv/',
       'server/handoff/',
