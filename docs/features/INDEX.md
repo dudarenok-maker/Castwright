@@ -93,6 +93,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [31 — Sticky generation across navigation](31-sticky-generation.md) — Generation survives every navigation except an explicit Stop or queue drain; local-analyzer triggers prompt for pause-and-analyse when a run is alive.
 - [32 — Sticky analysis across navigation](32-sticky-analysis.md) — Analysis survives every navigation except `/pause` or `fresh:true` displacement; server-owned job + multi-subscriber catch-up replay; `AnalysisPill` in the top-bar mirrors the generation pill.
 - [35 — Per-chapter engine drift detection](35-engine-drift-detection.md) — Stamp each rendered chapter with its TTS engine; surface drift when the project's active engine differs.
+- [107 — Within-chapter sentence parallelism](107-within-chapter-parallelism.md) — Bounded-concurrency dispatch of a chapter's sentence groups in `synthesiseChapter`, width = `gpuSemaphore.maxConcurrency` (default 1 ⇒ byte-identical to the old serial loop). Results collected by `group.index` and concatenated in narrative order; sample-rate anchor fixed before dispatch (lowest-index group / title beat), not first-to-complete; `onGroupStart` heartbeats still reset the 30 s stall watchdog. Stacks on plan 87, references plan 70d.
 ### H. Playback & listen
 
 - [19 — Listener preview](19-preview-listener.md) — Listener-POV full-screen preview.
