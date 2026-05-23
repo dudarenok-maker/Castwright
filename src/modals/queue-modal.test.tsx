@@ -207,6 +207,63 @@ describe('QueueModal', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('drag-to-reorder dispatches reorder thunk with the new global order (BACKLOG Could #40)', async () => {
+    renderModal([
+      entry({ id: 'a1', chapterId: 1, order: 0 }),
+      entry({ id: 'a2', chapterId: 2, order: 1 }),
+      entry({ id: 'a3', chapterId: 3, order: 2 }),
+    ]);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entries: [], paused: false }),
+    });
+
+    const handle = screen.getByTestId('queue-entry-a1-drag');
+    const targetRow = screen.getByTestId('queue-entry-a3');
+
+    /* jsdom's elementFromPoint returns null; stub it to return the row
+       we want the pointer to be "over" during the pointermove. */
+    const originalEFP = document.elementFromPoint;
+    document.elementFromPoint = (): Element => targetRow;
+
+    /* Separate act blocks so React commits between events — the
+       window-level pointermove listener is registered by a useEffect
+       that runs AFTER pointerdown's setDrag commit. */
+    await act(async () => {
+      fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1 });
+    });
+    await act(async () => {
+      /* jsdom doesn't ship PointerEvent — fake it with a plain Event +
+         the two properties our handler reads (clientX/Y). */
+      const moveEv = new Event('pointermove') as Event & { clientX: number; clientY: number };
+      moveEv.clientX = 100;
+      moveEv.clientY = 100;
+      window.dispatchEvent(moveEv);
+    });
+    await act(async () => {
+      window.dispatchEvent(new Event('pointerup'));
+    });
+
+    document.elementFromPoint = originalEFP;
+
+    const reorderCall = fetchMock.mock.calls.find((c) => c[0] === '/api/queue/reorder');
+    expect(reorderCall).toBeDefined();
+    /* a1 was dragged to a3's slot — within Book A the new order is
+       a2, a3, a1 (a1 spliced into a3's index, which was 2). */
+    expect(reorderCall![1].body).toContain('"order":["a2","a3","a1"]');
+  });
+
+  it('drag handle is absent on the in-flight pinned row (no drop target either)', () => {
+    renderModal([
+      entry({ id: 'a1', status: 'in_progress', order: 0 }),
+      entry({ id: 'a2', chapterId: 2, order: 1 }),
+    ]);
+    /* a1 (in-flight) has no drag handle; a2 (queued) does. */
+    expect(screen.queryByTestId('queue-entry-a1-drag')).not.toBeInTheDocument();
+    expect(screen.getByTestId('queue-entry-a2-drag')).toBeInTheDocument();
+  });
+
   it('dispatches loadQueue on open (cross-tab freshness)', async () => {
     renderModal([]);
     /* The mount-time loadQueue fires; assert via fetchMock since the
