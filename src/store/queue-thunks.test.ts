@@ -8,9 +8,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { queueSlice, type QueueEntry } from './queue-slice';
 import { notificationsSlice } from './notifications-slice';
+import { chaptersSlice } from './chapters-slice';
 import {
   cancelQueueEntry,
   enqueueQueueEntries,
+  haltActiveGeneration,
   loadQueue,
   reorderQueue,
   setQueuePaused,
@@ -176,5 +178,45 @@ describe('cancelQueueEntry', () => {
     expect(toasts).toHaveLength(1);
     expect(toasts[0].kind).toBe('warn');
     expect(toasts[0].message).toContain('Pause the queue');
+  });
+});
+
+describe('haltActiveGeneration (plan 102 Should #5 — local-analyzer GPU halt)', () => {
+  it('dispatches the requestStreamHalt one-shot AND pauses the queue', async () => {
+    fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: true }));
+    /* A recording middleware captures every dispatched action type — including
+       the thunk-internal requestStreamHalt (a dispatch spy on store.dispatch
+       wouldn't, since the thunk closes over the pre-spy dispatch). */
+    const recorded: string[] = [];
+    const recorder =
+      () =>
+      (next: (a: unknown) => unknown) =>
+      (action: unknown): unknown => {
+        if (action && typeof action === 'object' && 'type' in action) {
+          recorded.push((action as { type: string }).type);
+        }
+        return next(action);
+      };
+    const store = configureStore({
+      reducer: {
+        queue: queueSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        chapters: chaptersSlice.reducer,
+      },
+      middleware: (gd) => gd().concat(recorder),
+    });
+
+    await (store.dispatch as unknown as TestDispatch)(haltActiveGeneration());
+
+    /* (a) requestStreamHalt — the generation-stream middleware observes this to
+       close the open SSE handle immediately (free the GPU within the chapter). */
+    expect(recorded).toContain('chapters/requestStreamHalt');
+    /* (b) the queue is paused so the dispatcher won't re-drain while the
+       analyzer owns the GPU. */
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/queue/pause',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ paused: true }) }),
+    );
+    expect(store.getState().queue.paused).toBe(true);
   });
 });

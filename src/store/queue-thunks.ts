@@ -17,6 +17,7 @@
 import type { AppDispatch } from './index';
 import { queueActions, type QueueEntry, type QueueScope } from './queue-slice';
 import { notificationsActions } from './notifications-slice';
+import { chaptersActions } from './chapters-slice';
 
 export interface EnqueueInput {
   /** Frontend-minted unique id. Deterministic for tests; in production we
@@ -91,6 +92,27 @@ export function reorderQueue(desiredOrder: string[]) {
     const snapshot = await readSnapshot(res);
     dispatch(queueActions.setSnapshot(snapshot));
     return snapshot;
+  };
+}
+
+/** Halt the in-flight generation NOW and stop the drain — used by the
+    local-analyzer guard when a local analysis needs the GPU that TTS is
+    holding. Two parts:
+      (a) `requestStreamHalt` — observed by the generation-stream middleware,
+          which POSTs /pause and closes the open SSE handle immediately
+          (freeing the GPU within the chapter, not at the next boundary); and
+      (b) `setQueuePaused(true)` — stops the dispatcher from draining the next
+          entry and keeps reconcile from auto-reopening once the analysis owns
+          the GPU.
+    Replaces the old `chaptersActions.setPaused(true)` single-signal path
+    (plan 102 Should #5 removed `chapters.paused`). The user resumes via the
+    queue modal's Resume control after the analysis completes. */
+export function haltActiveGeneration() {
+  return async (dispatch: AppDispatch): Promise<void> => {
+    dispatch(chaptersActions.requestStreamHalt());
+    await dispatch(setQueuePaused(true)).catch((e: unknown) => {
+      console.warn('[queue] haltActiveGeneration: pause failed', e);
+    });
   };
 }
 

@@ -102,7 +102,6 @@ interface Props {
   title?: string | null;
   bookId: string;
   modelKey: TtsModelKey;
-  setPaused: (p: boolean) => void;
   onRegenerate: (ch: Chapter) => void;
   /** Header "Regenerate" entry-point shown when every chapter is done.
       Defaults the modal to scope='forward' from chapter 1, i.e. the whole

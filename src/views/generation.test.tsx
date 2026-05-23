@@ -208,7 +208,6 @@ function renderView() {
         title="the Coalfall Commission"
         bookId="b1"
         modelKey="coqui-xtts-v2"
-        setPaused={() => {}}
         onRegenerate={() => {}}
         onRegenerateBook={() => {}}
         onRegenerateCharacterInChapter={() => {}}
@@ -302,9 +301,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
           paused
           title="the Coalfall Commission"
           bookId="b1"
-          modelKey="coqui-xtts-v2"
-          setPaused={() => {}}
-          onRegenerate={() => {}}
+          modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
@@ -368,9 +365,7 @@ describe('GenerationView — early-tick render guards (regression)', () => {
           paused
           title="the Coalfall Commission"
           bookId="b1"
-          modelKey="coqui-xtts-v2"
-          setPaused={() => {}}
-          onRegenerate={() => {}}
+          modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
@@ -482,9 +477,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
           paused
           title="the Coalfall Commission"
           bookId="b1"
-          modelKey="coqui-xtts-v2"
-          setPaused={() => {}}
-          onRegenerate={() => {}}
+          modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
@@ -579,9 +572,7 @@ describe('GenerationView — heartbeat / stalled state', () => {
           paused={false}
           title="the Coalfall Commission"
           bookId="b1"
-          modelKey="coqui-xtts-v2"
-          setPaused={() => {}}
-          onRegenerate={() => {}}
+          modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
@@ -640,9 +631,7 @@ describe('GenerationView — activity sidebar', () => {
           paused
           title="the Coalfall Commission"
           bookId="b1"
-          modelKey="coqui-xtts-v2"
-          setPaused={() => {}}
-          onRegenerate={() => {}}
+          modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
@@ -699,9 +688,7 @@ describe('GenerationView — header action once the run is complete', () => {
           paused={false}
           title="the Coalfall Commission"
           bookId="b1"
-          modelKey="coqui-xtts-v2"
-          setPaused={() => {}}
-          onRegenerate={() => {}}
+          modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={onRegenerateBook}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
@@ -752,9 +739,7 @@ describe('GenerationView — header action once the run is complete', () => {
           paused
           title="the Coalfall Commission"
           bookId="b1"
-          modelKey="coqui-xtts-v2"
-          setPaused={() => {}}
-          onRegenerate={() => {}}
+          modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
@@ -777,14 +762,13 @@ describe('generationStreamMiddleware — Pause/Resume regenerate loop (regressio
     streamGenerationMock.mockClear();
   });
 
-  it('opens the SSE on regenerateChapter and drains pendingRegen immediately', () => {
-    /* The bug: pause aborts the SSE before the server's idle tick arrives,
-       so pendingRegen sticks. Resume reopens the SSE with the same
-       force:true spec and wipes the in-flight chapter — every Pause→Resume
-       is a fresh force-regen of the original target set. The fix is to
-       dispatch consumePendingRegen immediately after the middleware opens
-       the SSE. This regression used to live in the Generate view's effect;
-       it now lives in `generationStreamMiddleware`. */
+  it('opens the SSE on regenerateChapter with the regen spec (chapterIds + force)', () => {
+    /* The regen path: regenerateChapter → the generation-stream middleware
+       computes the spec (chapterIds + force:true) from the action and hands it
+       straight to the shared runner, which opens the SSE. Plan 102 Should #5
+       moved this off the slice (the old chapters.pendingRegen field) into
+       middleware-local state, so the spec is drained the instant the runner
+       owns it and a Pause→Resume can't replay a stale force-regen. */
     let runner: StreamRunner | null = null;
     const getRunner = (): StreamRunner => runner!;
     const store = configureStore({
@@ -821,9 +805,11 @@ describe('generationStreamMiddleware — Pause/Resume regenerate loop (regressio
     };
     expect(callArgs?.chapterIds).toEqual([1]);
     expect(callArgs?.force).toBe(true);
-
-    /* And after the open, the spec is drained so a later Resume can't replay it. */
-    expect(store.getState().chapters.pendingRegen).toBe(null);
+    /* The spec is drained the instant the runner owns it (middleware-local
+       pendingSpec → null) so a later resume can't replay it — no longer an
+       observable slice field after plan 102 Should #5; the single
+       streamGeneration call above is the proof the open used the regen spec
+       and didn't re-fire. */
   });
 });
 
@@ -974,9 +960,7 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
           paused
           title="Drift Fixture"
           bookId="b1"
-          modelKey={modelKey}
-          setPaused={() => {}}
-          onRegenerate={() => {}}
+          modelKey={modelKey}          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
@@ -1092,9 +1076,7 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
           paused
           title="Drift Fixture"
           bookId="b1"
-          modelKey="kokoro-v1"
-          setPaused={() => {}}
-          onRegenerate={() => {}}
+          modelKey="kokoro-v1"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
@@ -1218,10 +1200,11 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
     fireEvent.click(screen.getByRole('button', { name: /^Regenerate all$/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
 
-    /* Dialog gone, no regenerate dispatched. */
+    /* Dialog gone, no regenerate dispatched — no chapter row flipped to
+       in_progress (the regen reducers' observable side-effect; the old
+       pendingRegen / regenEpoch fields were removed in plan 102 Should #5). */
     expect(screen.queryByText(/Regenerate 1 chapter with Kokoro v1\?/)).not.toBeInTheDocument();
-    expect(store.getState().chapters.pendingRegen).toBe(null);
-    expect(store.getState().chapters.regenEpoch).toBe(0);
+    expect(store.getState().chapters.chapters.every((c) => c.state !== 'in_progress')).toBe(true);
   });
 
   it('mixed source engines render side-by-side in the dialog body', () => {
@@ -1368,9 +1351,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
           paused
           title="the Coalfall Commission"
           bookId="b1"
-          modelKey="coqui-xtts-v2"
-          setPaused={() => {}}
-          onRegenerate={() => {}}
+          modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
@@ -1516,10 +1497,10 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(await screen.findByText(/Pause audio generation to analyse\?/i)).toBeInTheDocument();
     expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
 
-    /* Confirm — should dispatch setPaused(true) and only THEN kick off
-       the subset analysis call. */
+    /* Confirm — should halt the active generation (haltActiveGeneration:
+       requestStreamHalt + setQueuePaused, unit-tested in queue-thunks.test.ts)
+       and only THEN kick off the subset analysis call. */
     fireEvent.click(screen.getByRole('button', { name: /Pause and analyse/i }));
-    expect(store.getState().chapters.paused).toBe(true);
     await screen.findByRole('button', { name: /Cancel/i }).catch(() => null);
     expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
   });
