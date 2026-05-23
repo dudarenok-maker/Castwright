@@ -78,7 +78,7 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
 - _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
 
-### 5. Merge journal for deterministic alias un-link
+### 3. Merge journal for deterministic alias un-link
 
 Source: plan 95 ship (2026-05-22) — Out of scope. PR [#142](https://github.com/dudarenok-maker/AudioBook-Generator/pull/142) shipped editable cast aliases with a Reattribute Lines modal that uses the preserved Phase-0a `chapterCast` as a lineage proxy to narrow the user's manual reattribution from "whole book" to "these N chapters." It works, but it's not deterministic — a chapter shows up if the alias was in its Phase-0a roster, even when the merge that put the alias on the source character happened mid-book and didn't actually rewrite any chapter-1 sentences. The user has to skim and reassign.
 
@@ -88,17 +88,7 @@ Source: plan 95 ship (2026-05-22) — Out of scope. PR [#142](https://github.com
 - _Migration:_ books that pre-date the journal still get the `chapterCast` fallback (today's behaviour); only newly-merged ones benefit. No backfill — the lineage was lost at the old merges and there's no way to reconstruct it.
 - _Benefit (user):_ reattribute modal becomes a precise checklist instead of a scoped review — every row the user sees is provably their merge's work, no third-party sentences to skip over. Big quality-of-life win for series-2-into-1 cleanups where merges pile up.
 
-### 6. Cross-book queue dispatcher (plan 102 follow-up — closes bug #2)
-
-Source: plan 102 ship (2026-05-23) — Out of scope for the v1 ship. The queue dispatcher at `src/store/queue-dispatcher-middleware.ts:96` gates on `chapters.currentBookId === head.bookId` before firing the regenerate that the existing `generation-stream-middleware` translates into an SSE open. Queue entries for other books sit waiting until the user navigates to that book. Plan-102 bug #2 (cross-book voice-drift races) is half-fixed by Waves 4a + 4b: the queue serialises the entries so they no longer fight, but the dispatcher only acts on entries for the currently-loaded book.
-
-- _What:_ Lift the same-book gate. The dispatcher calls `api.streamGeneration` directly for cross-book entries (reusing the existing fetch-SSE pipeline; no duplication), tracks the cancel + cross-book `activeStream` snapshot in middleware-local state, and tears down on idle. The slice's `applyGenerationTick` reducer already has a cross-book guard at `src/store/chapters-slice.ts:309` that skips per-chapter mutations when the tick's bookId differs from the slice's loaded book — so ticks from the cross-book stream won't clobber the user's currently-viewed book's rows. Per-chapter detail for the cross-book entry stays absent until the user navigates to that book and the slice hydrates fresh from disk (`hydrateFromBookState`). The global top-bar pill keeps moving via the cross-book `activeStream` snapshot regardless of which book is viewed.
-- _Acceptance:_ With Books A + B both having queued work and the user viewing Book A: enqueue A.ch5 → drains. While A.ch5 is mid-synth, enqueue B.ch3 → enters the queue. A.ch5 completes → dispatcher fires generation for B.ch3 WITHOUT the user navigating. Top-bar pill correctly reflects B.ch3's progress. Voice-drift fix from `DriftReportModal` covering 3 chapters across Books A + B → all 3 drain serially regardless of which book is viewed. New Vitest pin in `queue-dispatcher-middleware.test.ts` for the cross-book branch (mocks `api.streamGeneration` and asserts the tick → DELETE round-trip on idle). Playwright spec extension in `e2e/queue-modal.spec.ts` driving a cross-book scenario via `page.route` injecting two books' worth of queue entries.
-- _Key files:_ `src/store/queue-dispatcher-middleware.ts` (lift the same-book gate; branch to a `streamCrossBook` helper that calls `api.streamGeneration` and tracks the cancel + sets `chapters.activeStream` via `chaptersActions.setActiveStream`); `src/lib/api.ts` (already exports `streamGeneration` — no contract change); `src/store/chapters-slice.ts` (cross-book guard at `applyGenerationTick` already exists — verify it still skips correctly when called from the dispatcher's onTick); `src/store/queue-dispatcher-middleware.test.ts` (new cross-book cases); `e2e/queue-modal.spec.ts` (cross-book scenario).
-- _Depends on:_ plan 102 (shipped).
-- _Benefit (user / architectural):_ closes bug #2 from plan 102. The user can mix-and-match cross-book ordering — "regenerate ch5 of Book A, then ch3 of Book B, then ch7 of Book A" — and the dispatcher honours the explicit order without requiring per-book navigation. Architecturally, decouples generation scheduling from the slice's loaded-book state, which is the seam future "Schedule overnight" / "Pause this book, prioritise that one" affordances will plug into.
-
-### 7. Strip chapters-slice generation control fields (plan 102 cleanup)
+### 4. Strip chapters-slice generation control fields (plan 102 cleanup)
 
 Source: plan 102 ship (2026-05-23) — Out of scope for the v1 ship. The dispatcher relies on the existing `generation-stream-middleware`'s `pendingRegen` consumption path — when the dispatcher fires `chaptersActions.regenerateChapter`, the slice sets `pendingRegen` + bumps `regenEpoch`, and the existing middleware reconciles by opening the SSE. Stripping those fields prematurely would break the slice→middleware handshake the dispatcher relies on.
 
@@ -345,6 +335,16 @@ Source: net-new (2026-05-23). Surfaced during the plan-103 CI cost audit.
 - _Key files:_ `.github/workflows/regen-visual-baselines.yml` (collapse `strategy.matrix.project` into a sequential step loop; consolidate the artifact upload).
 - _Depends on:_ none.
 - _Benefit (technical):_ ~60 billed min/month freed on regen days; tidier workflow.
+
+### 38. Pre-seed pending-revision stubs for cross-book character regens
+
+Source: plan 102 Should #6 ship (2026-05-23) — known limitation called out in the cross-book dispatcher PR. When the dispatcher opens a CROSS-book entry whose scope is `character`, it does not enqueue a pending-revision stub the way the same-book path does (`generation-stream-middleware`'s regen observer keys off the `regenerateCharacter` action, which the cross-book path deliberately does not dispatch — it would mutate the viewed book's rows). The revision still renders once the user opens that book and its revisions hydrate from disk; only the eager in-session stub is missing.
+
+- _What:_ When the dispatcher's cross-book branch opens a `character`-scoped entry, enqueue the pending-revision stub directly from the queue entry's `{ bookId, chapterId, characterId }` rather than from the viewed book's `Chapter`/`Character` objects (which aren't in the slice while a different book is viewed). Requires either teaching `buildPendingRevisionStub` to accept the minimal id triple, or hydrating the other book's chapter/character names from the library/cast caches.
+- _Acceptance:_ Enqueue a character-scoped regen for Book B while viewing Book A; without navigating to B, a pending revision stub for that (chapter, character) exists in `revisions.pending` (playable=false), and flips to playable on the cross-book stream's `chapter_complete`.
+- _Key files:_ `src/store/queue-dispatcher-middleware.ts` (cross-book branch), `src/lib/build-pending-revision.ts` (accept minimal input), `src/store/revisions-slice.ts`.
+- _Depends on:_ Should #6 (cross-book dispatcher) shipped.
+- _Benefit (user):_ the diff player's pending-revision list is complete for cross-book character regens without requiring a navigate-to-book round-trip first. Low priority — the revision is recoverable on book open today.
 
 ---
 
