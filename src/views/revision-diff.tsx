@@ -75,7 +75,6 @@ export function RevisionDiffPlayer({
           if (!cancelled) setAudioA(res);
         })
         .catch((err) => {
-          /* eslint-disable-next-line no-console */
           console.warn('[revision-diff] previous audio fetch failed:', err);
         });
     }
@@ -182,7 +181,6 @@ export function RevisionDiffPlayer({
     if (version === 'B' && !playable) return;
     const fn = version === 'A' ? ab.playA : ab.playB;
     fn(opts).catch((err) => {
-      /* eslint-disable-next-line no-console */
       console.warn('[revision-diff] play failed:', err);
     });
   }

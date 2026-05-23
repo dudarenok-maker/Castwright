@@ -279,11 +279,25 @@ describe('parseLoudnormSecondPassJson', () => {
 });
 
 describe('isSecondPassMeasurementUseable', () => {
-  function fixture(overrides: Partial<{ output_i: number; output_lra: number; output_tp: number; output_thresh: number }>) {
+  function fixture(
+    overrides: Partial<{
+      output_i: number;
+      output_lra: number;
+      output_tp: number;
+      output_thresh: number;
+    }>,
+  ) {
     return {
-      input_i: -22.5, input_lra: 9.4, input_tp: -2.1, input_thresh: -32.5,
-      output_i: -16, output_lra: 8, output_tp: -1.5, output_thresh: -26,
-      normalization_type: 'linear', target_offset: 6.45,
+      input_i: -22.5,
+      input_lra: 9.4,
+      input_tp: -2.1,
+      input_thresh: -32.5,
+      output_i: -16,
+      output_lra: 8,
+      output_tp: -1.5,
+      output_thresh: -26,
+      normalization_type: 'linear',
+      target_offset: 6.45,
       ...overrides,
     };
   }
@@ -366,9 +380,7 @@ describeIfFfmpeg('encodePcmToAudio with two-pass loudnorm (real ffmpeg)', () => 
        to -16 than the baseline. We allow a generous ±3 LU window for the
        normalised path — synthetic sine-pair material with a near-zero LRA
        confuses the loudnorm gain estimator more than real speech does. */
-    expect(Math.abs(normalisedLoudness - -16)).toBeLessThan(
-      Math.abs(baselineLoudness - -16),
-    );
+    expect(Math.abs(normalisedLoudness - -16)).toBeLessThan(Math.abs(baselineLoudness - -16));
     expect(Math.abs(normalisedLoudness - -16)).toBeLessThan(3);
   }, 60_000);
 
@@ -486,7 +498,6 @@ describeIfFfmpeg('encodePcmToAudio with single-pass loudnorm (real ffmpeg)', () 
 });
 
 if (!ffmpegPresent) {
-  // eslint-disable-next-line no-console
   console.warn(
     '[loudnorm.test.ts] ffmpeg not found on PATH — skipping loudnorm integration tests. ' +
       'Install: winget install Gyan.FFmpeg',

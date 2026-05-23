@@ -330,7 +330,10 @@ describeIfTools('buildM4b', () => {
        use here). Surface every key on failure so a future ffmpeg
        upgrade that renames the key surfaces clearly. */
     const descKey = seen.find((k) => k === 'description' || k === 'desc');
-    expect(descKey, `expected description/desc in format tags; got: ${seen.join(', ')}`).toBeDefined();
+    expect(
+      descKey,
+      `expected description/desc in format tags; got: ${seen.join(', ')}`,
+    ).toBeDefined();
     const descValue = tags[descKey as keyof typeof tags] as string;
     expect(descValue).toBe(longDesc);
   }, 30_000);
@@ -385,6 +388,5 @@ describeIfTools('buildM4b', () => {
 });
 
 if (!toolsPresent) {
-  // eslint-disable-next-line no-console
   console.warn('[build-m4b.test.ts] ffmpeg/ffprobe missing — skipping M4B integration tests.');
 }

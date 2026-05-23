@@ -141,8 +141,14 @@ describe('ListenView — top section reads from bookMeta', () => {
   it('paints the cover with the book gradient passed in props', () => {
     renderView({ gradient: ['#abcdef', '#123456'] });
     const cover = screen.getByTestId('listen-cover-art');
-    expect((cover as HTMLElement).style.background).toContain('#abcdef');
-    expect((cover as HTMLElement).style.background).toContain('#123456');
+    /* jsdom 29 canonicalises hex colours to rgb() in the CSSOM (and in the
+       serialised `style` attribute) — #abcdef → rgb(171, 205, 239),
+       #123456 → rgb(18, 52, 86) — so we assert against the rgb() forms the
+       browser also computes rather than the source hex literals. */
+    const background = (cover as HTMLElement).style.background;
+    expect(background).toContain('linear-gradient(135deg');
+    expect(background).toContain('rgb(171, 205, 239)'); // #abcdef
+    expect(background).toContain('rgb(18, 52, 86)'); // #123456
   });
 
   it('renders a loading shell when bookMeta is null', () => {

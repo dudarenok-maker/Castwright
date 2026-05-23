@@ -264,7 +264,6 @@ describeIf('applyId3v24Tags', () => {
 });
 
 if (!ffmpegPresent || !ffprobePresent) {
-  // eslint-disable-next-line no-console
   console.warn(
     '[id3-tags.test.ts] ffmpeg/ffprobe missing — skipping ID3 round-trip tests. ' +
       'Install: winget install Gyan.FFmpeg',

@@ -30,11 +30,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
-import {
-  bookStateAudioFormat,
-  findBookByBookId,
-  type BookStateJson,
-} from '../workspace/scan.js';
+import { bookStateAudioFormat, findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
@@ -308,8 +304,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      covers the regenerate-after-speaker-edit case that 70c missed. */
   const editsPath = manuscriptEditsJsonPath(bookDir);
   const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath);
-  const hasEdits =
-    Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0;
+  const hasEdits = Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0;
   if (hasEdits) {
     await rebuildCacheFromEdits(state.manuscriptId, editsPath).catch((e) => {
       console.error('[generation] rebuild cache from edits failed', e);
@@ -358,9 +353,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const existingForResume = inFlightByBook.get(bookId);
   const effectiveQueueEntryId = existingForResume?.queueEntryId ?? queueEntryId;
   const onDiskCompleted = state.chapters
-    .filter(
-      (c) => !c.excluded && !targetIdSet.has(c.id) && chapterAudioExists(audioRoot, c.slug),
-    )
+    .filter((c) => !c.excluded && !targetIdSet.has(c.id) && chapterAudioExists(audioRoot, c.slug))
     .map((c) => c.id);
   send({
     type: 'resume_from',
@@ -691,7 +684,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           } catch (err) {
             /* Non-fatal — playback works without the sidecar; Wave 2's
                report-card UI degrades to "no data" gracefully. Log + carry on. */
-            /* eslint-disable-next-line no-console */
+
             console.warn(
               `[generation] failed to write loudness sidecar for ${chapter.slug}: ${
                 (err as Error).message
@@ -760,7 +753,6 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       try {
         await writeChapterPeaksFile(result.pcm, result.sampleRate, peaksPath);
       } catch (err) {
-        /* eslint-disable-next-line no-console */
         console.warn(
           `[generation] failed to write peaks for ${chapter.slug}: ${(err as Error).message}`,
         );
@@ -952,4 +944,3 @@ generationRouter.post('/:bookId/generation/pause', (req: Request, res: Response)
   }
   res.status(200).json({ ok: true, paused: job != null });
 });
-

@@ -44,7 +44,6 @@ export async function preserveExistingAsPrevious(
        the live pair is left untouched. */
     await renameWithRetry(existing.path, previousAudio);
   } catch (err) {
-    /* eslint-disable-next-line no-console */
     console.warn(
       `[preserve-previous-audio] audio rename failed for ${slug}: ${(err as Error).message}`,
     );
@@ -59,7 +58,7 @@ export async function preserveExistingAsPrevious(
          off the audio file alone (no per-segment seek for the preserved
          take). Log and continue. The sibling fsck will pair these up on
          next book open. */
-      /* eslint-disable-next-line no-console */
+
       console.warn(
         `[preserve-previous-audio] segments rename failed for ${slug}: ${(err as Error).message}`,
       );
