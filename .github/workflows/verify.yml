@@ -97,35 +97,12 @@ jobs:
             echo "scope $k=${!k}"
           done
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          # Node 24 — matches the dev box (see plan 81 / wave 1). The npm
-          # cache below speeds the cold (cache-miss) `npm ci` path; the
-          # node_modules cache below skips `npm ci` entirely on a warm hit.
-          node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            server/package-lock.json
-
-      # Cache the UNPACKED node_modules (root + server) keyed on both
-      # lockfiles + Node major. On a hit the install step below skips
-      # entirely (npm ci ~40 s → 0). A lockfile change busts the key and
-      # forces a fresh install. This is the always-paid setup tax shrunk for
-      # every run, including multi-scope PRs that run every leg.
-      - name: Cache node_modules
-        id: node-modules-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            node_modules
-            server/node_modules
-          key: ${{ runner.os }}-node24-modules-${{ hashFiles('package-lock.json', 'server/package-lock.json') }}
-
-      - name: Install deps (skip on cache hit)
-        if: steps.node-modules-cache.outputs.cache-hit != 'true'
-        run: npm ci && npm --prefix server ci
+      # Node 24 (matches the dev box, plan 81 / wave 1) + npm download cache +
+      # node_modules cache + conditional `npm ci`. Extracted to a composite so
+      # a Node-major bump is a one-file edit shared with cross-os.yml (plan
+      # 106). MUST run after Checkout — the action file only exists post-clone.
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
 
       - name: Lint
         if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.server == 'true' || steps.changes.outputs.scripts == 'true' || steps.changes.outputs.shared == 'true'

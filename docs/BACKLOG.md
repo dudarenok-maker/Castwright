@@ -346,26 +346,6 @@ Source: net-new (2026-05-23). Surfaced during the plan-103 CI cost audit.
 - _Depends on:_ none.
 - _Benefit (technical):_ ~60 billed min/month freed on regen days; tidier workflow.
 
-### 38. Composite setup action to DRY `verify.yml` ↔ `cross-os.yml`
-
-Source: net-new (2026-05-23). Surfaced during plan-103 implementation.
-
-- _What:_ The "checkout + setup-node + node_modules cache + npm ci + ffmpeg + Playwright cache/install" preamble is now near-duplicated across `verify.yml` and `cross-os.yml`. Extract a local composite action (`.github/actions/setup/action.yml`) so the two stay in lockstep and a Node-version or cache-key change lands in one place.
-- _Acceptance:_ Both workflows `uses: ./.github/actions/setup`; a Node-major bump or cache-key change is a one-file edit; both workflows stay green.
-- _Key files:_ new `.github/actions/setup/action.yml`; `.github/workflows/verify.yml`, `.github/workflows/cross-os.yml`.
-- _Depends on:_ plan 103 merged.
-- _Benefit (technical):_ removes drift risk between the two setup paths; no billed-minute change (refactor only).
-
-### 39. Path-filter `cross-os.yml`'s `mobile-e2e` on frontend/e2e scope
-
-Source: net-new (2026-05-23). Surfaced during plan-103 implementation.
-
-- _What:_ The weekly `cross-os.yml` always runs `mobile-e2e`. When the week's only changes on `main` were server/sidecar/scripts, the mobile-viewport run gains nothing. Gate it (or the whole job) on whether `main` saw any frontend/e2e change since the last cron run — a cheap `git log` window probe. Low priority: the weekly cadence makes the absolute saving small.
-- _Acceptance:_ A cron run on a week with no frontend/e2e changes skips `mobile-e2e` (or no-ops cleanly); a week with frontend changes runs it.
-- _Key files:_ `.github/workflows/cross-os.yml`.
-- _Depends on:_ plan 103 merged.
-- _Benefit (technical):_ trims the rare wasted weekly mobile-e2e run; mostly tidiness.
-
 ---
 
 ## Won't (this round) — explicitly parked
