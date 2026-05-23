@@ -147,12 +147,24 @@ coverRouter.post(
   (req: Request, res: Response, next: (err?: unknown) => void) => {
     uploadMw.single('image')(req, res, (err: unknown) => {
       if (err) {
-        const code = (err as { code?: string }).code;
-        if (code === 'LIMIT_FILE_SIZE') {
-          return res.status(413).json({
-            error: `Cover must be under ${MAX_UPLOAD_BYTES} bytes.`,
-            kind: 'oversize',
-          });
+        /* multer 2.x still raises MulterError with the same `.code`
+           strings as 1.x (LIMIT_FILE_SIZE, LIMIT_UNEXPECTED_FILE …).
+           Gate on the instanceof so a non-multer middleware error can't
+           masquerade as an upload-limit response, then branch on the
+           stable code. */
+        if (err instanceof multer.MulterError) {
+          if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(413).json({
+              error: `Cover must be under ${MAX_UPLOAD_BYTES} bytes.`,
+              kind: 'oversize',
+            });
+          }
+          if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+            return res.status(400).json({
+              error: `Unexpected upload field "${err.field ?? ''}" — use the "image" field.`,
+              kind: 'unexpected_field',
+            });
+          }
         }
         return res.status(400).json({ error: (err as Error).message || 'Upload error.' });
       }
