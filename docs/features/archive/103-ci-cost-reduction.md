@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-23
 owner: null
 ---
 
 # CI cost reduction — path-filtered verify steps + cross-OS consolidation
 
-> Status: active (archive to `archive/` once shipped + Ship notes filled)
+> Status: stable
 > Key files: `.github/workflows/verify.yml`, `.github/workflows/cross-os.yml`, `.github/workflows/release.yml`, `.github/workflows/pr-title-lint.yml`, `CLAUDE.md`
 > URL surface: GitHub Actions — `pull_request`, `push` (tags), `workflow_dispatch`, `schedule`
 > OpenAPI ops: none
@@ -65,4 +65,8 @@ This is GitHub-side workflow configuration with no in-repo executable surface �
 
 ## Ship notes
 
-(Filled when status flips to `stable`. Append shipped date + merge commit SHA, then `git mv` to `docs/features/archive/` and move the INDEX entry to the Shipped section.)
+Shipped 2026-05-23 via PR #186 (merge commit `da5c695`). `verify.yml` rewritten to a single `verify` job (name preserved) with a pure-bash `git diff` scope detector gating each leg behind an `if:`, plus a `node_modules` `actions/cache` layer and a draft-skip (`+ ready_for_review` trigger). `release.yml` dropped to Ubuntu-only verify before publish; new `cross-os.yml` carries macOS+Windows verify + the former per-PR `mobile-e2e` on `workflow_dispatch` + a weekly Sunday cron; `e2e-mobile.yml` deleted; `pr-title-lint.yml` dropped its `edited` trigger.
+
+Implementation delta vs. the spec: the scope detector is a transparent bash `git diff --name-only` step rather than `dorny/paths-filter` — chosen to avoid introducing the first third-party action into an otherwise all-`actions/*` workflow set (zero new supply-chain trust). Same outputs, same `if:` gating.
+
+Operational note discovered at ship time: the account had already exhausted its monthly Actions quota, so PR #186's own CI (the intended canary) could not run — every check failed in ~2s with a billing/spending-limit annotation, not a workflow error. Merged anyway (no branch-protection wall on GitHub Free). The path-filter behaviour therefore lands its first live verification on the next PR after the quota is topped up / resets.
