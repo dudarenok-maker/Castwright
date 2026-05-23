@@ -45,6 +45,7 @@ import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
 import { uiActions } from '../store/ui-slice';
 import { selectQueueCount } from '../store/queue-slice';
+import { enqueueQueueEntries } from '../store/queue-thunks';
 import { api, AnalysisError } from '../lib/api';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
@@ -719,10 +720,24 @@ export function GenerationView({
         confirmLabel={`Regenerate ${driftedCount === 1 ? '1 chapter' : `all ${driftedCount}`}`}
         cancelLabel="Cancel"
         onConfirm={() => {
-          dispatch(
-            chaptersActions.regenerateChapterIds({
-              chapterIds: driftedChapters.map((c) => c.id),
-            }),
+          /* Plan 102 — drift bulk regen now enqueues one entry per
+             drifted chapter (was: single regenerateChapterIds dispatch
+             that hard-interrupted any in-flight chapter). Each entry
+             rides through the queue dispatcher serially, so an
+             in-flight chapter completes before the next drift target
+             starts. Entry ids include a short rand suffix so two
+             back-to-back drift runs in the same session don't collide
+             on duplicate ids. */
+          const rand = Math.random().toString(36).slice(2, 8);
+          void dispatch(
+            enqueueQueueEntries(
+              driftedChapters.map((c) => ({
+                id: `drift-bulk-${bookId}-${c.id}-${rand}`,
+                bookId,
+                chapterId: c.id,
+                scope: 'this',
+              })),
+            ),
           );
           setBulkRegenOpen(false);
         }}
