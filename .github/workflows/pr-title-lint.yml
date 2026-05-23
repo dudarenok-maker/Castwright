@@ -2,7 +2,11 @@ name: PR title lint
 
 on:
   pull_request:
-    types: [opened, edited, synchronize, reopened]
+    # `edited` dropped (plan 103): title typo-fixes re-fired the lint for no
+    # gain. `opened` + `reopened` catch the title at PR creation; a malformed
+    # title surfaced then persists in the statusCheckRollup until a real push
+    # (`synchronize`) re-runs the check. Saves the per-edit re-fires.
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
