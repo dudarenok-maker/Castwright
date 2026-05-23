@@ -108,6 +108,26 @@ Source: plan 95 ship (2026-05-22) — Out of scope. PR [#142](https://github.com
 - _Migration:_ books that pre-date the journal still get the `chapterCast` fallback (today's behaviour); only newly-merged ones benefit. No backfill — the lineage was lost at the old merges and there's no way to reconstruct it.
 - _Benefit (user):_ reattribute modal becomes a precise checklist instead of a scoped review — every row the user sees is provably their merge's work, no third-party sentences to skip over. Big quality-of-life win for series-2-into-1 cleanups where merges pile up.
 
+### 6. Cross-book queue dispatcher (plan 102 follow-up — closes bug #2)
+
+Source: plan 102 ship (2026-05-23) — Out of scope for the v1 ship. The queue dispatcher at `src/store/queue-dispatcher-middleware.ts:96` gates on `chapters.currentBookId === head.bookId` before firing the regenerate that the existing `generation-stream-middleware` translates into an SSE open. Queue entries for other books sit waiting until the user navigates to that book. Plan-102 bug #2 (cross-book voice-drift races) is half-fixed by Waves 4a + 4b: the queue serialises the entries so they no longer fight, but the dispatcher only acts on entries for the currently-loaded book.
+
+- _What:_ Lift the same-book gate. The dispatcher calls `api.streamGeneration` directly for cross-book entries (reusing the existing fetch-SSE pipeline; no duplication), tracks the cancel + cross-book `activeStream` snapshot in middleware-local state, and tears down on idle. The slice's `applyGenerationTick` reducer already has a cross-book guard at `src/store/chapters-slice.ts:309` that skips per-chapter mutations when the tick's bookId differs from the slice's loaded book — so ticks from the cross-book stream won't clobber the user's currently-viewed book's rows. Per-chapter detail for the cross-book entry stays absent until the user navigates to that book and the slice hydrates fresh from disk (`hydrateFromBookState`). The global top-bar pill keeps moving via the cross-book `activeStream` snapshot regardless of which book is viewed.
+- _Acceptance:_ With Books A + B both having queued work and the user viewing Book A: enqueue A.ch5 → drains. While A.ch5 is mid-synth, enqueue B.ch3 → enters the queue. A.ch5 completes → dispatcher fires generation for B.ch3 WITHOUT the user navigating. Top-bar pill correctly reflects B.ch3's progress. Voice-drift fix from `DriftReportModal` covering 3 chapters across Books A + B → all 3 drain serially regardless of which book is viewed. New Vitest pin in `queue-dispatcher-middleware.test.ts` for the cross-book branch (mocks `api.streamGeneration` and asserts the tick → DELETE round-trip on idle). Playwright spec extension in `e2e/queue-modal.spec.ts` driving a cross-book scenario via `page.route` injecting two books' worth of queue entries.
+- _Key files:_ `src/store/queue-dispatcher-middleware.ts` (lift the same-book gate; branch to a `streamCrossBook` helper that calls `api.streamGeneration` and tracks the cancel + sets `chapters.activeStream` via `chaptersActions.setActiveStream`); `src/lib/api.ts` (already exports `streamGeneration` — no contract change); `src/store/chapters-slice.ts` (cross-book guard at `applyGenerationTick` already exists — verify it still skips correctly when called from the dispatcher's onTick); `src/store/queue-dispatcher-middleware.test.ts` (new cross-book cases); `e2e/queue-modal.spec.ts` (cross-book scenario).
+- _Depends on:_ plan 102 (shipped).
+- _Benefit (user / architectural):_ closes bug #2 from plan 102. The user can mix-and-match cross-book ordering — "regenerate ch5 of Book A, then ch3 of Book B, then ch7 of Book A" — and the dispatcher honours the explicit order without requiring per-book navigation. Architecturally, decouples generation scheduling from the slice's loaded-book state, which is the seam future "Schedule overnight" / "Pause this book, prioritise that one" affordances will plug into.
+
+### 7. Strip chapters-slice generation control fields (plan 102 cleanup)
+
+Source: plan 102 ship (2026-05-23) — Out of scope for the v1 ship. The dispatcher relies on the existing `generation-stream-middleware`'s `pendingRegen` consumption path — when the dispatcher fires `chaptersActions.regenerateChapter`, the slice sets `pendingRegen` + bumps `regenEpoch`, and the existing middleware reconciles by opening the SSE. Stripping those fields prematurely would break the slice→middleware handshake the dispatcher relies on.
+
+- _What:_ Rewrite `generation-stream-middleware` to consume queue state directly instead of reading `pendingRegen` off the slice. Then drop `pendingRegen` + `regenEpoch` + `paused` from `chapters-slice` (the `paused` field is duplicated with `queue.paused`; the queue version is canonical now). Touch every slice test that pins those fields. Remove the `REGEN_TYPES` branch in the existing middleware that closes the handle on `regenerateChapter` — the queue path already serialises so the close-and-restart logic is dead code. The dispatcher's local `inFlightEntryId` trick becomes unnecessary too — the middleware's open state IS the source of truth.
+- _Acceptance:_ `chapters-slice.ts` no longer carries `pendingRegen`, `regenEpoch`, or `paused`. `generation-stream-middleware.ts` reads `queue.entries.find(e => e.status === 'in_progress')` (or equivalent) instead of `chapters.pendingRegen`. All existing tests pass after fixture updates. Dispatcher no longer tracks `inFlightEntryId` locally. `src/views/generation.tsx` reads `queue.paused` for the row's "Paused" pill instead of `chapters.paused`.
+- _Key files:_ `src/store/chapters-slice.ts` (strip 3 fields + paired reducers + types); `src/store/generation-stream-middleware.ts` (rewire open-side gate to read queue state); `src/store/queue-dispatcher-middleware.ts` (simplify — no local entry tracking); `src/store/chapters-slice.test.ts` + every test fixture that pins `pendingRegen` (~5-10 places); `src/views/generation.tsx` (`paused` selector flip).
+- _Depends on:_ Should #6 (cross-book dispatcher) shipping first is recommended — once the dispatcher owns the entire open-side path the slice strip is more obviously correct. Could also ship independently if pinned carefully.
+- _Benefit (technical / architectural):_ removes 3 redundant fields from the slice that exist only because of the v1 same-slice-owns-generation contract. The queue slice + dispatcher are the new owners. Reduces the slice→middleware handshake to one direction (queue is authoritative). Cleans up ~60 lines of dead reconcile code in the existing middleware.
+
 ---
 
 ## Could — nice to have, low-cost wins
@@ -375,6 +395,16 @@ Source: net-new (2026-05-23). Surfaced during plan-103 implementation.
 - _Key files:_ `.github/workflows/cross-os.yml`.
 - _Depends on:_ plan 103 merged.
 - _Benefit (technical):_ trims the rare wasted weekly mobile-e2e run; mostly tidiness.
+
+### 40. Drag-to-reorder for the queue modal (plan 102 polish)
+
+Source: plan 102 ship (2026-05-23) — Out of scope for the v1 ship. The queue modal at `src/modals/queue-modal.tsx` reorders via tap pills (Move up / Move down) which satisfies the touch-equivalence rule from CLAUDE.md plan 81 and works on desktop AND mobile in one code path. Drag-to-reorder is purely additive polish for desktop users with a mouse.
+
+- _What:_ Add a PointerEvent-based drag handle on the left edge of each queue entry row (desktop only — `hidden sm:flex`). Reuses the existing PointerEvent pattern from `src/views/manuscript.tsx:377-451` (paragraph boundary handle). On drop, dispatch `reorderQueue(desiredOrderIds)` which POSTs `/api/queue/reorder` — the same thunk the tap pills already call, just with a different desiredOrder computation. The in-flight (pinned) entry remains non-draggable; the drag handle is suppressed on `entry.status === 'in_progress'` rows.
+- _Acceptance:_ On desktop, hovering a queue row reveals a `⋮⋮` drag handle on the left. Dragging it onto another row reorders the queue via `/api/queue/reorder`. The in-flight row shows no handle. On touch devices, the handle is hidden and the existing tap pills remain the only reorder affordance.
+- _Key files:_ `src/modals/queue-modal.tsx` (PointerEvent listener on each non-pinned row + drop-zone math); `src/modals/queue-modal.test.tsx` (paired Vitest pin for the drag-reorder dispatch shape).
+- _Depends on:_ plan 102 (shipped).
+- _Benefit (user):_ desktop users get a one-gesture reorder instead of multiple tap-pill clicks. Minor — current pill UX is already functional — but a small polish win for users juggling 10+ queue entries.
 
 ---
 
