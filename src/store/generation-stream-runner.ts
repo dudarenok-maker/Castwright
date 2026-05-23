@@ -40,12 +40,6 @@ export interface StreamSpec {
 }
 
 export interface StreamOpenOpts {
-  /** Same-book reconcile path passes true: the spec came from the slice's
-      `pendingRegen`, so drain it the instant the SSE owns it (the
-      Pause→Resume rationale documented on the slice reducer). Cross-book
-      dispatch passes false — there is no slice-level `pendingRegen` to drain
-      (it would belong to the currently-viewed book, not the streaming one). */
-  consumePendingRegen?: boolean;
   /** Queue entry this stream fulfils. Threaded to the server so per-chapter
       ticks correlate to the right queue row when entries from different
       books interleave. */
@@ -195,13 +189,6 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
       onTick: (ev: GenerationTick) => dispatch(chaptersActions.applyGenerationTick(ev)),
     });
     handle = { cancel, bookId, modelKey, completedChapterIds: [] };
-
-    /* Drain the spec the instant the SSE owns it — same Pause→Resume rationale
-       documented on the slice reducer: without this, an aborted SSE never
-       delivers `idle` so `pendingRegen` would stick around forever and every
-       Resume would re-force-regen the original target set. Only the same-book
-       reconcile path consumes it; cross-book has no slice pendingRegen. */
-    if (opts.consumePendingRegen && spec) dispatch(chaptersActions.consumePendingRegen());
   };
 
   const handleTick = (ev: GenerationTick | undefined): void => {
