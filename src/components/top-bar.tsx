@@ -81,6 +81,12 @@ interface TopBarProps {
       driven by `useTtsLifecycle()` mounted once in Layout, so its state stays
       in sync with whatever the Generation view's local pill is showing. */
   ttsPill?: ReactNode;
+  /** Plan 102 — workspace queue count. When > 0, renders a compact chip in
+      the top-right cluster that opens the global queue modal on click. When
+      0, the chip is hidden. */
+  queueCount?: number;
+  /** Plan 102 — click handler for the queue chip; dispatched by Layout. */
+  onOpenQueue?: () => void;
 }
 
 const TABS: Array<{ id: View; label: string }> = [
@@ -118,6 +124,8 @@ export function TopBar({
   generationPill,
   analysisPill,
   ttsPill,
+  queueCount,
+  onOpenQueue,
 }: TopBarProps) {
   const showGlobalNav = stage === 'books' || stage === 'voices' || stage === 'changelog';
   const onGlobal = (id: 'books' | 'voices' | 'changelog') => {
@@ -224,6 +232,18 @@ export function TopBar({
               className={`text-xs font-mono px-2 py-1 rounded-md transition-colors hover:bg-ink/5 ${stage === 'worktrees' ? 'bg-ink/10 ring-1 ring-ink/20' : 'text-ink/50'}`}
             >
               wt
+            </button>
+          )}
+          {(queueCount ?? 0) > 0 && onOpenQueue && (
+            <button
+              type="button"
+              onClick={onOpenQueue}
+              aria-label={`Generation queue — ${queueCount} pending`}
+              title="Generation queue"
+              data-testid="topbar-queue-chip"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold min-h-[44px] sm:min-h-0"
+            >
+              Queue · {queueCount}
             </button>
           )}
           <ThemeToggleButton />
