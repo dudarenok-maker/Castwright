@@ -191,7 +191,6 @@ function makeStore() {
       characters,
       chapters: [chapter1, chapter2],
       sentences,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any),
   );
   return store;
@@ -292,7 +291,6 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
         characters,
         chapters: [ch1Done, ch2Queued, ch3Excluded],
         sentences: [...sentences, ...ch3Sentences],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any),
     );
     render(
@@ -359,7 +357,6 @@ describe('GenerationView — early-tick render guards (regression)', () => {
         characters,
         chapters: [live],
         sentences,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any),
     );
     render(
@@ -474,7 +471,6 @@ describe('GenerationView — per-character progress is derived from the manuscri
         characters: cast,
         chapters: [liveChapter],
         sentences: dayOne,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any),
     );
     return render(
@@ -557,7 +553,6 @@ describe('GenerationView — heartbeat / stalled state', () => {
         characters,
         chapters: [live],
         sentences,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any),
     );
     /* Drive a real progress tick so the slice writes lastTickAt = Date.now()
@@ -571,7 +566,6 @@ describe('GenerationView — heartbeat / stalled state', () => {
         progress: 0.5,
         currentLine: 50,
         totalLines: 100,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any),
     );
     vi.setSystemTime(new Date('2026-05-13T15:01:00Z'));
@@ -692,7 +686,6 @@ describe('GenerationView — header action once the run is complete', () => {
         characters,
         chapters: [allDone1, allDone2],
         sentences,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any),
     );
 
@@ -747,7 +740,6 @@ describe('GenerationView — header action once the run is complete', () => {
         characters,
         chapters: [chapter1, chapter2],
         sentences,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any),
     );
 
@@ -968,7 +960,6 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
         characters,
         chapters,
         sentences,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any),
     );
     render(
@@ -1083,7 +1074,6 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
         characters,
         chapters,
         sentences,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any),
     );
     return store;
@@ -1133,8 +1123,24 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
       json: () =>
         Promise.resolve({
           entries: [
-            { id: 'e1', bookId: 'b1', chapterId: 1, scope: 'this', status: 'queued', order: 0, addedAt: '2026-05-23T00:00:00Z' },
-            { id: 'e2', bookId: 'b1', chapterId: 3, scope: 'this', status: 'queued', order: 1, addedAt: '2026-05-23T00:00:00Z' },
+            {
+              id: 'e1',
+              bookId: 'b1',
+              chapterId: 1,
+              scope: 'this',
+              status: 'queued',
+              order: 0,
+              addedAt: '2026-05-23T00:00:00Z',
+            },
+            {
+              id: 'e2',
+              bookId: 'b1',
+              chapterId: 3,
+              scope: 'this',
+              status: 'queued',
+              order: 1,
+              addedAt: '2026-05-23T00:00:00Z',
+            },
           ],
           paused: false,
         }),
@@ -1316,7 +1322,6 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         characters,
         chapters: [chapter1, chapter2, ch3Excluded],
         sentences,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any),
     );
     store.dispatch(
@@ -1338,13 +1343,12 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       store.dispatch(
         chaptersSlice.actions.setActiveStream({
           bookId: activeStream.bookId,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
           modelKey: activeStream.modelKey as any,
           done: 0,
           total: 2,
           inProgress: 1,
           lastTickAt: Date.now(),
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any),
       );
     }

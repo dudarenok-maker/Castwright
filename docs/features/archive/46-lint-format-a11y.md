@@ -80,7 +80,7 @@ owner: null
   5. `test(frontend): plan 46 add axe-core a11y spec for four views`
   6. `ci(ci): plan 46 wire test:a11y + lint into verify chain`
   7. `docs(docs): plan 46 ship + archive`
-- ESLint 8.57.1 pinned (legacy config); flat-config migration intentionally deferred.
+- ESLint 8.57.1 pinned (legacy config); flat-config migration intentionally deferred. **Followed up 2026-05-23 by plan 104 — `.eslintrc.cjs` migrated to `eslint.config.js` (flat config) on ESLint 9; the lint ratchet here (same relaxed rules, `--max-warnings 0`, api-types/workspace ignores) is preserved verbatim. See [docs/features/104-eslint-flat-config.md](../104-eslint-flat-config.md).**
 - Three axe rules disabled at the spec level (`AXE_OPTS` in `a11y.test.tsx`); see invariant #5.
 - Seven ESLint rules relaxed in `.eslintrc.cjs` (rules-of-hooks, four jsx-a11y interaction rules, media-has-caption, no-constant-condition + no-control-regex + no-empty + no-inner-declarations on server); see invariant #6.
 - Two pre-existing flakes named explicitly: `server/src/routes/user-settings.test.ts` and `server/src/workspace/user-settings.test.ts` share `server/user-settings.json` on disk and produce sporadic round-trip failures in the full server suite. They pass in isolation. Quarantine is out of scope here; tracked as a follow-up.

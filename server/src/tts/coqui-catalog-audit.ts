@@ -146,7 +146,7 @@ export async function runCatalogAudit(opts: AuditOptions): Promise<CoquiCatalogA
       await new Promise((r) => setTimeout(r, attemptDelayMs));
     }
   }
-  // eslint-disable-next-line no-console
+
   console.warn(
     `[tts:catalog-audit] Could not reach ${sidecarUrl}/speakers within ` +
       `${((maxAttempts * attemptDelayMs) / 1000).toFixed(0)}s — skipping audit. ` +
@@ -162,7 +162,6 @@ function logAudit(audit: CoquiCatalogAudit): void {
      start, so cost is negligible. */
   const line = '─'.repeat(64);
   const log = (s: string) => {
-    // eslint-disable-next-line no-console
     console.log(s);
   };
   log('');

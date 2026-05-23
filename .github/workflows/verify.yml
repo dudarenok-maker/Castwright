@@ -83,7 +83,7 @@ jobs:
           match() { echo "$FILES" | grep -qE "$1"; }
           frontend=false; server=false; sidecar=false
           e2e=false; scripts=false; hooks=false; shared=false
-          match '^(src/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|\.eslintrc\.cjs$)' && frontend=true
+          match '^(src/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|eslint\.config\.(js|mjs)$)' && frontend=true
           match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$)' && server=true
           match '^server/tts-sidecar/' && sidecar=true
           match '^(e2e/|playwright\.config\.ts$)' && e2e=true

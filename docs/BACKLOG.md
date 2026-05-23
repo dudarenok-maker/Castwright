@@ -78,17 +78,7 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
 - _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
 
-### 3. ESLint 8 → 9 migration (drops the `inflight`/`glob@7`/`rimraf@3` deprecation chain)
-
-Source: net-new (2026-05-22). Surfaced by the `deprecated inflight@1.0.6` warning on `npm install`; full triage in `~/.claude/plans/fancy-bouncing-lovelace.md`.
-
-- _What:_ Bump `eslint` `^8.57.1` → `^9.x` and rewrite `.eslintrc.cjs` as flat config (`eslint.config.js`). Bump `@typescript-eslint/{eslint-plugin,parser}` `^7.18.0` → `^8.x` (v8 is the first major that supports ESLint 9), `eslint-plugin-react-hooks` `^4.6.2` → `^5.x`, and audit `eslint-plugin-react` + `eslint-plugin-jsx-a11y` + `eslint-config-prettier` for ESLint-9 compatibility. Re-baseline plan 46's autofix snapshot. Removes the `inflight@1.0.6` / `glob@7.2.3` / `rimraf@3.0.2` transitive chain that lives entirely inside ESLint 8's `file-entry-cache` → `flat-cache` plumbing — no direct dependency on our side.
-- _Acceptance:_ `npm install` no longer prints the `deprecated inflight@1.0.6` warning. `npm ls inflight` returns empty. `npm run lint` passes against the migrated flat config with the same rule set (no rule relaxations to make the migration green). `npm run verify` stays green end-to-end. Plan 46's autofix-baseline snapshot is regenerated and committed.
-- _Key files:_ `package.json` (4 devDeps to bump), new `eslint.config.js` (flat config), delete `.eslintrc.cjs` if present, `docs/features/archive/46-lint-format-a11y.md` (note the migration in Ship notes), any tests under `scripts/tests/` that exercise the lint command.
-- _Depends on:_ none structural. Pure tooling bump.
-- _Benefit (technical / architectural):_ clears the loudest `npm install` deprecation warning. Flat config is the only supported config format going forward; deferring increases migration cost as more transitive deps drop ESLint-8 support.
-
-### 4. Multer 1.x → 2.x security upgrade (server file uploads)
+### 3. Multer 1.x → 2.x security upgrade (server file uploads)
 
 Source: net-new (2026-05-22). Surfaced by `npm warn deprecated multer@1.4.5-lts.2: Multer 1.x is impacted by a number of vulnerabilities, which have been patched in 2.x.` on `npm install --prefix server`. Full deprecation audit notes in `~/.claude/plans/fancy-bouncing-lovelace.md`.
 
@@ -313,18 +303,18 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 - _Depends on:_ none (the on-disk segment shape already carries `kind: 'title'` since PR #101).
 - _Benefit (user):_ visual cue that matches the audible cue — listener sees "you're hearing the title now" before the body segments start. Today the title beat is audible-only.
 
-### 32. Track upstream-blocked deprecation chains (jsdom · archiver · @google/genai)
+### 32. Track upstream-blocked deprecation chains (~~jsdom~~ · ~~archiver~~ · @google/genai)
 
-Source: net-new (2026-05-22). Surfaced by the full `npm install` deprecation audit in `~/.claude/plans/fancy-bouncing-lovelace.md`. Pure tracking item — no direct fix; we wait for upstream majors. Companion to Should-#1 (ESLint 8 → 9, once that lands) and Should-#2 (Multer 1 → 2) which cover the chains we CAN fix today.
+Source: net-new (2026-05-22). Surfaced by the full `npm install` deprecation audit in `~/.claude/plans/fancy-bouncing-lovelace.md`. Pure tracking item — no direct fix; we wait for upstream majors. Companion to the now-shipped ESLint 8 → 9 migration (plan 104) and the Multer 1 → 2 upgrade which cover the chains we could fix immediately.
 
-- _What:_ Periodically re-run the deprecation audit (`npm install` at root + `npm install --prefix server` on a fresh clone, grep `npm warn deprecated`) and bump direct deps whose upstream majors drop one of these transitives. The currently-unfixable chains (as of 2026-05-22) are:
-  - `jsdom@25 → html-encoding-sniffer + whatwg-encoding@3.1.1` — deprecation says "Use @exodus/bytes". Waiting on jsdom upstream to migrate.
-  - `archiver@7 → archiver-utils → glob@10.5.0` — deprecation says "Old versions of glob are not supported". Waiting on archiver upstream to bump glob to v11+.
-  - `@google/genai@2 → google-auth-library → gaxios → node-fetch → fetch-blob → node-domexception@1.0.0` — deprecation says "Use your platform's native DOMException". Deep transitive via the Gemini SDK; waiting for `node-fetch`/`fetch-blob`/`google-auth-library` upstream to migrate to native DOMException.
-- _Acceptance:_ each time a direct dep is bumped (jsdom, archiver, or @google/genai), re-run the audit and tick off the resolved chain in this entry. Entry is removed from BACKLOG when all three resolve.
-- _Key files:_ `package.json` (jsdom + archiver direct), `server/package.json` (@google/genai direct). No source changes — purely a dep-bump tracking item.
-- _Depends on:_ upstream releases. Not on our schedule.
-- _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog that says "yes, we know, we're waiting on these three upstreams." Pairs with Should #3 (ESLint 8 → 9 chain) and Should #4 (Multer 1 → 2 security) which together account for every deprecation warning surfaced on a fresh 2026-05-22 install.
+- _What:_ Periodically re-run the deprecation audit (`npm install` at root + `npm install --prefix server` on a fresh clone, grep `npm warn deprecated`) and bump direct deps whose upstream majors drop one of these transitives. Status of the three tracked chains:
+  - ✅ **RESOLVED 2026-05-23 (plan 104):** `jsdom@25 → html-encoding-sniffer + whatwg-encoding@3.1.1`. Bumped jsdom `^25 → ^29` (29.1.1); the `whatwg-encoding` deprecation warning is gone from the audit. One frontend spec (`src/views/listen.test.tsx` cover-gradient) needed adapting because jsdom 29 canonicalises hex CSS colours to `rgb()` in the CSSOM.
+  - ✅ **RESOLVED 2026-05-23 (plan 104):** `archiver@7 → archiver-utils → glob@10.5.0`. Bumped archiver `^7 → ^8` (8.0.0); the `glob` deprecation warning is gone. archiver 8 is pure ESM and dropped the v7 callable factory, so `scripts/build-release-zip.mjs` now constructs `new ZipArchive(opts)` (pinned by `scripts/tests/archiver-zip.test.mjs`).
+  - ⏳ **STILL TRACKED:** `@google/genai@2 → google-auth-library → gaxios → node-fetch → fetch-blob → node-domexception@1.0.0` — deprecation says "Use your platform's native DOMException". Deep transitive via the Gemini SDK; `@google/genai` is still on major 2 (no v3), so this stays blocked. Waiting for `node-fetch`/`fetch-blob`/`google-auth-library` upstream to migrate to native DOMException, OR for a `@google/genai` v3 that drops the `node-fetch` chain.
+- _Acceptance:_ each time a direct dep is bumped (jsdom, archiver, or @google/genai), re-run the audit and tick off the resolved chain in this entry. Entry is removed from BACKLOG when all three resolve — two of three are now done; only the `@google/genai` chain remains.
+- _Key files:_ `server/package.json` (`@google/genai` direct). The jsdom + archiver bumps already landed in root `package.json` (plan 104). No source changes for the remaining chain — purely a dep-bump tracking item.
+- _Depends on:_ upstream releases (`@google/genai` v3 or a native-DOMException migration in its `node-fetch` chain). Not on our schedule.
+- _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog. As of 2026-05-23 a fresh `npm install` at root prints ZERO deprecation warnings (ESLint 9 + jsdom 29 + archiver 8 all cleared); the only remaining deprecation in the monorepo is the `@google/genai` `node-domexception` chain on the server side.
 
 ### 33. Per-voice row sample-preview button inside `<VoiceOverridePicker>`
 

@@ -59,7 +59,7 @@ function ensureAudio(): HTMLAudioElement {
   });
   audio.addEventListener('error', () => {
     const mediaErr = audio?.error;
-    // eslint-disable-next-line no-console
+
     console.error('[sample-playback] audio element errored', {
       url: state.currentUrl,
       code: mediaErr?.code,
@@ -105,11 +105,9 @@ export function useSamplePlayback() {
       state.isPlaying = true;
       notify();
       try {
-        // eslint-disable-next-line no-console
         console.log('[sample-playback] playing', url);
         await a.play();
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.error('[sample-playback] play() rejected', err);
         state.isPlaying = false;
         state.currentUrl = null;

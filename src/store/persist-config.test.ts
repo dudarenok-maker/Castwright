@@ -34,8 +34,8 @@ describe('UI_PERSIST_WHITELIST', () => {
   it('omits every transient overlay (regen modal, drawer-detail, stale-audio, ...) so refresh does not resurrect dismissed UI', () => {
     /* The init shape of ui-slice carries the full surface area; whatever
        isn't in the whitelist must NOT appear here. */
-    const initial = uiSlice.reducer(undefined, { type: 'noop' });
-    const transientKeys: Array<keyof typeof initial> = [
+    const _initial = uiSlice.reducer(undefined, { type: 'noop' });
+    const transientKeys: Array<keyof typeof _initial> = [
       'currentTrack',
       'matchDetailFor',
       'handoffApp',
@@ -83,8 +83,8 @@ describe('MANUSCRIPT_PERSIST_WHITELIST', () => {
   });
 
   it('omits sentences / sourceText / importCandidate / pendingReupload (server-sourced or transient — stale persistence would race the hydrate)', () => {
-    const initial = manuscriptSlice.reducer(undefined, { type: 'noop' });
-    const transientKeys: Array<keyof typeof initial> = [
+    const _initial = manuscriptSlice.reducer(undefined, { type: 'noop' });
+    const transientKeys: Array<keyof typeof _initial> = [
       'sentences',
       'sourceText',
       'importCandidate',
