@@ -15,7 +15,7 @@
  * touch-equivalence rule for desktop AND mobile in one path, keeping the
  * shipped modal small. Touch targets are ≥44×44 px per WCAG 2.5.5. */
 
-import { useMemo, useEffect } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
   selectInFlightEntry,
@@ -32,7 +32,7 @@ import {
   setQueuePaused,
 } from '../store/queue-thunks';
 import { uiActions } from '../store/ui-slice';
-import { IconClose, IconPause, IconPlay, IconTrash } from '../lib/icons';
+import { IconClose, IconDrag, IconPause, IconPlay, IconTrash } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 
 interface QueueModalProps {
@@ -196,6 +196,70 @@ function BookGroup({ title, entries, inFlightId, onReorder, onCancel }: BookGrou
     onReorder(next);
   };
 
+  /* Plan 102 polish (BACKLOG Could #40) — desktop drag-to-reorder.
+     Pointer-events based for browser breadth; the handle is hidden via
+     `hidden sm:flex` on coarse-pointer devices so touch users continue to
+     rely on the Move up / Move down pills.
+
+     Drag model: pointerdown on the ⋮⋮ handle captures the dragged entry
+     id; window-level pointermove tracks which row the pointer is over
+     (via [data-entry-id] on each li); pointerup commits the reorder by
+     splicing the dragged entry into the drop target's slot in the
+     group's order, then bubbling the new order via onReorder. */
+  const [drag, setDrag] = useState<{ fromId: string; overId: string | null } | null>(null);
+
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: globalThis.PointerEvent): void => {
+      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      const rowEl = el?.closest?.('[data-entry-id]') as HTMLElement | null;
+      const id = rowEl?.dataset.entryId ?? null;
+      /* Skip self-hover and the in-flight pinned row — neither is a
+         valid drop target. */
+      const valid = id != null && id !== drag.fromId && id !== inFlightId;
+      setDrag((d) => (d && d.overId !== (valid ? id : null) ? { ...d, overId: valid ? id : null } : d));
+    };
+    const onUp = (): void => {
+      setDrag((d) => {
+        if (d && d.overId) {
+          const fromIdx = entries.findIndex((e) => e.id === d.fromId);
+          const toIdx = entries.findIndex((e) => e.id === d.overId);
+          if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
+            const next = [...entries];
+            const [moved] = next.splice(fromIdx, 1);
+            next.splice(toIdx, 0, moved);
+            onReorder(next);
+          }
+        }
+        return null;
+      });
+      document.body.classList.remove('dragging-queue-entry');
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+    /* `entries` + `inFlightId` are captured at drag-start time intentionally —
+       reordering during an in-flight drag is rare and would require resync;
+       eslint exhaustive-deps would force a re-subscribe on every queue mutation. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag?.fromId]);
+
+  const onDragStart = (fromId: string) => (e: React.PointerEvent<HTMLButtonElement>): void => {
+    e.preventDefault();
+    setDrag({ fromId, overId: null });
+    document.body.classList.add('dragging-queue-entry');
+    try {
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+    } catch {
+      /* Older browsers may throw on capture — fall through. */
+    }
+  };
+
   return (
     <section>
       <h4 className="text-xs uppercase tracking-widest text-ink/50 font-semibold mb-2">
@@ -208,10 +272,32 @@ function BookGroup({ title, entries, inFlightId, onReorder, onCancel }: BookGrou
             <li
               key={entry.id}
               data-testid={`queue-entry-${entry.id}`}
-              className={`flex items-center gap-2 px-3 py-2 rounded-2xl border ${
-                isInFlight ? 'border-magenta/40 bg-magenta/5' : 'border-ink/10 bg-white'
+              data-entry-id={entry.id}
+              className={`flex items-center gap-2 px-3 py-2 rounded-2xl border transition-colors ${
+                isInFlight
+                  ? 'border-magenta/40 bg-magenta/5'
+                  : drag?.overId === entry.id
+                    ? 'border-magenta/60 bg-magenta/10'
+                    : drag?.fromId === entry.id
+                      ? 'border-ink/10 bg-white opacity-40'
+                      : 'border-ink/10 bg-white'
               }`}
             >
+              {!isInFlight && (
+                /* Desktop-only drag handle — hidden on touch so users
+                   fall back to the Move up / Move down pills (which work
+                   on every viewport per the CLAUDE.md touch-equivalence
+                   rule). Cursor reflects drag state for clarity. */
+                <button
+                  type="button"
+                  onPointerDown={onDragStart(entry.id)}
+                  aria-label="Drag to reorder"
+                  data-testid={`queue-entry-${entry.id}-drag`}
+                  className="hidden sm:flex items-center justify-center text-ink/30 hover:text-ink/60 cursor-grab active:cursor-grabbing touch-none p-1 -ml-1"
+                >
+                  <IconDrag className="w-4 h-4" />
+                </button>
+              )}
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-ink truncate">
                   Chapter {entry.chapterId}
