@@ -5,7 +5,7 @@
        then calls proceed; Cancel does neither.
    Pairs with docs/features/NN-sticky-generation.md. */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, fireEvent, act } from '@testing-library/react';
@@ -13,6 +13,20 @@ import { uiSlice } from '../store/ui-slice';
 import { chaptersSlice, type ActiveStreamSnapshot } from '../store/chapters-slice';
 import { librarySlice } from '../store/library-slice';
 import { useLocalAnalyzerGuard } from './use-local-analyzer-guard';
+import { haltActiveGeneration } from '../store/queue-thunks';
+
+/* The guard's confirm dispatches haltActiveGeneration (requestStreamHalt +
+   setQueuePaused) — its end-to-end behaviour is unit-tested in
+   queue-thunks.test.ts. Here we mock it to a plain no-op action so we can
+   assert the guard fires it on confirm (and only on confirm) without wiring
+   the queue slice + /api/queue/pause fetch into this hook test. */
+vi.mock('../store/queue-thunks', () => ({
+  haltActiveGeneration: vi.fn(() => ({ type: 'test/haltActiveGeneration' })),
+}));
+
+beforeEach(() => {
+  vi.mocked(haltActiveGeneration).mockClear();
+});
 
 function makeStore(opts: { selectedModel: string; activeStream: ActiveStreamSnapshot | null }) {
   const store = configureStore({
@@ -63,7 +77,7 @@ describe('useLocalAnalyzerGuard', () => {
 
     expect(proceed).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('Pause audio generation to analyse?')).not.toBeInTheDocument();
-    expect(store.getState().chapters.paused).toBe(false);
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
   });
 
   it('passes through immediately when a local engine is selected but no generation is active', () => {
@@ -95,21 +109,21 @@ describe('useLocalAnalyzerGuard', () => {
     /* Modal renders, proceed not yet called. */
     expect(screen.getByText('Pause audio generation to analyse?')).toBeInTheDocument();
     expect(proceed).not.toHaveBeenCalled();
-    expect(store.getState().chapters.paused).toBe(false);
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
 
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: 'Pause and analyse' }));
     });
 
-    /* Pause dispatched (middleware would close the SSE handle on next
-       reconcile) and the import proceed fired. */
-    expect(store.getState().chapters.paused).toBe(true);
+    /* Halt dispatched (the middleware closes the SSE handle + the queue is
+       paused) and the import proceed fired. */
+    expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
     expect(proceed).toHaveBeenCalledTimes(1);
     /* Modal is gone. */
     expect(screen.queryByText('Pause audio generation to analyse?')).not.toBeInTheDocument();
   });
 
-  it('opens the modal and Cancel closes it without dispatching setPaused or running proceed', () => {
+  it('opens the modal and Cancel closes it without halting generation or running proceed', () => {
     const store = makeStore({ selectedModel: 'qwen3.5:9b', activeStream: liveSnapshot });
     const proceed = vi.fn();
     render(
@@ -124,7 +138,7 @@ describe('useLocalAnalyzerGuard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
 
     expect(proceed).not.toHaveBeenCalled();
-    expect(store.getState().chapters.paused).toBe(false);
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
     expect(screen.queryByText('Pause audio generation to analyse?')).not.toBeInTheDocument();
   });
 

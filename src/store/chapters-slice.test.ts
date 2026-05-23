@@ -16,11 +16,8 @@ const makeChapter = (id: number, overrides: Partial<Chapter> = {}): Chapter => (
 
 const baseState = (chapters: Chapter[]): ChaptersState => ({
   chapters,
-  paused: false,
   lastError: null,
   generationStartedAt: null,
-  pendingRegen: null,
-  regenEpoch: 0,
   lastTickAt: null,
   currentBookId: null,
   activeStream: null,
@@ -420,39 +417,35 @@ describe('chaptersSlice — applyGenerationTick', () => {
   });
 
   describe('idle', () => {
-    it('clears pendingRegen and clears generationStartedAt when the queue is drained', () => {
+    it('clears generationStartedAt when the queue is drained', () => {
       const start: ChaptersState = {
         ...baseState([makeChapter(3, { state: 'done' })]),
-        pendingRegen: { chapterIds: [3], force: true },
         generationStartedAt: Date.now() - 60_000,
       };
       const next = chaptersSlice.reducer(
         start,
         chaptersActions.applyGenerationTick(tick({ type: 'idle' })),
       );
-      expect(next.pendingRegen).toBe(null);
       expect(next.generationStartedAt).toBe(null);
     });
 
-    it('clears pendingRegen but keeps generationStartedAt while work remains', () => {
+    it('keeps generationStartedAt while work remains', () => {
       const startedAt = Date.now() - 60_000;
       const start: ChaptersState = {
         ...baseState([makeChapter(3, { state: 'in_progress' })]),
-        pendingRegen: { chapterIds: [3], force: true },
         generationStartedAt: startedAt,
       };
       const next = chaptersSlice.reducer(
         start,
         chaptersActions.applyGenerationTick(tick({ type: 'idle' })),
       );
-      expect(next.pendingRegen).toBe(null);
       expect(next.generationStartedAt).toBe(startedAt);
     });
   });
 });
 
 describe('chaptersSlice — regenerate reducers', () => {
-  it('regenerateChapter (this) sets pendingRegen to just that chapter and bumps regenEpoch', () => {
+  it('regenerateChapter (this) flips just that chapter to in_progress', () => {
     const start = baseState([
       makeChapter(3, {
         state: 'done',
@@ -465,8 +458,6 @@ describe('chaptersSlice — regenerate reducers', () => {
       start,
       chaptersActions.regenerateChapter({ chapterId: 3, scope: 'this' }),
     );
-    expect(next.pendingRegen).toEqual({ chapterIds: [3], force: true });
-    expect(next.regenEpoch).toBe(1);
     expect(next.chapters[0].state).toBe('in_progress');
     expect(next.chapters[0].progress).toBeCloseTo(0.05);
     expect(next.chapters[0].characters.narrator).toBe('queued');
@@ -506,8 +497,6 @@ describe('chaptersSlice — regenerate reducers', () => {
       start,
       chaptersActions.regenerateChapter({ chapterId: 4, scope: 'forward' }),
     );
-    expect(next.pendingRegen).toEqual({ chapterIds: [4, 5], force: true });
-    expect(next.regenEpoch).toBe(1);
     expect(next.chapters[0].state).toBe('done');
     expect(next.chapters[1].state).toBe('in_progress');
     expect(next.chapters[2].state).toBe('queued');
@@ -545,8 +534,6 @@ describe('chaptersSlice — regenerate reducers', () => {
         chapterIds: [3, 4],
       }),
     );
-    expect(next.pendingRegen).toEqual({ chapterIds: [4], force: true });
-    expect(next.regenEpoch).toBe(1);
     expect(next.chapters[0].state).toBe('done');
     expect(next.chapters[0].characters.eliza).toBe('skipped');
     expect(next.chapters[1].state).toBe('in_progress');
@@ -564,8 +551,10 @@ describe('chaptersSlice — regenerate reducers', () => {
         chapterIds: [3],
       }),
     );
-    expect(next.pendingRegen).toBe(null);
-    expect(next.regenEpoch).toBe(0);
+    /* No-op: the character is skipped on the only listed chapter, so the row
+       is untouched. */
+    expect(next.chapters[0].state).toBe('done');
+    expect(next.chapters[0].characters.halloran).toBe('skipped');
   });
 
   it('batchRegenerateCharacters skips chapters where none of the listed characters are active', () => {
@@ -586,8 +575,6 @@ describe('chaptersSlice — regenerate reducers', () => {
         chapterIds: [3, 4],
       }),
     );
-    expect(next.pendingRegen).toEqual({ chapterIds: [4], force: true });
-    expect(next.regenEpoch).toBe(1);
     expect(next.chapters[0].characters.halloran).toBe('skipped');
     expect(next.chapters[1].characters.halloran).toBe('queued');
     expect(next.chapters[1].characters.eliza).toBe('queued');
@@ -598,7 +585,7 @@ describe('chaptersSlice — regenerate reducers', () => {
      button: an explicit, possibly non-contiguous list of chapter ids
      gets re-queued on the active engine. Each test below pins one
      facet of the contract the middleware + view depend on. */
-  it('regenerateChapterIds re-queues every listed chapter and stamps pendingRegen', () => {
+  it('regenerateChapterIds re-queues every listed chapter (head goes in_progress)', () => {
     const start = baseState([
       makeChapter(3, {
         state: 'done',
@@ -617,11 +604,8 @@ describe('chaptersSlice — regenerate reducers', () => {
       }),
     );
     /* Non-contiguous list — chapter 5 was never drifted (queued), so it
-       stays untouched. The pendingRegen list mirrors the targets in
-       slice order so the head row (id 3) goes in_progress and the
-       middleware POSTs the canonical chapterIds + force. */
-    expect(next.pendingRegen).toEqual({ chapterIds: [3, 4, 6], force: true });
-    expect(next.regenEpoch).toBe(1);
+       stays untouched. The head row (id 3) goes in_progress; the
+       middleware computes the canonical chapterIds + force from the action. */
     expect(next.chapters[0].state).toBe('in_progress');
     expect(next.chapters[0].progress).toBeCloseTo(0.05);
     expect(next.chapters[0].characters.narrator).toBe('queued');
@@ -638,8 +622,6 @@ describe('chaptersSlice — regenerate reducers', () => {
         chapterIds: [99, 100],
       }),
     );
-    expect(next.pendingRegen).toBe(null);
-    expect(next.regenEpoch).toBe(0);
     expect(next.chapters[0].state).toBe('done');
   });
 
@@ -659,7 +641,6 @@ describe('chaptersSlice — regenerate reducers', () => {
         chapterIds: [3, 4],
       }),
     );
-    expect(next.pendingRegen).toEqual({ chapterIds: [3], force: true });
     expect(next.chapters[0].state).toBe('in_progress');
     expect(next.chapters[1].state).toBe('queued'); // unchanged
     expect(next.chapters[1].excluded).toBe(true);
@@ -840,34 +821,18 @@ describe('chaptersSlice — hydrateFromBookState', () => {
     expect(next.chapters[1].characters).toEqual({ narrator: 'queued', eliza: 'queued' });
   });
 
-  it('leaves paused=false when no chapters have completed audio on disk (auto-start regression)', () => {
-    /* Before this fix the reducer unconditionally forced paused=true on
-       every hydrate — which meant landing on Generate after confirming
-       cast required an explicit Resume click before anything started. */
-    const start: ChaptersState = { ...baseState([]), paused: false };
-    const next = chaptersSlice.reducer(
-      start,
-      chaptersActions.hydrateFromBookState({
-        chapters,
-        completedSlugs: [],
-        characters: cast,
-      }),
-    );
-    expect(next.paused).toBe(false);
-  });
-
-  it('leaves paused untouched even when chapters are already on disk (sticky-generation contract)', () => {
-    /* Reversed from the original "force paused=true on hydrate" rule.
-       With the sticky-generation contract (plan 31, invariant 1a) the
-       server-side job survives browser reload, so the client should
-       always try to attach — forcing paused=true here would make the
-       Generate button display Resume and the middleware suppress
-       auto-attaching to the still-live job, exactly the symptom that
-       prompted this fix (pill disappeared, in-progress chapter looked
-       gone, button stuck on Resume). Pause is now an *explicit* signal
-       only — setPaused dispatched from the Stop button or the
-       local-analyzer guard — and is never inferred from disk state. */
-    const start: ChaptersState = { ...baseState([]), paused: false };
+  it('clears lastError + generationStartedAt on hydrate (fresh frame for the opened book)', () => {
+    /* Plan 102 Should #5 removed `chapters.paused` — hydrate no longer has a
+       pause flag to inadvertently flip, so the old "auto-start regression"
+       trio collapses to this. Whether generation auto-attaches on open is now
+       governed entirely by the generation-stream middleware's reconcile
+       (hasWork && !queue.paused) — see its sticky-generation tests. Here we
+       just pin that hydrate gives the opened book a clean error/ETA frame. */
+    const start: ChaptersState = {
+      ...baseState([]),
+      lastError: 'stale error from a prior book',
+      generationStartedAt: Date.now() - 60_000,
+    };
     const next = chaptersSlice.reducer(
       start,
       chaptersActions.hydrateFromBookState({
@@ -876,23 +841,8 @@ describe('chaptersSlice — hydrateFromBookState', () => {
         characters: cast,
       }),
     );
-    expect(next.paused).toBe(false);
-  });
-
-  it('preserves a previously-set paused flag across hydrate (does not reset paused=true to false)', () => {
-    /* Symmetric to the case above — once the user has explicitly paused,
-       a follow-up hydrate (e.g. opening the same book again) must NOT
-       silently clear the pause and resume. */
-    const start: ChaptersState = { ...baseState([]), paused: true };
-    const next = chaptersSlice.reducer(
-      start,
-      chaptersActions.hydrateFromBookState({
-        chapters,
-        completedSlugs: ['01-chapter-one'],
-        characters: cast,
-      }),
-    );
-    expect(next.paused).toBe(true);
+    expect(next.lastError).toBe(null);
+    expect(next.generationStartedAt).toBe(null);
   });
 
   /* Plan 77 — per-chapter EBU R128 sidecar hydration. The book-state
@@ -942,10 +892,13 @@ describe('chaptersSlice — hydrateFromBookState', () => {
 });
 
 describe('chaptersSlice — misc reducers', () => {
-  it('setPaused toggles the paused flag', () => {
-    const start = baseState([makeChapter(3)]);
-    expect(chaptersSlice.reducer(start, chaptersActions.setPaused(true)).paused).toBe(true);
-    expect(chaptersSlice.reducer(start, chaptersActions.setPaused(false)).paused).toBe(false);
+  it('requestStreamHalt is a no-op on slice state (the middleware reacts to the action)', () => {
+    /* Plan 102 Should #5 — the analyzer "stop the stream NOW" signal carries
+       no state; the generation-stream middleware observes the action type and
+       closes the open SSE handle. The reducer must leave the slice untouched. */
+    const start = baseState([makeChapter(3, { state: 'in_progress' })]);
+    const next = chaptersSlice.reducer(start, chaptersActions.requestStreamHalt());
+    expect(next).toEqual(start);
   });
 
   it('clearLastError clears the banner without touching anything else', () => {
@@ -955,27 +908,11 @@ describe('chaptersSlice — misc reducers', () => {
     expect(next.chapters).toEqual(start.chapters);
   });
 
-  it('consumePendingRegen clears pendingRegen without touching anything else (Pause/Resume loop fix)', () => {
-    /* Regression: pause aborts the SSE, idle tick never lands on the client,
-       pendingRegen stays set, Resume reopens with force:true and wipes the
-       in-flight chapter. The fix is to clear the spec the moment the view
-       forwards it to the server — this reducer is the seam. */
-    const start: ChaptersState = {
-      ...baseState([makeChapter(3, { state: 'in_progress', progress: 0.4 })]),
-      pendingRegen: { chapterIds: [3, 4, 5], force: true },
-      regenEpoch: 7,
-      generationStartedAt: Date.now() - 5_000,
-      lastError: 'something',
-    };
-    const next = chaptersSlice.reducer(start, chaptersActions.consumePendingRegen());
-    expect(next.pendingRegen).toBe(null);
-    /* Everything else is preserved — the spec has been delivered, the run
-       is still alive, the banner (if any) is still relevant. */
-    expect(next.regenEpoch).toBe(7);
-    expect(next.generationStartedAt).toBe(start.generationStartedAt);
-    expect(next.lastError).toBe('something');
-    expect(next.chapters).toEqual(start.chapters);
-  });
+  /* The old `consumePendingRegen` reducer was removed in plan 102 Should #5
+     along with the `chapters.pendingRegen` field. The spec the SSE renders now
+     lives in middleware-local state (generation-stream-middleware's
+     `pendingSpec`) and is drained the instant the runner opens — covered by
+     generation-stream-middleware.test.ts's open-side assertions. */
 });
 
 describe('chaptersSlice — initial state (mock-leak regression)', () => {
@@ -1019,8 +956,6 @@ describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, pl
        the cross-tab message doesn't contaminate per-tab UI state.
        This is the cross-bookId-isolation invariant the plan locks in. */
     expect(next.chapters).toEqual(start.chapters);
-    expect(next.pendingRegen).toBe(start.pendingRegen);
-    expect(next.regenEpoch).toBe(start.regenEpoch);
     expect(next.currentBookId).toBe(start.currentBookId);
   });
 

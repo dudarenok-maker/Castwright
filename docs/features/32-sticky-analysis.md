@@ -1,5 +1,15 @@
 # 32 — Sticky analysis across navigation
 
+> **Update — plan 102 Should #5 (2026-05-23).** The D2 reverse-local-analyzer
+> guard's *generation* side changed: `chapters.paused` was removed, so the
+> reconcile-driven guard no longer dispatches `chaptersActions.setPaused(true)`
+> — it is now a pure gate (refuses to open the stream this pass). The forward
+> (explicit) guard's confirm dispatches a `haltActiveGeneration` thunk instead
+> of `setPaused(true)`, and the Generate-view Pause/Resume toggle described
+> below was relocated to the queue modal (`queue.paused`) back in plan 102. The
+> **analysis** slice's own `setPaused` (the pause-bridge) is unchanged — only
+> the chapters-side references below are superseded.
+
 **Status:** stable. Server (B1), frontend slice + middleware + view wiring (B2), top-bar pill + docs (B3), middleware-owned cross-navigation SSE (D1), reverse-direction local-analyzer guard (D2), and cold-boot rehydration end-to-end (E1 server + E2 frontend) all landed. D1 (middleware-owned SSE) lifted the cross-navigation freeze on the pill — middleware now owns its own subscribe-only SSE in addition to the pause-bridge. D2 wired the symmetric reverse-direction local-analyzer guard so an explicit TTS-start (Resume / Regenerate\*) prompts when a local analysis is alive somewhere in the workspace.
 
 Analysis, once started, runs to completion (or to the user's explicit Pause) regardless of where the user navigates. The previous contract aborted the analyzer the moment the SSE socket closed — navigate-away from the analysing view tore the in-flight LLM call down, and the next visit had to re-do the chapter the abort caught. The B-series contract pins the loop to a server-owned job keyed on `manuscriptId` so navigation only unsubscribes; the job carries on until the queue drains, `/pause` is called, or a `fresh: true` POST displaces it.
