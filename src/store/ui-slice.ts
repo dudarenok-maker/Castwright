@@ -79,6 +79,10 @@ export interface UiState {
       Apply / Discard or whenever the upload stage exits. Transient —
       not persisted. */
   reuploadingBookId: string | null;
+  /** Plan 102 — true while the global Queue modal is open. The modal is
+      mounted in Layout and reachable from the top-bar queue chip + the
+      Generate view's "View queue" button. */
+  queueModalOpen: boolean;
 }
 
 const initialState: UiState = {
@@ -102,6 +106,7 @@ const initialState: UiState = {
   ttsModelKeyExplicit: false,
   themeOverride: null,
   reuploadingBookId: null,
+  queueModalOpen: false,
 };
 
 export const uiSlice = createSlice({
@@ -267,6 +272,15 @@ export const uiSlice = createSlice({
     },
     setThemeOverride: (s, a: PayloadAction<'light' | 'dark' | 'system'>) => {
       s.themeOverride = a.payload;
+    },
+    /* Plan 102 — global Queue modal open/close. The modal is mounted in
+       Layout and renders nothing when closed; both the top-bar queue chip
+       and the Generate view's "View queue" button dispatch openQueueModal. */
+    openQueueModal: (s) => {
+      s.queueModalOpen = true;
+    },
+    closeQueueModal: (s) => {
+      s.queueModalOpen = false;
     },
     clearThemeOverride: (s) => {
       s.themeOverride = null;

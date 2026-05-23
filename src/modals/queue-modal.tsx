@@ -1,0 +1,279 @@
+/* Plan 102 — global queue modal.
+ *
+ * Mounted in Layout; renders nothing when `ui.queueModalOpen` is false.
+ * Lists every workspace queue entry grouped by book, with per-row
+ * Move-up / Move-down / Cancel actions and a queue-global Resume / Pause
+ * control at the top. The in-flight entry is pinned at the top of its book
+ * group and the reorder pills are hidden on it.
+ *
+ * Responsive per CLAUDE.md mobile protocol:
+ *   - phone (`<640px`)  → full-screen sheet
+ *   - tablet/desktop     → dialog centered on screen
+ *
+ * The reorder UI is tap-pill only for v1 (Move up / Move down buttons).
+ * Drag-to-reorder lives in a follow-up (BACKLOG) — tap pills satisfy the
+ * touch-equivalence rule for desktop AND mobile in one path, keeping the
+ * shipped modal small. Touch targets are ≥44×44 px per WCAG 2.5.5. */
+
+import { useMemo, useEffect } from 'react';
+import { useAppDispatch, useAppSelector } from '../store';
+import {
+  selectInFlightEntry,
+  selectQueueByBook,
+  selectQueueCount,
+  selectQueueLoaded,
+  selectQueuePaused,
+  type QueueEntry,
+} from '../store/queue-slice';
+import {
+  cancelQueueEntry,
+  loadQueue,
+  reorderQueue,
+  setQueuePaused,
+} from '../store/queue-thunks';
+import { uiActions } from '../store/ui-slice';
+import { IconClose, IconPause, IconPlay, IconTrash } from '../lib/icons';
+import { PrimaryButton } from '../components/primitives';
+
+interface QueueModalProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+export function QueueModal({ open, onClose }: QueueModalProps) {
+  const dispatch = useAppDispatch();
+  const groupedByBook = useAppSelector(selectQueueByBook);
+  const paused = useAppSelector(selectQueuePaused);
+  const loaded = useAppSelector(selectQueueLoaded);
+  const count = useAppSelector(selectQueueCount);
+  const inFlight = useAppSelector(selectInFlightEntry);
+  const bookTitles = useAppSelector((s) => s.library.books);
+
+  /* Refresh the queue snapshot whenever the modal opens — covers the
+     cross-tab case where another tab mutated the queue while ours was
+     closed. Cheap call (one /api/queue GET). */
+  useEffect(() => {
+    if (open) {
+      dispatch(loadQueue()).catch((e: unknown) => {
+        console.warn('[queue-modal] loadQueue failed', e);
+      });
+    }
+  }, [open, dispatch]);
+
+  const lookupBookTitle = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const b of bookTitles) map.set(b.bookId, b.title);
+    return (bookId: string): string => map.get(bookId) ?? bookId;
+  }, [bookTitles]);
+
+  if (!open) return null;
+
+  const togglePause = (): void => {
+    dispatch(setQueuePaused(!paused)).catch((e: unknown) => {
+      console.warn('[queue-modal] setPaused failed', e);
+    });
+  };
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        className="fixed inset-0 bg-ink/40 z-50 fade-in"
+        data-testid="queue-modal-backdrop"
+      />
+      <div
+        className="fixed inset-0 z-50 grid sm:place-items-center sm:p-6 pointer-events-none"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Generation queue"
+      >
+        <div className="bg-white sm:rounded-3xl shadow-float w-full h-full sm:h-auto sm:max-w-2xl sm:max-h-[90vh] pointer-events-auto fade-in flex flex-col">
+          {/* Header */}
+          <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3 sticky top-0 bg-white/95 backdrop-blur-md">
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
+                Generation queue
+              </p>
+              <h3 className="text-base font-bold text-ink">
+                {count === 0 ? 'Empty' : `${count} ${count === 1 ? 'entry' : 'entries'} pending`}
+              </h3>
+            </div>
+            {count > 0 && (
+              <button
+                onClick={togglePause}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-ink/5 hover:bg-ink/10 text-sm font-medium text-ink min-h-[44px] sm:min-h-0"
+                data-testid="queue-modal-pause"
+              >
+                {paused ? (
+                  <>
+                    <IconPlay className="w-4 h-4" /> Resume
+                  </>
+                ) : (
+                  <>
+                    <IconPause className="w-4 h-4" /> Pause
+                  </>
+                )}
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+              aria-label="Close queue"
+            >
+              <IconClose className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Body */}
+          <div className="px-6 py-5 flex-1 overflow-y-auto">
+            {!loaded ? (
+              <p className="text-sm text-ink/60">Loading queue…</p>
+            ) : count === 0 ? (
+              <div className="py-10 text-center">
+                <p className="text-sm text-ink/60">No chapters queued.</p>
+                <p className="text-xs text-ink/40 mt-1">
+                  Click "Add to queue" on any chapter to start.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {groupedByBook.map(({ bookId, entries }) => (
+                  <BookGroup
+                    key={bookId}
+                    title={lookupBookTitle(bookId)}
+                    entries={entries}
+                    inFlightId={inFlight?.id ?? null}
+                    onReorder={(newOrderForGroup) => {
+                      /* Reorder within the GROUP requires building the full
+                         workspace-level order: keep the in-flight entry first
+                         (pinned), then this group's new order, then any other
+                         book's entries in their existing order. */
+                      const orderable = groupedByBook
+                        .flatMap((g) =>
+                          g.bookId === bookId ? newOrderForGroup : g.entries,
+                        )
+                        .filter((e) => e.id !== inFlight?.id)
+                        .map((e) => e.id);
+                      dispatch(reorderQueue(orderable)).catch((e: unknown) => {
+                        console.warn('[queue-modal] reorder failed', e);
+                      });
+                    }}
+                    onCancel={(entryId) => {
+                      dispatch(cancelQueueEntry(entryId)).catch(() => {
+                        /* Toast surfaced inside the thunk's 409 handler. */
+                      });
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+interface BookGroupProps {
+  title: string;
+  entries: QueueEntry[];
+  inFlightId: string | null;
+  onReorder: (entries: QueueEntry[]) => void;
+  onCancel: (entryId: string) => void;
+}
+
+function BookGroup({ title, entries, inFlightId, onReorder, onCancel }: BookGroupProps) {
+  const moveUp = (idx: number): void => {
+    if (idx <= 0) return;
+    const next = [...entries];
+    [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+    onReorder(next);
+  };
+  const moveDown = (idx: number): void => {
+    if (idx >= entries.length - 1) return;
+    const next = [...entries];
+    [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+    onReorder(next);
+  };
+
+  return (
+    <section>
+      <h4 className="text-xs uppercase tracking-widest text-ink/50 font-semibold mb-2">
+        {title}
+      </h4>
+      <ul className="space-y-1.5" data-testid={`queue-modal-group-${title}`}>
+        {entries.map((entry, idx) => {
+          const isInFlight = entry.id === inFlightId;
+          return (
+            <li
+              key={entry.id}
+              data-testid={`queue-entry-${entry.id}`}
+              className={`flex items-center gap-2 px-3 py-2 rounded-2xl border ${
+                isInFlight ? 'border-magenta/40 bg-magenta/5' : 'border-ink/10 bg-white'
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-ink truncate">
+                  Chapter {entry.chapterId}
+                  {entry.characterId ? ` · ${entry.characterId}` : ''}
+                </div>
+                <div className="text-xs text-ink/50">
+                  {isInFlight
+                    ? `In flight${entry.progress != null ? ` · ${Math.round(entry.progress * 100)}%` : ''}`
+                    : entry.status === 'failed'
+                      ? `Failed${entry.errorReason ? ` · ${entry.errorReason}` : ''}`
+                      : entry.status === 'paused'
+                        ? 'Paused'
+                        : 'Queued'}
+                </div>
+              </div>
+              {!isInFlight && (
+                <>
+                  <button
+                    onClick={() => moveUp(idx)}
+                    disabled={idx === 0}
+                    aria-label="Move up"
+                    className="p-2 rounded-full hover:bg-ink/5 text-ink/60 disabled:opacity-30 disabled:cursor-not-allowed min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+                    data-testid={`queue-entry-${entry.id}-up`}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    onClick={() => moveDown(idx)}
+                    disabled={idx === entries.length - 1}
+                    aria-label="Move down"
+                    className="p-2 rounded-full hover:bg-ink/5 text-ink/60 disabled:opacity-30 disabled:cursor-not-allowed min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+                    data-testid={`queue-entry-${entry.id}-down`}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    onClick={() => onCancel(entry.id)}
+                    aria-label="Cancel entry"
+                    className="p-2 rounded-full hover:bg-red-50 text-ink/60 hover:text-red-700 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+                    data-testid={`queue-entry-${entry.id}-cancel`}
+                  >
+                    <IconTrash className="w-4 h-4" />
+                  </button>
+                </>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/** Convenience component that wires the modal to ui-slice state — mount this
+    directly in Layout instead of QueueModal so callers don't have to plumb
+    open/onClose. */
+export function QueueModalContainer(): JSX.Element {
+  const dispatch = useAppDispatch();
+  const open = useAppSelector((s) => s.ui.queueModalOpen);
+  return <QueueModal open={open} onClose={() => dispatch(uiActions.closeQueueModal())} />;
+}
+
+/* Re-export from primitives for direct consumers; unused here but the
+   modal's "View queue" CTA in callers may want a typed button. */
+export { PrimaryButton };

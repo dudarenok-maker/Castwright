@@ -43,6 +43,8 @@ import { DriftReportModal } from '../modals/drift-report';
 import { ProfileDrawer } from '../modals/profile-drawer';
 import { ReattributeLinesModal } from '../modals/reattribute-lines';
 import { ConfirmDialog } from '../modals/confirm-dialog';
+import { QueueModalContainer } from '../modals/queue-modal';
+import { loadQueue } from '../store/queue-thunks';
 import { ToastStack } from './toast-stack';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { RevisionTimelineModal } from './revision-timeline-modal';
@@ -89,6 +91,9 @@ export function Layout() {
   const stage = useAppSelector((s) => s.ui.stage);
   const ui = useAppSelector((s) => s.ui);
   const userDisplayName = useAppSelector((s) => s.account.displayName);
+  /* Plan 102 — workspace queue count drives the top-bar queue chip + the
+     Generate view's "View queue" button visibility. */
+  const queueCount = useAppSelector((s) => s.queue.entries.length);
   /* Plan 89 C3 — `characters` and `chapters.chapters` are large arrays the
      Layout reads every render. Use shallow equality so unrelated slice mutations
      (e.g. a foreign book's drift poll bumping `revisions`, or a heartbeat tick
@@ -208,6 +213,15 @@ export function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const skipFirst = useRef(true);
+  /* Plan 102 — cold-boot hydrate of the workspace queue. One call per app
+     mount; the modal re-fetches on every open to catch cross-tab mutations
+     since we deliberately don't broadcast queue actions over BroadcastChannel
+     in v1 (single-writer per-workspace contract holds). */
+  useEffect(() => {
+    dispatch(loadQueue()).catch((e: unknown) => {
+      console.warn('[layout] initial loadQueue failed', e);
+    });
+  }, [dispatch]);
   useEffect(() => {
     if (skipFirst.current) {
       skipFirst.current = false;
@@ -868,6 +882,8 @@ export function Layout() {
           import.meta.env.DEV ? () => dispatch(uiActions.openWorktrees()) : undefined
         }
         userDisplayName={userDisplayName}
+        queueCount={queueCount}
+        onOpenQueue={() => dispatch(uiActions.openQueueModal())}
       />
 
       {/* Plan 89 C5 — single shared Suspense boundary for the route-leaf
@@ -1234,6 +1250,8 @@ export function Layout() {
           onClose={() => setReattributeModal(null)}
         />
       )}
+      <QueueModalContainer />
+
       {ui.showRevisionPlayer && pending[0] && bookId && (
         <RevisionDiffPlayer
           revision={pending[0]}
