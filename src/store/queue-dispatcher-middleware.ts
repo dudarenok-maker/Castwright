@@ -96,9 +96,23 @@ export const queueDispatcherMiddleware: Middleware = (storeApi: MiddlewareAPI) =
     if (chapters.currentBookId !== head.bookId) return;
 
     /* Dispatch the regenerate. The existing generation-stream-middleware
-       reacts: sets pendingRegen, reconciles, opens SSE for the chapter. */
+       reacts: sets pendingRegen, reconciles, opens SSE for the
+       chapter / character target. */
     inFlightEntryId = head.id;
-    dispatch(chaptersActions.regenerateChapter({ chapterId: head.chapterId, scope: 'this' }));
+    if (head.scope === 'character' && head.characterId) {
+      /* Per-character-in-chapter entries dispatch regenerateCharacter
+         scoped to a single chapter. Multi-chapter character regen is
+         expanded at enqueue time into one entry per chapter so each
+         is independently reorderable in the modal. */
+      dispatch(
+        chaptersActions.regenerateCharacter({
+          characterId: head.characterId,
+          chapterIds: [head.chapterId],
+        }),
+      );
+    } else {
+      dispatch(chaptersActions.regenerateChapter({ chapterId: head.chapterId, scope: 'this' }));
+    }
   };
 
   return (next) => (action) => {
