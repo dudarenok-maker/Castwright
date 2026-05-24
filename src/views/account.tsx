@@ -74,6 +74,9 @@ export function AccountView() {
   const [eagerLoadKokoro, setEagerLoadKokoro] = useState<boolean>(
     account.eagerLoadKokoro ?? true,
   );
+  const [generationWorkers, setGenerationWorkers] = useState<number>(
+    account.generationWorkers ?? 2,
+  );
   const themeOverride = useAppSelector((s) => s.ui.themeOverride);
   const [showSaved, setShowSaved] = useState(false);
 
@@ -95,6 +98,7 @@ export function AccountView() {
     setAutoStartSidecar(account.autoStartSidecar ?? true);
     setDualModelEnabled(account.dualModelEnabled ?? false);
     setEagerLoadKokoro(account.eagerLoadKokoro ?? true);
+    setGenerationWorkers(account.generationWorkers ?? 2);
   }, [
     account.hydrated,
     account.displayName,
@@ -114,6 +118,7 @@ export function AccountView() {
     account.autoStartSidecar,
     account.dualModelEnabled,
     account.eagerLoadKokoro,
+    account.generationWorkers,
   ]);
 
   /* When the engine switches, the selected modelKey may not belong to the
@@ -158,6 +163,7 @@ export function AccountView() {
       coverPickerDefaultTab !== (account.coverPickerDefaultTab ?? 'search') ||
       defaultThemePreference !== (account.defaultThemePreference ?? 'system') ||
       dualModelEnabled !== (account.dualModelEnabled ?? false) ||
+      generationWorkers !== (account.generationWorkers ?? 2) ||
       autoStartDirty ||
       eagerLoadKokoroDirty ||
       workspaceDirty
@@ -177,6 +183,7 @@ export function AccountView() {
     coverPickerDefaultTab,
     defaultThemePreference,
     dualModelEnabled,
+    generationWorkers,
     autoStartDirty,
     eagerLoadKokoroDirty,
     workspaceDirty,
@@ -202,6 +209,7 @@ export function AccountView() {
       autoStartSidecar,
       dualModelEnabled,
       eagerLoadKokoro,
+      generationWorkers,
     };
     const action = await dispatch(saveAccountSettings(patch));
     if (saveAccountSettings.fulfilled.match(action)) {
@@ -585,6 +593,27 @@ export function AccountView() {
                 Restart the sidecar to apply this change.
               </p>
             )}
+          </FieldRow>
+          <FieldRow
+            label="Generation workers"
+            sublabel="How many chapters the generation queue synthesizes at once (1–4, default 2). Chapters are pulled from the queue across books. This is queue concurrency only — the GPU stays the limit on simultaneous synthesis, so raising this never risks running out of VRAM. Takes effect on the next generation run."
+          >
+            <input
+              type="number"
+              min={1}
+              max={4}
+              step={1}
+              value={generationWorkers}
+              onChange={(e) => {
+                const parsed = parseInt(e.target.value, 10);
+                if (Number.isFinite(parsed)) {
+                  /* Clamp to schema [1, 4] so Save can't 400 on a fat-finger. */
+                  setGenerationWorkers(Math.max(1, Math.min(4, parsed)));
+                }
+              }}
+              data-testid="account-generation-workers"
+              className="w-24 rounded-xl border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            />
           </FieldRow>
         </FormCard>
 

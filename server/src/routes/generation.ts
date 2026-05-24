@@ -45,7 +45,7 @@ import {
 } from '../tts/index.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { pickVoiceForEngine } from '../tts/voice-mapping.js';
-import { getCachedUserSettings } from '../workspace/user-settings.js';
+import { getCachedUserSettings, getResolvedGenerationWorkers } from '../workspace/user-settings.js';
 import {
   audioExtForFormat,
   encodePcmToAudio,
@@ -969,10 +969,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      server/tts-sidecar/tests/test_concurrent_synthesis.py:214-244). Kokoro
      v1 is ~1 GB resident and two concurrent inferences fit on an 8 GB GPU
      without eviction; that's the documented default. */
-  const concurrencyEnv = process.env.GEN_CHAPTER_CONCURRENCY;
-  const parsedConcurrency = concurrencyEnv ? Number.parseInt(concurrencyEnv, 10) : NaN;
-  const concurrency =
-    Number.isFinite(parsedConcurrency) && parsedConcurrency >= 1 ? parsedConcurrency : 2;
+  /* Plan 111 — pool width is the resolved `generationWorkers` setting
+     (GEN_WORKERS env > generationWorkers setting > 2). `GEN_CHAPTER_CONCURRENCY`
+     is still honored as a legacy env fallback inside the resolver (retired in a
+     later wave). Today this drives within-book fan-out; once the queue worker
+     pool lands, the same setting bounds cross-book concurrency too. */
+  const concurrency = getResolvedGenerationWorkers();
   const effectiveConcurrency = Math.min(concurrency, targetChapters.length || 1);
 
   let nextIndex = 0;
