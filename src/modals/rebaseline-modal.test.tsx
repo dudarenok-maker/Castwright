@@ -1,0 +1,263 @@
+/* Rebaseline modal (plan 108, Wave 5) — RTL tests.
+ *   - default selection = the principal cast (≥80% of non-narrator lines;
+ *     narrator excluded)
+ *   - Propose renders one current-vs-proposed row per included character
+ *   - Approve dispatches the series-scoped Qwen override for included rows
+ *     (asserted via the mocked api.setVoiceOverride call shape)
+ *   - per-character design failure is tolerated (row marked failed, others
+ *     still proposed + approvable) */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
+import { RebaselineModalContainer } from './rebaseline-modal';
+import { uiSlice } from '../store/ui-slice';
+import { castSlice } from '../store/cast-slice';
+import { voicesSlice } from '../store/voices-slice';
+import { notificationsSlice } from '../store/notifications-slice';
+import { rebaselineSlice } from '../store/rebaseline-slice';
+import type { Character, Voice } from '../lib/types';
+
+/* Mock the api surface the modal calls. designQwenVoice returns a derived
+   voiceId per character; generateAllVoiceStyles returns an empty batch (the
+   modal falls back to per-character generate); setVoiceOverride is the spy
+   the approve test asserts on. */
+const designQwenVoice = vi.fn(async (_bookId: string, characterId: string) => ({
+  voiceId: `qwen-${characterId}`,
+  previewUrl: `blob:${characterId}`,
+}));
+const generateVoiceStyle = vi.fn(async (_bookId: string, characterId: string) => ({
+  voiceStyle: `persona for ${characterId}`,
+}));
+const generateAllVoiceStyles = vi.fn(async () => ({ voiceStyles: {}, failures: {} }));
+const setVoiceOverride = vi.fn(async () => undefined);
+
+vi.mock('../lib/api', () => ({
+  api: {
+    designQwenVoice: (...args: unknown[]) => designQwenVoice(...(args as [string, string])),
+    generateVoiceStyle: (...args: unknown[]) => generateVoiceStyle(...(args as [string, string])),
+    generateAllVoiceStyles: () => generateAllVoiceStyles(),
+    setVoiceOverride: (...args: unknown[]) => setVoiceOverride(...(args as [])),
+  },
+}));
+
+/* Audition uses the auto-load orchestrator + sample playback — stub both so
+   no real audio / network is hit in jsdom. */
+vi.mock('../lib/play-sample-with-auto-load', () => ({
+  playSampleWithAutoLoad: vi.fn(async () => ({ analyzerEvicted: false })),
+}));
+vi.mock('../lib/use-sample-playback', () => ({
+  useSamplePlayback: () => ({
+    currentUrl: null,
+    isPlaying: false,
+    play: vi.fn(async () => undefined),
+    stop: vi.fn(),
+    playUntilEnded: vi.fn(async () => ({ cancelled: false })),
+  }),
+}));
+
+const char = (id: string, name: string, lines: number, role = 'role'): Character =>
+  ({
+    id,
+    name,
+    role,
+    color: 'narrator',
+    lines,
+    attributes: [],
+    voiceId: `voice-${id}`,
+  }) as Character;
+
+const voice = (id: string, characterId: string): Voice =>
+  ({
+    id,
+    character: characterId,
+    bookId: 'book-1',
+    bookTitle: 'Book One',
+    attributes: [],
+    usedIn: 1,
+    source: 'current',
+    gradient: ['#000', '#fff'],
+    ttsVoice: { provider: 'kokoro', name: 'af_heart', description: '' },
+  }) as unknown as Voice;
+
+function makeStore(characters: Character[], voices: Voice[]) {
+  return configureStore({
+    reducer: {
+      ui: uiSlice.reducer,
+      cast: castSlice.reducer,
+      voices: voicesSlice.reducer,
+      notifications: notificationsSlice.reducer,
+      rebaseline: rebaselineSlice.reducer,
+    },
+    preloadedState: {
+      ui: { ...uiSlice.getInitialState(), rebaselineModalOpen: true },
+      cast: { characters },
+      voices: { ...voicesSlice.getInitialState(), voices },
+    },
+  });
+}
+
+/* Canonical cast: narrator dominates lines (excluded), Biana + Keefe carry
+   the bulk of dialogue, Bystander is a one-liner under the 80% threshold. */
+const CHARACTERS = [
+  char('narrator', 'Narrator', 500),
+  char('biana', 'Biana', 80),
+  char('keefe', 'Keefe', 60),
+  char('bystander', 'Bystander', 1),
+];
+const VOICES = [voice('voice-biana', 'biana'), voice('voice-keefe', 'keefe')];
+
+beforeEach(() => {
+  designQwenVoice.mockClear();
+  generateVoiceStyle.mockClear();
+  generateAllVoiceStyles.mockClear();
+  setVoiceOverride.mockClear();
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+describe('RebaselineModal — default selection', () => {
+  it('pre-selects the principal cast and excludes the narrator', () => {
+    const store = makeStore(CHARACTERS, VOICES);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    const sel = store.getState().rebaseline.selectedCharacterIds;
+    expect(sel).toContain('biana');
+    expect(sel).toContain('keefe');
+    expect(sel).not.toContain('narrator');
+    // The narrator row renders (toggleable on) but is unchecked by default.
+    const narratorRow = screen.getByLabelText('Rebaseline Narrator') as HTMLInputElement;
+    expect(narratorRow.checked).toBe(false);
+    const bianaRow = screen.getByLabelText('Rebaseline Biana') as HTMLInputElement;
+    expect(bianaRow.checked).toBe(true);
+  });
+
+  it('renders nothing without a bookId (global voices tab)', () => {
+    const store = makeStore(CHARACTERS, VOICES);
+    const { container } = render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId={null} />
+      </Provider>,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('RebaselineModal — propose', () => {
+  it('renders a current-vs-proposed row per selected character', async () => {
+    const store = makeStore(CHARACTERS, VOICES);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('rebaseline-proposal-biana')).toBeInTheDocument();
+      expect(screen.getByTestId('rebaseline-proposal-keefe')).toBeInTheDocument();
+    });
+    // Both a current + proposed audition button per row.
+    expect(screen.getByTestId('rebaseline-play-current-biana')).toBeInTheDocument();
+    expect(screen.getByTestId('rebaseline-play-proposed-biana')).toBeInTheDocument();
+    // The design call fired once per selected character.
+    expect(designQwenVoice).toHaveBeenCalledTimes(2);
+    expect(store.getState().rebaseline.proposals.biana.proposedVoiceId).toBe('qwen-biana');
+  });
+});
+
+describe('RebaselineModal — approve', () => {
+  it('writes a series-scoped Qwen override for each included character', async () => {
+    const store = makeStore(CHARACTERS, VOICES);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-approve')).not.toBeDisabled());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(setVoiceOverride).toHaveBeenCalledTimes(2));
+    // Assert the call shape: keyed by the character's library voiceId,
+    // engine qwen + designed voiceId, scope series + the anchor bookId.
+    const calls = setVoiceOverride.mock.calls as unknown as Array<
+      [string, { engine: string; name: string }, { scope: string; bookId: string }]
+    >;
+    const bianaCall = calls.find((c) => c[1].name === 'qwen-biana');
+    expect(bianaCall).toBeTruthy();
+    expect(bianaCall![0]).toBe('voice-biana');
+    expect(bianaCall![1]).toEqual({ engine: 'qwen', name: 'qwen-biana' });
+    expect(bianaCall![2]).toEqual({ scope: 'series', bookId: 'book-1' });
+    // The cast slice mirrors the engine + override.
+    const biana = store.getState().cast.characters.find((c) => c.id === 'biana')!;
+    expect(biana.ttsEngine).toBe('qwen');
+    expect(biana.overrideTtsVoices?.qwen?.name).toBe('qwen-biana');
+    // Success toast fired with the count.
+    const toast = store
+      .getState()
+      .notifications.toasts.find((t) => t.message.includes('Rebaselined 2 characters'));
+    expect(toast).toBeTruthy();
+  });
+
+  it('untickling a row excludes it from the approve write', async () => {
+    const store = makeStore(CHARACTERS, VOICES);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-include-keefe')).toBeInTheDocument());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-include-keefe'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(setVoiceOverride).toHaveBeenCalledTimes(1));
+    const calls = setVoiceOverride.mock.calls as unknown as Array<[string, { name: string }]>;
+    expect(calls[0][1].name).toBe('qwen-biana');
+  });
+});
+
+describe('RebaselineModal — per-character failure', () => {
+  it('marks a failed row and still proposes + approves the others', async () => {
+    designQwenVoice.mockImplementation(async (_bookId: string, characterId: string) => {
+      if (characterId === 'keefe') throw new Error('sidecar down');
+      return { voiceId: `qwen-${characterId}`, previewUrl: `blob:${characterId}` };
+    });
+    const store = makeStore(CHARACTERS, VOICES);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => {
+      expect(store.getState().rebaseline.proposals.keefe.status).toBe('failed');
+      expect(store.getState().rebaseline.proposals.biana.status).toBe('ready');
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    // Only the surviving row is written.
+    await waitFor(() => expect(setVoiceOverride).toHaveBeenCalledTimes(1));
+    const calls = setVoiceOverride.mock.calls as unknown as Array<[string, { name: string }]>;
+    expect(calls[0][1].name).toBe('qwen-biana');
+  });
+});

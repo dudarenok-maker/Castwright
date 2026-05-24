@@ -30,6 +30,7 @@ const baseState = (stage: Stage): UiState => ({
   themeOverride: null,
   reuploadingBookId: null,
   queueModalOpen: false,
+  rebaselineModalOpen: false,
 });
 
 describe('uiSlice — openBook status→stage routing', () => {

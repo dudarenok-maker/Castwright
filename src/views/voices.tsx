@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { SectionLabel, MixedHeading, VoiceSwatch } from '../components/primitives';
 import { StatTile } from '../components/stat-tiles';
 import { VoiceCard } from '../components/voice-library-panel';
-import { IconPlay } from '../lib/icons';
+import { IconPlay, IconSparkle } from '../lib/icons';
 import type {
   BaseVoice,
   Character,
@@ -28,10 +28,8 @@ import { playBaseVoiceSampleWithAutoLoad } from '../lib/play-sample-with-auto-lo
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { findCharacterForVoice, pickMergeSurvivor } from '../lib/voice-character-link';
 import { CompareCastModal } from '../modals/compare-cast-modal';
-import {
-  DuplicateReviewModal,
-  type DuplicateReviewPair,
-} from '../modals/duplicate-review-modal';
+import { RebaselineModalContainer } from '../modals/rebaseline-modal';
+import { DuplicateReviewModal, type DuplicateReviewPair } from '../modals/duplicate-review-modal';
 import {
   detectDuplicateCandidates,
   type BookSeriesInfo,
@@ -123,9 +121,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      retroactively without retrying on every render. Plan 96 promotes
      `globalCastFetching` to a Set so per-side parallel fetches for a
      cross-book pair don't clobber each other's in-flight state. */
-  const [globalCastCache, setGlobalCastCache] = useState<Map<string, Character[]>>(
-    () => new Map(),
-  );
+  const [globalCastCache, setGlobalCastCache] = useState<Map<string, Character[]>>(() => new Map());
   const [globalCastFailed, setGlobalCastFailed] = useState<Set<string>>(() => new Set());
   const [globalCastFetching, setGlobalCastFetching] = useState<Set<string>>(() => new Set());
   /* Plan 101 — DuplicateReviewModal state. `duplicatePair` is the pair
@@ -232,7 +228,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
            triggers the hydrate; per-side link checks only fire once a
            cast source is in hand. */
         const perSideSources = sideBookIds.map((bookId) =>
-          bookId === currentBookId ? characters : globalCastCache.get(bookId) ?? null,
+          bookId === currentBookId ? characters : (globalCastCache.get(bookId) ?? null),
         );
         const anyMissing = perSideSources.some((s) => s === null);
         if (anyMissing) {
@@ -588,7 +584,18 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             member using it across books — handy when one base voice carries through a whole series.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {currentBookId && characters.length > 0 && (
+            <button
+              type="button"
+              onClick={() => dispatch(uiActions.openRebaselineModal())}
+              data-testid="open-rebaseline"
+              title="Move the principal cast onto bespoke Qwen voices across the whole series"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-magenta text-white text-sm font-semibold hover:bg-magenta/90 transition-colors min-h-[44px] sm:min-h-0"
+            >
+              <IconSparkle className="w-4 h-4" /> Rebaseline the series
+            </button>
+          )}
           <TtsEngineModelPicker
             modelKey={ttsModelKey}
             onChange={(next) => dispatch(uiActions.setTtsModelKey(next))}
@@ -722,11 +729,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                 }
                 className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed max-w-[14rem] truncate"
               >
-                {mergeBusy
-                  ? 'Merging…'
-                  : mergeTarget
-                    ? `Merge into ${mergeTarget.name}`
-                    : 'Merge'}
+                {mergeBusy ? 'Merging…' : mergeTarget ? `Merge into ${mergeTarget.name}` : 'Merge'}
               </button>
             )}
             {selectionDuplicateCandidate && (
@@ -805,7 +808,12 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                         if (!cached) return prev;
                         const merged = cached.map((c) =>
                           c.id === u.characterId
-                            ? { ...c, gender: next.gender, ageRange: next.ageRange, tone: next.tone }
+                            ? {
+                                ...c,
+                                gender: next.gender,
+                                ageRange: next.ageRange,
+                                tone: next.tone,
+                              }
                             : c,
                         );
                         const map = new Map(prev);
@@ -862,6 +870,11 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         onClose={() => setDuplicatePair(null)}
         onResolved={() => setSelectedVoiceIds([])}
       />
+
+      {/* Plan 108 Wave 5 — "Rebaseline the series" modal. Mounted here;
+          renders nothing when closed or when no book is loaded (the
+          series-scoped write needs a book anchor). */}
+      <RebaselineModalContainer bookId={currentBookId} />
     </div>
   );
 }
