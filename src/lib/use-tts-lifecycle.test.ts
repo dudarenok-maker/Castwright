@@ -38,6 +38,8 @@ beforeEach(() => {
     modelLoaded: false,
     kokoroLoaded: false,
     kokoroLoading: false,
+    qwenLoaded: false,
+    qwenLoading: false,
   });
   /* GPU semaphore queue probe — runs on the same 30 s tick as /health.
      Default to an empty queue so the "Queued (N ahead) ·" pill prefix
@@ -214,6 +216,79 @@ describe('useTtsLifecycle', () => {
     });
     expect(mocks.unloadSidecar).toHaveBeenCalledOnce();
     expect(mocks.unloadSidecar).toHaveBeenCalledWith({ engine: 'kokoro' });
+  });
+
+  it('flips the Qwen pill to "ready" when /health reports qwenLoaded=true', async () => {
+    /* Plan 108: the bespoke Qwen engine reports through the same /health
+       response (qwenLoaded / qwenLoading) — the third consumer the
+       BACKLOG #15 fan-out anticipated. */
+    mocks.getSidecarHealth.mockResolvedValueOnce({
+      status: 'reachable',
+      url: '',
+      loading: false,
+      modelLoaded: false,
+      kokoroLoaded: false,
+      kokoroLoading: false,
+      qwenLoaded: true,
+      qwenLoading: false,
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.qwen.state).toBe('ready'));
+    expect(result.current.coqui.state).toBe('idle');
+    expect(result.current.kokoro.state).toBe('idle');
+  });
+
+  it('flips the Qwen pill to "loading" when /health reports qwenLoading=true', async () => {
+    mocks.getSidecarHealth.mockResolvedValueOnce({
+      status: 'reachable',
+      url: '',
+      loading: false,
+      modelLoaded: false,
+      kokoroLoaded: false,
+      kokoroLoading: false,
+      qwenLoaded: false,
+      qwenLoading: true,
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.qwen.state).toBe('loading'));
+  });
+
+  it('Qwen onLoad does NOT touch the analyzer (treated like Kokoro, not Coqui)', async () => {
+    /* Qwen must not auto-evict the analyzer — only Coqui does. Regression
+       net for the plan 108 residency rule. */
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.qwen.state).toBe('idle'));
+
+    await act(async () => {
+      await result.current.qwen.onLoad();
+    });
+
+    expect(mocks.unloadAnalyzer).not.toHaveBeenCalled();
+    expect(mocks.getOllamaHealth).not.toHaveBeenCalled();
+    expect(mocks.loadSidecar).toHaveBeenCalledOnce();
+    expect(mocks.loadSidecar).toHaveBeenCalledWith({ engine: 'qwen' });
+    expect(result.current.evictionNotice).toBeNull();
+  });
+
+  it('Qwen onStop calls unloadSidecar with engine=qwen', async () => {
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.qwen.state).toBe('idle'));
+
+    await act(async () => {
+      await result.current.qwen.onStop();
+    });
+    expect(mocks.unloadSidecar).toHaveBeenCalledOnce();
+    expect(mocks.unloadSidecar).toHaveBeenCalledWith({ engine: 'qwen' });
+  });
+
+  it('drives all THREE pills from a SINGLE /health probe per tick (one-poll invariant)', async () => {
+    /* Adding the Qwen consumer must NOT introduce a second poll — the
+       BACKLOG #15 / plan 30 G1 invariant. After one mount cycle the
+       sidecar /health probe must have fired exactly once even though three
+       engine pills read from it. */
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.qwen.state).toBe('idle'));
+    expect(mocks.getSidecarHealth).toHaveBeenCalledTimes(1);
   });
 
   it('Kokoro pending state does not bleed into Coqui pill', async () => {

@@ -33,6 +33,11 @@ interface SidecarHealthBody {
      one-poll-per-tick invariant. */
   kokoro_loaded?: boolean;
   kokoro_loading?: boolean;
+  /* Qwen mirrors the Kokoro pair (plan 108). Like Kokoro it does NOT
+     auto-evict the analyzer; its bespoke per-character voices share the
+     same single /health response so useTtsLifecycle stays on one poll. */
+  qwen_loaded?: boolean;
+  qwen_loading?: boolean;
   device?: string | null;
 }
 
@@ -62,6 +67,8 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       loading: body.loading === true,
       kokoroLoaded: body.kokoro_loaded === true,
       kokoroLoading: body.kokoro_loading === true,
+      qwenLoaded: body.qwen_loaded === true,
+      qwenLoading: body.qwen_loading === true,
       device: typeof body.device === 'string' ? body.device : null,
     });
   } catch (e) {
@@ -92,7 +99,7 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
    is loaded returns `ready` immediately, so the UI can fire this on every
    screen entry without burning compute.
 
-   Body: `{ engine?: 'coqui' | 'kokoro', model?: string }`. Forwarded
+   Body: `{ engine?: 'coqui' | 'kokoro' | 'qwen', model?: string }`. Forwarded
    verbatim — see the sidecar's /load route for default-resolution logic. */
 sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
   const url = getResolvedSidecarUrl();
@@ -133,9 +140,9 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
    2s probe budget suffices. Idempotent: returns `idle` whether or not the
    sidecar had a model resident.
 
-   Body: `{ engine?: 'coqui' | 'kokoro' }`, default `'coqui'`. We forward
-   the full body so the sidecar can dispatch — the Kokoro Stop pill sets
-   `engine: 'kokoro'` here. */
+   Body: `{ engine?: 'coqui' | 'kokoro' | 'qwen' }`, default `'coqui'`. We
+   forward the full body so the sidecar can dispatch — the Kokoro / Qwen
+   Stop pills set `engine: 'kokoro'` / `engine: 'qwen'` here. */
 sidecarHealthRouter.post('/unload', async (req: Request, res: Response) => {
   const url = getResolvedSidecarUrl();
   const target = `${url}/unload`;

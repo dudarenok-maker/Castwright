@@ -6,12 +6,20 @@
 import { describe, expect, it } from 'vitest';
 import { selectEnginesInUse } from './engines-in-use-selector';
 import type { RootState } from './index';
+import type { Character } from '../lib/types';
 
-function makeState(modelKey: string): RootState {
-  /* Cast — the selector only reads `account.defaultTtsModelKey`. We don't
-     need a full store. */
-  return { account: { defaultTtsModelKey: modelKey } } as unknown as RootState;
+function makeState(modelKey: string, characters: Character[] = []): RootState {
+  /* Cast — the selector reads `account.defaultTtsModelKey` plus the cast
+     slice's characters (for per-character engine overrides). We don't need
+     a full store. */
+  return {
+    account: { defaultTtsModelKey: modelKey },
+    cast: { characters },
+  } as unknown as RootState;
 }
+
+const charWithEngine = (id: string, ttsEngine?: Character['ttsEngine']): Character =>
+  ({ id, name: id, role: '', color: 'narrator', lines: 0, scenes: 0, ttsEngine }) as Character;
 
 describe('selectEnginesInUse', () => {
   it('returns {kokoro} when the default is kokoro-v1', () => {
@@ -38,5 +46,40 @@ describe('selectEnginesInUse', () => {
        — it just yields no pills. */
     const empty = { account: { defaultTtsModelKey: undefined } } as unknown as RootState;
     expect(selectEnginesInUse(empty)).toEqual(new Set());
+  });
+
+  it('includes "qwen" when any cast character has ttsEngine="qwen" (plan 108)', () => {
+    /* Per-character engine override: Qwen is bespoke-per-character, so it's
+       almost never the book default. A single character pinned to Qwen must
+       still surface the Qwen pill alongside the default Kokoro pill. */
+    const state = makeState('kokoro-v1', [
+      charWithEngine('narrator'),
+      charWithEngine('halloran', 'qwen'),
+    ]);
+    expect(selectEnginesInUse(state)).toEqual(new Set(['kokoro', 'qwen']));
+  });
+
+  it('includes "qwen" when a character carries an overrideTtsVoices.qwen slot', () => {
+    /* Even without ttsEngine set, a designed Qwen voice slot means the
+       character can synthesise with Qwen — surface the pill. */
+    const char = {
+      id: 'halloran',
+      name: 'Halloran',
+      role: '',
+      color: 'narrator',
+      lines: 0,
+      scenes: 0,
+      overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+    } as unknown as Character;
+    const state = makeState('kokoro-v1', [char]);
+    expect(selectEnginesInUse(state)).toEqual(new Set(['kokoro', 'qwen']));
+  });
+
+  it('does NOT include "qwen" when no character uses it', () => {
+    const state = makeState('kokoro-v1', [
+      charWithEngine('narrator'),
+      charWithEngine('halloran', 'kokoro'),
+    ]);
+    expect(selectEnginesInUse(state)).toEqual(new Set(['kokoro']));
   });
 });
