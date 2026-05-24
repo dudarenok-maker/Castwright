@@ -59,7 +59,7 @@ function parseTicks(body: string): ParsedTick[] {
 beforeAll(async () => {
   workspaceRoot = await mkdtemp(join(tmpdir(), 'queue-resume-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  process.env.GEN_CHAPTER_CONCURRENCY = '1';
+  process.env.GEN_WORKERS = '1';
 
   const [{ generationRouter }, { makeBookId }, cacheModule] = await Promise.all([
     import('./generation.js'),

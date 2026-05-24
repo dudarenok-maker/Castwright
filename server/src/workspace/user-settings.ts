@@ -292,15 +292,15 @@ export function getResolvedAutoStartSidecar(): boolean {
 
 /** Plan 111 — number of chapters the generation queue synthesises
     concurrently. Resolution chain:
-      1. process.env.GEN_WORKERS (preferred new name) — for CI / tests / ops.
-      2. process.env.GEN_CHAPTER_CONCURRENCY (legacy name, retired in a later
-         wave — honored for now so existing tests + deployers don't break).
-      3. cached user-settings generationWorkers (if defined).
-      4. DEFAULT_USER_SETTINGS.generationWorkers (2).
+      1. process.env.GEN_WORKERS — for CI / tests / ops. (Renamed from the
+         plan-87 GEN_CHAPTER_CONCURRENCY, which is retired as of plan 111
+         wave 4.)
+      2. cached user-settings generationWorkers (if defined).
+      3. DEFAULT_USER_SETTINGS.generationWorkers (2).
     Returns an integer ≥ 1; never undefined. Queue/synthesis concurrency only
     — the GPU semaphore is the separate VRAM guard. */
 export function getResolvedGenerationWorkers(): number {
-  const envRaw = process.env.GEN_WORKERS ?? process.env.GEN_CHAPTER_CONCURRENCY;
+  const envRaw = process.env.GEN_WORKERS;
   const envN = envRaw ? Number.parseInt(envRaw, 10) : NaN;
   if (Number.isFinite(envN) && envN >= 1) return envN;
   const c = cached;
