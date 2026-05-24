@@ -604,9 +604,247 @@ def _float_audio_to_int16_le(audio: Any) -> bytes:
     return scaled.tobytes()
 
 
+class QwenEngine(Engine):
+    """Qwen3-TTS as a per-character BESPOKE-voice engine (plan 108).
+
+    Unlike Kokoro (a fixed 28-voice catalog), Qwen voices are DESIGNED once
+    from a natural-language persona and then reused consistently across a
+    whole book via the official design → clone → cache → reuse recipe:
+
+      1. design  — VoiceDesign model: `generate_voice_design(text, language,
+                   instruct)` synthesises a short reference clip that matches
+                   a persona like "a warm, gentle teenage girl".
+      2. clone   — Base model: `create_voice_clone_prompt(ref_audio, ref_text)`
+                   distils that clip into a reusable speaker embedding
+                   (x-vector + ICL tokens).
+      3. cache   — the prompt object is saved to voices/qwen/<voiceId>.pt with
+                   a sidecar <voiceId>.json manifest (instruct/language/ref_text).
+      4. reuse   — synth: Base model `generate_voice_clone(text, language,
+                   voice_clone_prompt)` re-uses the cached embedding for every
+                   sentence, so the voice identity is identical across the book.
+
+    `synthesize(model, voice, text)` treats `voice` as a designed voiceId and
+    fails fast if that voice hasn't been designed yet (no profile-inference
+    fallback — bespoke voices are explicit). Voice creation is a separate
+    operation (`design_voice`, driven by POST /qwen/design-voice).
+
+    Lazy-loaded (opt-in PRELOAD_QWEN=1): a second always-resident engine would
+    break the 8 GB VRAM budget the dual-model flag exists to gate. The Base
+    model (~1.2 GB) is the resident synth model; the heavier VoiceDesign model
+    is loaded transiently only during voice creation and can be evicted after.
+
+    NOTE (empirical verification owed): the exact `qwen_tts` method signatures,
+    the clone-prompt object's serialisation, and that a designed preset yields a
+    CONSISTENT identity across calls are confirmed against the real weights when
+    the model is downloaded (see scripts/install-qwen3.mjs). The integration is
+    isolated to the small `_qwen_*` shims below so a signature drift is a
+    one-place fix. Output is numpy float → `_float_audio_to_int16_le` like the
+    other engines; sample rate comes straight off the model return.
+    """
+
+    name = "qwen"
+
+    # Synthesis (clone) model — small, resident. Base variant does the cloning
+    # + the per-sentence generate_voice_clone.
+    BASE_MODEL = os.environ.get(
+        "QWEN_BASE_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    )
+    # Voice-design model — produces the reference clip from a persona. There is
+    # no confirmed 0.6B VoiceDesign at time of writing, so default to the 1.7B
+    # one; loaded transiently during design only. Override via env once a 0.6B
+    # VoiceDesign ships.
+    VOICEDESIGN_MODEL = os.environ.get(
+        "QWEN_VOICEDESIGN_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+    )
+    # Default language for English-first books. Per-voice language is stored in
+    # each voice's manifest and overrides this at synth time.
+    DEFAULT_LANGUAGE = os.environ.get("QWEN_LANGUAGE", "English")
+    # Calibration line spoken when designing a voice (gives the model enough
+    # phonetic coverage to fix a timbre). Also reused as the audition preview.
+    CALIBRATION_TEXT = (
+        "The quick brown fox jumps over the lazy dog, "
+        "and she wondered what tomorrow would bring."
+    )
+
+    def __init__(self) -> None:
+        self._base: Any = None  # resident clone/synth model
+        self._design: Any = None  # transient voice-design model
+        self._loading: bool = False
+        self._load_lock: asyncio.Lock = asyncio.Lock()
+        self._device = os.environ.get("QWEN_DEVICE", "cuda:0")
+        self._voices_dir = os.path.join(os.path.dirname(__file__), "voices", "qwen")
+
+    # --- qwen_tts integration shims (the only model-API-coupled surface) ---
+
+    def _load_qwen_model(self, model_id: str) -> Any:
+        """Load a Qwen3TTSModel. Isolated so the import + from_pretrained
+        signature lives in exactly one place."""
+        try:
+            import torch  # type: ignore
+            from qwen_tts import Qwen3TTSModel  # type: ignore
+        except ImportError as e:
+            raise RuntimeError(
+                f"Failed to import qwen_tts/torch ({e}). Install with: "
+                "`.\\.venv\\Scripts\\python.exe -m pip install qwen-tts` in "
+                "server/tts-sidecar."
+            ) from e
+        return Qwen3TTSModel.from_pretrained(
+            model_id,
+            device_map=self._device,
+            dtype=torch.bfloat16,
+        )
+
+    def _ensure_base_loaded(self) -> None:
+        if self._base is None:
+            log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
+            self._base = self._load_qwen_model(self.BASE_MODEL)
+            log.info("Qwen Base loaded.")
+
+    def _ensure_design_loaded(self) -> None:
+        if self._design is None:
+            log.info(
+                "Loading Qwen VoiceDesign model=%s on %s (transient) …",
+                self.VOICEDESIGN_MODEL, self._device,
+            )
+            self._design = self._load_qwen_model(self.VOICEDESIGN_MODEL)
+            log.info("Qwen VoiceDesign loaded.")
+
+    def _voice_paths(self, voice_id: str) -> tuple[str, str]:
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", voice_id)
+        return (
+            os.path.join(self._voices_dir, f"{safe}.pt"),
+            os.path.join(self._voices_dir, f"{safe}.json"),
+        )
+
+    def unload(self) -> None:
+        """Drop both Qwen models and free VRAM. Idempotent."""
+        had = self._base is not None or self._design is not None
+        self._base = None
+        self._design = None
+        if had:
+            try:
+                import torch  # type: ignore
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            log.info("Qwen models unloaded.")
+
+    def unload_design(self) -> None:
+        """Drop only the heavy VoiceDesign model after a design pass, keeping
+        the resident Base synth model loaded."""
+        if self._design is None:
+            return
+        self._design = None
+        try:
+            import torch  # type: ignore
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        log.info("Qwen VoiceDesign unloaded (Base stays resident).")
+
+    def list_voices(self) -> list[str]:
+        """Designed voice ids = the .json manifests under voices/qwen/."""
+        try:
+            names = [
+                fn[:-5]
+                for fn in os.listdir(self._voices_dir)
+                if fn.endswith(".json")
+            ]
+            return sorted(names)
+        except FileNotFoundError:
+            return []
+
+    def design_voice(
+        self, voice_id: str, instruct: str, language: Optional[str], calibration_text: Optional[str]
+    ) -> SynthResult:
+        """Design + cache a reusable bespoke voice from a persona `instruct`.
+        Returns an audition preview (the calibration line spoken in the new
+        voice) so the UI can play it back before the user commits."""
+        import torch  # type: ignore
+
+        lang = (language or self.DEFAULT_LANGUAGE).strip() or self.DEFAULT_LANGUAGE
+        ref_text = (calibration_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
+
+        self._ensure_design_loaded()
+        # 1. design a reference clip from the persona instruction.
+        ref_wavs, ref_sr = self._design.generate_voice_design(
+            text=ref_text, language=lang, instruct=instruct
+        )
+        ref_audio = ref_wavs[0]
+
+        # 2. distil into a reusable clone prompt on the Base model.
+        self._ensure_base_loaded()
+        prompt = self._base.create_voice_clone_prompt(
+            ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+        )
+
+        # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
+        os.makedirs(self._voices_dir, exist_ok=True)
+        pt_path, json_path = self._voice_paths(voice_id)
+        torch.save(prompt, pt_path)
+        import json as _json
+
+        with open(json_path, "w", encoding="utf-8") as fh:
+            _json.dump(
+                {
+                    "voiceId": voice_id,
+                    "instruct": instruct,
+                    "language": lang,
+                    "refText": ref_text,
+                    "baseModel": self.BASE_MODEL,
+                    "designModel": self.VOICEDESIGN_MODEL,
+                },
+                fh,
+                ensure_ascii=False,
+                indent=2,
+            )
+        log.info("Designed + cached Qwen voice '%s' (instruct=%r).", voice_id, instruct[:80])
+
+        # 4. audition preview — speak the calibration line in the new voice.
+        wavs, sr = self._base.generate_voice_clone(
+            text=[ref_text], language=[lang], voice_clone_prompt=prompt
+        )
+        return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
+
+    def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
+        """`voice` is a designed voiceId. Loads its cached clone prompt and
+        reuses it — identical identity across the book. Fails fast (no
+        catalog fallback) if the voice hasn't been designed."""
+        import torch  # type: ignore
+
+        pt_path, json_path = self._voice_paths(voice)
+        if not os.path.isfile(pt_path):
+            raise RuntimeError(
+                f"Qwen voice '{voice}' has not been designed yet (no cached "
+                f"embedding at {pt_path}). Design it first via "
+                "POST /qwen/design-voice."
+            )
+        lang = self.DEFAULT_LANGUAGE
+        if os.path.isfile(json_path):
+            try:
+                import json as _json
+
+                with open(json_path, encoding="utf-8") as fh:
+                    lang = _json.load(fh).get("language", lang) or lang
+            except Exception:
+                pass
+
+        self._ensure_base_loaded()
+        prompt = torch.load(pt_path)
+        wavs, sr = self._base.generate_voice_clone(
+            text=[text], language=[lang], voice_clone_prompt=prompt
+        )
+        return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
+
+
 ENGINES: dict[str, Engine] = {
     "coqui": CoquiEngine(),
     "kokoro": KokoroEngine(),
+    "qwen": QwenEngine(),
 }
 
 
@@ -650,6 +888,28 @@ async def _preload_default_engines() -> None:
                 e,
             )
 
+    # Qwen: opt-in via PRELOAD_QWEN=1 (off by default). A second always-resident
+    # engine would break the 8 GB VRAM budget the dual-model flag gates, so Qwen
+    # warms on demand via POST /load (the Node side loads it when a book uses a
+    # Qwen voice and the dual-model flag is on). Only the resident Base model is
+    # eagerly warmed here; the VoiceDesign model stays transient.
+    if _parse_bool(os.environ.get("PRELOAD_QWEN"), False):
+        qwen = ENGINES.get("qwen")
+        if isinstance(qwen, QwenEngine):
+            try:
+                log.info("Preloading Qwen Base at startup (PRELOAD_QWEN=1)…")
+                await asyncio.to_thread(qwen._ensure_base_loaded)
+                log.info("Qwen Base preload complete.")
+            except Exception as e:
+                log.warning(
+                    "Qwen preload failed (%s). Run "
+                    "server/tts-sidecar/scripts/install-qwen3.mjs to install weights; "
+                    "the other engines still work.",
+                    e,
+                )
+    else:
+        log.info("PRELOAD_QWEN is not set — Qwen warms on demand via POST /load.")
+
 
 @app.get("/health")
 def health() -> dict[str, Any]:
@@ -687,6 +947,16 @@ def health() -> dict[str, Any]:
     if isinstance(kokoro, KokoroEngine):
         kokoro_loaded = kokoro._kokoro is not None
         kokoro_loading = kokoro._loading
+    # Qwen load state — its own pair of fields, same pattern as Kokoro, so the
+    # Node proxy + useTtsLifecycle hook read every engine's state off one poll.
+    # `_base is not None` is "ready to synth" (the resident clone model);
+    # the transient VoiceDesign model isn't surfaced (it's a creation-time detail).
+    qwen_loaded = False
+    qwen_loading = False
+    qwen = ENGINES.get("qwen")
+    if isinstance(qwen, QwenEngine):
+        qwen_loaded = qwen._base is not None
+        qwen_loading = qwen._loading
     return {
         "ok": True,
         "engines": sorted(ENGINES.keys()),
@@ -694,6 +964,8 @@ def health() -> dict[str, Any]:
         "loading": loading,
         "kokoro_loaded": kokoro_loaded,
         "kokoro_loading": kokoro_loading,
+        "qwen_loaded": qwen_loaded,
+        "qwen_loading": qwen_loading,
         "device": device,
         "poisoned": poisoned,
         "poison_reason": poison_reason,
@@ -717,7 +989,7 @@ async def load_model(req: Request) -> JSONResponse:
     if not isinstance(body, dict):
         body = {}
     engine_id = body.get("engine")
-    if not isinstance(engine_id, str) or engine_id not in {"coqui", "kokoro"}:
+    if not isinstance(engine_id, str) or engine_id not in {"coqui", "kokoro", "qwen"}:
         engine_id = "coqui"
 
     if engine_id == "kokoro":
@@ -739,6 +1011,29 @@ async def load_model(req: Request) -> JSONResponse:
                 return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
             finally:
                 kokoro._loading = False
+        return JSONResponse({"status": "ready"})
+
+    if engine_id == "qwen":
+        qwen = ENGINES.get("qwen")
+        if not isinstance(qwen, QwenEngine):
+            return JSONResponse(
+                {"status": "error", "error": "qwen engine missing"}, status_code=500
+            )
+        if qwen._base is not None:
+            return JSONResponse({"status": "ready"})
+        async with qwen._load_lock:
+            if qwen._base is not None:
+                return JSONResponse({"status": "ready"})
+            qwen._loading = True
+            try:
+                # Warms the resident Base (clone/synth) model only; the heavy
+                # VoiceDesign model loads transiently during design_voice.
+                await asyncio.to_thread(qwen._ensure_base_loaded)
+            except Exception as e:
+                log.exception("/load failed (engine=qwen)")
+                return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+            finally:
+                qwen._loading = False
         return JSONResponse({"status": "ready"})
 
     model = body.get("model")
@@ -785,13 +1080,19 @@ async def unload_model(req: Request) -> JSONResponse:
     if not isinstance(body, dict):
         body = {}
     engine_id = body.get("engine")
-    if not isinstance(engine_id, str) or engine_id not in {"coqui", "kokoro"}:
+    if not isinstance(engine_id, str) or engine_id not in {"coqui", "kokoro", "qwen"}:
         engine_id = "coqui"
 
     if engine_id == "kokoro":
         kokoro = ENGINES.get("kokoro")
         if isinstance(kokoro, KokoroEngine):
             await asyncio.to_thread(kokoro.unload)
+        return JSONResponse({"status": "idle"})
+
+    if engine_id == "qwen":
+        qwen = ENGINES.get("qwen")
+        if isinstance(qwen, QwenEngine):
+            await asyncio.to_thread(qwen.unload)
         return JSONResponse({"status": "idle"})
 
     coqui = ENGINES.get("coqui")
@@ -819,7 +1120,59 @@ def speakers() -> dict[str, Any]:
     kokoro = ENGINES.get("kokoro")
     if isinstance(kokoro, KokoroEngine):
         out["kokoro"] = kokoro._voices
+    # Qwen's "catalog" is the set of DESIGNED voices (read from the cached
+    # manifests under voices/qwen/), not a fixed list — bespoke per-character
+    # voices, available even when the model isn't loaded.
+    qwen = ENGINES.get("qwen")
+    if isinstance(qwen, QwenEngine):
+        out["qwen"] = qwen.list_voices()
     return out
+
+
+@app.post("/qwen/design-voice")
+async def qwen_design_voice(req: Request) -> Response:
+    """Design + cache a reusable bespoke Qwen voice from a persona, and return
+    an audition preview (PCM, same wire shape as /synthesize) of the calibration
+    line spoken in the new voice.
+
+    Body: `{ voiceId, instruct, language?, calibrationText? }`. `instruct` is the
+    natural-language persona (e.g. "a warm, gentle teenage girl, mid-paced, with
+    a hint of anxiety"); the caller composes it from the character's profile.
+    Idempotent-ish — re-designing the same voiceId overwrites its embedding."""
+    try:
+        body = await req.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body must be JSON.")
+    voice_id = body.get("voiceId")
+    instruct = body.get("instruct")
+    language = body.get("language")
+    calibration_text = body.get("calibrationText")
+    if not isinstance(voice_id, str) or not voice_id.strip():
+        raise HTTPException(status_code=400, detail="`voiceId` is required.")
+    if not isinstance(instruct, str) or not instruct.strip():
+        raise HTTPException(status_code=400, detail="`instruct` is required.")
+
+    qwen = ENGINES.get("qwen")
+    if not isinstance(qwen, QwenEngine):
+        return JSONResponse({"detail": "qwen engine missing"}, status_code=500)
+
+    try:
+        result = await asyncio.to_thread(
+            qwen.design_voice,
+            voice_id.strip(),
+            instruct.strip(),
+            language if isinstance(language, str) else None,
+            calibration_text if isinstance(calibration_text, str) else None,
+        )
+    except Exception as e:
+        log.exception("/qwen/design-voice failed (voiceId=%s)", voice_id)
+        return JSONResponse({"detail": str(e)}, status_code=500)
+
+    return Response(
+        content=result.pcm,
+        media_type=f"audio/L16;codec=pcm;rate={result.sample_rate}",
+        headers={"X-Sample-Rate": str(result.sample_rate)},
+    )
 
 
 @app.post("/synthesize")
