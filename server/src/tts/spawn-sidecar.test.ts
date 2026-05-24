@@ -6,7 +6,9 @@
                                             PRELOAD_COQUI=0.
    4. autoStart=true, modelKey=coqui-xtts-v2 → spawn called once, env has
                                                PRELOAD_COQUI=1.
-   5. handle.kill() on win32 shells out to `taskkill /T /F /PID`. */
+   5. eagerLoadKokoro=true  → env has PRELOAD_KOKORO=1.
+   6. eagerLoadKokoro=false → env has PRELOAD_KOKORO=0.
+   7. handle.kill() on win32 shells out to `taskkill /T /F /PID`. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
@@ -43,6 +45,7 @@ describe('spawnSidecar', () => {
     const handle = await spawnSidecar({
       autoStart: false,
       modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
       repoRoot: '/repo',
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -62,6 +65,7 @@ describe('spawnSidecar', () => {
     const handle = await spawnSidecar({
       autoStart: true,
       modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
       repoRoot: '/repo',
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -79,6 +83,7 @@ describe('spawnSidecar', () => {
     const handle = await spawnSidecar({
       autoStart: true,
       modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
       repoRoot: '/repo',
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -95,13 +100,36 @@ describe('spawnSidecar', () => {
       expect.arrayContaining(['-ExecutionPolicy', 'Bypass', '-NoProfile', '-File']),
     );
     expect(options.env.PRELOAD_COQUI).toBe('0');
+    expect(options.env.PRELOAD_KOKORO).toBe('1');
     expect(options.windowsHide).toBe(true);
+  });
+
+  it('spawns with PRELOAD_KOKORO=0 when eagerLoadKokoro is false', async () => {
+    const handle = await spawnSidecar({
+      autoStart: true,
+      modelKey: 'kokoro-v1',
+      eagerLoadKokoro: false,
+      repoRoot: '/repo',
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      log,
+      warn,
+    });
+
+    expect(handle).not.toBeNull();
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    const [, , options] = spawnFn.mock.calls[0];
+    expect(options.env.PRELOAD_KOKORO).toBe('0');
+    /* eagerLoadKokoro is orthogonal to the Coqui preload — kokoro-v1
+       default still leaves Coqui lazy. */
+    expect(options.env.PRELOAD_COQUI).toBe('0');
   });
 
   it('spawns with PRELOAD_COQUI=1 when default model is coqui-xtts-v2', async () => {
     const handle = await spawnSidecar({
       autoStart: true,
       modelKey: 'coqui-xtts-v2',
+      eagerLoadKokoro: true,
       repoRoot: '/repo',
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -122,6 +150,7 @@ describe('spawnSidecar', () => {
     const handle = await spawnSidecar({
       autoStart: true,
       modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
       repoRoot: '/repo',
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -159,6 +188,7 @@ describe('spawnSidecar', () => {
       const handle = await spawnSidecar({
         autoStart: true,
         modelKey: 'kokoro-v1',
+        eagerLoadKokoro: true,
         repoRoot: '/repo',
         spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
         probeFn,

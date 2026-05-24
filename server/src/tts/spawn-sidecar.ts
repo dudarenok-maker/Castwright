@@ -30,6 +30,11 @@ export type TtsModelKey = UserSettings['defaultTtsModelKey'];
 export interface SpawnSidecarOpts {
   autoStart: boolean;
   modelKey: TtsModelKey;
+  /* When true (default), the spawned sidecar gets PRELOAD_KOKORO=1 and
+     eager-loads Kokoro at startup. When false (Qwen-primary users who
+     want the ~1 GB VRAM back), PRELOAD_KOKORO=0 and Kokoro warms on
+     demand on first synth. */
+  eagerLoadKokoro: boolean;
   repoRoot: string;
   /* Override-points for tests. */
   port?: number;
@@ -123,6 +128,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   const {
     autoStart,
     modelKey,
+    eagerLoadKokoro,
     repoRoot,
     port = DEFAULT_PORT,
     host = DEFAULT_HOST,
@@ -149,6 +155,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PRELOAD_COQUI: modelKey === 'coqui-xtts-v2' ? '1' : '0',
+    PRELOAD_KOKORO: eagerLoadKokoro ? '1' : '0',
   };
 
   let child: ChildProcess;
@@ -195,7 +202,9 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     warn('[sidecar] pid file write failed (non-fatal):', err);
   }
 
-  log(`[sidecar] spawned pid=${pid} (PRELOAD_COQUI=${env.PRELOAD_COQUI}, modelKey=${modelKey})`);
+  log(
+    `[sidecar] spawned pid=${pid} (PRELOAD_COQUI=${env.PRELOAD_COQUI}, PRELOAD_KOKORO=${env.PRELOAD_KOKORO}, modelKey=${modelKey})`,
+  );
 
   /* If the child exits on its own (e.g. start.ps1 venv check failed),
      surface that as a single warning so the user knows TTS won't be
