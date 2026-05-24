@@ -998,4 +998,34 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     selectQwen();
     expect(screen.queryByText('Model voice')).toBeNull();
   });
+
+  it('shows a bespoke Qwen card line (not the preset descriptor) when the character is Qwen', async () => {
+    /* The Voice profile card must resolve against the CHARACTER's engine,
+       not the project engine. A Qwen character with no designed voice shows
+       "Qwen · No voice designed yet"; a designed one shows the voiceId +
+       "Designed voice". Either way the preset descriptor (e.g. a Kokoro
+       "Light · Male · US" line) must NOT appear. */
+    renderWithBook({
+      ...baseChar,
+      ttsEngine: 'qwen',
+      voiceStyle: 'a steady adult voice',
+      overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+    });
+    /* Card shows the bespoke Qwen line. */
+    expect(screen.getByText(/Designed voice/)).toBeTruthy();
+    expect(screen.getByText('qwen-halloran')).toBeTruthy();
+    /* No preset register/gender descriptor leaks through. */
+    expect(screen.queryByText(/· Male · US/)).toBeNull();
+  });
+
+  it('updates the card to a Qwen bespoke line live when switching engine to Qwen', async () => {
+    /* The in-drawer engineChoice must drive the card immediately — before
+       Save — so the user sees the engine switch reflected. A character
+       whose project engine is the Kokoro default starts with a preset
+       line; switching to Qwen flips the card to the bespoke line. */
+    renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' });
+    selectQwen();
+    /* With no designed voice yet, the card reads the "not designed" copy. */
+    expect(screen.getByText(/No voice designed yet/)).toBeTruthy();
+  });
 });

@@ -14,7 +14,8 @@ import {
 } from '../lib/icons';
 import { SectionLabel, MixedHeading, Avatar, Pill, VoiceSwatch } from '../components/primitives';
 import { VoiceLibraryPanel } from '../components/voice-library-panel';
-import type { Character, Voice, DriftEvent, CharColor, TtsModelKey } from '../lib/types';
+import type { Character, Voice, DriftEvent, CharColor, TtsModelKey, TtsEngine } from '../lib/types';
+import type { TtsVoiceAssignment } from '../lib/tts-voice-mapping';
 import { useAppSelector } from '../store';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
@@ -337,7 +338,7 @@ export function CastView({
           </div>
           {filtered.map((c, i) => {
             const voice = findVoiceForCharacter(c, library);
-            const ttsVoice = voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, ttsEngine);
+            const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
             const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}`;
@@ -525,7 +526,7 @@ export function CastView({
         <div className="md:hidden flex flex-col gap-3">
           {filtered.map((c) => {
             const voice = findVoiceForCharacter(c, library);
-            const ttsVoice = voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, ttsEngine);
+            const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
             const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}`;
@@ -881,17 +882,48 @@ function ttsLabel(key: TtsModelKey): string {
   return TTS_MODEL_OPTIONS.find((o) => o.id === key)?.label ?? key;
 }
 
+/* Engine-aware row-label resolver. A library voice's preset descriptor
+   normally wins, but a character pinned to the bespoke Qwen engine
+   (plan 108) must show its designed/Qwen line, not the project Kokoro/Coqui
+   preset — so Qwen overrides any matched library voice. Preset engines keep
+   the matched library voice (or the project-engine stub) exactly as before. */
+function resolveDisplayTtsVoice(
+  c: Character,
+  voice: Voice | undefined,
+  projectEngine: TtsEngine,
+): TtsVoiceAssignment {
+  if (c.ttsEngine === 'qwen') return resolveTtsVoiceForCharacter(c, 'qwen');
+  return voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, projectEngine);
+}
+
 interface TtsVoiceLineProps {
   ttsVoice: { provider: string; name: string; description: string };
 }
 function TtsVoiceLine({ ttsVoice }: TtsVoiceLineProps) {
+  /* Qwen is bespoke (no prebuilt catalog) — surface the engine name so a
+     Qwen-pinned character reads "Qwen · Designed voice" instead of an empty
+     name line. Preset engines keep the name · description shape. */
+  const isQwen = ttsVoice.provider === 'qwen';
   return (
     <span
-      title={`Prebuilt ${ttsVoice.provider} voice — ${ttsVoice.description}`}
+      title={
+        isQwen
+          ? `Qwen bespoke voice — ${ttsVoice.description}`
+          : `Prebuilt ${ttsVoice.provider} voice — ${ttsVoice.description}`
+      }
       className="block text-[11px] text-ink/50 truncate"
     >
-      <span className="font-semibold text-ink/70">{ttsVoice.name}</span>
-      <span className="text-ink/40"> · {ttsVoice.description}</span>
+      {isQwen ? (
+        <>
+          <span className="font-semibold text-ink/70">Qwen</span>
+          <span className="text-ink/40"> · {ttsVoice.description}</span>
+        </>
+      ) : (
+        <>
+          <span className="font-semibold text-ink/70">{ttsVoice.name}</span>
+          <span className="text-ink/40"> · {ttsVoice.description}</span>
+        </>
+      )}
     </span>
   );
 }

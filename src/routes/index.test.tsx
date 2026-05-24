@@ -354,6 +354,11 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
           onLoad: vi.fn(async () => {}),
           onStop: vi.fn(async () => {}),
         },
+        qwen: {
+          state: 'unreachable',
+          onLoad: vi.fn(async () => {}),
+          onStop: vi.fn(async () => {}),
+        },
         evictionNotice: null,
         loadErrorNotice: null,
         dismissNotices: vi.fn(),
@@ -477,6 +482,11 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
           onStop: vi.fn(async () => {}),
         },
         kokoro: {
+          state: 'unreachable',
+          onLoad: vi.fn(async () => {}),
+          onStop: vi.fn(async () => {}),
+        },
+        qwen: {
           state: 'unreachable',
           onLoad: vi.fn(async () => {}),
           onStop: vi.fn(async () => {}),
@@ -765,6 +775,11 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
           onStop: vi.fn(async () => {}),
         },
         kokoro: {
+          state: 'unreachable',
+          onLoad: vi.fn(async () => {}),
+          onStop: vi.fn(async () => {}),
+        },
+        qwen: {
           state: 'unreachable',
           onLoad: vi.fn(async () => {}),
           onStop: vi.fn(async () => {}),

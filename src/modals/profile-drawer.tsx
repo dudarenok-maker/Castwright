@@ -363,6 +363,21 @@ export function ProfileDrawer({
   const samplePrefix = sampleUrlPrefixFor(sampleVoiceId, ttsModelKey);
   const isPlayingThis = playback.isPlaying && !!playback.currentUrl?.startsWith(samplePrefix);
 
+  /* Card-line voice descriptor — resolved against the CHARACTER's engine
+     (live `engineChoice`, falling back to the project default) rather than
+     the project engine, so switching this character to Qwen updates the
+     card immediately. For a Qwen character the preset descriptor
+     ("Kokoro · am_erio · …") doesn't apply — `resolveTtsVoiceForCharacter`
+     returns the bespoke "Qwen · Designed voice" / "No voice designed yet"
+     line and we use it even when a library voice is matched (Qwen overrides
+     any preset). Preset engines keep the matched library voice's own
+     descriptor, exactly as before. */
+  const effectiveEngine: TtsEngine = engineChoice === 'default' ? ttsEngine : engineChoice;
+  const cardTtsVoice =
+    effectiveEngine === 'qwen'
+      ? resolveTtsVoiceForCharacter(editedCharacter, 'qwen')
+      : sampleSubject.ttsVoice;
+
   /* Conflict detection: a matched library voice carries its own gender +
      age attributes. When the user's edits disagree, keeping the match
      would produce "UI says female teen, audio sounds male adult".
@@ -576,13 +591,16 @@ export function ProfileDrawer({
                     view's TtsVoiceLine so the drawer stays in sync. */}
                 <p
                   className="mt-1 text-[11px] truncate"
-                  title={`${capitalise(sampleSubject.ttsVoice.provider)} voice — ${sampleSubject.ttsVoice.description}`}
+                  title={`${capitalise(cardTtsVoice.provider)} voice — ${cardTtsVoice.description}`}
                 >
+                  <span className="text-ink/40">{capitalise(cardTtsVoice.provider)} · </span>
+                  {cardTtsVoice.name && (
+                    <span className="font-semibold text-ink/70">{cardTtsVoice.name}</span>
+                  )}
                   <span className="text-ink/40">
-                    {capitalise(sampleSubject.ttsVoice.provider)} ·{' '}
+                    {cardTtsVoice.name ? ' · ' : ''}
+                    {cardTtsVoice.description}
                   </span>
-                  <span className="font-semibold text-ink/70">{sampleSubject.ttsVoice.name}</span>
-                  <span className="text-ink/40"> · {sampleSubject.ttsVoice.description}</span>
                 </p>
                 <div className="mt-2">
                   <button
