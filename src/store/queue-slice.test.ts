@@ -42,6 +42,27 @@ describe('queueSlice.setSnapshot', () => {
     expect(next.loaded).toBe(true);
   });
 
+  it('round-trips the Wave-3 requiredEngines + multiTts fields into state', () => {
+    const next = queueSlice.reducer(
+      initial,
+      queueActions.setSnapshot({
+        entries: [
+          sampleEntry({ id: 'single', requiredEngines: ['kokoro'], multiTts: false }),
+          sampleEntry({ id: 'multi', requiredEngines: ['kokoro', 'qwen'], multiTts: true }),
+          sampleEntry({ id: 'legacy' }),
+        ],
+        paused: false,
+      }),
+    );
+    expect(next.entries[0].requiredEngines).toEqual(['kokoro']);
+    expect(next.entries[0].multiTts).toBe(false);
+    expect(next.entries[1].requiredEngines).toEqual(['kokoro', 'qwen']);
+    expect(next.entries[1].multiTts).toBe(true);
+    /* Legacy entry: fields absent, treated as single-engine / unknown. */
+    expect(next.entries[2].requiredEngines).toBeUndefined();
+    expect(next.entries[2].multiTts).toBeUndefined();
+  });
+
   it('overwrites prior entries (server-authoritative)', () => {
     let s = queueSlice.reducer(
       initial,

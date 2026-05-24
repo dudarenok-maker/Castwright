@@ -13,6 +13,8 @@
  *     per-chapter `{ scope: 'this' }` entries; this server-side shape
  *     never carries 'forward' as a row. */
 
+import type { TtsEngine } from '../tts/index.js';
+
 export type QueueScope = 'this' | 'character';
 export type QueueStatus = 'queued' | 'in_progress' | 'paused' | 'done' | 'failed';
 
@@ -27,6 +29,16 @@ export interface QueueEntry {
   order: number;
   progress?: number;
   errorReason?: string | null;
+  /* Plan 108 Wave 3 — the distinct TTS engines this chapter requires, computed
+     server-side at enqueue time from the chapter's speaking characters (cast +
+     analysis cache) + the book's default engine. Sorted + deduped. ABSENT on a
+     legacy entry (pre-108) or when cast/analysis wasn't available at enqueue —
+     treat absence as "single-engine / unknown" rather than multi. Lives on the
+     SERVER queue shape only (NOT in openapi.yaml). */
+  requiredEngines?: TtsEngine[];
+  /* True when `requiredEngines.length > 1` — surfaced as the multi-TTS badge +
+     dual-model advisory in the queue modal. Mirrors `isMultiTts`. */
+  multiTts?: boolean;
 }
 
 export interface QueueFile {
@@ -42,6 +54,10 @@ export interface EnqueueInput {
   scope: QueueScope;
   characterId?: string;
   addedAt?: string; // optional — defaults to now()
+  /* Plan 108 Wave 3 — engine set stamped by the route from the chapter's
+     speaking characters. Omitted when cast/analysis isn't available. */
+  requiredEngines?: TtsEngine[];
+  multiTts?: boolean;
 }
 
 /** Append entries to the bottom of the queue. Renumbers `order` to stay
@@ -64,6 +80,10 @@ export function enqueue(file: QueueFile, inputs: EnqueueInput[]): QueueFile {
       addedAt: input.addedAt ?? new Date().toISOString(),
       status: 'queued',
       order: 0, // overwritten by renumber below
+      /* Plan 108 Wave 3 — only stamped when the route resolved them; absent
+         otherwise (legacy / cast or analysis unavailable). */
+      ...(input.requiredEngines ? { requiredEngines: input.requiredEngines } : {}),
+      ...(input.multiTts != null ? { multiTts: input.multiTts } : {}),
     });
   }
   return renumber({ ...file, entries: [...file.entries, ...fresh] });
