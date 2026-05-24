@@ -58,6 +58,7 @@ owner: null
 5. **Book-delete prunes queue entries atomically.** The existing book-deletion route gains a queue-prune step that removes entries matching the deleted `bookId` in the same write transaction as the directory drop. No orphaned entries can persist.
 6. **`resume_from` is emitted FIRST on every new subscriber.** Before any `progress` / `chapter_assembling` / `chapter_complete` tick. Reconnect after `tsx watch` restart or server bounce — first event the frontend sees is the resume snapshot, then the per-entry catch-up follows.
 7. **Regenerate dispatches NEVER close the active SSE handle.** This is the structural fix for the user-cited "loses all progress" bug. The middleware's hard-interrupt path at `src/store/generation-stream-middleware.ts:325-347` is replaced with an enqueue-only flow that appends to the queue and lets the in-flight entry complete naturally.
+8. **The queue auto-drains when unpaused — there is NO "start" gate.** A queue is a queue: if it has work and `paused === false`, the dispatcher starts the head entry. The server initialises a fresh `.queue.json` with `paused: false` (`queue-migrate.ts`), so enqueuing work (or rehydrating a queue with leftover entries on app boot) begins draining immediately — on any view, without an explicit Resume/Start click. `Pause` (queue modal) is the only opt-out; `Resume` un-pauses a paused queue, it does not "start" an idle one. Plan 102 Should #6 (cross-book dispatcher) extended this so the drain runs regardless of which book is currently viewed (see the Ship notes' deferred-follow-ups list below). (Decision confirmed 2026-05-24: auto-drain is the intended contract; the earlier walkthrough wording implying "Resume to start" was inaccurate and is corrected below.)
 
 ## Test plan
 
@@ -79,8 +80,8 @@ Run with the canonical full-pipeline manuscript `C:\Users\dudar\Downloads\Bonus 
 2. **Upload Keefe + a Pushkin short-story stub.** Analyse both books to completion.
 3. **Enqueue chapter 3 of Book A** from the Generate view's per-chapter "Add to queue" button → toast "Added to queue · 1 entry pending" with a "View queue" CTA. Top-bar queue chip shows `1`.
 4. **Switch to Book B**, enqueue chapter 1 of Book B → toast "Added to queue · 2 entries pending". Queue chip shows `2`.
-5. **Click the queue chip → View queue modal opens.** Two entries visible: `A.ch3` (order 0), `B.ch1` (order 1). Resume button is the only top-level action (queue not yet started).
-6. **Click Resume** → `A.ch3` flips to `in_progress` and pins to the top (non-draggable). Progress bar advances.
+5. **Click the queue chip → View queue modal opens.** Two entries visible: `A.ch3` (order 0), `B.ch1` (order 1). The queue auto-drains when unpaused (invariant 8), so `A.ch3` has **already** flipped to `in_progress` and pinned to the top (non-draggable); `B.ch1` is queued behind it. The modal's top-level control is **Pause** (the queue is running) — there is no "start" button.
+6. **`A.ch3` is mid-flight without any click** — its progress bar advances. (To stop it, you would click Pause; see step 15. Resume un-pauses; it is not needed to begin.)
 7. **While `A.ch3` is mid-flight, enqueue `A.ch7`** from Book A's Generate view → toast fires, `A.ch7` appears at order 2 (bottom), `A.ch3`'s progress bar unaffected (no drop).
 8. **Drag `A.ch7` above `B.ch1` in the modal** → confirmed visual feedback, the next entry to dispatch after `A.ch3` completes is now `A.ch7`.
 9. **`A.ch3` completes** → status flips to `done`, toast "A.ch3 completed". Dispatcher pops `A.ch7`, which flips to `in_progress`.
