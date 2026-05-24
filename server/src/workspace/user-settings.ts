@@ -87,6 +87,14 @@ export const userSettingsSchema = z.object({
   analyzerPhase0Model: z.string().nullable().optional(),
   analyzerPhase1Model: z.string().nullable().optional(),
   analyzerPhase1MinLagChapters: z.number().int().min(0).max(50).nullable().optional(),
+  /* When true, the TTS sidecar may keep two TTS engines (e.g. Kokoro +
+     Qwen) resident in GPU memory at once so a mixed-engine book generates
+     without an inter-chapter engine swap. Off by default — dual-residency
+     is a deliberate ~8 GB VRAM commitment; a mixed-engine book still
+     generates with this false, it just pays the swap latency. Optional
+     with a `false` default so legacy user-settings.json files load
+     unchanged. Takes effect on the next generation run (no restart). */
+  dualModelEnabled: z.boolean().optional(),
   /* Plan 49 — UI-managed Gemini API key. Stored plaintext (same trust
      model as server/.env, which is gitignored and single-user). The
      env var GEMINI_API_KEY still wins when present (for CI / power
@@ -148,6 +156,10 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   analyzerPhase0Model: null,
   analyzerPhase1Model: null,
   analyzerPhase1MinLagChapters: null,
+  /* Off by default — loading two TTS engines into GPU memory at once is a
+     deliberate user choice (~8 GB headroom). Flip in lockstep with
+     src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
+  dualModelEnabled: false,
   /* Plan 49 — null = no UI-saved key. Resolver falls through to env
      (process.env.GEMINI_API_KEY) and then null. */
   geminiApiKey: null,

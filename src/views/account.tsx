@@ -68,6 +68,9 @@ export function AccountView() {
   const [autoStartSidecar, setAutoStartSidecar] = useState<boolean>(
     account.autoStartSidecar ?? true,
   );
+  const [dualModelEnabled, setDualModelEnabled] = useState<boolean>(
+    account.dualModelEnabled ?? false,
+  );
   const themeOverride = useAppSelector((s) => s.ui.themeOverride);
   const [showSaved, setShowSaved] = useState(false);
 
@@ -87,6 +90,7 @@ export function AccountView() {
     setCoverPickerDefaultTab(account.coverPickerDefaultTab ?? 'search');
     setDefaultThemePreference(account.defaultThemePreference ?? 'system');
     setAutoStartSidecar(account.autoStartSidecar ?? true);
+    setDualModelEnabled(account.dualModelEnabled ?? false);
   }, [
     account.hydrated,
     account.displayName,
@@ -104,6 +108,7 @@ export function AccountView() {
     account.coverPickerDefaultTab,
     account.defaultThemePreference,
     account.autoStartSidecar,
+    account.dualModelEnabled,
   ]);
 
   /* When the engine switches, the selected modelKey may not belong to the
@@ -141,6 +146,7 @@ export function AccountView() {
       analyzerPhase1MinLagChapters !== (account.analyzerPhase1MinLagChapters ?? null) ||
       coverPickerDefaultTab !== (account.coverPickerDefaultTab ?? 'search') ||
       defaultThemePreference !== (account.defaultThemePreference ?? 'system') ||
+      dualModelEnabled !== (account.dualModelEnabled ?? false) ||
       autoStartDirty ||
       workspaceDirty
     );
@@ -158,6 +164,7 @@ export function AccountView() {
     analyzerPhase1MinLagChapters,
     coverPickerDefaultTab,
     defaultThemePreference,
+    dualModelEnabled,
     autoStartDirty,
     workspaceDirty,
     account,
@@ -180,6 +187,7 @@ export function AccountView() {
       coverPickerDefaultTab,
       defaultThemePreference,
       autoStartSidecar,
+      dualModelEnabled,
     };
     const action = await dispatch(saveAccountSettings(patch));
     if (saveAccountSettings.fulfilled.match(action)) {
@@ -520,6 +528,25 @@ export function AccountView() {
                 Restart the server to apply this change.
               </p>
             )}
+          </FieldRow>
+          <FieldRow
+            label="Keep both TTS engines loaded (dual-model mode)"
+            sublabel="Loads two TTS engines into GPU memory at once so a book can mix engines (e.g. Kokoro + Qwen) without swap latency. Only enable if your GPU has headroom (~8 GB); the analyzer auto-evicts during generation. Off by default — when off, a mixed-engine book still generates but pays an engine-swap cost."
+          >
+            <label className="inline-flex items-center gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={dualModelEnabled}
+                onChange={(e) => setDualModelEnabled(e.target.checked)}
+                data-testid="account-dual-model-enabled"
+                className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
+              />
+              <span className="text-sm text-ink">
+                {dualModelEnabled
+                  ? 'Enabled — both engines may stay resident; mixed-engine books skip the swap.'
+                  : 'Disabled — one engine at a time; mixed-engine books pay a swap cost.'}
+              </span>
+            </label>
           </FieldRow>
         </FormCard>
 
@@ -865,6 +892,25 @@ pwsh server/tts-sidecar/scripts/install-coqui.ps1
 bash server/tts-sidecar/scripts/install-coqui.sh`}</pre>
           <p className="mt-2 text-xs text-ink/55">
             One-shot pre-fetch is optional; the sidecar auto-downloads on first synth call.
+          </p>
+        </div>
+
+        <div>
+          <h3 className="text-sm font-medium text-ink">Qwen3-TTS 0.6B (optional TTS engine)</h3>
+          <p className="mt-1 text-xs text-ink/55">
+            Qwen3-TTS adds a second local engine that coexists with Kokoro. Pre-fetch the weights
+            (~1.8 GB) via:
+          </p>
+          <pre
+            data-testid="account-qwen-install-cmd"
+            className="mt-2 rounded-xl bg-ink/[0.04] p-3 text-xs font-mono text-ink/80 overflow-x-auto"
+          >{`# Windows
+pwsh server/tts-sidecar/scripts/install-qwen3.ps1
+
+# macOS / Linux
+node server/tts-sidecar/scripts/install-qwen3.mjs`}</pre>
+          <p className="mt-2 text-xs text-ink/55">
+            One-shot pre-fetch is optional; the sidecar downloads on first use.
           </p>
         </div>
       </div>
