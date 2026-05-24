@@ -374,6 +374,30 @@ Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexi
 - _Depends on:_ plan 108 (series-scoped write) shipped.
 - _Benefit (user):_ recurring narrators / crossover characters stay consistent across an author's whole catalogue, not just within one series.
 
+### 42. Try PyTorch-native SDPA attention for the Qwen sidecar engine
+
+Source: net-new (2026-05-24). Surfaced while investigating the `flash-attn is not installed. Will only run the manual PyTorch version` warning the Qwen Base model prints on load. The standalone `flash-attn` package is explicitly NOT worth pursuing on Windows (no official wheels; needs the CUDA Toolkit + MSVC + a long, brittle source build — same toolchain tax `requirements.txt` already documents for DeepSpeed) for a sub-1B model doing short-sequence TTS where attention isn't the bottleneck. PyTorch ships flash-attention-2-equivalent kernels via `scaled_dot_product_attention` with zero install, so this captures most of the upside cross-platform.
+
+- _What:_ Pass `attn_implementation="sdpa"` into the Qwen model load in `QwenEngine._load_qwen_model`, behind a guard so a `from_pretrained` signature that doesn't accept the kwarg falls back cleanly to today's bf16-only call (logs once, no regression). First confirm `Qwen3TTSModel.from_pretrained` actually forwards the kwarg down to the underlying transformers model — the engine's own NOTE flags these signatures as "empirical verification owed" until the weights are downloaded. Silences the scary startup warning and may modestly speed per-sentence synth.
+- _Acceptance:_ With Qwen weights present, loading the Base model no longer prints the flash-attn warning; one synth call produces same-quality PCM as the eager path; a timing on one chapter is no worse than today. If the kwarg is rejected, the engine loads exactly as it does now. New pytest case in `server/tts-sidecar/tests/test_qwen3.py` asserting the load path tolerates both kwarg-accepted and kwarg-rejected outcomes.
+- _Key files:_ `server/tts-sidecar/main.py:679-695` (`_load_qwen_model`); `server/tts-sidecar/tests/test_qwen3.py` (load-path case).
+- _Depends on:_ Qwen weights installed via `scripts/install-qwen3.mjs` to verify empirically — plan 108 in flight.
+- _Benefit (technical):_ removes a scary-looking startup warning and picks up PyTorch's optimised attention kernels for free, cross-platform, without the Windows-hostile `flash-attn` build.
+
+### 43. Clean up deployer-facing warnings from the Qwen install + sidecar startup
+
+Source: net-new (2026-05-24). Surfaced running `scripts/install-qwen3.mjs` on a clean Windows box — the install + first model load print several scary-looking-but-mostly-benign warnings that an alpha-tester deployer can't tell apart from real errors. To be fixed in a dedicated cleanup run (user-directed). Sweep ALL such warnings and decide suppress-vs-document for each; today's known ones:
+
+- **HF Hub symlink warning** (`huggingface_hub cache-system uses symlinks … your machine does not support them … degraded version that might require more space`): functionally harmless — the install already localizes the cache to `voices/qwen/hf` via `HF_HOME`/`HF_HUB_CACHE` (`install-qwen3.mjs:83-84`), and with only two models (Base + VoiceDesign), downloaded once, the extra disk is negligible. **Fix:** add `HF_HUB_DISABLE_SYMLINKS_WARNING: '1'` to the install script's `env` object (`install-qwen3.mjs:84`) AND the sidecar's runtime env so it doesn't reappear at model load. Do NOT require enabling Windows Developer Mode.
+- **`SoX could not be found!`**: a no-op for our pipeline — SoX is an optional audio backend a transitive dep (the coqui/torchaudio stack sharing the venv) probes at import; we do audio I/O via `soundfile` (libsndfile) and encode MP3 via ffmpeg server-side. **Action:** document as benign, or suppress at source if cheap; do NOT install SoX (its own Windows headache for zero benefit).
+- **`flash-attn is not installed`**: the real fix is the SDPA path tracked in Could #42, not installing flash-attn — cross-referenced, not duplicated here.
+
+- _What:_ In a single cleanup pass over the Qwen install + sidecar startup, suppress every benign-but-noisy warning at its source (env var or logging filter) and leave only warnings the deployer must actually act on. Concrete fixes above; also re-run the install on a clean Windows box and triage any warning not yet listed.
+- _Acceptance:_ Running `install-qwen3.mjs` + a first Qwen model load on a clean Windows box prints no scary warning that requires no action; any warning that remains is one the deployer genuinely must respond to. SoX + HF-symlink banners gone; flash-attn handled via Could #42.
+- _Key files:_ `server/tts-sidecar/scripts/install-qwen3.mjs` (env object ~line 84); `server/tts-sidecar/main.py` (sidecar runtime env / startup); `server/tts-sidecar/README.md` (document any warning intentionally left as-is).
+- _Depends on:_ plan 108 install script (in flight). Fold the fixes into the cleanup run, not a one-off.
+- _Benefit (user / deployer):_ clean first-run output for alpha testers — warnings that survive are actionable, not noise. Matches the multi-model-gap audit + deployer-facing-script hygiene already used elsewhere in the bundle.
+
 ---
 
 ## Won't (this round) — explicitly parked
