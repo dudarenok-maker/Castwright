@@ -1,7 +1,14 @@
 // Pairs with docs/features/16-generation-stream.md
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { chaptersSlice, chaptersActions, type ChaptersState } from './chapters-slice';
+import {
+  chaptersSlice,
+  chaptersActions,
+  selectActiveStreams,
+  selectAnyActiveStream,
+  type ActiveStreamSnapshot,
+  type ChaptersState,
+} from './chapters-slice';
 import type { Chapter, GenerationTick } from '../lib/types';
 
 const makeChapter = (id: number, overrides: Partial<Chapter> = {}): Chapter => ({
@@ -20,7 +27,7 @@ const baseState = (chapters: Chapter[]): ChaptersState => ({
   generationStartedAt: null,
   lastTickAt: null,
   currentBookId: null,
-  activeStream: null,
+  activeStreams: {},
 });
 
 const tick = (t: Partial<GenerationTick> & { type: GenerationTick['type'] }): GenerationTick =>
@@ -936,7 +943,7 @@ describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, pl
      stay untouched (broadcasting them would fan out regen side-
      effects across tabs, which is the racing-writes case parked
      as Won't #3). */
-  it('replaces activeStream verbatim with the inbound snapshot', () => {
+  it('mirrors the inbound snapshot as the per-book stream map', () => {
     const sibling = {
       bookId: 'book-sibling',
       modelKey: 'kokoro-v1' as const,
@@ -951,7 +958,7 @@ describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, pl
       start,
       chaptersActions.applyExternalChaptersSnapshot(sibling),
     );
-    expect(next.activeStream).toEqual(sibling);
+    expect(next.activeStreams).toEqual({ 'book-sibling': sibling });
     /* Per-chapter rows / pendingRegen / regenEpoch UNCHANGED — proves
        the cross-tab message doesn't contaminate per-tab UI state.
        This is the cross-bookId-isolation invariant the plan locks in. */
@@ -962,21 +969,97 @@ describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, pl
   it('accepts null to mirror a sibling clearActiveStream', () => {
     const start: ChaptersState = {
       ...baseState([]),
-      activeStream: {
-        bookId: 'book-x',
-        modelKey: 'kokoro-v1',
-        done: 5,
-        total: 10,
-        inProgress: 0,
-        lastTickAt: 1000,
-        halted: false,
+      activeStreams: {
+        'book-x': {
+          bookId: 'book-x',
+          modelKey: 'kokoro-v1',
+          done: 5,
+          total: 10,
+          inProgress: 0,
+          lastTickAt: 1000,
+          halted: false,
+        },
       },
     };
     const next = chaptersSlice.reducer(
       start,
       chaptersActions.applyExternalChaptersSnapshot(null),
     );
-    expect(next.activeStream).toBeNull();
+    expect(next.activeStreams).toEqual({});
+  });
+});
+
+describe('chaptersSlice — activeStreams per-book map (plan 111 Wave 2)', () => {
+  const snap = (bookId: string, over: Partial<ActiveStreamSnapshot> = {}): ActiveStreamSnapshot => ({
+    bookId,
+    modelKey: 'kokoro-v1',
+    done: 0,
+    total: 5,
+    inProgress: 1,
+    lastTickAt: 1000,
+    halted: false,
+    ...over,
+  });
+
+  it('setActiveStream keys by bookId so concurrent streams coexist', () => {
+    let s = chaptersSlice.reducer(baseState([]), chaptersActions.setActiveStream(snap('book-A')));
+    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-B', { done: 2 })));
+    expect(Object.keys(s.activeStreams).sort()).toEqual(['book-A', 'book-B']);
+    expect(s.activeStreams['book-B'].done).toBe(2);
+  });
+
+  it('clearActiveStream(bookId) removes only that book’s stream', () => {
+    let s = chaptersSlice.reducer(baseState([]), chaptersActions.setActiveStream(snap('book-A')));
+    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-B')));
+    s = chaptersSlice.reducer(s, chaptersActions.clearActiveStream('book-A'));
+    expect(Object.keys(s.activeStreams)).toEqual(['book-B']);
+  });
+
+  it('updateActiveStreamProgress targets the named book and bumps lastTickAt', () => {
+    let s = chaptersSlice.reducer(baseState([]), chaptersActions.setActiveStream(snap('book-A')));
+    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-B')));
+    s = chaptersSlice.reducer(
+      s,
+      chaptersActions.updateActiveStreamProgress({ bookId: 'book-B', done: 4, inProgress: 2 }),
+    );
+    expect(s.activeStreams['book-B'].done).toBe(4);
+    expect(s.activeStreams['book-B'].inProgress).toBe(2);
+    /* book-A untouched. */
+    expect(s.activeStreams['book-A'].done).toBe(0);
+    /* No-op when the book has no open stream. */
+    const after = chaptersSlice.reducer(
+      s,
+      chaptersActions.updateActiveStreamProgress({ bookId: 'book-Z', done: 9 }),
+    );
+    expect(after.activeStreams['book-Z']).toBeUndefined();
+  });
+
+  it('selectActiveStreams / selectAnyActiveStream read the map', () => {
+    const empty = { chapters: baseState([]) };
+    expect(selectActiveStreams(empty)).toEqual([]);
+    expect(selectAnyActiveStream(empty)).toBe(false);
+    const live = {
+      chapters: chaptersSlice.reducer(baseState([]), chaptersActions.setActiveStream(snap('book-A'))),
+    };
+    expect(selectActiveStreams(live).map((x) => x.bookId)).toEqual(['book-A']);
+    expect(selectAnyActiveStream(live)).toBe(true);
+  });
+
+  it('cross-book guard: a tick is dropped when a stream is open but not for the viewed book', () => {
+    /* Slice holds book-A rows; a stream is open for book-B only. A progress
+       tick for chapter 1 (which exists in book-A's rows) must NOT mutate them
+       — it belongs to book-B (chapter ids collide across books). */
+    let s: ChaptersState = {
+      ...baseState([makeChapter(1, { state: 'queued' })]),
+      currentBookId: 'book-A',
+    };
+    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-B')));
+    const after = chaptersSlice.reducer(
+      s,
+      chaptersActions.applyGenerationTick({ type: 'progress', chapterId: 1, progress: 0.9 } as GenerationTick),
+    );
+    expect(after.chapters[0].state).toBe('queued');
+    expect(after.chapters[0].progress).toBe(0);
   });
 });
 
