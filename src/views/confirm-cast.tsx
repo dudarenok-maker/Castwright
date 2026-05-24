@@ -254,7 +254,7 @@ export function ConfirmCastView({
 interface CardProps {
   character: Character;
   voice: Voice | undefined;
-  ttsEngine: 'coqui' | 'gemini' | 'piper' | 'kokoro';
+  ttsEngine: 'coqui' | 'gemini' | 'piper' | 'kokoro' | 'qwen';
   decision: Decision | undefined;
   onDecision: (d: Decision) => void;
   /** Current state of the "Update library profile from this manuscript"
@@ -292,7 +292,7 @@ function CharacterList({
 }: {
   characters: Character[];
   findVoice: (id: string | undefined) => Voice | undefined;
-  ttsEngine: 'coqui' | 'gemini' | 'piper' | 'kokoro';
+  ttsEngine: 'coqui' | 'gemini' | 'piper' | 'kokoro' | 'qwen';
   decisions: Record<string, Decision>;
   setDecisions: (d: Record<string, Decision>) => void;
   overrides: Record<string, boolean>;

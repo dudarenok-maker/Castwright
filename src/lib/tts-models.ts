@@ -31,6 +31,11 @@ export const TTS_ENGINES: TtsEngineGroup[] = [
     models: [
       { id: 'kokoro-v1', label: 'Kokoro v1', hint: 'Default · 28 English voices · quality-tuned' },
       {
+        id: 'qwen3-tts-0.6b',
+        label: 'Qwen3-TTS 0.6B',
+        hint: 'Bespoke per-character voices · designed from a persona',
+      },
+      {
         id: 'coqui-xtts-v2',
         label: 'Coqui XTTS v2',
         hint: 'Alternate · 30 baked voices · zero-shot cloning',
@@ -70,10 +75,13 @@ export const DEFAULT_TTS_MODEL: TtsModelKey = FRONTEND_ACCOUNT_DEFAULTS.defaultT
 /* Mirror of the backend's engineForModelKey — keeps the UI honest about
    which sidecar/cloud it will hit when a sample is requested. Add new
    prefixes here in lockstep with server/src/tts/index.ts. */
-export function engineForModelKey(key: TtsModelKey): 'coqui' | 'piper' | 'kokoro' | 'gemini' {
+export function engineForModelKey(
+  key: TtsModelKey,
+): 'coqui' | 'piper' | 'kokoro' | 'qwen' | 'gemini' {
   if (key.startsWith('coqui-')) return 'coqui';
   if (key.startsWith('piper-')) return 'piper';
   if (key.startsWith('kokoro-')) return 'kokoro';
+  if (key.startsWith('qwen')) return 'qwen';
   return 'gemini';
 }
 
