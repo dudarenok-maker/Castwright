@@ -9,7 +9,12 @@
    side of the pair fails the test instead of shipping silently. */
 
 import { describe, it, expect } from 'vitest';
-import { auditEngineCatalog, pickVoiceForEngine, KOKORO_PROFILE_VOICES } from './voice-mapping.js';
+import {
+  auditEngineCatalog,
+  pickVoiceForEngine,
+  resolveVoiceAssignment,
+  KOKORO_PROFILE_VOICES,
+} from './voice-mapping.js';
 
 describe('voice-mapping catalogs are self-consistent', () => {
   it('coqui: every picker voice has a description and every described voice is routable', () => {
@@ -193,5 +198,82 @@ describe('pickVoiceForEngine honours the per-cast overrideTtsVoice', () => {
       { gender: 'male' },
     );
     expect(withNull).toBe(withoutKey);
+  });
+});
+
+describe('qwen is a bespoke-voice engine — no catalog inference (plan 108)', () => {
+  /* Qwen voices are designed per character (design -> clone -> cache ->
+     reuse), not picked from a profile table. A Qwen character MUST carry an
+     explicit designed voiceId in overrideTtsVoices.qwen; with none, there's
+     nothing to infer — the picker returns '' (not a fallback voice). */
+
+  it('returns the designed voiceId from the qwen override slot', () => {
+    const picked = pickVoiceForEngine(
+      'qwen',
+      {
+        id: 'char-biana',
+        character: 'Biana',
+        attributes: ['Female', 'Teen'],
+        overrideTtsVoices: { qwen: { name: 'biana-bright-teen' } },
+      },
+      { gender: 'female', ageRange: 'teen' },
+    );
+    expect(picked).toBe('biana-bright-teen');
+  });
+
+  it('returns "" (no fallback) when no qwen voice has been designed', () => {
+    /* The load-bearing invariant: unlike the preset engines, Qwen does NOT
+       fall through to attribute inference — there is no catalog. An empty
+       string signals "design one first" to the UI / generation path. */
+    const picked = pickVoiceForEngine(
+      'qwen',
+      { id: 'char-biana', character: 'Biana', attributes: ['Female', 'Teen'] },
+      { gender: 'female', ageRange: 'teen' },
+    );
+    expect(picked).toBe('');
+  });
+
+  it('ignores a non-qwen override slot (each engine reads its own slot)', () => {
+    const picked = pickVoiceForEngine(
+      'qwen',
+      {
+        id: 'char-biana',
+        character: 'Biana',
+        attributes: [],
+        overrideTtsVoices: { kokoro: { name: 'af_bella' } },
+      },
+      { gender: 'female' },
+    );
+    expect(picked).toBe('');
+  });
+
+  it('resolveVoiceAssignment labels designed vs undesigned qwen voices', () => {
+    const undesigned = resolveVoiceAssignment(
+      'qwen',
+      { id: 'char-x', character: 'X', attributes: [] },
+      { gender: 'female' },
+    );
+    expect(undesigned).toEqual({
+      provider: 'qwen',
+      name: '',
+      description: 'No voice designed yet',
+    });
+    const designed = resolveVoiceAssignment('qwen', {
+      id: 'char-x',
+      character: 'X',
+      attributes: [],
+      overrideTtsVoices: { qwen: { name: 'x-voice' } },
+    });
+    expect(designed).toEqual({ provider: 'qwen', name: 'x-voice', description: 'Designed voice' });
+  });
+
+  it('auditEngineCatalog reports an empty audit for qwen (no static catalog)', () => {
+    const audit = auditEngineCatalog('qwen');
+    expect(audit).toEqual({
+      engine: 'qwen',
+      missingDescriptions: [],
+      unrouted: [],
+      routedCount: 0,
+    });
   });
 });
