@@ -1,25 +1,23 @@
-/* Unit tests for queue-dispatcher-middleware (plan 102 Wave 4a).
+/* Unit tests for queue-dispatcher-middleware (plan 111 worker pool).
  *
- * The dispatcher drains the workspace queue by dispatching regenerateChapter
- * for the head entry when same-book conditions are met. These tests use a
- * minimal store wiring the queue + chapters slices and the dispatcher
- * middleware; they assert (a) when a regenerate fires, (b) when it doesn't,
- * (c) that completion (clearActiveStream) triggers a DELETE round-trip,
- * (d) pause halts dispatch. */
+ * The dispatcher is the sole stream-opener: it fills up to N workers from the
+ * flat queue across books, coalescing same-book claims into ONE stream, and
+ * DELETEs an entry once its book's stream closes. These tests pin: the open
+ * args + row flip, the completion DELETE, N-slot fill across books, same-book
+ * coalescing (no second forced request), no double-claim, and the no-loop
+ * invariant. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { queueSlice, type QueueEntry } from './queue-slice';
 import { chaptersSlice } from './chapters-slice';
 import { uiSlice } from './ui-slice';
+import { accountSlice } from './account-slice';
 import { notificationsSlice } from './notifications-slice';
 import { queueDispatcherMiddleware } from './queue-dispatcher-middleware';
 import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
+import type { GenerationTick } from '../lib/types';
 
-/* The cross-book branch opens the SSE directly via the shared runner, which
-   calls api.streamGeneration. Mock it so we can assert the open args; the
-   DELETE round-trip still goes through the global fetch mock (queue-thunks
-   uses fetch directly, not the api module). */
 const streamGenerationMock = vi.fn();
 const cancelStreamMock = vi.fn();
 vi.mock('../lib/api', () => ({
@@ -44,13 +42,34 @@ const entry = (overrides: Partial<QueueEntry> = {}): QueueEntry => ({
 });
 
 let fetchMock: ReturnType<typeof vi.fn>;
+/* Stateful server-queue mirror so a DELETE removes one entry (not the whole
+   queue) and the returned snapshot stays consistent across drains. */
+let queueEntries: QueueEntry[] = [];
 
 beforeEach(() => {
-  fetchMock = vi.fn();
+  queueEntries = [];
+  fetchMock = vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
+    const u = String(url);
+    if (u.includes('/api/queue/enqueue')) {
+      const incoming = init?.body ? (JSON.parse(init.body).entries as QueueEntry[]) : [];
+      queueEntries = [...queueEntries, ...incoming];
+    } else if (init?.method === 'DELETE') {
+      const id = u.split('/').pop();
+      queueEntries = queueEntries.filter((e) => e.id !== id);
+    }
+    return jsonResp({ entries: queueEntries, paused: false });
+  });
   vi.stubGlobal('fetch', fetchMock);
   streamGenerationMock.mockClear();
   cancelStreamMock.mockClear();
 });
+
+/* Seed the queue in BOTH the store and the mock mirror so DELETE responses
+   stay consistent. */
+function seed(store: ReturnType<typeof makeStore>, entries: QueueEntry[]): void {
+  queueEntries = [...entries];
+  store.dispatch(queueSlice.actions.setSnapshot({ entries: queueEntries, paused: false }));
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -65,10 +84,7 @@ function jsonResp(body: unknown, status = 200): Response {
   } as Response;
 }
 
-function makeStore() {
-  /* One runner per store (test isolation). Lazy accessor breaks the
-     store↔runner creation cycle — see src/store/index.ts for the same
-     pattern in production. */
+function makeStore(generationWorkers = 2) {
   let runner: StreamRunner | null = null;
   const getRunner = (): StreamRunner => runner!;
   const store = configureStore({
@@ -76,7 +92,11 @@ function makeStore() {
       ui: uiSlice.reducer,
       queue: queueSlice.reducer,
       chapters: chaptersSlice.reducer,
+      account: accountSlice.reducer,
       notifications: notificationsSlice.reducer,
+    },
+    preloadedState: {
+      account: { ...accountSlice.getInitialState(), generationWorkers },
     },
     middleware: (getDefault) =>
       getDefault({ serializableCheck: false }).concat(queueDispatcherMiddleware(getRunner)),
@@ -85,280 +105,133 @@ function makeStore() {
   return store;
 }
 
-/** Helper — flush microtasks (the dispatcher defers tick() via
-    queueMicrotask). */
 async function flushMicro(): Promise<void> {
+  await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
 }
 
-describe('queue-dispatcher-middleware', () => {
-  it('dispatches regenerateChapter for the head entry when book matches and no stream is active', async () => {
+/* Find the open call for a book and drive its stream to completion by feeding
+   an idle tick through the runner's per-stream onTick (the runner then closes
+   the handle + clears the book's snapshot, which wakes the dispatcher). */
+function completeStream(bookId: string): void {
+  const call = streamGenerationMock.mock.calls.find(
+    (c) => (c[0] as { bookId?: string }).bookId === bookId,
+  );
+  if (!call) throw new Error(`no open stream for ${bookId}`);
+  (call[0] as { onTick: (ev: GenerationTick) => void }).onTick({ type: 'idle' } as GenerationTick);
+}
+
+const openedBookIds = () =>
+  streamGenerationMock.mock.calls.map((c) => (c[0] as { bookId: string }).bookId);
+
+describe('queue-dispatcher-middleware (worker pool)', () => {
+  it('opens a stream for a same-book entry and flips its rows', async () => {
     const store = makeStore();
-    /* Seed currentBookId so the same-book gate clears. */
     store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
-    /* Seed a chapter row so regenerateChapter has something to mutate. */
     store.dispatch(
       chaptersSlice.actions.setChapters([
-        {
-          id: 3,
-          title: 'Chapter 3',
-          state: 'done',
-          progress: 1,
-          duration: '0:30',
-          characters: {},
-        },
+        { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
       ] as never),
     );
-
-    /* Cold-boot snapshot — first GET landed, empty queue. */
-    store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: false }));
+    store.dispatch(queueSlice.actions.setSnapshot({ entries: [entry()], paused: false }));
     await flushMicro();
-    /* Same-book regen NOT fired → the head chapter row is untouched (still
-       'done'). regenerateChapter would have flipped it to 'in_progress'. */
-    expect(store.getState().chapters.chapters[0].state).toBe('done');
 
-    /* Now an entry arrives via setSnapshot — dispatcher should fire. */
-    store.dispatch(
-      queueSlice.actions.setSnapshot({ entries: [entry()], paused: false }),
-    );
-    await flushMicro();
-    /* Same-book regen fired → regenerateChapter flipped the head row to
-       in_progress. (The stream spec now lives middleware-local in the
-       generation-stream middleware, which this store doesn't include.) */
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    const args = streamGenerationMock.mock.calls[0][0] as { bookId: string; chapterIds: number[] };
+    expect(args.bookId).toBe('book-A');
+    expect(args.chapterIds).toEqual([3]);
+    /* Viewed-book row flipped to in_progress via regenerateChapterIds. */
     expect(store.getState().chapters.chapters[0].state).toBe('in_progress');
   });
 
-  it('does not dispatch when the queue is paused', async () => {
-    const store = makeStore();
+  it('coalesces same-book entries into ONE stream (same-book no-abort)', async () => {
+    const store = makeStore(2);
+    store.dispatch(
+      queueSlice.actions.setSnapshot({
+        entries: [
+          entry({ id: 'a3', bookId: 'book-A', chapterId: 3 }),
+          entry({ id: 'a4', bookId: 'book-A', chapterId: 4 }),
+        ],
+        paused: false,
+      }),
+    );
+    await flushMicro();
+    /* Both same-book chapters ride ONE forced request — never a second that
+       would abort the first server-side. */
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    const args = streamGenerationMock.mock.calls[0][0] as { bookId: string; chapterIds: number[] };
+    expect(args.bookId).toBe('book-A');
+    expect(args.chapterIds.sort()).toEqual([3, 4]);
+  });
+
+  it('fills up to N workers across books and holds the rest', async () => {
+    const store = makeStore(2);
+    seed(store, [
+      entry({ id: 'a', bookId: 'book-A', chapterId: 1 }),
+      entry({ id: 'b', bookId: 'book-B', chapterId: 1 }),
+      entry({ id: 'c', bookId: 'book-C', chapterId: 1 }),
+    ]);
+    await flushMicro();
+    /* N=2 → two books streaming, the third waits. */
+    expect(openedBookIds().sort()).toEqual(['book-A', 'book-B']);
+
+    /* Book-A finishes → its slot frees → book-C opens. */
+    completeStream('book-A');
+    await flushMicro();
+    expect(openedBookIds()).toContain('book-C');
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/queue/a'))).toBe(true);
+  });
+
+  it('DELETEs an entry only after its book’s stream closes (no-loop)', async () => {
+    const store = makeStore(2);
     store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
     store.dispatch(
       chaptersSlice.actions.setChapters([
-        { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
+        { id: 3, title: 'Chapter 3', state: 'queued', progress: 0, duration: '0:30', characters: {} },
       ] as never),
     );
+    seed(store, [entry()]);
+    await flushMicro();
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    /* No DELETE while the stream is live. */
+    expect(fetchMock.mock.calls.some((c) => (c[1] as { method?: string })?.method === 'DELETE')).toBe(
+      false,
+    );
+
+    /* Mark the chapter done + close the stream (idle). */
+    store.dispatch(chaptersSlice.actions.applyGenerationTick({ type: 'chapter_complete', chapterId: 3 } as GenerationTick));
+    completeStream('book-A');
+    await flushMicro();
+
+    /* Entry DELETEd exactly once, and no re-open of the done chapter. */
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1', { method: 'DELETE' });
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not double-claim across back-to-back snapshots', async () => {
+    const store = makeStore(2);
+    const snap = { entries: [entry({ id: 'a', bookId: 'book-A', chapterId: 1 })], paused: false };
+    store.dispatch(queueSlice.actions.setSnapshot(snap));
+    store.dispatch(queueSlice.actions.setSnapshot(snap));
+    await flushMicro();
+    /* The single entry opens exactly one stream despite two snapshot ticks. */
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not dispatch while the queue is paused', async () => {
+    const store = makeStore(2);
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [entry()], paused: true }));
     await flushMicro();
-    /* Same-book regen NOT fired → the head chapter row is untouched (still
-       'done'). regenerateChapter would have flipped it to 'in_progress'. */
-    expect(store.getState().chapters.chapters[0].state).toBe('done');
-  });
-
-  it('opens a CROSS-book entry directly via the runner without dispatching a regenerate (Wave 4b)', async () => {
-    /* The user is viewing book-A; the head entry is for book-B. The
-       same-book gate is lifted (Should #6): instead of waiting for the user
-       to navigate, the dispatcher opens the SSE for book-B directly through
-       the shared runner. It must NOT dispatch a regenerate action — that
-       would mutate book-A's rows (the slice holds book-A). So pendingRegen
-       stays null, but streamGeneration fires for book-B with the explicit
-       spec + queueEntryId, and the cross-book activeStream snapshot is
-       seeded so the global pill keeps moving. */
-    const store = makeStore();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
-    store.dispatch(
-      chaptersSlice.actions.setChapters([
-        { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
-      ] as never),
-    );
-    store.dispatch(
-      queueSlice.actions.setSnapshot({
-        entries: [entry({ id: 'xb1', bookId: 'book-B', chapterId: 7 })],
-        paused: false,
-      }),
-    );
-    await flushMicro();
-
-    /* No slice-level regen — book-A's rows are untouched. */
-    /* Same-book regen NOT fired → the head chapter row is untouched (still
-       'done'). regenerateChapter would have flipped it to 'in_progress'. */
-    expect(store.getState().chapters.chapters[0].state).toBe('done');
-    /* The cross-book stream opened with the right spec + entry correlation. */
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    const args = streamGenerationMock.mock.calls[0]?.[0] as {
-      bookId?: string;
-      chapterIds?: number[];
-      force?: boolean;
-      queueEntryId?: string;
-    };
-    expect(args.bookId).toBe('book-B');
-    expect(args.chapterIds).toEqual([7]);
-    expect(args.force).toBe(true);
-    expect(args.queueEntryId).toBe('xb1');
-    /* Cross-book snapshot seeded for the streaming book, not the viewed one. */
-    expect((Object.values(store.getState().chapters.activeStreams)[0] ?? null)?.bookId).toBe('book-B');
-  });
-
-  it('does not open a SECOND stream for a cross-book head while one is already in flight', async () => {
-    const store = makeStore();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
-    store.dispatch(
-      chaptersSlice.actions.setChapters([
-        { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
-      ] as never),
-    );
-    /* A stream is already open (some other book's work). */
-    store.dispatch(
-      chaptersSlice.actions.setActiveStream({
-        bookId: 'book-C',
-        modelKey: 'kokoro-v1',
-        done: 0,
-        total: 3,
-        inProgress: 1,
-        lastTickAt: Date.now(),
-        halted: false,
-      } as never),
-    );
-    store.dispatch(
-      queueSlice.actions.setSnapshot({
-        entries: [entry({ id: 'xb2', bookId: 'book-B' })],
-        paused: false,
-      }),
-    );
-    await flushMicro();
-    /* The activeStream gate holds — no second SSE. */
     expect(streamGenerationMock).not.toHaveBeenCalled();
   });
 
-  it('DELETEs the cross-book entry when its SSE finishes (idle → clearActiveStream)', async () => {
-    const store = makeStore();
+  it('waits for the cold-boot snapshot before opening anything', async () => {
+    const store = makeStore(2);
+    /* No setSnapshot yet → queue.loaded false → dispatcher idle even if a
+       slice mutation fires. */
     store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
-    store.dispatch(
-      chaptersSlice.actions.setChapters([
-        { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
-      ] as never),
-    );
-    store.dispatch(
-      queueSlice.actions.setSnapshot({
-        entries: [entry({ id: 'xb3', bookId: 'book-B', chapterId: 7 })],
-        paused: false,
-      }),
-    );
     await flushMicro();
-    /* Cross-book stream opened + activeStream seeded by the runner. */
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    expect((Object.values(store.getState().chapters.activeStreams)[0] ?? null)?.bookId).toBe('book-B');
-
-    /* SSE drains — runner closes → clearActiveStream. Dispatcher then DELETEs
-       the entry it was tracking (inFlightEntryId = 'xb3'). */
-    fetchMock.mockResolvedValueOnce(jsonResp({ entries: [], paused: false }));
-    store.dispatch(chaptersSlice.actions.clearActiveStream('book-B'));
-    await flushMicro();
-    await flushMicro();
-    expect(fetchMock).toHaveBeenCalledWith('/api/queue/xb3', { method: 'DELETE' });
-  });
-
-  it('does not dispatch while an SSE handle is open (activeStream non-null)', async () => {
-    const store = makeStore();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
-    store.dispatch(
-      chaptersSlice.actions.setChapters([
-        { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
-      ] as never),
-    );
-    /* Simulate the existing middleware having opened an SSE for some other
-       work. */
-    store.dispatch(
-      chaptersSlice.actions.setActiveStream({
-        bookId: 'book-A',
-        modelKey: 'kokoro-v1',
-        done: 0,
-        total: 5,
-        inProgress: 1,
-        lastTickAt: Date.now(),
-        halted: false,
-      } as never),
-    );
-    store.dispatch(queueSlice.actions.setSnapshot({ entries: [entry()], paused: false }));
-    await flushMicro();
-    /* Same-book regen NOT fired → the head chapter row is untouched (still
-       'done'). regenerateChapter would have flipped it to 'in_progress'. */
-    expect(store.getState().chapters.chapters[0].state).toBe('done');
-  });
-
-  it('DELETEs the in-flight entry when the SSE finishes (clearActiveStream)', async () => {
-    const store = makeStore();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
-    store.dispatch(
-      chaptersSlice.actions.setChapters([
-        { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
-      ] as never),
-    );
-    /* Seed the queue + let dispatcher fire regenerate. */
-    store.dispatch(queueSlice.actions.setSnapshot({ entries: [entry()], paused: false }));
-    await flushMicro();
-    expect(store.getState().chapters.chapters[0].state).toBe('in_progress');
-
-    /* Simulate the existing middleware opening the SSE → setActiveStream. */
-    store.dispatch(
-      chaptersSlice.actions.setActiveStream({
-        bookId: 'book-A',
-        modelKey: 'kokoro-v1',
-        done: 0,
-        total: 1,
-        inProgress: 1,
-        lastTickAt: Date.now(),
-        halted: false,
-      } as never),
-    );
-    await flushMicro();
-
-    /* Now the SSE finishes — closeHandle dispatches clearActiveStream. */
-    fetchMock.mockResolvedValueOnce(jsonResp({ entries: [], paused: false }));
-    store.dispatch(chaptersSlice.actions.clearActiveStream('book-A'));
-    await flushMicro();
-    await flushMicro();
-
-    /* Dispatcher should have fired DELETE /api/queue/e1. */
-    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1', { method: 'DELETE' });
-  });
-
-  it('dispatches regenerateCharacter when the head entry is scope=character (Wave 4b)', async () => {
-    const store = makeStore();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
-    store.dispatch(
-      chaptersSlice.actions.setChapters([
-        {
-          id: 3,
-          title: 'Chapter 3',
-          state: 'done',
-          progress: 1,
-          duration: '0:30',
-          /* Character must exist on the row for regenerateCharacter to
-             mutate it (the reducer no-ops when the character is missing
-             or 'skipped'). */
-          characters: { narrator: 'done' },
-        },
-      ] as never),
-    );
-    store.dispatch(
-      queueSlice.actions.setSnapshot({
-        entries: [entry({ scope: 'character', characterId: 'narrator' })],
-        paused: false,
-      }),
-    );
-    await flushMicro();
-    /* regenerateCharacter routed via the dispatcher's scope branch flips the
-       character to 'queued' and (since the chapter was done) the row to
-       in_progress. */
-    expect(store.getState().chapters.chapters[0].state).toBe('in_progress');
-    expect(store.getState().chapters.chapters[0].characters.narrator).toBe('queued');
-  });
-
-  it('waits for the cold-boot snapshot before doing anything', async () => {
-    const store = makeStore();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
-    store.dispatch(
-      chaptersSlice.actions.setChapters([
-        { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
-      ] as never),
-    );
-    /* No setSnapshot yet — loaded is false. Even if the queue magically had
-       entries (it can't until setSnapshot fires, but defense-in-depth), the
-       dispatcher would do nothing. We assert by checking that just setting
-       chapters (which is a trigger type) doesn't fire a regenerate. */
-    await flushMicro();
-    /* Same-book regen NOT fired → the head chapter row is untouched (still
-       'done'). regenerateChapter would have flipped it to 'in_progress'. */
-    expect(store.getState().chapters.chapters[0].state).toBe('done');
+    expect(streamGenerationMock).not.toHaveBeenCalled();
   });
 });

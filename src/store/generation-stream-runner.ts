@@ -58,6 +58,10 @@ interface OpenHandle {
   cancel: () => void;
   bookId: string;
   modelKey: TtsModelKey;
+  /** Chapter ids this stream is rendering (the spec's chapterIds). Lets the
+      dispatcher answer "is chapter X already being generated?" so two workers
+      never claim the same chapter. */
+  chapterIds: number[];
   /* Per-run rollup accumulator. Every chapter_complete tick pushes its
      chapterId here; on run end (close) we emit one generation_run_complete
      event with the full list — keeps the activity feed from drowning in
@@ -66,24 +70,31 @@ interface OpenHandle {
 }
 
 export interface StreamRunner {
-  /** Open an SSE for `bookId` with the given spec. No-ops if a handle is
-      already open (the single-SSE invariant — callers gate on
-      `chapters.activeStream` first, this is belt-and-braces). */
+  /** Open an SSE for `bookId` with the given spec. No-ops if a stream is
+      already open FOR THAT BOOK (the per-book singleton — two concurrent
+      streams for one book would abort each other server-side, see
+      server/src/routes/generation.ts `inFlightByBook`). Different books open
+      independent concurrent streams (plan 111 worker pool). */
   open(
     bookId: string,
     modelKey: TtsModelKey,
     spec: StreamSpec | null,
     opts?: StreamOpenOpts,
   ): void;
-  /** Tear down the active handle (flushing the run rollup) and clear the
-      cross-book snapshot. No-op when nothing is open. */
-  close(): void;
-  isOpen(): boolean;
-  getBookId(): string | null;
-  /** Drive the per-tick side-effects. Called by the generation-stream
-      middleware on every `chapters/applyGenerationTick`, after the reducer
-      has run, so post-tick state is visible here. */
-  handleTick(ev: GenerationTick | undefined): void;
+  /** Tear down the stream for `bookId` (flushing its run rollup) and clear
+      that book's snapshot. No-op when nothing is open for the book. */
+  close(bookId: string): void;
+  /** Tear down every open stream — store teardown / hard reset. */
+  closeAll(): void;
+  /** Number of books currently streaming (the dispatcher's N-slot gate). */
+  openBookCount(): number;
+  /** Book ids of every open stream — used by the halt path to pause each. */
+  openBookIds(): string[];
+  /** Is a stream open for this specific book? (per-book singleton check) */
+  hasOpenStreamForBook(bookId: string): boolean;
+  /** Union of chapter ids across all open streams — so the dispatcher never
+      claims a chapter that's already rendering. */
+  openChapterIds(): number[];
 }
 
 function snapshotFromChapters(
@@ -108,10 +119,15 @@ function snapshotFromChapters(
 }
 
 export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
-  let handle: OpenHandle | null = null;
+  /* Plan 111 worker pool — one handle per book. The per-book singleton is
+     structural (the server aborts a book's prior job on a new forced request,
+     so two streams for one book can't coexist); different books stream
+     concurrently up to the dispatcher's N-worker cap. */
+  const handles = new Map<string, OpenHandle>();
   const dispatch = store.dispatch;
 
-  const close = (): void => {
+  const close = (bookId: string): void => {
+    const handle = handles.get(bookId);
     if (!handle) return;
     /* Flush the per-run rollup before tearing down. Empty runs (pause before
        any chapter finished, queue drained immediately) write nothing — there
@@ -123,10 +139,13 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
         ),
       );
     }
-    const closedBookId = handle.bookId;
     handle.cancel();
-    handle = null;
-    dispatch(chaptersActions.clearActiveStream(closedBookId));
+    handles.delete(bookId);
+    dispatch(chaptersActions.clearActiveStream(bookId));
+  };
+
+  const closeAll = (): void => {
+    for (const bookId of [...handles.keys()]) close(bookId);
   };
 
   const open = (
@@ -135,10 +154,9 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
     spec: StreamSpec | null,
     opts: StreamOpenOpts = {},
   ): void => {
-    /* Single-SSE invariant — never stack a second stream. Callers gate on
-       chapters.activeStream first; this guards the seam directly so a future
-       caller can't bypass it. */
-    if (handle) return;
+    /* Per-book singleton — never stack a second stream for the SAME book (the
+       server would abort the first). Different books open concurrently. */
+    if (handles.has(bookId)) return;
 
     const after = store.getState();
 
@@ -159,10 +177,10 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
           : [];
     dispatch(changeLogActions.appendLogEvent(buildGenerationStartedEvent({ chapterIds: ids })));
 
-    /* Seed the cross-book snapshot. Same-book: derive from the slice's rows
+    /* Seed this book's snapshot. Same-book: derive from the slice's rows
        (it IS this book's data right now). Cross-book: the slice holds the
        wrong book, so seed a minimal placeholder; the first tick's run*
-       aggregates refresh it via updateActiveStreamProgress in handleTick. */
+       aggregates refresh it via updateActiveStreamProgress. */
     const seed: ActiveStreamSnapshot = sliceOnThisBook
       ? snapshotFromChapters(bookId, modelKey, after.chapters)
       : {
@@ -187,32 +205,45 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
          store, not over any view's props, so generation continues after the
          Generate view unmounts. */
       getChapters: () => store.getState().chapters.chapters,
-      onTick: (ev: GenerationTick) => dispatch(chaptersActions.applyGenerationTick(ev)),
+      /* Each stream binds its own bookId so a tick is always attributable to
+         the right book even with several streams running. */
+      onTick: (ev: GenerationTick) => onStreamTick(bookId, ev),
     });
-    handle = { cancel, bookId, modelKey, completedChapterIds: [] };
+    handles.set(bookId, { cancel, bookId, modelKey, chapterIds: ids, completedChapterIds: [] });
   };
 
-  const handleTick = (ev: GenerationTick | undefined): void => {
+  /* Per-stream tick entry point. Row mutation (applyGenerationTick) only fires
+     for the VIEWED book — a foreign-book tick would corrupt the viewed book's
+     rows (chapter ids collide across books). Side-effects + snapshot refresh
+     run for every stream via handleTickFor. */
+  const onStreamTick = (bookId: string, ev: GenerationTick | undefined): void => {
+    if (!ev) return;
+    if (store.getState().chapters.currentBookId === bookId) {
+      dispatch(chaptersActions.applyGenerationTick(ev));
+    }
+    handleTickFor(bookId, ev);
+  };
+
+  const handleTickFor = (bookId: string, ev: GenerationTick): void => {
+    const handle = handles.get(bookId);
     if (!handle) return;
     const after = store.getState();
-    const sliceMatchesHandle = after.chapters.currentBookId === handle.bookId;
+    const sliceMatchesHandle = after.chapters.currentBookId === bookId;
     if (sliceMatchesHandle) {
       /* Slice has this book's rows — derive counters from rows so we
          pick up any user-side mutations (excluded toggles etc.). */
       dispatch(
         chaptersActions.setActiveStream(
-          snapshotFromChapters(handle.bookId, handle.modelKey, after.chapters),
+          snapshotFromChapters(bookId, handle.modelKey, after.chapters),
         ),
       );
-    } else if (ev && ev.type !== 'idle') {
-      /* Bug E — cross-book path. The slice is on a different book so
-         the per-chapter tick reducer's cross-book guard short-circuits
-         and the snapshot stops refreshing (counters AND lastTickAt
-         freeze). Pull counters straight from the tick payload's run
-         aggregates so the pill keeps moving and the stall check stays
-         fresh. Older servers don't emit the run* fields — in that
-         case `updateActiveStreamProgress` still bumps lastTickAt so
-         the pill at minimum doesn't go spuriously stalled. */
+    } else if (ev.type !== 'idle') {
+      /* Cross-book path. The slice is on a different book so the per-chapter
+         tick was not applied; pull counters straight from the tick payload's
+         run aggregates so the pill keeps moving and the stall check stays
+         fresh. Older servers don't emit the run* fields — `updateActiveStream
+         Progress` still bumps lastTickAt so the pill doesn't go spuriously
+         stalled. */
       const evRecord = ev as unknown as Record<string, unknown>;
       const runDone = typeof evRecord.runDone === 'number' ? evRecord.runDone : undefined;
       const runTotal = typeof evRecord.runTotal === 'number' ? evRecord.runTotal : undefined;
@@ -220,26 +251,23 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
         typeof evRecord.runInProgress === 'number' ? evRecord.runInProgress : undefined;
       dispatch(
         chaptersActions.updateActiveStreamProgress({
-          bookId: handle.bookId,
+          bookId,
           done: runDone,
           total: runTotal,
           inProgress: runInProgress,
         }),
       );
     }
-    if (ev && ev.type === 'chapter_complete' && ev.chapterId != null && sliceMatchesHandle) {
+    if (ev.type === 'chapter_complete' && ev.chapterId != null && sliceMatchesHandle) {
       /* Accumulate — do NOT dispatch a per-chapter event. The rollup goes
          out once on close (run drain / pause). De-dupe so a retry tick or
          re-emitted SSE message doesn't double-count. */
       if (!handle.completedChapterIds.includes(ev.chapterId)) {
         handle.completedChapterIds.push(ev.chapterId);
       }
-      /* Flip any pending revisions for this chapter to playable. The
-         new render is on disk now, so the diff player can fetch it.
-         No-op when no pending revision targets the chapter (e.g.
-         plain regenerateChapter without a character). */
+      /* Flip any pending revisions for this chapter to playable. */
       dispatch(revisionsActions.markRevisionPlayable({ chapterId: ev.chapterId }));
-    } else if (ev && ev.type === 'chapter_failed' && ev.chapterId != null && sliceMatchesHandle) {
+    } else if (ev.type === 'chapter_failed' && ev.chapterId != null && sliceMatchesHandle) {
       const ch = after.chapters.chapters.find((c) => c.id === ev.chapterId);
       if (ch) {
         dispatch(
@@ -251,14 +279,8 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
           ),
         );
       }
-    } else if (ev && ev.type === 'chapter_failed' && ev.chapterId == null && sliceMatchesHandle) {
-      /* Stream-level halt (setup / sidecar / cast issue — chapter id
-         absent). The chapters reducer flipped any in-flight chapter
-         to 'failed' and set lastError; per-chapter rows already
-         surface that. This toast covers the "did anything happen?"
-         gap when the user is on a different view (Cast, Library)
-         when the stream dies. Dedupe on 'generation-stream' so a
-         burst of halt ticks doesn't stack. */
+    } else if (ev.type === 'chapter_failed' && ev.chapterId == null && sliceMatchesHandle) {
+      /* Stream-level halt (setup / sidecar / cast issue — chapter id absent). */
       dispatch(
         notificationsActions.pushToast({
           kind: 'error',
@@ -266,24 +288,20 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
           dedupeKey: 'generation-stream',
         }),
       );
-    } else if (ev && ev.type === 'idle') {
-      /* Server's idle tick is the unambiguous "no more work" end-of-
-         stream signal (server/src/routes/generation.ts emits it once
-         the target loop drains). Tear down the handle here regardless
-         of which book the slice currently reflects — the reconcile-
-         based close only runs when currentBookId === handle.bookId, so
-         an idle tick delivered while the user is on a different book
-         (or a global view) would otherwise leave the handle live and
-         the global pill stuck at "100%". */
-      close();
+    } else if (ev.type === 'idle') {
+      /* Server's idle tick is the unambiguous "no more work" signal for this
+         book's stream — tear it down (per-book, leaving other streams alive). */
+      close(bookId);
     }
   };
 
   return {
     open,
     close,
-    isOpen: () => handle != null,
-    getBookId: () => handle?.bookId ?? null,
-    handleTick,
+    closeAll,
+    openBookCount: () => handles.size,
+    openBookIds: () => [...handles.keys()],
+    hasOpenStreamForBook: (bookId) => handles.has(bookId),
+    openChapterIds: () => [...handles.values()].flatMap((h) => h.chapterIds),
   };
 }

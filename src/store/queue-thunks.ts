@@ -18,6 +18,18 @@ import type { AppDispatch } from './index';
 import { queueActions, type QueueEntry, type QueueScope } from './queue-slice';
 import { notificationsActions } from './notifications-slice';
 import { chaptersActions } from './chapters-slice';
+import { mockQueueRequest } from '../mocks/mock-queue';
+
+/* Plan 111 — the persisted queue drives generation, so mock mode (dev app +
+   e2e) needs a working queue with no backend. Route through the in-memory
+   mock-queue when VITE_USE_MOCKS, else the real /api/queue/* routes. The
+   mock returns a fetch-Response-like object so `readSnapshot` is unchanged. */
+const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
+
+function queueRequest(path: string, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<Response> {
+  if (USE_MOCKS) return Promise.resolve(mockQueueRequest(path, init) as unknown as Response);
+  return fetch(path, init);
+}
 
 export interface EnqueueInput {
   /** Frontend-minted unique id. Deterministic for tests; in production we
@@ -50,32 +62,36 @@ async function readSnapshot(res: Response): Promise<QueueSnapshotResponse> {
     even across hard reload / server bounce. */
 export function loadQueue() {
   return async (dispatch: AppDispatch): Promise<void> => {
-    const res = await fetch('/api/queue');
+    const res = await queueRequest('/api/queue');
     const snapshot = await readSnapshot(res);
     dispatch(queueActions.setSnapshot(snapshot));
   };
 }
 
-/** POST /api/queue/enqueue — append one or more entries. The 10 regenerate
-    trigger sites funnel through here (Wave 4). Pops a toast with the new
-    count + a "View queue" CTA. */
-export function enqueueQueueEntries(entries: EnqueueInput[]) {
+/** POST /api/queue/enqueue — append one or more entries. The regenerate
+    trigger sites funnel through here and pop a toast with the new count + a
+    "View queue" CTA. Pass `{ silent: true }` (plan 111 enqueue-on-work) to
+    suppress the toast — the auto-enqueue of a resumed/first run is not a
+    user-initiated "Added to queue" action. */
+export function enqueueQueueEntries(entries: EnqueueInput[], opts: { silent?: boolean } = {}) {
   return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
-    const res = await fetch('/api/queue/enqueue', {
+    const res = await queueRequest('/api/queue/enqueue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ entries }),
     });
     const snapshot = await readSnapshot(res);
     dispatch(queueActions.setSnapshot(snapshot));
-    const count = snapshot.entries.length;
-    dispatch(
-      notificationsActions.pushToast({
-        kind: 'info',
-        message: `Added to queue · ${count} ${count === 1 ? 'entry' : 'entries'} pending.`,
-        dedupeKey: 'queue-enqueue',
-      }),
-    );
+    if (!opts.silent) {
+      const count = snapshot.entries.length;
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'info',
+          message: `Added to queue · ${count} ${count === 1 ? 'entry' : 'entries'} pending.`,
+          dedupeKey: 'queue-enqueue',
+        }),
+      );
+    }
     return snapshot;
   };
 }
@@ -84,7 +100,7 @@ export function enqueueQueueEntries(entries: EnqueueInput[]) {
     The modal calls this on drop / tap-pill release. */
 export function reorderQueue(desiredOrder: string[]) {
   return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
-    const res = await fetch('/api/queue/reorder', {
+    const res = await queueRequest('/api/queue/reorder', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ order: desiredOrder }),
@@ -120,7 +136,7 @@ export function haltActiveGeneration() {
     Resume/Pause control inside the modal calls this. */
 export function setQueuePaused(paused: boolean) {
   return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
-    const res = await fetch('/api/queue/pause', {
+    const res = await queueRequest('/api/queue/pause', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ paused }),
@@ -138,7 +154,7 @@ export function setQueuePaused(paused: boolean) {
     structured error keeps the flow self-explanatory. */
 export function cancelQueueEntry(entryId: string) {
   return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
-    const res = await fetch(`/api/queue/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
+    const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
     if (res.status === 409) {
       dispatch(
         notificationsActions.pushToast({
