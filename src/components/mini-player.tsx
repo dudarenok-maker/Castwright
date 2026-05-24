@@ -361,7 +361,10 @@ export function MiniPlayer({
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'm' && e.key !== 'M') return;
       const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -660,17 +663,20 @@ export function MiniPlayer({
             if (t <= 5) return;
             lastSavedAtRef.current = now;
             const chapterId = chapter.id;
-            void api
-              .putListenProgress(bookId, { chapterId, currentSec: t })
-              .catch((err) => {
-                console.warn('[mini-player] listen-progress save failed', (err as Error).message);
-              });
+            void api.putListenProgress(bookId, { chapterId, currentSec: t }).catch((err) => {
+              console.warn('[mini-player] listen-progress save failed', (err as Error).message);
+            });
           }}
           onLoadedMetadata={(e) => {
             const target = e.currentTarget;
             const d = target.duration;
             if (Number.isFinite(d) && d > 0) {
-              setAudio((a) => ({ ...a, durationSec: d }));
+              /* Plan 109 — the server's durationSec (from segments.json, PCM-
+                 exact) is authoritative; don't clobber it with the browser's
+                 estimate, which is wildly inflated for any legacy MP3 that
+                 shipped without a Xing VBR header. Adopt the element's value
+                 only when the server gave us nothing. */
+              setAudio((a) => (a.durationSec > 0 ? a : { ...a, durationSec: d }));
               /* Plan 47 — apply the resume bookmark now that the
                  audio element knows its duration. Cap at d - 1 so a
                  resume point parked near the end of the chapter
