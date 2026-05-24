@@ -10,14 +10,15 @@
    arrive) read the same state without spinning up a parallel poll.
 
    ─── Hard invariant: one hook, one poll, one /health response ──────────
-   Both Coqui and Kokoro engine states fan out from the SAME 30 s setInterval
-   below. Do NOT split into useCoquiLifecycle + useKokoroLifecycle — that
-   was the duplicated-poll situation plan 30 G1 consolidated away, and the
+   Coqui, Kokoro AND Qwen engine states all fan out from the SAME 30 s
+   setInterval below. Do NOT split into per-engine hooks — that was the
+   duplicated-poll situation plan 30 G1 consolidated away, and the
    per-engine fan-out here is what BACKLOG #15 documents as the seam a
    third consumer would extend (without adding a second poll). The /health
-   response carries both engines' load state in one shot (see
+   response carries every engine's load state in one shot (see
    server/src/routes/sidecar-health.ts forwarding `kokoroLoaded` /
-   `kokoroLoading` alongside Coqui's `modelLoaded` / `loading`).
+   `kokoroLoading` and `qwenLoaded` / `qwenLoading` alongside Coqui's
+   `modelLoaded` / `loading`).
 
    The hook deliberately keeps `playSampleWithAutoLoad` out of scope:
    sample-Play surfaces (drawer, cast row) still trigger their own JIT
@@ -39,6 +40,9 @@ export interface TtsLifecycle {
   /** Kokoro v1 — eager-loaded at sidecar startup, ~1 GB VRAM, does NOT auto-
       evict the analyzer (fits alongside Ollama on an 8 GB GPU per plan 14a). */
   kokoro: EngineLifecycle;
+  /** Qwen — bespoke per-character engine (plan 108), button-driven. Treated
+      like Kokoro for residency: does NOT auto-evict the analyzer. */
+  qwen: EngineLifecycle;
   /** Inline banner copy: "Analyzer unloaded to free VRAM for TTS." Shared
       slot — only one engine load is in flight at a time so a single notice
       surface is correct. */
@@ -65,7 +69,7 @@ export interface TtsLifecycle {
   gpuInFlight?: number;
 }
 
-type EngineId = 'coqui' | 'kokoro';
+type EngineId = 'coqui' | 'kokoro' | 'qwen';
 
 export function useTtsLifecycle(): TtsLifecycle {
   const [sidecarHealth, setSidecarHealth] = useState<SidecarHealth | null>(null);
@@ -77,6 +81,7 @@ export function useTtsLifecycle(): TtsLifecycle {
      Stop on Kokoro doesn't clobber Coqui's optimistic state. */
   const [pendingCoqui, setPendingCoqui] = useState<ModelControlState | null>(null);
   const [pendingKokoro, setPendingKokoro] = useState<ModelControlState | null>(null);
+  const [pendingQwen, setPendingQwen] = useState<ModelControlState | null>(null);
   const [evictionNotice, setEvictionNotice] = useState<string | null>(null);
   const [loadErrorNotice, setLoadErrorNotice] = useState<string | null>(null);
 
@@ -90,12 +95,14 @@ export function useTtsLifecycle(): TtsLifecycle {
           setSidecarHealth(h);
           setPendingCoqui(null);
           setPendingKokoro(null);
+          setPendingQwen(null);
         })
         .catch(() => {
           if (cancelled) return;
           setSidecarHealth({ status: 'unreachable', url: '', error: 'Probe failed.' });
           setPendingCoqui(null);
           setPendingKokoro(null);
+          setPendingQwen(null);
         });
 
       /* GPU queue state — same cadence, separate endpoint. Permissive
@@ -140,8 +147,18 @@ export function useTtsLifecycle(): TtsLifecycle {
     return 'idle';
   })();
 
+  const qwenState: ModelControlState = (() => {
+    if (pendingQwen) return pendingQwen;
+    if (!sidecarHealth) return 'idle';
+    if (sidecarHealth.status === 'unreachable') return 'unreachable';
+    if (sidecarHealth.qwenLoading) return 'loading';
+    if (sidecarHealth.qwenLoaded) return 'ready';
+    return 'idle';
+  })();
+
   const setPending = (engine: EngineId, next: ModelControlState | null) => {
     if (engine === 'kokoro') setPendingKokoro(next);
+    else if (engine === 'qwen') setPendingQwen(next);
     else setPendingCoqui(next);
   };
 
@@ -220,6 +237,11 @@ export function useTtsLifecycle(): TtsLifecycle {
       state: kokoroState,
       onLoad: () => doLoad('kokoro'),
       onStop: () => doStop('kokoro'),
+    },
+    qwen: {
+      state: qwenState,
+      onLoad: () => doLoad('qwen'),
+      onStop: () => doStop('qwen'),
     },
     evictionNotice,
     loadErrorNotice,

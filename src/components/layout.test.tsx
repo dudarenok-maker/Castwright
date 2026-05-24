@@ -453,3 +453,63 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
     expect(queryByText('Library title — Keeper')).toBeNull();
   });
 });
+
+describe('Layout — global TTS pills: per-character Qwen (plan 108)', () => {
+  /* Renders Layout at the confirm stage (where showGlobalTtsPill is true)
+     with a cast that contains a Qwen-pinned character. The top-bar pill
+     cluster must surface a Qwen ModelControlPill (aria-label "Qwen <state>")
+     alongside the default Kokoro pill — proving selectEnginesInUse's
+     per-character signal drives the pill render. /health is mocked
+     unreachable so the pill resolves to "Qwen unreachable". */
+  it('renders the Qwen pill when a cast character is pinned to ttsEngine="qwen"', async () => {
+    getBookStateMock.mockResolvedValue({
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'mns_test',
+        title: 'Bonus Keefe Story',
+        author: 'Shannon Messenger',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: false,
+        chapters: [],
+        coverGradient: ['#3C194F', '#0F0E0D'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      cast: {
+        characters: [
+          { id: 'narrator', name: 'Narrator', role: 'Observer', color: 'narrator' },
+          { id: 'halloran', name: 'Captain Halloran', role: 'Captain', color: 'halloran', ttsEngine: 'qwen' },
+        ],
+      },
+      manuscript: { wordCount: 0, format: 'plaintext' },
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+    });
+
+    const store = makeStore();
+    /* The Qwen pill rides the per-character override; the account default
+       (whatever it hydrates to) drives a separate engine pill we don't
+       assert on here. */
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+
+    const { findByRole } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/cast']}>
+          <Routes>
+            <Route path="/books/:bookId/cast" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* The Qwen pill renders once the cast hydrates from getBookState. */
+    const qwenPill = await findByRole('group', { name: /^Qwen / });
+    expect(qwenPill).toBeTruthy();
+  });
+});
