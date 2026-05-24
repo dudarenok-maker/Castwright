@@ -86,7 +86,8 @@ def fake_qwen_runtime(monkeypatch, tmp_path):
         with open(path, "wb") as fh:
             fh.write(b"\x00")  # presence marker for isfile()
 
-    def _load(path: str, **_kwargs: Any) -> Any:
+    def _load(path: str, **kwargs: Any) -> Any:
+        fake_torch._last_load_kwargs = kwargs  # type: ignore[attr-defined]
         return _store.get(str(path), {"_prompt": True})
 
     fake_torch.save = _save  # type: ignore[attr-defined]
@@ -166,6 +167,12 @@ def test_synthesize_reuses_cached_voice(fake_qwen_runtime) -> None:
     # The cached prompt was passed to generate_voice_clone (reuse, not re-design).
     assert engine._base is not None
     assert len(engine._base.clone_calls) >= 1
+    # Regression: PyTorch 2.6+ defaults torch.load(weights_only=True), which
+    # rejects the qwen_tts VoiceClonePromptItem object we cache. The engine
+    # MUST load with weights_only=False (the file is our own, trusted output).
+    import torch as _t  # the stubbed module from the fixture
+
+    assert _t._last_load_kwargs.get("weights_only") is False
 
 
 def test_synthesize_fails_fast_on_undesigned_voice(fake_qwen_runtime) -> None:

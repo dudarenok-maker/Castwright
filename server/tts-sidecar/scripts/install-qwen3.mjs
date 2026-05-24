@@ -78,10 +78,13 @@ function main() {
   }
   step(`Using venv python: ${python}`);
 
-  // HF cache lives with the sidecar so the weights are portable and the
-  // release zip's exclude list (which already drops voices/) keeps them out.
-  const hfHome = join(SIDECAR_DIR, 'voices', 'qwen', 'hf');
-  const env = { HF_HOME: hfHome, HF_HUB_CACHE: hfHome };
+  // Prefetch into the DEFAULT Hugging Face cache (~/.cache/huggingface) so the
+  // weights land exactly where the sidecar's QwenEngine.from_pretrained looks
+  // at runtime. (An earlier version pointed HF_HOME at voices/qwen/hf, but the
+  // engine doesn't set HF_HOME, so it ignored that copy and re-downloaded on
+  // first use — a ~6-min cold stall. Aligning on the default cache fixes it;
+  // the multi-GB weights live outside the repo, so the release zip is unaffected.)
+  const env = {};
   if (FORCE_CPU) env.QWEN_DEVICE = 'cpu';
 
   step('Installing qwen-tts (pulls torch + soundfile)...');
@@ -92,7 +95,7 @@ function main() {
 
   const models = SKIP_DESIGN ? [BASE_MODEL] : [BASE_MODEL, VOICEDESIGN_MODEL];
   step(
-    `Pre-fetching ${models.length} model(s) into ${hfHome} ` +
+    `Pre-fetching ${models.length} model(s) into the default Hugging Face cache ` +
       `(~1.8 GB Base${SKIP_DESIGN ? '' : ' + ~3.4 GB VoiceDesign'}; expect a few min)...`,
   );
   // device_map="cpu" for the prefetch so a box without CUDA can still download
@@ -111,7 +114,7 @@ function main() {
   }
 
   step('Done. Qwen3-TTS installed.');
-  step('  - Synthesis model (Base) and voice-design model are cached under voices/qwen/hf.');
+  step('  - Base (synth) + VoiceDesign models are in the default Hugging Face cache (~/.cache/huggingface).');
   step('  - Qwen warms on demand via POST /load (or set PRELOAD_QWEN=1 to load Base on boot).');
   step('  - Design a per-character voice via POST /qwen/design-voice.');
 }
