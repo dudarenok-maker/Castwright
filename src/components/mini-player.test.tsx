@@ -71,10 +71,8 @@ vi.mock('../lib/api', () => ({
        Per-test overrides via getListenProgressMock.mockImplementation
        drive the resume-seek + save-flush specs below. */
     getListenProgress: (bookId: string) => getListenProgressMock(bookId),
-    putListenProgress: (
-      bookId: string,
-      args: { chapterId: number; currentSec: number },
-    ) => putListenProgressMock(bookId, args),
+    putListenProgress: (bookId: string, args: { chapterId: number; currentSec: number }) =>
+      putListenProgressMock(bookId, args),
   },
 }));
 
@@ -378,5 +376,64 @@ describe('MiniPlayer — plan 47 resume + flush', () => {
       unmount();
     });
     expect(putListenProgressMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('MiniPlayer — plan 109 duration source of truth', () => {
+  async function resolveChapterWithDuration(id: number, url: string, durationSec: number) {
+    const resolver = pendingByChapter.get(id);
+    if (!resolver) throw new Error(`No pending fetch for chapter ${id}`);
+    await act(async () => {
+      resolver({ url, durationSec, peaks: [], sampleRate: 24000, segments: [] });
+    });
+  }
+
+  async function fireLoadedMetadata(audioEl: HTMLAudioElement, durationSec: number) {
+    Object.defineProperty(audioEl, 'duration', { configurable: true, value: durationSec });
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('loadedmetadata'));
+    });
+  }
+
+  it('keeps the server durationSec for the scrubber total, not the inflated browser estimate', async () => {
+    /* The bug: a legacy Xing-less MP3 makes the browser report a ~7x duration.
+       The server's segments.json value (634 s = 10:34) is authoritative and
+       must win the displayed total over the browser's 4578 s (76:18). */
+    const { container } = renderPlayer(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapterWithDuration(1, '/api/books/book-1/chapters/1/audio.mp3', 634);
+    await fireLoadedMetadata(audioEl, 4578);
+
+    expect(container.textContent).toContain('10:34'); // formatTime(634)
+    expect(container.textContent).not.toContain('76:18'); // formatTime(4578)
+  });
+
+  it('falls back to the browser duration when the server provided none', async () => {
+    const { container } = renderPlayer(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapterWithDuration(1, '/api/books/book-1/chapters/1/audio.mp3', 0);
+    await fireLoadedMetadata(audioEl, 600);
+
+    expect(container.textContent).toContain('10:00'); // formatTime(600)
   });
 });
