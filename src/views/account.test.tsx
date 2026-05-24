@@ -522,6 +522,52 @@ describe('AccountView — dual-model TTS mode', () => {
   });
 });
 
+describe('AccountView — eager-load Kokoro', () => {
+  it('renders the eager-load checkbox checked when the preference is true', () => {
+    renderView({ eagerLoadKokoro: true });
+    const checkbox = screen.getByTestId('account-eager-load-kokoro') as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+    expect(screen.getByText(/preloads kokoro at startup/i)).toBeInTheDocument();
+  });
+
+  it('renders the eager-load checkbox unchecked when the preference is false', () => {
+    renderView({ eagerLoadKokoro: false });
+    const checkbox = screen.getByTestId('account-eager-load-kokoro') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    expect(screen.getByText(/warms on demand on first synth/i)).toBeInTheDocument();
+  });
+
+  it('defaults to true when the field is absent (legacy settings file)', () => {
+    renderView({ eagerLoadKokoro: undefined });
+    const checkbox = screen.getByTestId('account-eager-load-kokoro') as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it('shows the restart-sidecar pill as soon as the toggle is flipped', async () => {
+    const user = userEvent.setup();
+    renderView({ eagerLoadKokoro: true });
+    expect(screen.queryByText(/restart the sidecar to apply this change/i)).toBeNull();
+    await user.click(screen.getByTestId('account-eager-load-kokoro'));
+    expect(screen.getByText(/restart the sidecar to apply this change/i)).toBeInTheDocument();
+  });
+
+  it('round-trips eagerLoadKokoro=false through the Save patch', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      eagerLoadKokoro: false,
+    });
+    const user = userEvent.setup();
+    renderView({ eagerLoadKokoro: true });
+    await user.click(screen.getByTestId('account-eager-load-kokoro'));
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+    const [patch] = (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch.eagerLoadKokoro).toBe(false);
+  });
+});
+
 describe('AccountView — Models card (plan 61)', () => {
   it('renders the Models section with the in-app Ollama install card', async () => {
     /* The OllamaInstall component fires /api/ollama/detect on mount —

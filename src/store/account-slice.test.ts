@@ -111,6 +111,13 @@ describe('accountSlice — granular setters', () => {
     const b = accountSlice.reducer(a, accountActions.setDualModelEnabled(false));
     expect(b.dualModelEnabled).toBe(false);
   });
+
+  it('setEagerLoadKokoro toggles the eager-load flag', () => {
+    const a = accountSlice.reducer(undefined, accountActions.setEagerLoadKokoro(false));
+    expect(a.eagerLoadKokoro).toBe(false);
+    const b = accountSlice.reducer(a, accountActions.setEagerLoadKokoro(true));
+    expect(b.eagerLoadKokoro).toBe(true);
+  });
 });
 
 describe('accountSlice — dual-model flag', () => {
@@ -131,6 +138,27 @@ describe('accountSlice — dual-model flag', () => {
     await store.dispatch(saveAccountSettings({ dualModelEnabled: true }));
     expect(putSpy).toHaveBeenCalledWith({ dualModelEnabled: true });
     expect(store.getState().account.dualModelEnabled).toBe(true);
+  });
+});
+
+describe('accountSlice — eager-load Kokoro flag', () => {
+  it('hydrates eagerLoadKokoro from the server fetch response', async () => {
+    (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      eagerLoadKokoro: false,
+    });
+    const store = makeStore();
+    await store.dispatch(fetchAccountSettings());
+    expect(store.getState().account.eagerLoadKokoro).toBe(false);
+  });
+
+  it('round-trips eagerLoadKokoro through saveAccountSettings', async () => {
+    const putSpy = api.putUserSettings as unknown as ReturnType<typeof vi.fn>;
+    putSpy.mockResolvedValue({ ...SERVER_FIXTURE, eagerLoadKokoro: false });
+    const store = makeStore();
+    await store.dispatch(saveAccountSettings({ eagerLoadKokoro: false }));
+    expect(putSpy).toHaveBeenCalledWith({ eagerLoadKokoro: false });
+    expect(store.getState().account.eagerLoadKokoro).toBe(false);
   });
 });
 

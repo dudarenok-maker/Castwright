@@ -1830,6 +1830,16 @@ components:
             headroom), so a mixed-engine book still generates with this off,
             it just pays the swap latency. Takes effect on the next
             generation run; no server restart required.
+        eagerLoadKokoro:
+          type: boolean
+          description: |
+            When true (default), the Node server spawns the TTS sidecar
+            with `PRELOAD_KOKORO=1`, so Kokoro eager-loads at sidecar
+            startup (~1 GB VRAM, ~1 s). When false, the sidecar is spawned
+            with `PRELOAD_KOKORO=0` and Kokoro warms on demand on the first
+            synth that needs it (or via POST /load) — for Qwen-primary
+            users who want the ~1 GB VRAM back. Takes effect on the next
+            sidecar restart.
         apiKeyStatus:
           type: string
           enum: [set, unset]
@@ -1898,6 +1908,8 @@ components:
           maximum: 50
           nullable: true
         dualModelEnabled:
+          type: boolean
+        eagerLoadKokoro:
           type: boolean
 
     # --- Library ----------------------------------------------------

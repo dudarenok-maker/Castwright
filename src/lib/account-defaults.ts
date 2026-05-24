@@ -30,6 +30,7 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
   | 'analyzerPhase1Model'
   | 'analyzerPhase1MinLagChapters'
   | 'dualModelEnabled'
+  | 'eagerLoadKokoro'
 > = {
   displayName: 'Mike Dudarenok',
   /* Gemini 3.1 Flash Lite over the Google API key is the new default
@@ -83,4 +84,9 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
      Account view. Flip in lockstep with
      server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   dualModelEnabled: false,
+  /* On by default — Kokoro v1 (the engine default) is cheap to eager-load
+     (~1 GB VRAM, ~1 s). Qwen-primary users turn this off to reclaim that
+     ~1 GB; Kokoro then warms on demand on first synth. Flip in lockstep
+     with server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
+  eagerLoadKokoro: true,
 };
