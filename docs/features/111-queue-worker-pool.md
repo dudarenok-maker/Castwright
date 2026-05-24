@@ -6,7 +6,7 @@ owner: null
 
 # Persisted queue as the single source of truth + N configurable generation workers
 
-> Status: active (Wave 1 shipped — the `generationWorkers` setting; Waves 2–4 in flight)
+> Status: active (Waves 1–2 shipped — the `generationWorkers` setting + the per-book `activeStreams` map; Waves 3–4 in flight)
 > Key files: `src/store/generation-stream-runner.ts`, `src/store/queue-dispatcher-middleware.ts`, `src/store/chapters-slice.ts`, `src/store/generation-stream-middleware.ts`, `server/src/routes/generation.ts`, `src/views/account.tsx`
 > URL surface: `#/books/<id>/generate`, global queue modal + top-bar pill, Account view
 > OpenAPI ops: `GET/PUT /api/user/settings` (new `generationWorkers` field); generation SSE unchanged
@@ -30,7 +30,7 @@ Completes plan 102's intended migration. The leftover "generating override" — 
 ## Wave sequence (each wave = one PR, ordered so there is NO parallelism-regression window)
 
 - **Wave 1 (shipped) — `generationWorkers` setting end-to-end.** openapi `UserSettings`/`UserSettingsPatch`; `server/src/workspace/user-settings.ts` (`z.number().int().min(1).max(4)`, default 2, `getResolvedGenerationWorkers()` resolver: `GEN_WORKERS` env > legacy `GEN_CHAPTER_CONCURRENCY` env > setting > 2); `generation.ts` pool width reads the resolver; `account-defaults.ts` + `account-slice.ts` (`setGenerationWorkers`) + `account.tsx` (number input). The setting immediately tunes within-book fan-out via the existing pool; cross-book lands in Wave 3. No behavior change at the default (2).
-- **Wave 2 — `activeStream` → per-book map (client-only).** `activeStreams: Record<bookId, snapshot>` + reducers + `selectActiveStreams`/`selectAnyActiveStream`; migrate the top-bar pill (aggregate), broadcast-middleware, local-analyzer guard. Runner still single-handle (N=1, behaviour identical).
+- **Wave 2 (shipped) — `activeStream` → per-book map (client-only).** `activeStreams: Record<bookId, snapshot>` + reducers (`setActiveStream` keyed by bookId, `clearActiveStream(bookId)`, `updateActiveStreamProgress({bookId,…})`) + `selectActiveStreams`/`selectAnyActiveStream`; cross-book guard reframed for the map; migrated the top-bar pill (aggregates done/total/inProgress, stalled iff every stream quiet, onClick → queue modal when >1 book), broadcast-middleware (wire still one snapshot), local-analyzer guard, queue-slice Part-A overlay selectors, dispatcher single-in-flight gate. Runner still single-handle (N=1, behaviour identical).
 - **Wave 3 — worker pool.** Runner → `Map<bookId, handle>` + per-stream tick routing; dispatcher fills up to N slots (claim Set, group-by-book), reads `generationWorkers`; remove the `hasWork` override + add the enqueue-on-work observer; collapse the `regenerateChapter` round-trip. Client concurrency goes live here.
 - **Wave 4 — retire `GEN_CHAPTER_CONCURRENCY`.** Drop the legacy env-name fallback; rename test env to `GEN_WORKERS`; update plan-87 test/doc descriptions. Cleanup, strictly after Wave 3.
 

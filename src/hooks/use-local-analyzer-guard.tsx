@@ -35,6 +35,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
+import { selectAnyActiveStream } from '../store/chapters-slice';
 import { haltActiveGeneration } from '../store/queue-thunks';
 import { MODEL_OPTIONS } from '../lib/models';
 import { ConfirmDialog } from '../modals/confirm-dialog';
@@ -61,7 +62,10 @@ interface GuardResult {
 export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}): GuardResult {
   const dispatch = useAppDispatch();
   const selectedModel = useAppSelector((s) => s.ui.selectedModel);
-  const activeStream = useAppSelector((s) => s.chapters.activeStream);
+  const anyActiveStream = useAppSelector(selectAnyActiveStream);
+  /* A representative generating book for the modal copy (advisory). Stable
+     string read so this hook doesn't re-render on every progress tick. */
+  const activeBookId = useAppSelector((s) => Object.keys(s.chapters.activeStreams)[0] ?? null);
   const libraryBooks = useAppSelector((s) => s.library.books);
 
   /* Stash the proceed callback in state — the modal needs to call it on
@@ -74,7 +78,7 @@ export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}
   const engine = MODEL_OPTIONS.find((m) => m.id === selectedModel)?.engine ?? 'gemini';
 
   const guard: GuardResult['guard'] = (proceed) => {
-    if (engine !== 'local' || !activeStream) {
+    if (engine !== 'local' || !anyActiveStream) {
       proceed();
       return;
     }
@@ -83,11 +87,11 @@ export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}
 
   const close = () => setPending(null);
 
-  const titleFromLibrary = activeStream
-    ? (libraryBooks.find((b) => b.bookId === activeStream.bookId)?.title ?? null)
+  const titleFromLibrary = activeBookId
+    ? (libraryBooks.find((b) => b.bookId === activeBookId)?.title ?? null)
     : null;
   const resolvedTitle =
-    generatingBookTitle ?? titleFromLibrary ?? activeStream?.bookId ?? 'the other book';
+    generatingBookTitle ?? titleFromLibrary ?? activeBookId ?? 'the other book';
 
   const modal = (
     <ConfirmDialog
