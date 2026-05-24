@@ -2313,6 +2313,17 @@ export interface components {
              */
             ageRange?: "child" | "teen" | "adult" | "elderly";
             description?: string;
+            /**
+             * @description Natural-language voice-design persona (plan 108) — a short
+             *     instruct like "a bright, confident teenage girl, warm and a
+             *     little playful, mid-paced, with a hint of anxiety". Generated
+             *     per-character by Gemini from the character's full profile +
+             *     dialogue evidence, then editable by the user. Seeds the Qwen
+             *     sidecar's bespoke voice-design flow
+             *     (`POST /qwen/design-voice {voiceId, instruct, …}`). Optional —
+             *     absent until a persona has been generated.
+             */
+            voiceStyle?: string;
             evidence?: {
                 quote?: string;
                 note?: string;

@@ -560,3 +560,40 @@ describe('castSlice — applyAddAlias (POST /cast/add-alias response)', () => {
     expect(r2.characters[0].aliases).toEqual(['Foster']);
   });
 });
+
+describe('castSlice — setVoiceStyle (plan 108)', () => {
+  it('sets the voice-design persona on the matching character', () => {
+    const start = baseState([makeChar('Wren'), makeChar('Marlow')]);
+    const next = castSlice.reducer(
+      start,
+      castActions.setVoiceStyle({
+        characterId: 'Wren',
+        voiceStyle: 'a poised, confident teenage girl, warm and mid-paced',
+      }),
+    );
+    expect(next.characters.find((c) => c.id === 'Wren')!.voiceStyle).toBe(
+      'a poised, confident teenage girl, warm and mid-paced',
+    );
+    /* Other characters untouched. */
+    expect(next.characters.find((c) => c.id === 'Marlow')!.voiceStyle).toBeUndefined();
+  });
+
+  it('overwrites an existing persona (re-generate)', () => {
+    const start = baseState([makeChar('Wren', { voiceStyle: 'old persona' })]);
+    const next = castSlice.reducer(
+      start,
+      castActions.setVoiceStyle({ characterId: 'Wren', voiceStyle: 'new persona' }),
+    );
+    expect(next.characters[0].voiceStyle).toBe('new persona');
+  });
+
+  it('no-ops when the character id is not in the slice', () => {
+    const start = baseState([makeChar('Wren')]);
+    const next = castSlice.reducer(
+      start,
+      castActions.setVoiceStyle({ characterId: 'ghost', voiceStyle: 'whatever' }),
+    );
+    expect(next).toEqual(start);
+  });
+});
+

@@ -31,6 +31,7 @@ import { castLinkPriorRouter } from './routes/cast-link-prior.js';
 import { castNotLinkedToRouter } from './routes/cast-not-linked-to.js';
 import { castSeriesPatchRouter } from './routes/cast-series-patch.js';
 import { castAddFromRosterRouter } from './routes/cast-add-from-roster.js';
+import { voiceStyleRouter } from './routes/voice-style.js';
 import { libraryCastOverrideRouter } from './routes/library-cast-override.js';
 import { seriesRosterRouter } from './routes/series-roster.js';
 import { voiceSampleRouter } from './routes/voice-sample.js';
@@ -146,6 +147,7 @@ app.use('/api/books', castLinkPriorRouter); // mounts /:bookId/cast/link-prior (
 app.use('/api/books', castNotLinkedToRouter); // mounts /:bookId/cast/:characterId/not-linked-to (plan 101 — mark cross-book duplicate as intentional variant)
 app.use('/api/books', castSeriesPatchRouter); // mounts /:bookId/cast/:characterId/series-patch (cross-book Compare save propagation, BACKLOG #7)
 app.use('/api/books', castAddFromRosterRouter); // mounts /:bookId/cast/add-from-roster (new local character pulled from a prior series-mate)
+app.use('/api/books', voiceStyleRouter); // mounts /:bookId/cast/{:characterId/voice-style/generate,voice-style/generate-all} (plan 108 — Gemini voice-design personas)
 app.use('/api/books', seriesRosterRouter); // mounts /:bookId/series-roster (prior-book characters in the same series)
 app.use('/api', libraryCastOverrideRouter); // mounts /library-cast/override (cross-book; not under /:bookId)
 app.use('/api/books', generationRouter); // mounts /:bookId/generation (SSE)

@@ -53,6 +53,12 @@ export const characterSchema = z
     gender: z.enum(['male', 'female', 'neutral']).optional(),
     ageRange: z.enum(['child', 'teen', 'adult', 'elderly']).optional(),
     description: z.string().optional(),
+    /* Natural-language voice-design persona (plan 108). Generated per
+       character by Gemini from the full profile + dialogue evidence and
+       editable by the user; seeds the Qwen sidecar's bespoke voice-design
+       flow. Optional + additive so existing cast.json files keep
+       validating. */
+    voiceStyle: z.string().optional(),
     evidence: z.array(evidenceSchema).optional(),
     voiceState: z.enum(['generated', 'tuned', 'reused', 'locked']).optional(),
     matchedFrom: z
