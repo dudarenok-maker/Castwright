@@ -711,10 +711,10 @@ export function Layout() {
   const showGlobalTtsPill =
     stageKind === 'analysing' || stageKind === 'confirm' || stageKind === 'ready';
   /* Pills only render for engines actually in use by the current book —
-     Coqui pill when the book synthesises with Coqui, Kokoro pill when it
-     synthesises with Kokoro. Today this is derived from the book's
-     effective default model key (singleton set); the set shape leaves
-     room for per-character engine overrides without churning consumers.
+     Coqui / Kokoro pills when the book synthesises with them, the Qwen
+     pill when any cast member is pinned to the bespoke Qwen engine
+     (plan 108). Derived from the book's effective default model key PLUS
+     per-character `ttsEngine` overrides (see selectEnginesInUse).
      Gemini has no Stop pill (cloud, no VRAM to free). */
   const enginesInUse = useAppSelector(selectEnginesInUse);
   /* GPU semaphore queue badge — prefixes the TTS pill cluster with
@@ -762,6 +762,20 @@ export function Layout() {
           }}
           onStop={() => {
             void ttsLifecycle.coqui.onStop();
+          }}
+        />
+      )}
+      {enginesInUse.has('qwen') && (
+        <ModelControlPill
+          kind="tts"
+          engineLabel="Qwen"
+          state={ttsLifecycle.qwen.state}
+          unreachableLabel="Sidecar process not running"
+          onLoad={() => {
+            void ttsLifecycle.qwen.onLoad();
+          }}
+          onStop={() => {
+            void ttsLifecycle.qwen.onStop();
           }}
         />
       )}

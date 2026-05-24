@@ -3160,13 +3160,16 @@ export interface SidecarHealth {
 
      `modelLoaded` / `loading` stay Coqui-specific for back-compat (the
      Coqui pill polls them); `kokoroLoaded` / `kokoroLoading` are the
-     Kokoro pair, added when Kokoro got its own in-app Stop pill. Both
-     pairs fan out from the same /health response so useTtsLifecycle
-     stays on one poll per tick. */
+     Kokoro pair, added when Kokoro got its own in-app Stop pill;
+     `qwenLoaded` / `qwenLoading` are the Qwen pair (plan 108, bespoke
+     per-character engine). All three pairs fan out from the same /health
+     response so useTtsLifecycle stays on one poll per tick. */
   modelLoaded?: boolean;
   loading?: boolean;
   kokoroLoaded?: boolean;
   kokoroLoading?: boolean;
+  qwenLoaded?: boolean;
+  qwenLoading?: boolean;
   device?: string | null;
 }
 
@@ -3739,12 +3742,17 @@ async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   return {
     status: 'reachable',
     url: '(mock)',
-    engines: ['coqui', 'kokoro', 'gemini'],
+    engines: ['coqui', 'kokoro', 'qwen', 'gemini'],
     modelLoaded: MOCK_SIDECAR_MODEL_LOADED,
     loading: false,
     kokoroLoaded: MOCK_SIDECAR_KOKORO_LOADED,
     kokoroLoading: false,
-    device: MOCK_SIDECAR_MODEL_LOADED || MOCK_SIDECAR_KOKORO_LOADED ? 'cuda' : null,
+    qwenLoaded: MOCK_SIDECAR_QWEN_LOADED,
+    qwenLoading: false,
+    device:
+      MOCK_SIDECAR_MODEL_LOADED || MOCK_SIDECAR_KOKORO_LOADED || MOCK_SIDECAR_QWEN_LOADED
+        ? 'cuda'
+        : null,
   };
 }
 
@@ -3755,14 +3763,17 @@ async function mockGetSidecarHealth(): Promise<SidecarHealth> {
    the real sidecar's eager-preload-at-startup behaviour. */
 let MOCK_SIDECAR_MODEL_LOADED = false;
 let MOCK_SIDECAR_KOKORO_LOADED = true;
+/* Qwen starts unloaded under mocks — it's a button-driven bespoke engine
+   like Coqui (no eager preload), so the Qwen pill begins at 'idle'. */
+let MOCK_SIDECAR_QWEN_LOADED = false;
 let MOCK_OLLAMA_MODEL_LOADED = false;
 
 async function realLoadSidecar(
-  opts: { engine?: 'coqui' | 'kokoro' } = {},
+  opts: { engine?: 'coqui' | 'kokoro' | 'qwen' } = {},
 ): Promise<ModelControlResult> {
   /* Default to Coqui when the caller omits `engine` — preserves back-compat
-     with the original signature. The Kokoro pill always passes
-     `{ engine: 'kokoro' }` explicitly. */
+     with the original signature. The Kokoro / Qwen pills always pass
+     `{ engine: 'kokoro' | 'qwen' }` explicitly. */
   const body = opts.engine ? { engine: opts.engine } : {};
   const res = await fetch('/api/sidecar/load', {
     method: 'POST',
@@ -3775,7 +3786,7 @@ async function realLoadSidecar(
 }
 
 async function realUnloadSidecar(
-  opts: { engine?: 'coqui' | 'kokoro' } = {},
+  opts: { engine?: 'coqui' | 'kokoro' | 'qwen' } = {},
 ): Promise<ModelControlResult> {
   const body = opts.engine ? { engine: opts.engine } : {};
   const res = await fetch('/api/sidecar/unload', {
@@ -3811,11 +3822,13 @@ async function realGetOllamaHealth(): Promise<OllamaHealth> {
 }
 
 async function mockLoadSidecar(
-  opts: { engine?: 'coqui' | 'kokoro' } = {},
+  opts: { engine?: 'coqui' | 'kokoro' | 'qwen' } = {},
 ): Promise<ModelControlResult> {
   await wait(60);
   if (opts.engine === 'kokoro') {
     MOCK_SIDECAR_KOKORO_LOADED = true;
+  } else if (opts.engine === 'qwen') {
+    MOCK_SIDECAR_QWEN_LOADED = true;
   } else {
     MOCK_SIDECAR_MODEL_LOADED = true;
   }
@@ -3823,11 +3836,13 @@ async function mockLoadSidecar(
 }
 
 async function mockUnloadSidecar(
-  opts: { engine?: 'coqui' | 'kokoro' } = {},
+  opts: { engine?: 'coqui' | 'kokoro' | 'qwen' } = {},
 ): Promise<ModelControlResult> {
   await wait(40);
   if (opts.engine === 'kokoro') {
     MOCK_SIDECAR_KOKORO_LOADED = false;
+  } else if (opts.engine === 'qwen') {
+    MOCK_SIDECAR_QWEN_LOADED = false;
   } else {
     MOCK_SIDECAR_MODEL_LOADED = false;
   }

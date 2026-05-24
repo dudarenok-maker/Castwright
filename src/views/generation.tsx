@@ -32,6 +32,7 @@ const INERT_ENGINE_LIFECYCLE = {
 const INERT_TTS_LIFECYCLE: TtsLifecycle = {
   coqui: INERT_ENGINE_LIFECYCLE,
   kokoro: INERT_ENGINE_LIFECYCLE,
+  qwen: INERT_ENGINE_LIFECYCLE,
   evictionNotice: null,
   loadErrorNotice: null,
   dismissNotices: () => {},
