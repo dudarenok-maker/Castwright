@@ -431,7 +431,7 @@ export interface StreamArgs {
   }>;
   onTick: (ev: GenerationTick & { type: GenerationTick['type'] }) => void;
   /** Mock-only: number of chapters to keep in-flight in parallel. Mirrors the
-      server's `GEN_CHAPTER_CONCURRENCY` (default 2 — see plan 87 archive). The
+      server's `GEN_WORKERS` (default 2 — see plan 87 archive). The
       real `streamGeneration` ignores this; the mock uses it to interleave SSE
       events across K chapters so browser-level specs can pin the parallel-SSE
       contract. Defaults to 2 when unset, capped by the number of queued
@@ -1012,7 +1012,7 @@ function mockStreamGeneration({
 }: StreamArgs): () => void {
   const onTick = safeOnTick(rawOnTick);
   /* Mock the real server's parallel-chapter SSE cadence (plan 87 archive,
-     `GEN_CHAPTER_CONCURRENCY`, default 2). The server keeps K chapters
+     `GEN_WORKERS`, default 2). The server keeps K chapters
      in-flight on a bounded worker pool, so progress / chapter_complete
      events for multiple chapters interleave on the wire — each keyed by
      `chapterId`. Three behaviours that matter:
@@ -1035,7 +1035,7 @@ function mockStreamGeneration({
         the cast and the active-speaker caption updates.
 
      `mockGenConcurrency` (default 2) caps the in-flight set width and
-     mirrors `GEN_CHAPTER_CONCURRENCY` on the server. Browser-level e2e
+     mirrors `GEN_WORKERS` on the server. Browser-level e2e
      specs can seed `window.__mockGenConcurrency` to force the value
      deterministically without re-plumbing the middleware. */
   const requestedK =

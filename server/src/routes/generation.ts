@@ -955,7 +955,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      synthesiseChapter` loop at this site with K concurrent workers that
      pull from a shared index. K=1 reproduces the serial loop byte-for-byte
      (one worker, sequential pulls, same processOneChapter body), so
-     setting `GEN_CHAPTER_CONCURRENCY=1` is the safety valve.
+     setting `GEN_WORKERS=1` is the safety valve.
 
      Why an index-pulling pool rather than `Promise.all(map(...))`:
      - Bounds the concurrency without spinning up N pending promises.
@@ -970,10 +970,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      v1 is ~1 GB resident and two concurrent inferences fit on an 8 GB GPU
      without eviction; that's the documented default. */
   /* Plan 111 — pool width is the resolved `generationWorkers` setting
-     (GEN_WORKERS env > generationWorkers setting > 2). `GEN_CHAPTER_CONCURRENCY`
-     is still honored as a legacy env fallback inside the resolver (retired in a
-     later wave). Today this drives within-book fan-out; once the queue worker
-     pool lands, the same setting bounds cross-book concurrency too. */
+     (GEN_WORKERS env > generationWorkers setting > 2). The plan-87
+     `GEN_CHAPTER_CONCURRENCY` env is retired (wave 4). This drives within-book
+     fan-out; the queue dispatcher bounds cross-book concurrency with the same
+     setting. */
   const concurrency = getResolvedGenerationWorkers();
   const effectiveConcurrency = Math.min(concurrency, targetChapters.length || 1);
 
