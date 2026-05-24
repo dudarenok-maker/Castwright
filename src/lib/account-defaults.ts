@@ -29,6 +29,7 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
   | 'analyzerPhase0Model'
   | 'analyzerPhase1Model'
   | 'analyzerPhase1MinLagChapters'
+  | 'dualModelEnabled'
 > = {
   displayName: 'Mike Dudarenok',
   /* Gemini 3.1 Flash Lite over the Google API key is the new default
@@ -77,4 +78,9 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
   analyzerPhase0Model: null,
   analyzerPhase1Model: null,
   analyzerPhase1MinLagChapters: null,
+  /* Off by default — keeping two TTS engines resident in GPU memory at
+     once is a deliberate VRAM commitment the user opts into in the
+     Account view. Flip in lockstep with
+     server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
+  dualModelEnabled: false,
 };
