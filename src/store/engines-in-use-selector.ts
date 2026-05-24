@@ -1,6 +1,6 @@
 /* selectEnginesInUse — derive the set of TTS engines a given book will
    actually synthesise with, so the top bar can render only the pills that
-   matter for the current view (Kokoro / Coqui / Gemini).
+   matter for the current view (Kokoro / Coqui / Qwen / Gemini).
 
    Today the engine is a per-book setting (`account.defaultTtsModelKey` is
    the user-wide default; book-specific overrides may arrive later) — so
@@ -20,7 +20,7 @@
 import type { RootState } from './index';
 import { engineForModelKey } from '../lib/tts-models';
 
-export type EngineFamily = 'coqui' | 'kokoro' | 'gemini';
+export type EngineFamily = 'coqui' | 'kokoro' | 'qwen' | 'gemini';
 
 /* `piper` exists in the engine taxonomy but has no pill (no Load/Stop
    control on Piper today). We map it to `coqui` for pill purposes since
@@ -29,6 +29,7 @@ export type EngineFamily = 'coqui' | 'kokoro' | 'gemini';
 function engineFamilyForKey(key: string): EngineFamily {
   const engine = engineForModelKey(key as Parameters<typeof engineForModelKey>[0]);
   if (engine === 'kokoro') return 'kokoro';
+  if (engine === 'qwen') return 'qwen';
   if (engine === 'gemini') return 'gemini';
   /* coqui + piper both ride the Coqui pill / sidecar lifecycle. */
   return 'coqui';
@@ -39,6 +40,15 @@ export function selectEnginesInUse(state: RootState): Set<EngineFamily> {
   const modelKey = state.account?.defaultTtsModelKey;
   if (modelKey) {
     result.add(engineFamilyForKey(modelKey));
+  }
+  /* Per-character engine overrides (plan 108): Qwen is bespoke-per-character,
+     so it's almost never the book default — a single character pinned to
+     Qwen must still surface the Qwen pill. Detect either an explicit
+     `ttsEngine: 'qwen'` or a designed `overrideTtsVoices.qwen` slot on any
+     cast member of the currently-loaded book. */
+  const characters = state.cast?.characters;
+  if (characters?.some((c) => c.ttsEngine === 'qwen' || c.overrideTtsVoices?.qwen)) {
+    result.add('qwen');
   }
   return result;
 }
