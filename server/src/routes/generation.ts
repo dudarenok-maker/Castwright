@@ -39,8 +39,13 @@ import {
   engineForModelKey,
   isTtsModelKey,
   selectTtsProvider,
+  type TtsEngine,
   type TtsModelKey,
+  type TtsProvider,
 } from '../tts/index.js';
+import { resolveCharacterEngine } from '../tts/per-character-engine.js';
+import { pickVoiceForEngine } from '../tts/voice-mapping.js';
+import { getCachedUserSettings } from '../workspace/user-settings.js';
 import {
   audioExtForFormat,
   encodePcmToAudio,
@@ -51,6 +56,8 @@ import { DEFAULT_LOUDNORM_OPTIONS, type LoudnormOptions } from '../tts/loudnorm.
 import { formatDuration } from '../audio/format-duration.js';
 import {
   synthesiseChapter,
+  toVoiceLike,
+  buildHintFromCast,
   type CastCharacter,
   type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
@@ -206,6 +213,13 @@ interface CharacterSnapshot {
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
   voiceId?: string;
   voiceEngine?: string;
+  /** The voice NAME actually used at synthesis time — the resolved output of
+      `pickVoiceForEngine(charEngine, …)` (plan 108). Unlike `voiceId` (the
+      library id, which doesn't change when only a per-engine override flips),
+      this captures the real voice so the drift detector can catch an
+      override-only change. Optional: segments written before plan 108 have no
+      value → the detector treats it as "no signal" and falls back to voiceId. */
+  resolvedVoiceName?: string;
   /** Attribute list captured at synthesis time. The drift detector
       compares this against the current cast's attributes — a non-empty
       symmetric difference fires a drift event because attributes drive
@@ -290,6 +304,57 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       errorReason: 'Cast not confirmed yet — open the cast view first.',
     });
     return res.end();
+  }
+
+  /* Per-character engine routing (plan 108). Engine is no longer one global
+     choice: a character may carry its own `ttsEngine` (narrator on Kokoro, a
+     bespoke character on Qwen, …). Build a per-engine provider cache — the
+     default engine reuses the request's provider/modelKey — so
+     `synthesiseChapter` routes each character to its own engine's provider
+     without reconstructing it per group. */
+  const canonicalModelKeyForEngine = (e: TtsEngine): TtsModelKey => {
+    switch (e) {
+      case 'kokoro':
+        return 'kokoro-v1';
+      case 'qwen':
+        return 'qwen3-tts-0.6b';
+      case 'coqui':
+        return 'coqui-xtts-v2';
+      case 'piper':
+        return 'piper-en-us-medium';
+      case 'gemini':
+        return modelKey.startsWith('gemini-') ? modelKey : 'gemini-2.5-flash';
+    }
+  };
+  const providerCache = new Map<TtsEngine, { provider: TtsProvider; modelKey: TtsModelKey }>();
+  providerCache.set(engine, { provider, modelKey });
+  const resolveForEngine = (e: TtsEngine): { provider: TtsProvider; modelKey: TtsModelKey } => {
+    const cached = providerCache.get(e);
+    if (cached) return cached;
+    const mk = canonicalModelKeyForEngine(e);
+    const built = { provider: selectTtsProvider(mk), modelKey: mk };
+    providerCache.set(e, built);
+    return built;
+  };
+
+  /* Dual-model advisory (plan 108). If the cast mixes engines but the user
+     hasn't opted into keeping both resident, warn that enabling dual-model
+     mode avoids engine-swap latency. Advisory only — the run proceeds; the
+     sidecar lazy-loads each engine on first use. */
+  const requiredEngines = new Set(cast.characters.map((c) => resolveCharacterEngine(c, engine)));
+  if (requiredEngines.size > 1 && !getCachedUserSettings().dualModelEnabled) {
+    const list = [...requiredEngines].sort().join(' + ');
+    const message =
+      `This book mixes TTS engines (${list}) but dual-model mode is off. Generation ` +
+      `will still run, but turning on "Keep both TTS engines loaded" in Account ` +
+      `settings avoids engine-swap latency.`;
+    console.warn(`[generation] ${message}`);
+    send({
+      type: 'warning',
+      code: 'dual_model_off_multi_engine',
+      message,
+      engines: [...requiredEngines].sort(),
+    });
   }
 
   /* Plan 80 — manuscript-edits.json is the canonical post-analysis sentence
@@ -580,6 +645,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         provider,
         modelKey,
         engine,
+        resolveForEngine,
         signal: controller.signal,
         chapterTitleNarration,
         narratorCharacterId: 'narrator',
@@ -709,12 +775,25 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       const characterSnapshots: Record<string, CharacterSnapshot> = {};
       for (const c of cast.characters) {
         if (!speakingIds.has(c.id)) continue;
+        /* Per-character engine + the voice NAME actually rendered (plan 108).
+           voiceEngine was the global run engine before; now it's this
+           character's resolved engine. resolvedVoiceName captures the real
+           pickVoiceForEngine output so the drift detector can catch an
+           override-only change (same voiceId, different override) — see the
+           revisions.ts comparison added in Wave 4. */
+        const charEngine = resolveCharacterEngine(c, engine);
+        const resolvedVoiceName = pickVoiceForEngine(
+          charEngine,
+          toVoiceLike(c),
+          buildHintFromCast(c),
+        );
         characterSnapshots[c.id] = {
           tone: c.tone,
           gender: c.gender,
           ageRange: c.ageRange,
           voiceId: c.voiceId,
-          voiceEngine: engine,
+          voiceEngine: charEngine,
+          resolvedVoiceName: resolvedVoiceName || undefined,
           /* Sorted for stable comparison — the analyzer's attribute order
              isn't deterministic across runs, so without the sort an
              order-only change would look like drift to the detector. */
