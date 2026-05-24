@@ -24,9 +24,20 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-function fakeFfmpegChild(
-  opts: { stderr?: string } = {},
-): {
+/* Plan 109: the MP3 path now writes to a seekable temp file and reads it back
+   (so libmp3lame can stamp the Xing header). The mocked spawn never writes
+   that file, so stub `readFile`/`unlink` — otherwise the encoder's read-back
+   throws ENOENT under the fake child. Everything else stays real. */
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readFile: vi.fn(async () => Buffer.from('stub-mp3-bytes')),
+    unlink: vi.fn(async () => {}),
+  };
+});
+
+function fakeFfmpegChild(opts: { stderr?: string } = {}): {
   on: ReturnType<typeof vi.fn>;
   stdin: { on: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
   stdout: { on: ReturnType<typeof vi.fn> };
@@ -150,6 +161,37 @@ describe('encodePcmToAudio spawn args', () => {
       expect(args[caIndex + 1]).toMatch(codec);
     });
   });
+
+  /* Regression for plan 109: MP3 must encode to a seekable file (not the
+     non-seekable `pipe:1`) so libmp3lame can seek back and write the Xing VBR
+     header. Without it, players estimate duration from a sampled bitrate and
+     inflate it ~7x. We assert the output target is a temp file path and that
+     `-write_xing 1` is present; AAC/Opus keep streaming to stdout. */
+  describe('mp3 output target', () => {
+    it('writes mp3 to a seekable temp file, not pipe:1, with -write_xing 1', async () => {
+      const { encodePcmToAudio } = await import('./mp3.js');
+      await encodePcmToAudio(Buffer.alloc(2), 24_000, { format: 'mp3', quality: 2 });
+
+      const args = spawnMock.mock.calls[0][1] as string[];
+      const outTarget = args[args.length - 1];
+      expect(outTarget).not.toBe('pipe:1');
+      expect(outTarget).toContain('audiobook-encode-');
+      expect(outTarget.endsWith('.mp3')).toBe(true);
+
+      const xingIdx = args.indexOf('-write_xing');
+      expect(xingIdx).toBeGreaterThanOrEqual(0);
+      expect(args[xingIdx + 1]).toBe('1');
+    });
+
+    it.each(['aac-m4a', 'opus'] as const)('keeps %s streaming to pipe:1', async (format) => {
+      const { encodePcmToAudio } = await import('./mp3.js');
+      await encodePcmToAudio(Buffer.alloc(2), 24_000, { format, quality: 2 });
+
+      const args = spawnMock.mock.calls[0][1] as string[];
+      expect(args[args.length - 1]).toBe('pipe:1');
+      expect(args).not.toContain('-write_xing');
+    });
+  });
 });
 
 /* Two-pass sidecar payload coverage (2026-05-22 LUFS-drift fix). Both passes
@@ -170,7 +212,8 @@ describe('encodePcmToAudio two-pass sidecar payload', () => {
   /* A complete first-pass JSON block (input_* only — no output_*). Stable
      real-shape input that makes isMeasurementUseable return true and lets
      the encoder progress to the second pass. */
-  const firstPassStderr = `[Parsed_loudnorm @ 0x1] \n` +
+  const firstPassStderr =
+    `[Parsed_loudnorm @ 0x1] \n` +
     `{\n` +
     `        "input_i" : "-22.50",\n` +
     `        "input_tp" : "-2.13",\n` +
@@ -181,7 +224,8 @@ describe('encodePcmToAudio two-pass sidecar payload', () => {
 
   /* Real-shape second-pass JSON. output_i is the post-normalisation value
      we want persisted into the sidecar. */
-  const secondPassStderr = `[Parsed_loudnorm @ 0x1] \n` +
+  const secondPassStderr =
+    `[Parsed_loudnorm @ 0x1] \n` +
     `{\n` +
     `        "input_i" : "-22.50",\n` +
     `        "input_tp" : "-2.13",\n` +
@@ -201,7 +245,8 @@ describe('encodePcmToAudio two-pass sidecar payload', () => {
       .mockImplementationOnce(() => fakeFfmpegChild({ stderr: secondPassStderr }));
 
     const { encodePcmToAudio } = await import('./mp3.js');
-    let sidecar: { i: number; lra: number; tp: number; twoPass: boolean; target: number } | null = null;
+    let sidecar: { i: number; lra: number; tp: number; twoPass: boolean; target: number } | null =
+      null;
     await encodePcmToAudio(Buffer.alloc(2), 24_000, {
       quality: 2,
       loudnorm: { target: -16, lra: 11, tp: -1.5, twoPass: true },
