@@ -3108,6 +3108,17 @@ components:
           enum: [child, teen, adult, elderly]
           description: Coarse age bucket used as a register hint for TTS.
         description: { type: string }
+        voiceStyle:
+          type: string
+          description: |
+            Natural-language voice-design persona (plan 108) — a short
+            instruct like "a bright, confident teenage girl, warm and a
+            little playful, mid-paced, with a hint of anxiety". Generated
+            per-character by Gemini from the character's full profile +
+            dialogue evidence, then editable by the user. Seeds the Qwen
+            sidecar's bespoke voice-design flow
+            (`POST /qwen/design-voice {voiceId, instruct, …}`). Optional —
+            absent until a persona has been generated.
         evidence:
           type: array
           items:
