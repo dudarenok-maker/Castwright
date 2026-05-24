@@ -6,7 +6,7 @@
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
-import { chaptersSlice } from './chapters-slice';
+import { chaptersSlice, type ActiveStreamSnapshot } from './chapters-slice';
 import { manuscriptSlice } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { changeLogSlice } from './change-log-slice';
@@ -21,6 +21,13 @@ import type { Chapter, GenerationTick, Character } from '../lib/types';
 const streamGenerationMock = vi.fn();
 const cancelMock = vi.fn();
 const pauseGenerationMock = vi.fn();
+
+/* Plan 111 Wave 2 — `activeStream` became a per-book map. Through Wave 2 the
+   runner is still single-handle, so these tests assert on the single open
+   stream. */
+const firstActiveStream = (s: {
+  chapters: { activeStreams: Record<string, ActiveStreamSnapshot> };
+}): ActiveStreamSnapshot | null => Object.values(s.chapters.activeStreams)[0] ?? null;
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -150,7 +157,7 @@ describe('generationStreamMiddleware', () => {
     store.dispatch(chaptersSlice.actions.requestStreamHalt());
     expect(cancelMock).toHaveBeenCalledTimes(1);
     /* clearActiveStream fires on close, so the snapshot disappears. */
-    expect(store.getState().chapters.activeStream).toBeNull();
+    expect(firstActiveStream(store.getState())).toBeNull();
 
     /* requestStreamHalt skips reconcile; a later trigger re-runs it. This
        store has no queue slice (queue.paused defaults false), so the still
@@ -218,7 +225,7 @@ describe('generationStreamMiddleware', () => {
 
     store.dispatch(uiSlice.actions.goHome());
     expect(cancelMock).toHaveBeenCalledTimes(0);
-    expect(store.getState().chapters.activeStream?.bookId).toBe('b1');
+    expect(firstActiveStream(store.getState())?.bookId).toBe('b1');
   });
 
   it('keeps the SSE alive across startNewBook (Upload screen) — the canonical "I want to import while gen runs" path', () => {
@@ -230,7 +237,7 @@ describe('generationStreamMiddleware', () => {
     store.dispatch(uiSlice.actions.goHome());
     store.dispatch(uiSlice.actions.startNewBook());
     expect(cancelMock).toHaveBeenCalledTimes(0);
-    expect(store.getState().chapters.activeStream?.bookId).toBe('b1');
+    expect(firstActiveStream(store.getState())?.bookId).toBe('b1');
   });
 
   it('keeps the SSE alive when the user opens a different book — and refuses to start a second stream for it', () => {
@@ -249,7 +256,7 @@ describe('generationStreamMiddleware', () => {
     expect(cancelMock).toHaveBeenCalledTimes(0);
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
     /* activeStream still describes the original generating book. */
-    expect(store.getState().chapters.activeStream?.bookId).toBe('b1');
+    expect(firstActiveStream(store.getState())?.bookId).toBe('b1');
   });
 
   it('keeps the SSE alive when the TTS model is switched mid-run (new model applies to the NEXT run)', () => {
@@ -311,7 +318,7 @@ describe('generationStreamMiddleware', () => {
     store.dispatch(chaptersSlice.actions.applyGenerationTick({ type: 'idle' } as GenerationTick));
 
     expect(cancelMock).toHaveBeenCalled();
-    expect(store.getState().chapters.activeStream).toBeNull();
+    expect(firstActiveStream(store.getState())).toBeNull();
 
     streamGenerationMock.mockClear();
     store.dispatch(chaptersSlice.actions.applyGenerationTick({ type: 'idle' } as GenerationTick));
@@ -412,14 +419,14 @@ describe('generationStreamMiddleware', () => {
   it('publishes an activeStream snapshot on open and clears it on close', () => {
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
-    expect(store.getState().chapters.activeStream).toBeNull();
+    expect(firstActiveStream(store.getState())).toBeNull();
 
     seedBook(store, 'b1', [
       ch(1, { state: 'done', progress: 1, characters: { narrator: 'done' } }),
       ch(2, { state: 'in_progress', progress: 0.5 }),
       ch(3, { state: 'queued' }),
     ]);
-    const snap = store.getState().chapters.activeStream;
+    const snap = firstActiveStream(store.getState());
     expect(snap).not.toBeNull();
     expect(snap!.bookId).toBe('b1');
     expect(snap!.done).toBe(1);
@@ -428,7 +435,7 @@ describe('generationStreamMiddleware', () => {
 
     /* Halt → snapshot cleared. */
     store.dispatch(chaptersSlice.actions.requestStreamHalt());
-    expect(store.getState().chapters.activeStream).toBeNull();
+    expect(firstActiveStream(store.getState())).toBeNull();
   });
 
   it('enqueues a pending revision per (characterId, chapterId) on regenerateCharacter', () => {
@@ -534,7 +541,7 @@ describe('generationStreamMiddleware', () => {
       ch(3, { state: 'queued', excluded: true }),
       ch(4, { state: 'queued', excluded: true }),
     ]);
-    const snap = store.getState().chapters.activeStream;
+    const snap = firstActiveStream(store.getState());
     expect(snap).not.toBeNull();
     expect(snap!.total).toBe(2);
     expect(snap!.done).toBe(1);
@@ -556,7 +563,7 @@ describe('generationStreamMiddleware', () => {
       ch(2, { state: 'queued', excluded: true }),
     ]);
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    expect(store.getState().chapters.activeStream).not.toBeNull();
+    expect(firstActiveStream(store.getState())).not.toBeNull();
 
     /* Complete the only non-excluded chapter. After the reducer flips it
        to 'done', reconcile should consider the queue drained (the
@@ -569,7 +576,7 @@ describe('generationStreamMiddleware', () => {
     );
 
     expect(cancelMock).toHaveBeenCalled();
-    expect(store.getState().chapters.activeStream).toBeNull();
+    expect(firstActiveStream(store.getState())).toBeNull();
   });
 
   it('closes the SSE on idle even when the slice has drifted to a different book', () => {
@@ -591,7 +598,7 @@ describe('generationStreamMiddleware', () => {
        to b1 per the sticky-generation contract. */
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b2'));
     expect(cancelMock).not.toHaveBeenCalled();
-    expect(store.getState().chapters.activeStream?.bookId).toBe('b1');
+    expect(firstActiveStream(store.getState())?.bookId).toBe('b1');
 
     /* Final idle arrives for the still-streaming b1 job. The slice is
        on b2 so reconcile's cross-book guard would return early — only
@@ -600,7 +607,7 @@ describe('generationStreamMiddleware', () => {
     store.dispatch(chaptersSlice.actions.applyGenerationTick({ type: 'idle' } as GenerationTick));
 
     expect(cancelMock).toHaveBeenCalled();
-    expect(store.getState().chapters.activeStream).toBeNull();
+    expect(firstActiveStream(store.getState())).toBeNull();
   });
 });
 
@@ -725,7 +732,7 @@ describe('generationStreamMiddleware — Bug E cross-book heartbeat + counters',
       ch(3),
     ]);
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    const openTickAt = store.getState().chapters.activeStream?.lastTickAt;
+    const openTickAt = firstActiveStream(store.getState())?.lastTickAt;
 
     /* User navigates to a different book. Layout would dispatch
        setCurrentBookId('b2') + setChapters(b2's chapters). */
@@ -753,7 +760,7 @@ describe('generationStreamMiddleware — Bug E cross-book heartbeat + counters',
     } as unknown as GenerationTick;
     store.dispatch(chaptersSlice.actions.applyGenerationTick(tick));
 
-    const snap = store.getState().chapters.activeStream;
+    const snap = firstActiveStream(store.getState());
     expect(snap?.bookId).toBe('b1'); /* still describes the generating book */
     expect(snap?.done).toBe(32);
     expect(snap?.total).toBe(63);
@@ -772,7 +779,7 @@ describe('generationStreamMiddleware — Bug E cross-book heartbeat + counters',
       ch(1, { state: 'in_progress', progress: 0.1 }),
       ch(2),
     ]);
-    const openSnap = store.getState().chapters.activeStream;
+    const openSnap = firstActiveStream(store.getState());
     expect(openSnap).not.toBeNull();
     const openDone = openSnap!.done;
     const openTotal = openSnap!.total;
@@ -794,7 +801,7 @@ describe('generationStreamMiddleware — Bug E cross-book heartbeat + counters',
     } as unknown as GenerationTick;
     store.dispatch(chaptersSlice.actions.applyGenerationTick(tick));
 
-    const snap = store.getState().chapters.activeStream;
+    const snap = firstActiveStream(store.getState());
     /* Counters stay at their open-time values (the slice didn't have b1's
        rows to recompute, and the payload didn't carry server aggregates). */
     expect(snap?.done).toBe(openDone);
@@ -814,7 +821,7 @@ describe('generationStreamMiddleware — Bug E cross-book heartbeat + counters',
     store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'generating' }));
     seedBook(store, 'b2', [ch(7, { state: 'queued' })]);
 
-    const beforeIdle = store.getState().chapters.activeStream?.lastTickAt;
+    const beforeIdle = firstActiveStream(store.getState())?.lastTickAt;
     /* Sleep a moment so a misfiring refresh would show a higher number. */
     const wallBefore = Date.now() + 1;
     while (Date.now() < wallBefore) {
@@ -830,7 +837,7 @@ describe('generationStreamMiddleware — Bug E cross-book heartbeat + counters',
     } as unknown as GenerationTick;
     store.dispatch(chaptersSlice.actions.applyGenerationTick(idleTick));
 
-    const snap = store.getState().chapters.activeStream;
+    const snap = firstActiveStream(store.getState());
     /* Idle skipped both the slice mutation AND the cross-book refresh. */
     expect(snap?.lastTickAt).toBe(beforeIdle);
   });

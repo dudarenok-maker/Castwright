@@ -56,7 +56,7 @@ function renderModal(
         regenEpoch: 0,
         lastTickAt: null,
         currentBookId: null,
-        activeStream: null,
+        activeStreams: {},
       },
     },
   });

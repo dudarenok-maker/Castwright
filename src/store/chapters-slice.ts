@@ -74,9 +74,12 @@ export interface ChaptersState {
       mid-run the slice gets repopulated with that book's rows, and ticks
       from the still-running stream would otherwise clobber them. */
   currentBookId: string | null;
-  /** Cross-book progress snapshot — see ActiveStreamSnapshot. Non-null
-      means a generation stream is open somewhere. */
-  activeStream: ActiveStreamSnapshot | null;
+  /** Cross-book progress snapshots, keyed by bookId — see ActiveStreamSnapshot.
+      A non-empty map means at least one generation stream is open somewhere.
+      Through plan 111 Wave 2 the runner is still single-handle, so this holds
+      0 or 1 entries; Wave 3's worker pool populates several (one per book
+      generating concurrently). */
+  activeStreams: Record<string, ActiveStreamSnapshot>;
 }
 
 const initialState: ChaptersState = {
@@ -85,7 +88,7 @@ const initialState: ChaptersState = {
   generationStartedAt: null,
   lastTickAt: null,
   currentBookId: null,
-  activeStream: null,
+  activeStreams: {},
 };
 
 export const chaptersSlice = createSlice({
@@ -119,18 +122,20 @@ export const chaptersSlice = createSlice({
       s.currentBookId = a.payload;
     },
 
-    /** Middleware → slice handshake: sets the cross-book snapshot when a
-        stream opens, and replaces it on every non-idle tick with a fresh
-        derive of done/total/inProgress/lastTickAt. */
+    /** Middleware → slice handshake: sets the cross-book snapshot for a book
+        when its stream opens, and replaces it on every non-idle tick with a
+        fresh derive of done/total/inProgress/lastTickAt. Keyed by the
+        snapshot's own bookId so concurrent streams (Wave 3) don't clobber
+        each other. */
     setActiveStream: (s, a: PayloadAction<ActiveStreamSnapshot>) => {
-      s.activeStream = a.payload;
+      s.activeStreams[a.payload.bookId] = a.payload;
     },
 
-    /** Middleware → slice handshake: cleared on closeHandle (pause,
-        queue drain, store teardown). The header pill hides entirely when
-        this is null. */
-    clearActiveStream: (s) => {
-      s.activeStream = null;
+    /** Middleware → slice handshake: cleared on closeHandle (pause, queue
+        drain, store teardown) for the book whose stream closed. The header
+        pill hides entirely when no streams remain. */
+    clearActiveStream: (s, a: PayloadAction<string>) => {
+      delete s.activeStreams[a.payload];
     },
 
     /** Bug E — cross-book heartbeat + counter refresh from a server tick
@@ -141,17 +146,18 @@ export const chaptersSlice = createSlice({
         per-chapter tick reducer's cross-book guard would otherwise drop
         the tick on the floor. Slice-matches-handle path keeps using
         `setActiveStream(snapshotFromChapters(...))` because the slice
-        rows are authoritative there. */
+        rows are authoritative there. Targets the snapshot for `bookId`. */
     updateActiveStreamProgress: (
       s,
-      a: PayloadAction<{ done?: number; total?: number; inProgress?: number }>,
+      a: PayloadAction<{ bookId: string; done?: number; total?: number; inProgress?: number }>,
     ) => {
-      if (!s.activeStream) return;
-      s.activeStream.lastTickAt = Date.now();
+      const snap = s.activeStreams[a.payload.bookId];
+      if (!snap) return;
+      snap.lastTickAt = Date.now();
       const { done, total, inProgress } = a.payload;
-      if (done != null) s.activeStream.done = done;
-      if (total != null) s.activeStream.total = total;
-      if (inProgress != null) s.activeStream.inProgress = inProgress;
+      if (done != null) snap.done = done;
+      if (total != null) snap.total = total;
+      if (inProgress != null) snap.inProgress = inProgress;
     },
 
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
@@ -276,9 +282,21 @@ export const chaptersSlice = createSlice({
          slice gets re-hydrated with that other book's chapter rows. The
          middleware's still-open handle keeps streaming for the original
          book, but its ticks must NOT mutate the now-irrelevant slice — the
-         cross-book progress snapshot (activeStream) keeps the header pill
-         alive instead. The middleware updates activeStream out-of-band. */
-      if (s.activeStream && s.currentBookId && s.activeStream.bookId !== s.currentBookId) return;
+         cross-book progress snapshot (activeStreams) keeps the header pill
+         alive instead. The middleware updates activeStreams out-of-band.
+
+         Map form: if a stream is open but NOT for the viewed book, this tick
+         is for another book — drop it (chapter ids collide across books).
+         Through Wave 2 there is at most one open stream, so this is exactly
+         the old `activeStream.bookId !== currentBookId` guard; Wave 3 routes
+         ticks by bookId in the runner so a viewed-book stream + foreign-book
+         stream can't be confused. */
+      if (
+        s.currentBookId &&
+        Object.keys(s.activeStreams).length > 0 &&
+        !s.activeStreams[s.currentBookId]
+      )
+        return;
 
       /* Start the ETA clock on the first real progress signal of a run. */
       if (
@@ -609,7 +627,10 @@ export const chaptersSlice = createSlice({
        reflects the sibling activity. Echo suppression lives in the
        middleware (instanceId tag on outbound, ignore self-broadcasts). */
     applyExternalChaptersSnapshot: (s, a: PayloadAction<ActiveStreamSnapshot | null>) => {
-      s.activeStream = a.payload;
+      /* The broadcast wire still carries a single snapshot (a sibling tab has
+         at most one stream through Wave 2). Mirror it as the whole map: a
+         snapshot replaces the map with just that book; null clears it. */
+      s.activeStreams = a.payload ? { [a.payload.bookId]: a.payload } : {};
     },
 
     batchRegenerateCharacters: (
@@ -650,3 +671,20 @@ export const chaptersSlice = createSlice({
 });
 
 export const chaptersActions = chaptersSlice.actions;
+
+/* --- Active-stream selectors (plan 111 Wave 2) ----------------------------
+   The single `activeStream` field became a per-book map; these give consumers
+   a stable read surface that works whether 0, 1, or N streams are open. */
+
+interface ChaptersRootShape {
+  chapters: ChaptersState;
+}
+
+/** All open generation streams (one per book generating). Empty when idle. */
+export const selectActiveStreams = (s: ChaptersRootShape): ActiveStreamSnapshot[] =>
+  Object.values(s.chapters.activeStreams);
+
+/** True when any generation stream is open. Replaces the old
+    `if (chapters.activeStream)` truthiness checks. */
+export const selectAnyActiveStream = (s: ChaptersRootShape): boolean =>
+  Object.keys(s.chapters.activeStreams).length > 0;

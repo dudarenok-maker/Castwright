@@ -96,7 +96,9 @@ function renderModal(
         ...chaptersSlice.getInitialState(),
         ...(opts.activeGeneration
           ? {
-              activeStream: opts.activeGeneration.activeStream,
+              activeStreams: {
+                [opts.activeGeneration.activeStream.bookId]: opts.activeGeneration.activeStream,
+              },
               currentBookId: opts.activeGeneration.currentBookId,
               chapters: (opts.activeGeneration.chapters ??
                 []) as ReturnType<typeof chaptersSlice.reducer>['chapters'],

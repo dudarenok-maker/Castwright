@@ -472,7 +472,7 @@ describe('broadcastMiddleware — inbound', () => {
         snapshot: chaptersSnap,
       },
     );
-    expect(store.getState().chapters.activeStream).toEqual(chaptersSnap);
+    expect(store.getState().chapters.activeStreams).toEqual({ [chaptersSnap.bookId]: chaptersSnap });
     expect(mock.sent).toHaveLength(0);
   });
 
@@ -564,7 +564,7 @@ describe('broadcastMiddleware — inbound', () => {
       },
     );
     expect(store.getState().analysis.activeStream).toEqual(yokoSnap);
-    expect(store.getState().chapters.activeStream).toBeNull();
+    expect(store.getState().chapters.activeStreams).toEqual({});
     expect(mock.sent).toHaveLength(0);
   });
 
@@ -574,7 +574,7 @@ describe('broadcastMiddleware — inbound', () => {
     onmsg({ data: null } as MessageEvent);
     onmsg({ data: { kind: 'sync:unknown', instanceId: 'x', bookId: null, mode: 'full' } } as MessageEvent);
     expect(store.getState().analysis.activeStream).toBeNull();
-    expect(store.getState().chapters.activeStream).toBeNull();
+    expect(store.getState().chapters.activeStreams).toEqual({});
   });
 });
 

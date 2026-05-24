@@ -174,7 +174,7 @@ const CHAPTERS_BROADCAST_ACTIONS: ReadonlySet<string> = new Set([
     locally to avoid a circular type back through `RootState`. */
 interface BroadcastableRootState {
   analysis: { activeStream: AnalysisStreamSnapshot | null };
-  chapters: { activeStream: ActiveStreamSnapshot | null };
+  chapters: { activeStreams: Record<string, ActiveStreamSnapshot> };
 }
 
 /** Random 16-char hex id. Crypto-grade not required — collision risk
@@ -316,7 +316,9 @@ export function createBroadcastMiddleware(opts?: {
           } else if (msg.mode === 'full') {
             store.dispatch(chaptersActions.applyExternalChaptersSnapshot(msg.snapshot));
           } else if (msg.mode === 'diff') {
-            const current = (store.getState() as BroadcastableRootState).chapters.activeStream;
+            const current =
+              Object.values((store.getState() as BroadcastableRootState).chapters.activeStreams)[0] ??
+              null;
             if (current) {
               store.dispatch(
                 chaptersActions.applyExternalChaptersSnapshot({ ...current, ...msg.diff }),
@@ -408,7 +410,10 @@ export function createBroadcastMiddleware(opts?: {
 
       if (CHAPTERS_BROADCAST_ACTIONS.has(type)) {
         const state = store.getState() as BroadcastableRootState;
-        const snapshot = state.chapters.activeStream;
+        /* The wire still carries a single snapshot. Through Wave 2 there is at
+           most one open stream, so the single value is unambiguous; pick the
+           first if several ever coexist (the pill aggregates locally anyway). */
+        const snapshot = Object.values(state.chapters.activeStreams)[0] ?? null;
         const bookId = snapshot?.bookId ?? null;
         const now = outbound.now();
 
