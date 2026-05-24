@@ -64,7 +64,7 @@ vi.mock('../lib/api', () => ({
        no pending pill state lands. */
     getSidecarHealth: vi.fn(async () => ({ status: 'unreachable', url: '(test)' })),
     /* useTtsLifecycle also polls /api/gpu/queue on the same cadence (the
-       GPU semaphore depth that drives the "Queued (N ahead) ·" pill
+       GPU semaphore depth that drives the "GPU busy · N waiting ·" pill
        prefix). Stub to an empty queue so the pill renders without the
        prefix in these tests. */
     getGpuQueueState: vi.fn(async () => ({ depth: 0, inFlight: 0, max: 1 })),

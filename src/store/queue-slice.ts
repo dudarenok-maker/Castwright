@@ -12,6 +12,7 @@
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { components } from '../lib/api-types';
+import type { ChaptersState } from './chapters-slice';
 
 /* Plan 108 Wave 3 — the TTS engines a chapter requires, stamped server-side at
    enqueue time. The contract lives on the SERVER queue shape only (NOT in
@@ -113,3 +114,79 @@ export const selectQueueByBook = (s: RootSliceShape): { bookId: string; entries:
     which row is non-draggable. */
 export const selectInFlightEntry = (s: RootSliceShape): QueueEntry | null =>
   s.queue.entries.find((e) => e.status === 'in_progress') ?? null;
+
+/* --- Active-generation overlay (read-side honesty) ------------------------
+   The workspace queue (`.queue.json`) is populated only by explicit
+   regenerate / "Add to queue" actions. The PRIMARY generation path — first
+   generation after analysis, and resume-on-reopen — opens its SSE through the
+   generation-stream-middleware `reconcile` (`hasWork(chapters)`), which never
+   writes a queue entry. That left the queue modal + "Queue · N" chip reporting
+   "Empty"/0 while a book was visibly generating (line counts incrementing).
+
+   These two selectors let the modal / chip reflect that live run by reading the
+   `chapters.activeStream` snapshot the runner publishes. They read `chapters`
+   via an OPTIONAL field so lean stores that omit the slice (e.g. the queue-modal
+   unit test store) stay valid — mirrors the defensive `queue?` read in
+   generation-stream-middleware. */
+
+interface ActiveGenerationRootShape {
+  queue: QueueState;
+  chapters?: ChaptersState;
+}
+
+export interface ActiveGenerationChapterRow {
+  id: number;
+  state: 'in_progress' | 'queued';
+}
+
+export interface ActiveGenerationView {
+  bookId: string;
+  done: number;
+  total: number;
+  inProgress: number;
+  /** Per-chapter rows when the streaming book is the one currently loaded in
+      the chapters slice. `null` for a cross-book stream — the slice then holds
+      a DIFFERENT book's rows, so only the summary counts are trustworthy. */
+  chapters: ActiveGenerationChapterRow[] | null;
+}
+
+/** A view of the in-flight generation run when the workspace queue has no
+    real entries to show. Returns `null` when there ARE real entries (the real
+    queue always wins) or when no stream is live. Same-book streams carry the
+    per-chapter rows; cross-book streams carry only the done/total summary. */
+export const selectActiveGenerationView = (
+  s: ActiveGenerationRootShape,
+): ActiveGenerationView | null => {
+  if (s.queue.entries.length > 0) return null;
+  const chapters = s.chapters;
+  const active = chapters?.activeStream ?? null;
+  if (!chapters || !active) return null;
+  const sameBook = chapters.currentBookId === active.bookId;
+  /* Excluded chapters never queue or synthesise — mirror the filter in the
+     runner's snapshotFromChapters + middleware hasWork so the row count agrees
+     with the pill's done/total. */
+  const rows: ActiveGenerationChapterRow[] | null = sameBook
+    ? chapters.chapters
+        .filter((c) => !c.excluded && (c.state === 'in_progress' || c.state === 'queued'))
+        .map((c) => ({ id: c.id, state: c.state as 'in_progress' | 'queued' }))
+    : null;
+  return {
+    bookId: active.bookId,
+    done: active.done,
+    total: active.total,
+    inProgress: active.inProgress,
+    chapters: rows,
+  };
+};
+
+/** Count for the "Queue · N" chip + "View queue · N" button. Real queue entries
+    win; otherwise reflect the live run so the chip doesn't read 0 / disappear
+    while a book generates. Distinct from `selectQueueCount` (which must stay the
+    REAL entry count — the modal header + pause gate operate on real entries). */
+export const selectGenerationActivityCount = (s: ActiveGenerationRootShape): number => {
+  if (s.queue.entries.length > 0) return s.queue.entries.length;
+  const view = selectActiveGenerationView(s);
+  if (!view) return 0;
+  if (view.chapters) return view.chapters.length;
+  return Math.max(view.total - view.done, view.inProgress, 1);
+};
