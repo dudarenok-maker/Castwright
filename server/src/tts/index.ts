@@ -35,7 +35,7 @@ export interface TtsProvider {
 /* Engine groupings. Local engines all share the sidecar provider; only the
    `model` field on the sidecar request differs. Gemini is its own provider
    (direct Google API). */
-export type TtsEngine = 'coqui' | 'piper' | 'kokoro' | 'gemini';
+export type TtsEngine = 'coqui' | 'piper' | 'kokoro' | 'gemini' | 'qwen';
 
 /* UI-stable namespaced keys. The engine half drives provider selection; the
    model half is forwarded to the engine as-is. New local engines/voices slot
@@ -44,6 +44,7 @@ export type TtsModelKey =
   | 'coqui-xtts-v2' // local default
   | 'piper-en-us-medium' // future local
   | 'kokoro-v1' // future local
+  | 'qwen3-tts-0.6b' // local bespoke-voice engine (plan 108)
   | 'gemini-2.5-flash' // cloud fallback
   | 'gemini-3.1-flash';
 
@@ -51,6 +52,7 @@ export const TTS_MODEL_LABELS: Record<TtsModelKey, string> = {
   'coqui-xtts-v2': 'Coqui XTTS v2 (local)',
   'piper-en-us-medium': 'Piper en-US medium (local)',
   'kokoro-v1': 'Kokoro v1 (local)',
+  'qwen3-tts-0.6b': 'Qwen3-TTS 0.6B (local)',
   'gemini-2.5-flash': 'Gemini 2.5 Flash TTS',
   'gemini-3.1-flash': 'Gemini 3.1 Flash TTS',
 };
@@ -73,6 +75,7 @@ export function isTtsModelKey(value: unknown): value is TtsModelKey {
     value === 'coqui-xtts-v2' ||
     value === 'piper-en-us-medium' ||
     value === 'kokoro-v1' ||
+    value === 'qwen3-tts-0.6b' ||
     value === 'gemini-2.5-flash' ||
     value === 'gemini-3.1-flash'
   );
@@ -82,6 +85,7 @@ export function engineForModelKey(key: TtsModelKey): TtsEngine {
   if (key.startsWith('coqui-')) return 'coqui';
   if (key.startsWith('piper-')) return 'piper';
   if (key.startsWith('kokoro-')) return 'kokoro';
+  if (key.startsWith('qwen')) return 'qwen';
   return 'gemini';
 }
 
@@ -91,6 +95,9 @@ export function sidecarModelId(key: TtsModelKey): string {
   if (key === 'coqui-xtts-v2') return 'xtts_v2';
   if (key === 'piper-en-us-medium') return 'en-us-medium';
   if (key === 'kokoro-v1') return 'v1';
+  // Qwen ignores the model field at synth (voice = designed voiceId), but the
+  // sidecar /synthesize contract requires a non-empty model string.
+  if (key === 'qwen3-tts-0.6b') return '0.6b';
   throw new Error(`sidecarModelId called with non-local key: ${key}`);
 }
 
