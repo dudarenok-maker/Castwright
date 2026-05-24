@@ -21,7 +21,18 @@ export interface QueueState {
   entries: QueueEntry[];
   /** Queue-global pause flag — flipped via POST /api/queue/pause. When true
       the dispatcher waits at the next chapter boundary; the in-flight entry
-      runs to completion before the drain stops. */
+      runs to completion before the drain stops.
+
+      DEFAULT IS false → the queue AUTO-DRAINS. There is no "start" gate: when
+      `paused === false` and there is queued work, the dispatcher
+      (`queue-dispatcher-middleware`) begins the head entry as soon as a
+      snapshot loads — on any view, on app boot, without an explicit Resume.
+      `Pause` is the only opt-out; `Resume` un-pauses, it does not "start" an
+      idle queue. Since plan 102 Should #5 this flag is also the open-side gate
+      the generation-stream middleware reads (it replaced the removed
+      `chapters.paused`), so a paused queue suppresses cold-boot auto-resume
+      too. Contract documented in docs/features/archive/102-global-queue-modal.md
+      (invariant 8). */
   paused: boolean;
   /** First-load gate — true after the initial GET /api/queue completes. The
       modal renders empty-state UI vs spinner based on this. */
