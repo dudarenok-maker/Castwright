@@ -374,6 +374,16 @@ Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexi
 - _Depends on:_ plan 108 (series-scoped write) shipped.
 - _Benefit (user):_ recurring narrators / crossover characters stay consistent across an author's whole catalogue, not just within one series.
 
+### 42. Try PyTorch-native SDPA attention for the Qwen sidecar engine
+
+Source: net-new (2026-05-24). Surfaced while investigating the `flash-attn is not installed. Will only run the manual PyTorch version` warning the Qwen Base model prints on load. The standalone `flash-attn` package is explicitly NOT worth pursuing on Windows (no official wheels; needs the CUDA Toolkit + MSVC + a long, brittle source build — same toolchain tax `requirements.txt` already documents for DeepSpeed) for a sub-1B model doing short-sequence TTS where attention isn't the bottleneck. PyTorch ships flash-attention-2-equivalent kernels via `scaled_dot_product_attention` with zero install, so this captures most of the upside cross-platform.
+
+- _What:_ Pass `attn_implementation="sdpa"` into the Qwen model load in `QwenEngine._load_qwen_model`, behind a guard so a `from_pretrained` signature that doesn't accept the kwarg falls back cleanly to today's bf16-only call (logs once, no regression). First confirm `Qwen3TTSModel.from_pretrained` actually forwards the kwarg down to the underlying transformers model — the engine's own NOTE flags these signatures as "empirical verification owed" until the weights are downloaded. Silences the scary startup warning and may modestly speed per-sentence synth.
+- _Acceptance:_ With Qwen weights present, loading the Base model no longer prints the flash-attn warning; one synth call produces same-quality PCM as the eager path; a timing on one chapter is no worse than today. If the kwarg is rejected, the engine loads exactly as it does now. New pytest case in `server/tts-sidecar/tests/test_qwen3.py` asserting the load path tolerates both kwarg-accepted and kwarg-rejected outcomes.
+- _Key files:_ `server/tts-sidecar/main.py:679-695` (`_load_qwen_model`); `server/tts-sidecar/tests/test_qwen3.py` (load-path case).
+- _Depends on:_ Qwen weights installed via `scripts/install-qwen3.mjs` to verify empirically — plan 108 in flight.
+- _Benefit (technical):_ removes a scary-looking startup warning and picks up PyTorch's optimised attention kernels for free, cross-platform, without the Windows-hostile `flash-attn` build.
+
 ---
 
 ## Won't (this round) — explicitly parked
