@@ -6,6 +6,8 @@ owner: dudarenok-maker
 
 # Parallel chapter synthesis with bounded worker pool
 
+> **Plan 111 update (2026-05-25):** the pool's width env `GEN_CHAPTER_CONCURRENCY` was renamed to `GEN_WORKERS` and is now driven by the `generationWorkers` user setting (default 2). The pool itself (this plan) is unchanged — it's the within-book fan-out engine the plan-111 queue dispatcher opens streams against. References to `GEN_CHAPTER_CONCURRENCY` below are historical; read them as `GEN_WORKERS`.
+>
 > Status: stable
 > Key files: `server/src/routes/generation.ts:485-530`, `server/src/synthesise-chapter.ts`, `src/lib/api.ts`, `src/store/ui-slice.ts`
 > URL surface: indirect — `#/books/<id>/generation`; SSE stream emitted by `POST /api/books/:bookId/generation`

@@ -36,7 +36,7 @@ owner: null
 - **RTK Immer drafts** (plan 26): new `rebaseline-slice` mutates drafts.
 - **Mock toggle** (plan 23): new endpoints get mock implementations behind `api.*`.
 - **Concurrent multi-book workflow** (project invariant): mixed-engine generation and rebaseline must not break cross-book queue dispatch; global pills stay live regardless of viewed book.
-- **`GEN_CHAPTER_CONCURRENCY` stays global** (plan 87) — only the GPU semaphore becomes VRAM-weighted.
+- **`GEN_WORKERS` stays global** (plan 87) — only the GPU semaphore becomes VRAM-weighted.
 - **Single-engine behavior unchanged**: with only one engine used and `GPU_VRAM_BUDGET` unset, generation and GPU arbitration are byte-identical to today.
 
 ### Migration story
