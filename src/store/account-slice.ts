@@ -100,6 +100,13 @@ export const accountSlice = createSlice({
     setDualModelEnabled: (s, a: PayloadAction<boolean>) => {
       s.dualModelEnabled = a.payload;
     },
+    /* Eager-load Kokoro at sidecar startup — when false the sidecar is
+       spawned with PRELOAD_KOKORO=0 so Kokoro warms on demand, freeing
+       ~1 GB VRAM. Toggled from the Account view's TTS-sidecar card;
+       takes effect on the next sidecar restart. */
+    setEagerLoadKokoro: (s, a: PayloadAction<boolean>) => {
+      s.eagerLoadKokoro = a.payload;
+    },
   },
   extraReducers: (builder) => {
     builder
