@@ -16,7 +16,18 @@ import { queueSlice, type QueueEntry } from '../store/queue-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { librarySlice } from '../store/library-slice';
 import { accountSlice } from '../store/account-slice';
+import { chaptersSlice } from '../store/chapters-slice';
+import type { ActiveStreamSnapshot } from '../store/chapters-slice';
 import type { LibraryBook } from '../lib/types';
+
+/* Read-side honesty preload — when set, the store carries a live activeStream
+   (the reconcile-driven path writes no queue entry) so the modal should show
+   the active run instead of "Empty". */
+interface ActiveGenerationPreload {
+  activeStream: ActiveStreamSnapshot;
+  currentBookId: string | null;
+  chapters?: Array<{ id: number; state: string; excluded?: boolean }>;
+}
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -56,7 +67,12 @@ const libraryBook = (bookId: string, title: string): LibraryBook => ({
 
 function renderModal(
   entries: QueueEntry[],
-  opts: { paused?: boolean; books?: LibraryBook[]; dualModelEnabled?: boolean } = {},
+  opts: {
+    paused?: boolean;
+    books?: LibraryBook[];
+    dualModelEnabled?: boolean;
+    activeGeneration?: ActiveGenerationPreload;
+  } = {},
 ) {
   const store = configureStore({
     reducer: {
@@ -64,6 +80,7 @@ function renderModal(
       notifications: notificationsSlice.reducer,
       library: librarySlice.reducer,
       account: accountSlice.reducer,
+      chapters: chaptersSlice.reducer,
     },
     preloadedState: {
       queue: { entries, paused: opts.paused ?? false, loaded: true },
@@ -74,6 +91,17 @@ function renderModal(
       account: {
         ...accountSlice.getInitialState(),
         dualModelEnabled: opts.dualModelEnabled ?? false,
+      },
+      chapters: {
+        ...chaptersSlice.getInitialState(),
+        ...(opts.activeGeneration
+          ? {
+              activeStream: opts.activeGeneration.activeStream,
+              currentBookId: opts.activeGeneration.currentBookId,
+              chapters: (opts.activeGeneration.chapters ??
+                []) as ReturnType<typeof chaptersSlice.reducer>['chapters'],
+            }
+          : {}),
       },
     },
   });
@@ -101,6 +129,62 @@ describe('QueueModal', () => {
     renderModal([]);
     expect(screen.getByText('Empty')).toBeInTheDocument();
     expect(screen.getByText(/No chapters queued/)).toBeInTheDocument();
+  });
+
+  it('shows the active-generation run instead of "Empty" when the queue is empty but a stream is live', () => {
+    renderModal([], {
+      books: [libraryBook('book-A', 'Book Alpha')],
+      activeGeneration: {
+        activeStream: {
+          bookId: 'book-A',
+          modelKey: 'kokoro-v1',
+          done: 2,
+          total: 5,
+          inProgress: 1,
+          lastTickAt: null,
+          halted: false,
+        } as ActiveStreamSnapshot,
+        currentBookId: 'book-A',
+        chapters: [
+          { id: 1, state: 'done' },
+          { id: 2, state: 'in_progress' },
+          { id: 3, state: 'queued' },
+        ],
+      },
+    });
+    /* Header reads "Generating…" not "Empty"; the empty CTA is gone. */
+    expect(screen.getByText('Generating…')).toBeInTheDocument();
+    expect(screen.queryByText(/No chapters queued/)).not.toBeInTheDocument();
+    /* The active-generation section names the book + lists the live rows. */
+    expect(screen.getByTestId('queue-modal-active-generation')).toBeInTheDocument();
+    expect(screen.getByText('Book Alpha')).toBeInTheDocument();
+    expect(screen.getByTestId('queue-active-chapter-2')).toBeInTheDocument();
+    expect(screen.getByTestId('queue-active-chapter-3')).toBeInTheDocument();
+    /* Done chapter is not listed as pending work. */
+    expect(screen.queryByTestId('queue-active-chapter-1')).not.toBeInTheDocument();
+  });
+
+  it('prefers real queue entries over the active-stream overlay', () => {
+    renderModal([entry({ id: 'a1', bookId: 'book-A', chapterId: 1, order: 0 })], {
+      books: [libraryBook('book-A', 'Book Alpha')],
+      activeGeneration: {
+        activeStream: {
+          bookId: 'book-A',
+          modelKey: 'kokoro-v1',
+          done: 0,
+          total: 3,
+          inProgress: 1,
+          lastTickAt: null,
+          halted: false,
+        } as ActiveStreamSnapshot,
+        currentBookId: 'book-A',
+        chapters: [{ id: 1, state: 'in_progress' }],
+      },
+    });
+    /* Real entry wins — the synthetic active-generation section is suppressed. */
+    expect(screen.queryByTestId('queue-modal-active-generation')).not.toBeInTheDocument();
+    expect(screen.getByTestId('queue-entry-a1')).toBeInTheDocument();
+    expect(screen.getByText('1 entry pending')).toBeInTheDocument();
   });
 
   it('renders entries grouped by book with the book title from library', () => {

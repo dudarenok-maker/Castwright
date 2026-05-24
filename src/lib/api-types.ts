@@ -1221,7 +1221,7 @@ export interface paths {
          *
          *     Polled by `useTtsLifecycle()` on the same 30 s cadence as
          *     `/api/sidecar/health`. When `depth > 0` the frontend prefixes
-         *     the top-bar pill label with `"Queued (N ahead) ·"` so the
+         *     the top-bar pill label with `"GPU busy · N waiting ·"` so the
          *     waiting session can see why it's not starting.
          *
          *     `max` is the configured `GPU_CONCURRENCY` ceiling (default 1,
@@ -2564,7 +2564,7 @@ export interface components {
             urls: string[];
         };
         GpuQueueState: {
-            /** @description Number of acquires waiting in the FIFO queue behind the in-flight ops. The frontend pill renders 'Queued (N ahead) ·' when this is > 0. */
+            /** @description Number of acquires waiting in the FIFO queue behind the in-flight ops. The frontend pill renders 'GPU busy · N waiting ·' when this is > 0. */
             depth: number;
             /** @description Number of GPU ops currently holding a slot (analyzer + sidecar combined). Capped at `max`. */
             inFlight: number;

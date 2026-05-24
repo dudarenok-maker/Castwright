@@ -42,7 +42,7 @@ beforeEach(() => {
     qwenLoading: false,
   });
   /* GPU semaphore queue probe — runs on the same 30 s tick as /health.
-     Default to an empty queue so the "Queued (N ahead) ·" pill prefix
+     Default to an empty queue so the "GPU busy · N waiting ·" pill prefix
      stays hidden in tests that don't exercise contention. */
   mocks.getGpuQueueState.mockResolvedValue({ depth: 0, inFlight: 0, max: 1 });
   mocks.getOllamaHealth.mockResolvedValue({
@@ -333,7 +333,7 @@ describe('useTtsLifecycle', () => {
 
   it('exposes the GPU semaphore queue depth from /api/gpu/queue on the same tick', async () => {
     /* Hook polls /api/gpu/queue alongside /api/sidecar/health so the
-       top-bar pill can prefix "Queued (N ahead) ·". When depth > 0 the
+       top-bar pill can prefix "GPU busy · N waiting ·". When depth > 0 the
        hook surfaces it on TtsLifecycle.gpuQueueDepth; consumer
        (layout.tsx) decides whether to render the prefix. */
     mocks.getGpuQueueState.mockResolvedValueOnce({ depth: 2, inFlight: 1, max: 1 });
