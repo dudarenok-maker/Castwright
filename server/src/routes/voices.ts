@@ -47,6 +47,7 @@ import {
   type BaseVoiceEntry,
 } from '../tts/base-voices.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 
 export const voicesRouter = Router();
 
@@ -320,20 +321,58 @@ voicesRouter.put('/:voiceId/pin', async (req: Request, res: Response) => {
    one override applies to all. */
 voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
   const { voiceId } = req.params;
-  const body = (req.body ?? {}) as { override?: unknown };
+  const body = (req.body ?? {}) as { override?: unknown; scope?: unknown; bookId?: unknown };
   const parsed = parseOverrideField(body.override);
   if (parsed === 'invalid') {
     return res.status(400).json({
       error: 'Body must include `override: { engine, name }` or `override: null`.',
     });
   }
+  /* Scope (plan 108): default 'workspace' keeps the original behaviour
+     (write to every confirmed cast.json that shares the voiceId). A
+     'series' scope limits the write to the (author, series) of `bookId`
+     so a bespoke Qwen voice propagates across that series only. The
+     scope/bookId may arrive in the body OR as query params (the client
+     uses the body). */
+  const scopeRaw =
+    typeof body.scope === 'string'
+      ? body.scope
+      : typeof req.query.scope === 'string'
+        ? req.query.scope
+        : undefined;
+  const bookId =
+    typeof body.bookId === 'string'
+      ? body.bookId
+      : typeof req.query.bookId === 'string'
+        ? req.query.bookId
+        : undefined;
+  if (scopeRaw !== undefined && scopeRaw !== 'series' && scopeRaw !== 'workspace') {
+    return res.status(400).json({ error: "`scope` must be 'series' or 'workspace'." });
+  }
+  const scope: 'series' | 'workspace' = scopeRaw === 'series' ? 'series' : 'workspace';
+  if (scope === 'series' && !bookId) {
+    return res.status(400).json({ error: "`scope: 'series'` requires `bookId`." });
+  }
   try {
     ensureWorkspace();
-    const updates = await applyOverrideToCastFiles(voiceId, parsed);
+    let seriesFilter: { author: string; series: string } | undefined;
+    if (scope === 'series') {
+      const resolved = await findAuthorSeriesForBookId(bookId!);
+      if (!resolved) {
+        return res
+          .status(404)
+          .json({ error: `Book "${bookId}" not found — can't resolve its series.` });
+      }
+      seriesFilter = resolved;
+    }
+    const updates = await applyOverrideToCastFiles(voiceId, parsed, seriesFilter);
     if (updates === 0) {
+      const where = seriesFilter
+        ? `in series "${seriesFilter.author} / ${seriesFilter.series}"`
+        : 'in any confirmed cast';
       return res
         .status(404)
-        .json({ error: `No character with voiceId "${voiceId}" found in any confirmed cast.` });
+        .json({ error: `No character with voiceId "${voiceId}" found ${where}.` });
     }
     res.status(204).end();
   } catch (e) {
@@ -376,6 +415,13 @@ function parseOverrideField(
 async function applyOverrideToCastFiles(
   voiceId: string,
   override: { engine: TtsEngine; name: string } | null,
+  /* When provided, only cast.json files whose state.json (author, series)
+     matches are touched — the plan-108 series-scoped write. Compared
+     against state.json's author/series (not the folder names) so it
+     stays consistent with series-cast-scan's resolution. Standalones are
+     excluded from a series scope (a standalone's cast isn't series
+     continuity). Omit for the original workspace-wide behaviour. */
+  seriesFilter?: { author: string; series: string },
 ): Promise<number> {
   let updated = 0;
   for (const authorName of listDirs(BOOKS_ROOT)) {
@@ -384,6 +430,11 @@ async function applyOverrideToCastFiles(
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
         const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
+        if (seriesFilter) {
+          if (state.isStandalone === true) continue;
+          if (state.author !== seriesFilter.author || state.series !== seriesFilter.series)
+            continue;
+        }
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
         let dirty = false;
