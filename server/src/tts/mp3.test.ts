@@ -5,7 +5,7 @@
    hint from scripts/start-app.ps1 preflight). */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
@@ -26,7 +26,28 @@ const ffmpegPresent = (() => {
   }
 })();
 
+const ffprobePresent = (() => {
+  try {
+    const result = spawnSync('ffprobe', ['-version'], { stdio: 'ignore' });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+})();
+
 const describeIfFfmpeg = ffmpegPresent ? describe : describe.skip;
+
+/* Read the container's reported duration via ffprobe (what players and
+   browsers trust). For a VBR MP3 this is only reliable when a Xing/Info
+   header is present — the whole point of the plan 109 regression below. */
+function ffprobeDurationSec(file: string): number {
+  const out = spawnSync(
+    'ffprobe',
+    ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nk=1:nw=1', file],
+    { encoding: 'utf8' },
+  );
+  return Number(out.stdout.trim());
+}
 
 /* Build a 24 kHz mono int16 LE PCM buffer holding a 440 Hz sine wave for the
    given duration. Realistic-enough payload for the encoder; using silence
@@ -92,6 +113,35 @@ describeIfFfmpeg('encodePcmToAudio', () => {
     const channelMode = (headerByte3 >> 6) & 0x3;
     expect(channelMode).toBe(0b11); // mono
   });
+
+  /* Regression for plan 109. Before the fix the MP3 was piped to ffmpeg's
+     non-seekable `pipe:1`, so libmp3lame could not write the Xing VBR header;
+     the container then reported a duration ~7x the real length (a 3 s clip
+     probed as ~21 s). This asserts the encoded MP3's container duration
+     matches the PCM duration AND that a Xing/Info header is present. */
+  (ffprobePresent ? it : it.skip)(
+    'produces an MP3 whose container duration matches the PCM duration (Xing header present)',
+    async () => {
+      const sampleRate = 24_000;
+      const seconds = 3.0;
+      const mp3 = await encodePcmToAudio(sinePcm(sampleRate, seconds), sampleRate, { quality: 2 });
+
+      const head = mp3.subarray(0, 4096);
+      const hasXing = head.includes(Buffer.from('Xing')) || head.includes(Buffer.from('Info'));
+      expect(hasXing, 'encoded MP3 is missing its Xing/Info VBR header').toBe(true);
+
+      const dir = mkdtempSync(join(tmpdir(), 'mp3-xing-'));
+      try {
+        const file = join(dir, 'clip.mp3');
+        writeFileSync(file, mp3);
+        const probed = ffprobeDurationSec(file);
+        /* Was ~21 s pre-fix; allow encoder-padding slack. */
+        expect(Math.abs(probed - seconds)).toBeLessThan(0.15);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('rejects when ffmpeg exits non-zero (invalid sample rate)', async () => {
     const pcm = sinePcm(24_000, 0.1);
