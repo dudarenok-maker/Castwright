@@ -159,8 +159,16 @@ export const selectActiveGenerationView = (
 ): ActiveGenerationView | null => {
   if (s.queue.entries.length > 0) return null;
   const chapters = s.chapters;
-  const active = chapters?.activeStream ?? null;
-  if (!chapters || !active) return null;
+  if (!chapters) return null;
+  /* Prefer the stream for the currently-viewed book (so the overlay lists its
+     rows); else any open stream. With one stream this is exactly the prior
+     single-snapshot behaviour. */
+  const streams = Object.values(chapters.activeStreams);
+  const active =
+    (chapters.currentBookId ? chapters.activeStreams[chapters.currentBookId] : undefined) ??
+    streams[0] ??
+    null;
+  if (!active) return null;
   const sameBook = chapters.currentBookId === active.bookId;
   /* Excluded chapters never queue or synthesise — mirror the filter in the
      runner's snapshotFromChapters + middleware hasWork so the row count agrees

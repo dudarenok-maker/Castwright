@@ -185,7 +185,7 @@ describe('queue-dispatcher-middleware', () => {
     expect(args.force).toBe(true);
     expect(args.queueEntryId).toBe('xb1');
     /* Cross-book snapshot seeded for the streaming book, not the viewed one. */
-    expect(store.getState().chapters.activeStream?.bookId).toBe('book-B');
+    expect((Object.values(store.getState().chapters.activeStreams)[0] ?? null)?.bookId).toBe('book-B');
   });
 
   it('does not open a SECOND stream for a cross-book head while one is already in flight', async () => {
@@ -236,12 +236,12 @@ describe('queue-dispatcher-middleware', () => {
     await flushMicro();
     /* Cross-book stream opened + activeStream seeded by the runner. */
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    expect(store.getState().chapters.activeStream?.bookId).toBe('book-B');
+    expect((Object.values(store.getState().chapters.activeStreams)[0] ?? null)?.bookId).toBe('book-B');
 
     /* SSE drains — runner closes → clearActiveStream. Dispatcher then DELETEs
        the entry it was tracking (inFlightEntryId = 'xb3'). */
     fetchMock.mockResolvedValueOnce(jsonResp({ entries: [], paused: false }));
-    store.dispatch(chaptersSlice.actions.clearActiveStream());
+    store.dispatch(chaptersSlice.actions.clearActiveStream('book-B'));
     await flushMicro();
     await flushMicro();
     expect(fetchMock).toHaveBeenCalledWith('/api/queue/xb3', { method: 'DELETE' });
@@ -304,7 +304,7 @@ describe('queue-dispatcher-middleware', () => {
 
     /* Now the SSE finishes — closeHandle dispatches clearActiveStream. */
     fetchMock.mockResolvedValueOnce(jsonResp({ entries: [], paused: false }));
-    store.dispatch(chaptersSlice.actions.clearActiveStream());
+    store.dispatch(chaptersSlice.actions.clearActiveStream('book-A'));
     await flushMicro();
     await flushMicro();
 
