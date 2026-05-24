@@ -277,6 +277,7 @@ const listenerCallback = () => {
     sidecarHandle = await spawnSidecar({
       autoStart: getResolvedAutoStartSidecar(),
       modelKey: settings.defaultTtsModelKey,
+      eagerLoadKokoro: settings.eagerLoadKokoro ?? true,
       repoRoot: resolve(__dirname, '..', '..'),
     });
   })();

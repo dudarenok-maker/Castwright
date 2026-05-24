@@ -1417,6 +1417,16 @@ export interface components {
              */
             dualModelEnabled?: boolean;
             /**
+             * @description When true (default), the Node server spawns the TTS sidecar
+             *     with `PRELOAD_KOKORO=1`, so Kokoro eager-loads at sidecar
+             *     startup (~1 GB VRAM, ~1 s). When false, the sidecar is spawned
+             *     with `PRELOAD_KOKORO=0` and Kokoro warms on demand on the first
+             *     synth that needs it (or via POST /load) — for Qwen-primary
+             *     users who want the ~1 GB VRAM back. Takes effect on the next
+             *     sidecar restart.
+             */
+            eagerLoadKokoro?: boolean;
+            /**
              * @description Whether process.env.GEMINI_API_KEY is non-empty. The key value
              *     itself is never returned over the wire — the UI uses this flag
              *     to render a "set in server/.env" pill.
@@ -1462,6 +1472,7 @@ export interface components {
             analyzerPhase1Model?: string | null;
             analyzerPhase1MinLagChapters?: number | null;
             dualModelEnabled?: boolean;
+            eagerLoadKokoro?: boolean;
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];
