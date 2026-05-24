@@ -3703,7 +3703,7 @@ async function mockGetExportLanUrls(): Promise<ExportLanInfo> {
 }
 
 /* GPU semaphore state — surfaces the depth/inFlight/max triple from the
-   server's GpuSemaphore so the top-bar pill can prefix "Queued (N ahead) ·"
+   server's GpuSemaphore so the top-bar pill can prefix "GPU busy · N waiting ·"
    when a session is waiting behind another's analyzer / sidecar call.
    See server/src/gpu/semaphore.ts + server/src/routes/gpu-queue.ts. */
 export interface GpuQueueState {
@@ -3731,7 +3731,7 @@ async function mockGetGpuQueueState(): Promise<GpuQueueState> {
   /* Mocks don't run a real semaphore — generation is local + synchronous
      under VITE_USE_MOCKS=true, so the queue is always empty. The shape
      stays contract-correct so any future visual regression on the pill's
-     "Queued (N ahead) ·" prefix can be exercised by stubbing the api
+     "GPU busy · N waiting ·" prefix can be exercised by stubbing the api
      surface in tests. */
   await wait(20);
   return { depth: 0, inFlight: 0, max: 1 };

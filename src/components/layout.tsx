@@ -45,6 +45,7 @@ import { ReattributeLinesModal } from '../modals/reattribute-lines';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { QueueModalContainer } from '../modals/queue-modal';
 import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
+import { selectGenerationActivityCount } from '../store/queue-slice';
 import { ToastStack } from './toast-stack';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { RevisionTimelineModal } from './revision-timeline-modal';
@@ -91,9 +92,11 @@ export function Layout() {
   const stage = useAppSelector((s) => s.ui.stage);
   const ui = useAppSelector((s) => s.ui);
   const userDisplayName = useAppSelector((s) => s.account.displayName);
-  /* Plan 102 — workspace queue count drives the top-bar queue chip + the
-     Generate view's "View queue" button visibility. */
-  const queueCount = useAppSelector((s) => s.queue.entries.length);
+  /* Drives the top-bar queue chip's visibility. Reflects real workspace queue
+     entries when present, else the live generation run so the chip (the modal's
+     entry point on non-Generate views) stays reachable while a book generates
+     via the reconcile-driven path, which writes no queue entry. */
+  const queueCount = useAppSelector(selectGenerationActivityCount);
   /* Plan 89 C3 — `characters` and `chapters.chapters` are large arrays the
      Layout reads every render. Use shallow equality so unrelated slice mutations
      (e.g. a foreign book's drift poll bumping `revisions`, or a heartbeat tick
@@ -717,9 +720,11 @@ export function Layout() {
      per-character `ttsEngine` overrides (see selectEnginesInUse).
      Gemini has no Stop pill (cloud, no VRAM to free). */
   const enginesInUse = useAppSelector(selectEnginesInUse);
-  /* GPU semaphore queue badge — prefixes the TTS pill cluster with
-     "Queued (N ahead) ·" when this session is waiting behind another
-     session's analyzer / sidecar call. Hidden when depth is 0 or
+  /* GPU semaphore badge — prefixes the TTS pill cluster with
+     "GPU busy · N waiting ·" when this session is waiting behind another
+     session's analyzer / sidecar call. Worded to NOT collide with the
+     generation queue (the "Queue · N" chip / queue modal) — this is GPU
+     resource contention, a different thing. Hidden when depth is 0 or
      undefined (older server that doesn't expose /api/gpu/queue). The
      server-side semaphore in server/src/gpu/semaphore.ts serialises
      GPU-heavy ops at GPU_CONCURRENCY=1 so two parallel Claude Code
@@ -732,9 +737,9 @@ export function Layout() {
       {showGpuQueueBadge && (
         <span
           className="text-xs text-ink/70 tabular-nums"
-          aria-label={`GPU queue: ${gpuQueueDepth} ahead`}
+          aria-label={`GPU busy: ${gpuQueueDepth} waiting`}
         >
-          Queued ({gpuQueueDepth} ahead) ·
+          GPU busy · {gpuQueueDepth} waiting ·
         </span>
       )}
       {enginesInUse.has('kokoro') && (
