@@ -71,6 +71,9 @@ export function AccountView() {
   const [dualModelEnabled, setDualModelEnabled] = useState<boolean>(
     account.dualModelEnabled ?? false,
   );
+  const [eagerLoadKokoro, setEagerLoadKokoro] = useState<boolean>(
+    account.eagerLoadKokoro ?? true,
+  );
   const themeOverride = useAppSelector((s) => s.ui.themeOverride);
   const [showSaved, setShowSaved] = useState(false);
 
@@ -91,6 +94,7 @@ export function AccountView() {
     setDefaultThemePreference(account.defaultThemePreference ?? 'system');
     setAutoStartSidecar(account.autoStartSidecar ?? true);
     setDualModelEnabled(account.dualModelEnabled ?? false);
+    setEagerLoadKokoro(account.eagerLoadKokoro ?? true);
   }, [
     account.hydrated,
     account.displayName,
@@ -109,6 +113,7 @@ export function AccountView() {
     account.defaultThemePreference,
     account.autoStartSidecar,
     account.dualModelEnabled,
+    account.eagerLoadKokoro,
   ]);
 
   /* When the engine switches, the selected modelKey may not belong to the
@@ -131,6 +136,12 @@ export function AccountView() {
   const persistedAutoStart = account.autoStartSidecar ?? true;
   const autoStartDirty = autoStartSidecar !== persistedAutoStart;
 
+  /* Like autoStartDirty, this gates a "Restart required" badge: the
+     PRELOAD_KOKORO env only changes when the sidecar is re-spawned, so a
+     toggle here doesn't take effect until the next restart. */
+  const persistedEagerLoadKokoro = account.eagerLoadKokoro ?? true;
+  const eagerLoadKokoroDirty = eagerLoadKokoro !== persistedEagerLoadKokoro;
+
   const dirty = useMemo(() => {
     return (
       displayName !== account.displayName ||
@@ -148,6 +159,7 @@ export function AccountView() {
       defaultThemePreference !== (account.defaultThemePreference ?? 'system') ||
       dualModelEnabled !== (account.dualModelEnabled ?? false) ||
       autoStartDirty ||
+      eagerLoadKokoroDirty ||
       workspaceDirty
     );
   }, [
@@ -166,6 +178,7 @@ export function AccountView() {
     defaultThemePreference,
     dualModelEnabled,
     autoStartDirty,
+    eagerLoadKokoroDirty,
     workspaceDirty,
     account,
   ]);
@@ -188,6 +201,7 @@ export function AccountView() {
       defaultThemePreference,
       autoStartSidecar,
       dualModelEnabled,
+      eagerLoadKokoro,
     };
     const action = await dispatch(saveAccountSettings(patch));
     if (saveAccountSettings.fulfilled.match(action)) {
@@ -547,6 +561,30 @@ export function AccountView() {
                   : 'Disabled — one engine at a time; mixed-engine books pay a swap cost.'}
               </span>
             </label>
+          </FieldRow>
+          <FieldRow
+            label="Eager-load Kokoro at startup"
+            sublabel="On by default. Turn off if Qwen is your main engine — Kokoro then loads only when a Kokoro voice (e.g. the narrator) is synthesized, freeing ~1 GB VRAM. Takes effect on the next sidecar restart."
+          >
+            <label className="inline-flex items-center gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={eagerLoadKokoro}
+                onChange={(e) => setEagerLoadKokoro(e.target.checked)}
+                data-testid="account-eager-load-kokoro"
+                className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
+              />
+              <span className="text-sm text-ink">
+                {eagerLoadKokoro
+                  ? 'Enabled — the sidecar preloads Kokoro at startup.'
+                  : 'Disabled — Kokoro warms on demand on first synth.'}
+              </span>
+            </label>
+            {eagerLoadKokoroDirty && (
+              <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
+                Restart the sidecar to apply this change.
+              </p>
+            )}
           </FieldRow>
         </FormCard>
 
