@@ -65,9 +65,7 @@ function wait(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function inferFormat(
-  fileName?: string,
-): 'markdown' | 'plaintext' | 'epub' | 'pdf' | 'mobi' | null {
+function inferFormat(fileName?: string): 'markdown' | 'plaintext' | 'epub' | 'pdf' | 'mobi' | null {
   if (!fileName) return null;
   const m = fileName.toLowerCase().match(/\.([a-z0-9]+)$/);
   if (!m) return null;
@@ -385,6 +383,27 @@ export interface GenerateAllVoiceStylesResponse {
   voiceStyles: Record<string, string>;
   failures: Record<string, string>;
 }
+
+/* Design + audition a bespoke Qwen voice for a cast member (plan 108,
+   Wave 4). The server proxies the sidecar's /qwen/design-voice, which
+   caches a reusable speaker embedding under a derived voiceId and returns
+   an audition preview. The Profile Drawer plays `previewUrl` and, on
+   Save, pins `voiceId` into the character's overrideTtsVoices.qwen slot. */
+export interface DesignQwenVoiceResponse {
+  /** Derived cache voiceId (echoed from the X-Qwen-Voice-Id header). */
+  voiceId: string;
+  /** Object URL for the audition preview blob (WAV-wrapped PCM). The
+      caller is responsible for revoking it after playback. */
+  previewUrl: string;
+}
+
+/** Optional scope for a voice-override write (plan 108). Default
+    'workspace' (back-compat); 'series' limits the write to the
+    (author, series) of `bookId`. */
+export interface VoiceOverrideScope {
+  scope?: 'series' | 'workspace';
+  bookId?: string;
+}
 export interface StreamArgs {
   bookId: string;
   modelKey: TtsModelKey;
@@ -488,8 +507,31 @@ async function mockGetBaseVoices(): Promise<{ voices: BaseVoice[] }> {
   return { voices: MOCK_BASE_VOICES };
 }
 
-async function mockSetVoiceOverride(_voiceId: string, _override: BaseVoice | null): Promise<void> {
+async function mockSetVoiceOverride(
+  _voiceId: string,
+  _override: BaseVoice | null,
+  _opts?: VoiceOverrideScope,
+): Promise<void> {
   await wait(20);
+}
+
+/* Mock Qwen voice design — returns a deterministic derived voiceId and a
+   tiny silent-WAV object URL so the drawer's audition button round-trips
+   under VITE_USE_MOCKS without a live sidecar. */
+async function mockDesignQwenVoice(
+  _bookId: string,
+  characterId: string,
+  _persona?: string,
+): Promise<DesignQwenVoiceResponse> {
+  await wait(120);
+  /* 8 bytes of silence wrapped as WAV @ 24kHz — enough for an <audio>
+     src; jsdom never actually decodes it in tests. */
+  const blob = pcm16ToWavBlob(new ArrayBuffer(8), 24000);
+  const previewUrl =
+    typeof URL.createObjectURL === 'function'
+      ? URL.createObjectURL(blob)
+      : 'blob:mock-qwen-preview';
+  return { voiceId: `qwen-${characterId}`, previewUrl };
 }
 
 async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {
@@ -771,8 +813,7 @@ function applyMockSliceWrite(prev: BookStateResponse, req: PutStateRequest): Boo
         genre: patch.genre !== undefined ? patch.genre : prev.state.genre,
         publicationDate:
           patch.publicationDate !== undefined ? patch.publicationDate : prev.state.publicationDate,
-        description:
-          patch.description !== undefined ? patch.description : prev.state.description,
+        description: patch.description !== undefined ? patch.description : prev.state.description,
         notes: patch.notes !== undefined ? patch.notes : prev.state.notes,
         updatedAt: new Date().toISOString(),
       };
@@ -1023,9 +1064,7 @@ function mockStreamGeneration({
       const totalLines = active.totalLines || 600;
       const nextProgress = Math.min(1, (active.progress || 0) + 0.02);
       const currentLine = Math.round(totalLines * nextProgress);
-      const cast = Object.keys(active.characters).filter(
-        (k) => active.characters[k] !== 'skipped',
-      );
+      const cast = Object.keys(active.characters).filter((k) => active.characters[k] !== 'skipped');
       const characterId =
         cast.length > 0
           ? cast[Math.min(cast.length - 1, Math.floor(nextProgress * cast.length))]
@@ -1194,16 +1233,83 @@ async function realGetBaseVoices(): Promise<{ voices: BaseVoice[] }> {
   return res.json();
 }
 
-async function realSetVoiceOverride(voiceId: string, override: BaseVoice | null): Promise<void> {
+async function realSetVoiceOverride(
+  voiceId: string,
+  override: BaseVoice | null,
+  opts?: VoiceOverrideScope,
+): Promise<void> {
+  const body: { override: BaseVoice | null; scope?: string; bookId?: string } = { override };
+  if (opts?.scope) body.scope = opts.scope;
+  if (opts?.bookId) body.bookId = opts.bookId;
   const res = await fetch(`/api/voices/${encodeURIComponent(voiceId)}/override`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ override }),
+    body: JSON.stringify(body),
   });
   if (!res.ok)
     throw new Error(
       `Voice override update failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
+}
+
+/* Wrap raw 16-bit little-endian PCM in a minimal WAV header so an
+   <audio> element can decode the audition preview without a codec. The
+   sidecar returns mono signed-16 LE at the given sample rate. */
+function pcm16ToWavBlob(pcm: ArrayBuffer, sampleRate: number): Blob {
+  const channels = 1;
+  const bitsPerSample = 16;
+  const byteRate = (sampleRate * channels * bitsPerSample) / 8;
+  const blockAlign = (channels * bitsPerSample) / 8;
+  const dataLen = pcm.byteLength;
+  const buffer = new ArrayBuffer(44 + dataLen);
+  const view = new DataView(buffer);
+  const writeStr = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataLen, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataLen, true);
+  new Uint8Array(buffer, 44).set(new Uint8Array(pcm));
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function realDesignQwenVoice(
+  bookId: string,
+  characterId: string,
+  persona?: string,
+): Promise<DesignQwenVoiceResponse> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/design-voice`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(persona !== undefined ? { persona } : {}),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Voice design failed (${res.status}).`);
+  }
+  const voiceId = res.headers.get('X-Qwen-Voice-Id') ?? `qwen-${characterId}`;
+  const sampleRate = Number(res.headers.get('X-Sample-Rate') ?? '24000') || 24000;
+  const pcm = await res.arrayBuffer();
+  const blob = pcm16ToWavBlob(pcm, sampleRate);
+  return { voiceId, previewUrl: URL.createObjectURL(blob) };
 }
 
 async function realImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {
@@ -1912,9 +2018,7 @@ async function realUnlinkAlias({
   return res.json();
 }
 
-async function mockUnlinkAlias({
-  aliasName,
-}: UnlinkAliasArgs): Promise<UnlinkAliasResponse> {
+async function mockUnlinkAlias({ aliasName }: UnlinkAliasArgs): Promise<UnlinkAliasResponse> {
   /* Mock mode is stateless on the cast side — the redux store holds the
      authoritative shape, and the layout's onUnlinkAlias handler dispatches
      a delta reducer with the response. So all we need to do is mint the
@@ -1969,10 +2073,7 @@ async function realAddAlias({
   return res.json();
 }
 
-async function mockAddAlias({
-  characterId,
-  aliasName,
-}: AddAliasArgs): Promise<AddAliasResponse> {
+async function mockAddAlias({ characterId, aliasName }: AddAliasArgs): Promise<AddAliasResponse> {
   await wait(60);
   const trimmed = aliasName.trim();
   if (!trimmed) {
@@ -2004,9 +2105,7 @@ async function realGenerateVoiceStyle(
   return res.json();
 }
 
-async function realGenerateAllVoiceStyles(
-  bookId: string,
-): Promise<GenerateAllVoiceStylesResponse> {
+async function realGenerateAllVoiceStyles(bookId: string): Promise<GenerateAllVoiceStylesResponse> {
   const res = await fetch(
     `/api/books/${encodeURIComponent(bookId)}/cast/voice-style/generate-all`,
     {
@@ -2404,14 +2503,11 @@ async function realRenameChapter(
   chapterId: number,
   title: string,
 ): Promise<RenameChapterResponse> {
-  const res = await fetch(
-    `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/rename`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
-    },
-  );
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
   if (!res.ok) {
     let detail = '';
     try {
@@ -2475,14 +2571,11 @@ async function postRestructure(
   endpoint: 'merge' | 'split' | 'reorder' | 'exclude' | 'refresh-titles',
   body: unknown,
 ): Promise<ChapterRestructureResponse> {
-  const res = await fetch(
-    `/api/books/${encodeURIComponent(bookId)}/chapters/${endpoint}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    },
-  );
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) {
     let detail = '';
     try {
@@ -2586,7 +2679,11 @@ async function mockSplitChapter(
   await wait(80);
   return {
     chapters: [
-      { id: chapterId, title: `Chapter ${chapterId}`, slug: `${String(chapterId).padStart(2, '0')}-mock` },
+      {
+        id: chapterId,
+        title: `Chapter ${chapterId}`,
+        slug: `${String(chapterId).padStart(2, '0')}-mock`,
+      },
       {
         id: chapterId + 1,
         title: newTitle ?? `Chapter ${chapterId} (cont.)`,
@@ -3797,6 +3894,7 @@ const real = {
   addAlias: realAddAlias,
   generateVoiceStyle: realGenerateVoiceStyle,
   generateAllVoiceStyles: realGenerateAllVoiceStyles,
+  designQwenVoice: realDesignQwenVoice,
   overrideLibraryCast: realOverrideLibraryCast,
   getSeriesRoster: realGetSeriesRoster,
   linkPriorCharacter: realLinkPriorCharacter,
@@ -3975,6 +4073,7 @@ const mock = {
   addAlias: mockAddAlias,
   generateVoiceStyle: mockGenerateVoiceStyle,
   generateAllVoiceStyles: mockGenerateAllVoiceStyles,
+  designQwenVoice: mockDesignQwenVoice,
   overrideLibraryCast: mockOverrideLibraryCast,
   getSeriesRoster: mockGetSeriesRoster,
   linkPriorCharacter: mockLinkPriorCharacter,

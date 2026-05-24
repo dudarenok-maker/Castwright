@@ -83,6 +83,7 @@ const ENGINE_LABEL: Record<TtsEngine, string> = {
   gemini: 'Gemini',
   piper: 'Piper',
   kokoro: 'Kokoro',
+  qwen: 'Qwen',
 };
 
 /* Plan 101 — module-level empty list for the defensive library-books

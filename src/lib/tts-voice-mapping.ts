@@ -11,7 +11,12 @@
 
 import type { Character } from './types';
 
-export type TtsEngine = 'coqui' | 'gemini' | 'piper' | 'kokoro';
+/* qwen is a BESPOKE per-character engine (plan 108) — no preset catalog;
+   its "voice" is a designed voiceId living in overrideTtsVoices.qwen.name.
+   Kept in this union so the engine-aware resolver below can label it
+   ("Designed voice" / "No voice designed yet") instead of falsely picking
+   a Coqui/Kokoro preset for it. */
+export type TtsEngine = 'coqui' | 'gemini' | 'piper' | 'kokoro' | 'qwen';
 
 export interface TtsVoiceAssignment {
   provider: TtsEngine;
@@ -315,6 +320,19 @@ export function resolveTtsVoiceForCharacter(
   c: Character,
   engine: TtsEngine = 'coqui',
 ): TtsVoiceAssignment {
+  /* Qwen has no preset catalog — the resolved voice is the designed
+     voiceId pinned in overrideTtsVoices.qwen (mirrors the server's
+     pickVoiceForEngine('qwen', …) which fails fast without one). Label
+     it like the server's describeVoiceAssignment so the drawer/cast row
+     copy matches. */
+  if (engine === 'qwen') {
+    const designed = c.overrideTtsVoices?.qwen?.name;
+    return {
+      provider: 'qwen',
+      name: designed ?? '',
+      description: designed ? 'Designed voice' : 'No voice designed yet',
+    };
+  }
   const profile = resolveProfileForCharacter(c);
   const id = c.voiceId ?? c.id;
   const options = catalogForEngine(engine)[profile];

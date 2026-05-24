@@ -17,6 +17,11 @@ const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK_ONE = 'Book One';
 const BOOK_TWO = 'Book Two';
+/* A SECOND series under the same author, sharing the v_Brann voiceId, used
+   to prove a series-scoped override only touches the anchor book's
+   series (plan 108). */
+const OTHER_SERIES = 'Unlocked';
+const OTHER_BOOK = 'Other Book';
 
 let workspaceRoot: string;
 let app: Express;
@@ -108,6 +113,29 @@ beforeAll(async () => {
       scenes: 7,
     },
   ]);
+  /* Third book — DIFFERENT series, same author, same voiceId. A
+     series-scoped write anchored on BOOK_ONE must NOT touch this one. */
+  writeBookOnDisk(
+    workspaceRoot,
+    AUTHOR,
+    OTHER_SERIES,
+    OTHER_BOOK,
+    paths.makeBookId(AUTHOR, OTHER_SERIES, OTHER_BOOK),
+    [
+      {
+        id: 'char-Brann',
+        name: 'Brann',
+        role: 'protagonist',
+        color: 'magenta',
+        voiceId: 'v_Brann',
+        gender: 'male',
+        ageRange: 'teen',
+        attributes: ['Male', 'Teen'],
+        lines: 10,
+        scenes: 1,
+      },
+    ],
+  );
 
   app = express();
   app.use(express.json());
@@ -135,8 +163,9 @@ describe('GET /api/voices — aggregation', () => {
     const v_Brann = res.body.voices.find((v: { id: string }) => v.id === 'v_Brann');
     expect(v_Brann).toBeDefined();
     expect(v_Brann.bookSeries).toBe(SERIES);
-    /* usedIn === 2 because both books share the same voiceId. */
-    expect(v_Brann.usedIn).toBe(2);
+    /* usedIn === 3 — both same-series books plus the cross-series book
+       share the same voiceId (the aggregator folds workspace-wide). */
+    expect(v_Brann.usedIn).toBe(3);
   });
 
   it('exposes overrideTtsVoices map when cast.json carries one', async () => {
@@ -347,6 +376,72 @@ describe('PUT /api/voices/:voiceId/override', () => {
     const res = await request(app)
       .put('/api/voices/v_does_not_exist/override')
       .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('PUT /api/voices/:voiceId/override — series scope (plan 108)', () => {
+  afterEach(async () => {
+    /* Clear all three casts between cases so the cross-series assertions
+       start clean. */
+    await request(app).put('/api/voices/v_Brann/override').send({ override: null });
+    const otherPath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      OTHER_SERIES,
+      OTHER_BOOK,
+      '.audiobook',
+      'cast.json',
+    );
+    const cast = JSON.parse(readFileSync(otherPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    delete cast.characters[0].overrideTtsVoices;
+    writeFileSync(otherPath, JSON.stringify(cast));
+  });
+
+  it("writes ONLY to the anchor book's series, leaving other series untouched", async () => {
+    const res = await request(app)
+      .put('/api/voices/v_Brann/override')
+      .send({
+        override: { engine: 'qwen', name: 'qwen-v_Brann' },
+        scope: 'series',
+        bookId: bookOneId,
+      });
+    expect(res.status).toBe(204);
+
+    /* Both same-series books got the Qwen designed voiceId. */
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const two = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
+    expect(one.characters[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-v_Brann' } });
+    expect(two.characters[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-v_Brann' } });
+
+    /* The cross-series book did NOT change. */
+    const other = readCastFromDisk(workspaceRoot, AUTHOR, OTHER_SERIES, OTHER_BOOK);
+    expect(other.characters[0].overrideTtsVoices).toBeUndefined();
+  });
+
+  it('defaults to a workspace-wide write when no scope is passed', async () => {
+    await request(app)
+      .put('/api/voices/v_Brann/override')
+      .send({ override: { engine: 'qwen', name: 'qwen-v_Brann' } });
+    /* All three books — including the cross-series one — get the override. */
+    const other = readCastFromDisk(workspaceRoot, AUTHOR, OTHER_SERIES, OTHER_BOOK);
+    expect(other.characters[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-v_Brann' } });
+  });
+
+  it("400s when scope is 'series' but bookId is missing", async () => {
+    const res = await request(app)
+      .put('/api/voices/v_Brann/override')
+      .send({ override: { engine: 'qwen', name: 'qwen-v_Brann' }, scope: 'series' });
+    expect(res.status).toBe(400);
+  });
+
+  it('404s when the series-anchor bookId is unknown', async () => {
+    const res = await request(app)
+      .put('/api/voices/v_Brann/override')
+      .send({ override: { engine: 'qwen', name: 'qwen-v_Brann' }, scope: 'series', bookId: 'nope' });
     expect(res.status).toBe(404);
   });
 });

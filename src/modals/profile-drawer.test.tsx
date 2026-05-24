@@ -6,6 +6,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice, voicesActions } from '../store/voices-slice';
+import { castSlice } from '../store/cast-slice';
 import { ProfileDrawer, type PriorMergeCandidate } from './profile-drawer';
 import {
   playSampleWithAutoLoad,
@@ -28,13 +29,27 @@ vi.mock('../lib/use-sample-playback', () => ({
   }),
 }));
 
-const setVoiceOverride = vi.fn((_voiceId: string, _override: BaseVoice | null) =>
-  Promise.resolve(),
+const setVoiceOverride = vi.fn(
+  (_voiceId: string, _override: BaseVoice | null, _opts?: { scope?: string; bookId?: string }) =>
+    Promise.resolve(),
+);
+const generateVoiceStyle = vi.fn((_bookId: string, _characterId: string) =>
+  Promise.resolve({ voiceStyle: 'a bright, confident teenage voice' }),
+);
+const designQwenVoice = vi.fn((_bookId: string, _characterId: string, _persona?: string) =>
+  Promise.resolve({ voiceId: 'qwen-halloran', previewUrl: 'blob:preview' }),
 );
 vi.mock('../lib/api', () => ({
   api: {
-    setVoiceOverride: (voiceId: string, override: BaseVoice | null) =>
-      setVoiceOverride(voiceId, override),
+    /* Forward exactly the args received — a 2-arg call stays 2-arg so the
+       existing override-write assertions (toHaveBeenCalledWith(id, null))
+       keep matching after the optional scope arg landed. */
+    setVoiceOverride: (...args: unknown[]) =>
+      (setVoiceOverride as unknown as (...a: unknown[]) => Promise<void>)(...args),
+    generateVoiceStyle: (bookId: string, characterId: string) =>
+      generateVoiceStyle(bookId, characterId),
+    designQwenVoice: (bookId: string, characterId: string, persona?: string) =>
+      designQwenVoice(bookId, characterId, persona),
   },
 }));
 
@@ -45,7 +60,7 @@ interface StoreSetup {
 
 function makeStore({ baseVoices, voices }: StoreSetup = {}) {
   const store = configureStore({
-    reducer: { ui: uiSlice.reducer, voices: voicesSlice.reducer },
+    reducer: { ui: uiSlice.reducer, voices: voicesSlice.reducer, cast: castSlice.reducer },
   });
   if (baseVoices) store.dispatch(voicesActions.hydrateBaseVoices(baseVoices));
   if (voices) store.dispatch(voicesActions.hydrate({ voices }));
@@ -698,9 +713,9 @@ describe('ProfileDrawer voice-preview while editing', () => {
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
     expect(screen.getByTestId('voice-preview-candidates')).toBeTruthy();
     /* Default sample text is the pangram + follow-on. */
-    expect(
-      (screen.getByTestId('voice-preview-sample-text') as HTMLTextAreaElement).value,
-    ).toMatch(/quick brown fox/i);
+    expect((screen.getByTestId('voice-preview-sample-text') as HTMLTextAreaElement).value).toMatch(
+      /quick brown fox/i,
+    );
   });
 
   it('clicking Play on a candidate row routes through playBaseVoiceSampleWithAutoLoad with the user-edited text', async () => {
@@ -765,9 +780,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
     fireEvent.change(screen.getByTestId('voice-preview-sample-text'), {
       target: { value: 'Bespoke preview line.' },
     });
-    expect(window.localStorage.getItem('voice-preview-sample-text')).toBe(
-      'Bespoke preview line.',
-    );
+    expect(window.localStorage.getItem('voice-preview-sample-text')).toBe('Bespoke preview line.');
   });
 });
 
@@ -823,10 +836,7 @@ describe('ProfileDrawer alias chip editing', () => {
     resolveIt();
     /* Re-enabled after settle so the user can chain unlinks. */
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Unlink Sior' })).toHaveProperty(
-        'disabled',
-        false,
-      );
+      expect(screen.getByRole('button', { name: 'Unlink Sior' })).toHaveProperty('disabled', false);
     });
   });
 
@@ -877,5 +887,115 @@ describe('ProfileDrawer alias chip editing', () => {
     renderDrawer(baseChar, { onAddAlias: vi.fn().mockResolvedValue(undefined) });
     expect(screen.getByText('Also known as')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Add alias' })).toBeTruthy();
+  });
+});
+
+describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', () => {
+  /* Renders the drawer WITH a bookId + an onSave spy so the Qwen
+     design + series-scoped override path can be exercised. */
+  function renderWithBook(character: Character, onSave = vi.fn()) {
+    const store = makeStore({});
+    const utils = render(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={character}
+          voice={undefined}
+          bookId="book-1"
+          onClose={() => {}}
+          onSave={onSave}
+          onLock={() => {}}
+        />
+      </Provider>,
+    );
+    return { store, onSave, ...utils };
+  }
+
+  function selectQwen() {
+    const select = screen.getByLabelText('TTS engine for this character');
+    fireEvent.change(select, { target: { value: 'qwen' } });
+  }
+
+  it('shows the persona textarea + Regenerate + Design buttons when Qwen is selected', async () => {
+    renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' });
+    selectQwen();
+    expect(screen.getByTestId('qwen-design-panel')).toBeTruthy();
+    expect((screen.getByTestId('qwen-persona-text') as HTMLTextAreaElement).value).toBe(
+      'a steady adult voice',
+    );
+    expect(screen.getByTestId('qwen-regenerate-persona')).toBeTruthy();
+    expect(screen.getByTestId('qwen-design-voice')).toBeTruthy();
+  });
+
+  it('auto-generates a persona on first switch to Qwen when none exists', async () => {
+    generateVoiceStyle.mockClear();
+    renderWithBook(baseChar); // no voiceStyle
+    selectQwen();
+    await waitFor(() => {
+      expect(generateVoiceStyle).toHaveBeenCalledWith('book-1', 'halloran');
+    });
+    await waitFor(() => {
+      expect((screen.getByTestId('qwen-persona-text') as HTMLTextAreaElement).value).toBe(
+        'a bright, confident teenage voice',
+      );
+    });
+  });
+
+  it('regenerates the persona via the api on Regenerate click', async () => {
+    generateVoiceStyle.mockClear();
+    generateVoiceStyle.mockResolvedValueOnce({ voiceStyle: 'a regenerated gravelly voice' });
+    renderWithBook({ ...baseChar, voiceStyle: 'old persona' });
+    selectQwen();
+    fireEvent.click(screen.getByTestId('qwen-regenerate-persona'));
+    await waitFor(() => {
+      expect((screen.getByTestId('qwen-persona-text') as HTMLTextAreaElement).value).toBe(
+        'a regenerated gravelly voice',
+      );
+    });
+  });
+
+  it('designs + previews the voice via the api on Design click', async () => {
+    designQwenVoice.mockClear();
+    renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' });
+    selectQwen();
+    fireEvent.click(screen.getByTestId('qwen-design-voice'));
+    await waitFor(() => {
+      expect(designQwenVoice).toHaveBeenCalledWith('book-1', 'halloran', 'a steady adult voice');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy();
+    });
+  });
+
+  it('on Save writes ttsEngine=qwen + the qwen override series-scoped', async () => {
+    setVoiceOverride.mockClear();
+    const onSave = vi.fn();
+    renderWithBook({ ...baseChar, voiceId: 'v_hal', voiceStyle: 'a steady adult voice' }, onSave);
+    selectQwen();
+    /* Design first so a voiceId is staged. */
+    fireEvent.click(screen.getByTestId('qwen-design-voice'));
+    await waitFor(() => expect(designQwenVoice).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
+    /* onSave carries the per-character engine + the qwen override slot. */
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    const saved = onSave.mock.calls[0][0] as Character;
+    expect(saved.ttsEngine).toBe('qwen');
+    expect(saved.overrideTtsVoices?.qwen?.name).toBe('qwen-halloran');
+
+    /* Series-scoped override write fired with scope:'series' + bookId. */
+    expect(setVoiceOverride).toHaveBeenCalledWith(
+      'v_hal',
+      { engine: 'qwen', name: 'qwen-halloran' },
+      { scope: 'series', bookId: 'book-1' },
+    );
+  });
+
+  it('hides the preset Model voice picker while Qwen is selected', async () => {
+    renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' }, vi.fn());
+    /* Preset picker label present before switching. */
+    expect(screen.getByText('Model voice')).toBeTruthy();
+    selectQwen();
+    expect(screen.queryByText('Model voice')).toBeNull();
   });
 });
