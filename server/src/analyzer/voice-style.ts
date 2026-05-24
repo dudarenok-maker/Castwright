@@ -1,0 +1,155 @@
+/* Gemini voice-style persona generator (plan 108, Wave 4 dependency).
+
+   Every cast member gets a short natural-language "voice style" persona —
+   a Qwen voice-design `instruct` like:
+     "a bright, confident teenage girl, warm and a little playful,
+      mid-paced, with a hint of anxiety"
+   The Qwen sidecar designs a bespoke voice FROM such a persona
+   (`POST /qwen/design-voice {voiceId, instruct, …}`), so the persona is the
+   editable, durable seed of a character's designed voice.
+
+   Locked decisions (user 2026-05-24):
+     (a) model is pinned to `gemini-3.1-flash-lite` (env-overridable via
+         `VOICE_STYLE_MODEL` for triage) — its own rate-limit bucket,
+         500 RPD on the free tier;
+     (b) ONE Gemini call PER CHARACTER — never batch multiple characters
+         into one prompt, so a persona can't be contaminated by a
+         neighbouring character's traits;
+     (c) the persona is derived from the character's FULL profile —
+         gender, age, role, description, tone metrics, AND their collected
+         dialogue evidence quotes (reusing `buildHintFromCast`).
+
+   Every call goes through the shared `geminiRateLimiter` so a generate-all
+   batch can't compound into a 429 storm — same discipline as the analyzer's
+   stage calls. A Gemini API key is required (same resolution as the
+   analyzer); we fail with a clear message when it's absent. */
+
+import { GoogleGenAI } from '@google/genai';
+import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
+import { getResolvedGeminiApiKey } from '../workspace/user-settings.js';
+import { geminiRateLimiter } from './rate-limit.js';
+import { stripCodeFences } from './gemini.js';
+
+/** Pinned voice-style model. `gemini-3.1-flash-lite` per the locked
+    decision; env-overridable for ops triage without a rebuild. */
+export function resolveVoiceStyleModel(): string {
+  const raw = process.env.VOICE_STYLE_MODEL?.trim();
+  return raw && raw.length > 0 ? raw : 'gemini-3.1-flash-lite';
+}
+
+/* Tone metrics are 0–100. Translate the two that matter most for a voice
+   persona (warmth + pace) into plain words so the model anchors on a
+   register rather than guessing from raw numbers. Authority/emotion are
+   passed through as numbers in the profile block — they nuance the
+   description but don't need their own gloss. */
+function describeTone(tone: CastCharacter['tone']): string | null {
+  if (!tone) return null;
+  const parts: string[] = [];
+  if (typeof tone.warmth === 'number') {
+    parts.push(tone.warmth >= 66 ? 'warm' : tone.warmth <= 33 ? 'cool/detached' : 'neutral warmth');
+  }
+  if (typeof tone.pace === 'number') {
+    parts.push(tone.pace >= 66 ? 'fast-paced' : tone.pace <= 33 ? 'slow, measured' : 'mid-paced');
+  }
+  if (typeof tone.authority === 'number') {
+    parts.push(`authority ${tone.authority}/100`);
+  }
+  if (typeof tone.emotion === 'number') {
+    parts.push(`emotional intensity ${tone.emotion}/100`);
+  }
+  return parts.length ? parts.join(', ') : null;
+}
+
+/* Build the per-character prompt. Tight by design: a short profile block,
+   up to a handful of representative dialogue quotes, and an explicit
+   instruction to return ONLY the persona phrase. The quotes are the
+   strongest signal for timbre/temperament — the model should lean on how
+   the character actually speaks, not just the analyzer's labels. */
+export function buildVoiceStylePrompt(character: CastCharacter): string {
+  const hint = buildHintFromCast(character);
+  const lines: string[] = [];
+
+  lines.push(`Name: ${character.name ?? character.id}`);
+  if (hint.role) lines.push(`Role: ${hint.role}`);
+  if (hint.gender) lines.push(`Gender: ${hint.gender}`);
+  if (hint.ageRange) lines.push(`Age range: ${hint.ageRange}`);
+  if (hint.description) lines.push(`Description: ${hint.description}`);
+  const tone = describeTone(hint.tone);
+  if (tone) lines.push(`Tone metrics: ${tone}`);
+
+  /* Cap the quote block so a chatty character can't blow the prompt out;
+     the first handful are enough to characterise the voice, and shorter
+     prompts keep the flash-lite call fast + cheap. */
+  const quotes = (hint.evidence ?? []).slice(0, 6);
+  if (quotes.length) {
+    lines.push('');
+    lines.push('Dialogue evidence (how this character actually speaks):');
+    for (const q of quotes) lines.push(`- "${q}"`);
+  }
+
+  return `You design audiobook character voices. From the character profile below, write ONE concise voice-design persona describing the voice to synthesise — its timbre, age, gender, speaking pace, and temperament — and bake in the character's dominant emotional register.
+
+Rules:
+- Output ONLY the persona phrase. No preamble, no quotes, no markdown, no name.
+- One sentence or comma-separated clause, at most ~30 words.
+- Describe the VOICE (how they sound), not the plot.
+- English.
+
+Example output: a bright, confident teenage girl, warm and a little playful, mid-paced, with a hint of anxiety
+
+Character profile:
+${lines.join('\n')}
+
+Voice-design persona:`;
+}
+
+/* Strip anything the model wraps around the persona phrase: code fences,
+   a leading "Persona:" label, wrapping quotes, trailing punctuation noise.
+   Conservative — collapses internal whitespace/newlines to single spaces
+   so a multi-line answer still lands as one clean instruct. */
+export function cleanPersona(raw: string): string {
+  let s = stripCodeFences(raw).trim();
+  /* Drop a leading label like "Persona:" / "Voice:" the model sometimes
+     prepends despite the instruction. */
+  s = s.replace(/^(voice[- ]?design persona|persona|voice style|voice)\s*[:\-—]\s*/i, '');
+  /* Collapse newlines + runs of whitespace into single spaces. */
+  s = s.replace(/\s+/g, ' ').trim();
+  /* Strip a single wrapping pair of quotes (straight or smart). */
+  s = s.replace(/^["'“”']+/, '').replace(/["'“”']+$/, '').trim();
+  return s;
+}
+
+/** Generate a voice-style persona for ONE character via a single
+    `gemini-3.1-flash-lite` call, rate-limited through the shared limiter.
+    Throws when no Gemini API key resolves, or when the model returns an
+    empty response. */
+export async function generateVoiceStylePersona(character: CastCharacter): Promise<string> {
+  const apiKey = getResolvedGeminiApiKey();
+  if (!apiKey) {
+    throw new Error(
+      'GEMINI_API_KEY is required to generate voice-style personas. ' +
+        'Set it from Account → Server configuration → Gemini API key, ' +
+        'or in server/.env for CI / power users.',
+    );
+  }
+
+  const model = resolveVoiceStyleModel();
+  const prompt = buildVoiceStylePrompt(character);
+  /* Token estimate for the limiter — ~chars/4 plus a flat ceiling margin,
+     same heuristic as the analyzer's estimateInputTokens. */
+  const estTokens = Math.ceil(prompt.length / 4) + 200;
+
+  await geminiRateLimiter.acquire(model, estTokens);
+
+  const client = new GoogleGenAI({ apiKey });
+  const response = await client.models.generateContent({
+    model,
+    contents: prompt,
+  });
+
+  const persona = cleanPersona(response.text ?? '');
+  if (!persona) {
+    throw new Error(`Voice-style generation for "${character.id}" returned an empty persona.`);
+  }
+  return persona;
+}

@@ -40,6 +40,16 @@ export const castSlice = createSlice({
       const next = a.payload;
       s.characters = s.characters.map((c) => (c.id === next.id ? { ...c, ...next } : c));
     },
+    /* Plan 108 — set a character's Gemini-generated voice-design persona
+       ("voice style"). The server persists it to cast.json; this reducer
+       mirrors the returned persona into redux so the future drawer (Wave 4)
+       renders the new value without re-hydrating the whole cast. No-op when
+       the character id isn't in the slice. */
+    setVoiceStyle: (s, a: PayloadAction<{ characterId: string; voiceStyle: string }>) => {
+      const { characterId, voiceStyle } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (c) c.voiceStyle = voiceStyle;
+    },
     /* From POST /api/manuscripts/:id/analysis response. The analyser schema
        leaves voiceState optional, but freshly-analysed characters have, by
        definition, just had a voice generated for them — default the field

@@ -368,6 +368,23 @@ export interface AddAliasResponse {
   alias: string;
   alreadyPresent: boolean;
 }
+/* POST /api/books/:bookId/cast/:characterId/voice-style/generate (single)
+   and /cast/voice-style/generate-all (batch) — plan 108. The server makes
+   ONE Gemini (`gemini-3.1-flash-lite`) call per character from the
+   character's full profile + dialogue evidence, persists the resulting
+   natural-language voice-design persona on the character in cast.json, and
+   returns it. The batch route loops the cast (narrator skipped by default),
+   tolerates per-character failures, and returns the successes keyed by
+   character id alongside a per-character failure map. The persona seeds the
+   Qwen sidecar's bespoke voice-design flow; the drawer UI (Wave 4) lets the
+   user edit it. */
+export interface GenerateVoiceStyleResponse {
+  voiceStyle: string;
+}
+export interface GenerateAllVoiceStylesResponse {
+  voiceStyles: Record<string, string>;
+  failures: Record<string, string>;
+}
 export interface StreamArgs {
   bookId: string;
   modelKey: TtsModelKey;
@@ -1965,6 +1982,78 @@ async function mockAddAlias({
      store state. Returning alreadyPresent=false unconditionally is fine;
      the reducer no-ops when the alias is already there. */
   return { characterId, alias: trimmed, alreadyPresent: false };
+}
+
+async function realGenerateVoiceStyle(
+  bookId: string,
+  characterId: string,
+): Promise<GenerateVoiceStyleResponse> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/voice-style/generate`,
+    { method: 'POST' },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Voice-style generation failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function realGenerateAllVoiceStyles(
+  bookId: string,
+): Promise<GenerateAllVoiceStylesResponse> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/voice-style/generate-all`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Voice-style batch generation failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+/* Mock voice-style generation — returns a canned persona so the future
+   drawer can exercise the round-trip under VITE_USE_MOCKS without a live
+   Gemini key. The persona is deterministic per characterId so a test can
+   assert on it; the generate-all mock derives one for every non-narrator
+   character in the live cast slice (the caller passes the ids it knows
+   about, but the mock has no cast on its own, so it just echoes a single
+   canned persona keyed by the requested characterId for the single route
+   and an empty batch for generate-all — the redux store is authoritative). */
+const MOCK_PERSONA = 'a warm, steady adult voice, mid-paced and grounded, quietly confident';
+
+async function mockGenerateVoiceStyle(
+  _bookId: string,
+  _characterId: string,
+): Promise<GenerateVoiceStyleResponse> {
+  await wait(80);
+  return { voiceStyle: MOCK_PERSONA };
+}
+
+async function mockGenerateAllVoiceStyles(
+  _bookId: string,
+): Promise<GenerateAllVoiceStylesResponse> {
+  await wait(120);
+  /* Stateless mock — the cast lives in redux, not the mock. The drawer
+     (Wave 4) dispatches setVoiceStyle per returned id; in mock mode the
+     batch returns no entries and the UI can fall back to the single route
+     per character. */
+  return { voiceStyles: {}, failures: {} };
 }
 
 async function realOverrideLibraryCast(
@@ -3706,6 +3795,8 @@ const real = {
   seriesPatchCharacter: realSeriesPatchCharacter,
   unlinkAlias: realUnlinkAlias,
   addAlias: realAddAlias,
+  generateVoiceStyle: realGenerateVoiceStyle,
+  generateAllVoiceStyles: realGenerateAllVoiceStyles,
   overrideLibraryCast: realOverrideLibraryCast,
   getSeriesRoster: realGetSeriesRoster,
   linkPriorCharacter: realLinkPriorCharacter,
@@ -3882,6 +3973,8 @@ const mock = {
   seriesPatchCharacter: mockSeriesPatchCharacter,
   unlinkAlias: mockUnlinkAlias,
   addAlias: mockAddAlias,
+  generateVoiceStyle: mockGenerateVoiceStyle,
+  generateAllVoiceStyles: mockGenerateAllVoiceStyles,
   overrideLibraryCast: mockOverrideLibraryCast,
   getSeriesRoster: mockGetSeriesRoster,
   linkPriorCharacter: mockLinkPriorCharacter,
