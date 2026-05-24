@@ -1840,6 +1840,18 @@ components:
             synth that needs it (or via POST /load) — for Qwen-primary
             users who want the ~1 GB VRAM back. Takes effect on the next
             sidecar restart.
+        generationWorkers:
+          type: integer
+          minimum: 1
+          maximum: 4
+          description: |
+            Number of chapters the generation queue synthesises concurrently
+            (queue-worker concurrency). Default 2. Pulled from the flat queue
+            across books; same-book chapters fan out within one stream via the
+            server's bounded pool. This is queue/synthesis concurrency only —
+            the process-global GPU semaphore (`GPU_CONCURRENCY`) remains the
+            VRAM guard, so raising this never risks an out-of-memory. Resolved
+            as `GEN_WORKERS` env > this setting > 2.
         apiKeyStatus:
           type: string
           enum: [set, unset]
@@ -1911,6 +1923,10 @@ components:
           type: boolean
         eagerLoadKokoro:
           type: boolean
+        generationWorkers:
+          type: integer
+          minimum: 1
+          maximum: 4
 
     # --- Library ----------------------------------------------------
     LibraryResponse:

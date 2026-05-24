@@ -118,6 +118,34 @@ describe('accountSlice — granular setters', () => {
     const b = accountSlice.reducer(a, accountActions.setEagerLoadKokoro(true));
     expect(b.eagerLoadKokoro).toBe(true);
   });
+
+  it('setGenerationWorkers sets the queue-worker count', () => {
+    const a = accountSlice.reducer(undefined, accountActions.setGenerationWorkers(4));
+    expect(a.generationWorkers).toBe(4);
+    const b = accountSlice.reducer(a, accountActions.setGenerationWorkers(1));
+    expect(b.generationWorkers).toBe(1);
+  });
+});
+
+describe('accountSlice — generationWorkers (plan 111)', () => {
+  it('hydrates generationWorkers from the server fetch response', async () => {
+    (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      generationWorkers: 3,
+    });
+    const store = makeStore();
+    await store.dispatch(fetchAccountSettings());
+    expect(store.getState().account.generationWorkers).toBe(3);
+  });
+
+  it('round-trips generationWorkers through saveAccountSettings', async () => {
+    const putSpy = api.putUserSettings as unknown as ReturnType<typeof vi.fn>;
+    putSpy.mockResolvedValue({ ...SERVER_FIXTURE, generationWorkers: 4 });
+    const store = makeStore();
+    await store.dispatch(saveAccountSettings({ generationWorkers: 4 }));
+    expect(putSpy).toHaveBeenCalledWith({ generationWorkers: 4 });
+    expect(store.getState().account.generationWorkers).toBe(4);
+  });
 });
 
 describe('accountSlice — dual-model flag', () => {

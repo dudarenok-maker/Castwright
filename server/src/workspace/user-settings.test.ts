@@ -10,6 +10,7 @@ import {
   DEFAULT_USER_SETTINGS,
   userSettingsSchema,
   getResolvedAutoStartSidecar,
+  getResolvedGenerationWorkers,
   _resetUserSettingsCache,
 } from './user-settings.js';
 
@@ -122,6 +123,87 @@ describe('userSettingsSchema — autoStartSidecar (plan 43)', () => {
       expect(getResolvedAutoStartSidecar()).toBe(true);
       process.env.DISABLE_AUTOSTART_SIDECAR = '0';
       expect(getResolvedAutoStartSidecar()).toBe(true);
+    });
+  });
+});
+
+describe('userSettingsSchema — generationWorkers (plan 111)', () => {
+  it('defaults to 2 on a fresh user-settings document', () => {
+    expect(DEFAULT_USER_SETTINGS.generationWorkers).toBe(2);
+  });
+
+  it('accepts integers in [1, 4]', () => {
+    for (const value of [1, 2, 3, 4]) {
+      expect(
+        userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, generationWorkers: value })
+          .generationWorkers,
+      ).toBe(value);
+    }
+  });
+
+  it('rejects out-of-range and non-integer values (0, 5, 2.5)', () => {
+    for (const value of [0, 5, 2.5]) {
+      expect(() =>
+        userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, generationWorkers: value }),
+      ).toThrow();
+    }
+  });
+
+  it('treats the field as optional — legacy settings files without it parse cleanly', () => {
+    const { generationWorkers: _generationWorkers, ...legacy } = DEFAULT_USER_SETTINGS;
+    const parsed = userSettingsSchema.parse(legacy);
+    expect(parsed.generationWorkers).toBeUndefined();
+  });
+
+  describe('getResolvedGenerationWorkers', () => {
+    beforeEach(() => {
+      _resetUserSettingsCache();
+      delete process.env.GEN_WORKERS;
+      delete process.env.GEN_CHAPTER_CONCURRENCY;
+    });
+
+    afterEach(() => {
+      delete process.env.GEN_WORKERS;
+      delete process.env.GEN_CHAPTER_CONCURRENCY;
+      _resetUserSettingsCache();
+    });
+
+    it('returns the default (2) when nothing is cached and no env override', () => {
+      expect(getResolvedGenerationWorkers()).toBe(2);
+    });
+
+    it('honors GEN_WORKERS env', () => {
+      process.env.GEN_WORKERS = '3';
+      expect(getResolvedGenerationWorkers()).toBe(3);
+    });
+
+    it('still honors the legacy GEN_CHAPTER_CONCURRENCY env when GEN_WORKERS is unset', () => {
+      process.env.GEN_CHAPTER_CONCURRENCY = '4';
+      expect(getResolvedGenerationWorkers()).toBe(4);
+    });
+
+    it('prefers GEN_WORKERS over the legacy GEN_CHAPTER_CONCURRENCY', () => {
+      process.env.GEN_WORKERS = '1';
+      process.env.GEN_CHAPTER_CONCURRENCY = '4';
+      expect(getResolvedGenerationWorkers()).toBe(1);
+    });
+
+    it('falls through to the cached user setting when no env is set', async () => {
+      const mod = await import('./user-settings.js');
+      mod._resetUserSettingsCache();
+      const before = await mod.readUserSettings();
+      try {
+        await mod.writeUserSettings({ generationWorkers: 4 });
+        expect(mod.getResolvedGenerationWorkers()).toBe(4);
+      } finally {
+        await mod.writeUserSettings({ generationWorkers: before.generationWorkers ?? 2 });
+        mod._resetUserSettingsCache();
+      }
+    });
+
+    it('ignores a non-numeric env and falls back to the default', () => {
+      process.env.GEN_WORKERS = 'lots';
+      expect(getResolvedGenerationWorkers()).toBe(2);
     });
   });
 });
