@@ -234,6 +234,13 @@ export function pickVoiceForEngine(
   ) {
     return voice.overrideTtsVoice.name;
   }
+  /* Qwen voices are BESPOKE (designed per character, plan 108) — there is NO
+     profile catalog to infer from. A character on the Qwen engine MUST carry
+     an explicit designed voiceId in overrideTtsVoices.qwen; with none, there's
+     nothing to pick. Return '' so the cast view can show "no voice designed
+     yet"; the generation path treats a Qwen character without a designed voice
+     as an error or routes it to the default engine (plan 108 Wave 2b). */
+  if (engine === 'qwen') return '';
   const profile = inferProfile(voice, hint);
   const table = catalogForEngine(engine);
   const options = table[profile];
@@ -271,6 +278,9 @@ function describeVoice(engine: TtsEngine, name: string): string {
   if (engine === 'gemini') return GEMINI_VOICE_DESCRIPTIONS[name] ?? 'Prebuilt voice';
   if (engine === 'coqui') return COQUI_VOICE_DESCRIPTIONS[name] ?? 'Local voice';
   if (engine === 'kokoro') return KOKORO_VOICE_DESCRIPTIONS[name] ?? 'Local voice';
+  /* Qwen voices are designed bespoke per character — no static descriptor
+     table. An empty name means none has been designed yet. */
+  if (engine === 'qwen') return name ? 'Designed voice' : 'No voice designed yet';
   return 'Local voice';
 }
 
@@ -455,6 +465,11 @@ export interface CatalogConsistency {
 }
 
 export function auditEngineCatalog(engine: TtsEngine): CatalogConsistency {
+  /* Qwen has no static catalog to audit — its voices are designed bespoke per
+     character at runtime (plan 108). Nothing to diff; report an empty audit. */
+  if (engine === 'qwen') {
+    return { engine, missingDescriptions: [], unrouted: [], routedCount: 0 };
+  }
   const profiles =
     engine === 'gemini'
       ? GEMINI_PROFILE_VOICES
