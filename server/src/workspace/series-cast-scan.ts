@@ -39,7 +39,7 @@ export interface ScanSeriesOptions {
    book whose state.json was just written but state.castConfirmed is
    still false — already excluded by scanLibraryCharacters but caller
    may still pass us its bookId). */
-async function findAuthorSeriesForBookId(
+export async function findAuthorSeriesForBookId(
   targetBookId: string,
 ): Promise<{ author: string; series: string } | null> {
   const { existsSync, readdirSync } = await import('node:fs');
