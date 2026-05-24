@@ -13,7 +13,19 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { components } from '../lib/api-types';
 
-export type QueueEntry = components['schemas']['QueueEntry'];
+/* Plan 108 Wave 3 — the TTS engines a chapter requires, stamped server-side at
+   enqueue time. The contract lives on the SERVER queue shape only (NOT in
+   openapi.yaml), so it's mirrored here as a local union rather than pulled from
+   the generated api-types. Keep in lockstep with server/src/tts/index.ts
+   TtsEngine. */
+export type TtsEngine = 'coqui' | 'piper' | 'kokoro' | 'gemini' | 'qwen';
+
+/* Generated base shape (openapi) widened with the additive Wave-3 fields.
+   Absent on a legacy entry / when the server couldn't resolve them. */
+export type QueueEntry = components['schemas']['QueueEntry'] & {
+  requiredEngines?: TtsEngine[];
+  multiTts?: boolean;
+};
 export type QueueScope = QueueEntry['scope'];
 export type QueueStatus = QueueEntry['status'];
 

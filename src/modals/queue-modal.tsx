@@ -24,6 +24,7 @@ import {
   selectQueueLoaded,
   selectQueuePaused,
   type QueueEntry,
+  type TtsEngine,
 } from '../store/queue-slice';
 import {
   cancelQueueEntry,
@@ -40,6 +41,19 @@ interface QueueModalProps {
   onClose: () => void;
 }
 
+/* Plan 108 Wave 3 — human-readable engine names for the per-row badge. */
+const ENGINE_LABELS: Record<TtsEngine, string> = {
+  kokoro: 'Kokoro',
+  qwen: 'Qwen',
+  coqui: 'Coqui XTTS',
+  gemini: 'Gemini',
+  piper: 'Piper',
+};
+
+function engineLabel(engine: TtsEngine): string {
+  return ENGINE_LABELS[engine] ?? engine;
+}
+
 export function QueueModal({ open, onClose }: QueueModalProps) {
   const dispatch = useAppDispatch();
   const groupedByBook = useAppSelector(selectQueueByBook);
@@ -48,6 +62,11 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
   const count = useAppSelector(selectQueueCount);
   const inFlight = useAppSelector(selectInFlightEntry);
   const bookTitles = useAppSelector((s) => s.library.books);
+  /* Plan 108 Wave 3 — when a multi-TTS chapter is queued but the user hasn't
+     opted into keeping both engines resident, the row shows the same advisory
+     the generation flow emits (enable dual-model mode in Account settings to
+     avoid engine-swap latency). */
+  const dualModelEnabled = useAppSelector((s) => s.account?.dualModelEnabled ?? false);
 
   /* Refresh the queue snapshot whenever the modal opens — covers the
      cross-tab case where another tab mutated the queue while ours was
@@ -143,6 +162,7 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                     title={lookupBookTitle(bookId)}
                     entries={entries}
                     inFlightId={inFlight?.id ?? null}
+                    dualModelEnabled={dualModelEnabled}
                     onReorder={(newOrderForGroup) => {
                       /* Reorder within the GROUP requires building the full
                          workspace-level order: keep the in-flight entry first
@@ -178,11 +198,19 @@ interface BookGroupProps {
   title: string;
   entries: QueueEntry[];
   inFlightId: string | null;
+  dualModelEnabled: boolean;
   onReorder: (entries: QueueEntry[]) => void;
   onCancel: (entryId: string) => void;
 }
 
-function BookGroup({ title, entries, inFlightId, onReorder, onCancel }: BookGroupProps) {
+function BookGroup({
+  title,
+  entries,
+  inFlightId,
+  dualModelEnabled,
+  onReorder,
+  onCancel,
+}: BookGroupProps) {
   const moveUp = (idx: number): void => {
     if (idx <= 0) return;
     const next = [...entries];
@@ -312,6 +340,35 @@ function BookGroup({ title, entries, inFlightId, onReorder, onCancel }: BookGrou
                         ? 'Paused'
                         : 'Queued'}
                 </div>
+                {/* Plan 108 Wave 3 — name the TTS engine(s) this chapter needs.
+                    Single: "Kokoro"; multi: "Kokoro + Qwen". Absent on legacy /
+                    unresolved entries (no badge rather than a misleading one). */}
+                {entry.requiredEngines && entry.requiredEngines.length > 0 && (
+                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                        entry.multiTts
+                          ? 'bg-magenta/10 text-magenta'
+                          : 'bg-ink/5 text-ink/60'
+                      }`}
+                      data-testid={`queue-entry-${entry.id}-engines`}
+                    >
+                      {entry.requiredEngines.map(engineLabel).join(' + ')}
+                    </span>
+                  </div>
+                )}
+                {/* Multi-TTS + dual-model OFF → same advisory the generation
+                    flow surfaces: enabling dual-model mode avoids engine-swap
+                    latency. Subtle, non-blocking. */}
+                {entry.multiTts && !dualModelEnabled && (
+                  <p
+                    className="mt-1 text-[10px] leading-tight text-ink/45"
+                    data-testid={`queue-entry-${entry.id}-dual-model-warning`}
+                  >
+                    Mixes TTS engines. Turn on "Keep both TTS engines loaded" in
+                    Account settings to avoid engine-swap latency.
+                  </p>
+                )}
               </div>
               {!isInFlight && (
                 <>
