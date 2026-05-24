@@ -14,6 +14,7 @@ import { writeFile } from 'node:fs/promises';
 import type { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { gpuSemaphore } from '../gpu/semaphore.js';
+import { costForEngine } from '../tts/engine-vram-cost.js';
 import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../handoff/protocol.js';
 import {
   stage1Schema,
@@ -392,8 +393,10 @@ export class OllamaAnalyzer implements Analyzer {
        slot is held across the full streamed response (fetch + read
        loop) and released in the outer `finally` below; that covers
        abort paths, fetch-throws, non-2xx responses, and mid-stream
-       errors equally well. See server/src/gpu/semaphore.ts. */
-    const releaseGpu = await gpuSemaphore.acquire();
+       errors equally well. The analyzer's VRAM weight (engine-vram-cost.ts)
+       is large enough to serialise it against any TTS op — they already
+       evict each other on the GPU. See server/src/gpu/semaphore.ts. */
+    const releaseGpu = await gpuSemaphore.acquire(costForEngine('analyzer'));
 
     try {
       let response: Response;
