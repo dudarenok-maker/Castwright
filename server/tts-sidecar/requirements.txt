@@ -36,3 +36,14 @@ numpy>=1.26,<3.0
 # voices manifest into voices/kokoro/ (gitignored, ~330 MB).
 kokoro-onnx>=0.4.0,<0.5.0
 onnxruntime-gpu>=1.20.0,<2.0.0
+
+# Qwen3-TTS — per-character bespoke voices via design -> clone -> cache ->
+# reuse (plan 108). NOT a fixed-voice catalog like Kokoro; voices are designed
+# from a persona once and reused for consistency. Pulls torch + soundfile.
+# Left unpinned here because the weights + exact wheel are fetched by
+# scripts/install-qwen3.mjs (a few GB, gitignored under voices/qwen/), not on a
+# plain `pip install -r`. NOTE: qwen-tts may pull a transformers newer than the
+# `<5.0` cap coqui-tts needs above — if pip reports a conflict at install time,
+# run the sidecar with EITHER Coqui OR Qwen in its venv, or pin transformers to
+# a version both accept (verified empirically when the model is downloaded).
+# qwen-tts
