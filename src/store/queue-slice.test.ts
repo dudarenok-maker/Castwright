@@ -169,7 +169,7 @@ describe('active-generation selectors', () => {
       generationStartedAt: null,
       lastTickAt: null,
       currentBookId: opts.currentBookId,
-      activeStream: opts.activeStream,
+      activeStreams: opts.activeStream ? { [opts.activeStream.bookId]: opts.activeStream } : {},
     }) as ChaptersState;
 
   const emptyQueue: QueueState = { entries: [], paused: false, loaded: true };

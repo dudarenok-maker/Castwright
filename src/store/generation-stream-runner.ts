@@ -123,9 +123,10 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
         ),
       );
     }
+    const closedBookId = handle.bookId;
     handle.cancel();
     handle = null;
-    dispatch(chaptersActions.clearActiveStream());
+    dispatch(chaptersActions.clearActiveStream(closedBookId));
   };
 
   const open = (
@@ -219,6 +220,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
         typeof evRecord.runInProgress === 'number' ? evRecord.runInProgress : undefined;
       dispatch(
         chaptersActions.updateActiveStreamProgress({
+          bookId: handle.bookId,
           done: runDone,
           total: runTotal,
           inProgress: runInProgress,
