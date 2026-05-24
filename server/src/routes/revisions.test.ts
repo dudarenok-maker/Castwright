@@ -52,6 +52,7 @@ interface CharacterSnapshot {
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
   voiceId?: string;
   voiceEngine?: string;
+  resolvedVoiceName?: string;
   attributes?: string[];
 }
 
@@ -121,6 +122,8 @@ interface SeedOpts {
     ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
     voiceId?: string;
     attributes?: string[];
+    ttsEngine?: string;
+    overrideTtsVoices?: Record<string, { name: string }>;
   }>;
   dismissed?: string[];
 }
@@ -523,5 +526,62 @@ describe('GET /api/books/:bookId/revisions — dismissed filter', () => {
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     const factors = (res.body.drift as DriftEventOut[]).map((d) => d.factor);
     expect(factors).toEqual(['gender']);
+  });
+});
+
+describe('GET .../revisions — engine + resolved-voice drift (plan 108 R5)', () => {
+  it('fires both engine drift AND voice drift when a character moves to a new engine + designed voice', async () => {
+    seed({
+      snapshots: {
+        biana: { voiceId: 'lib-biana', voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' },
+      },
+      cast: [
+        {
+          id: 'biana',
+          voiceId: 'lib-biana',
+          ttsEngine: 'qwen',
+          overrideTtsVoices: { qwen: { name: 'biana-designed' } },
+        },
+      ],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.status).toBe(200);
+    const drift = res.body.drift as DriftEventOut[];
+    const engineEvent = drift.find((d) => d.factor === 'engine');
+    const voiceEvent = drift.find((d) => d.factor === 'voice');
+    // Engine changed kokoro -> qwen.
+    expect(engineEvent, 'expected an engine drift event').toBeTruthy();
+    expect(engineEvent!.severity).toBe('severe');
+    // Resolved voice name changed af_bella -> biana-designed (the qwen override).
+    expect(voiceEvent, 'expected a voice drift event').toBeTruthy();
+    expect(voiceEvent!.severity).toBe('severe');
+  });
+
+  it('catches an override-ONLY voice change (same voiceId) via resolvedVoiceName, with no engine drift', async () => {
+    seed({
+      snapshots: {
+        biana: { voiceId: 'lib-biana', voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' },
+      },
+      // voiceId unchanged; only the per-engine override flipped af_bella -> af_nicole.
+      cast: [
+        { id: 'biana', voiceId: 'lib-biana', overrideTtsVoices: { kokoro: { name: 'af_nicole' } } },
+      ],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const drift = res.body.drift as DriftEventOut[];
+    const voiceEvent = drift.find((d) => d.factor === 'voice');
+    expect(voiceEvent, 'override-only change must still fire voice drift').toBeTruthy();
+    // Engine unchanged (still kokoro) → no engine drift.
+    expect(drift.find((d) => d.factor === 'engine')).toBeFalsy();
+  });
+
+  it('pre-108 snapshot (no resolvedVoiceName) falls back to the voiceId comparison', async () => {
+    seed({
+      // No resolvedVoiceName — legacy segment. Same voiceId → no voice drift.
+      snapshots: { biana: { voiceId: 'lib-biana', voiceEngine: 'kokoro' } },
+      cast: [{ id: 'biana', voiceId: 'lib-biana' }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.body.drift).toEqual([]);
   });
 });
