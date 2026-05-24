@@ -386,9 +386,7 @@ Source: net-new (2026-05-24). Surfaced running `scripts/install-qwen3.mjs` on a 
 - _Depends on:_ plan 108 install script (in flight). Fold the fixes into the cleanup run, not a one-off.
 - _Benefit (user / deployer):_ clean first-run output for alpha testers — warnings that survive are actionable, not noise. Matches the multi-model-gap audit + deployer-facing-script hygiene already used elsewhere in the bundle.
 
-### 44. Make the workspace queue authoritative for reconcile-driven runs — NOW PLAN 111
-
-Re-scoped into a formal plan: **[docs/features/111-queue-worker-pool.md](features/111-queue-worker-pool.md)** (active). The earlier "reflection-enqueue" sketch (mirror the reconcile run's chapters into `.queue.json`) was superseded by the user's cleaner direction: remove the `hasWork` "generating override" entirely so the persisted queue is the single source of truth, and model parallelism as N configurable queue workers (`generationWorkers` setting, default 2, coalesce-per-book). Wave 1 (the setting end-to-end) shipped; Waves 2–4 in flight. Tracking lives in the plan doc, not here.
+<!-- #44 (authoritative queue + N workers) SHIPPED 2026-05-25 as plan 111 — see docs/features/archive/111-queue-worker-pool.md. -->
 
 ---
 

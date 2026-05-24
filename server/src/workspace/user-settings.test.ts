@@ -177,15 +177,10 @@ describe('userSettingsSchema — generationWorkers (plan 111)', () => {
       expect(getResolvedGenerationWorkers()).toBe(3);
     });
 
-    it('still honors the legacy GEN_CHAPTER_CONCURRENCY env when GEN_WORKERS is unset', () => {
+    it('ignores the retired GEN_CHAPTER_CONCURRENCY env (plan 111 wave 4)', () => {
       process.env.GEN_CHAPTER_CONCURRENCY = '4';
-      expect(getResolvedGenerationWorkers()).toBe(4);
-    });
-
-    it('prefers GEN_WORKERS over the legacy GEN_CHAPTER_CONCURRENCY', () => {
-      process.env.GEN_WORKERS = '1';
-      process.env.GEN_CHAPTER_CONCURRENCY = '4';
-      expect(getResolvedGenerationWorkers()).toBe(1);
+      /* No longer read — falls through to the default. */
+      expect(getResolvedGenerationWorkers()).toBe(2);
     });
 
     it('falls through to the cached user setting when no env is set', async () => {

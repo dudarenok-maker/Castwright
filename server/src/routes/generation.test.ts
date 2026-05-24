@@ -83,7 +83,7 @@ beforeAll(async () => {
   /* Plan 87 — default test concurrency is K=1 so the existing assertions
      stay byte-identical to the pre-pool serial loop. The new parallel
      describe block below sets K=2 explicitly per-case via the env knob. */
-  process.env.GEN_CHAPTER_CONCURRENCY = '1';
+  process.env.GEN_WORKERS = '1';
 
   const [{ generationRouter }, { makeBookId }, cacheModule] = await Promise.all([
     import('./generation.js'),
@@ -143,7 +143,7 @@ afterAll(async () => {
   await cacheModule.clearAnalysisCache(MANUSCRIPT_ID);
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
-  delete process.env.GEN_CHAPTER_CONCURRENCY;
+  delete process.env.GEN_WORKERS;
 });
 
 beforeEach(() => {
@@ -803,7 +803,7 @@ describe('POST /api/books/:bookId/generation — plan 80 edits override cache', 
 /* ── Plan 87 — bounded chapter-concurrency worker pool ────────────────────
    The route used to walk targetChapters with a sequential `for…await`.
    Plan 87 replaced that with a K-wide worker pool sized by
-   `GEN_CHAPTER_CONCURRENCY` (default 2). Each chapter still walks its
+   `GEN_WORKERS` (default 2). Each chapter still walks its
    sentences sequentially inside `synthesiseChapter` — concurrency is at
    the chapter layer only.
 
@@ -816,7 +816,7 @@ describe('POST /api/books/:bookId/generation — plan 80 edits override cache', 
      - K>=N (concurrency exceeds chapter count) clamps to N workers and
        still completes every chapter exactly once.
 
-   We control concurrency by setting `process.env.GEN_CHAPTER_CONCURRENCY`
+   We control concurrency by setting `process.env.GEN_WORKERS`
    inside the `it` body BEFORE calling the route — the route reads
    `process.env` at request time, not module-load time. Restoring the
    default after each case keeps the rest of the file's K=1 pin intact. */
@@ -824,12 +824,12 @@ describe('POST /api/books/:bookId/generation — plan 87 bounded chapter concurr
   let originalConcurrency: string | undefined;
 
   beforeEach(() => {
-    originalConcurrency = process.env.GEN_CHAPTER_CONCURRENCY;
+    originalConcurrency = process.env.GEN_WORKERS;
   });
 
   afterEach(async () => {
-    if (originalConcurrency === undefined) delete process.env.GEN_CHAPTER_CONCURRENCY;
-    else process.env.GEN_CHAPTER_CONCURRENCY = originalConcurrency;
+    if (originalConcurrency === undefined) delete process.env.GEN_WORKERS;
+    else process.env.GEN_WORKERS = originalConcurrency;
     /* Clean per-case audio so the next case's chapterAudioExists check
        starts from the same baseline. */
     const fs = await import('node:fs');
@@ -838,7 +838,7 @@ describe('POST /api/books/:bookId/generation — plan 87 bounded chapter concurr
   });
 
   it('K=1 (env=1) — chapters synthesise strictly one-at-a-time (byte-identical to today)', async () => {
-    process.env.GEN_CHAPTER_CONCURRENCY = '1';
+    process.env.GEN_WORKERS = '1';
     /* Track concurrent synthesise invocations. With K=1 only ever one
        chapter is between `synthesiseChapter` start and finish. */
     let inflight = 0;
@@ -879,7 +879,7 @@ describe('POST /api/books/:bookId/generation — plan 87 bounded chapter concurr
   });
 
   it('K=2 — both chapters enter synthesiseChapter before either completes', async () => {
-    process.env.GEN_CHAPTER_CONCURRENCY = '2';
+    process.env.GEN_WORKERS = '2';
     /* Gate every synth on a deferred resolver so the test can observe the
        inflight window. With K=2 and two chapters, both workers must enter
        synth before any can complete — that's the smoking gun for the
@@ -935,7 +935,7 @@ describe('POST /api/books/:bookId/generation — plan 87 bounded chapter concurr
        chapter 1's chapter_complete. The chapters slice routes ticks by
        chapterId, so the in-flight chapter 2 needs to enter the pipeline
        before chapter 1 wraps. */
-    process.env.GEN_CHAPTER_CONCURRENCY = '2';
+    process.env.GEN_WORKERS = '2';
     const resolvers: Array<() => void> = [];
     synthesiseImpl = async () => {
       await new Promise<void>((resolve) => {
@@ -979,7 +979,7 @@ describe('POST /api/books/:bookId/generation — plan 87 bounded chapter concurr
   });
 
   it('K=2 — both chapter_complete ticks land, no chapter is dropped or duplicated', async () => {
-    process.env.GEN_CHAPTER_CONCURRENCY = '2';
+    process.env.GEN_WORKERS = '2';
     /* Defaults synthesiseImpl from beforeEach() returns immediately — no
        gating. The worker pool still has to claim each chapter exactly
        once via the shared cursor. */
@@ -1000,7 +1000,7 @@ describe('POST /api/books/:bookId/generation — plan 87 bounded chapter concurr
     /* Worker count is `min(concurrency, targetChapters.length)`. With 2
        chapters and K=4 we expect exactly 2 workers — the pool's index
        cursor still hands each chapter out exactly once. */
-    process.env.GEN_CHAPTER_CONCURRENCY = '4';
+    process.env.GEN_WORKERS = '4';
     let synthCalls = 0;
     synthesiseImpl = async () => {
       synthCalls += 1;
@@ -1030,11 +1030,11 @@ describe('POST /api/books/:bookId/generation — plan 87 bounded chapter concurr
   });
 
   it('invalid env (non-numeric) falls back to default K=2', async () => {
-    /* If the operator typos GEN_CHAPTER_CONCURRENCY=garbage, we don't
+    /* If the operator typos GEN_WORKERS=garbage, we don't
        want the route to refuse — we want it to silently fall back to the
        default. Verify by observing maxInflight reaches 2 against gated
        synth. */
-    process.env.GEN_CHAPTER_CONCURRENCY = 'not-a-number';
+    process.env.GEN_WORKERS = 'not-a-number';
     let inflight = 0;
     let maxInflight = 0;
     const resolvers: Array<() => void> = [];
