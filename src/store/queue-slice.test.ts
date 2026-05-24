@@ -4,6 +4,8 @@ import { describe, it, expect } from 'vitest';
 import {
   queueActions,
   queueSlice,
+  selectActiveGenerationView,
+  selectGenerationActivityCount,
   selectInFlightEntry,
   selectQueueByBook,
   selectQueueCount,
@@ -14,6 +16,7 @@ import {
   type QueueEntry,
   type QueueState,
 } from './queue-slice';
+import type { ActiveStreamSnapshot, ChaptersState } from './chapters-slice';
 
 const sampleEntry = (overrides: Partial<QueueEntry> = {}): QueueEntry => ({
   id: 'e1',
@@ -136,5 +139,110 @@ describe('selectors', () => {
       queue: { entries: [sampleEntry()], paused: false, loaded: true },
     };
     expect(selectInFlightEntry(empty)).toBeNull();
+  });
+});
+
+/* Read-side honesty selectors — surface the live generation run (driven by the
+   reconcile path, which writes no queue entry) when the workspace queue is empty
+   so the modal / chip don't read "Empty"/0 mid-generation. */
+describe('active-generation selectors', () => {
+  const stream = (overrides: Partial<ActiveStreamSnapshot> = {}): ActiveStreamSnapshot =>
+    ({
+      bookId: 'book-A',
+      modelKey: 'kokoro-v1',
+      done: 2,
+      total: 5,
+      inProgress: 1,
+      lastTickAt: null,
+      halted: false,
+      ...overrides,
+    }) as ActiveStreamSnapshot;
+
+  const chaptersState = (opts: {
+    activeStream: ActiveStreamSnapshot | null;
+    currentBookId: string | null;
+    chapters?: Array<{ id: number; state: string; excluded?: boolean }>;
+  }): ChaptersState =>
+    ({
+      chapters: (opts.chapters ?? []) as ChaptersState['chapters'],
+      lastError: null,
+      generationStartedAt: null,
+      lastTickAt: null,
+      currentBookId: opts.currentBookId,
+      activeStream: opts.activeStream,
+    }) as ChaptersState;
+
+  const emptyQueue: QueueState = { entries: [], paused: false, loaded: true };
+
+  it('returns null and the real count when there ARE real queue entries (real queue wins)', () => {
+    const s = {
+      queue: {
+        entries: [sampleEntry({ id: 'r1' }), sampleEntry({ id: 'r2' })],
+        paused: false,
+        loaded: true,
+      },
+      chapters: chaptersState({ activeStream: stream(), currentBookId: 'book-A' }),
+    };
+    expect(selectActiveGenerationView(s)).toBeNull();
+    expect(selectGenerationActivityCount(s)).toBe(2);
+  });
+
+  it('same-book stream: lists in_progress + queued rows (excluded filtered out)', () => {
+    const s = {
+      queue: emptyQueue,
+      chapters: chaptersState({
+        activeStream: stream({ done: 2, total: 5, inProgress: 1 }),
+        currentBookId: 'book-A',
+        chapters: [
+          { id: 1, state: 'done' },
+          { id: 2, state: 'in_progress' },
+          { id: 3, state: 'queued' },
+          { id: 4, state: 'queued', excluded: true },
+          { id: 5, state: 'failed' },
+        ],
+      }),
+    };
+    const view = selectActiveGenerationView(s);
+    expect(view).not.toBeNull();
+    expect(view!.bookId).toBe('book-A');
+    expect(view!.done).toBe(2);
+    expect(view!.total).toBe(5);
+    expect(view!.chapters).toEqual([
+      { id: 2, state: 'in_progress' },
+      { id: 3, state: 'queued' },
+    ]);
+    /* Count tracks the listed rows, not done/failed/excluded. */
+    expect(selectGenerationActivityCount(s)).toBe(2);
+  });
+
+  it('cross-book stream: no per-chapter rows, count derived from the summary', () => {
+    const s = {
+      queue: emptyQueue,
+      chapters: chaptersState({
+        activeStream: stream({ bookId: 'book-B', done: 3, total: 10, inProgress: 2 }),
+        currentBookId: 'book-A', // slice holds a DIFFERENT book
+        chapters: [{ id: 1, state: 'done' }],
+      }),
+    };
+    const view = selectActiveGenerationView(s);
+    expect(view!.bookId).toBe('book-B');
+    expect(view!.chapters).toBeNull();
+    /* max(total-done, inProgress, 1) = max(7, 2, 1) = 7. */
+    expect(selectGenerationActivityCount(s)).toBe(7);
+  });
+
+  it('empty queue with no live stream → null / 0', () => {
+    const s = {
+      queue: emptyQueue,
+      chapters: chaptersState({ activeStream: null, currentBookId: 'book-A' }),
+    };
+    expect(selectActiveGenerationView(s)).toBeNull();
+    expect(selectGenerationActivityCount(s)).toBe(0);
+  });
+
+  it('store without a chapters slice → null / 0 (defensive optional read)', () => {
+    const s = { queue: emptyQueue };
+    expect(selectActiveGenerationView(s)).toBeNull();
+    expect(selectGenerationActivityCount(s)).toBe(0);
   });
 });

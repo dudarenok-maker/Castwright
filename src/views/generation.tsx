@@ -45,7 +45,7 @@ import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
 import { uiActions } from '../store/ui-slice';
-import { selectQueueCount } from '../store/queue-slice';
+import { selectGenerationActivityCount } from '../store/queue-slice';
 import { enqueueQueueEntries } from '../store/queue-thunks';
 import { api, AnalysisError } from '../lib/api';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
@@ -132,10 +132,11 @@ export function GenerationView({
   const sentences = useAppSelector((s) => s.manuscript.sentences);
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   const activityEvents = useAppSelector((s) => s.changeLog.events);
-  /* Plan 102 — drives the "View queue · N" pill in the header. Reads the
-     workspace queue mirror so the count tracks cross-book entries (the
-     reason for moving the queue out of the slice in the first place). */
-  const queueCount = useAppSelector(selectQueueCount);
+  /* Drives the "View queue · N" pill in the header. Reflects real workspace
+     queue entries when present, else the live generation run (the primary,
+     reconcile-driven path never writes a queue entry) so the pill doesn't read
+     0 / vanish while a book is visibly generating. */
+  const activityCount = useAppSelector(selectGenerationActivityCount);
   /* Plan 102 — Generate view scroll consumer. ui.stage.currentChapterId
      is set by the queue modal's "Jump to chapter" affordance (modal pushes
      #/books/<bookId>/generate?chapter=<id>); we scroll the chapter row
@@ -610,11 +611,11 @@ export function GenerationView({
             onClick={() => dispatch(uiActions.openQueueModal())}
             data-testid="generation-view-queue"
             aria-label={
-              queueCount > 0 ? `View queue — ${queueCount} pending` : 'View queue'
+              activityCount > 0 ? `View queue — ${activityCount} pending` : 'View queue'
             }
             className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
           >
-            View queue{queueCount > 0 && <span className="text-magenta">· {queueCount}</span>}
+            View queue{activityCount > 0 && <span className="text-magenta">· {activityCount}</span>}
           </button>
           {allComplete && (
             <button

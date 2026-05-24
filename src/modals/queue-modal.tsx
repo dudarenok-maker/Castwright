@@ -18,11 +18,13 @@
 import { useMemo, useEffect, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
+  selectActiveGenerationView,
   selectInFlightEntry,
   selectQueueByBook,
   selectQueueCount,
   selectQueueLoaded,
   selectQueuePaused,
+  type ActiveGenerationView,
   type QueueEntry,
   type TtsEngine,
 } from '../store/queue-slice';
@@ -61,6 +63,11 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
   const loaded = useAppSelector(selectQueueLoaded);
   const count = useAppSelector(selectQueueCount);
   const inFlight = useAppSelector(selectInFlightEntry);
+  /* Read-side honesty — when the workspace queue is empty but a generation
+     stream is live (the reconcile-driven first-run / resume path writes no
+     queue entry), show that run instead of a misleading "Empty". `null` when
+     there ARE real entries or no stream is running. */
+  const activeView = useAppSelector(selectActiveGenerationView);
   const bookTitles = useAppSelector((s) => s.library.books);
   /* Plan 108 Wave 3 — when a multi-TTS chapter is queued but the user hasn't
      opted into keeping both engines resident, the row shows the same advisory
@@ -114,7 +121,11 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                 Generation queue
               </p>
               <h3 className="text-base font-bold text-ink">
-                {count === 0 ? 'Empty' : `${count} ${count === 1 ? 'entry' : 'entries'} pending`}
+                {count > 0
+                  ? `${count} ${count === 1 ? 'entry' : 'entries'} pending`
+                  : activeView
+                    ? 'Generating…'
+                    : 'Empty'}
               </h3>
             </div>
             {count > 0 && (
@@ -147,6 +158,11 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
           <div className="px-6 py-5 flex-1 overflow-y-auto">
             {!loaded ? (
               <p className="text-sm text-ink/60">Loading queue…</p>
+            ) : count === 0 && activeView ? (
+              <ActiveGenerationSection
+                view={activeView}
+                title={lookupBookTitle(activeView.bookId)}
+              />
             ) : count === 0 ? (
               <div className="py-10 text-center">
                 <p className="text-sm text-ink/60">No chapters queued.</p>
@@ -191,6 +207,58 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
         </div>
       </div>
     </>
+  );
+}
+
+/* Read-side honesty section — shown when the workspace queue holds no real
+   entries but a generation stream is live. The rows are SYNTHETIC (derived
+   from chapters.activeStream + the viewed book's chapter rows), so they carry
+   NO reorder / cancel / drag controls — there's nothing on the server to
+   mutate. Same-book streams list the in-flight + queued chapters; a cross-book
+   stream (slice holds a different book) shows only the done/total summary. */
+function ActiveGenerationSection({
+  view,
+  title,
+}: {
+  view: ActiveGenerationView;
+  title: string;
+}) {
+  return (
+    <section data-testid="queue-modal-active-generation">
+      <h4 className="text-xs uppercase tracking-widest text-ink/50 font-semibold mb-2">
+        {title}
+      </h4>
+      <p className="text-xs text-ink/50 mb-2">
+        Generating · {view.done}/{view.total} chapters
+        <span className="text-ink/35"> · not in the queue</span>
+      </p>
+      {view.chapters && view.chapters.length > 0 ? (
+        <ul className="space-y-1.5">
+          {view.chapters.map((row) => (
+            <li
+              key={row.id}
+              data-testid={`queue-active-chapter-${row.id}`}
+              className={`flex items-center gap-2 px-3 py-2 rounded-2xl border ${
+                row.state === 'in_progress'
+                  ? 'border-magenta/40 bg-magenta/5'
+                  : 'border-ink/10 bg-white'
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-ink truncate">Chapter {row.id}</div>
+                <div className="text-xs text-ink/50">
+                  {row.state === 'in_progress' ? 'Generating' : 'Queued'}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-ink/40">
+          Generation is running for this book in the background.
+        </p>
+      )}
+    </section>
   );
 }
 

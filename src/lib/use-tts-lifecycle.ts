@@ -55,7 +55,7 @@ export interface TtsLifecycle {
       should clear it everywhere. */
   dismissNotices: () => void;
   /** GPU semaphore queue depth — number of GPU ops queued behind the
-      in-flight ones. Drives the "Queued (N ahead) ·" prefix on the
+      in-flight ones. Drives the "GPU busy · N waiting ·" prefix on the
       top-bar pill so a session waiting on another's analyzer / sidecar
       call can see why it's not starting. `undefined` when the server
       doesn't expose `/api/gpu/queue` (older builds / partial deploys)
