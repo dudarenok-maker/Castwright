@@ -18,6 +18,11 @@ gpuQueueRouter.get('/queue', (_req: Request, res: Response) => {
   res.json({
     depth: gpuSemaphore.queueDepth,
     inFlight: gpuSemaphore.inFlight,
+    /* `max` is the legacy field the frontend pill reads; kept aliased to the
+       token budget so the existing shape never breaks. `budget`/`usedTokens`
+       are additive — the VRAM-weighted view for diagnostics. */
     max: gpuSemaphore.maxConcurrency,
+    budget: gpuSemaphore.budget,
+    usedTokens: gpuSemaphore.usedTokens,
   });
 });
