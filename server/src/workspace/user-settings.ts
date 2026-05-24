@@ -95,6 +95,13 @@ export const userSettingsSchema = z.object({
      with a `false` default so legacy user-settings.json files load
      unchanged. Takes effect on the next generation run (no restart). */
   dualModelEnabled: z.boolean().optional(),
+  /* When true (default), the spawned TTS sidecar gets PRELOAD_KOKORO=1 and
+     eager-loads Kokoro at startup (~1 GB VRAM, ~1 s). When false, the
+     sidecar gets PRELOAD_KOKORO=0 and Kokoro warms on demand on first
+     synth — for Qwen-primary users who want the ~1 GB VRAM back. Changing
+     it re-spawns env on the next sidecar restart. Optional with a `true`
+     default so legacy user-settings.json files load unchanged. */
+  eagerLoadKokoro: z.boolean().optional(),
   /* Plan 49 — UI-managed Gemini API key. Stored plaintext (same trust
      model as server/.env, which is gitignored and single-user). The
      env var GEMINI_API_KEY still wins when present (for CI / power
@@ -160,6 +167,12 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      deliberate user choice (~8 GB headroom). Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   dualModelEnabled: false,
+  /* On by default — eager-loading Kokoro at sidecar startup is cheap
+     (~1 GB VRAM, ~1 s) and matches the kokoro-v1 engine default. Qwen-
+     primary users turn this off to reclaim that ~1 GB; Kokoro then warms
+     on demand. Flip in lockstep with src/lib/account-defaults.ts
+     FRONTEND_ACCOUNT_DEFAULTS. */
+  eagerLoadKokoro: true,
   /* Plan 49 — null = no UI-saved key. Resolver falls through to env
      (process.env.GEMINI_API_KEY) and then null. */
   geminiApiKey: null,
