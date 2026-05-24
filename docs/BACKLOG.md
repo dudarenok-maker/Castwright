@@ -384,6 +384,20 @@ Source: net-new (2026-05-24). Surfaced while investigating the `flash-attn is no
 - _Depends on:_ Qwen weights installed via `scripts/install-qwen3.mjs` to verify empirically — plan 108 in flight.
 - _Benefit (technical):_ removes a scary-looking startup warning and picks up PyTorch's optimised attention kernels for free, cross-platform, without the Windows-hostile `flash-attn` build.
 
+### 43. Clean up deployer-facing warnings from the Qwen install + sidecar startup
+
+Source: net-new (2026-05-24). Surfaced running `scripts/install-qwen3.mjs` on a clean Windows box — the install + first model load print several scary-looking-but-mostly-benign warnings that an alpha-tester deployer can't tell apart from real errors. To be fixed in a dedicated cleanup run (user-directed). Sweep ALL such warnings and decide suppress-vs-document for each; today's known ones:
+
+- **HF Hub symlink warning** (`huggingface_hub cache-system uses symlinks … your machine does not support them … degraded version that might require more space`): functionally harmless — the install already localizes the cache to `voices/qwen/hf` via `HF_HOME`/`HF_HUB_CACHE` (`install-qwen3.mjs:83-84`), and with only two models (Base + VoiceDesign), downloaded once, the extra disk is negligible. **Fix:** add `HF_HUB_DISABLE_SYMLINKS_WARNING: '1'` to the install script's `env` object (`install-qwen3.mjs:84`) AND the sidecar's runtime env so it doesn't reappear at model load. Do NOT require enabling Windows Developer Mode.
+- **`SoX could not be found!`**: a no-op for our pipeline — SoX is an optional audio backend a transitive dep (the coqui/torchaudio stack sharing the venv) probes at import; we do audio I/O via `soundfile` (libsndfile) and encode MP3 via ffmpeg server-side. **Action:** document as benign, or suppress at source if cheap; do NOT install SoX (its own Windows headache for zero benefit).
+- **`flash-attn is not installed`**: the real fix is the SDPA path tracked in Could #42, not installing flash-attn — cross-referenced, not duplicated here.
+
+- _What:_ In a single cleanup pass over the Qwen install + sidecar startup, suppress every benign-but-noisy warning at its source (env var or logging filter) and leave only warnings the deployer must actually act on. Concrete fixes above; also re-run the install on a clean Windows box and triage any warning not yet listed.
+- _Acceptance:_ Running `install-qwen3.mjs` + a first Qwen model load on a clean Windows box prints no scary warning that requires no action; any warning that remains is one the deployer genuinely must respond to. SoX + HF-symlink banners gone; flash-attn handled via Could #42.
+- _Key files:_ `server/tts-sidecar/scripts/install-qwen3.mjs` (env object ~line 84); `server/tts-sidecar/main.py` (sidecar runtime env / startup); `server/tts-sidecar/README.md` (document any warning intentionally left as-is).
+- _Depends on:_ plan 108 install script (in flight). Fold the fixes into the cleanup run, not a one-off.
+- _Benefit (user / deployer):_ clean first-run output for alpha testers — warnings that survive are actionable, not noise. Matches the multi-model-gap audit + deployer-facing-script hygiene already used elsewhere in the bundle.
+
 ---
 
 ## Won't (this round) — explicitly parked
