@@ -83,6 +83,10 @@ export interface UiState {
       mounted in Layout and reachable from the top-bar queue chip + the
       Generate view's "View queue" button. */
   queueModalOpen: boolean;
+  /** Plan 108 Wave 5 — true while the "Rebaseline the series" modal is
+      open. Opened from the Voices view's rebaseline button (only when a
+      book is loaded so the series-scoped write has an anchor). */
+  rebaselineModalOpen: boolean;
 }
 
 const initialState: UiState = {
@@ -107,6 +111,7 @@ const initialState: UiState = {
   themeOverride: null,
   reuploadingBookId: null,
   queueModalOpen: false,
+  rebaselineModalOpen: false,
 };
 
 export const uiSlice = createSlice({
@@ -281,6 +286,15 @@ export const uiSlice = createSlice({
     },
     closeQueueModal: (s) => {
       s.queueModalOpen = false;
+    },
+    /* Plan 108 Wave 5 — "Rebaseline the series" modal open/close. Mounted
+       in the Voices view; opened from the rebaseline button when a book is
+       loaded. */
+    openRebaselineModal: (s) => {
+      s.rebaselineModalOpen = true;
+    },
+    closeRebaselineModal: (s) => {
+      s.rebaselineModalOpen = false;
     },
     clearThemeOverride: (s) => {
       s.themeOverride = null;
