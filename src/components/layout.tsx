@@ -5,7 +5,7 @@ import { useAppDispatch, useAppSelector, useAppSelectorShallow } from '../store'
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { fetchAccountSettings } from '../store/account-slice';
-import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
+import { chaptersActions, selectActiveStreams, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
 import { revisionsActions, selectDriftGroupsByBook } from '../store/revisions-slice';
@@ -104,7 +104,7 @@ export function Layout() {
      array identity is structurally unchanged. */
   const characters = useAppSelectorShallow((s) => s.cast.characters);
   const chapters = useAppSelectorShallow((s) => s.chapters.chapters);
-  const activeStream = useAppSelector((s) => s.chapters.activeStream);
+  const activeStreams = useAppSelectorShallow(selectActiveStreams);
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
   const driftGroupsByBook = useAppSelector(selectDriftGroupsByBook);
   const bookMetaSaved = useAppSelector((s) => s.bookMeta.saved);
@@ -792,7 +792,7 @@ export function Layout() {
      keeps the SSE open across all navigation; this is purely a UI tick to
      surface elapsed-since-last-tick. */
   const [, forceClockTick] = useState(0);
-  const pillAlive = activeStream != null;
+  const pillAlive = activeStreams.length > 0;
   useEffect(() => {
     if (!pillAlive) return;
     const id = setInterval(() => forceClockTick((n) => n + 1), 1000);
@@ -807,21 +807,35 @@ export function Layout() {
      Computed inline (not memoised) so the per-second forceClockTick above
      keeps the "stalled" check fresh against Date.now(). */
   const generationPill: GenerationPillData | null = (() => {
-    if (!activeStream) return null;
-    const { bookId: streamBookId, done, total, inProgress, lastTickAt, halted } = activeStream;
+    if (activeStreams.length === 0) return null;
+    /* Aggregate across every open stream (Wave 3 may have several books
+       generating at once). With one stream this is byte-identical to the
+       prior single-snapshot pill. */
+    const done = activeStreams.reduce((acc, s) => acc + s.done, 0);
+    const total = activeStreams.reduce((acc, s) => acc + s.total, 0);
+    const inProgress = activeStreams.reduce((acc, s) => acc + s.inProgress, 0);
+    const halted = activeStreams.some((s) => s.halted);
     const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+    /* Stalled only when EVERY in-flight stream is quiet — one moving stream
+       means the run is alive. */
     const stalled =
       !halted &&
       inProgress > 0 &&
-      lastTickAt != null &&
-      Date.now() - lastTickAt > STALL_THRESHOLD_MS;
+      activeStreams.every(
+        (s) => s.lastTickAt != null && Date.now() - s.lastTickAt > STALL_THRESHOLD_MS,
+      );
     const state: GenerationPillData['state'] = halted ? 'halted' : stalled ? 'stalled' : 'running';
     return {
       state,
       done,
       total,
       percent,
-      onClick: () => navigate(`/books/${streamBookId}/generate`),
+      /* One book → jump to its Generate view; several → open the queue modal
+         (no single book to navigate to). */
+      onClick:
+        activeStreams.length === 1
+          ? () => navigate(`/books/${activeStreams[0].bookId}/generate`)
+          : () => dispatch(uiActions.openQueueModal()),
     };
   })();
 

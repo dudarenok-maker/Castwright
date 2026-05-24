@@ -78,8 +78,8 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
          (a) our own generation that's still in flight, and (b) any other
          open path the generation-stream-middleware drove (e.g. cold-boot
          auto-resume of slice-queued chapters). We never run two SSEs at
-         once. */
-      if (chapters.activeStream) return;
+         once (through Wave 2; Wave 3's pool lifts this to an N-slot gate). */
+      if (Object.keys(chapters.activeStreams).length > 0) return;
 
       /* activeStream is null. If we were tracking an entry, the chapter
          just completed (or the stream was torn down — pause, halt, etc.).
