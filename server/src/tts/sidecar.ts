@@ -12,6 +12,7 @@
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider, TtsEngine } from './index.js';
 import { sidecarModelId } from './index.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
+import { costForEngine } from './engine-vram-cost.js';
 
 interface SidecarOptions {
   url: string;
@@ -44,9 +45,10 @@ export class SidecarTtsProvider implements TtsProvider {
        doesn't race the analyzer (or another concurrent synth) for VRAM
        on an 8 GB GPU. Held across the buffered arrayBuffer() read
        below; the sidecar response is NOT streaming, so a single
-       release after the read covers the whole GPU op. See
-       server/src/gpu/semaphore.ts. */
-    const releaseGpu = await gpuSemaphore.acquire();
+       release after the read covers the whole GPU op. Cost is the engine's
+       VRAM weight (engine-vram-cost.ts) so a heavy engine takes more of the
+       budget than a light one. See server/src/gpu/semaphore.ts. */
+    const releaseGpu = await gpuSemaphore.acquire(costForEngine(this.engine));
 
     try {
       let response: Response;
@@ -93,7 +95,8 @@ export class SidecarTtsProvider implements TtsProvider {
            - 4xx other than 408 → client-side; retry won't help. */
         const poisoned = isPoisonedBody(bodyText);
         const transient =
-          !poisoned && (response.status === 408 || (response.status >= 500 && response.status < 600));
+          !poisoned &&
+          (response.status === 408 || (response.status >= 500 && response.status < 600));
         throw Object.assign(
           new Error(
             `Local TTS sidecar returned ${response.status}: ${trimmed || response.statusText}`,

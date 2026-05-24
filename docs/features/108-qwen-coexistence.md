@@ -13,8 +13,8 @@ owner: null
 
 ## Benefit / Rationale
 
-- **User:** a second local TTS engine (Qwen3-TTS 0.6B) can be used *alongside* Kokoro inside one book. A character can be moved to a different engine **and** a specific base voice from the cast view — today impossible for any character not already matched to a library voice. The change propagates across the whole book series. A new "Rebaseline the series" modal LLM-ranks the best voice across the engines the user selects for the principal cast, shows current-vs-proposed with audition, and on approval writes the changes (surfacing as drift) — the fix for "Biana's voice isn't working, put her on a Qwen voice across her series."
-- **Technical:** engine becomes a *per-character* decision rather than one global `modelKey` per generation run. The GPU semaphore becomes VRAM-weighted so two engines never overcommit an 8 GB GPU. The queue surfaces each chapter's required engine set. Loading two engines into VRAM is gated behind a deliberate `dualModelEnabled` user setting.
+- **User:** a second local TTS engine (Qwen3-TTS 0.6B) can be used _alongside_ Kokoro inside one book. A character can be moved to a different engine **and** a specific base voice from the cast view — today impossible for any character not already matched to a library voice. The change propagates across the whole book series. A new "Rebaseline the series" modal LLM-ranks the best voice across the engines the user selects for the principal cast, shows current-vs-proposed with audition, and on approval writes the changes (surfacing as drift) — the fix for "Biana's voice isn't working, put her on a Qwen voice across her series."
+- **Technical:** engine becomes a _per-character_ decision rather than one global `modelKey` per generation run. The GPU semaphore becomes VRAM-weighted so two engines never overcommit an 8 GB GPU. The queue surfaces each chapter's required engine set. Loading two engines into VRAM is gated behind a deliberate `dualModelEnabled` user setting.
 - **Architectural:** establishes "add the Nth TTS engine" as a mechanical change (sidecar engine class + registry entry + server catalog table) and the per-engine `overrideTtsVoices` map as the durable cross-engine cast contract. Closes a long-standing drift gap: a voice change that lives in `overrideTtsVoices` (not `voiceId`) now actually trips drift detection.
 
 ## Architectural impact
@@ -49,7 +49,7 @@ owner: null
 ## Invariants to preserve
 
 - `server/src/gpu/semaphore.ts:96-99` reads `GPU_CONCURRENCY` at module load; the rewrite must keep a singleton, keep FIFO order, and keep `maxConcurrency`/`inFlight`/`queueDepth` getters (consumed by `server/src/tts/synthesise-chapter.ts` poolWidth default and `server/src/routes/gpu-queue.ts`).
-- `server/src/routes/revisions.ts:175-179` currently has NO engine-drift factor and compares `snapshot.voiceId` vs `current.voiceId` only. A rebaseline writes `overrideTtsVoices[engine].name`, NOT `voiceId` — so without the R5 fix (snapshot + compare the *resolved* voice name + engine) it produces zero drift. The fix must add `resolvedVoiceName` to the snapshot and a comparison here.
+- `server/src/routes/revisions.ts:175-179` currently has NO engine-drift factor and compares `snapshot.voiceId` vs `current.voiceId` only. A rebaseline writes `overrideTtsVoices[engine].name`, NOT `voiceId` — so without the R5 fix (snapshot + compare the _resolved_ voice name + engine) it produces zero drift. The fix must add `resolvedVoiceName` to the snapshot and a comparison here.
 - `server/src/routes/generation.ts` resolves engine in three places (resolve, thread into `synthesiseChapter`, drift snapshot `voiceEngine`). All three must become per-character.
 - `server/tts-sidecar/main.py` `ENGINES` registry + `/synthesize` `{engine,model,voice,text}` contract is the single seam for engine addition — do not special-case Qwen elsewhere in the sidecar.
 
@@ -87,9 +87,18 @@ Run against the real backend + sidecar (this feature is sidecar-bound). Canonica
 
 ## Out of scope
 
-- **Multi-language / Russian** — the language half of BACKLOG Must #2 (BCP-47 `language` field, Cyrillic detection, voice-library language filtering, Cyrillic token estimator). This plan delivers only the Qwen *engine* + coexistence. Must #2 stays on the backlog for the language work.
+- **Multi-language / Russian** — the language half of BACKLOG Must #2 (BCP-47 `language` field, Cyrillic detection, voice-library language filtering, Cyrillic token estimator). This plan delivers only the Qwen _engine_ + coexistence. Must #2 stays on the backlog for the language work.
 - **Per-segment / cross-series voice linking** — tracked separately on the backlog.
 
 ## Ship notes
 
 (Filled per wave as each flips to `stable`.)
+
+### Wave 1 — `feat/gpu-vram-weighted-semaphore`
+
+- `server/src/gpu/semaphore.ts` rewritten from a flat count semaphore to a VRAM token-budget semaphore. `acquire(cost = 1)` now takes `cost` tokens; grants immediately only when no waiter is queued ahead AND `used + cost <= budget`, else queues FIFO and drains as many head-of-line waiters as fit on each release. `cost` is clamped into `[1, budget]` (a `cost > budget` runs alone instead of deadlocking; `cost < 1` floors to 1). The single-use double-release guard is preserved.
+- Singleton budget resolves from new env `GPU_VRAM_BUDGET`; when unset/invalid it falls back to `GPU_CONCURRENCY` (default 1) — so a single-engine box with every caller at the default cost 1 behaves byte-identically to the old count semaphore. Retained getters: `queueDepth`, `inFlight` (holder count), `maxConcurrency` (returns budget, so `synthesise-chapter.ts`'s poolWidth default is unchanged). Added `budget` + `usedTokens`.
+- New `server/src/tts/engine-vram-cost.ts`: provisional `ENGINE_VRAM_COST` (`kokoro 1, qwen 1, coqui 3, gemini 0, analyzer 4`), `costForEngine(engine)` (unknown → 1), and `DEFAULT_GPU_VRAM_BUDGET = 4`. Values are estimates — tuning tracked in BACKLOG #39.
+- Acquire sites now charge per-engine cost: `sidecar.ts` → `costForEngine(this.engine)`, `ollama.ts` → `costForEngine('analyzer')`. `gpu-queue.ts` JSON gains `budget` + `usedTokens` additively (`max` still aliases the budget).
+- `server/.env.example` documents `GPU_VRAM_BUDGET` with the fallback-to-`GPU_CONCURRENCY` note.
+- Tests: `server/src/gpu/semaphore.test.ts` (weighted acquire/release at budget 4, `cost > budget` clamp, `cost < 1` clamp, head-of-line FIFO blocking, weighted double-release no-leak, plus the back-compat invariant that budget = N + cost 1 == old count semaphore max = N) and new `server/src/tts/engine-vram-cost.test.ts`.
