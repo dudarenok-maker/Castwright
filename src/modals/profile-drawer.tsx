@@ -26,7 +26,9 @@ import { api } from '../lib/api';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import { VoicePreviewButton } from '../components/voice-preview-button';
 import { VoiceOverridePicker } from '../components/voice-override-picker';
+import { VoiceEnginePicker, type EngineChoice } from '../components/voice-engine-picker';
 import { CharacterSearchPicker } from '../components/character-search-picker';
+import { castActions } from '../store/cast-slice';
 
 /* Default preview line. Pangram + a short follow-on so the user can
    hear consonant + vowel coverage AND a held sentence at typical
@@ -50,6 +52,11 @@ function loadInitialPreviewText(): string {
 interface Props {
   character: Character;
   voice: Voice | undefined;
+  /** Current book id — required for the plan-108 per-character Qwen flow
+      (voice-style generate, design-voice, series-scoped override). When
+      absent (no book context), the engine picker still renders but the
+      Qwen design sub-flow is unavailable. */
+  bookId?: string;
   onClose: () => void;
   /** Meta carries the conflict flag so the change-log dispatch in layout.tsx
       knows whether the save reset the library match. */
@@ -136,6 +143,7 @@ const AGE_OPTIONS: Array<{ value: CharAgeRange; label: string }> = [
 export function ProfileDrawer({
   character,
   voice,
+  bookId,
   onClose,
   onSave,
   onLock,
@@ -173,6 +181,33 @@ export function ProfileDrawer({
      user has time to read it. Cleared on the next click. */
   const [evictionBanner, setEvictionBanner] = useState<string | null>(null);
   const sampleLoading = sampleStatus !== 'idle';
+
+  /* ── Plan 108 per-character engine + bespoke-voice state ──────────────
+     `engineChoice` mirrors Character.ttsEngine ('default' = use the
+     project default; a real engine = per-character override). `persona`
+     is the editable Character.voiceStyle. The design flow caches a
+     bespoke Qwen embedding server-side and returns an audition the drawer
+     plays; on Save we pin the designed voiceId series-scoped. The
+     narrator usually stays default — no character to design a voice for. */
+  const [engineChoice, setEngineChoice] = useState<EngineChoice>(character.ttsEngine ?? 'default');
+  const [persona, setPersona] = useState<string>(character.voiceStyle ?? '');
+  const [personaBusy, setPersonaBusy] = useState(false);
+  const [designBusy, setDesignBusy] = useState(false);
+  const [engineError, setEngineError] = useState<string | null>(null);
+  /* Designed voiceId staged this session — set by Design & preview, read
+     by Save to write overrideTtsVoices.qwen.name. Seeds from the existing
+     assignment so a re-open of an already-Qwen character can Save without
+     re-designing. */
+  const [designedVoiceId, setDesignedVoiceId] = useState<string | null>(
+    character.overrideTtsVoices?.qwen?.name ?? null,
+  );
+  /* Object URL of the most-recent audition preview — revoked on the next
+     design + on unmount so blobs don't leak. */
+  const designPreviewUrlRef = useRef<string | null>(null);
+  const designPlaying =
+    playback.isPlaying &&
+    !!playback.currentUrl &&
+    playback.currentUrl === designPreviewUrlRef.current;
   /* The analyzer ships ≥3 evidence quotes sorted longest-first
      (server/src/routes/analysis.ts sortEvidence). The drawer shows the
      first 3 by default — index 0 is also the voice-cloning sample, so
@@ -400,6 +435,81 @@ export function ProfileDrawer({
     }
   }
 
+  /* Auto-generate the persona on first switch to Qwen when the character
+     has none yet. Mirrors the server's per-character generator, then
+     mirrors the result into redux (setVoiceStyle) so a later cast
+     re-hydrate keeps it. No-ops without a bookId. */
+  async function generatePersona() {
+    if (!bookId || personaBusy) return;
+    setPersonaBusy(true);
+    setEngineError(null);
+    try {
+      const { voiceStyle } = await api.generateVoiceStyle(bookId, character.id);
+      setPersona(voiceStyle);
+      dispatch(castActions.setVoiceStyle({ characterId: character.id, voiceStyle }));
+    } catch (e) {
+      setEngineError((e as Error).message || 'Voice-style generation failed.');
+    } finally {
+      setPersonaBusy(false);
+    }
+  }
+
+  function onSelectEngine(next: EngineChoice) {
+    setEngineChoice(next);
+    setEngineError(null);
+    /* First switch to Qwen with no persona → auto-compose one so the
+       textarea isn't empty (the user can then edit / regenerate). */
+    if (next === 'qwen' && !persona.trim() && bookId && !personaBusy) {
+      void generatePersona();
+    }
+  }
+
+  async function designVoice() {
+    if (designPlaying) {
+      playback.stop();
+      return;
+    }
+    if (!bookId || designBusy) return;
+    const trimmed = persona.trim();
+    if (!trimmed) {
+      setEngineError('Add a persona before designing a voice.');
+      return;
+    }
+    setDesignBusy(true);
+    setEngineError(null);
+    try {
+      const { voiceId, previewUrl } = await api.designQwenVoice(bookId, character.id, trimmed);
+      /* Revoke the prior preview URL before replacing it. */
+      if (designPreviewUrlRef.current) {
+        try {
+          URL.revokeObjectURL(designPreviewUrlRef.current);
+        } catch {
+          /* jsdom / no-op env */
+        }
+      }
+      designPreviewUrlRef.current = previewUrl;
+      setDesignedVoiceId(voiceId);
+      await playback.play(previewUrl);
+    } catch (e) {
+      setEngineError((e as Error).message || 'Voice design failed.');
+    } finally {
+      setDesignBusy(false);
+    }
+  }
+
+  /* Revoke a staged preview blob on unmount so it doesn't leak. */
+  useEffect(() => {
+    return () => {
+      if (designPreviewUrlRef.current) {
+        try {
+          URL.revokeObjectURL(designPreviewUrlRef.current);
+        } catch {
+          /* no-op */
+        }
+      }
+    };
+  }, []);
+
   return (
     <>
       <div onClick={onClose} className="fixed inset-0 bg-ink/30 z-40 fade-in" />
@@ -522,63 +632,80 @@ export function ProfileDrawer({
               </div>
             </div>
 
-            <ModelVoiceOverridePicker
-              voiceId={voice?.id ?? character.voiceId ?? character.id}
-              currentOverrides={mapOverridesToBaseVoiceMap(
-                voice?.overrideTtsVoices ?? null,
-                voice?.overrideTtsVoice ?? null,
-              )}
-              autoVoiceName={sampleSubject.ttsVoice.name}
-              autoVoiceEngine={sampleSubject.ttsVoice.provider as TtsEngine}
-              activeEngine={ttsEngine}
-              baseVoices={baseVoices}
-              baseVoicesLoaded={baseVoicesLoaded}
-              error={overrideError}
-              previewText={previewText}
-              onPreviewTextChange={setPreviewText}
-              previewExpanded={showPreviewCandidates}
-              onPreviewExpandedChange={setShowPreviewCandidates}
-              previewModelKey={ttsModelKey}
-              onChange={async (next) => {
-                setOverrideError(null);
-                const voiceIdForApi = voice?.id ?? character.voiceId ?? character.id;
-                /* Optimistic local update — slice mutation only takes effect
+            <VoiceEnginePicker
+              value={engineChoice}
+              onChange={onSelectEngine}
+              installedEngines={['kokoro', 'qwen']}
+              persona={persona}
+              onPersonaChange={setPersona}
+              onRegeneratePersona={() => void generatePersona()}
+              personaBusy={personaBusy}
+              onDesignVoice={() => void designVoice()}
+              designBusy={designBusy}
+              designPlaying={designPlaying}
+              designedVoiceId={designedVoiceId}
+              error={engineError}
+            />
+
+            {engineChoice !== 'qwen' && (
+              <ModelVoiceOverridePicker
+                voiceId={voice?.id ?? character.voiceId ?? character.id}
+                currentOverrides={mapOverridesToBaseVoiceMap(
+                  voice?.overrideTtsVoices ?? null,
+                  voice?.overrideTtsVoice ?? null,
+                )}
+                autoVoiceName={sampleSubject.ttsVoice.name}
+                autoVoiceEngine={sampleSubject.ttsVoice.provider as TtsEngine}
+                activeEngine={ttsEngine}
+                baseVoices={baseVoices}
+                baseVoicesLoaded={baseVoicesLoaded}
+                error={overrideError}
+                previewText={previewText}
+                onPreviewTextChange={setPreviewText}
+                previewExpanded={showPreviewCandidates}
+                onPreviewExpandedChange={setShowPreviewCandidates}
+                previewModelKey={ttsModelKey}
+                onChange={async (next) => {
+                  setOverrideError(null);
+                  const voiceIdForApi = voice?.id ?? character.voiceId ?? character.id;
+                  /* Optimistic local update — slice mutation only takes effect
                    when the targeted Voice exists in the library payload. For
                    unmatched characters (no library Voice yet) the reducer
                    no-ops and the next hydrate picks up the persisted value. */
-                if (voice?.id) {
-                  dispatch(voicesActions.setOverride({ voiceId: voiceIdForApi, override: next }));
-                }
-                try {
-                  await api.setVoiceOverride(voiceIdForApi, next);
-                } catch (err) {
-                  setOverrideError((err as Error).message);
-                  /* On failure, revert by re-dispatching the prior state.
+                  if (voice?.id) {
+                    dispatch(voicesActions.setOverride({ voiceId: voiceIdForApi, override: next }));
+                  }
+                  try {
+                    await api.setVoiceOverride(voiceIdForApi, next);
+                  } catch (err) {
+                    setOverrideError((err as Error).message);
+                    /* On failure, revert by re-dispatching the prior state.
                      For per-engine overrides this is a coarse revert — we
                      restore the full prior map. The next hydrate corrects
                      any drift. */
-                  if (voice?.id) {
-                    const prior = voice.overrideTtsVoices ?? null;
-                    if (prior) {
-                      for (const [engine, slot] of Object.entries(prior)) {
-                        if (slot?.name) {
-                          dispatch(
-                            voicesActions.setOverride({
-                              voiceId: voiceIdForApi,
-                              override: { engine: engine as TtsEngine, name: slot.name },
-                            }),
-                          );
+                    if (voice?.id) {
+                      const prior = voice.overrideTtsVoices ?? null;
+                      if (prior) {
+                        for (const [engine, slot] of Object.entries(prior)) {
+                          if (slot?.name) {
+                            dispatch(
+                              voicesActions.setOverride({
+                                voiceId: voiceIdForApi,
+                                override: { engine: engine as TtsEngine, name: slot.name },
+                              }),
+                            );
+                          }
                         }
+                      } else {
+                        dispatch(
+                          voicesActions.setOverride({ voiceId: voiceIdForApi, override: null }),
+                        );
                       }
-                    } else {
-                      dispatch(
-                        voicesActions.setOverride({ voiceId: voiceIdForApi, override: null }),
-                      );
                     }
                   }
-                }
-              }}
-            />
+                }}
+              />
+            )}
 
             {hasConflict && (
               <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-xs text-amber-900">
@@ -1060,13 +1187,31 @@ export function ProfileDrawer({
           <PrimaryButton
             variant="dark"
             onClick={() => {
+              /* Per-character engine (plan 108): 'default' clears the
+                 field (use the project default); a real engine pins it. */
+              const nextEngine = engineChoice === 'default' ? undefined : engineChoice;
+              const personaTrimmed = persona.trim();
               const next: Character = {
                 ...character,
                 tone,
                 gender: gender || undefined,
                 ageRange: ageRange || undefined,
                 voiceState: 'tuned',
+                ttsEngine: nextEngine ?? null,
+                voiceStyle: personaTrimmed || character.voiceStyle,
               };
+              /* When Qwen is selected with a designed voice, pin it into
+                 the character's per-engine override map so the cast view +
+                 synth resolve it. The series-scoped write below propagates
+                 it to disk across the series. */
+              const qwenVoiceId =
+                engineChoice === 'qwen' ? (designedVoiceId ?? undefined) : undefined;
+              if (engineChoice === 'qwen' && qwenVoiceId) {
+                next.overrideTtsVoices = {
+                  ...(character.overrideTtsVoices ?? {}),
+                  qwen: { name: qwenVoiceId },
+                };
+              }
               /* Conflict reset: drop the library voiceId + matchedFrom so the
                  cast view falls back to the engine's prebuilt-voice pick. The
                  ttsVoice line in the drawer already previewed what that will
@@ -1075,6 +1220,24 @@ export function ProfileDrawer({
               if (hasConflict) {
                 next.voiceId = undefined;
                 next.matchedFrom = undefined;
+              }
+              /* Series-scoped override write — fire-and-forget; the redux
+                 character carries the same value so the UI is correct even
+                 if the disk write is slow. Only when we actually designed a
+                 Qwen voice and have a book to anchor the series. */
+              if (engineChoice === 'qwen' && qwenVoiceId && bookId) {
+                const voiceIdForApi = voice?.id ?? character.voiceId ?? character.id;
+                void api
+                  .setVoiceOverride(
+                    voiceIdForApi,
+                    { engine: 'qwen', name: qwenVoiceId },
+                    { scope: 'series', bookId },
+                  )
+                  .catch(() => {
+                    /* The next cast hydrate reconciles a failed write; the
+                       drawer-local error surface already covered the design
+                       step, so a swallow here keeps Save snappy. */
+                  });
               }
               onSave(next, { hadConflict: hasConflict });
             }}
