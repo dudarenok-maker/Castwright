@@ -39,6 +39,9 @@ interface QueueEntryShape {
   addedAt: string;
   status: 'queued' | 'in_progress' | 'paused' | 'done' | 'failed';
   order: number;
+  /* Plan 108 Wave 3 — server-stamped engine set + multi-TTS flag. */
+  requiredEngines?: ('coqui' | 'piper' | 'kokoro' | 'gemini' | 'qwen')[];
+  multiTts?: boolean;
 }
 
 /* Helper: install a per-test in-memory queue + intercept every /api/queue
@@ -205,6 +208,57 @@ test.describe('queue modal (plan 102)', () => {
     await expect(page.getByTestId('queue-entry-ns-c3')).toHaveCount(0, { timeout: 5_000 });
     /* The viewed book's entry is untouched. */
     await expect(page.getByTestId('queue-entry-sb-c1')).toBeVisible();
+  });
+
+  test('multi-TTS chapter shows the engine badge + dual-model-off warning (plan 108 Wave 3)', async ({
+    page,
+  }) => {
+    /* One single-engine chapter (Kokoro) and one multi-engine chapter
+       (Kokoro + Qwen). The multi one names both engines and — with the
+       dual-model flag at its default (off) in mock mode — shows the advisory
+       to enable dual-model mode in Account settings. */
+    const { respondSnapshot } = installQueueRoutes([
+      {
+        id: 'single',
+        bookId: 'sb',
+        chapterId: 1,
+        scope: 'this',
+        addedAt: new Date().toISOString(),
+        status: 'queued',
+        order: 0,
+        requiredEngines: ['kokoro'],
+        multiTts: false,
+      },
+      {
+        id: 'multi',
+        bookId: 'sb',
+        chapterId: 2,
+        scope: 'this',
+        addedAt: new Date().toISOString(),
+        status: 'queued',
+        order: 1,
+        requiredEngines: ['kokoro', 'qwen'],
+        multiTts: true,
+      },
+    ]);
+    await page.route('**/api/queue', respondSnapshot);
+    await page.route('**/api/queue/*', respondSnapshot);
+
+    await page.goto('/#/books/sb/listen');
+    const chip = page.getByTestId('topbar-queue-chip');
+    await chip.waitFor({ state: 'visible', timeout: 10_000 });
+    await chip.click();
+    await expect(page.getByRole('dialog', { name: /Generation queue/i })).toBeVisible({
+      timeout: 5_000,
+    });
+
+    /* Single-engine row: badge names Kokoro, no advisory. */
+    await expect(page.getByTestId('queue-entry-single-engines')).toHaveText('Kokoro');
+    await expect(page.getByTestId('queue-entry-single-dual-model-warning')).toHaveCount(0);
+
+    /* Multi-engine row: badge names both engines + the dual-model advisory. */
+    await expect(page.getByTestId('queue-entry-multi-engines')).toHaveText('Kokoro + Qwen');
+    await expect(page.getByTestId('queue-entry-multi-dual-model-warning')).toBeVisible();
   });
 
   test('Generate view "View queue" button opens the modal', async ({ page }) => {

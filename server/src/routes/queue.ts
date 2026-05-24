@@ -29,6 +29,7 @@ import {
   type EnqueueInput,
   type QueueScope,
 } from '../workspace/queue-io.js';
+import { resolveChapterEngineStamp } from '../workspace/queue-engine-stamp.js';
 
 export const queueRouter = Router();
 
@@ -90,6 +91,24 @@ queueRouter.post('/enqueue', async (req: Request, res: Response) => {
       ...(isString(r.addedAt) ? { addedAt: r.addedAt } : {}),
     });
   }
+  /* Plan 108 Wave 3 — stamp each entry with the TTS engines its chapter needs
+     (cast + analysis cache + book default), so the queue modal can name the
+     engine(s) and warn on a multi-TTS chapter when dual-model mode is off.
+     Best-effort: a resolver throw / missing cast leaves the fields off (legacy
+     / unknown) rather than failing the enqueue. */
+  await Promise.all(
+    inputs.map(async (input) => {
+      try {
+        const stamp = await resolveChapterEngineStamp(input.bookId, input.chapterId);
+        if (stamp) {
+          input.requiredEngines = stamp.requiredEngines;
+          input.multiTts = stamp.multiTts;
+        }
+      } catch (e) {
+        console.warn(`[queue] engine-stamp failed for "${input.id}"`, e);
+      }
+    }),
+  );
   try {
     const before = await readQueueFile(queueJsonPath());
     const after = enqueue(before, inputs);
