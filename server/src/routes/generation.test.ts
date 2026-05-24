@@ -22,9 +22,18 @@ import request from 'supertest';
 /* Mock synthesiseChapter so the route never needs a real TTS provider. The
    mock is mutable per test case via the synthesiseImpl ref. */
 let synthesiseImpl: (args: unknown) => Promise<unknown>;
-vi.mock('../tts/synthesise-chapter.js', () => ({
-  synthesiseChapter: (args: unknown) => synthesiseImpl(args),
-}));
+vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
+  /* Spread the real module so the route's other imports from here
+     (toVoiceLike + buildHintFromCast, used to compute the per-character
+     resolvedVoiceName snapshot since plan 108 Wave 2b) keep their real
+     implementations — they're pure transforms. Only synthesiseChapter is
+     stubbed so the route never needs a live TTS provider. */
+  const actual = await importOriginal<typeof import('../tts/synthesise-chapter.js')>();
+  return {
+    ...actual,
+    synthesiseChapter: (args: unknown) => synthesiseImpl(args),
+  };
+});
 
 /* Mock selectTtsProvider so the route doesn't reach for GEMINI_API_KEY or a
    live sidecar — the route only uses the provider to feed into
