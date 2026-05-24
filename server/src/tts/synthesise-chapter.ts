@@ -37,6 +37,10 @@ export interface CastCharacter {
       consumes a `string[]` of bare quotes. `buildHintFromCast` does the
       flattening. */
   evidence?: Array<{ quote?: string; note?: string } | string>;
+  /** Natural-language voice-design persona (plan 108). Generated per
+      character by Gemini and editable by the user; seeds the Qwen sidecar's
+      bespoke voice-design flow. Persisted in cast.json. */
+  voiceStyle?: string;
   /** Per-engine user-set voice overrides. The active synth engine reads
       its own slot; missing slots fall through to attribute inference.
       Persisted in cast.json so it survives reloads + analysis reparses.

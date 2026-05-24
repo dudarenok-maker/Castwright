@@ -560,3 +560,40 @@ describe('castSlice — applyAddAlias (POST /cast/add-alias response)', () => {
     expect(r2.characters[0].aliases).toEqual(['Foster']);
   });
 });
+
+describe('castSlice — setVoiceStyle (plan 108)', () => {
+  it('sets the voice-design persona on the matching character', () => {
+    const start = baseState([makeChar('sophie'), makeChar('keefe')]);
+    const next = castSlice.reducer(
+      start,
+      castActions.setVoiceStyle({
+        characterId: 'sophie',
+        voiceStyle: 'a poised, confident teenage girl, warm and mid-paced',
+      }),
+    );
+    expect(next.characters.find((c) => c.id === 'sophie')!.voiceStyle).toBe(
+      'a poised, confident teenage girl, warm and mid-paced',
+    );
+    /* Other characters untouched. */
+    expect(next.characters.find((c) => c.id === 'keefe')!.voiceStyle).toBeUndefined();
+  });
+
+  it('overwrites an existing persona (re-generate)', () => {
+    const start = baseState([makeChar('sophie', { voiceStyle: 'old persona' })]);
+    const next = castSlice.reducer(
+      start,
+      castActions.setVoiceStyle({ characterId: 'sophie', voiceStyle: 'new persona' }),
+    );
+    expect(next.characters[0].voiceStyle).toBe('new persona');
+  });
+
+  it('no-ops when the character id is not in the slice', () => {
+    const start = baseState([makeChar('sophie')]);
+    const next = castSlice.reducer(
+      start,
+      castActions.setVoiceStyle({ characterId: 'ghost', voiceStyle: 'whatever' }),
+    );
+    expect(next).toEqual(start);
+  });
+});
+
