@@ -9,6 +9,7 @@
 import type { SentenceOutput } from '../handoff/schemas.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from './voice-mapping.js';
 import type { TtsEngine, TtsModelKey, TtsProvider } from './index.js';
+import { resolveCharacterEngine } from './per-character-engine.js';
 import { normaliseForTts } from './text-normalize.js';
 import { pcmDurationSec } from './pcm.js';
 import { resamplePcm16 } from './resample-pcm16.js';
@@ -48,6 +49,11 @@ export interface CastCharacter {
       cast.json files written by older clients still satisfy this
       interface before normalisation. */
   overrideTtsVoice?: { engine: TtsEngine; name: string } | null;
+  /** Per-character engine (plan 108). When set, this character is synthesised
+      through this engine (e.g. `'qwen'` for a bespoke voice) regardless of the
+      run's default engine; absent → the run default. The narrator typically
+      leaves this unset and stays on the default (Kokoro). */
+  ttsEngine?: TtsEngine | null;
 }
 
 export interface SentenceGroup {
@@ -107,10 +113,17 @@ export interface SynthesiseChapterOpts {
   cast: CastCharacter[];
   provider: TtsProvider;
   modelKey: TtsModelKey;
-  /** Drives engine-specific voice catalog lookup. Must match the engine
-      behind `provider` so each character's name resolves to a voice the
-      engine actually has. */
+  /** The run's DEFAULT engine — used for any character that doesn't carry its
+      own `ttsEngine`, and the engine `provider`/`modelKey` below speak. Must
+      match the engine behind `provider`. */
   engine: TtsEngine;
+  /** Per-character engine routing (plan 108). When provided, each group + the
+      title beat resolve their character's engine via `resolveCharacterEngine`
+      and look up that engine's provider + modelKey here; absent → every
+      character uses the default `provider`/`modelKey`/`engine` (byte-identical
+      to pre-108). The caller (generation.ts) builds + caches one provider per
+      engine so a mixed-engine chapter never reconstructs providers per group. */
+  resolveForEngine?: (engine: TtsEngine) => { provider: TtsProvider; modelKey: TtsModelKey };
   /** Notification fired *before* each group's TTS call starts. Needed because
       a single group can be a multi-minute call on CPU (e.g. a long narrator
       block folded into one synth), and without a tick at the start the SSE
@@ -214,7 +227,7 @@ export function buildSentenceGroups(sentences: SentenceOutput[]): SentenceGroup[
     picker prefers the map when present and the synth engine matches a
     slot. The legacy field is only consulted as a fallback for cast.json
     files that haven't yet round-tripped through the normaliser. */
-function toVoiceLike(c: CastCharacter): VoiceLike {
+export function toVoiceLike(c: CastCharacter): VoiceLike {
   return {
     id: c.voiceId ?? c.id,
     character: c.name,
@@ -252,6 +265,7 @@ export async function synthesiseChapter(
     provider,
     modelKey,
     engine,
+    resolveForEngine,
     onGroupStart,
     onGroupComplete,
     onGroupRetry,
@@ -262,6 +276,21 @@ export async function synthesiseChapter(
     onTitleComplete,
     sentenceConcurrency = gpuSemaphore.maxConcurrency,
   } = opts;
+
+  /* Per-character engine resolver (plan 108). Returns the engine + its
+     provider + modelKey for a given character. When the caller supplied
+     `resolveForEngine`, each character routes to its own engine's provider;
+     otherwise everything uses the run default — byte-identical to pre-108. */
+  const routeFor = (
+    c: CastCharacter,
+  ): { engine: TtsEngine; provider: TtsProvider; modelKey: TtsModelKey } => {
+    const charEngine = resolveCharacterEngine(c, engine);
+    if (resolveForEngine && charEngine !== engine) {
+      const r = resolveForEngine(charEngine);
+      return { engine: charEngine, provider: r.provider, modelKey: r.modelKey };
+    }
+    return { engine: charEngine, provider, modelKey };
+  };
 
   const castById = new Map(cast.map((c) => [c.id, c]));
   const groups = buildSentenceGroups(sentences);
@@ -295,8 +324,13 @@ export async function synthesiseChapter(
     }
     const narratorChar =
       castById.get(narratorCharacterId) ?? { id: narratorCharacterId, name: 'Narrator' };
+    /* The title beat speaks in the narrator's engine — which, per plan 108, is
+       usually the default (Kokoro) since the narrator rarely carries a bespoke
+       per-character engine. routeFor honours an explicit narrator ttsEngine if
+       one is set. */
+    const titleRoute = routeFor(narratorChar);
     const narratorVoice = pickVoiceForEngine(
-      engine,
+      titleRoute.engine,
       toVoiceLike(narratorChar),
       buildHintFromCast(narratorChar),
     );
@@ -305,10 +339,10 @@ export async function synthesiseChapter(
 
     const titleResult = await withTtsRetry(
       () =>
-        provider.synthesize({
+        titleRoute.provider.synthesize({
           text: normaliseForTts(titleText),
           voiceName: narratorVoice,
-          modelKey,
+          modelKey: titleRoute.modelKey,
           signal,
         }),
       { signal },
@@ -348,8 +382,14 @@ export async function synthesiseChapter(
      `runningBytes`, or `segments` (which would race under parallel workers). */
   async function synthGroup(group: SentenceGroup): Promise<{ pcm: Buffer; sampleRate: number }> {
     const character = castById.get(group.characterId) ?? { id: group.characterId };
+    /* Per-character engine routing (plan 108): resolve this character's engine
+       + its provider + modelKey, then pick a voice from THAT engine. A
+       narrator-on-Kokoro + hero-on-Qwen chapter routes each group correctly;
+       the index-order concat below resamples any per-engine sample-rate
+       mismatch to the chapter anchor, so mixed engines reassemble cleanly. */
+    const route = routeFor(character);
     const voiceName = pickVoiceForEngine(
-      engine,
+      route.engine,
       toVoiceLike(character),
       buildHintFromCast(character),
     );
@@ -382,10 +422,10 @@ export async function synthesiseChapter(
        and surface as today's per-chapter `chapter_failed`. */
     const result = await withTtsRetry(
       () =>
-        provider.synthesize({
+        route.provider.synthesize({
           text: normaliseForTts(group.text),
           voiceName,
-          modelKey,
+          modelKey: route.modelKey,
           signal,
         }),
       {
