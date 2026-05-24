@@ -14,6 +14,7 @@ invariant; if you add a new language prefix, extend the assertions here.
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from pathlib import Path
@@ -490,6 +491,58 @@ def test_health_after_kokoro_load_unload_cycle(kokoro_unloaded_client) -> None:
     assert client.get("/health").json()["kokoro_loaded"] is True
     client.post("/unload", json={"engine": "kokoro"})
     assert client.get("/health").json()["kokoro_loaded"] is False
+
+
+# ── Eager-preload opt-out (PRELOAD_KOKORO) ───────────────────────────────
+#
+# The sidecar eager-loads Kokoro at startup by default (PRELOAD_KOKORO unset
+# or =1) — cheap (~1 GB / ~1 s) and matches the kokoro-v1 engine default.
+# Qwen-primary users set PRELOAD_KOKORO=0 (propagated by the Node server from
+# the account-level "Eager-load Kokoro at startup" toggle) so the eager load
+# is skipped and Kokoro warms on demand on first synth, freeing ~1 GB VRAM.
+# These tests pin the gate by calling the startup hook directly with a spy
+# engine and asserting whether _ensure_loaded ran.
+
+
+def _run_preload_capturing_kokoro(monkeypatch) -> list[str]:
+    """Swap in a real KokoroEngine with a stubbed _ensure_loaded (so no real
+    weights load) and run the FastAPI startup hook once. Returns the list of
+    model args _ensure_loaded was called with — empty when the eager load was
+    skipped, ['v1'] when it fired. Coqui stays gated off by conftest's
+    PRELOAD_COQUI=0 and Qwen by its own false default, so only the Kokoro
+    block under test does any work."""
+    engine = main.KokoroEngine()
+    calls: list[str] = []
+    monkeypatch.setattr(engine, "_ensure_loaded", lambda model: calls.append(model))
+    monkeypatch.setitem(main.ENGINES, "kokoro", engine)
+    asyncio.run(main._preload_default_engines())
+    return calls
+
+
+def test_preload_skips_kokoro_when_disabled(monkeypatch) -> None:
+    """PRELOAD_KOKORO=0 → the startup hook must NOT eager-load Kokoro.
+    Kokoro then warms on demand on the first synth (KokoroEngine.synthesize
+    calls _ensure_loaded), freeing the ~1 GB VRAM for a Qwen-primary user."""
+    monkeypatch.setenv("PRELOAD_KOKORO", "0")
+    assert _run_preload_capturing_kokoro(monkeypatch) == [], (
+        "Kokoro eager-loaded despite PRELOAD_KOKORO=0"
+    )
+
+
+def test_preload_loads_kokoro_when_unset(monkeypatch) -> None:
+    """Default (PRELOAD_KOKORO unset) preserves today's behaviour: the
+    startup hook eager-loads Kokoro v1."""
+    monkeypatch.delenv("PRELOAD_KOKORO", raising=False)
+    assert _run_preload_capturing_kokoro(monkeypatch) == ["v1"], (
+        "Kokoro not eager-loaded with PRELOAD_KOKORO unset"
+    )
+
+
+def test_preload_loads_kokoro_when_enabled(monkeypatch) -> None:
+    """PRELOAD_KOKORO=1 explicitly opts in to the eager load (same as the
+    unset default)."""
+    monkeypatch.setenv("PRELOAD_KOKORO", "1")
+    assert _run_preload_capturing_kokoro(monkeypatch) == ["v1"]
 
 
 def test_load_unknown_engine_defaults_to_coqui(kokoro_unloaded_client) -> None:
