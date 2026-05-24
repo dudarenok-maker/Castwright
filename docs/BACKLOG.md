@@ -49,6 +49,8 @@ Source: net-new (2026-05-22). Captured during planning of the cross-version upgr
 
 Source: net-new (2026-05-20). Captured during planning of the next full version update; user-flagged as critical for the next full version update.
 
+> **Scope note (2026-05-24):** the **engine** half of this item — adding Qwen3-TTS 0.6B as a coexisting sidecar engine + per-engine voice plumbing + cross-platform install script — is being delivered by [plan 108](features/108-qwen-coexistence.md) (Kokoro + Qwen coexistence, English). What remains HERE is the **language** half: the BCP-47 `language` field on `BookStateJson`/`Book`/`Character`, Cyrillic auto-detection + confirm-metadata override, voice-library `language` filtering + auto-load on Russian-book select, the Cyrillic-aware Gemini token estimator, the analyzer language preamble, and the never-cross-language invariant. Re-scope the _What_/_Key files_ below to the language work when this item opens; the Qwen engine, `overrideTtsVoices` map, and install-script shape will already exist.
+
 - _What:_ Lift the implicit English-only assumption across the stack. Add `language` (BCP-47 string, default `"en"`) to `BookStateJson` and the OpenAPI `Book` + `Character` schemas. Add **Qwen3-TTS 0.6B** as a third sidecar engine (Alibaba, Apache 2.0, ~2.5 GB on disk, 4–6 GB VRAM during synth — fits the existing analyzer-eviction pattern) with its own cross-platform install script. Pipe `book.language` through to every sidecar `/synthesize` call. Auto-detect language on manuscript drop (≥30% Cyrillic codepoints → `"ru"`) with a chip + override on the confirm-metadata view. Filter the voice library panel by `voice.language === book.language` and auto-load Qwen3 when a Russian book becomes active. Fix the Gemini analyzer's Latin-only chars/4 token estimator for Cyrillic. Inject a language preamble into analyzer skill prompts for non-English manuscripts. Listen-header language badge + dedicated library language filter pill (separate from free-text tags). **Hard invariant: never cross-language** — Russian voices never read English text, English voices never read Russian text.
 - _Acceptance:_ Upload an English manuscript → behaviour unchanged from today (regression). Upload a Russian public-domain fixture (Pushkin / Chekhov — NOT the Marlow Story, that's English) → confirm-metadata chip detects Russian + allows override → opening the book auto-loads Qwen3 with the existing analyzer-eviction banner → cast picker shows ONLY Russian voices → preview button speaks a Russian pangram → generated chapter audio is Russian with zero English bleed-through. Cyrillic token estimate within ±10% of actual `usage.input_tokens` on a long chapter. Library `Russian` filter pill ANDs with existing tag filters. Concurrent-multibook invariant holds: starting Russian Book A then switching to English Book B mid-flight keeps Book B's picker English and Book A's in-flight analysis Russian. On a fresh clone with no Qwen3 weights, opening a Russian book surfaces a clear "run `npm run install:qwen3`" call-to-action — not a silent 404. New Vitest + Playwright coverage on every new seam (detect-language helper, voice-library filter, preview-text switch, listen-header badge, library language pill); new pytest case in `server/tts-sidecar/tests/test_qwen3.py` (Cyrillic input + `language: "ru"` → non-empty PCM, no cross-bleed under concurrent synth).
 - _Key files:_ `openapi.yaml` (add `language` to `Book` + `Character`; `BaseVoice.language` already half-extended at `openapi.yaml:2181-2185`); `src/lib/types.ts:135-185` (`BookStateJson`); `src/store/book-meta-slice.ts:22-38` (`EditableBookMeta`); server state.json reader (default-back-fill migration on read). Sidecar: `server/tts-sidecar/main.py:176,403-409,436,468,527-532` + new `server/tts-sidecar/engines/qwen3.py` + new `server/tts-sidecar/scripts/install-qwen3.mjs` (Node ESM, cross-platform) + thin `scripts/install-qwen3.ps1` wrapper for Windows discoverability. Server: `server/src/tts/voice-mapping.ts:104-146,223-242` (add Qwen3 profile tables, language-aware `pickVoiceForEngine`), `server/src/tts/synthesise-chapter.ts` (thread `book.language` to sidecar), `server/src/tts/base-voices.ts:36-41` (populate the existing-but-unfilled `language` field on every voice), `server/src/analyzer/gemini.ts:553-562` (Cyrillic-aware `estimateInputTokens`), analyzer skill-prompt loader (language preamble injection). Frontend: `src/views/upload.tsx:141-163` + new `src/lib/detect-language.ts` + the confirm-metadata view (chip + override); `src/components/listen/listen-header.tsx:219-234` (badge); `src/components/voice-library-panel.tsx` (language filter), `src/components/voice-preview-button.tsx` (per-language sample text), `src/components/model-control-pill.tsx` (Qwen3 button + auto-load on Russian-book select); `src/components/library/library-chrome.tsx:49-56` + `src/store/library-slice.ts:111` (language filter pill ANDed with tag intersection). Tailwind config needs no work — General Sans / Lora / Inter all support Cyrillic. Full design intent + wave decomposition captured in `~/.claude/plans/ok-lets-do-a-delightful-kahn.md`; move into `docs/features/NN-multi-language-russian.md` when the next round opens.
@@ -117,6 +119,8 @@ Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ship
 ### 3. Batch voice-replace across all books
 
 Source: net-new (2026-05-18).
+
+> **Scope note (2026-05-24):** largely subsumed by [plan 108](features/108-qwen-coexistence.md)'s "Rebaseline the series" modal + series-scoped override write (`PUT /api/voices/:voiceId/override?scope=series`), which lets the user re-map any character's engine + base voice across a series with current-vs-proposed audition. What this item retains that plan 108 does not cover: the *library-level* "pick voice A → replace with voice B everywhere across ALL books (not just one series)" bulk affordance + multi-book audio invalidation. Re-scope to that workspace-wide bulk replace, or close, once plan 108 ships.
 
 - _What:_ Add a "Replace voice everywhere" affordance in the voice library: pick a current voice, pick a replacement, see a preview of all (book, character) pairs that would be affected, confirm. Affected books' cast slices are mutated; audio is invalidated (regen prompt per book).
 - _Acceptance:_ Three books each use voice `am_michael` for one character → batch replace `am_michael` → `am_eric` shows 3 affected pairs, confirm rewrites all three cast.json files, audio marked stale. Vitest covers the dry-run preview + write logic; e2e covers the modal flow.
@@ -217,6 +221,8 @@ Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
 
 Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item A3).
 
+> **Scope note (2026-05-24):** being delivered by [plan 108](features/108-qwen-coexistence.md) as the deliberate `dualModelEnabled` user setting (default off) — generalised to Kokoro + Qwen, with the same idea applying to Kokoro + XTTS. When `dualModelEnabled` is on, both engines stay resident (Ollama auto-evicts during generation via the existing banner); when off, a mixed-engine book pays the engine-swap cost with an inline warning. Remove this item when plan 108's dual-model wave ships.
+
 - _What:_ Drop the eviction wiring between Kokoro and XTTS; keep both engines loaded. Per-character voice profiles already carry `overrideTtsVoices: { coqui?, kokoro? }` per CLAUDE.md — pick at synth time. VRAM math (Kokoro 1 GB + XTTS 3 GB + Ollama analyzer ~7 GB = 11 GB on an 8 GB GPU) requires Ollama auto-eviction during generation, with the existing "TTS / Analyzer unloaded to free VRAM" banner.
 - _Acceptance:_ A mixed-engine book (Coqui voice on character A, Kokoro on character B) renders without engine-swap latency between sentences. First XTTS use no longer pays the ~30 s cold-load. Ollama auto-eviction surfaces a clear banner during generation; re-loads on analysis trigger.
 - _Key files:_ `server/tts-sidecar/main.py` (eviction wiring removal); `src/components/model-control-pill.tsx`; analyzer eviction at `server/src/analyzer/ollama.ts:92`.
@@ -278,7 +284,9 @@ Source: net-new (2026-05-22). Surfaced by the full `npm install` deprecation aud
 
 ### 33. Per-voice row sample-preview button inside `<VoiceOverridePicker>`
 
-Source: net-new (2026-05-22). Deferred from the picker-autocomplete bundle — the model-voice override picker now uses the shared `<SearchablePicker>` primitive but renders each voice row as just `name`. The original plan reserved a tiny `▶` slot on each row for in-list auditioning so the user can preview a voice without committing the override; v1 ships with the row label only, matching the legacy `<select>` parity.
+Source: net-new (2026-05-22).
+
+> **Scope note (2026-05-24):** [plan 108](features/108-qwen-coexistence.md) surfaces `<VoiceOverridePicker>` for every character (not just library-matched ones) and reuses `playSampleWithAutoLoad` for current-vs-proposed audition in the rebaseline modal — so the in-row `▶` affordance described here is a natural add inside the same picker work. Land it as part of plan 108's Wave 4 per-character picker, or keep as a standalone follow-up. Deferred from the picker-autocomplete bundle — the model-voice override picker now uses the shared `<SearchablePicker>` primitive but renders each voice row as just `name`. The original plan reserved a tiny `▶` slot on each row for in-list auditioning so the user can preview a voice without committing the override; v1 ships with the row label only, matching the legacy `<select>` parity.
 
 - _What:_ Add a per-row Play button that routes through `playSampleWithAutoLoad` (same helper the existing "Preview voice" / cast-row swatch use). Hover/focus reveals the icon on pointer devices; `coarse-pointer:opacity-60` keeps it faintly visible on touch. Sample text comes from the same drawer-level `previewText` the candidate-preview block uses. Single-row in-flight gate (the helper already coalesces concurrent clicks).
 - _Acceptance:_ Open the Profile Drawer's voice-override picker on the Kokoro tab. Click the `▶` next to a voice → that voice's sample plays without changing the current override. Pick the voice → override commits. Concurrent rapid clicks across rows fire one synth at a time.
@@ -335,6 +343,36 @@ Source: plan 102 Should #6 ship (2026-05-23) — known limitation called out in 
 - _Key files:_ `src/store/queue-dispatcher-middleware.ts` (cross-book branch), `src/lib/build-pending-revision.ts` (accept minimal input), `src/store/revisions-slice.ts`.
 - _Depends on:_ Should #6 (cross-book dispatcher) shipped.
 - _Benefit (user):_ the diff player's pending-revision list is complete for cross-book character regens without requiring a navigate-to-book round-trip first. Low priority — the revision is recoverable on book open today.
+
+### 39. Tune per-engine VRAM cost map against real hardware
+
+Source: net-new (2026-05-24). Spun off from [plan 108](features/108-qwen-coexistence.md) — the VRAM-weighted GPU semaphore ships with provisional per-engine costs (R2).
+
+- _What:_ The `ENGINE_VRAM_COST` map in `server/src/tts/engine-vram-cost.ts` and the default `GPU_VRAM_BUDGET` ship as estimates (analyzer ≈ budget, coqui ≈ 3, kokoro ≈ 1, qwen ≈ 1, gemini = 0; budget ≈ 4). Measure actual peak VRAM per engine during synth on the target 8 GB GPU (per the reboot-before-perf-baselines protocol) and correct the constants so two engines pack without spilling and a single heavy engine doesn't over-serialize.
+- _Acceptance:_ With corrected costs, a Kokoro+Qwen mixed-engine run holds both resident with headroom for the analyzer to evict-and-reload; `nvidia-smi` peak stays under the card's VRAM; no spill-to-RAM slowdown. Numbers documented in plan 108's Ship notes.
+- _Key files:_ `server/src/tts/engine-vram-cost.ts`; `server/.env.example` (`GPU_VRAM_BUDGET` doc); plan 108 Ship notes.
+- _Depends on:_ plan 108 Wave 1 (the weighted semaphore) shipped.
+- _Benefit (technical):_ correct VRAM accounting is the difference between two engines coexisting smoothly and thrashing the GPU. Estimates unblock the feature; measured values make it reliable.
+
+### 40. Engine-drift factor polish + `resolvedVoiceName` backfill
+
+Source: net-new (2026-05-24). Spun off from [plan 108](features/108-qwen-coexistence.md)'s R5 drift fix.
+
+- _What:_ Plan 108 adds an explicit engine-drift factor and snapshots the *resolved* voice name (`CharacterSnapshot.resolvedVoiceName`) so override-only voice changes trip drift. Chapters rendered BEFORE that change have no `resolvedVoiceName` and degrade to "no signal." Add a one-shot backfill script (mirror `scripts/relufs-existing.mjs`) that recomputes `resolvedVoiceName` for existing `segments.json` from the cast at render time where derivable, so legacy chapters participate in override-drift detection.
+- _Acceptance:_ Running the backfill over a book generated before plan 108 populates `resolvedVoiceName` on its `segments.json` snapshots; a subsequent rebaseline of that book surfaces voice drift on those legacy chapters.
+- _Key files:_ new `scripts/backfill-resolved-voice-name.mjs`; `server/src/routes/revisions.ts` (drift comparison); `server/src/tts/synthesise-chapter.ts` (snapshot writer).
+- _Depends on:_ plan 108 Wave 4 (R5 drift fix) shipped.
+- _Benefit (user):_ rebaseline drift is complete for books generated before the feature landed, not just new ones.
+
+### 41. Cross-series voice linking
+
+Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexistence.md) planning — series scoping stops at the `(author, series)` boundary.
+
+- _What:_ Plan 108's per-character engine + voice changes propagate across one series via `findAuthorSeriesForBookId`. A character who recurs across DIFFERENT series by the same author (or a shared-universe crossover) is not covered — the rebaseline / per-character write stops at the series boundary by design. Add an explicit cross-series link affordance (extend `Character.aliases` / a new link record) so a deliberate "this is the same voice across series X and Y" decision propagates voice + engine across both.
+- _Acceptance:_ Link character A in series X to character B in series Y; a voice/engine change on A also writes B's cast.json. No implicit cross-series propagation without an explicit link (preserves the current series-boundary default).
+- _Key files:_ `server/src/workspace/series-cast-scan.ts`; `server/src/routes/voices.ts` (cross-series write path); a new link record on `Character`.
+- _Depends on:_ plan 108 (series-scoped write) shipped.
+- _Benefit (user):_ recurring narrators / crossover characters stay consistent across an author's whole catalogue, not just within one series.
 
 ---
 
