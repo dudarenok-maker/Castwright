@@ -1,14 +1,16 @@
 /* PCM → audio encoder. Pipes raw 16-bit signed little-endian mono PCM through
-   system `ffmpeg` and collects the encoder's stdout. Used by generation.ts
-   after per-sentence PCM has been concatenated into the full chapter buffer
-   — encoding once at chapter granularity sidesteps frame-alignment and
-   gapless-playback issues that per-segment encoding would create.
+   system `ffmpeg`. Used by generation.ts after per-sentence PCM has been
+   concatenated into the full chapter buffer — encoding once at chapter
+   granularity sidesteps frame-alignment and gapless-playback issues that
+   per-segment encoding would create.
 
    Format dispatch (plan 72): the `format` discriminator selects MP3
    (LAME, default), AAC/M4A (libfdk_aac or native AAC) or Opus (libopus).
-   `buildMp3FfmpegArgs` keeps the v1 invocation byte-identical for the
-   default path; the AAC/Opus builders are siblings that route through the
-   same spawn/stdout-capture plumbing.
+   The AAC/Opus builders stream to stdout (`pipe:1`); the MP3 builder writes
+   to a seekable temp file instead so libmp3lame can seek back and stamp the
+   Xing/Info VBR header (plan 109 — a non-seekable pipe drops it and players
+   then estimate, and badly inflate, the duration). `encodePcmToAudio` reads
+   the temp file back so all three formats return a Buffer to the caller.
 
    ffmpeg is a hard runtime dep; scripts/start-app.ps1 preflights it. We do
    NOT mock the encoder boundary in tests — the integration suite spawns the
@@ -22,8 +24,10 @@
    `peaks: []` so chapters generated before this plan keep loading. */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { computePeaks } from '../audio/compute-peaks.js';
 import {
   buildSecondPassFilterString,
@@ -117,6 +121,13 @@ interface FfmpegBuildOpts {
   /** When set, injects `-af <loudnormFilter>` between input + codec args
    *  so EBU R128 normalisation runs across any codec branch. Plan 71. */
   loudnormFilter?: string | null;
+  /** When set, the MP3 builder writes the encode to this seekable file path
+   *  instead of `pipe:1`. Required for libmp3lame to seek back and write the
+   *  Xing/Info VBR header — a non-seekable pipe drops it, leaving players to
+   *  estimate (and wildly inflate) the duration. Plan 109. AAC/Opus paths
+   *  ignore this and keep streaming to stdout (they carry reliable duration
+   *  metadata without a seek-back). */
+  outputPath?: string;
 }
 
 /** Loudnorm's `print_format=json` summary is logged at info level — at the
@@ -129,10 +140,11 @@ function ffmpegLogArgs(opts: FfmpegBuildOpts): string[] {
   return ['-loglevel', 'error'];
 }
 
-/** Build the ffmpeg arg list for the MP3 (libmp3lame) path. The v1
- *  invocation — preserved byte-identical so existing chapters re-encode
- *  identically — was extracted out of `encodePcmToAudio` when format
- *  dispatch landed. */
+/** Build the ffmpeg arg list for the MP3 (libmp3lame) path. Writes to
+ *  `opts.outputPath` (a seekable temp file) rather than `pipe:1` so the Xing
+ *  VBR header lands; falls back to `pipe:1` when no path is supplied (e.g.
+ *  arg-shape tests). The output `-ar` pin (loudnorm fix, plan 71) and the
+ *  `-q:a` VBR quality are unchanged. */
 function buildMp3FfmpegArgs(opts: FfmpegBuildOpts): string[] {
   return [
     ...ffmpegLogArgs(opts),
@@ -156,9 +168,17 @@ function buildMp3FfmpegArgs(opts: FfmpegBuildOpts): string[] {
     'libmp3lame',
     '-q:a',
     String(opts.quality),
+    /* Write the Xing/Info VBR header. libmp3lame can only do this when the
+       output is seekable (it seeks back to the file start after encoding to
+       fill in the final frame count); on a non-seekable `pipe:1` the header
+       is silently dropped and players estimate duration from a sampled
+       bitrate — ~7x too long on a quiet chapter lead-in. `outputPath` routes
+       us to a seekable temp file so the header lands. Plan 109. */
+    '-write_xing',
+    '1',
     '-f',
     'mp3',
-    'pipe:1',
+    opts.outputPath ?? 'pipe:1',
   ];
 }
 
@@ -309,7 +329,25 @@ export async function encodePcmToAudio(
     }
   }
 
-  const builderOpts: FfmpegBuildOpts = { sampleRate, quality, loudnormFilter };
+  /* MP3 must encode to a seekable file so libmp3lame can write the Xing VBR
+     header (see buildMp3FfmpegArgs). A unique temp path per call — pid+ts
+     alone can collide when concurrent multi-book generation encodes
+     simultaneously, so a random suffix guarantees uniqueness. AAC/Opus stay
+     on `pipe:1`. Plan 109. */
+  const mp3OutPath =
+    format === 'mp3'
+      ? join(
+          tmpdir(),
+          `audiobook-encode-${process.pid}-${Date.now()}-${randomUUID().slice(0, 8)}.mp3`,
+        )
+      : null;
+
+  const builderOpts: FfmpegBuildOpts = {
+    sampleRate,
+    quality,
+    loudnormFilter,
+    ...(mp3OutPath ? { outputPath: mp3OutPath } : {}),
+  };
 
   let args: string[];
   switch (format) {
@@ -328,44 +366,66 @@ export async function encodePcmToAudio(
     }
   }
 
-  const encodeResult = await new Promise<{ encoded: Buffer; stderr: string }>((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+  let encodeResult: { encoded: Buffer; stderr: string };
+  try {
+    encodeResult = await new Promise<{ encoded: Buffer; stderr: string }>((resolve, reject) => {
+      const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
 
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
 
-    child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
-    child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
+      child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
+      child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
 
-    child.on('error', (err) => {
-      /* spawn failure: ffmpeg not on PATH. Surface a friendly hint — the
+      child.on('error', (err) => {
+        /* spawn failure: ffmpeg not on PATH. Surface a friendly hint — the
            preflight in start-app.ps1 should normally prevent this. */
-      reject(
-        new Error(
-          `Failed to spawn ffmpeg: ${err.message}. ` +
-            `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
-        ),
-      );
-    });
+        reject(
+          new Error(
+            `Failed to spawn ffmpeg: ${err.message}. ` +
+              `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
+          ),
+        );
+      });
 
-    child.on('close', (code) => {
-      const stderr = Buffer.concat(stderrChunks).toString('utf8');
-      if (code === 0) {
-        resolve({ encoded: Buffer.concat(stdoutChunks), stderr });
-      } else {
-        reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim() || '(no stderr)'}`));
-      }
-    });
+      child.on('close', (code) => {
+        const stderr = Buffer.concat(stderrChunks).toString('utf8');
+        if (code === 0) {
+          resolve({ encoded: Buffer.concat(stdoutChunks), stderr });
+        } else {
+          reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim() || '(no stderr)'}`));
+        }
+      });
 
-    child.stdin.on('error', (err) => {
-      /* EPIPE if ffmpeg dies before we finish writing the PCM. The 'close'
+      child.stdin.on('error', (err) => {
+        /* EPIPE if ffmpeg dies before we finish writing the PCM. The 'close'
            handler will report the real reason via stderr; swallow here so the
            promise doesn't reject twice. */
-      if ((err as NodeJS.ErrnoException).code !== 'EPIPE') reject(err);
-    });
+        if ((err as NodeJS.ErrnoException).code !== 'EPIPE') reject(err);
+      });
 
-    child.stdin.end(pcm);
-  });
+      child.stdin.end(pcm);
+    });
+  } catch (err) {
+    /* On encode failure (spawn error / non-zero exit) clean up any partial
+       temp file ffmpeg may have left behind before rethrowing. Plan 109. */
+    if (mp3OutPath) await unlink(mp3OutPath).catch(() => {});
+    throw err;
+  }
+
+  /* MP3 was written to a seekable temp file (so the Xing header landed);
+     read it back into the Buffer this function contracts to return, then
+     remove the temp. AAC/Opus stream to stdout as before. Plan 109. */
+  let encoded: Buffer;
+  if (mp3OutPath) {
+    try {
+      encoded = await readFile(mp3OutPath);
+    } finally {
+      await unlink(mp3OutPath).catch(() => {});
+    }
+  } else {
+    encoded = encodeResult.encoded;
+  }
 
   /* Two-pass post-encode upgrade: parse the second-pass loudnorm JSON from
      stderr and replace the provisional sidecar's input_i value with the
@@ -417,7 +477,7 @@ export async function encodePcmToAudio(
     await opts.onLoudnessMeasured(pendingSidecar);
   }
 
-  return encodeResult.encoded;
+  return encoded;
 }
 
 /** Map an `EncodePcmAudioFormat` to the on-disk file extension generation
