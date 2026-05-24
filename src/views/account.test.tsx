@@ -477,6 +477,51 @@ describe('AccountView — TTS sidecar auto-start (plan 43)', () => {
   });
 });
 
+describe('AccountView — dual-model TTS mode', () => {
+  it('renders the dual-model checkbox unchecked by default', () => {
+    renderView({ dualModelEnabled: false });
+    const checkbox = screen.getByTestId('account-dual-model-enabled') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it('renders the dual-model checkbox checked when the preference is true', () => {
+    renderView({ dualModelEnabled: true });
+    const checkbox = screen.getByTestId('account-dual-model-enabled') as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it('defaults to false when the field is absent (legacy settings file)', () => {
+    renderView({ dualModelEnabled: undefined });
+    const checkbox = screen.getByTestId('account-dual-model-enabled') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it('does NOT show a restart-required badge (takes effect on next generation run)', async () => {
+    const user = userEvent.setup();
+    renderView({ dualModelEnabled: false });
+    await user.click(screen.getByTestId('account-dual-model-enabled'));
+    /* Unlike auto-start, flipping dual-model mode shows no restart badge —
+       it's read on the next generation run, not at server boot. */
+    expect(screen.queryByText(/restart the server to apply this change/i)).toBeNull();
+  });
+
+  it('round-trips dualModelEnabled=true through the Save patch', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      dualModelEnabled: true,
+    });
+    const user = userEvent.setup();
+    renderView({ dualModelEnabled: false });
+    await user.click(screen.getByTestId('account-dual-model-enabled'));
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+    const [patch] = (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch.dualModelEnabled).toBe(true);
+  });
+});
+
 describe('AccountView — Models card (plan 61)', () => {
   it('renders the Models section with the in-app Ollama install card', async () => {
     /* The OllamaInstall component fires /api/ollama/detect on mount —
@@ -518,6 +563,25 @@ describe('AccountView — Models card (plan 61)', () => {
       const pre = screen.getByTestId('account-coqui-install-cmd');
       expect(pre.textContent).toMatch(/install-coqui\.ps1/);
       expect(pre.textContent).toMatch(/install-coqui\.sh/);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('renders the cross-platform Qwen3-TTS install snippet (both PowerShell + Node)', () => {
+    /* The Qwen card mirrors the Coqui block: a PowerShell command for
+       Windows and a Node command for macOS / Linux, both in one copyable
+       <pre> so the user grabs their platform's line without scrolling. */
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(JSON.stringify({ installed: false, version: null }), { status: 200 }),
+      );
+    try {
+      renderView();
+      const pre = screen.getByTestId('account-qwen-install-cmd');
+      expect(pre.textContent).toMatch(/install-qwen3\.ps1/);
+      expect(pre.textContent).toMatch(/install-qwen3\.mjs/);
     } finally {
       fetchSpy.mockRestore();
     }

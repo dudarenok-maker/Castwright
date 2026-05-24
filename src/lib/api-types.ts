@@ -1398,6 +1398,17 @@ export interface components {
              */
             analyzerPhase1MinLagChapters?: number | null;
             /**
+             * @description When true, the TTS sidecar is allowed to keep two TTS engines
+             *     (e.g. Kokoro + Qwen) resident in GPU memory simultaneously so a
+             *     book that mixes engines can generate without paying an
+             *     engine-swap cost between chapters. Default false: loading two
+             *     engines at once is a deliberate VRAM commitment (~8 GB
+             *     headroom), so a mixed-engine book still generates with this off,
+             *     it just pays the swap latency. Takes effect on the next
+             *     generation run; no server restart required.
+             */
+            dualModelEnabled?: boolean;
+            /**
              * @description Whether process.env.GEMINI_API_KEY is non-empty. The key value
              *     itself is never returned over the wire — the UI uses this flag
              *     to render a "set in server/.env" pill.
@@ -1442,6 +1453,7 @@ export interface components {
             analyzerPhase0Model?: string | null;
             analyzerPhase1Model?: string | null;
             analyzerPhase1MinLagChapters?: number | null;
+            dualModelEnabled?: boolean;
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];

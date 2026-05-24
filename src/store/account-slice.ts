@@ -94,6 +94,12 @@ export const accountSlice = createSlice({
     setAnalyzerPhase1MinLagChapters: (s, a: PayloadAction<number | null>) => {
       s.analyzerPhase1MinLagChapters = a.payload;
     },
+    /* Dual-model TTS mode — when true the sidecar may keep two TTS
+       engines resident in GPU memory at once. Off by default; toggled
+       from the Account view's TTS-sidecar card. */
+    setDualModelEnabled: (s, a: PayloadAction<boolean>) => {
+      s.dualModelEnabled = a.payload;
+    },
   },
   extraReducers: (builder) => {
     builder
