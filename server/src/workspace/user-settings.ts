@@ -102,6 +102,12 @@ export const userSettingsSchema = z.object({
      it re-spawns env on the next sidecar restart. Optional with a `true`
      default so legacy user-settings.json files load unchanged. */
   eagerLoadKokoro: z.boolean().optional(),
+  /* Plan 111 — number of chapters the generation queue synthesises
+     concurrently (queue-worker concurrency). Default 2. Queue/synthesis
+     concurrency only; the process-global GPU semaphore (GPU_CONCURRENCY)
+     stays the VRAM guard, so raising this never risks OOM. Optional with a
+     `2` default so legacy user-settings.json files load unchanged. */
+  generationWorkers: z.number().int().min(1).max(4).optional(),
   /* Plan 49 — UI-managed Gemini API key. Stored plaintext (same trust
      model as server/.env, which is gitignored and single-user). The
      env var GEMINI_API_KEY still wins when present (for CI / power
@@ -173,6 +179,10 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      on demand. Flip in lockstep with src/lib/account-defaults.ts
      FRONTEND_ACCOUNT_DEFAULTS. */
   eagerLoadKokoro: true,
+  /* Plan 111 — 2 concurrent generation workers by default (within-book
+     fan-out today; cross-book once the worker pool lands). Flip in lockstep
+     with src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
+  generationWorkers: 2,
   /* Plan 49 — null = no UI-saved key. Resolver falls through to env
      (process.env.GEMINI_API_KEY) and then null. */
   geminiApiKey: null,
@@ -278,6 +288,27 @@ export function getResolvedAutoStartSidecar(): boolean {
   if (process.env.DISABLE_AUTOSTART_SIDECAR === '1') return false;
   const c = cached;
   return c?.autoStartSidecar ?? DEFAULT_USER_SETTINGS.autoStartSidecar ?? true;
+}
+
+/** Plan 111 — number of chapters the generation queue synthesises
+    concurrently. Resolution chain:
+      1. process.env.GEN_WORKERS (preferred new name) — for CI / tests / ops.
+      2. process.env.GEN_CHAPTER_CONCURRENCY (legacy name, retired in a later
+         wave — honored for now so existing tests + deployers don't break).
+      3. cached user-settings generationWorkers (if defined).
+      4. DEFAULT_USER_SETTINGS.generationWorkers (2).
+    Returns an integer ≥ 1; never undefined. Queue/synthesis concurrency only
+    — the GPU semaphore is the separate VRAM guard. */
+export function getResolvedGenerationWorkers(): number {
+  const envRaw = process.env.GEN_WORKERS ?? process.env.GEN_CHAPTER_CONCURRENCY;
+  const envN = envRaw ? Number.parseInt(envRaw, 10) : NaN;
+  if (Number.isFinite(envN) && envN >= 1) return envN;
+  const c = cached;
+  const fromSettings = c?.generationWorkers;
+  if (typeof fromSettings === 'number' && Number.isFinite(fromSettings) && fromSettings >= 1) {
+    return fromSettings;
+  }
+  return DEFAULT_USER_SETTINGS.generationWorkers ?? 2;
 }
 
 /** Hardcoded Ollama tag used as the terminal fallback in

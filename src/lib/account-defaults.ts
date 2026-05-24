@@ -31,6 +31,7 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
   | 'analyzerPhase1MinLagChapters'
   | 'dualModelEnabled'
   | 'eagerLoadKokoro'
+  | 'generationWorkers'
 > = {
   displayName: 'Mike Dudarenok',
   /* Gemini 3.1 Flash Lite over the Google API key is the new default
@@ -89,4 +90,8 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
      ~1 GB; Kokoro then warms on demand on first synth. Flip in lockstep
      with server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   eagerLoadKokoro: true,
+  /* Plan 111 — 2 concurrent generation workers by default. Queue/synthesis
+     concurrency only; the GPU semaphore stays the VRAM guard. Flip in lockstep
+     with server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
+  generationWorkers: 2,
 };
