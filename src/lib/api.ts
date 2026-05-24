@@ -3228,6 +3228,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     analyzerPhase0Model,
     analyzerPhase1Model,
     analyzerPhase1MinLagChapters,
+    dualModelEnabled,
   } = patch;
   Object.assign(
     MOCK_USER_SETTINGS,
@@ -3243,6 +3244,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         analyzerPhase0Model,
         analyzerPhase1Model,
         analyzerPhase1MinLagChapters,
+        dualModelEnabled,
       }).filter(([, v]) => v !== undefined),
     ),
   );

@@ -126,6 +126,53 @@ describe('userSettingsSchema — autoStartSidecar (plan 43)', () => {
   });
 });
 
+describe('userSettingsSchema — dualModelEnabled', () => {
+  it('defaults to false on a fresh user-settings document', () => {
+    expect(DEFAULT_USER_SETTINGS.dualModelEnabled).toBe(false);
+  });
+
+  it('accepts true and false', () => {
+    expect(
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, dualModelEnabled: true })
+        .dualModelEnabled,
+    ).toBe(true);
+    expect(
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, dualModelEnabled: false })
+        .dualModelEnabled,
+    ).toBe(false);
+  });
+
+  it("rejects non-boolean values such as 'yes'", () => {
+    expect(() =>
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, dualModelEnabled: 'yes' }),
+    ).toThrow();
+  });
+
+  it('treats the field as optional — legacy settings files without it parse cleanly', () => {
+    const { dualModelEnabled: _dualModelEnabled, ...legacy } = DEFAULT_USER_SETTINGS;
+    const parsed = userSettingsSchema.parse(legacy);
+    expect(parsed.dualModelEnabled).toBeUndefined();
+  });
+
+  it('round-trips through writeUserSettings + readUserSettings', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    const before = await mod.readUserSettings();
+    try {
+      const updated = await mod.writeUserSettings({ dualModelEnabled: true });
+      expect(updated.dualModelEnabled).toBe(true);
+      mod._resetUserSettingsCache();
+      const reread = await mod.readUserSettings();
+      expect(reread.dualModelEnabled).toBe(true);
+    } finally {
+      await mod.writeUserSettings({
+        dualModelEnabled: before.dualModelEnabled ?? false,
+      });
+      mod._resetUserSettingsCache();
+    }
+  });
+});
+
 describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
   it("defaults to 'search' on a fresh user-settings document", () => {
     expect(DEFAULT_USER_SETTINGS.coverPickerDefaultTab).toBe('search');

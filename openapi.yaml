@@ -1798,6 +1798,17 @@ components:
             (`10`). `0` releases the lag entirely; `10` anchors
             attribution to the roster-author model's interpretive
             baseline (recommended).
+        dualModelEnabled:
+          type: boolean
+          description: |
+            When true, the TTS sidecar is allowed to keep two TTS engines
+            (e.g. Kokoro + Qwen) resident in GPU memory simultaneously so a
+            book that mixes engines can generate without paying an
+            engine-swap cost between chapters. Default false: loading two
+            engines at once is a deliberate VRAM commitment (~8 GB
+            headroom), so a mixed-engine book still generates with this off,
+            it just pays the swap latency. Takes effect on the next
+            generation run; no server restart required.
         apiKeyStatus:
           type: string
           enum: [set, unset]
@@ -1865,6 +1876,8 @@ components:
           minimum: 0
           maximum: 50
           nullable: true
+        dualModelEnabled:
+          type: boolean
 
     # --- Library ----------------------------------------------------
     LibraryResponse:
