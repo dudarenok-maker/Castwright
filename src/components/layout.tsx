@@ -1161,6 +1161,7 @@ export function Layout() {
             <ProfileDrawer
               character={profileCharacter}
               voice={profileVoice ?? undefined}
+              bookId={bookId ?? undefined}
               mergeCandidates={
                 bookId ? characters.filter((c) => c.id !== profileCharacter.id) : undefined
               }
@@ -1271,7 +1272,16 @@ export function Layout() {
                     prior.voiceId !== updated.voiceId ||
                     prior.gender !== updated.gender ||
                     prior.ageRange !== updated.ageRange ||
-                    JSON.stringify(prior.tone ?? {}) !== JSON.stringify(updated.tone ?? {});
+                    JSON.stringify(prior.tone ?? {}) !== JSON.stringify(updated.tone ?? {}) ||
+                    /* Plan 108 — a per-character engine swap, a persona
+                       (voiceStyle) edit, or any per-engine override change
+                       also invalidates rendered audio. The server drift
+                       detector catches engine/resolved-voice changes; this
+                       fires the immediate in-session nudge. */
+                    (prior.ttsEngine ?? undefined) !== (updated.ttsEngine ?? undefined) ||
+                    (prior.voiceStyle ?? '') !== (updated.voiceStyle ?? '') ||
+                    JSON.stringify(prior.overrideTtsVoices ?? {}) !==
+                      JSON.stringify(updated.overrideTtsVoices ?? {});
                   if (voiceChanged) {
                     const affectedChapters = chapters
                       .filter(

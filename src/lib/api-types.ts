@@ -935,6 +935,14 @@ export interface paths {
          *     synthesis bypasses the attribute-driven picker (`pickVoiceForEngine`)
          *     and uses the named speaker directly. Cross-engine overrides are kept
          *     but ignored at synth time; the UI surfaces an "engine mismatch" badge.
+         *
+         *     Scope (plan 108): the default `workspace` scope writes the override
+         *     to every confirmed-cast book sharing the voiceId across the whole
+         *     workspace (back-compat). Pass `scope: 'series'` + `bookId` to limit
+         *     the write to the cast.json files of books in the same
+         *     `(author, series)` as `bookId` — used by the Profile Drawer's
+         *     per-character Qwen design flow so a bespoke voice propagates across
+         *     that series only.
          */
         put: operations["setVoiceOverride"];
         post?: never;
@@ -1936,7 +1944,7 @@ export interface components {
              *     tab and family-header Play buttons.
              * @enum {string}
              */
-            rawEngine?: "coqui" | "gemini" | "piper" | "kokoro";
+            rawEngine?: "coqui" | "gemini" | "piper" | "kokoro" | "qwen";
             /**
              * @description Base-voice name from `GET /api/voices/base` (e.g. "Asya Anara",
              *     "Charon"). Ignored unless `rawEngine` is also set.
@@ -1959,8 +1967,8 @@ export interface components {
          */
         TtsVoiceAssignment: {
             /** @enum {string} */
-            provider: "coqui" | "gemini" | "piper" | "kokoro";
-            /** @description Engine-specific prebuilt voice name, e.g. 'Charon' (Gemini) or 'Claribel Dervla' (Coqui XTTS v2). */
+            provider: "coqui" | "gemini" | "piper" | "kokoro" | "qwen";
+            /** @description Engine-specific prebuilt voice name, e.g. 'Charon' (Gemini) or 'Claribel Dervla' (Coqui XTTS v2). For Qwen this is a designed-voice id. */
             name: string;
             /** @description Short label for the picked voice — engine-specific. Empty/placeholder when the engine doesn't publish descriptors. */
             description: string;
@@ -1974,8 +1982,8 @@ export interface components {
          */
         BaseVoice: {
             /** @enum {string} */
-            engine: "coqui" | "gemini" | "piper" | "kokoro";
-            /** @description Engine-specific speaker handle, e.g. 'Asya Anara' (Coqui XTTS) or 'Charon' (Gemini). */
+            engine: "coqui" | "gemini" | "piper" | "kokoro" | "qwen";
+            /** @description Engine-specific speaker handle, e.g. 'Asya Anara' (Coqui XTTS) or 'Charon' (Gemini). For Qwen this is a designed-voice id (no fixed catalog). */
             name: string;
             /** @description Optional ISO 639-1 / BCP-47 hint; absent when the engine doesn't tag languages. */
             language?: string;
@@ -2324,6 +2332,32 @@ export interface components {
              *     absent until a persona has been generated.
              */
             voiceStyle?: string;
+            /**
+             * @description Per-character TTS engine override (plan 108). When set, this
+             *     character is synthesised with this engine instead of the
+             *     project default — e.g. a speaking character moved to bespoke
+             *     Qwen while the narrator stays on a Kokoro preset. Absent means
+             *     "use the project default engine" (back-compat: pre-108 cast.json
+             *     files have no signal here). Resolved server-side by
+             *     `resolveCharacterEngine`.
+             * @enum {string|null}
+             */
+            ttsEngine?: "coqui" | "gemini" | "piper" | "kokoro" | "qwen" | null;
+            /**
+             * @description Per-engine user-set voice overrides for THIS character, keyed
+             *     by `TtsEngine`. Mirrors the same field on `Voice`: each slot
+             *     pins a specific speaker for that engine; the active synth
+             *     engine reads its own slot and falls back to attribute
+             *     inference when absent. For Qwen the slot's `name` is a designed
+             *     voiceId (the bespoke-voice cache key). Engine switches preserve
+             *     assignments so toggling Coqui ↔ Kokoro ↔ Qwen needs no re-cast.
+             */
+            overrideTtsVoices?: {
+                [key: string]: {
+                    /** @description Engine-specific speaker handle (designed voiceId for Qwen). */
+                    name: string;
+                };
+            } | null;
             evidence?: {
                 quote?: string;
                 note?: string;
@@ -3988,6 +4022,19 @@ export interface operations {
             content: {
                 "application/json": {
                     override: components["schemas"]["BaseVoice"] | null;
+                    /**
+                     * @description Write scope. `workspace` (default) propagates across
+                     *     every confirmed cast.json sharing the voiceId.
+                     *     `series` limits the write to the `(author, series)` of
+                     *     `bookId` (required when `scope: 'series'`).
+                     * @enum {string}
+                     */
+                    scope?: "series" | "workspace";
+                    /**
+                     * @description Anchor book whose `(author, series)` defines the series
+                     *     scope. Required when `scope: 'series'`; ignored otherwise.
+                     */
+                    bookId?: string;
                 };
             };
         };
