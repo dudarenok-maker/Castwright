@@ -104,6 +104,34 @@ describe('accountSlice — granular setters', () => {
     const c = accountSlice.reducer(b, accountActions.setAnalyzerPhase1MinLagChapters(null));
     expect(c.analyzerPhase1MinLagChapters).toBeNull();
   });
+
+  it('setDualModelEnabled toggles the dual-model flag', () => {
+    const a = accountSlice.reducer(undefined, accountActions.setDualModelEnabled(true));
+    expect(a.dualModelEnabled).toBe(true);
+    const b = accountSlice.reducer(a, accountActions.setDualModelEnabled(false));
+    expect(b.dualModelEnabled).toBe(false);
+  });
+});
+
+describe('accountSlice — dual-model flag', () => {
+  it('hydrates dualModelEnabled from the server fetch response', async () => {
+    (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      dualModelEnabled: true,
+    });
+    const store = makeStore();
+    await store.dispatch(fetchAccountSettings());
+    expect(store.getState().account.dualModelEnabled).toBe(true);
+  });
+
+  it('round-trips dualModelEnabled through saveAccountSettings', async () => {
+    const putSpy = api.putUserSettings as unknown as ReturnType<typeof vi.fn>;
+    putSpy.mockResolvedValue({ ...SERVER_FIXTURE, dualModelEnabled: true });
+    const store = makeStore();
+    await store.dispatch(saveAccountSettings({ dualModelEnabled: true }));
+    expect(putSpy).toHaveBeenCalledWith({ dualModelEnabled: true });
+    expect(store.getState().account.dualModelEnabled).toBe(true);
+  });
 });
 
 describe('accountSlice — Analyzer card (plan 88 phase-2)', () => {
