@@ -860,10 +860,14 @@ async def _preload_default_engines() -> None:
     button warms it on demand to avoid eating ~30 s of boot time and ~3 GB
     of VRAM the user may not need yet).
 
-    Kokoro: eager by default. ~1 s cold start and ~1 GB VRAM make the
-    "always loaded" choice cheap. Failure-tolerant: if the weights aren't
-    installed yet (fresh clone before install-kokoro.ps1 runs), log a
-    warning and keep the sidecar alive so the Coqui path still works."""
+    Kokoro: eager by default (PRELOAD_KOKORO=1), opt-out via
+    PRELOAD_KOKORO=0. ~1 s cold start and ~1 GB VRAM make the "always
+    loaded" choice cheap, but a Qwen-primary user can free that ~1 GB by
+    turning the eager load off — Kokoro then warms on demand on first
+    synth (KokoroEngine.synthesize calls _ensure_loaded) or via POST
+    /load. Failure-tolerant when eager: if the weights aren't installed
+    yet (fresh clone before install-kokoro.ps1 runs), log a warning and
+    keep the sidecar alive so the Coqui path still works."""
     if os.environ.get("PRELOAD_COQUI", "0") == "1":
         coqui_model = os.environ.get("PRELOAD_COQUI_MODEL", "xtts_v2")
         coqui = ENGINES.get("coqui")
@@ -879,18 +883,21 @@ async def _preload_default_engines() -> None:
     else:
         log.info("PRELOAD_COQUI is not set — skipping eager Coqui load; use POST /load to warm the model.")
 
-    kokoro = ENGINES.get("kokoro")
-    if isinstance(kokoro, KokoroEngine):
-        try:
-            log.info("Preloading Kokoro at startup…")
-            await asyncio.to_thread(kokoro._ensure_loaded, "v1")
-            log.info("Kokoro preload complete — /synthesize is hot.")
-        except Exception as e:
-            log.warning(
-                "Kokoro preload failed (%s). The Coqui path still works; run "
-                "server/tts-sidecar/scripts/install-kokoro.ps1 to install Kokoro weights.",
-                e,
-            )
+    if _parse_bool(os.environ.get("PRELOAD_KOKORO"), True):
+        kokoro = ENGINES.get("kokoro")
+        if isinstance(kokoro, KokoroEngine):
+            try:
+                log.info("Preloading Kokoro at startup…")
+                await asyncio.to_thread(kokoro._ensure_loaded, "v1")
+                log.info("Kokoro preload complete — /synthesize is hot.")
+            except Exception as e:
+                log.warning(
+                    "Kokoro preload failed (%s). The Coqui path still works; run "
+                    "server/tts-sidecar/scripts/install-kokoro.ps1 to install Kokoro weights.",
+                    e,
+                )
+    else:
+        log.info("PRELOAD_KOKORO=0 — Kokoro warms on demand on first synth.")
 
     # Qwen: opt-in via PRELOAD_QWEN=1 (off by default). A second always-resident
     # engine would break the 8 GB VRAM budget the dual-model flag gates, so Qwen
