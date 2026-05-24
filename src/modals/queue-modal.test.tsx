@@ -15,6 +15,7 @@ import { QueueModal } from './queue-modal';
 import { queueSlice, type QueueEntry } from '../store/queue-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { librarySlice } from '../store/library-slice';
+import { accountSlice } from '../store/account-slice';
 import type { LibraryBook } from '../lib/types';
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -53,12 +54,16 @@ const libraryBook = (bookId: string, title: string): LibraryBook => ({
   audioFormat: 'mp3',
 } as unknown as LibraryBook);
 
-function renderModal(entries: QueueEntry[], opts: { paused?: boolean; books?: LibraryBook[] } = {}) {
+function renderModal(
+  entries: QueueEntry[],
+  opts: { paused?: boolean; books?: LibraryBook[]; dualModelEnabled?: boolean } = {},
+) {
   const store = configureStore({
     reducer: {
       queue: queueSlice.reducer,
       notifications: notificationsSlice.reducer,
       library: librarySlice.reducer,
+      account: accountSlice.reducer,
     },
     preloadedState: {
       queue: { entries, paused: opts.paused ?? false, loaded: true },
@@ -66,6 +71,10 @@ function renderModal(entries: QueueEntry[], opts: { paused?: boolean; books?: Li
         books: opts.books ?? [],
         pausedSnapshots: {},
       } as ReturnType<typeof librarySlice.reducer>,
+      account: {
+        ...accountSlice.getInitialState(),
+        dualModelEnabled: opts.dualModelEnabled ?? false,
+      },
     },
   });
   /* loadQueue thunk fires on open — return an empty snapshot so the re-fetch
@@ -262,6 +271,39 @@ describe('QueueModal', () => {
     /* a1 (in-flight) has no drag handle; a2 (queued) does. */
     expect(screen.queryByTestId('queue-entry-a1-drag')).not.toBeInTheDocument();
     expect(screen.getByTestId('queue-entry-a2-drag')).toBeInTheDocument();
+  });
+
+  it('renders a single-engine badge naming the engine (plan 108 Wave 3)', () => {
+    renderModal([entry({ id: 'a1', requiredEngines: ['kokoro'], multiTts: false })]);
+    const badge = screen.getByTestId('queue-entry-a1-engines');
+    expect(badge).toHaveTextContent('Kokoro');
+    expect(screen.queryByTestId('queue-entry-a1-dual-model-warning')).toBeNull();
+  });
+
+  it('renders a multi-engine badge naming both engines', () => {
+    renderModal([entry({ id: 'a1', requiredEngines: ['kokoro', 'qwen'], multiTts: true })]);
+    expect(screen.getByTestId('queue-entry-a1-engines')).toHaveTextContent('Kokoro + Qwen');
+  });
+
+  it('shows the dual-model advisory on a multi-TTS chapter when the flag is off', () => {
+    renderModal([entry({ id: 'a1', requiredEngines: ['kokoro', 'qwen'], multiTts: true })], {
+      dualModelEnabled: false,
+    });
+    expect(screen.getByTestId('queue-entry-a1-dual-model-warning')).toBeInTheDocument();
+  });
+
+  it('hides the dual-model advisory when the flag is on', () => {
+    renderModal([entry({ id: 'a1', requiredEngines: ['kokoro', 'qwen'], multiTts: true })], {
+      dualModelEnabled: true,
+    });
+    expect(screen.getByTestId('queue-entry-a1-engines')).toHaveTextContent('Kokoro + Qwen');
+    expect(screen.queryByTestId('queue-entry-a1-dual-model-warning')).toBeNull();
+  });
+
+  it('renders no engine badge for a legacy entry without requiredEngines', () => {
+    renderModal([entry({ id: 'a1' })]);
+    expect(screen.queryByTestId('queue-entry-a1-engines')).toBeNull();
+    expect(screen.queryByTestId('queue-entry-a1-dual-model-warning')).toBeNull();
   });
 
   it('dispatches loadQueue on open (cross-tab freshness)', async () => {
