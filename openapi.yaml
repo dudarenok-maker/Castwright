@@ -1058,7 +1058,7 @@ paths:
               properties:
                 modelKey:
                   type: string
-                  enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                  enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
                   description: TTS model key. Local engines (kokoro-, coqui-) route to the sidecar; gemini-* keys route to Google's TTS API.
                 chapterIds:
                   type: array
@@ -1699,7 +1699,7 @@ components:
             Used to filter the model dropdown's initial state.
         defaultTtsModelKey:
           type: string
-          enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
           description: |
             TTS model key from src/lib/tts-models.ts. Used as the initial
             value of ui.ttsModelKey when a book has no persisted TTS-model
@@ -1864,7 +1864,7 @@ components:
         defaultTtsEngine: { type: string, enum: [local, gemini] }
         defaultTtsModelKey:
           type: string
-          enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
         sidecarUrl: { type: string }
         analysisEngine: { type: string, enum: [local, gemini] }
         ollamaUrl: { type: string }
@@ -2393,7 +2393,7 @@ components:
             the next page reload.
         audioModelKey:
           type: string
-          enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
           description: |
             Only on `chapter_complete` — the TTS model key that produced
             this chapter's audio. Carries the engine forward so the
@@ -2517,7 +2517,7 @@ components:
       properties:
         modelKey:
           type: string
-          enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
           description: UI-stable TTS model key. The engine prefix (kokoro-, coqui-, gemini-) drives provider selection server-side.
         voice:
           type: object
@@ -2583,7 +2583,7 @@ components:
         cached: { type: boolean }
         modelKey:
           type: string
-          enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
 
     # --- Voice library ---------------------------------------------
     TtsVoiceAssignment:
@@ -3218,7 +3218,7 @@ components:
           }
         audioModelKey:
           type: string
-          enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
           description: |
             TTS model key that produced this chapter's existing audio
             file. Stamped at render time and backfilled from the
@@ -3281,7 +3281,7 @@ components:
               excluded: { type: boolean }
               audioModelKey:
                 type: string
-                enum: [kokoro-v1, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
               audioRenderedAt: { type: string, format: date-time }
               titleOverridden: { type: boolean }
         sentenceRemap:
