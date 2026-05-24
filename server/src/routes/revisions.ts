@@ -18,6 +18,10 @@ import { existsSync, readdirSync } from 'node:fs';
 import { audioDir, castJsonPath, revisionsJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findBookByBookId } from '../workspace/scan.js';
+import { resolveCharacterEngine } from '../tts/per-character-engine.js';
+import { pickVoiceForEngine } from '../tts/voice-mapping.js';
+import { toVoiceLike, buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
+import type { TtsEngine } from '../tts/index.js';
 
 interface CharacterSnapshot {
   tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
@@ -25,6 +29,11 @@ interface CharacterSnapshot {
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
   voiceId?: string;
   voiceEngine?: string;
+  /** The voice NAME resolved at render time (plan 108 Wave 2b). Lets the
+      detector catch an override-only change (same voiceId, different
+      per-engine override) that the voiceId comparison misses. Absent on
+      pre-108 segments → fall back to voiceId. */
+  resolvedVoiceName?: string;
   /** Attribute list captured at synthesis time, sorted by
       generation.ts. Compared against the current cast's attributes —
       any non-empty symmetric difference fires a moderate-severity drift
@@ -39,15 +48,10 @@ interface SegmentsFile {
   characterSnapshots?: Record<string, CharacterSnapshot>;
 }
 
-interface CastCharacter {
-  id: string;
-  name?: string;
-  voiceId?: string;
-  gender?: 'male' | 'female' | 'neutral';
-  ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
-  tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
-  attributes?: string[];
-}
+/* CastCharacter is imported from synthesise-chapter.ts (plan 108 R5) so the
+   resolved-voice drift comparison below can reuse toVoiceLike +
+   buildHintFromCast on the live cast row — it needs the override / evidence /
+   ttsEngine fields the old narrow local shape lacked. */
 
 interface RevisionsPersisted {
   pending?: unknown[];
@@ -172,11 +176,29 @@ export async function getRevisionsForBook(
         current,
         detectedAt,
       };
-      /* No engine-drift factor: engine isn't stored in cast.json (it's per-
-         generation, set on the Generate view), so there's no current value
-         to compare against. A voiceId swap covers the cross-engine case in
-         practice — voice ids are engine-scoped. */
-      pushHardDrift(drift, ctx, 'voice', 'Voice', snapshot.voiceId, current.voiceId);
+      /* Engine drift (plan 108): the character's resolved engine changed since
+         this chapter rendered (e.g. Maerin moved from Kokoro to Qwen). Use the
+         rendered engine as the fallback default so a character with no explicit
+         ttsEngine and an unchanged engine doesn't false-fire. */
+      const renderedEngine = (snapshot.voiceEngine as TtsEngine | undefined) ?? 'kokoro';
+      const currentEngine = resolveCharacterEngine(current, renderedEngine);
+      if (snapshot.voiceEngine) {
+        pushHardDrift(drift, ctx, 'engine', 'Engine', snapshot.voiceEngine, currentEngine);
+      }
+      /* Voice drift: prefer the resolved voice NAME (catches an override-only
+         change that keeps voiceId constant — the rebaseline / per-character
+         picker case), falling back to voiceId for pre-108 snapshots that have
+         no resolvedVoiceName. */
+      if (snapshot.resolvedVoiceName) {
+        const currentName = pickVoiceForEngine(
+          currentEngine,
+          toVoiceLike(current),
+          buildHintFromCast(current),
+        );
+        pushHardDrift(drift, ctx, 'voice', 'Voice', snapshot.resolvedVoiceName, currentName);
+      } else {
+        pushHardDrift(drift, ctx, 'voice', 'Voice', snapshot.voiceId, current.voiceId);
+      }
       pushHardDrift(drift, ctx, 'gender', 'Gender', snapshot.gender, current.gender);
       pushHardDrift(drift, ctx, 'ageRange', 'Age range', snapshot.ageRange, current.ageRange);
       for (const key of TONE_KEYS) {
@@ -276,7 +298,7 @@ function autoQueueableFor(severity: DriftEvent['severity']): boolean | undefined
 function pushHardDrift(
   out: DriftEvent[],
   ctx: DriftContext,
-  factor: 'voice' | 'gender' | 'ageRange',
+  factor: 'voice' | 'engine' | 'gender' | 'ageRange',
   factorLabel: string,
   before: string | undefined,
   after: string | undefined,
