@@ -5,7 +5,7 @@
  * the same way the chapter-audio / book-state test files do. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -14,17 +14,76 @@ import request from 'supertest';
 let workspaceRoot: string;
 let app: Express;
 
+/* A real book on disk so the Wave-3 engine-stamp resolver (cast + analysis
+   cache + book default) has something to resolve. */
+const STAMP_AUTHOR = 'Queue Stamp Author';
+const STAMP_SERIES = 'Standalones';
+const STAMP_TITLE = 'Queue Stamp Book';
+const STAMP_MANUSCRIPT_ID = 'm_queue_stamp_test';
+let stampBookId: string;
+
 beforeAll(async () => {
   workspaceRoot = await mkdtemp(join(tmpdir(), 'queue-route-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
   /* Import AFTER WORKSPACE_DIR is set so paths.ts captures the override. */
   const { queueRouter } = await import('./queue.js');
+  const { makeBookId } = await import('../workspace/paths.js');
+  const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+
+  /* Book on disk: narrator speaks chapter 1 (single-engine, book default);
+     narrator + a qwen-override character speak chapter 2 (multi-TTS). */
+  stampBookId = makeBookId(STAMP_AUTHOR, STAMP_SERIES, STAMP_TITLE);
+  const bookDir = join(workspaceRoot, 'books', STAMP_AUTHOR, STAMP_SERIES, STAMP_TITLE);
+  await mkdir(join(bookDir, '.audiobook'), { recursive: true });
+  await writeFile(
+    join(bookDir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId: stampBookId,
+      manuscriptId: STAMP_MANUSCRIPT_ID,
+      title: STAMP_TITLE,
+      author: STAMP_AUTHOR,
+      series: STAMP_SERIES,
+      seriesPosition: null,
+      isStandalone: true,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed: true,
+      chapters: [
+        { id: 1, title: 'Chapter 1', slug: '01-chapter-one' },
+        { id: 2, title: 'Chapter 2', slug: '02-chapter-two' },
+      ],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  await writeFile(join(bookDir, 'manuscript.txt'), 'placeholder');
+  await writeFile(
+    join(bookDir, '.audiobook', 'cast.json'),
+    JSON.stringify({
+      characters: [
+        { id: 'narrator', name: 'Narrator' },
+        { id: 'Maerin', name: 'Maerin', ttsEngine: 'qwen' },
+      ],
+    }),
+  );
+  await saveAnalysisCache(STAMP_MANUSCRIPT_ID, {
+    chapters: {
+      1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }],
+      2: [
+        { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+        { id: 3, chapterId: 2, characterId: 'Maerin', text: 'Hi there.' },
+      ],
+    },
+  });
+
   app = express();
   app.use(express.json());
   app.use('/api/queue', queueRouter);
 });
 
 afterAll(async () => {
+  const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+  await clearAnalysisCache(STAMP_MANUSCRIPT_ID);
   await rm(workspaceRoot, { recursive: true, force: true });
 });
 
@@ -101,6 +160,36 @@ describe('POST /api/queue/enqueue', () => {
       .post('/api/queue/enqueue')
       .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 2, scope: 'this' }] });
     expect(dup.status).toBe(409);
+  });
+
+  it('omits engine fields when the book is not on disk (legacy / unknown)', async () => {
+    const res = await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
+    expect(res.status).toBe(200);
+    const [entry] = res.body.entries;
+    expect(entry.requiredEngines).toBeUndefined();
+    expect(entry.multiTts).toBeUndefined();
+  });
+
+  it('stamps requiredEngines + multiTts=false for a single-engine chapter', async () => {
+    const res = await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e-single', bookId: stampBookId, chapterId: 1, scope: 'this' }] });
+    expect(res.status).toBe(200);
+    const [entry] = res.body.entries;
+    expect(entry.requiredEngines).toEqual(['kokoro']);
+    expect(entry.multiTts).toBe(false);
+  });
+
+  it('stamps requiredEngines + multiTts=true for a mixed-engine chapter', async () => {
+    const res = await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e-multi', bookId: stampBookId, chapterId: 2, scope: 'this' }] });
+    expect(res.status).toBe(200);
+    const [entry] = res.body.entries;
+    expect(entry.requiredEngines).toEqual(['kokoro', 'qwen']);
+    expect(entry.multiTts).toBe(true);
   });
 });
 
