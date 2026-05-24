@@ -109,6 +109,49 @@ describe('GET /api/sidecar/health', () => {
     expect(res.body.kokoroLoading).toBe(false);
   });
 
+  it('forwards the Qwen per-engine fields as qwenLoaded / qwenLoading', async () => {
+    /* Plan 108: Qwen rides the same /health response as Coqui + Kokoro. The
+       proxy must split snake_case `qwen_loaded` / `qwen_loading` out to
+       camelCase so the single useTtsLifecycle hook fans them out to the
+       Qwen pill without a second probe. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['kokoro', 'qwen'],
+          model_loaded: false,
+          loading: false,
+          kokoro_loaded: true,
+          kokoro_loading: false,
+          qwen_loaded: true,
+          qwen_loading: false,
+          device: 'cuda',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenLoaded).toBe(true);
+    expect(res.body.qwenLoading).toBe(false);
+  });
+
+  it('coerces missing Qwen load-state fields to safe defaults', async () => {
+    /* An older sidecar that predates Qwen support must not leave the new
+       Qwen pill rendering as `undefined`. Mirror the Kokoro back-compat
+       coercion. */
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, engines: ['kokoro'] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenLoaded).toBe(false);
+    expect(res.body.qwenLoading).toBe(false);
+  });
+
   it('returns unreachable when the sidecar responds non-2xx', async () => {
     fetchMock.mockResolvedValue(
       new Response('nope', { status: 503, statusText: 'Service Unavailable' }),
