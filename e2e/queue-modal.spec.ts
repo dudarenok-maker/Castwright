@@ -29,6 +29,7 @@
  *     tests pin that path deterministically. */
 
 import { test, expect, type Route } from '@playwright/test';
+import { goToConfirm } from './helpers';
 
 interface QueueEntryShape {
   id: string;
@@ -275,5 +276,56 @@ test.describe('queue modal (plan 102)', () => {
     await expect(page.getByRole('dialog', { name: /Generation queue/i })).toBeVisible({
       timeout: 5_000,
     });
+  });
+
+  test('reflects the live generation run when the workspace queue is empty (read-side honesty)', async ({
+    page,
+  }) => {
+    /* The PRIMARY generation path — first generation after analysis, and
+       resume-on-reopen — opens its SSE via the reconcile middleware, which
+       writes NO workspace-queue entry. Before this fix the modal showed
+       "Empty / No chapters queued" while a book was visibly generating. Here
+       we drive a real mock generation (queue stubbed empty so loadQueue
+       resolves rather than hanging on "Loading…") and assert the modal shows
+       the active run instead.
+
+       Cold-boot analysis walk + generate navigation pushes past the default
+       30 s test timeout on a cold Vite cache — same budget as
+       generation-parallel.spec.ts. */
+    test.setTimeout(60_000);
+
+    const empty = (route: Route): Promise<void> =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ entries: [], paused: false }),
+      });
+    await page.route('**/api/queue', empty);
+    await page.route('**/api/queue/*', empty);
+
+    /* Cold boot → analysing → confirm → manuscript → Generate tab. The canned
+       analysis fixture seeds queued chapters, so landing on Generate trips the
+       reconcile open (TRIGGER_TYPES includes ui/changeView). */
+    await goToConfirm(page);
+    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
+    await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
+    await page.getByRole('button', { name: /^Generate$/ }).click();
+    await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
+
+    /* Wait until generation is live — ≥1 chapter-row "Generating" pill. The
+       mock SSE ticks for minutes, so the run is still alive when we open the
+       modal. */
+    await expect(page.locator('span', { hasText: /^Generating$/ }).first()).toBeVisible({
+      timeout: 20_000,
+    });
+
+    await page.getByTestId('generation-view-queue').click();
+    const dialog = page.getByRole('dialog', { name: /Generation queue/i });
+    await expect(dialog).toBeVisible({ timeout: 5_000 });
+
+    /* The active-generation overlay renders instead of the empty CTA. */
+    await expect(page.getByTestId('queue-modal-active-generation')).toBeVisible();
+    await expect(dialog.getByText('Generating…')).toBeVisible();
+    await expect(page.getByText(/No chapters queued/)).toHaveCount(0);
   });
 });
