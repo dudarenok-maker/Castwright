@@ -752,3 +752,44 @@ describe('AccountView — Analyzer card (plan 88 phase-2)', () => {
     expect(patch.analyzerPhase0Model).toBeNull();
   });
 });
+
+describe('AccountView — generation workers (plan 111)', () => {
+  it('renders the persisted worker count', () => {
+    renderView({ generationWorkers: 3 });
+    const input = screen.getByTestId('account-generation-workers') as HTMLInputElement;
+    expect(input.value).toBe('3');
+  });
+
+  it('defaults to 2 when the field is absent (legacy settings file)', () => {
+    renderView({ generationWorkers: undefined });
+    const input = screen.getByTestId('account-generation-workers') as HTMLInputElement;
+    expect(input.value).toBe('2');
+  });
+
+  it('clamps an out-of-range entry to [1, 4]', () => {
+    renderView({ generationWorkers: 2 });
+    const input = screen.getByTestId('account-generation-workers') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '9' } });
+    expect(input.value).toBe('4');
+    fireEvent.change(input, { target: { value: '0' } });
+    expect(input.value).toBe('1');
+  });
+
+  it('round-trips the worker count through the Save patch', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      generationWorkers: 4,
+    });
+    const user = userEvent.setup();
+    renderView({ generationWorkers: 2 });
+    fireEvent.change(screen.getByTestId('account-generation-workers'), {
+      target: { value: '4' },
+    });
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+    const [patch] = (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch.generationWorkers).toBe(4);
+  });
+});

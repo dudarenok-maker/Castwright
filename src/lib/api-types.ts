@@ -1427,6 +1427,16 @@ export interface components {
              */
             eagerLoadKokoro?: boolean;
             /**
+             * @description Number of chapters the generation queue synthesises concurrently
+             *     (queue-worker concurrency). Default 2. Pulled from the flat queue
+             *     across books; same-book chapters fan out within one stream via the
+             *     server's bounded pool. This is queue/synthesis concurrency only —
+             *     the process-global GPU semaphore (`GPU_CONCURRENCY`) remains the
+             *     VRAM guard, so raising this never risks an out-of-memory. Resolved
+             *     as `GEN_WORKERS` env > this setting > 2.
+             */
+            generationWorkers?: number;
+            /**
              * @description Whether process.env.GEMINI_API_KEY is non-empty. The key value
              *     itself is never returned over the wire — the UI uses this flag
              *     to render a "set in server/.env" pill.
@@ -1473,6 +1483,7 @@ export interface components {
             analyzerPhase1MinLagChapters?: number | null;
             dualModelEnabled?: boolean;
             eagerLoadKokoro?: boolean;
+            generationWorkers?: number;
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];
