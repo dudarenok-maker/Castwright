@@ -72,7 +72,8 @@ describe('loadQueue', () => {
     );
     const store = makeStore();
     await store.dispatch(loadQueue());
-    expect(fetchMock).toHaveBeenCalledWith('/api/queue');
+    /* queueRequest forwards `init` (undefined for the GET) to fetch. */
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue', undefined);
     expect(store.getState().queue.entries).toHaveLength(1);
     expect(store.getState().queue.entries[0].id).toBe('q1');
     expect(store.getState().queue.loaded).toBe(true);

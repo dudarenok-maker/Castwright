@@ -55,6 +55,14 @@ import './styles.css';
    docs/features/37-e2e-playwright.md under "Test hooks". */
 if (import.meta.env.DEV || import.meta.env.MODE === 'e2e') {
   (window as unknown as { __store__: typeof store }).__store__ = store;
+  /* Plan 111 — let e2e specs seed/reset the in-memory mock queue (the queue
+     drives generation in mock mode). Same DEV/e2e gate as __store__. */
+  void import('./mocks/mock-queue').then(({ seedMockQueue, resetMockQueue }) => {
+    (window as unknown as { __mockQueue: unknown }).__mockQueue = {
+      seed: seedMockQueue,
+      reset: resetMockQueue,
+    };
+  });
 }
 
 createRoot(document.getElementById('root')!).render(

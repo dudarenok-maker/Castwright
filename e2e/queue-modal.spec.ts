@@ -1,34 +1,18 @@
-/* Plan 102 — global queue modal e2e.
+/* Plan 102 + plan 111 — global queue modal e2e.
  *
- * Drives the modal end-to-end against Vite in mock mode. The mock backend
- * doesn't expose /api/queue/* (the queue is server-owned and the mock
- * never wired it), so we stub the routes per-test via page.route. That
- * keeps the spec free of mock-mode plumbing changes and pins the
- * frontend's expected request/response shapes against the OpenAPI
- * contract.
+ * Plan 111 made the persisted queue drive generation, and mock mode now has a
+ * real in-memory queue (src/mocks/mock-queue.ts) that the frontend's
+ * queue-thunks talk to. So these specs SEED that in-memory queue via the
+ * `window.__mockQueueInitial` hook (set by addInitScript before load) instead
+ * of stubbing /api/queue with page.route — there is no network call to
+ * intercept in mock mode any more.
  *
- * Covered flows:
- *   - Cold boot → top-bar queue chip surfaces the pending count.
- *   - Click chip → modal opens, lists every entry grouped by book.
- *   - Click Cancel on a non-in-flight entry → DELETE round-trips,
- *     modal re-renders without the cancelled entry.
- *   - Pause toggle → POST /pause flips the queue-global flag, badge
- *     reflects "Paused" in the modal header.
- *   - Generate view "View queue" button opens the modal as an alternate
- *     entry point.
- *   - Cross-book entries (Should #6): two books' entries render grouped in
- *     the modal while viewing one book, and the OTHER book's entry can be
- *     cancelled without navigating to it.
- *
- * Not covered (out of scope for this spec; covered elsewhere):
- *   - SSE reconnect during generation — pinned by api-stream-reconnect.test.ts.
- *   - Dispatcher drain semantics (incl. the cross-book open → idle → DELETE
- *     round-trip) — pinned by queue-dispatcher-middleware.test.ts. Driving a
- *     real cross-book SSE drain in mock mode is intentionally avoided here
- *     (the mock stream reads the viewed book's chapters); the dispatcher unit
- *     tests pin that path deterministically. */
+ * Static-inspection specs (chip count, grouping, cancel, badges) seed the
+ * queue PAUSED so the dispatcher doesn't drain it out from under the
+ * assertions. The last spec seeds nothing and drives a real generation to
+ * prove the queue is authoritative (chapters show up as real entries). */
 
-import { test, expect, type Route } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { goToConfirm } from './helpers';
 
 interface QueueEntryShape {
@@ -40,73 +24,41 @@ interface QueueEntryShape {
   addedAt: string;
   status: 'queued' | 'in_progress' | 'paused' | 'done' | 'failed';
   order: number;
-  /* Plan 108 Wave 3 — server-stamped engine set + multi-TTS flag. */
   requiredEngines?: ('coqui' | 'piper' | 'kokoro' | 'gemini' | 'qwen')[];
   multiTts?: boolean;
 }
 
-/* Helper: install a per-test in-memory queue + intercept every /api/queue
-   route against it. Returns a `state` ref so the spec can mutate the
-   fixture mid-test if needed.
-
-   Defaults to PAUSED. Since Should #6 lifted the same-book gate, the queue
-   dispatcher drains any UNPAUSED queue with work the moment the snapshot
-   loads — regardless of which view the user is on. These specs inspect the
-   queue UI (chip count, grouping, cancel), not the drain, so a paused
-   fixture keeps the injected entries put. Drain semantics (incl. the
-   cross-book open → idle → DELETE round-trip) are pinned by
-   queue-dispatcher-middleware.test.ts. Pass `false` to exercise draining. */
-function installQueueRoutes(entries: QueueEntryShape[], initialPaused = true) {
-  const state = { entries: [...entries], paused: initialPaused };
-
-  const respondSnapshot = (route: Route): Promise<void> =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ entries: state.entries, paused: state.paused }),
-    });
-
-  return { state, respondSnapshot };
+/* Seed the in-memory mock queue before the app loads. Defaults to PAUSED so
+   the static-inspection specs keep their injected entries put. */
+async function seedQueue(
+  page: import('@playwright/test').Page,
+  entries: QueueEntryShape[],
+  paused = true,
+): Promise<void> {
+  await page.addInitScript(
+    ([e, p]) => {
+      (window as unknown as { __mockQueueInitial: unknown }).__mockQueueInitial = e;
+      (window as unknown as { __mockQueueInitialPaused: unknown }).__mockQueueInitialPaused = p;
+    },
+    [entries, paused] as const,
+  );
 }
 
-test.describe('queue modal (plan 102)', () => {
-  test('top-bar chip surfaces the pending count and opens the modal', async ({ page }) => {
-    const { state, respondSnapshot } = installQueueRoutes([
-      {
-        id: 'e1',
-        bookId: 'sb',
-        chapterId: 1,
-        scope: 'this',
-        addedAt: new Date().toISOString(),
-        status: 'queued',
-        order: 0,
-      },
-      {
-        id: 'e2',
-        bookId: 'sb',
-        chapterId: 2,
-        scope: 'this',
-        addedAt: new Date().toISOString(),
-        status: 'queued',
-        order: 1,
-      },
-    ]);
-    await page.route('**/api/queue', respondSnapshot);
-    await page.route('**/api/queue/*', (route) => {
-      if (route.request().method() === 'DELETE') {
-        const url = new URL(route.request().url());
-        const id = url.pathname.split('/').pop();
-        state.entries = state.entries.filter((e) => e.id !== id);
-        void respondSnapshot(route);
-      } else {
-        void respondSnapshot(route);
-      }
-    });
+const e = (over: Partial<QueueEntryShape> & Pick<QueueEntryShape, 'id' | 'bookId' | 'chapterId'>): QueueEntryShape => ({
+  scope: 'this',
+  addedAt: new Date().toISOString(),
+  status: 'queued',
+  order: 0,
+  ...over,
+});
 
+test.describe('queue modal (plan 102 / 111)', () => {
+  test('top-bar chip surfaces the pending count and opens the modal', async ({ page }) => {
+    await seedQueue(page, [
+      e({ id: 'e1', bookId: 'sb', chapterId: 1 }),
+      e({ id: 'e2', bookId: 'sb', chapterId: 2 }),
+    ]);
     await page.goto('/#/books/sb/listen');
-    /* The chip mounts only when queueCount > 0; the layout's
-       mount-effect dispatches loadQueue which resolves with our 2
-       entries. */
     const chip = page.getByTestId('topbar-queue-chip');
     await chip.waitFor({ state: 'visible', timeout: 10_000 });
     await expect(chip).toContainText('Queue · 2');
@@ -115,82 +67,27 @@ test.describe('queue modal (plan 102)', () => {
     await expect(page.getByRole('dialog', { name: /Generation queue/i })).toBeVisible({
       timeout: 5_000,
     });
-    /* Modal header reads "N entries pending" — sanity-check the count is
-       rendered from our snapshot. */
     await expect(page.getByText(/2 entries pending/i)).toBeVisible();
   });
 
   test('cancel button removes the entry and re-renders the modal', async ({ page }) => {
-    const { state, respondSnapshot } = installQueueRoutes([
-      {
-        id: 'e-cancel',
-        bookId: 'sb',
-        chapterId: 5,
-        scope: 'this',
-        addedAt: new Date().toISOString(),
-        status: 'queued',
-        order: 0,
-      },
-    ]);
-    await page.route('**/api/queue', respondSnapshot);
-    await page.route('**/api/queue/*', (route) => {
-      if (route.request().method() === 'DELETE') {
-        const id = new URL(route.request().url()).pathname.split('/').pop();
-        state.entries = state.entries.filter((e) => e.id !== id);
-      }
-      void respondSnapshot(route);
-    });
-
+    await seedQueue(page, [e({ id: 'e-cancel', bookId: 'sb', chapterId: 5 })]);
     await page.goto('/#/books/sb/listen');
     await page.getByTestId('topbar-queue-chip').waitFor({ state: 'visible', timeout: 10_000 });
     await page.getByTestId('topbar-queue-chip').click();
     await expect(page.getByRole('dialog', { name: /Generation queue/i })).toBeVisible();
-    /* Modal lists chapter 5 — the cancel button carries a per-entry
-       data-testid so we can disambiguate when there are multiple rows. */
-    const cancelBtn = page.getByTestId('queue-entry-e-cancel-cancel');
-    await cancelBtn.click();
-    /* After the DELETE round-trip the modal re-renders empty. */
+    await page.getByTestId('queue-entry-e-cancel-cancel').click();
+    /* After the DELETE the modal re-renders empty. */
     await expect(page.getByText(/Empty/i).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test('cross-book entries render grouped and the other book’s entry cancels while viewing one book', async ({
     page,
   }) => {
-    /* Should #6 — two books' worth of queue entries injected via page.route.
-       The user is viewing Solway Bay (sb); a Northern Star (ns) entry is also
-       queued. Both render in the modal (grouped by book), and the ns entry —
-       a DIFFERENT book than the one on screen — can be cancelled without
-       navigating to it. This is the cross-book queue surface; the dispatcher
-       unit tests cover the actual cross-book drain. */
-    const { state, respondSnapshot } = installQueueRoutes([
-      {
-        id: 'sb-c1',
-        bookId: 'sb',
-        chapterId: 1,
-        scope: 'this',
-        addedAt: new Date().toISOString(),
-        status: 'queued',
-        order: 0,
-      },
-      {
-        id: 'ns-c3',
-        bookId: 'ns',
-        chapterId: 3,
-        scope: 'this',
-        addedAt: new Date().toISOString(),
-        status: 'queued',
-        order: 1,
-      },
+    await seedQueue(page, [
+      e({ id: 'sb-c1', bookId: 'sb', chapterId: 1 }),
+      e({ id: 'ns-c3', bookId: 'ns', chapterId: 3, order: 1 }),
     ]);
-    await page.route('**/api/queue', respondSnapshot);
-    await page.route('**/api/queue/*', (route) => {
-      if (route.request().method() === 'DELETE') {
-        const id = new URL(route.request().url()).pathname.split('/').pop();
-        state.entries = state.entries.filter((e) => e.id !== id);
-      }
-      void respondSnapshot(route);
-    });
-
     await page.goto('/#/books/sb/listen');
     const chip = page.getByTestId('topbar-queue-chip');
     await chip.waitFor({ state: 'visible', timeout: 10_000 });
@@ -200,51 +97,28 @@ test.describe('queue modal (plan 102)', () => {
       timeout: 5_000,
     });
 
-    /* Both books' entries render (grouped by book in the modal). */
     await expect(page.getByTestId('queue-entry-sb-c1')).toBeVisible();
     await expect(page.getByTestId('queue-entry-ns-c3')).toBeVisible();
 
-    /* Cancel the OTHER book's entry (ns) while still on sb's listen view. */
     await page.getByTestId('queue-entry-ns-c3-cancel').click();
     await expect(page.getByTestId('queue-entry-ns-c3')).toHaveCount(0, { timeout: 5_000 });
-    /* The viewed book's entry is untouched. */
     await expect(page.getByTestId('queue-entry-sb-c1')).toBeVisible();
   });
 
   test('multi-TTS chapter shows the engine badge + dual-model-off warning (plan 108 Wave 3)', async ({
     page,
   }) => {
-    /* One single-engine chapter (Kokoro) and one multi-engine chapter
-       (Kokoro + Qwen). The multi one names both engines and — with the
-       dual-model flag at its default (off) in mock mode — shows the advisory
-       to enable dual-model mode in Account settings. */
-    const { respondSnapshot } = installQueueRoutes([
-      {
-        id: 'single',
-        bookId: 'sb',
-        chapterId: 1,
-        scope: 'this',
-        addedAt: new Date().toISOString(),
-        status: 'queued',
-        order: 0,
-        requiredEngines: ['kokoro'],
-        multiTts: false,
-      },
-      {
+    await seedQueue(page, [
+      e({ id: 'single', bookId: 'sb', chapterId: 1, requiredEngines: ['kokoro'], multiTts: false }),
+      e({
         id: 'multi',
         bookId: 'sb',
         chapterId: 2,
-        scope: 'this',
-        addedAt: new Date().toISOString(),
-        status: 'queued',
         order: 1,
         requiredEngines: ['kokoro', 'qwen'],
         multiTts: true,
-      },
+      }),
     ]);
-    await page.route('**/api/queue', respondSnapshot);
-    await page.route('**/api/queue/*', respondSnapshot);
-
     await page.goto('/#/books/sb/listen');
     const chip = page.getByTestId('topbar-queue-chip');
     await chip.waitFor({ state: 'visible', timeout: 10_000 });
@@ -253,23 +127,15 @@ test.describe('queue modal (plan 102)', () => {
       timeout: 5_000,
     });
 
-    /* Single-engine row: badge names Kokoro, no advisory. */
     await expect(page.getByTestId('queue-entry-single-engines')).toHaveText('Kokoro');
     await expect(page.getByTestId('queue-entry-single-dual-model-warning')).toHaveCount(0);
-
-    /* Multi-engine row: badge names both engines + the dual-model advisory. */
     await expect(page.getByTestId('queue-entry-multi-engines')).toHaveText('Kokoro + Qwen');
     await expect(page.getByTestId('queue-entry-multi-dual-model-warning')).toBeVisible();
   });
 
   test('Generate view "View queue" button opens the modal', async ({ page }) => {
-    const { respondSnapshot } = installQueueRoutes([]);
-    await page.route('**/api/queue', respondSnapshot);
-    await page.route('**/api/queue/*', respondSnapshot);
-
+    await seedQueue(page, []);
     await page.goto('/#/books/sb/generate');
-    /* The header View queue button is always rendered (chip-style); the
-       count badge only shows when queue is non-empty. */
     const viewQueue = page.getByTestId('generation-view-queue');
     await viewQueue.waitFor({ state: 'visible', timeout: 10_000 });
     await viewQueue.click();
@@ -278,43 +144,22 @@ test.describe('queue modal (plan 102)', () => {
     });
   });
 
-  test('reflects the live generation run when the workspace queue is empty (read-side honesty)', async ({
+  test('the queue is authoritative — generating chapters appear as real queue entries (plan 111)', async ({
     page,
   }) => {
-    /* The PRIMARY generation path — first generation after analysis, and
-       resume-on-reopen — opens its SSE via the reconcile middleware, which
-       writes NO workspace-queue entry. Before this fix the modal showed
-       "Empty / No chapters queued" while a book was visibly generating. Here
-       we drive a real mock generation (queue stubbed empty so loadQueue
-       resolves rather than hanging on "Loading…") and assert the modal shows
-       the active run instead.
-
-       Cold-boot analysis walk + generate navigation pushes past the default
-       30 s test timeout on a cold Vite cache — same budget as
-       generation-parallel.spec.ts. */
+    /* No override any more: analysis lands → enqueue-on-work fills the queue →
+       the dispatcher drains it. So while a book generates, the queue modal
+       shows REAL entries (not the old synthetic overlay). Drives a real mock
+       generation and asserts the modal reports pending entries. */
     test.setTimeout(60_000);
 
-    const empty = (route: Route): Promise<void> =>
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ entries: [], paused: false }),
-      });
-    await page.route('**/api/queue', empty);
-    await page.route('**/api/queue/*', empty);
-
-    /* Cold boot → analysing → confirm → manuscript → Generate tab. The canned
-       analysis fixture seeds queued chapters, so landing on Generate trips the
-       reconcile open (TRIGGER_TYPES includes ui/changeView). */
     await goToConfirm(page);
     await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
     await page.getByRole('button', { name: /^Generate$/ }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
 
-    /* Wait until generation is live — ≥1 chapter-row "Generating" pill. The
-       mock SSE ticks for minutes, so the run is still alive when we open the
-       modal. */
+    /* Generation is live once a chapter-row "Generating" pill shows. */
     await expect(page.locator('span', { hasText: /^Generating$/ }).first()).toBeVisible({
       timeout: 20_000,
     });
@@ -322,10 +167,8 @@ test.describe('queue modal (plan 102)', () => {
     await page.getByTestId('generation-view-queue').click();
     const dialog = page.getByRole('dialog', { name: /Generation queue/i });
     await expect(dialog).toBeVisible({ timeout: 5_000 });
-
-    /* The active-generation overlay renders instead of the empty CTA. */
-    await expect(page.getByTestId('queue-modal-active-generation')).toBeVisible();
-    await expect(dialog.getByText('Generating…')).toBeVisible();
+    /* Authoritative queue → real pending entries, never "No chapters queued". */
+    await expect(dialog.getByText(/entr(y|ies) pending/i)).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/No chapters queued/)).toHaveCount(0);
   });
 });

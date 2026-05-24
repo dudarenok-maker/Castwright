@@ -12,8 +12,6 @@ import { changeLogSlice } from '../store/change-log-slice';
 import { castSlice } from '../store/cast-slice';
 import { librarySlice } from '../store/library-slice';
 import { accountSlice } from '../store/account-slice';
-import { generationStreamMiddleware } from '../store/generation-stream-middleware';
-import { createStreamRunner, type StreamRunner } from '../store/generation-stream-runner';
 import { queueSlice } from '../store/queue-slice';
 import { GenerationView } from './generation';
 import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
@@ -757,61 +755,11 @@ describe('GenerationView — header action once the run is complete', () => {
    in the queue modal. Wave 4b adds the equivalent guard test to the
    QueueModal pause/resume control where the affordance lives now. */
 
-describe('generationStreamMiddleware — Pause/Resume regenerate loop (regression)', () => {
-  beforeEach(() => {
-    streamGenerationMock.mockClear();
-  });
-
-  it('opens the SSE on regenerateChapter with the regen spec (chapterIds + force)', () => {
-    /* The regen path: regenerateChapter → the generation-stream middleware
-       computes the spec (chapterIds + force:true) from the action and hands it
-       straight to the shared runner, which opens the SSE. Plan 102 Should #5
-       moved this off the slice (the old chapters.pendingRegen field) into
-       middleware-local state, so the spec is drained the instant the runner
-       owns it and a Pause→Resume can't replay a stale force-regen. */
-    let runner: StreamRunner | null = null;
-    const getRunner = (): StreamRunner => runner!;
-    const store = configureStore({
-      reducer: {
-        ui: uiSlice.reducer,
-        chapters: chaptersSlice.reducer,
-        manuscript: manuscriptSlice.reducer,
-        changeLog: changeLogSlice.reducer,
-        cast: castSlice.reducer,
-        library: librarySlice.reducer,
-        queue: queueSlice.reducer,
-      },
-      middleware: (gd) => gd().concat(generationStreamMiddleware(getRunner)),
-    });
-    runner = createStreamRunner(store);
-    /* Middleware skips opens unless a book is in scope AND the chapters
-       slice has claimed that book via setCurrentBookId (cross-book guard
-       requires the pair to agree before reconcile opens or closes). */
-    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
-    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
-    /* Setup may have opened a stream on the initial chapters; the assertion
-       below cares only about the regenerate-driven reopen. */
-    streamGenerationMock.mockClear();
-
-    store.dispatch(chaptersSlice.actions.regenerateChapter({ chapterId: 1, scope: 'this' }));
-
-    /* streamGeneration MUST have been called with the spec (otherwise we'd
-       have broken the regenerate path entirely). */
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    const callArgs = streamGenerationMock.mock.calls[0]?.[0] as {
-      chapterIds?: unknown;
-      force?: unknown;
-    };
-    expect(callArgs?.chapterIds).toEqual([1]);
-    expect(callArgs?.force).toBe(true);
-    /* The spec is drained the instant the runner owns it (middleware-local
-       pendingSpec → null) so a later resume can't replay it — no longer an
-       observable slice field after plan 102 Should #5; the single
-       streamGeneration call above is the proof the open used the regen spec
-       and didn't re-fire. */
-  });
-});
+/* (plan 111 wave 3) The "regenerateChapter opens the SSE with a spec" path no
+   longer lives in the middleware — regen now enqueues and the queue dispatcher
+   is the sole stream-opener. That behaviour + the Pause/Resume no-replay
+   regression are covered by queue-dispatcher-middleware.test.ts (same-book
+   open, no double-claim, no-loop) and generation-stream-runner.test.ts. */
 
 describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
   /* This is the headline UX guarantee of the button-driven model lifecycle:
