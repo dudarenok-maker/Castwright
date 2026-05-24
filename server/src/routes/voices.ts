@@ -130,7 +130,13 @@ async function loadVoicesMeta(): Promise<VoicesMetaJson> {
 }
 
 function parseEngine(value: unknown): TtsEngine {
-  if (value === 'gemini' || value === 'coqui' || value === 'piper' || value === 'kokoro')
+  if (
+    value === 'gemini' ||
+    value === 'coqui' ||
+    value === 'piper' ||
+    value === 'kokoro' ||
+    value === 'qwen'
+  )
     return value;
   return 'coqui';
 }
@@ -347,7 +353,8 @@ function parseOverrideField(
     v.engine !== 'coqui' &&
     v.engine !== 'gemini' &&
     v.engine !== 'piper' &&
-    v.engine !== 'kokoro'
+    v.engine !== 'kokoro' &&
+    v.engine !== 'qwen'
   )
     return 'invalid';
   if (v.name.trim().length === 0) return 'invalid';
