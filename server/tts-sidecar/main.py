@@ -834,7 +834,11 @@ class QwenEngine(Engine):
                 pass
 
         self._ensure_base_loaded()
-        prompt = torch.load(pt_path)
+        # weights_only=False: the cached prompt is a qwen_tts VoiceClonePromptItem
+        # (not a plain tensor), which PyTorch 2.6+'s default safe-unpickler
+        # rejects. Safe here — WE wrote this file in design_voice (trusted),
+        # it's not untrusted input.
+        prompt = torch.load(pt_path, weights_only=False)
         wavs, sr = self._base.generate_voice_clone(
             text=[text], language=[lang], voice_clone_prompt=prompt
         )
