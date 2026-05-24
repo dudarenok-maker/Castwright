@@ -45,6 +45,7 @@ function makeStore({
     themeOverride,
     reuploadingBookId: null,
     queueModalOpen: false,
+    rebaselineModalOpen: false,
   };
   const accountPreloaded: AccountState = {
     ...FRONTEND_ACCOUNT_DEFAULTS,
