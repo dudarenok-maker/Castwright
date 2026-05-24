@@ -1111,3 +1111,77 @@ describe('synthesiseChapter within-chapter parallelism (plan 107)', () => {
     expect(result.segments[2].startSec).toBe(result.segments[1].endSec);
   });
 });
+
+describe('synthesiseChapter per-character engine routing (plan 108)', () => {
+  function taggedProvider(sampleRate = 24000): TtsProvider & { calls: SynthesizeInput[] } {
+    const calls: SynthesizeInput[] = [];
+    return {
+      calls,
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        calls.push(input);
+        return { pcm: Buffer.alloc(4), sampleRate, mimeType: 'audio/pcm' };
+      },
+    };
+  }
+
+  it('routes each character to its own engine via resolveForEngine, reassembling in narrative order', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator' },
+      {
+        id: 'biana',
+        name: 'Biana',
+        gender: 'female',
+        ageRange: 'teen',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'biana-designed' } },
+      },
+    ];
+    const kokoro = taggedProvider(24000); // default engine + anchor rate
+    const qwen = taggedProvider(16000); // different rate → must resample to anchor
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'narrator'), sentence(2, 'biana'), sentence(3, 'narrator')],
+      cast,
+      provider: kokoro,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+      resolveForEngine: (e) =>
+        e === 'qwen'
+          ? { provider: qwen, modelKey: 'qwen3-tts-0.6b' }
+          : { provider: kokoro, modelKey: 'kokoro-v1' },
+    });
+
+    // Biana's line went to the Qwen provider with her designed voiceId + qwen modelKey.
+    expect(qwen.calls).toHaveLength(1);
+    expect(qwen.calls[0].voiceName).toBe('biana-designed');
+    expect(qwen.calls[0].modelKey).toBe('qwen3-tts-0.6b');
+    // The narrator's two lines used the default (kokoro) provider + a kokoro voice.
+    expect(kokoro.calls).toHaveLength(2);
+    for (const c of kokoro.calls) {
+      expect(c.modelKey).toBe('kokoro-v1');
+      expect(c.voiceName).toMatch(/^(af_|am_|bf_|bm_)/);
+    }
+    // Anchor rate is groups[0] (narrator/kokoro = 24000); the 16k qwen group resamples up.
+    expect(result.sampleRate).toBe(24000);
+    // Narrative order preserved across engines.
+    expect(result.segments.map((s) => s.characterId)).toEqual(['narrator', 'biana', 'narrator']);
+  });
+
+  it('without resolveForEngine + no per-character ttsEngine, everything uses the default provider (byte-identical to pre-108)', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator' },
+      { id: 'fitz', name: 'Fitz', gender: 'male', ageRange: 'teen' },
+    ];
+    const provider = taggedProvider(24000);
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'narrator'), sentence(2, 'fitz')],
+      cast,
+      provider,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+    });
+    expect(provider.calls).toHaveLength(2);
+    for (const c of provider.calls) expect(c.modelKey).toBe('kokoro-v1');
+    expect(result.segments).toHaveLength(2);
+  });
+});
