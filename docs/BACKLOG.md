@@ -120,7 +120,7 @@ Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ship
 
 Source: net-new (2026-05-18).
 
-> **Scope note (2026-05-24):** largely subsumed by [plan 108](features/108-qwen-coexistence.md)'s "Rebaseline the series" modal + series-scoped override write (`PUT /api/voices/:voiceId/override?scope=series`), which lets the user re-map any character's engine + base voice across a series with current-vs-proposed audition. What this item retains that plan 108 does not cover: the *library-level* "pick voice A → replace with voice B everywhere across ALL books (not just one series)" bulk affordance + multi-book audio invalidation. Re-scope to that workspace-wide bulk replace, or close, once plan 108 ships.
+> **Re-scoped (2026-05-24, plan 108 shipped):** the *series-scoped* per-character re-map is now delivered by [plan 108](features/108-qwen-coexistence.md)'s "Rebaseline the series" modal + `PUT /api/voices/:voiceId/override?scope=series` (re-map a character's engine + base voice across a series with current-vs-proposed audition). This item now covers ONLY what remains: the *library-level, workspace-wide* "pick voice A → replace with voice B everywhere across ALL books (not just one series)" bulk affordance + multi-book audio invalidation.
 
 - _What:_ Add a "Replace voice everywhere" affordance in the voice library: pick a current voice, pick a replacement, see a preview of all (book, character) pairs that would be affected, confirm. Affected books' cast slices are mutated; audio is invalidated (regen prompt per book).
 - _Acceptance:_ Three books each use voice `am_michael` for one character → batch replace `am_michael` → `am_eric` shows 3 affected pairs, confirm rewrites all three cast.json files, audio marked stale. Vitest covers the dry-run preview + write logic; e2e covers the modal flow.
@@ -216,18 +216,6 @@ Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
 - _Key files:_ grep `src/**/*.tsx` for `group-hover:` / `peer-hover:` / `hover:opacity-0`; apply per-component judgement.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances.
-
-### 14. Both TTS engines resident (Kokoro + XTTS)
-
-Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item A3).
-
-> **Scope note (2026-05-24):** being delivered by [plan 108](features/108-qwen-coexistence.md) as the deliberate `dualModelEnabled` user setting (default off) — generalised to Kokoro + Qwen, with the same idea applying to Kokoro + XTTS. When `dualModelEnabled` is on, both engines stay resident (Ollama auto-evicts during generation via the existing banner); when off, a mixed-engine book pays the engine-swap cost with an inline warning. Remove this item when plan 108's dual-model wave ships.
-
-- _What:_ Drop the eviction wiring between Kokoro and XTTS; keep both engines loaded. Per-character voice profiles already carry `overrideTtsVoices: { coqui?, kokoro? }` per CLAUDE.md — pick at synth time. VRAM math (Kokoro 1 GB + XTTS 3 GB + Ollama analyzer ~7 GB = 11 GB on an 8 GB GPU) requires Ollama auto-eviction during generation, with the existing "TTS / Analyzer unloaded to free VRAM" banner.
-- _Acceptance:_ A mixed-engine book (Coqui voice on character A, Kokoro on character B) renders without engine-swap latency between sentences. First XTTS use no longer pays the ~30 s cold-load. Ollama auto-eviction surfaces a clear banner during generation; re-loads on analysis trigger.
-- _Key files:_ `server/tts-sidecar/main.py` (eviction wiring removal); `src/components/model-control-pill.tsx`; analyzer eviction at `server/src/analyzer/ollama.ts:92`.
-- _Depends on:_ none structural. Speed gain conditional on mixed-engine casts.
-- _Benefit (user):_ eliminates the 30 s XTTS cold-load on first use for mixed-engine books; enables fluid engine mixing per character.
 
 ### 15. Per-call local→Gemini analyzer overflow
 
