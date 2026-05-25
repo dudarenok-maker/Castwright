@@ -60,6 +60,14 @@ beforeEach(() => {
           (e, i) => ({ ...e, status: 'queued', order: queueEntries.length + i }) as QueueEntry,
         ),
       ];
+    } else if (init?.method === 'POST' && u.endsWith('/start')) {
+      const id = u.split('/').slice(-2)[0];
+      queueEntries = queueEntries.map((e) =>
+        e.id === id ? ({ ...e, status: 'in_progress' } as QueueEntry) : e,
+      );
+    } else if (init?.method === 'POST' && u.endsWith('/complete')) {
+      const id = u.split('/').slice(-2)[0];
+      queueEntries = queueEntries.filter((e) => e.id !== id);
     } else if (init?.method === 'DELETE') {
       const id = u.split('/').pop();
       queueEntries = queueEntries.filter((e) => e.id !== id);
@@ -106,7 +114,9 @@ const ch = (id: number, state: Chapter['state'] = 'queued'): Chapter =>
   }) as Chapter;
 
 async function flush(): Promise<void> {
-  for (let i = 0; i < 6; i++) await Promise.resolve();
+  /* Generous flush — the dispatcher fires /start on claim + /complete on
+     reconcile, each a fetch → res.json() → setSnapshot chain that can re-tick. */
+  for (let i = 0; i < 14; i++) await Promise.resolve();
 }
 
 describe('queue-driven generation integration (plan 111)', () => {

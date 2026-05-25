@@ -12,14 +12,19 @@
  *
  * Each tick:
  *   1. RECONCILE COMPLETIONS — for every entry we claimed whose CHAPTER no
- *      longer has an open stream, that chapter finished: DELETE it from the
- *      server queue. Chapter-level, so an entry leaves the queue the instant
- *      its own chapter completes, independent of siblings.
+ *      longer has an open stream, that chapter finished: POST /complete to drop
+ *      it from the server queue (status-agnostic — the entry is in_progress by
+ *      now, so a user-cancel DELETE would 409). Chapter-level, so an entry
+ *      leaves the queue the instant its own chapter completes, independent of
+ *      siblings.
  *   2. FILL TO N — claim up to (N − inFlight) queued entries from the flat
  *      queue across books, opening ONE stream per claimed entry (one chapter
- *      each, force:true). Skip chapters already streaming. For the VIEWED
- *      book, flip its rows (regenerateChapterIds / regenerateCharacter) so the
- *      Generate view reflects the run; cross-book opens are direct.
+ *      each, force:true). On claim, POST /start to flip the entry to
+ *      in_progress so the modal renders it "In flight" (multiple can be in
+ *      flight at once) and the persisted .queue.json survives a mid-run reload.
+ *      Skip chapters already streaming. For the VIEWED book, flip its rows
+ *      (regenerateChapterIds / regenerateCharacter) so the Generate view
+ *      reflects the run; cross-book opens are direct.
  *
  * Correctness:
  *   - No double-claim: middleware + queueMicrotask run single-threaded; we add
@@ -36,7 +41,7 @@
 import type { Middleware, MiddlewareAPI } from '@reduxjs/toolkit';
 import { chaptersActions, type ChaptersState } from './chapters-slice';
 import { queueActions, type QueueState } from './queue-slice';
-import { cancelQueueEntry } from './queue-thunks';
+import { completeQueueEntry, startQueueEntry } from './queue-thunks';
 import type { UiState } from './ui-slice';
 import type { AppDispatch } from './index';
 import type { StreamRunner } from './generation-stream-runner';
@@ -93,9 +98,12 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
         if (!runner.hasOpenStreamForChapter(bookId, chapterId)) {
           inFlight.delete(entryId);
           completed.add(entryId);
-          void dispatch(cancelQueueEntry(entryId)).catch(() => {
-            /* 404 already-gone / 409 in_progress — idempotent; the next
-               /api/queue snapshot reconciles. */
+          /* Completion removal, NOT a user cancel: the entry is in_progress
+             by now (we POSTed /start on claim), so DELETE would 409. /complete
+             drops it status-agnostically. Idempotent for an already-gone id;
+             the next /api/queue snapshot reconciles either way. */
+          void dispatch(completeQueueEntry(entryId)).catch(() => {
+            /* Best-effort — the next snapshot reconciles. */
           });
         }
       }
@@ -122,6 +130,16 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
            tick can't double-claim. */
         inFlight.set(e.id, { bookId: e.bookId, chapterId: e.chapterId });
         slots--;
+
+        /* Flip the entry to in_progress at the moment of claim — one entry =
+           one chapter actively starting, so claim == in_progress (no need to
+           wait for the first progress tick). The modal then renders this row
+           as "In flight" instead of "Queued", and the persisted .queue.json
+           shows in_progress mid-run so a reload reflects accurate state.
+           Best-effort: a failed mark only affects the label, not the run. */
+        void dispatch(startQueueEntry(e.id)).catch(() => {
+          /* Status label only — the stream still runs. */
+        });
 
         /* VIEWED book — flip rows so the Generate view shows the run. These
            dispatches no longer trigger an open (the override is gone); they

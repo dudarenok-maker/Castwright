@@ -10,7 +10,7 @@
  * next (Wave 4 — the dispatcher rewrite that consumes this slice landed
  * separately so Wave 2b stays focused on the foundation + reconnect). */
 
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { createSelector, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { components } from '../lib/api-types';
 import type { ChaptersState } from './chapters-slice';
 
@@ -90,13 +90,17 @@ export const selectQueueLoaded = (s: RootSliceShape): boolean => s.queue.loaded;
 export const selectQueueCount = (s: RootSliceShape): number => s.queue.entries.length;
 
 /** Find an entry by id — used by the modal's per-row reorder/cancel buttons. */
-export const selectQueueEntryById = (id: string) => (s: RootSliceShape): QueueEntry | undefined =>
-  s.queue.entries.find((e) => e.id === id);
+export const selectQueueEntryById =
+  (id: string) =>
+  (s: RootSliceShape): QueueEntry | undefined =>
+    s.queue.entries.find((e) => e.id === id);
 
 /** Entries grouped by bookId, preserving cross-book order. Cheap to recompute
     per render because the modal needs both the flat list AND the per-book
     grouping (for the "Book A · n chapters" headers). */
-export const selectQueueByBook = (s: RootSliceShape): { bookId: string; entries: QueueEntry[] }[] => {
+export const selectQueueByBook = (
+  s: RootSliceShape,
+): { bookId: string; entries: QueueEntry[] }[] => {
   const grouped: Record<string, QueueEntry[]> = {};
   const order: string[] = [];
   for (const entry of s.queue.entries) {
@@ -109,11 +113,24 @@ export const selectQueueByBook = (s: RootSliceShape): { bookId: string; entries:
   return order.map((bookId) => ({ bookId, entries: grouped[bookId] }));
 };
 
-/** The current in-flight entry (status === 'in_progress'), or null. Pinned at
-    order=0 by the server-side queue-io contract; the modal uses this to know
-    which row is non-draggable. */
+/** The FIRST in-flight entry (status === 'in_progress'), or null. Kept for the
+    reorder/drag path which still pins one entry; under queue-sole concurrency
+    MULTIPLE entries can be in_progress at once, so the modal's per-row "In
+    flight" label reads `selectInFlightEntryIds` instead. */
 export const selectInFlightEntry = (s: RootSliceShape): QueueEntry | null =>
   s.queue.entries.find((e) => e.status === 'in_progress') ?? null;
+
+/** The set of ALL in-flight entry ids (status === 'in_progress'). Under
+    queue-sole concurrency the dispatcher runs one chapter per worker, so up to
+    N entries are in flight simultaneously — the modal renders EVERY one as "In
+    flight" rather than assuming a single in-flight row. Memoised on the entries
+    reference so the modal's useSelector gets a stable Set across unrelated
+    re-renders (a fresh Set each call would re-render on every store tick). */
+export const selectInFlightEntryIds = createSelector(
+  [selectQueueEntries],
+  (entries): Set<string> =>
+    new Set(entries.filter((e) => e.status === 'in_progress').map((e) => e.id)),
+);
 
 /* --- Active-generation overlay (read-side honesty) ------------------------
    The workspace queue (`.queue.json`) is populated only by explicit
