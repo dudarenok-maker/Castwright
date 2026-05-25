@@ -71,18 +71,33 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
       reusable: true,
       ttsVoice: tts('Sulafat', 'Warm'),
     }),
-    /* Plan 101 — cross-book duplicate fixture. "Eliza" (Solway Bay) routes
-       to the same Kore voice as "Eliza Gray" (Northern Star); the
+    /* Plan 101 — cross-book duplicate fixture. "Eliza" (Carrick's Compass)
+       routes to the same Kore voice as "Eliza Gray" (Northern Star); the
        voices-view's auto-detection should normalise both to substring-
        match ('eliza' ⊂ 'elizagray') and flag the pair as a likely
        duplicate. Triggers the ⚠ pill on the Kore family card and the
-       'Review duplicate ↗' swap when the pair is hand-selected. */
+       'Review duplicate ↗' swap when the pair is hand-selected.
+
+       The partner lives in `cc` (NOT `sb`) on purpose: `cc`'s mock state
+       carries a non-null cast (`buildCarricksCompassMockState`), so when
+       the duplicate-review modal hydrates both books their characters
+       resolve and the link/variant buttons enable. `sb` keeps `cast: null`
+       to anchor the voices-compare spec, which is why it can't host the
+       linkable duplicate.
+
+       Deliberately NO `bookSeries` here (matches the sibling `cc` voice
+       `v_navigator`): tagging a `cc` voice with the series would make `cc`
+       — seriesPosition 3 — win `representativeBookIdBySeries`
+       (voices.tsx) and become the rebaseline representative, but `cc`'s
+       mock cast carries no line counts so `selectPrincipalCast` would
+       pre-select nothing and break `rebaseline.spec.ts`. Cross-book
+       duplicate detection reads series from the library slice, not this
+       field, so leaving it off doesn't affect the ⚠ pill. */
     withGradient({
-      id: 'v_eliza_sb',
+      id: 'v_eliza_cc',
       character: 'Eliza',
-      bookTitle: 'Solway Bay',
-      bookId: 'sb',
-      bookSeries: 'Northern Coast Trilogy',
+      bookTitle: "Carrick's Compass",
+      bookId: 'cc',
       attributes: ['Female', 'Alto', 'Working-class London', '20s', 'Defiant'],
       usedIn: 4,
       source: 'library',

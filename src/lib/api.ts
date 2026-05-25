@@ -738,11 +738,76 @@ function buildNorthernStarMockState(): BookStateResponse {
   };
 }
 
+/* Carrick's Compass — third Northern Coast Trilogy book. Plan 101 bug fix:
+   hosts the cross-book duplicate partner "Eliza" (voice `v_eliza_cc`),
+   which pairs with "Eliza Gray" (`v_eliza` in `ns`) on the shared Kore
+   base voice. Unlike `sb` (cast: null), this book carries a NON-null cast
+   so the duplicate-review modal can hydrate both sides, resolve their
+   Characters, and enable the link/variant buttons. The cast contains the
+   Eliza partner (resolves `v_eliza_cc` via voiceId) plus First Mate Greene
+   (the existing `v_navigator` cc voice) so `findCharacterForVoice` lands a
+   match on the foreign side. */
+function buildCarricksCompassMockState(): BookStateResponse {
+  const now = new Date().toISOString();
+  return {
+    state: {
+      bookId: 'cc',
+      manuscriptId: 'mns_cc',
+      title: "Carrick's Compass",
+      author: 'Mike Dudarenok',
+      series: 'Northern Coast Trilogy',
+      seriesPosition: 3,
+      isStandalone: false,
+      manuscriptFile: 'manuscript.epub',
+      castConfirmed: true,
+      chapters: [],
+      coverGradient: ['#D4A04E', '#7B5A26'],
+      createdAt: now,
+      updatedAt: now,
+      narratorCredit: null,
+      genre: null,
+      publicationDate: null,
+    },
+    cast: {
+      characters: [
+        {
+          id: 'eliza_cc',
+          name: 'Eliza',
+          role: 'Returning stowaway',
+          color: 'eliza',
+          attributes: ['Female', 'Alto', 'Working-class London', '20s', 'Defiant'],
+          voiceId: 'v_eliza_cc',
+          voiceState: 'reused',
+          description: 'The same Eliza, three books on — older, no less sharp.',
+        },
+        {
+          id: 'greene',
+          name: 'First Mate Greene',
+          role: 'Navigator',
+          color: 'halloran',
+          attributes: ['Female', 'Mezzo', 'Irish', '40s', 'Pragmatic'],
+          voiceId: 'v_navigator',
+          voiceState: 'generated',
+          description: 'Reads the coast by feel. Trusts the compass less than her gut.',
+        },
+      ],
+    },
+    manuscript: { wordCount: 91_200, format: 'epub' },
+    manuscriptEdits: null,
+    revisions: null,
+    completedSlugs: [],
+    chapterCharacters: undefined,
+    changeLog: null,
+    analysis: undefined,
+  };
+}
+
 /* Seed the default fixtures. Called at module init AND from
    _resetMockBookStates so per-test resets restore the default surface. */
 function seedDefaultMockBookStates(): void {
   MOCK_BOOK_STATES.set('sb', buildSolwayBayMockState());
   MOCK_BOOK_STATES.set('ns', buildNorthernStarMockState());
+  MOCK_BOOK_STATES.set('cc', buildCarricksCompassMockState());
 }
 seedDefaultMockBookStates();
 
