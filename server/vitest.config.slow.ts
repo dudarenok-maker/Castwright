@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-/* BACKLOG Could #33 — slow-test config that runs the 5 hot files in
+/* Plan 45 (vitest pool tuning) — slow-test config that runs the 5 hot files in
    a single fork (maxForks=1), separate from the main parallel `test`
    battery. The hot files all share the same shape: mkdtempSync +
    module imports in beforeAll racing on Windows tmpdir under

@@ -125,7 +125,7 @@ function seedAudio(slug: string): void {
 }
 
 beforeAll(async () => {
-  /* BACKLOG Could #33 — async mkdtemp under Windows tmpdir contention. */
+  /* Plan 45 (vitest pool tuning) — async mkdtemp under Windows tmpdir contention. */
   workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-restructure-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 

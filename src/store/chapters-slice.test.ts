@@ -942,7 +942,7 @@ describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, pl
      mirrored. Per-chapter rows / pendingRegen / regenEpoch must
      stay untouched (broadcasting them would fan out regen side-
      effects across tabs, which is the racing-writes case parked
-     as Won't #3). */
+     as backlog `fe-11`). */
   it('mirrors the inbound snapshot as the per-book stream map', () => {
     const sibling = {
       bookId: 'book-sibling',

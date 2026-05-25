@@ -62,7 +62,7 @@ Run `npm run dev` in mock mode (`VITE_USE_MOCKS=true`, on by default in `.env.de
 ## Out of scope
 
 - **Confirm-cast + Listen chapter list virtualisation** (Backlog Could #24) — separate branch (plan 93). Same `useWindowVirtualizer` dep; smaller threshold (~40 rows) because those lists have less DOM per row.
-- **Waveform memoisation** (Backlog Could #25) — deferred; low impact today.
+- **Waveform memoisation** (backlog `fe-6`) — deferred; low impact today.
 - **Internal-scroll-element virtualisation** — keeping the page-scroll architecture so `useWindowVirtualizer` is the right fit. If the manuscript view ever moves to an internal scroll container, switch to `useVirtualizer` and pass the container ref to `getScrollElement`.
 
 ## Ship notes

@@ -247,7 +247,7 @@ test('bump-version refuses a dirty tree (unless --dry-run)', () => {
   }
 });
 
-/* Regression for BACKLOG Should #3: a polluted GIT_DIR / GIT_WORK_TREE /
+/* Regression for the bump-version env-leak fix (plan 85): a polluted GIT_DIR / GIT_WORK_TREE /
    GIT_INDEX_FILE env (the shape husky's pre-commit hook produces when run
    inside a worktree) must NOT misdirect any subprocess call in this test
    to the parent repo. Before the fix, two bare execFileSync('git', …)

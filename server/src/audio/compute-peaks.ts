@@ -6,7 +6,7 @@
    in a sinusoidal mock — visually plausible but a lie. `computePeaks`
    replaces that lie with a real RMS-bin summary of the rendered chapter
    PCM, emitted at encode time and persisted next to the MP3 (see
-   `server/src/tts/mp3.ts`'s `writeChapterPeaksFile` and BACKLOG Could #35).
+   `server/src/tts/mp3.ts`'s `writeChapterPeaksFile` and plan 56).
 
    Contract:
    - Input: raw 16-bit signed little-endian MONO PCM (`Buffer`), same shape

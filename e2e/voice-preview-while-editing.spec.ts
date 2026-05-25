@@ -25,7 +25,7 @@ test.describe('profile drawer → voice preview while editing', () => {
     page,
   }) => {
     await goToConfirm(page);
-    /* BACKLOG Should #12 per-view hydration helper — waits for the
+    /* per-view hydration helper — waits for the
        first character profile button to mount before we go looking for
        Captain Halloran specifically. */
     await waitForConfirmViewReady(page);

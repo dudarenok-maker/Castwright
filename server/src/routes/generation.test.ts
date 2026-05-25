@@ -77,7 +77,7 @@ function parseTicks(body: string): ParsedTick[] {
 }
 
 beforeAll(async () => {
-  /* BACKLOG Could #33 — async mkdtemp under Windows tmpdir contention. */
+  /* Plan 45 (vitest pool tuning) — async mkdtemp under Windows tmpdir contention. */
   workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-generation-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
   /* Plan 87 — default test concurrency is K=1 so the existing assertions
