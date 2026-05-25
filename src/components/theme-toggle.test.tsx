@@ -46,6 +46,7 @@ function makeStore({
     reuploadingBookId: null,
     queueModalOpen: false,
     rebaselineModalOpen: false,
+    rebaselineBookId: null,
   };
   const accountPreloaded: AccountState = {
     ...FRONTEND_ACCOUNT_DEFAULTS,

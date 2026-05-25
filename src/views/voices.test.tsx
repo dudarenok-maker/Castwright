@@ -10,6 +10,7 @@ import { notificationsSlice } from '../store/notifications-slice';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { librarySlice } from '../store/library-slice';
+import { rebaselineSlice } from '../store/rebaseline-slice';
 import { LibraryView } from './voices';
 import type { BaseVoice, BookStateResponse, Character, Sentence, Voice } from '../lib/types';
 
@@ -1213,6 +1214,106 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
     );
     await act(async () => {});
     expect(screen.queryByRole('button', { name: /duplicate candidate/i })).toBeNull();
+  });
+});
+
+describe('LibraryView per-series Rebaseline button (plan 108 follow-up)', () => {
+  /* Two books in the same series ("The Hollow Tide"), b1 at
+     seriesPosition 1 and b2 at 2, both carrying Charon-family voices. The
+     per-series button surfaces on the series-group header; clicking it must
+     dispatch openRebaselineModal with the series' representative book — here
+     b2, since neither cast is cached so the latest-seriesPosition tiebreak
+     decides. */
+  function renderGlobalWithLibrary() {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        library: librarySlice.reducer,
+        rebaseline: rebaselineSlice.reducer,
+      },
+    });
+    /* Global voices stage (no open book) so the book-scoped button stays
+       hidden and only the per-series buttons can render. */
+    store.dispatch(uiSlice.actions.openVoices());
+    store.dispatch(
+      librarySlice.actions.hydrate({
+        authors: [
+          {
+            name: 'Test Author',
+            series: [
+              {
+                name: 'The Hollow Tide',
+                books: [
+                  {
+                    bookId: 'b1',
+                    title: 'Book One',
+                    author: 'Test Author',
+                    series: 'The Hollow Tide',
+                    seriesPosition: 1,
+                    isStandalone: false,
+                    status: 'complete',
+                    chapterCount: 0,
+                    completedChapters: 0,
+                    characterCount: 0,
+                    voiceCount: 0,
+                    lastWorkedOn: '2026-01-01',
+                    coverGradient: ['#000', '#fff'],
+                    tags: [],
+                  },
+                  {
+                    bookId: 'b2',
+                    title: 'Book Two',
+                    author: 'Test Author',
+                    series: 'The Hollow Tide',
+                    seriesPosition: 2,
+                    isStandalone: false,
+                    status: 'complete',
+                    chapterCount: 0,
+                    completedChapters: 0,
+                    characterCount: 0,
+                    voiceCount: 0,
+                    lastWorkedOn: '2026-01-02',
+                    coverGradient: ['#000', '#fff'],
+                    tags: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const view = render(
+      <Provider store={store}>
+        <LibraryView library={library} />
+      </Provider>,
+    );
+    return { ...view, store };
+  }
+
+  it('renders a per-series Rebaseline button on the series-group header', () => {
+    renderGlobalWithLibrary();
+    /* The button repeats per family that carries the series; at least one
+       must render with the series-scoped test id. */
+    const buttons = screen.getAllByTestId('rebaseline-series-The Hollow Tide');
+    expect(buttons.length).toBeGreaterThanOrEqual(1);
+    expect(buttons[0]).toHaveTextContent(/Rebaseline the series/i);
+  });
+
+  it('clicking dispatches openRebaselineModal with the representative bookId', async () => {
+    const { store } = renderGlobalWithLibrary();
+    const button = screen.getAllByTestId('rebaseline-series-The Hollow Tide')[0];
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(store.getState().ui.rebaselineModalOpen).toBe(true);
+    /* No cast cached for either book → tiebreak is the latest seriesPosition,
+       so b2 (position 2) is the representative. */
+    expect(store.getState().ui.rebaselineBookId).toBe('b2');
   });
 });
 
