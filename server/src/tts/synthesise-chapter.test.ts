@@ -11,7 +11,7 @@
    the hint plumbing. They use a fake provider (no real synthesis) and assert
    on the voiceName argument the picker resolves for each speaker. */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   buildSentenceGroups,
   synthesiseChapter,
@@ -739,7 +739,8 @@ describe('synthesiseChapter chapter-title beat', () => {
       engine: 'gemini',
       chapterTitleNarration: 'Chapter 1.',
       onTitleStart: () => events.push('title-start'),
-      onTitleComplete: ({ accumulatedSec }) => events.push(`title-complete:${accumulatedSec > 1 ? 'past-leading-silence' : 'too-early'}`),
+      onTitleComplete: ({ accumulatedSec }) =>
+        events.push(`title-complete:${accumulatedSec > 1 ? 'past-leading-silence' : 'too-early'}`),
     });
 
     /* Ordering: onTitleStart fires BEFORE the title synth (so the SSE
@@ -811,18 +812,8 @@ describe('buildSentenceGroups (plan 70d — per-sentence)', () => {
       s(3, 'Wren', 'Are you there?'),
       s(4, 'narrator', 'Close.'),
     ]);
-    expect(groups.map((g) => g.characterId)).toEqual([
-      'narrator',
-      'Wren',
-      'Wren',
-      'narrator',
-    ]);
-    expect(groups.map((g) => g.text)).toEqual([
-      'Open.',
-      'Hi.',
-      'Are you there?',
-      'Close.',
-    ]);
+    expect(groups.map((g) => g.characterId)).toEqual(['narrator', 'Wren', 'Wren', 'narrator']);
+    expect(groups.map((g) => g.text)).toEqual(['Open.', 'Hi.', 'Are you there?', 'Close.']);
   });
 
   it('scales to a 207-sentence all-narrator chapter (the regression case)', () => {
@@ -1090,10 +1081,7 @@ describe('synthesiseChapter within-chapter parallelism (plan 107)', () => {
     };
 
     const result = await synthesiseChapter({
-      sentences: [
-        sentence(1, 'narrator', 'Body one.'),
-        sentence(2, 'narrator', 'Body two.'),
-      ],
+      sentences: [sentence(1, 'narrator', 'Body one.'), sentence(2, 'narrator', 'Body two.')],
       cast,
       provider,
       modelKey: 'gemini-2.5-flash',
@@ -1183,5 +1171,99 @@ describe('synthesiseChapter per-character engine routing (plan 108)', () => {
     expect(provider.calls).toHaveLength(2);
     for (const c of provider.calls) expect(c.modelKey).toBe('kokoro-v1');
     expect(result.segments).toHaveLength(2);
+  });
+});
+
+describe('synthesiseChapter GPU-FIFO false-stall guard (queue-sole)', () => {
+  const cast: CastCharacter[] = [
+    { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+  ];
+
+  it('re-fires onGroupStart on the heartbeat interval while a group is blocked in the GPU FIFO', async () => {
+    /* Regression: the GPU token is acquired INSIDE provider.synthesize, so a
+       group blocked behind a sibling chapter in the semaphore FIFO emits its
+       initial onGroupStart, then goes silent until the token frees. If that
+       exceeds the 30 s client watchdog (STALL_THRESHOLD_MS) the chapter
+       false-trips "Worker has gone quiet". The fix re-fires onGroupStart on a
+       heartbeat (well under 30 s) until synthesize resolves.
+
+       Here a single group's synthesize stays pending (simulating the FIFO
+       block); we advance fake timers across several heartbeat intervals and
+       assert onGroupStart fired more than once for that group, then release. */
+    vi.useFakeTimers();
+    try {
+      let releaseSynth: (out: SynthesizeOutput) => void = () => {};
+      const provider: TtsProvider = {
+        synthesize(): Promise<SynthesizeOutput> {
+          return new Promise<SynthesizeOutput>((resolve) => {
+            releaseSynth = resolve;
+          });
+        },
+      };
+
+      const startsByGroup: number[] = [];
+      const promise = synthesiseChapter({
+        sentences: [sentence(1, 'narrator', 'A long blocked group.')],
+        cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+        groupHeartbeatMs: 1_000,
+        onGroupStart: ({ group }) => startsByGroup.push(group.index),
+      });
+
+      /* One immediate start tick (before the synth call). */
+      expect(startsByGroup.filter((i) => i === 0)).toHaveLength(1);
+
+      /* Advance across 3 heartbeat intervals while the synth stays pending —
+         each fires another onGroupStart so lastTickAt stays fresh. */
+      await vi.advanceTimersByTimeAsync(3_500);
+      expect(startsByGroup.filter((i) => i === 0).length).toBeGreaterThan(1);
+
+      /* Release the synth → heartbeat stops; finish the chapter. */
+      releaseSynth({ pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' });
+      await vi.runAllTimersAsync();
+      await promise;
+
+      /* No further heartbeats after the synth settled. */
+      const countAfterRelease = startsByGroup.filter((i) => i === 0).length;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(startsByGroup.filter((i) => i === 0).length).toBe(countAfterRelease);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT fire extra heartbeats when groupHeartbeatMs <= 0 (opt-out for exact-count callers)', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseSynth: (out: SynthesizeOutput) => void = () => {};
+      const provider: TtsProvider = {
+        synthesize(): Promise<SynthesizeOutput> {
+          return new Promise<SynthesizeOutput>((resolve) => {
+            releaseSynth = resolve;
+          });
+        },
+      };
+      const starts: number[] = [];
+      const promise = synthesiseChapter({
+        sentences: [sentence(1, 'narrator', 'Blocked but heartbeat disabled.')],
+        cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+        groupHeartbeatMs: 0,
+        onGroupStart: ({ group }) => starts.push(group.index),
+      });
+      expect(starts).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      /* No heartbeat fired despite a long block. */
+      expect(starts).toHaveLength(1);
+      releaseSynth({ pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' });
+      await vi.runAllTimersAsync();
+      await promise;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

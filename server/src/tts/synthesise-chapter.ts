@@ -198,6 +198,19 @@ export interface SynthesiseChapterOpts {
       old serial loop. An explicit value is mainly for tests, which need to
       exercise width>1 without touching process env. Clamped to >= 1. */
   sentenceConcurrency?: number;
+  /** Heartbeat cadence for the GPU-FIFO false-stall guard (queue-sole). The
+      GPU token is acquired INSIDE `provider.synthesize`
+      (`server/src/tts/sidecar.ts`), so a group blocked in the semaphore FIFO
+      behind a sibling chapter emits its `onGroupStart` tick, then goes silent
+      until the token is granted — which can exceed the client's 30 s "Worker
+      has gone quiet" watchdog (`STALL_THRESHOLD_MS`). To keep `lastTickAt`
+      fresh while a group waits, we re-fire `onGroupStart` on this interval
+      from the moment the group is dispatched until its `synthesize` resolves.
+      Reuses the existing tick plumbing (no new tick type / SSE shape).
+      Defaults to 10 s (well under the 30 s threshold). Set to 0 / a
+      non-positive value to disable (tests that assert exact onGroupStart
+      counts). Clamped pure — never reads process.env. */
+  groupHeartbeatMs?: number;
 }
 
 /** One group per sentence. Plan 70d — earlier code folded consecutive
@@ -279,6 +292,7 @@ export async function synthesiseChapter(
     onTitleStart,
     onTitleComplete,
     sentenceConcurrency = gpuSemaphore.maxConcurrency,
+    groupHeartbeatMs = 10_000,
   } = opts;
 
   /* Per-character engine resolver (plan 108). Returns the engine + its
@@ -326,8 +340,10 @@ export async function synthesiseChapter(
     if (signal?.aborted) {
       throw new DOMException('synthesiseChapter aborted', 'AbortError');
     }
-    const narratorChar =
-      castById.get(narratorCharacterId) ?? { id: narratorCharacterId, name: 'Narrator' };
+    const narratorChar = castById.get(narratorCharacterId) ?? {
+      id: narratorCharacterId,
+      name: 'Narrator',
+    };
     /* The title beat speaks in the narrator's engine — which, per plan 108, is
        usually the default (Kokoro) since the narrator rarely carries a bespoke
        per-character engine. routeFor honours an explicit narrator ttsEngine if
@@ -405,11 +421,35 @@ export async function synthesiseChapter(
        time is a running estimate; the authoritative per-segment timing is
        computed in the deterministic index-order pass after all groups
        settle. */
-    onGroupStart?.({
-      group,
-      totalGroups: groups.length,
-      accumulatedSec: pcmDurationSec(runningBytes, sampleRate),
-    });
+    const fireGroupStart = (): void =>
+      onGroupStart?.({
+        group,
+        totalGroups: groups.length,
+        accumulatedSec: pcmDurationSec(runningBytes, sampleRate),
+      });
+    fireGroupStart();
+
+    /* GPU-FIFO false-stall guard (queue-sole). The GPU token is acquired
+       INSIDE `provider.synthesize`, so a group blocked behind a sibling
+       chapter in the semaphore FIFO would emit the start tick above and then
+       go silent until the token frees — potentially past the 30 s client
+       watchdog. Re-fire the SAME start tick on `groupHeartbeatMs` while the
+       call is in flight (covering both the FIFO wait and a genuinely long
+       synth) so `lastTickAt` stays fresh; clear it the moment the call
+       settles. No new tick type — reuses the existing onGroupStart→progress
+       plumbing. Disabled when `groupHeartbeatMs <= 0` or no callback. */
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    if (onGroupStart && groupHeartbeatMs > 0) {
+      heartbeat = setInterval(fireGroupStart, groupHeartbeatMs);
+      /* Don't keep the event loop alive for the heartbeat alone. */
+      heartbeat.unref?.();
+    }
+    const stopHeartbeat = (): void => {
+      if (heartbeat) {
+        clearInterval(heartbeat);
+        heartbeat = undefined;
+      }
+    };
 
     /* Scrub all-caps runs and em/en-dashes immediately before the synth.
        XTTS otherwise spells multi-word all-caps openers letter-by-letter
@@ -424,27 +464,31 @@ export async function synthesiseChapter(
        toggled Stop, network blip). Non-transient throws (4xx, poisoned
        CUDA state, retry-exhausted) bubble out of the wrapper unchanged
        and surface as today's per-chapter `chapter_failed`. */
-    const result = await withTtsRetry(
-      () =>
-        route.provider.synthesize({
-          text: normaliseForTts(group.text),
-          voiceName,
-          modelKey: route.modelKey,
-          signal,
-        }),
-      {
-        signal,
-        onRetry: (info) =>
-          onGroupRetry?.({
-            group,
-            totalGroups: groups.length,
-            attempt: info.attempt,
-            backoffMs: info.backoffMs,
-            reason: info.reason,
+    try {
+      const result = await withTtsRetry(
+        () =>
+          route.provider.synthesize({
+            text: normaliseForTts(group.text),
+            voiceName,
+            modelKey: route.modelKey,
+            signal,
           }),
-      },
-    );
-    return { pcm: result.pcm, sampleRate: result.sampleRate };
+        {
+          signal,
+          onRetry: (info) =>
+            onGroupRetry?.({
+              group,
+              totalGroups: groups.length,
+              attempt: info.attempt,
+              backoffMs: info.backoffMs,
+              reason: info.reason,
+            }),
+        },
+      );
+      return { pcm: result.pcm, sampleRate: result.sampleRate };
+    } finally {
+      stopHeartbeat();
+    }
   }
 
   /* Body groups — bounded-concurrency dispatch (plan 107). Replaces the old

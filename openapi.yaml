@@ -1030,6 +1030,49 @@ paths:
         '409':
           description: Entry is in_progress; pause the queue first.
 
+  /api/queue/{entryId}/start:
+    post:
+      summary: Mark a queue entry in_progress (no reorder)
+      operationId: startQueueEntry
+      description: |
+        Flips the entry's status to `in_progress` WITHOUT reordering. Under the
+        queue-sole-concurrency model (one queue worker = one chapter) the
+        dispatcher fires this the instant it claims an entry and opens that
+        chapter's stream, so MULTIPLE entries can be `in_progress` at once —
+        unlike the legacy single-in-flight `startEntry` mutator, this does not
+        pin the entry to order 0 nor enforce a single-in-flight invariant. The
+        queue modal renders every `in_progress` entry as "In flight".
+        Idempotent (already-in_progress / missing id both 200). Persists to
+        `<workspace>/.queue.json`.
+      parameters:
+        - { in: path, name: entryId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Resulting queue snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueListResponse' }
+
+  /api/queue/{entryId}/complete:
+    post:
+      summary: Drop a finished queue entry (done-prune)
+      operationId: completeQueueEntry
+      description: |
+        Removes the entry from the queue regardless of status (the entry is
+        `in_progress` when its chapter completes). The dispatcher's chapter-level
+        reconcile fires this once a chapter's stream closes. Distinct from the
+        user-facing DELETE, which 409s an `in_progress` entry so the modal's
+        cancel button keeps its "pause first" guard. Idempotent for a missing id.
+        Persists to `<workspace>/.queue.json`.
+      parameters:
+        - { in: path, name: entryId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Resulting queue snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueListResponse' }
+
   /api/books/{bookId}/generation:
     post:
       summary: Generate chapter audio with progress streaming

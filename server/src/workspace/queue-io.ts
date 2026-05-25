@@ -7,8 +7,13 @@
  *   - entries[].id is unique within the workspace queue.
  *   - entries[].order is contiguous 0..N-1 after every mutation (renumber
  *     on insert / reorder / cancel / book-delete prune).
- *   - At most one entry has status === 'in_progress' at a time.
- *   - The in_progress entry (if any) is always at order === 0 — it's pinned.
+ *   - MULTIPLE entries may be status === 'in_progress' at once. Under the
+ *     plan-111-refactor queue-sole concurrency model the dispatcher runs one
+ *     chapter per worker (N concurrent), so up to N entries are in flight
+ *     simultaneously across all books — including sibling chapters of the same
+ *     book. `markInProgress` is the status-only transition the dispatcher uses
+ *     on claim; it does NOT reorder (unlike the legacy single-in-flight
+ *     `startEntry`, which pins to order 0 and is now unused).
  *   - 'forward' scope is expanded by the frontend at enqueue time into
  *     per-chapter `{ scope: 'this' }` entries; this server-side shape
  *     never carries 'forward' as a row. */
@@ -135,10 +140,26 @@ export function setPaused(file: QueueFile, paused: boolean): QueueFile {
   return { ...file, paused };
 }
 
-/** Mark a specific entry as in_progress, pinning it to order=0. Used by
- *  the frontend dispatcher when it picks the next entry to run.
- *  Idempotent if already in_progress; throws if another entry is already
- *  in_progress (the FIFO invariant — at most one at a time). */
+/** Mark a specific entry as in_progress WITHOUT reordering — the status-only
+ *  transition the queue-sole-concurrency dispatcher uses when it claims an
+ *  entry to run. Multiple entries can be in_progress at once (one per worker),
+ *  so this neither pins to order 0 nor enforces a single-in-flight invariant.
+ *  Idempotent: marking an already-in_progress entry is a no-op; a missing
+ *  entry id is a no-op (the snapshot caught up / the entry was cancelled). */
+export function markInProgress(file: QueueFile, entryId: string): QueueFile {
+  return {
+    ...file,
+    entries: file.entries.map(
+      (e): QueueEntry => (e.id === entryId ? { ...e, status: 'in_progress' } : e),
+    ),
+  };
+}
+
+/** LEGACY single-in-flight start (pre-refactor): marks the entry in_progress
+ *  AND pins it to order=0, throwing if another entry is already in_progress.
+ *  Superseded by `markInProgress` under queue-sole concurrency (which allows N
+ *  concurrent in-flight entries and never reorders). Retained for the unit
+ *  tests that pin its FIFO/pin behaviour; not wired to any route. */
 export function startEntry(file: QueueFile, entryId: string): QueueFile {
   const inFlight = file.entries.find((e) => e.status === 'in_progress');
   if (inFlight && inFlight.id !== entryId) {
@@ -146,8 +167,8 @@ export function startEntry(file: QueueFile, entryId: string): QueueFile {
       `queue.startEntry: cannot start "${entryId}" while "${inFlight.id}" is in_progress`,
     );
   }
-  const next = file.entries.map((e): QueueEntry =>
-    e.id === entryId ? { ...e, status: 'in_progress' } : e,
+  const next = file.entries.map(
+    (e): QueueEntry => (e.id === entryId ? { ...e, status: 'in_progress' } : e),
   );
   /* Pin the in-flight to order=0 by moving it to the head. */
   const target = next.find((e) => e.id === entryId);
@@ -172,14 +193,15 @@ export function completeEntry(
   if (outcome === 'done') {
     return renumber({ ...file, entries: file.entries.filter((e) => e.id !== entryId) });
   }
-  const next = file.entries.map((e): QueueEntry =>
-    e.id === entryId
-      ? {
-          ...e,
-          status: 'failed',
-          errorReason: errorReason ?? null,
-        }
-      : e,
+  const next = file.entries.map(
+    (e): QueueEntry =>
+      e.id === entryId
+        ? {
+            ...e,
+            status: 'failed',
+            errorReason: errorReason ?? null,
+          }
+        : e,
   );
   return renumber({ ...file, entries: next });
 }
@@ -187,9 +209,7 @@ export function completeEntry(
 /** Update progress on the in-flight entry. Cheap mutator the frontend
  *  calls (via the queue route) on every progress tick. */
 export function updateProgress(file: QueueFile, entryId: string, progress: number): QueueFile {
-  const next = file.entries.map((e): QueueEntry =>
-    e.id === entryId ? { ...e, progress } : e,
-  );
+  const next = file.entries.map((e): QueueEntry => (e.id === entryId ? { ...e, progress } : e));
   return { ...file, entries: next };
 }
 
