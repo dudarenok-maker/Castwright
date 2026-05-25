@@ -18,7 +18,7 @@ import { CHAR_COLORS } from '../lib/colors';
 import type { Character, Voice, CharColor } from '../lib/types';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad, type SampleStatus } from '../lib/play-sample-with-auto-load';
-import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
+import { resolveTtsVoiceForCharacter, sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { useAppDispatch, useAppSelector } from '../store';
 import { voicesActions } from '../store/voices-slice';
@@ -360,7 +360,17 @@ export function ProfileDrawer({
     source: 'current' as const,
     ttsVoice: stubTtsVoice,
   };
-  const samplePrefix = sampleUrlPrefixFor(sampleVoiceId, ttsModelKey);
+  /* Effective engine = this character's per-character override (live
+     `engineChoice`) when set, else the project default. Qwen is the only
+     override that diverges from the project model key, so a Qwen sample must
+     route to the Qwen model key. And a Qwen voice can only synth once it's
+     been designed (`designedVoiceId`); without one the server's
+     pickVoiceForEngine returns '' and the sidecar 400s, so we gate the
+     Play button instead of firing a request we know will fail. */
+  const effectiveEngine: TtsEngine = engineChoice === 'default' ? ttsEngine : engineChoice;
+  const effectiveSampleModelKey = sampleModelKeyForEngine(effectiveEngine, ttsModelKey);
+  const qwenSampleBlocked = effectiveEngine === 'qwen' && !designedVoiceId;
+  const samplePrefix = sampleUrlPrefixFor(sampleVoiceId, effectiveSampleModelKey);
   const isPlayingThis = playback.isPlaying && !!playback.currentUrl?.startsWith(samplePrefix);
 
   /* Card-line voice descriptor — resolved against the CHARACTER's engine
@@ -371,8 +381,7 @@ export function ProfileDrawer({
      returns the bespoke "Qwen · Designed voice" / "No voice designed yet"
      line and we use it even when a library voice is matched (Qwen overrides
      any preset). Preset engines keep the matched library voice's own
-     descriptor, exactly as before. */
-  const effectiveEngine: TtsEngine = engineChoice === 'default' ? ttsEngine : engineChoice;
+     descriptor, exactly as before. (`effectiveEngine` is derived above.) */
   const cardTtsVoice =
     effectiveEngine === 'qwen'
       ? resolveTtsVoiceForCharacter(editedCharacter, 'qwen')
@@ -409,6 +418,9 @@ export function ProfileDrawer({
       playback.stop();
       return;
     }
+    /* No designed Qwen voice → nothing to synth. The button is already
+       disabled in this state; this guards the swatch click path too. */
+    if (qwenSampleBlocked) return;
     setSampleError(null);
     setEvictionBanner(null);
     /* `synthesizing` is the most common starting status — for a warm model
@@ -426,13 +438,32 @@ export function ProfileDrawer({
       tone,
     });
 
-    console.log('[sample] requesting', { voiceId: sampleVoiceId, modelKey: ttsModelKey });
+    /* For a designed Qwen voice, the bespoke voiceId lives in
+       `designedVoiceId` (live this session, pre-Save), not in the
+       sample subject. Inject it into overrideTtsVoices.qwen so the server's
+       pickVoiceForEngine('qwen', …) resolves it; preserve any other-engine
+       slots already on the subject. Non-qwen engines pass through unchanged. */
+    const requestSubject =
+      effectiveEngine === 'qwen' && designedVoiceId
+        ? {
+            ...sampleSubject,
+            overrideTtsVoices: {
+              ...(voice?.overrideTtsVoices ?? {}),
+              qwen: { name: designedVoiceId },
+            },
+          }
+        : sampleSubject;
+
+    console.log('[sample] requesting', {
+      voiceId: sampleVoiceId,
+      modelKey: effectiveSampleModelKey,
+    });
     try {
       await playSampleWithAutoLoad({
         args: {
           voiceId: sampleVoiceId,
-          voice: sampleSubject,
-          modelKey: ttsModelKey,
+          voice: requestSubject,
+          modelKey: effectiveSampleModelKey,
           characterHint,
         },
         playback,
@@ -605,8 +636,8 @@ export function ProfileDrawer({
                 <div className="mt-2">
                   <button
                     onClick={playSample}
-                    disabled={sampleLoading}
-                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                    disabled={sampleLoading || qwenSampleBlocked}
+                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                       sampleLoading
                         ? 'bg-magenta/10 text-magenta cursor-wait'
                         : isPlayingThis
@@ -617,7 +648,7 @@ export function ProfileDrawer({
                     {sampleLoading ? (
                       <>
                         <IconSpinner className="w-3.5 h-3.5" />
-                        <span>{sampleLoadingLabel(sampleStatus, ttsModelKey)}</span>
+                        <span>{sampleLoadingLabel(sampleStatus, effectiveSampleModelKey)}</span>
                       </>
                     ) : isPlayingThis ? (
                       <>
@@ -631,7 +662,12 @@ export function ProfileDrawer({
                       </>
                     )}
                   </button>
-                  {!voice && (
+                  {qwenSampleBlocked && (
+                    <p className="mt-1 text-[11px] text-ink/50">
+                      Design a Qwen voice below before sampling.
+                    </p>
+                  )}
+                  {!voice && !qwenSampleBlocked && (
                     <p className="mt-1 text-[11px] text-ink/50">
                       No library voice matched yet — sampling directly from {character.name}'s
                       attributes.

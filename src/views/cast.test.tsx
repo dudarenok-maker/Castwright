@@ -275,6 +275,75 @@ describe('CastView VoiceSwatch sample playback', () => {
   });
 });
 
+describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
+  /* Regression: a Qwen-pinned row used to sample with the project model key +
+     a subject carrying no qwen override, so the server resolved engine=qwen
+     with an empty voice name and the sidecar 400'd ("`voice` is required.").
+     The sample must route to the Qwen model key and carry the designed
+     voiceId, and gate cleanly when no voice has been designed. */
+  function renderChars(characters: Character[]) {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    return {
+      store,
+      ...render(
+        <Provider store={store}>
+          <CastView
+            characters={characters}
+            setCharacters={() => {}}
+            library={library}
+            title="The Northern Star"
+            onOpenProfile={() => {}}
+            onShowMatchDetail={() => {}}
+            onBatchRegenerate={() => {}}
+            driftEvents={[]}
+            onShowDrift={() => {}}
+          />
+        </Provider>,
+      ),
+    };
+  }
+
+  const MarrowQwen: Character = {
+    ...Marrow,
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-Marrow' } },
+  };
+
+  it('routes a Qwen-pinned row through the Qwen model key + injects the designed voiceId', async () => {
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    renderChars([MarrowQwen]);
+    const row = rowFor('Mr. Marrow');
+    const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+    fireEvent.click(swatch);
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+    expect(args.modelKey).toBe('qwen3-tts-0.6b');
+    expect(args.voice.overrideTtsVoices?.qwen?.name).toBe('qwen-Marrow');
+  });
+
+  it('shows an inline error (no API call) for a Qwen-pinned row with no designed voice', async () => {
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    renderChars([{ ...Marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }]);
+    const row = rowFor('Mr. Marrow');
+    const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+    fireEvent.click(swatch);
+    await waitFor(() => expect(within(row).getByText(/No Qwen voice designed yet/)).toBeTruthy());
+    expect(playSampleWithAutoLoad).not.toHaveBeenCalled();
+  });
+
+  it('keeps the project model key + injects no qwen override for a non-Qwen row', async () => {
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    const { store } = renderChars([Marrow]);
+    const row = rowFor('Mr. Marrow');
+    const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+    fireEvent.click(swatch);
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+    expect(args.modelKey).toBe(store.getState().ui.ttsModelKey);
+    expect(args.voice.overrideTtsVoices?.qwen).toBeUndefined();
+  });
+});
+
 /* Plan 81 wave 3 — responsive layout coverage.
 
    The cast view collapses to a single-column card list under `md:` and
