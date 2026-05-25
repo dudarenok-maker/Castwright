@@ -39,7 +39,7 @@ test.describe('concurrent multi-book tabs (plan 89 C2 + C3)', () => {
       /* Mount both tabs at the library route. */
       await Promise.all([pageA.goto('/'), pageB.goto('/')]);
 
-      /* BACKLOG Should #12 per-view hydration helper on both tabs. */
+      /* per-view hydration helper on both tabs. */
       await Promise.all([waitForLibraryViewReady(pageA), waitForLibraryViewReady(pageB)]);
 
       /* Capture each tab's URL hash. */

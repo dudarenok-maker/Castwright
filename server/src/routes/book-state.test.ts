@@ -37,7 +37,7 @@ let app: Express;
 let bookId: string;
 
 beforeAll(async () => {
-  /* BACKLOG Could #33 — async mkdtemp yields the event loop during
+  /* Plan 45 (vitest pool tuning) — async mkdtemp yields the event loop during
      Windows AV/OneDrive tmpdir contention so other workers can interleave
      instead of blocking on a sync syscall. */
   workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-changelog-test-'));

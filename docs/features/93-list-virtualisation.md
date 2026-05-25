@@ -67,7 +67,7 @@ Run `npm run dev` in mock mode (`VITE_USE_MOCKS=true`).
 
 ## Out of scope
 
-- **Waveform memoisation** (Backlog Could #25) — deferred; low impact.
+- **Waveform memoisation** (backlog `fe-6`) — deferred; low impact.
 - **Other view-list virtualisation candidates** (Generation view chapter list, Voice library, Changelog) — apply the same pattern if they hit per-view perf gaps. Not in scope today.
 
 ## Ship notes
