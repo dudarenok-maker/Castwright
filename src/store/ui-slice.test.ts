@@ -31,6 +31,7 @@ const baseState = (stage: Stage): UiState => ({
   reuploadingBookId: null,
   queueModalOpen: false,
   rebaselineModalOpen: false,
+  rebaselineBookId: null,
 });
 
 describe('uiSlice — openBook status→stage routing', () => {
@@ -229,6 +230,23 @@ describe('uiSlice — seed defaults from account settings', () => {
     });
     expect(next.selectedModel).toBe('gemini-3.1-flash-lite');
     expect(next.ttsModelKey).toBe('gemini-3.1-flash');
+  });
+});
+
+describe('uiSlice — rebaseline modal target bookId', () => {
+  it('openRebaselineModal stores the target bookId and opens the modal', () => {
+    const start = baseState({ kind: 'voices' });
+    const next = uiSlice.reducer(start, uiActions.openRebaselineModal({ bookId: 'b2' }));
+    expect(next.rebaselineModalOpen).toBe(true);
+    expect(next.rebaselineBookId).toBe('b2');
+  });
+
+  it('closeRebaselineModal clears the open flag and the target bookId', () => {
+    let s = baseState({ kind: 'voices' });
+    s = uiSlice.reducer(s, uiActions.openRebaselineModal({ bookId: 'b2' }));
+    s = uiSlice.reducer(s, uiActions.closeRebaselineModal());
+    expect(s.rebaselineModalOpen).toBe(false);
+    expect(s.rebaselineBookId).toBeNull();
   });
 });
 

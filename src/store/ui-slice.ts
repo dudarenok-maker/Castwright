@@ -87,6 +87,11 @@ export interface UiState {
       open. Opened from the Voices view's rebaseline button (only when a
       book is loaded so the series-scoped write has an anchor). */
   rebaselineModalOpen: boolean;
+  /** Plan 108 follow-up — the book the rebaseline modal targets. The
+      book-scoped Voices tab passes the open book; the per-series buttons
+      on the global Voices view pass the series' representative book (the
+      one whose principal cast seeds the modal). Null when closed. */
+  rebaselineBookId: string | null;
 }
 
 const initialState: UiState = {
@@ -112,6 +117,7 @@ const initialState: UiState = {
   reuploadingBookId: null,
   queueModalOpen: false,
   rebaselineModalOpen: false,
+  rebaselineBookId: null,
 };
 
 export const uiSlice = createSlice({
@@ -289,12 +295,16 @@ export const uiSlice = createSlice({
     },
     /* Plan 108 Wave 5 — "Rebaseline the series" modal open/close. Mounted
        in the Voices view; opened from the rebaseline button when a book is
-       loaded. */
-    openRebaselineModal: (s) => {
+       loaded. The payload carries the target book: the open book for the
+       book-scoped tab, the series' representative book for the per-series
+       buttons on the global Voices view. */
+    openRebaselineModal: (s, a: PayloadAction<{ bookId: string }>) => {
       s.rebaselineModalOpen = true;
+      s.rebaselineBookId = a.payload.bookId;
     },
     closeRebaselineModal: (s) => {
       s.rebaselineModalOpen = false;
+      s.rebaselineBookId = null;
     },
     clearThemeOverride: (s) => {
       s.themeOverride = null;

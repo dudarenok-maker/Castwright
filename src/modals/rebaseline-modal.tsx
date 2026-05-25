@@ -22,7 +22,7 @@
    Three steps: setup (toggle characters) → propose (design per character,
    current-vs-proposed rows) → approve (series-scoped write). */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   IconClose,
@@ -69,7 +69,13 @@ export function RebaselineModalContainer({
 
 function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
   const dispatch = useAppDispatch();
-  const characters = useAppSelector((s) => s.cast.characters);
+  const reduxCharacters = useAppSelector((s) => s.cast.characters);
+  /* The open book (redux cast is its cast). When the modal targets the open
+     book we use redux directly; for a foreign book (the per-series global-
+     view buttons), we fetch that book's cast on open. */
+  const currentBookId = useAppSelector((s) =>
+    s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null,
+  );
   const voices = useAppSelector((s) => s.voices.voices);
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const status = useAppSelector((s) => s.rebaseline.status);
@@ -77,6 +83,51 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
   const proposals = useAppSelector((s) => s.rebaseline.proposals);
   const appliedCount = useAppSelector((s) => s.rebaseline.appliedCount);
   const playback = useSamplePlayback();
+
+  const targetIsOpenBook = bookId === currentBookId;
+
+  /* Foreign-book cast (fetched when the modal targets a book other than the
+     open one). null while loading / before the fetch resolves; the open-book
+     path leaves it null and reads redux instead.
+
+     v1 uses the representative book's cast — its principal cast covers the
+     recurring characters, and the series-scoped override write propagates by
+     voiceId across the whole series. Full cross-series cast aggregation (a
+     union of every book's cast) is a follow-up. */
+  const [foreignCharacters, setForeignCharacters] = useState<Character[] | null>(null);
+  const [foreignError, setForeignError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (targetIsOpenBook) return;
+    let cancelled = false;
+    setForeignCharacters(null);
+    setForeignError(null);
+    api
+      .getBookState(bookId)
+      .then((res) => {
+        if (cancelled) return;
+        setForeignCharacters(res?.cast?.characters ?? []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('[rebaseline] target cast fetch failed', err);
+        setForeignError('Could not load that series’ cast — try again.');
+        setForeignCharacters([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, targetIsOpenBook]);
+
+  /* The cast the modal works from: redux for the open book, the fetched
+     cast otherwise. Empty array while a foreign fetch is in flight. Memoised
+     so the ternary doesn't hand a fresh array to downstream useMemos every
+     render. */
+  const characters = useMemo(
+    () => (targetIsOpenBook ? reduxCharacters : (foreignCharacters ?? [])),
+    [targetIsOpenBook, reduxCharacters, foreignCharacters],
+  );
+  const loadingCast = !targetIsOpenBook && foreignCharacters === null;
 
   /* Guards the propose / approve loops against a second click + a close
      mid-flight (so a dispatch doesn't fire against a reset slice). */
@@ -89,18 +140,24 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
     return map;
   }, [characters]);
 
-  /* Seed the default selection (principal cast) once when the modal opens
-     against this book. `begin` resets any prior run. */
+  /* Seed the default selection (principal cast) once the resolved cast is in
+     hand. For the open book that's on mount; for a foreign book it's once the
+     fetch lands (guarded so a transient empty cast during the fetch doesn't
+     seed an empty selection). `begin` resets any prior run. */
+  const seededRef = useRef(false);
   useEffect(() => {
+    if (seededRef.current) return;
+    if (loadingCast) return;
+    seededRef.current = true;
     const principal = selectPrincipalCast(
       characters.map((c) => ({ id: c.id, name: c.name })),
       lineCountById,
     );
     dispatch(rebaselineActions.begin({ bookId, selectedCharacterIds: Array.from(principal) }));
-    // Only on mount (per modal open). Deps intentionally omitted so a cast
-    // re-hydrate mid-flow doesn't blow away the user's toggles.
+    // Deps intentionally narrow: seed exactly once per modal open, after the
+    // cast resolves. A later cast re-hydrate must not blow away user toggles.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadingCast]);
 
   function close() {
     if (playback.isPlaying) playback.stop();
@@ -406,7 +463,19 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
           </header>
 
           <div className="p-6 overflow-y-auto scrollbar-thin flex-1">
-            {status === 'setup' ? (
+            {loadingCast ? (
+              <div
+                className="grid place-items-center py-16 text-center"
+                data-testid="rebaseline-loading"
+              >
+                <IconSpinner className="w-6 h-6 text-magenta mb-3" />
+                <p className="text-sm text-ink/60">Loading the series’ cast…</p>
+              </div>
+            ) : foreignError ? (
+              <p className="text-sm text-red-600 py-8 text-center" role="alert">
+                {foreignError}
+              </p>
+            ) : status === 'setup' ? (
               <SetupStep
                 candidates={characters.filter((c) => !isNarrator(c))}
                 narrator={characters.find(isNarrator) ?? null}
