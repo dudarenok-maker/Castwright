@@ -10,7 +10,7 @@
  * catch the question explicitly.
  *
  * Pairs with `src/store/index.ts` where the configs live and
- * `docs/BACKLOG.md` Could #2 (redux-persist) which captured the
+ * the redux-persist whitelist config which captured the
  * original intent. */
 
 import { describe, it, expect } from 'vitest';

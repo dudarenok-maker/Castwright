@@ -3,7 +3,7 @@
  * Extracted from `e2e/new-book-flow.spec.ts` so multiple specs can drive
  * the same new-book flow without re-implementing the click chain. Today's
  * callers: `e2e/new-book-flow.spec.ts` (depth assertions) +
- * `e2e/responsive/visual.spec.ts` (per-stage baselines, BACKLOG Could #34).
+ * `e2e/responsive/visual.spec.ts` (per-stage baselines, plan 37).
  *
  * The mock backend in `src/lib/api.ts` is the contract these helpers
  * exercise; if you change the click affordances they target, update the
@@ -81,7 +81,7 @@ export async function waitForRouteReady(page: Page): Promise<void> {
  * character cards, audio src) need to wait for those signals — under
  * sustained parallel-worker contention the inline 5 s budgets in
  * several specs are too tight and retry-recover on the second run.
- * BACKLOG Should #12.
+ * These per-view hydration helpers absorb that timing.
  *
  * Each helper picks the cheapest signal that proves the slice is ready:
  *   - listen: h1 title visible AND "Play from the start" enabled

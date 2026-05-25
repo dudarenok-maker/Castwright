@@ -377,7 +377,7 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
         .runStage1('m_abort_mid_stream', '# prompt', { signal: controller.signal })
         .catch((e) => e);
 
-      /* BACKLOG Could #33 — wait deterministically for the stream call
+      /* Plan 45 (vitest pool tuning) — wait deterministically for the stream call
          instead of sleeping 20ms. Under pool contention (or even serial
          load) a sleep can race the analyzer's microtask scheduling, the
          abort fires first, generateContentStream is never called, and

@@ -13,7 +13,7 @@ import { defineConfig } from 'vitest/config';
    unexpectedly"), failing the whole verify. Cap + retry absorbs both the
    root cause and the residual transients without forcing a full re-push.
 
-   BACKLOG Could #33 (2026-05-22) — dropped maxForks 4 → 2 and added
+   Plan 45 (vitest pool tuning, 2026-05-22) — dropped maxForks 4 → 2 and added
    explicit hookTimeout: 30_000 after 4 routes test files (book-state,
    chapters-restructure, generation, plus analyzer/gemini for the timer-
    based abort race) repeatedly timed out across full-suite load. The

@@ -302,7 +302,7 @@ describe('QueueModal', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('drag-to-reorder dispatches reorder thunk with the new global order (BACKLOG Could #40)', async () => {
+  it('drag-to-reorder dispatches reorder thunk with the new global order (plan 102)', async () => {
     renderModal([
       entry({ id: 'a1', chapterId: 1, order: 0 }),
       entry({ id: 'a2', chapterId: 2, order: 1 }),
