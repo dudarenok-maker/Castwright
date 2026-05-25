@@ -339,6 +339,85 @@ describe('RebaselineModal — design progress indicators', () => {
   });
 });
 
+describe('RebaselineModal — design order', () => {
+  it('renders + designs top-to-bottom by line count, not alphabetically', async () => {
+    /* aria sorts FIRST alphabetically but has FEWER lines than zane; both clear
+       the 80% principal threshold, so both are selected. Top-to-bottom must be
+       zane (most lines) → aria, NOT the alphabetical aria → zane. */
+    const cast = [
+      char('narrator', 'Narrator', 500),
+      char('aria', 'Aria', 100),
+      char('zane', 'Zane', 120),
+    ];
+    const voices = [voice('voice-aria', 'aria'), voice('voice-zane', 'zane')];
+    const store = makeStore(cast, voices);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(store.getState().rebaseline.status).toBe('proposed'));
+    // Rendered row order: line-count desc (zane above aria). The modal portals
+    // into document.body, so query there rather than the render container.
+    const ids = Array.from(
+      document.body.querySelectorAll('[data-testid^="rebaseline-proposal-"]'),
+    ).map((el) => el.getAttribute('data-testid'));
+    expect(ids).toEqual(['rebaseline-proposal-zane', 'rebaseline-proposal-aria']);
+    // Designed in the same top-to-bottom order.
+    const designOrder = designQwenVoice.mock.calls.map((c) => c[1]);
+    expect(designOrder).toEqual(['zane', 'aria']);
+  });
+});
+
+describe('RebaselineModal — serial design queue', () => {
+  it('Re-design joins the queue behind an in-flight design instead of firing concurrently', async () => {
+    const store = makeStore(CHARACTERS, VOICES);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    // Let the initial propose settle so both rows are ready (2 design calls).
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(store.getState().rebaseline.status).toBe('proposed'));
+    expect(designQwenVoice).toHaveBeenCalledTimes(2);
+
+    // Hold the NEXT design (biana's re-design) open, then fire two re-designs
+    // back-to-back. The second must QUEUE, not fire concurrently.
+    let release: () => void = () => {};
+    designQwenVoice.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ voiceId: 'qwen-biana-v2', previewUrl: 'blob:biana2' });
+        }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-redesign-biana'));
+      fireEvent.click(screen.getByTestId('rebaseline-redesign-keefe'));
+    });
+    // biana is designing (held); keefe is queued behind it — only biana's
+    // re-design call has fired (2 from propose + 1).
+    await waitFor(() =>
+      expect(store.getState().rebaseline.proposals.biana.status).toBe('designing'),
+    );
+    expect(store.getState().rebaseline.proposals.keefe.status).toBe('pending');
+    expect(designQwenVoice).toHaveBeenCalledTimes(3);
+
+    // Releasing biana lets keefe's re-design run next (serial drain).
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(designQwenVoice).toHaveBeenCalledTimes(4));
+    expect(store.getState().rebaseline.proposals.keefe.status).toBe('ready');
+    expect(store.getState().rebaseline.proposals.biana.proposedVoiceId).toBe('qwen-biana-v2');
+  });
+});
+
 describe('RebaselineModal — approve', () => {
   it('writes a series-scoped Qwen override for each included character', async () => {
     const store = makeStore(CHARACTERS, VOICES);
