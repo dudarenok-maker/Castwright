@@ -32,6 +32,7 @@ const generateVoiceStyle = vi.fn(async (_bookId: string, characterId: string) =>
 }));
 const generateAllVoiceStyles = vi.fn(async () => ({ voiceStyles: {}, failures: {} }));
 const setVoiceOverride = vi.fn(async () => undefined);
+const getBookState = vi.fn(async (_bookId: string) => null as unknown);
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -39,6 +40,7 @@ vi.mock('../lib/api', () => ({
     generateVoiceStyle: (...args: unknown[]) => generateVoiceStyle(...(args as [string, string])),
     generateAllVoiceStyles: () => generateAllVoiceStyles(),
     setVoiceOverride: (...args: unknown[]) => setVoiceOverride(...(args as [])),
+    getBookState: (...args: unknown[]) => getBookState(...(args as [string])),
   },
 }));
 
@@ -81,7 +83,29 @@ const voice = (id: string, characterId: string): Voice =>
     ttsVoice: { provider: 'kokoro', name: 'af_heart', description: '' },
   }) as unknown as Voice;
 
-function makeStore(characters: Character[], voices: Voice[]) {
+/* `openBookId` sets the ui.stage to ready/<book> so the modal sees that book
+   as the OPEN book. Pass 'book-1' (the default) for the open-book path (cast
+   from redux, no fetch); pass a different id (or null) to exercise the
+   foreign-book fetch path. */
+function makeStore(
+  characters: Character[],
+  voices: Voice[],
+  { openBookId = 'book-1' as string | null } = {},
+) {
+  const baseUi = { ...uiSlice.getInitialState(), rebaselineModalOpen: true };
+  const ui =
+    openBookId === null
+      ? baseUi
+      : {
+          ...baseUi,
+          stage: {
+            kind: 'ready' as const,
+            bookId: openBookId,
+            view: 'cast' as const,
+            currentChapterId: 1,
+            openProfileId: null,
+          },
+        };
   return configureStore({
     reducer: {
       ui: uiSlice.reducer,
@@ -91,7 +115,7 @@ function makeStore(characters: Character[], voices: Voice[]) {
       rebaseline: rebaselineSlice.reducer,
     },
     preloadedState: {
-      ui: { ...uiSlice.getInitialState(), rebaselineModalOpen: true },
+      ui,
       cast: { characters },
       voices: { ...voicesSlice.getInitialState(), voices },
     },
@@ -113,6 +137,8 @@ beforeEach(() => {
   generateVoiceStyle.mockClear();
   generateAllVoiceStyles.mockClear();
   setVoiceOverride.mockClear();
+  getBookState.mockClear();
+  getBookState.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -146,6 +172,57 @@ describe('RebaselineModal — default selection', () => {
       </Provider>,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('RebaselineModal — cast sourcing', () => {
+  it('uses redux characters without fetching when the target IS the open book', async () => {
+    const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    /* Open-book path: the principal cast seeds from redux and getBookState
+       is never called. */
+    await waitFor(() => {
+      expect(store.getState().rebaseline.selectedCharacterIds).toContain('Maerin');
+    });
+    expect(getBookState).not.toHaveBeenCalled();
+  });
+
+  it('fetches the target series cast via api.getBookState when it is NOT the open book', async () => {
+    /* A DIFFERENT series cast lives in book-2 — the modal must fetch it and
+       seed the principal cast from it, not from the open book's redux cast
+       (which would be book-1's). */
+    getBookState.mockResolvedValue({
+      cast: {
+        characters: [
+          char('narrator', 'Narrator', 400),
+          char('Brann', 'Brann', 90),
+          char('Hart', 'Hart', 70),
+        ],
+      },
+    });
+    /* Open book is book-1, but the modal targets book-2. */
+    const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-2" />
+      </Provider>,
+    );
+    await waitFor(() => expect(getBookState).toHaveBeenCalledWith('book-2'));
+    /* The principal cast is seeded from book-2's fetched cast (Brann + Hart),
+       NOT the open book's redux cast (Maerin + Marlow). */
+    await waitFor(() => {
+      const sel = store.getState().rebaseline.selectedCharacterIds;
+      expect(sel).toContain('Brann');
+      expect(sel).toContain('Hart');
+      expect(sel).not.toContain('Maerin');
+      expect(sel).not.toContain('narrator');
+    });
+    /* The fetched cast's rows render in the setup step. */
+    expect(screen.getByLabelText('Rebaseline Brann')).toBeInTheDocument();
   });
 });
 

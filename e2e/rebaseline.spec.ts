@@ -75,4 +75,28 @@ test.describe('voices view → rebaseline the series modal', () => {
       page.getByText(/Rebaselined \d+ characters? across the series — drift/i),
     ).toBeVisible({ timeout: 10_000 });
   });
+
+  /* Plan 108 follow-up — the rebaseline action is now reachable PER-SERIES
+     from the GLOBAL Voices view ("Every voice you've ever generated"), with
+     no book open. Each series-group header carries its own button that opens
+     the modal pre-loaded with that series' representative cast. */
+  test('global voices view → per-series Rebaseline button opens the modal pre-loaded', async ({
+    page,
+  }) => {
+    await page.goto('/#/voices');
+    await waitForRouteReady(page);
+
+    /* At least one series group surfaces a per-series Rebaseline button
+       (testid prefixed with the series name). */
+    const seriesButton = page.locator('[data-testid^="rebaseline-series-"]').first();
+    await expect(seriesButton).toBeVisible({ timeout: 10_000 });
+    await seriesButton.click();
+
+    /* The modal mounts and loads the series cast — either the loading state
+       briefly, then the setup step with a pre-selected principal cast. */
+    const dialog = page.getByRole('dialog', { name: /Rebaseline the series/i });
+    await expect(dialog).toBeVisible();
+    const checkedSetup = dialog.locator('input[type="checkbox"]:checked');
+    await expect(checkedSetup.first()).toBeVisible({ timeout: 10_000 });
+  });
 });
