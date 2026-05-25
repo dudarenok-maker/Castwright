@@ -130,9 +130,18 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
   );
   const loadingCast = !targetIsOpenBook && foreignCharacters === null;
 
-  /* Guards the propose / approve loops against a second click + a close
-     mid-flight (so a dispatch doesn't fire against a reset slice). */
+  /* Guards the approve loop against a second click + a close mid-flight (so a
+     dispatch doesn't fire against a reset slice). */
   const runningRef = useRef(false);
+
+  /* Serial design queue — every voice design (the propose batch, Re-design,
+     Regenerate) runs through this single FIFO so only one /qwen/design-voice
+     call hits the sidecar at a time. Re-design/Regenerate therefore JOIN the
+     queue (the row shows "Queued…") instead of firing a competing request that
+     contends for the GPU and times out. */
+  const designQueueRef = useRef<Array<{ characterId: string; persona: string }>>([]);
+  const drainingRef = useRef(false);
+  const settleAfterDrainRef = useRef(false);
 
   /* Per-character line counts → the principal-cast default selection. */
   const lineCountById = useMemo(() => {
@@ -181,6 +190,18 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
     return map;
   }, [characters]);
 
+  /* Stable top-to-bottom order: most-spoken first (matches the setup step),
+     name as the tie-break. Used for BOTH the rendered row order and the design
+     enqueue order so the queue visibly works down the list, one by one. */
+  const orderByLineDesc = useMemo(
+    () => (aId: string, bId: string) => {
+      const byLines = (lineCountById[bId] ?? 0) - (lineCountById[aId] ?? 0);
+      if (byLines !== 0) return byLines;
+      return (charById.get(aId)?.name ?? aId).localeCompare(charById.get(bId)?.name ?? bId);
+    },
+    [lineCountById, charById],
+  );
+
   /* Design one character's bespoke voice: generate a persona if we don't
      have one, then design + cache the Qwen voice. Tolerates failure. */
   async function designOne(characterId: string, seedPersona: string): Promise<void> {
@@ -211,85 +232,53 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
     }
   }
 
-  /* Propose step — enter the proposing phase immediately (so the click has a
-     visible effect before any slow call runs), then design each selected
-     character's voice sequentially. Existing personas are reused as-is;
-     designOne generates a persona only for characters missing one, so
-     re-proposing never rebuilds a persona that already exists. Per-character
-     failures don't abort the batch. */
-  async function runPropose() {
-    if (runningRef.current) return;
-    runningRef.current = true;
-    /* Reuse any persona already on the character. The missing ones are filled
-       lazily inside designOne (one Gemini call each) — we deliberately do NOT
-       batch-regenerate, which would overwrite existing personas server-side
-       and rebuild work on every click. */
+  /* Drain the serial design queue one job at a time. Re-entrant-safe via
+     drainingRef; the loop re-reads the shared queue each turn so a job enqueued
+     mid-drain (a Re-design clicked while the batch runs) is picked up in order
+     rather than firing concurrently. */
+  async function drainDesignQueue() {
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    while (designQueueRef.current.length > 0) {
+      const job = designQueueRef.current.shift()!;
+      await designOne(job.characterId, job.persona);
+    }
+    drainingRef.current = false;
+    if (settleAfterDrainRef.current) {
+      settleAfterDrainRef.current = false;
+      dispatch(rebaselineActions.proposingSettled());
+    }
+  }
+
+  /* Enqueue one design job and kick the drainer. An empty persona means
+     "generate a fresh persona first" (Regenerate); a non-empty one re-designs
+     off that exact text (Re-design). The row is marked pending so it reads
+     "Queued…" until the worker reaches it — it never jumps the queue. */
+  function enqueueDesign(characterId: string, persona: string) {
+    dispatch(rebaselineActions.proposalQueued({ characterId }));
+    designQueueRef.current.push({ characterId, persona });
+    void drainDesignQueue();
+  }
+
+  /* Propose step — flip to the proposing phase immediately (so the queued rows
+     + footer progress show the instant Propose is clicked), then enqueue every
+     selected character TOP-TO-BOTTOM. designOne reuses an existing persona and
+     generates one only when missing, so re-proposing never rebuilds a persona
+     that already exists. Per-character failures don't abort the run. */
+  function runPropose() {
+    if (status !== 'setup' || drainingRef.current) return;
     const seeds: Record<string, string> = {};
     for (const id of selectedCharacterIds) {
       const c = charById.get(id);
       if (c?.voiceStyle) seeds[id] = c.voiceStyle;
     }
-    /* Flip to the proposing phase up front so the queued/designing rows + the
-       footer progress are visible the instant Propose is clicked. */
     dispatch(rebaselineActions.startProposing({ personaSeeds: seeds }));
-    for (const id of selectedCharacterIds) {
-      await designOne(id, seeds[id] ?? '');
+    settleAfterDrainRef.current = true;
+    const ordered = [...selectedCharacterIds].sort(orderByLineDesc);
+    for (const id of ordered) {
+      designQueueRef.current.push({ characterId: id, persona: seeds[id] ?? '' });
     }
-    dispatch(rebaselineActions.proposingSettled());
-    runningRef.current = false;
-  }
-
-  /* Regenerate one row's persona + re-design (the ↻ button). */
-  async function regenerateOne(characterId: string) {
-    if (runningRef.current) return;
-    dispatch(rebaselineActions.proposalDesigning({ characterId }));
-    try {
-      const res = await api.generateVoiceStyle(bookId, characterId);
-      const persona = res.voiceStyle;
-      dispatch(castActions.setVoiceStyle({ characterId, voiceStyle: persona }));
-      const { voiceId, previewUrl } = await api.designQwenVoice(bookId, characterId, persona);
-      dispatch(
-        rebaselineActions.proposalReady({
-          characterId,
-          persona,
-          proposedVoiceId: voiceId,
-          previewUrl,
-        }),
-      );
-    } catch (e) {
-      dispatch(
-        rebaselineActions.proposalFailed({
-          characterId,
-          error: (e as Error).message || 'Regenerate failed.',
-        }),
-      );
-    }
-  }
-
-  /* Re-design one row off its (possibly edited) persona without a new
-     persona generation — used after the user tweaks the textarea. */
-  async function redesignOne(characterId: string, persona: string) {
-    const trimmed = persona.trim();
-    if (!trimmed) return;
-    dispatch(rebaselineActions.proposalDesigning({ characterId }));
-    try {
-      const { voiceId, previewUrl } = await api.designQwenVoice(bookId, characterId, trimmed);
-      dispatch(
-        rebaselineActions.proposalReady({
-          characterId,
-          persona: trimmed,
-          proposedVoiceId: voiceId,
-          previewUrl,
-        }),
-      );
-    } catch (e) {
-      dispatch(
-        rebaselineActions.proposalFailed({
-          characterId,
-          error: (e as Error).message || 'Voice design failed.',
-        }),
-      );
-    }
+    void drainDesignQueue();
   }
 
   /* Approve step — for each INCLUDED proposal, write the series-scoped Qwen
@@ -406,8 +395,8 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
   );
 
   const proposalList = useMemo(
-    () => Object.values(proposals).sort((a, b) => a.characterId.localeCompare(b.characterId)),
-    [proposals],
+    () => Object.values(proposals).sort((a, b) => orderByLineDesc(a.characterId, b.characterId)),
+    [proposals, orderByLineDesc],
   );
 
   const includedCount = includedProposals({
@@ -420,6 +409,13 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
 
   const proposeBusy = status === 'proposing';
   const approveBusy = status === 'approving';
+  /* Any row still queued or designing — true during the propose run AND while a
+     standalone Re-design/Regenerate is in flight. Drives the footer progress +
+     keeps Approve disabled until every design has settled. */
+  const designing = useMemo(
+    () => proposalList.some((p) => p.status === 'pending' || p.status === 'designing'),
+    [proposalList],
+  );
 
   return createPortal(
     <>
@@ -489,8 +485,10 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
                 onPersonaChange={(characterId, persona) =>
                   dispatch(rebaselineActions.setProposalPersona({ characterId, persona }))
                 }
-                onRegenerate={regenerateOne}
-                onRedesign={redesignOne}
+                onRegenerate={(characterId) => enqueueDesign(characterId, '')}
+                onRedesign={(characterId, persona) => {
+                  if (persona.trim()) enqueueDesign(characterId, persona.trim());
+                }}
                 onToggleInclude={(characterId) =>
                   dispatch(rebaselineActions.toggleProposalInclude({ characterId }))
                 }
@@ -522,7 +520,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
                   data-testid="rebaseline-progress"
                   className="text-xs text-ink/55 inline-flex items-center gap-1.5"
                 >
-                  {proposeBusy ? (
+                  {proposeBusy || designing ? (
                     <>
                       <IconSpinner className="w-3.5 h-3.5" />
                       Designing voices… (
@@ -545,7 +543,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
                 </button>
                 <button
                   onClick={() => void runApprove()}
-                  disabled={proposeBusy || includedCount === 0}
+                  disabled={proposeBusy || designing || includedCount === 0}
                   data-testid="rebaseline-approve"
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-magenta text-white text-sm font-semibold hover:bg-magenta/90 disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
                 >
@@ -833,7 +831,11 @@ function ProposeStep({
                         <button
                           type="button"
                           onClick={() => onRedesign(p.characterId, p.persona)}
-                          disabled={p.status === 'designing' || p.persona.trim().length === 0}
+                          disabled={
+                            p.status === 'designing' ||
+                            p.status === 'pending' ||
+                            p.persona.trim().length === 0
+                          }
                           data-testid={`rebaseline-redesign-${p.characterId}`}
                           className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold bg-ink/[0.06] text-ink/70 hover:text-ink disabled:opacity-40 disabled:cursor-wait min-h-[32px]"
                         >
@@ -842,7 +844,7 @@ function ProposeStep({
                         <button
                           type="button"
                           onClick={() => onRegenerate(p.characterId)}
-                          disabled={p.status === 'designing'}
+                          disabled={p.status === 'designing' || p.status === 'pending'}
                           data-testid={`rebaseline-regenerate-${p.characterId}`}
                           className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold bg-peach/15 text-magenta hover:bg-peach/25 disabled:opacity-40 disabled:cursor-wait min-h-[32px]"
                         >
