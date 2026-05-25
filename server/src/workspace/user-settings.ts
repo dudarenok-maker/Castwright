@@ -22,6 +22,7 @@ export const TTS_ENGINE_VALUES = ['local', 'gemini'] as const;
 export const ANALYSIS_ENGINE_VALUES = ['local', 'gemini'] as const;
 export const TTS_MODEL_KEY_VALUES = [
   'kokoro-v1',
+  'qwen3-tts-0.6b',
   'coqui-xtts-v2',
   'gemini-2.5-flash',
   'gemini-3.1-flash',
