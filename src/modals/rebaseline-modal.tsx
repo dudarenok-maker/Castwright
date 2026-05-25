@@ -6,8 +6,9 @@
 
    - `selectPrincipalCast` (src/lib/principal-cast.ts) → the default
      selection (~80% of non-narrator lines; narrator excluded).
-   - `api.generateVoiceStyle` / `api.generateAllVoiceStyles` → the Gemini
-     persona generator (Character.voiceStyle).
+   - `api.generateVoiceStyle` → the per-character Gemini persona generator
+     (Character.voiceStyle). Generated lazily, only for a character that
+     lacks a persona — an existing persona is reused, never rebuilt.
    - `api.designQwenVoice` → designs + caches a bespoke Qwen voice from a
      persona and returns an audition preview blob + a derived voiceId.
    - `api.setVoiceOverride(…, { scope:'series', bookId })` → writes the
@@ -210,33 +211,26 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
     }
   }
 
-  /* Propose step — batch-generate personas (one call up front so the
-     network cadence is gated server-side), then design each selected
-     character's voice sequentially. Per-character failures don't abort. */
+  /* Propose step — enter the proposing phase immediately (so the click has a
+     visible effect before any slow call runs), then design each selected
+     character's voice sequentially. Existing personas are reused as-is;
+     designOne generates a persona only for characters missing one, so
+     re-proposing never rebuilds a persona that already exists. Per-character
+     failures don't abort the batch. */
   async function runPropose() {
     if (runningRef.current) return;
     runningRef.current = true;
-    /* Pre-seed personas: characters with an existing voiceStyle seed the
-       textarea; the batch generator fills the rest. We fire the batch but
-       tolerate it failing (mock returns an empty map; designOne then
-       falls back to the per-character generate). */
+    /* Reuse any persona already on the character. The missing ones are filled
+       lazily inside designOne (one Gemini call each) — we deliberately do NOT
+       batch-regenerate, which would overwrite existing personas server-side
+       and rebuild work on every click. */
     const seeds: Record<string, string> = {};
     for (const id of selectedCharacterIds) {
       const c = charById.get(id);
       if (c?.voiceStyle) seeds[id] = c.voiceStyle;
     }
-    try {
-      const batch = await api.generateAllVoiceStyles(bookId);
-      for (const [id, persona] of Object.entries(batch.voiceStyles)) {
-        if (selectedCharacterIds.includes(id)) {
-          seeds[id] = persona;
-          dispatch(castActions.setVoiceStyle({ characterId: id, voiceStyle: persona }));
-        }
-      }
-    } catch {
-      /* Batch is best-effort; designOne falls back to the per-character
-         generate when a seed is missing. */
-    }
+    /* Flip to the proposing phase up front so the queued/designing rows + the
+       footer progress are visible the instant Propose is clicked. */
     dispatch(rebaselineActions.startProposing({ personaSeeds: seeds }));
     for (const id of selectedCharacterIds) {
       await designOne(id, seeds[id] ?? '');
