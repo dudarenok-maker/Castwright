@@ -48,6 +48,14 @@ interface DuplicateReviewModalProps {
   /* Optional callback after a successful action so the caller can
      refresh local state (e.g. clear selection on the voices pill). */
   onResolved?: () => void;
+  /* True while the caller is still hydrating one (or both) books' casts.
+     The action buttons stay disabled and show a neutral loading hint
+     instead of the misleading "open both books" copy. */
+  loading?: boolean;
+  /* Set when a side's cast couldn't be hydrated (fetch failed or the book
+     genuinely has no confirmed cast). Distinct from `error` (the modal's
+     own server-action error) so the two banners never collide. */
+  hydrationError?: string | null;
 }
 
 export function DuplicateReviewModal({
@@ -55,6 +63,8 @@ export function DuplicateReviewModal({
   pair,
   onClose,
   onResolved,
+  loading = false,
+  hydrationError = null,
 }: DuplicateReviewModalProps) {
   const dispatch = useAppDispatch();
   const [busy, setBusy] = useState<'link' | 'variant' | null>(null);
@@ -87,8 +97,8 @@ export function DuplicateReviewModal({
   const winner = survivor === 'a' ? sideA : sideB;
   const loser = survivor === 'a' ? sideB : sideA;
   const canLink = !!sideA.character && !!sideB.character;
-  const linkDisabled = !canLink || busy !== null;
-  const variantDisabled = !canLink || busy !== null;
+  const linkDisabled = !canLink || loading || busy !== null;
+  const variantDisabled = !canLink || loading || busy !== null;
 
   async function handleLink() {
     if (!canLink || !sideA.character || !sideB.character) return;
@@ -218,9 +228,12 @@ export function DuplicateReviewModal({
                 Survivor: <span className="font-semibold text-ink">{winner.voice.character}</span>{' '}
                 — picking link will append &quot;{loser.voice.character}&quot; to its aliases.
               </p>
+            ) : loading ? (
+              <p className="text-xs text-ink/60 mb-3">Loading both books&rsquo; casts…</p>
             ) : (
               <p className="text-xs text-amber-700 mb-3">
-                Open both books so their casts hydrate before linking, or use Cancel.
+                {hydrationError ??
+                  'Couldn’t load one book’s cast — it may have no confirmed cast. Use Cancel.'}
               </p>
             )}
             {error && (
@@ -246,7 +259,11 @@ export function DuplicateReviewModal({
               {busy === 'variant' ? 'Saving…' : 'Different on purpose'}
             </button>
             <PrimaryButton variant="dark" onClick={handleLink} disabled={linkDisabled}>
-              {busy === 'link' ? 'Linking…' : 'Same character — link them'}
+              {busy === 'link'
+                ? 'Linking…'
+                : loading
+                  ? 'Loading casts…'
+                  : 'Same character — link them'}
             </PrimaryButton>
           </div>
         </div>
