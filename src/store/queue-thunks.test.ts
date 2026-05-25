@@ -11,11 +11,13 @@ import { notificationsSlice } from './notifications-slice';
 import { chaptersSlice } from './chapters-slice';
 import {
   cancelQueueEntry,
+  completeQueueEntry,
   enqueueQueueEntries,
   haltActiveGeneration,
   loadQueue,
   reorderQueue,
   setQueuePaused,
+  startQueueEntry,
 } from './queue-thunks';
 
 const sampleEntry = (overrides: Partial<QueueEntry> = {}): QueueEntry => ({
@@ -44,7 +46,10 @@ afterEach(() => {
    way it does in the real store. */
 type TestDispatch = (action: unknown) => Promise<unknown>;
 function makeStore(): {
-  getState: () => { queue: ReturnType<typeof queueSlice.reducer>; notifications: ReturnType<typeof notificationsSlice.reducer> };
+  getState: () => {
+    queue: ReturnType<typeof queueSlice.reducer>;
+    notifications: ReturnType<typeof notificationsSlice.reducer>;
+  };
   dispatch: TestDispatch;
 } {
   const store = configureStore({
@@ -160,6 +165,31 @@ describe('setQueuePaused', () => {
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ paused: true }) }),
     );
     expect(store.getState().queue.paused).toBe(true);
+  });
+});
+
+describe('startQueueEntry', () => {
+  it('POSTs /start and dispatches the snapshot (entry now in_progress)', async () => {
+    fetchMock.mockResolvedValue(
+      mockJsonResponse({
+        entries: [sampleEntry({ id: 'e1', status: 'in_progress' })],
+        paused: false,
+      }),
+    );
+    const store = makeStore();
+    await store.dispatch(startQueueEntry('e1'));
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1/start', { method: 'POST' });
+    expect(store.getState().queue.entries[0].status).toBe('in_progress');
+  });
+});
+
+describe('completeQueueEntry', () => {
+  it('POSTs /complete and dispatches the snapshot (entry dropped)', async () => {
+    fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: false }));
+    const store = makeStore();
+    await store.dispatch(completeQueueEntry('e1'));
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1/complete', { method: 'POST' });
+    expect(store.getState().queue.entries).toEqual([]);
   });
 });
 

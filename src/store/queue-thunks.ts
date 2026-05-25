@@ -26,7 +26,10 @@ import { mockQueueRequest } from '../mocks/mock-queue';
    mock returns a fetch-Response-like object so `readSnapshot` is unchanged. */
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 
-function queueRequest(path: string, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<Response> {
+function queueRequest(
+  path: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: string },
+): Promise<Response> {
   if (USE_MOCKS) return Promise.resolve(mockQueueRequest(path, init) as unknown as Response);
   return fetch(path, init);
 }
@@ -147,6 +150,40 @@ export function setQueuePaused(paused: boolean) {
   };
 }
 
+/** POST /api/queue/:entryId/start — mark an entry in_progress. The dispatcher
+    fires this the instant it claims an entry and opens that chapter's stream
+    (one entry = one chapter actively starting; claim == in_progress). Status
+    only — no reorder — because N entries can be in_progress at once under
+    queue-sole concurrency. Idempotent server-side, so a retried claim is safe;
+    failures are logged, not surfaced (the run still proceeds — this only
+    affects the modal's In flight / Queued label). */
+export function startQueueEntry(entryId: string) {
+  return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
+    const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}/start`, {
+      method: 'POST',
+    });
+    const snapshot = await readSnapshot(res);
+    dispatch(queueActions.setSnapshot(snapshot));
+    return snapshot;
+  };
+}
+
+/** POST /api/queue/:entryId/complete — drop a finished entry. The dispatcher's
+    reconcile fires this once a chapter's stream closes. Distinct from
+    cancelQueueEntry (user cancel, 409s an in_progress entry): completion
+    removal is status-agnostic because the entry IS in_progress when its
+    chapter finishes. */
+export function completeQueueEntry(entryId: string) {
+  return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
+    const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}/complete`, {
+      method: 'POST',
+    });
+    const snapshot = await readSnapshot(res);
+    dispatch(queueActions.setSnapshot(snapshot));
+    return snapshot;
+  };
+}
+
 /** DELETE /api/queue/:entryId — cancel a queued entry. The modal's per-row
     cancel button calls this. Server 409s if the entry is in_progress; we
     surface a toast in that case rather than re-throwing because the user's
@@ -154,7 +191,9 @@ export function setQueuePaused(paused: boolean) {
     structured error keeps the flow self-explanatory. */
 export function cancelQueueEntry(entryId: string) {
   return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
-    const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
+    const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}`, {
+      method: 'DELETE',
+    });
     if (res.status === 409) {
       dispatch(
         notificationsActions.pushToast({

@@ -1,11 +1,13 @@
-/* Unit tests for the generation-stream runner (plan 111 worker pool).
+/* Unit tests for the generation-stream runner (queue-sole concurrency).
  *
- * The runner owns the SSE handles — one per book — and self-drives each
- * stream's per-tick side-effects via the onTick it passes to
- * api.streamGeneration. These tests open streams, capture each onTick, feed
- * ticks, and assert: per-book snapshot, idle teardown (per book), the run
- * rollup, multi-handle concurrency, the per-book singleton, excluded-chapter
- * counting, and the dispatcher-facing query methods. */
+ * The runner owns the SSE handles — one per CHAPTER, keyed
+ * `${bookId}::${chapterId}` — and self-drives each stream's per-tick
+ * side-effects via the onTick it passes to api.streamGeneration. These tests
+ * open streams, capture each onTick, feed ticks, and assert: per-stream
+ * snapshot, idle teardown (per chapter), the run rollup, multi-handle
+ * concurrency (including two same-book chapters), the per-CHAPTER singleton,
+ * excluded-chapter counting, close-by-key leaving a sibling intact, and the
+ * dispatcher-facing query methods. */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
@@ -54,12 +56,15 @@ const ch = (id: number, overrides: Partial<Chapter> = {}): Chapter =>
     ...overrides,
   }) as Chapter;
 
-/* The onTick the runner passed for a given book's stream. */
-function onTickFor(bookId: string): (ev: GenerationTick) => void {
-  const call = streamGenerationMock.mock.calls.find(
-    (c) => (c[0] as { bookId?: string }).bookId === bookId,
-  );
-  if (!call) throw new Error(`no open stream for ${bookId}`);
+/* The onTick the runner passed for a given (book, chapter) stream. Matches
+   on the streamGeneration args' bookId + the single chapterId the dispatcher
+   passes. */
+function onTickFor(bookId: string, chapterId: number): (ev: GenerationTick) => void {
+  const call = streamGenerationMock.mock.calls.find((c) => {
+    const a = c[0] as { bookId?: string; chapterIds?: number[] };
+    return a.bookId === bookId && (a.chapterIds ?? []).includes(chapterId);
+  });
+  if (!call) throw new Error(`no open stream for ${bookId}::${chapterId}`);
   return (call[0] as { onTick: (ev: GenerationTick) => void }).onTick;
 }
 
@@ -69,8 +74,8 @@ function makeRunner(): { store: ReturnType<typeof makeStore>; runner: StreamRunn
   return { store, runner };
 }
 
-describe('generation-stream-runner (worker pool)', () => {
-  it('open() seeds the per-book snapshot from the viewed book’s rows', () => {
+describe('generation-stream-runner (queue-sole concurrency)', () => {
+  it('open() seeds the per-stream snapshot (keyed by composite key) from the viewed book’s rows', () => {
     const { store, runner } = makeRunner();
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
     store.dispatch(
@@ -81,59 +86,84 @@ describe('generation-stream-runner (worker pool)', () => {
         ch(4, { state: 'queued', excluded: true }),
       ]),
     );
-    runner.open('b1', 'kokoro-v1', { chapterIds: [2, 3], force: true });
-    const snap = store.getState().chapters.activeStreams['b1'];
+    runner.open('b1', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
+    const snap = store.getState().chapters.activeStreams['b1::2'];
     expect(snap).toBeDefined();
+    expect(snap.bookId).toBe('b1');
+    expect(snap.chapterId).toBe(2);
     /* Excluded chapter 4 is not counted in total. */
     expect(snap.total).toBe(3);
     expect(snap.done).toBe(1);
     expect(snap.inProgress).toBe(1);
+    expect(runner.hasOpenStreamForChapter('b1', 2)).toBe(true);
     expect(runner.hasOpenStreamForBook('b1')).toBe(true);
-    expect(runner.openChapterIds().sort()).toEqual([2, 3]);
+    expect(runner.openChapterIds()).toEqual([2]);
   });
 
-  it('is a per-book singleton — opening the same book twice opens one stream', () => {
+  it('is a per-CHAPTER singleton — re-opening the SAME chapter is a no-op, but a sibling chapter opens', () => {
     const { runner } = makeRunner();
-    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true });
-    runner.open('b1', 'kokoro-v1', { chapterIds: [2], force: true });
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    expect(runner.openBookCount()).toBe(1);
+    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    /* Two same-book chapters → two independent handles. */
+    runner.open('b1', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
+    expect(streamGenerationMock).toHaveBeenCalledTimes(2);
+    expect(runner.openBookCount()).toBe(2);
+    expect(runner.hasOpenStreamForChapter('b1', 1)).toBe(true);
+    expect(runner.hasOpenStreamForChapter('b1', 2)).toBe(true);
+    /* Re-opening chapter 1 is a no-op (singleton guards the chapter). */
+    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    expect(streamGenerationMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('two same-book chapters open two handles; closing one leaves the sibling + its snapshot intact', () => {
+    const { store, runner } = makeRunner();
+    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    runner.open('b1', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
+    expect(Object.keys(store.getState().chapters.activeStreams).sort()).toEqual(['b1::1', 'b1::2']);
+
+    /* Idle on chapter 1 closes ONLY its handle + snapshot; chapter 2 lives. */
+    onTickFor('b1', 1)({ type: 'idle' } as GenerationTick);
+    expect(runner.hasOpenStreamForChapter('b1', 1)).toBe(false);
+    expect(runner.hasOpenStreamForChapter('b1', 2)).toBe(true);
+    /* Book is still streaming (the sibling chapter). */
+    expect(runner.hasOpenStreamForBook('b1')).toBe(true);
+    expect(store.getState().chapters.activeStreams['b1::1']).toBeUndefined();
+    expect(store.getState().chapters.activeStreams['b1::2']).toBeDefined();
   });
 
   it('runs independent concurrent streams for different books', () => {
     const { store, runner } = makeRunner();
-    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true });
-    runner.open('b2', 'kokoro-v1', { chapterIds: [5], force: true });
+    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    runner.open('b2', 'kokoro-v1', { chapterIds: [5], force: true }, { chapterId: 5 });
     expect(runner.openBookCount()).toBe(2);
     expect(runner.openBookIds().sort()).toEqual(['b1', 'b2']);
-    expect(Object.keys(store.getState().chapters.activeStreams).sort()).toEqual(['b1', 'b2']);
+    expect(Object.keys(store.getState().chapters.activeStreams).sort()).toEqual(['b1::1', 'b2::5']);
 
     /* Idle on b1 closes ONLY b1's stream; b2 keeps running. */
-    onTickFor('b1')({ type: 'idle' } as GenerationTick);
+    onTickFor('b1', 1)({ type: 'idle' } as GenerationTick);
     expect(runner.hasOpenStreamForBook('b1')).toBe(false);
     expect(runner.hasOpenStreamForBook('b2')).toBe(true);
-    expect(store.getState().chapters.activeStreams['b1']).toBeUndefined();
-    expect(store.getState().chapters.activeStreams['b2']).toBeDefined();
+    expect(store.getState().chapters.activeStreams['b1::1']).toBeUndefined();
+    expect(store.getState().chapters.activeStreams['b2::5']).toBeDefined();
   });
 
   it('flushes a single generation_run_complete rollup on idle close', () => {
     const { store, runner } = makeRunner();
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
     store.dispatch(
-      chaptersSlice.actions.setChapters([
-        ch(1, { state: 'in_progress', progress: 0.5 }),
-        ch(2, { state: 'queued' }),
-      ]),
+      chaptersSlice.actions.setChapters([ch(1, { state: 'in_progress', progress: 0.5 })]),
     );
-    runner.open('b1', 'kokoro-v1', { chapterIds: [1, 2], force: true });
-    const tick = onTickFor('b1');
+    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    const tick = onTickFor('b1', 1);
     tick({ type: 'chapter_complete', chapterId: 1 } as GenerationTick);
-    tick({ type: 'chapter_complete', chapterId: 2 } as GenerationTick);
     /* No per-chapter complete events; rollup only on close. */
-    const before = store.getState().changeLog.events.filter((e) => e.type === 'generation_run_complete');
+    const before = store
+      .getState()
+      .changeLog.events.filter((e) => e.type === 'generation_run_complete');
     expect(before).toHaveLength(0);
     tick({ type: 'idle' } as GenerationTick);
-    const after = store.getState().changeLog.events.filter((e) => e.type === 'generation_run_complete');
+    const after = store
+      .getState()
+      .changeLog.events.filter((e) => e.type === 'generation_run_complete');
     expect(after).toHaveLength(1);
   });
 
@@ -143,14 +173,17 @@ describe('generation-stream-runner (worker pool)', () => {
     store.dispatch(
       chaptersSlice.actions.setChapters([ch(1, { state: 'in_progress', progress: 0.1 }), ch(2)]),
     );
-    runner.open('b1', 'kokoro-v1', { chapterIds: [1, 2], force: true });
-    onTickFor('b1')({
+    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    onTickFor(
+      'b1',
+      1,
+    )({
       type: 'progress',
       chapterId: 1,
       progress: 0.5,
       characterId: 'narrator',
     } as GenerationTick);
-    const snap = store.getState().chapters.activeStreams['b1'];
+    const snap = store.getState().chapters.activeStreams['b1::1'];
     expect(snap.lastTickAt).not.toBeNull();
   });
 
@@ -159,8 +192,11 @@ describe('generation-stream-runner (worker pool)', () => {
     /* Viewing b1; a stream is open for b2 (cross-book). */
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
     store.dispatch(chaptersSlice.actions.setChapters([ch(1, { state: 'queued' })]));
-    runner.open('b2', 'kokoro-v1', { chapterIds: [1], force: true });
-    onTickFor('b2')({
+    runner.open('b2', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    onTickFor(
+      'b2',
+      1,
+    )({
       type: 'progress',
       chapterId: 1,
       progress: 0.5,
@@ -169,15 +205,15 @@ describe('generation-stream-runner (worker pool)', () => {
       runInProgress: 1,
     } as unknown as GenerationTick);
     /* b2's snapshot picked up the run aggregates; b1's rows are untouched. */
-    expect(store.getState().chapters.activeStreams['b2'].total).toBe(3);
+    expect(store.getState().chapters.activeStreams['b2::1'].total).toBe(3);
     expect(store.getState().chapters.chapters[0].state).toBe('queued');
     expect(store.getState().chapters.chapters[0].progress).toBe(0);
   });
 
   it('closeAll tears down every stream', () => {
     const { runner } = makeRunner();
-    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true });
-    runner.open('b2', 'kokoro-v1', { chapterIds: [2], force: true });
+    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    runner.open('b2', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
     runner.closeAll();
     expect(runner.openBookCount()).toBe(0);
     expect(cancelMock).toHaveBeenCalledTimes(2);

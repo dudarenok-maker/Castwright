@@ -100,6 +100,16 @@ Source: plan 95 ship (2026-05-22) — Out of scope. PR [#142](https://github.com
 - _Migration:_ books that pre-date the journal still get the `chapterCast` fallback (today's behaviour); only newly-merged ones benefit. No backfill — the lineage was lost at the old merges and there's no way to reconstruct it.
 - _Benefit (user):_ reattribute modal becomes a precise checklist instead of a scoped review — every row the user sees is provably their merge's work, no third-party sentences to skip over. Big quality-of-life win for series-2-into-1 cleanups where merges pile up.
 
+### `srv-11` — Queue-level failure suppression (replace the removed cross-chapter cascade-kill)
+
+Source: net-new (2026-05-25). Surfaced making the queue dispatcher the sole concurrency authority (one worker = one chapter; the plan-87 within-book worker pool removed). See the "Update — 2026-05-25" note in [`111-queue-worker-pool.md`](features/archive/111-queue-worker-pool.md).
+
+- _What:_ Restore a safety net the refactor dropped. Under the old within-book worker pool, a chapter that deterministically poisoned synthesis (bad cast, missing voice, sidecar config error) failed alongside its book's other in-flight chapters via a shared cascade-kill — so a hopeless book stopped fast instead of burning the GPU re-failing every chapter. Now each chapter is its own `${bookId}::${chapterId}` queue job and fails independently, so N hopeless chapters each fail in turn with no circuit-breaker. Add a queue-level breaker: track consecutive identical failures per book (same `errorReason`), and after a threshold (e.g. 3) auto-pause that book's queue entries (or the whole queue) with a toast naming the repeated error, so the user fixes the root cause before the queue keeps draining into the same wall. Per-chapter independent failure stays the default; this only trips on a *repeated identical* failure pattern.
+- _Acceptance:_ Enqueue 5 chapters of a book whose cast references a non-existent voice → the first ~3 fail with the same `errorReason`, then the book's remaining queued entries auto-pause (not silently fail one-by-one) and a toast surfaces the repeated error. A book with a *single* transient failure (different error, or one-off) keeps draining its siblings — no false trip. New server + dispatcher tests pin the consecutive-identical-failure counter, the threshold trip, and the reset-on-success.
+- _Key files:_ `src/store/queue-dispatcher-middleware.ts` (track per-book consecutive failures off the stream's `chapter_failed` ticks; trip → `setQueuePaused` or a per-book pause), `server/src/workspace/queue-io.ts` (a per-book or per-entry failure-count field if the breaker needs persistence across reload), `server/src/routes/queue.ts` (status route if the count is server-tracked), `src/modals/queue-modal.tsx` (surface the tripped/paused state).
+- _Depends on:_ the queue-sole-concurrency refactor (shipped — `refactor/server-queue-sole-concurrency`).
+- _Benefit (user / technical):_ stops a misconfigured book from quietly burning GPU time re-failing every chapter; the user gets one clear "this keeps failing for reason X" signal instead of N scattered per-chapter failures. Restores the fail-fast property the cascade-kill gave for free, without re-coupling sibling chapters into one job.
+
 ---
 
 ## Could — nice to have, low-cost wins

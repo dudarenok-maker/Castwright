@@ -6,6 +6,7 @@ import {
   cancel,
   completeEntry,
   enqueue,
+  markInProgress,
   pruneByBook,
   reorder,
   setPaused,
@@ -159,6 +160,42 @@ describe('queue-io.startEntry', () => {
     f = startEntry(f, 'e1');
     f = startEntry(f, 'e1');
     expect(f.entries.find((e) => e.id === 'e1')?.status).toBe('in_progress');
+  });
+});
+
+describe('queue-io.markInProgress', () => {
+  it('flips the entry to in_progress WITHOUT reordering (order preserved)', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2'), sampleEntry('e3')]);
+    f = markInProgress(f, 'e2');
+    /* e2 stays at order 1 — no pin to order 0 (unlike startEntry). */
+    expect(f.entries.map((e) => [e.id, e.order, e.status])).toEqual([
+      ['e1', 0, 'queued'],
+      ['e2', 1, 'in_progress'],
+      ['e3', 2, 'queued'],
+    ]);
+  });
+
+  it('allows MULTIPLE concurrent in_progress entries (no single-in-flight throw)', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2')]);
+    f = markInProgress(f, 'e1');
+    f = markInProgress(f, 'e2');
+    expect(f.entries.filter((e) => e.status === 'in_progress').map((e) => e.id)).toEqual([
+      'e1',
+      'e2',
+    ]);
+  });
+
+  it('is a no-op for a missing entry id', () => {
+    const f = enqueue(emptyFile(), [sampleEntry('e1')]);
+    const next = markInProgress(f, 'missing');
+    expect(next.entries.map((e) => [e.id, e.status])).toEqual([['e1', 'queued']]);
+  });
+
+  it('is idempotent when the entry is already in_progress', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1')]);
+    f = markInProgress(f, 'e1');
+    f = markInProgress(f, 'e1');
+    expect(f.entries[0].status).toBe('in_progress');
   });
 });
 

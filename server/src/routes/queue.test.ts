@@ -204,7 +204,9 @@ describe('POST /api/queue/reorder', () => {
           { id: 'e3', bookId: 'book-A', chapterId: 3, scope: 'this' },
         ],
       });
-    const res = await request(app).post('/api/queue/reorder').send({ order: ['e3', 'e1', 'e2'] });
+    const res = await request(app)
+      .post('/api/queue/reorder')
+      .send({ order: ['e3', 'e1', 'e2'] });
     expect(res.status).toBe(200);
     expect(res.body.entries.map((e: { id: string }) => e.id)).toEqual(['e3', 'e1', 'e2']);
   });
@@ -218,7 +220,9 @@ describe('POST /api/queue/reorder', () => {
     await request(app)
       .post('/api/queue/enqueue')
       .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
-    const res = await request(app).post('/api/queue/reorder').send({ order: ['unknown'] });
+    const res = await request(app)
+      .post('/api/queue/reorder')
+      .send({ order: ['unknown'] });
     expect(res.status).toBe(409);
   });
 });
@@ -240,6 +244,92 @@ describe('POST /api/queue/pause', () => {
   });
 });
 
+describe('POST /api/queue/:entryId/start', () => {
+  it('marks the entry in_progress WITHOUT reordering (no order=0 pin)', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({
+        entries: [
+          { id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' },
+          { id: 'e2', bookId: 'book-A', chapterId: 2, scope: 'this' },
+        ],
+      });
+    /* Start the SECOND entry — under queue-sole concurrency we don't pin it to
+       order 0, so e1 stays at order 0 and e2 stays at order 1. */
+    const res = await request(app).post('/api/queue/e2/start');
+    expect(res.status).toBe(200);
+    expect(
+      res.body.entries.map((e: { id: string; status: string; order: number }) => [
+        e.id,
+        e.status,
+        e.order,
+      ]),
+    ).toEqual([
+      ['e1', 'queued', 0],
+      ['e2', 'in_progress', 1],
+    ]);
+  });
+
+  it('allows MULTIPLE entries to be in_progress at once (no single-in-flight throw)', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({
+        entries: [
+          { id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' },
+          { id: 'e2', bookId: 'book-B', chapterId: 1, scope: 'this' },
+        ],
+      });
+    await request(app).post('/api/queue/e1/start');
+    const res = await request(app).post('/api/queue/e2/start');
+    expect(res.status).toBe(200);
+    expect(
+      res.body.entries.filter((e: { status: string }) => e.status === 'in_progress'),
+    ).toHaveLength(2);
+  });
+
+  it('is idempotent for an already-in_progress entry', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
+    await request(app).post('/api/queue/e1/start');
+    const res = await request(app).post('/api/queue/e1/start');
+    expect(res.status).toBe(200);
+    expect(res.body.entries[0].status).toBe('in_progress');
+  });
+
+  it('is a no-op for a missing entry id', async () => {
+    const res = await request(app).post('/api/queue/missing/start');
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toEqual([]);
+  });
+});
+
+describe('POST /api/queue/:entryId/complete', () => {
+  it('drops an in_progress entry on completion (status-agnostic done-prune)', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({
+        entries: [
+          { id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' },
+          { id: 'e2', bookId: 'book-A', chapterId: 2, scope: 'this' },
+        ],
+      });
+    await request(app).post('/api/queue/e1/start');
+    const res = await request(app).post('/api/queue/e1/complete');
+    expect(res.status).toBe(200);
+    /* e1 removed even though it was in_progress (unlike DELETE which 409s). */
+    expect(res.body.entries.map((e: { id: string; order: number }) => [e.id, e.order])).toEqual([
+      ['e2', 0],
+    ]);
+  });
+
+  it('is idempotent for a missing entry id', async () => {
+    const res = await request(app).post('/api/queue/missing/complete');
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toEqual([]);
+  });
+});
+
 describe('DELETE /api/queue/:entryId', () => {
   it('removes a queued entry', async () => {
     await request(app)
@@ -253,6 +343,15 @@ describe('DELETE /api/queue/:entryId', () => {
     const res = await request(app).delete('/api/queue/e1');
     expect(res.status).toBe(200);
     expect(res.body.entries.map((e: { id: string }) => e.id)).toEqual(['e2']);
+  });
+
+  it('409s when DELETE-ing an in_progress entry (user must pause first)', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
+    await request(app).post('/api/queue/e1/start');
+    const res = await request(app).delete('/api/queue/e1');
+    expect(res.status).toBe(409);
   });
 
   it('is idempotent (cancelling a missing entry returns 200 with current snapshot)', async () => {
