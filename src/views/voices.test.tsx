@@ -46,6 +46,9 @@ vi.mock('../lib/api', () => ({
     getBaseVoices: () => getBaseVoices(),
     setVoiceOverride: (...args: unknown[]) => setVoiceOverride(...args),
     getBookState: (bookId: string) => getBookState(bookId),
+    /* The rebaseline modal (mounted by this view) fetches the series cast on
+       open; no series-mates in this test workspace. */
+    getSeriesCast: (_bookId: string) => Promise.resolve({ characters: [] as Character[] }),
     seriesPatchCharacter: (args: {
       bookId: string;
       characterId: string;
