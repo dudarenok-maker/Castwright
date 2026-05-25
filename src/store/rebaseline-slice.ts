@@ -114,6 +114,16 @@ export const rebaselineSlice = createSlice({
         };
       }
     },
+    /* Re-queue a proposal (Re-design / Regenerate) — back to pending so it
+       shows "Queued…" until the serial design worker reaches it. Keeps the
+       existing persona + preview until the new design lands. */
+    proposalQueued: (s, a: PayloadAction<{ characterId: string }>) => {
+      const p = s.proposals[a.payload.characterId];
+      if (p) {
+        p.status = 'pending';
+        p.error = undefined;
+      }
+    },
     /* Mark a single proposal as in-flight. */
     proposalDesigning: (s, a: PayloadAction<{ characterId: string }>) => {
       const p = s.proposals[a.payload.characterId];
