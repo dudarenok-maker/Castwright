@@ -304,6 +304,15 @@ export interface SeriesRosterEntry {
 export interface SeriesRosterResponse {
   characters: SeriesRosterEntry[];
 }
+/* GET /api/books/:bookId/series-cast — the FULL cast (every cast.json field:
+   lines, voiceStyle, overrideTtsVoices, ttsEngine, voiceId, …) of every OTHER
+   confirmed book in the same (author, series). Distinct from getSeriesRoster's
+   thin entries — the rebaseline modal needs the same shape getBookState
+   returns so it can merge series-mates onto the anchor cast (merge-series-cast.ts).
+   Each character also carries `sourceBookId`/`sourceBookTitle` provenance. */
+export interface SeriesCastResponse {
+  characters: import('./types').Character[];
+}
 /* POST /api/books/:bookId/cast/add-from-roster — add a new local
    character pulled from a prior series-mate's cast. Used by the
    manuscript-view reassign picker when the analyzer missed a
@@ -2275,6 +2284,30 @@ async function mockGetSeriesRoster(bookId: string): Promise<SeriesRosterResponse
   return { characters: MOCK_SERIES_ROSTER };
 }
 
+async function realGetSeriesCast(bookId: string): Promise<SeriesCastResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/series-cast`);
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Series cast fetch failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockGetSeriesCast(bookId: string): Promise<SeriesCastResponse> {
+  /* Mock mode has a single-book workspace with no series-mates on disk, so
+     there is nothing to aggregate — the rebaseline modal degrades to its
+     anchor cast (the open book), which is exactly the pre-aggregation
+     behaviour the design-system environment expects. */
+  await wait(40);
+  void bookId;
+  return { characters: [] };
+}
+
 async function realLinkPriorCharacter(
   args: LinkPriorCharacterArgs,
 ): Promise<LinkPriorCharacterResponse> {
@@ -3979,6 +4012,7 @@ const real = {
   designQwenVoice: realDesignQwenVoice,
   overrideLibraryCast: realOverrideLibraryCast,
   getSeriesRoster: realGetSeriesRoster,
+  getSeriesCast: realGetSeriesCast,
   linkPriorCharacter: realLinkPriorCharacter,
   notLinkedTo: realNotLinkedTo,
   addFromSeriesRoster: realAddFromSeriesRoster,
@@ -4158,6 +4192,7 @@ const mock = {
   designQwenVoice: mockDesignQwenVoice,
   overrideLibraryCast: mockOverrideLibraryCast,
   getSeriesRoster: mockGetSeriesRoster,
+  getSeriesCast: mockGetSeriesCast,
   linkPriorCharacter: mockLinkPriorCharacter,
   notLinkedTo: mockNotLinkedTo,
   addFromSeriesRoster: mockAddFromSeriesRoster,

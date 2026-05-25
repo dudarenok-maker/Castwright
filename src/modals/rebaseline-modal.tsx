@@ -43,6 +43,7 @@ import { castActions } from '../store/cast-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { rebaselineActions, includedProposals, type Proposal } from '../store/rebaseline-slice';
 import { selectPrincipalCast } from '../lib/principal-cast';
+import { mergeSeriesCast } from '../lib/merge-series-cast';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
@@ -87,16 +88,20 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
 
   const targetIsOpenBook = bookId === currentBookId;
 
-  /* Foreign-book cast (fetched when the modal targets a book other than the
-     open one). null while loading / before the fetch resolves; the open-book
-     path leaves it null and reads redux instead.
-
-     v1 uses the representative book's cast — its principal cast covers the
-     recurring characters, and the series-scoped override write propagates by
-     voiceId across the whole series. Full cross-series cast aggregation (a
-     union of every book's cast) is a follow-up. */
+  /* Anchor cast (the book the modal is keyed to). For the open book that's
+     redux; for a foreign book (the per-series global-view buttons) we fetch
+     it. null while loading / before the fetch resolves; the open-book path
+     leaves it null and reads redux instead. */
   const [foreignCharacters, setForeignCharacters] = useState<Character[] | null>(null);
   const [foreignError, setForeignError] = useState<string | null>(null);
+
+  /* Series-mates' casts — the full cast of every OTHER confirmed book in this
+     (author, series), fetched on open and merged onto the anchor below. This
+     is what makes the modal cover the WHOLE series: a character introduced in
+     a later volume becomes selectable, and principal-cast line counts reflect
+     the series total. null while loading; [] when the book is in no series OR
+     the fetch failed (degrade gracefully to the anchor-only cast). */
+  const [siblingCharacters, setSiblingCharacters] = useState<Character[] | null>(null);
 
   useEffect(() => {
     if (targetIsOpenBook) return;
@@ -120,15 +125,48 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
     };
   }, [bookId, targetIsOpenBook]);
 
-  /* The cast the modal works from: redux for the open book, the fetched
-     cast otherwise. Empty array while a foreign fetch is in flight. Memoised
-     so the ternary doesn't hand a fresh array to downstream useMemos every
-     render. */
-  const characters = useMemo(
+  useEffect(() => {
+    let cancelled = false;
+    setSiblingCharacters(null);
+    api
+      .getSeriesCast(bookId)
+      .then((res) => {
+        if (cancelled) return;
+        setSiblingCharacters(res.characters ?? []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        /* A series-cast fetch failure isn't fatal — fall back to the anchor
+           cast so the modal still works (it just won't include other books'
+           characters). The anchor fetch above owns the hard-error surface. */
+        console.error('[rebaseline] series-cast fetch failed', err);
+        setSiblingCharacters([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId]);
+
+  /* The anchor cast: redux for the open book, the fetched cast otherwise.
+     Empty array while a foreign fetch is in flight. */
+  const anchorCharacters = useMemo(
     () => (targetIsOpenBook ? reduxCharacters : (foreignCharacters ?? [])),
     [targetIsOpenBook, reduxCharacters, foreignCharacters],
   );
-  const loadingCast = !targetIsOpenBook && foreignCharacters === null;
+
+  /* The cast the modal works from: the anchor merged with every series-mate,
+     deduped by the override write key (voiceId ?? id) with line counts summed
+     series-wide. Falls back to the anchor alone while siblings load. */
+  const characters = useMemo(
+    () => mergeSeriesCast(anchorCharacters, siblingCharacters ?? []),
+    [anchorCharacters, siblingCharacters],
+  );
+
+  /* Wait for BOTH the anchor cast AND the series aggregation before seeding
+     the default selection, so the principal cast reflects series-total line
+     counts rather than one book's. */
+  const loadingCast =
+    (!targetIsOpenBook && foreignCharacters === null) || siblingCharacters === null;
 
   /* Guards the approve loop against a second click + a close mid-flight (so a
      dispatch doesn't fire against a reset slice). */
@@ -628,9 +666,10 @@ function SetupStep({
   return (
     <div className="space-y-4">
       <p className="text-sm text-ink/70 leading-relaxed">
-        The principal cast (the speaking characters who carry ~80% of the dialogue) is pre-selected.
-        Each selected character gets a bespoke Qwen voice designed from a persona. The narrator
-        stays on its Kokoro preset by default.
+        Every speaking character across the whole series is listed here; the principal cast (those
+        who carry ~80% of the series' dialogue) is pre-selected. Each selected character gets a
+        bespoke Qwen voice designed from a persona. The narrator stays on its Kokoro preset by
+        default.
       </p>
       <ul className="space-y-2">
         {sorted.map((c) => (
