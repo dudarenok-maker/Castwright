@@ -26,7 +26,7 @@ export interface TransientErrorShape {
 export interface WithTtsRetryOpts {
   /** Max total attempts (primary + retries). Default 3 → 1 + 2 retries.
       Matches the `1 attempt + 2 retries at 500ms / 2s` schedule named
-      in the regression plan for Should #13 / Backlog entry 13. */
+      in the regression plan for transient-failure auto-retry. */
   maxAttempts?: number;
   /** Backoff schedule in ms BETWEEN attempts (length must be >=
       maxAttempts-1). Defaults to [500, 2000]. */

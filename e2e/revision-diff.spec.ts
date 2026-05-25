@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 test.describe.configure({ mode: 'serial' });
 
 /**
- * Revision-diff a/b audition pill — plan 20 follow-on (backlog Must #2).
+ * Revision-diff a/b audition pill — plan 20 follow-on (a/b audio for revisions).
  *
  * Asserts the integration bit Vitest can't cover: the revisions poll
  * resolves under VITE_USE_MOCKS and the pending-revisions toolbar pill

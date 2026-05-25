@@ -75,7 +75,7 @@ export const STEPS = [
     },
   },
   {
-    /* BACKLOG Could #33 — 5 hot files (analyzer/gemini + 4 routes test
+    /* Plan 45 (vitest pool tuning) — 5 hot files (analyzer/gemini + 4 routes test
        files) run serially in a separate vitest invocation so their
        mkdtempSync + module-import contention can't trip the main
        parallel test:server battery. Cache invalidates on the same
@@ -114,7 +114,7 @@ export const STEPS = [
     },
   },
   {
-    /* BACKLOG Could #34 — visual baselines run in a separate serial
+    /* Plan 37 (visual baselines) — visual baselines run in a separate serial
        step so they can't race the parallel test:e2e battery for the
        Vite dev server. Same `globs` as test:e2e so the cache invalidates
        whenever a source file or e2e spec changes. */

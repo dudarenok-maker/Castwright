@@ -415,7 +415,7 @@ describe('synthesiseChapter voice routing', () => {
   });
 });
 
-/* ── Transient-failure auto-retry (Backlog Should #13) ──────────────────
+/* ── Transient-failure auto-retry ──────────────────
    End-to-end coverage of the retry wiring: when the provider throws a
    transient error, synthesiseChapter must NOT fail the chapter — it must
    re-call the provider after a short backoff. When the failure persists

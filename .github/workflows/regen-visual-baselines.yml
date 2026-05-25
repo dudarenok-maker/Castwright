@@ -1,6 +1,6 @@
 name: Regenerate Linux Visual Baselines
 
-# BACKLOG Should #1 — workflow_dispatch-triggered regeneration of the Linux
+# Workflow-dispatch-triggered regeneration of the Linux
 # Playwright visual baseline tree on ubuntu-latest. Restores PR Verify as
 # a real merge gate on the visual-regression seam: today only Windows
 # baselines are committed, so the directory-level skip in

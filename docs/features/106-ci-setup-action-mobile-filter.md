@@ -83,7 +83,7 @@ CI-workflow YAML is not unit-testable from the app harnesses. Validation is:
 
 - Folding checkout / ffmpeg / Playwright into the composite — see "What stayed per-workflow" above.
 - Any change to plan 103's path-filter regex or the `verify` job structure (103 is archived/stable; this plan layers on top, it does not reopen it).
-- `regen-visual-baselines.yml` matrix collapse (BACKLOG Could #37) — separate item, untouched.
+- `regen-visual-baselines.yml` matrix collapse (backlog `ops-3`) — separate item, untouched.
 
 ## Ship notes
 

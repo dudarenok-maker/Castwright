@@ -45,7 +45,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-1. `npm install --prefix server` → no `multer@…` deprecation warning printed (the remaining `node-domexception` warning is the `@google/genai` chain, tracked separately under BACKLOG Could #32 — not multer's).
+1. `npm install --prefix server` → no `multer@…` deprecation warning printed (the remaining `node-domexception` warning is the `@google/genai` chain, tracked separately under backlog `srv-4` — not multer's).
 2. `npm ls multer --prefix server` → `multer@2.1.1`. `npm ls @types/multer --prefix server` → `@types/multer@2.1.0`.
 3. In the running app (`npm start`), upload a local cover JPEG via the listen-header Cover picker → still writes `cover.jpg`, patches `state.json` with `source: 'local'`.
 4. Attempt to upload a >10 MiB cover → 413 with the "Cover must be under …" message and the gradient stays.
@@ -53,7 +53,7 @@ owner: null
 
 ## Out of scope
 
-- The `@google/genai` → `node-domexception@1.0.0` deprecation chain — still on `@google/genai` major 2 (no v3); tracked in BACKLOG Could #32 (jsdom · archiver · @google/genai). No server-side change here.
+- The `@google/genai` → `node-domexception@1.0.0` deprecation chain — still on `@google/genai` major 2 (no v3); tracked in backlog `srv-4` (jsdom · archiver · @google/genai). No server-side change here.
 - ESLint 8 → 10 flat-config migration + jsdom/archiver bumps — Cluster A of this round (root deps), separate branch.
 
 ## Ship notes
