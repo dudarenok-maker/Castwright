@@ -189,6 +189,21 @@ describe('user-settings router', () => {
     expect(res.body.error).toMatch(/invalid/i);
   });
 
+  /* Regression — Qwen3-TTS (plan 108) is a valid default TTS model key. The
+     PUT allow-list (TTS_MODEL_KEY_VALUES) was the one model-key surface that
+     wasn't updated when the engine landed, so selecting it in Account
+     settings 400'd. Round-trips through the body AND onto disk. */
+  it('PUT accepts qwen3-tts-0.6b as defaultTtsModelKey and round-trips it', async () => {
+    const res = await request(app)
+      .put('/api/user/settings')
+      .send({ defaultTtsModelKey: 'qwen3-tts-0.6b' });
+    expect(res.status).toBe(200);
+    expect(res.body.defaultTtsModelKey).toBe('qwen3-tts-0.6b');
+
+    const onDisk = JSON.parse(readFileSync(userSettingsPath, 'utf8'));
+    expect(onDisk.defaultTtsModelKey).toBe('qwen3-tts-0.6b');
+  });
+
   /* Plan 49 — dedicated Gemini-key PUT endpoint. The general PUT still
      strips secret-shaped fields (asserted above); this endpoint is the
      only sanctioned write path for the API key. */
