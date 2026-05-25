@@ -36,7 +36,12 @@ let queueEntries: QueueEntry[] = [];
 let fetchMock: ReturnType<typeof vi.fn>;
 
 function jsonResp(body: unknown, status = 200) {
-  return { ok: status >= 200 && status < 300, status, statusText: 'OK', json: () => Promise.resolve(body) };
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: 'OK',
+    json: () => Promise.resolve(body),
+  };
 }
 
 beforeEach(() => {
@@ -51,7 +56,9 @@ beforeEach(() => {
       for (const e of incoming) if (seen.has(e.id)) return jsonResp({ error: 'dup' }, 409);
       queueEntries = [
         ...queueEntries,
-        ...incoming.map((e, i) => ({ ...e, status: 'queued', order: queueEntries.length + i }) as QueueEntry),
+        ...incoming.map(
+          (e, i) => ({ ...e, status: 'queued', order: queueEntries.length + i }) as QueueEntry,
+        ),
       ];
     } else if (init?.method === 'DELETE') {
       const id = u.split('/').pop();
@@ -89,14 +96,21 @@ function makeStore() {
 }
 
 const ch = (id: number, state: Chapter['state'] = 'queued'): Chapter =>
-  ({ id, title: `Chapter ${id}`, duration: '00:00', state, progress: 0, characters: { narrator: 'queued' } }) as Chapter;
+  ({
+    id,
+    title: `Chapter ${id}`,
+    duration: '00:00',
+    state,
+    progress: 0,
+    characters: { narrator: 'queued' },
+  }) as Chapter;
 
 async function flush(): Promise<void> {
   for (let i = 0; i < 6; i++) await Promise.resolve();
 }
 
 describe('queue-driven generation integration (plan 111)', () => {
-  it('work appearing on the viewed book auto-enqueues and the dispatcher opens a stream', async () => {
+  it('work appearing on the viewed book auto-enqueues and the dispatcher opens one stream PER chapter', async () => {
     const { store } = makeStore();
     /* Cold-boot: queue loaded empty. */
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: false }));
@@ -106,33 +120,38 @@ describe('queue-driven generation integration (plan 111)', () => {
     store.dispatch(chaptersSlice.actions.setChapters([ch(1, 'done'), ch(2), ch(3)]));
     await flush();
 
-    /* enqueue-on-work enqueued chapters 2 + 3; the dispatcher claimed them
-       (one book → one stream) and opened it. */
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    const args = streamGenerationMock.mock.calls[0][0] as { bookId: string; chapterIds: number[] };
-    expect(args.bookId).toBe('b1');
-    expect(args.chapterIds.sort()).toEqual([2, 3]);
+    /* enqueue-on-work enqueued chapters 2 + 3; under queue-sole concurrency
+       (N=2 default) the dispatcher opens ONE stream PER chapter. */
+    expect(streamGenerationMock).toHaveBeenCalledTimes(2);
+    const calls = streamGenerationMock.mock.calls.map(
+      (c) => c[0] as { bookId: string; chapterIds: number[] },
+    );
+    expect(calls.every((a) => a.bookId === 'b1')).toBe(true);
+    /* One chapter per stream on the wire. */
+    expect(calls.map((a) => a.chapterIds[0]).sort()).toEqual([2, 3]);
   });
 
-  it('no regen loop — completing the run drains the queue and does not reopen', async () => {
+  it('no regen loop — completing each chapter drains the queue and does not reopen', async () => {
     const { store } = makeStore();
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: false }));
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
     store.dispatch(chaptersSlice.actions.setChapters([ch(1), ch(2)]));
     await flush();
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    /* One stream per chapter (N=2 default fills both). */
+    expect(streamGenerationMock).toHaveBeenCalledTimes(2);
 
-    /* Drive both chapters done, then idle (via the runner's per-stream onTick). */
-    const onTick = (streamGenerationMock.mock.calls[0][0] as { onTick: (e: GenerationTick) => void }).onTick;
-    onTick({ type: 'chapter_complete', chapterId: 1 } as GenerationTick);
-    onTick({ type: 'chapter_complete', chapterId: 2 } as GenerationTick);
-    onTick({ type: 'idle' } as GenerationTick);
+    /* Drive each chapter's own stream done + idle (per-stream onTick). */
+    for (const call of streamGenerationMock.mock.calls) {
+      const a = call[0] as { chapterIds: number[]; onTick: (e: GenerationTick) => void };
+      a.onTick({ type: 'chapter_complete', chapterId: a.chapterIds[0] } as GenerationTick);
+      a.onTick({ type: 'idle' } as GenerationTick);
+    }
     await flush();
 
     /* Entries DELETEd, queue empty, and NO re-open of the done chapters. */
     expect(queueEntries).toHaveLength(0);
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+    expect(streamGenerationMock).toHaveBeenCalledTimes(2);
     expect(store.getState().chapters.activeStreams).toEqual({});
   });
 });

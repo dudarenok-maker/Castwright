@@ -1,11 +1,12 @@
-/* Unit tests for queue-dispatcher-middleware (plan 111 worker pool).
+/* Unit tests for queue-dispatcher-middleware (queue-sole concurrency).
  *
  * The dispatcher is the sole stream-opener: it fills up to N workers from the
- * flat queue across books, coalescing same-book claims into ONE stream, and
- * DELETEs an entry once its book's stream closes. These tests pin: the open
- * args + row flip, the completion DELETE, N-slot fill across books, same-book
- * coalescing (no second forced request), no double-claim, and the no-loop
- * invariant. */
+ * flat queue across books, opening ONE stream PER CHAPTER (one queue worker =
+ * one chapter), and DELETEs an entry once its CHAPTER's stream closes. These
+ * tests pin: the open args + row flip, the chapter-level completion DELETE,
+ * N-slot fill across books, two same-book chapters opening two streams (no
+ * coalescing, no second-request abort since each chapter is keyed
+ * independently server-side), no double-claim, and the no-loop invariant. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
@@ -111,21 +112,27 @@ async function flushMicro(): Promise<void> {
   await Promise.resolve();
 }
 
-/* Find the open call for a book and drive its stream to completion by feeding
-   an idle tick through the runner's per-stream onTick (the runner then closes
-   the handle + clears the book's snapshot, which wakes the dispatcher). */
-function completeStream(bookId: string): void {
-  const call = streamGenerationMock.mock.calls.find(
-    (c) => (c[0] as { bookId?: string }).bookId === bookId,
-  );
-  if (!call) throw new Error(`no open stream for ${bookId}`);
+/* Find the open call for a (book, chapter) and drive its stream to completion
+   by feeding an idle tick through the runner's per-stream onTick (the runner
+   then closes that chapter's handle + clears its snapshot, which wakes the
+   dispatcher). */
+function completeStream(bookId: string, chapterId: number): void {
+  const call = streamGenerationMock.mock.calls.find((c) => {
+    const a = c[0] as { bookId?: string; chapterIds?: number[] };
+    return a.bookId === bookId && (a.chapterIds ?? []).includes(chapterId);
+  });
+  if (!call) throw new Error(`no open stream for ${bookId}::${chapterId}`);
   (call[0] as { onTick: (ev: GenerationTick) => void }).onTick({ type: 'idle' } as GenerationTick);
 }
 
 const openedBookIds = () =>
   streamGenerationMock.mock.calls.map((c) => (c[0] as { bookId: string }).bookId);
 
-describe('queue-dispatcher-middleware (worker pool)', () => {
+/* The single chapterId each open call carries (one chapter per stream). */
+const openedChapterIds = () =>
+  streamGenerationMock.mock.calls.map((c) => (c[0] as { chapterIds: number[] }).chapterIds);
+
+describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
   it('opens a stream for a same-book entry and flips its rows', async () => {
     const store = makeStore();
     store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
@@ -138,14 +145,20 @@ describe('queue-dispatcher-middleware (worker pool)', () => {
     await flushMicro();
 
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    const args = streamGenerationMock.mock.calls[0][0] as { bookId: string; chapterIds: number[] };
+    const args = streamGenerationMock.mock.calls[0][0] as {
+      bookId: string;
+      chapterIds: number[];
+    };
     expect(args.bookId).toBe('book-A');
+    /* One chapter on the wire (chapterIds is the server contract; the runner
+       keys its handle off the same single chapter via the opts.chapterId,
+       which is not part of the streamGeneration wire args). */
     expect(args.chapterIds).toEqual([3]);
     /* Viewed-book row flipped to in_progress via regenerateChapterIds. */
     expect(store.getState().chapters.chapters[0].state).toBe('in_progress');
   });
 
-  it('coalesces same-book entries into ONE stream (same-book no-abort)', async () => {
+  it('opens ONE stream PER same-book chapter (no coalescing, no second-request abort)', async () => {
     const store = makeStore(2);
     store.dispatch(
       queueSlice.actions.setSnapshot({
@@ -157,12 +170,39 @@ describe('queue-dispatcher-middleware (worker pool)', () => {
       }),
     );
     await flushMicro();
-    /* Both same-book chapters ride ONE forced request — never a second that
-       would abort the first server-side. */
-    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    const args = streamGenerationMock.mock.calls[0][0] as { bookId: string; chapterIds: number[] };
-    expect(args.bookId).toBe('book-A');
-    expect(args.chapterIds.sort()).toEqual([3, 4]);
+    /* Each same-book chapter rides its OWN forced request, keyed
+       `${bookId}::${chapterId}` server-side — two streams, never one that
+       aborts the other. */
+    expect(streamGenerationMock).toHaveBeenCalledTimes(2);
+    expect(openedBookIds()).toEqual(['book-A', 'book-A']);
+    /* Each stream carries exactly one chapter on the wire. */
+    expect(
+      openedChapterIds()
+        .map((ids) => ids[0])
+        .sort(),
+    ).toEqual([3, 4]);
+  });
+
+  it('chapter-level DELETE: completing ch3’s stream removes its entry without waiting on ch4', async () => {
+    const store = makeStore(2);
+    seed(store, [
+      entry({ id: 'a3', bookId: 'book-A', chapterId: 3 }),
+      entry({ id: 'a4', bookId: 'book-A', chapterId: 4 }),
+    ]);
+    await flushMicro();
+    expect(streamGenerationMock).toHaveBeenCalledTimes(2);
+
+    /* Close ONLY chapter 3's stream. */
+    completeStream('book-A', 3);
+    await flushMicro();
+    /* ch3's entry DELETEd; ch4 still in flight (no DELETE for it yet). */
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/a3', { method: 'DELETE' });
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/queue/a4'))).toBe(false);
+
+    /* Now close chapter 4. */
+    completeStream('book-A', 4);
+    await flushMicro();
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/a4', { method: 'DELETE' });
   });
 
   it('fills up to N workers across books and holds the rest', async () => {
@@ -173,35 +213,47 @@ describe('queue-dispatcher-middleware (worker pool)', () => {
       entry({ id: 'c', bookId: 'book-C', chapterId: 1 }),
     ]);
     await flushMicro();
-    /* N=2 → two books streaming, the third waits. */
+    /* N=2 → two chapters streaming, the third waits. */
     expect(openedBookIds().sort()).toEqual(['book-A', 'book-B']);
 
-    /* Book-A finishes → its slot frees → book-C opens. */
-    completeStream('book-A');
+    /* Book-A's chapter finishes → its slot frees → book-C opens. */
+    completeStream('book-A', 1);
     await flushMicro();
     expect(openedBookIds()).toContain('book-C');
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/queue/a'))).toBe(true);
   });
 
-  it('DELETEs an entry only after its book’s stream closes (no-loop)', async () => {
+  it('DELETEs an entry only after its chapter’s stream closes (no-loop)', async () => {
     const store = makeStore(2);
     store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
     store.dispatch(
       chaptersSlice.actions.setChapters([
-        { id: 3, title: 'Chapter 3', state: 'queued', progress: 0, duration: '0:30', characters: {} },
+        {
+          id: 3,
+          title: 'Chapter 3',
+          state: 'queued',
+          progress: 0,
+          duration: '0:30',
+          characters: {},
+        },
       ] as never),
     );
     seed(store, [entry()]);
     await flushMicro();
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
     /* No DELETE while the stream is live. */
-    expect(fetchMock.mock.calls.some((c) => (c[1] as { method?: string })?.method === 'DELETE')).toBe(
-      false,
-    );
+    expect(
+      fetchMock.mock.calls.some((c) => (c[1] as { method?: string })?.method === 'DELETE'),
+    ).toBe(false);
 
     /* Mark the chapter done + close the stream (idle). */
-    store.dispatch(chaptersSlice.actions.applyGenerationTick({ type: 'chapter_complete', chapterId: 3 } as GenerationTick));
-    completeStream('book-A');
+    store.dispatch(
+      chaptersSlice.actions.applyGenerationTick({
+        type: 'chapter_complete',
+        chapterId: 3,
+      } as GenerationTick),
+    );
+    completeStream('book-A', 3);
     await flushMicro();
 
     /* Entry DELETEd exactly once, and no re-open of the done chapter. */

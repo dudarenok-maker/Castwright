@@ -209,8 +209,8 @@ describe('generationStreamMiddleware — halt + stubs', () => {
     const { store, getRunner } = makeStore();
     /* Directly open two cross-book streams via the runner (the dispatcher's
        job in production; here we just need open streams to halt). */
-    getRunner().open('b1', 'kokoro-v1', { chapterIds: [1], force: true });
-    getRunner().open('b2', 'kokoro-v1', { chapterIds: [2], force: true });
+    getRunner().open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    getRunner().open('b2', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
     expect(getRunner().openBookCount()).toBe(2);
 
     store.dispatch(chaptersSlice.actions.requestStreamHalt());
