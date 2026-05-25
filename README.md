@@ -170,8 +170,10 @@ Copy `server/.env.example` as a starting point. Notable knobs:
   single-model `ANALYZER=…` path preserved verbatim when unset. The
   Account tab UI mirrors the same knobs per-book.
 - `PRELOAD_COQUI` — `0` (default; Coqui loads on demand) or `1`.
-- `GEN_CHAPTER_CONCURRENCY` (v1.4.0) — bounded worker pool size for
-  parallel chapter synthesis. Default `2`.
+- `GEN_WORKERS` (v1.4.0; renamed from `GEN_CHAPTER_CONCURRENCY`, which is no
+  longer read) — how many chapters the generation queue synthesises
+  concurrently. Default `2`. Queue concurrency only; the GPU semaphore
+  (`GPU_VRAM_BUDGET` / `GPU_CONCURRENCY`) is the separate VRAM guard.
 - `AUDIO_LOUDNORM_ENABLED` (v1.4.0) — `true` (default; two-pass EBU R128
   at -16 LUFS / 11 LU / -1.5 dBTP on every newly-rendered chapter) or
   `false` to opt out per server install. Voice samples deliberately
