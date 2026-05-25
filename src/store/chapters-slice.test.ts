@@ -2,6 +2,7 @@
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import {
+  aggregateStreamsByBook,
   chaptersSlice,
   chaptersActions,
   selectActiveStreams,
@@ -1063,22 +1064,53 @@ describe('chaptersSlice — activeStreams per-stream map (queue-sole concurrency
     expect(after.activeStreams['book-Z::9']).toBeUndefined();
   });
 
-  it('the layout pill aggregates two same-book chapter streams', () => {
-    /* The pill selectors aggregate across Object.values, so two same-book
-       chapter streams sum into one book's done/total readout. */
+  it('the layout pill dedupes two same-book chapter streams (no double count)', () => {
+    /* Each stream's snapshot is BOOK-WIDE (snapshotFromChapters counts every
+       active chapter of the book), so two same-book chapter streams each
+       report the book's full done/total. Naively summing yields 2×total
+       (the `10/14` bug); aggregateStreamsByBook must collapse them to ONE
+       book's `done/total/inProgress`. */
     let s = chaptersSlice.reducer(
       baseState([]),
-      chaptersActions.setActiveStream(snap('book-A', 1, { done: 1, total: 5, inProgress: 1 })),
+      chaptersActions.setActiveStream(snap('book-A', 1, { done: 5, total: 7, inProgress: 2 })),
     );
     s = chaptersSlice.reducer(
       s,
-      chaptersActions.setActiveStream(snap('book-A', 2, { done: 1, total: 5, inProgress: 1 })),
+      chaptersActions.setActiveStream(snap('book-A', 2, { done: 5, total: 7, inProgress: 2 })),
     );
-    const streams = selectActiveStreams({ chapters: s });
-    const done = streams.reduce((a, st) => a + st.done, 0);
-    const inProgress = streams.reduce((a, st) => a + st.inProgress, 0);
-    expect(done).toBe(2);
-    expect(inProgress).toBe(2);
+    const agg = aggregateStreamsByBook(selectActiveStreams({ chapters: s }));
+    expect(agg).toEqual({ done: 5, total: 7, inProgress: 2 });
+  });
+
+  describe('aggregateStreamsByBook', () => {
+    it('returns zeros for no streams', () => {
+      expect(aggregateStreamsByBook([])).toEqual({ done: 0, total: 0, inProgress: 0 });
+    });
+
+    it('passes a single stream through unchanged', () => {
+      expect(
+        aggregateStreamsByBook([snap('book-A', 1, { done: 3, total: 9, inProgress: 1 })]),
+      ).toEqual({ done: 3, total: 9, inProgress: 1 });
+    });
+
+    it('dedupes same-book streams by taking the per-book max, absorbing tick skew', () => {
+      /* Two snapshots of the same book momentarily disagree (one tick ahead);
+         max picks the fresher counters rather than summing them. */
+      const agg = aggregateStreamsByBook([
+        snap('book-A', 1, { done: 5, total: 7, inProgress: 2 }),
+        snap('book-A', 2, { done: 4, total: 7, inProgress: 3 }),
+      ]);
+      expect(agg).toEqual({ done: 5, total: 7, inProgress: 3 });
+    });
+
+    it('sums across DISTINCT books (Wave-3 multi-book run)', () => {
+      const agg = aggregateStreamsByBook([
+        snap('book-A', 1, { done: 1, total: 5, inProgress: 1 }),
+        snap('book-A', 2, { done: 1, total: 5, inProgress: 1 }),
+        snap('book-B', 1, { done: 2, total: 7, inProgress: 1 }),
+      ]);
+      expect(agg).toEqual({ done: 3, total: 12, inProgress: 2 });
+    });
   });
 
   it('selectActiveStreams / selectAnyActiveStream read the map', () => {
