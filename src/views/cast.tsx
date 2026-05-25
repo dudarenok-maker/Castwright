@@ -19,7 +19,7 @@ import type { TtsVoiceAssignment } from '../lib/tts-voice-mapping';
 import { useAppSelector } from '../store';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
-import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
+import { resolveTtsVoiceForCharacter, sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
@@ -104,18 +104,37 @@ export function CastView({
   const driftByChar = (id: string) => driftEvents.filter((d) => d.characterId === id);
   const totalDriftEvents = driftEvents.length;
   const findVoice = (id?: string) => library.find((v) => v.id === id);
+  /* A character's effective engine = its per-character override, else the
+     project default. Qwen is the only override that diverges from the project
+     model key, so the sample/Stop-detection prefix must use the Qwen key for
+     a Qwen-pinned character. */
+  const effectiveEngineFor = (c: Character): TtsEngine => c.ttsEngine ?? ttsEngine;
 
   async function playSampleFor(c: Character, voice: Voice | undefined) {
     const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
+    const effectiveEngine = effectiveEngineFor(c);
+    const effectiveModelKey = sampleModelKeyForEngine(effectiveEngine, ttsModelKey);
     /* Server appends a hash of (text, voiceName) to the cached filename so
-       attribute edits don't return stale audio. Match by prefix so we still
-       detect "this character's sample is what's playing". */
-    const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}`;
+       attribute edits don't return stale audio. Match by prefix (keyed on the
+       *effective* model key so a Qwen-pinned row still detects its own
+       playback) so we still detect "this character's sample is what's playing". */
+    const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${effectiveModelKey}`;
     if (playback.isPlaying && playback.currentUrl?.startsWith(samplePrefix)) {
       playback.stop();
       return;
     }
-    const stubTtsVoice = resolveTtsVoiceForCharacter(c, ttsEngine);
+    /* Qwen is bespoke — a sample can only synth once a voice has been designed
+       (its voiceId pinned in overrideTtsVoices.qwen). The cast row has no
+       in-place design affordance, so point the user at the profile. */
+    const designedQwenVoiceId = c.overrideTtsVoices?.qwen?.name;
+    if (effectiveEngine === 'qwen' && !designedQwenVoiceId) {
+      setRow(c.id, {
+        loading: false,
+        error: 'No Qwen voice designed yet — open the profile to design one.',
+      });
+      return;
+    }
+    const stubTtsVoice = resolveTtsVoiceForCharacter(c, effectiveEngine);
     const subject: Voice = voice ?? {
       id: sampleVoiceId,
       character: c.name,
@@ -127,11 +146,28 @@ export function CastView({
       source: 'current',
       ttsVoice: stubTtsVoice,
     };
+    /* Inject the designed Qwen voiceId so the server resolves it; preserve
+       any other-engine override slots already on the matched voice. */
+    const requestSubject: Voice =
+      effectiveEngine === 'qwen' && designedQwenVoiceId
+        ? {
+            ...subject,
+            overrideTtsVoices: {
+              ...(subject.overrideTtsVoices ?? {}),
+              qwen: { name: designedQwenVoiceId },
+            },
+          }
+        : subject;
     const characterHint = buildCharacterHint(c);
     setRow(c.id, { loading: true, error: undefined });
     try {
       await playSampleWithAutoLoad({
-        args: { voiceId: sampleVoiceId, voice: subject, modelKey: ttsModelKey, characterHint },
+        args: {
+          voiceId: sampleVoiceId,
+          voice: requestSubject,
+          modelKey: effectiveModelKey,
+          characterHint,
+        },
         playback,
         /* The row's spinner already signals "something's happening"; the
            per-row label is too cramped for the full status word. So we
@@ -341,7 +377,10 @@ export function CastView({
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
-            const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}`;
+            const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${sampleModelKeyForEngine(
+              effectiveEngineFor(c),
+              ttsModelKey,
+            )}`;
             const isPlayingThis =
               playback.isPlaying && !!playback.currentUrl?.startsWith(samplePrefix);
             const row = rowState[c.id];
@@ -529,7 +568,10 @@ export function CastView({
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
-            const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${ttsModelKey}`;
+            const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${sampleModelKeyForEngine(
+              effectiveEngineFor(c),
+              ttsModelKey,
+            )}`;
             const isPlayingThis =
               playback.isPlaying && !!playback.currentUrl?.startsWith(samplePrefix);
             const row = rowState[c.id];
@@ -599,7 +641,10 @@ export function CastView({
                     <span className="text-ink/40">{c.lines === 1 ? 'line' : 'lines'}</span>
                   </span>
                 </div>
-                <div className="flex items-center gap-3 min-w-0" onClick={(e) => e.stopPropagation()}>
+                <div
+                  className="flex items-center gap-3 min-w-0"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <VoiceSwatch
                     voice={
                       voice ?? {
@@ -695,10 +740,7 @@ export function CastView({
                   </button>
                 </div>
                 {row?.error && (
-                  <span
-                    className="text-[10px] text-red-600/80 truncate"
-                    title={row.error}
-                  >
+                  <span className="text-[10px] text-red-600/80 truncate" title={row.error}>
                     ⚠ {row.error}
                   </span>
                 )}
@@ -821,7 +863,12 @@ export function CastView({
           listen for drop events, even though touch users will never
           discover the affordance (tap-to-assign lands in wave 4). */}
       {showLibrary && (
-        <div className="lg:hidden fixed inset-0 z-40 fade-in" role="dialog" aria-modal="true" aria-label="Voice library">
+        <div
+          className="lg:hidden fixed inset-0 z-40 fade-in"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Voice library"
+        >
           <button
             type="button"
             onClick={() => setShowLibrary(false)}

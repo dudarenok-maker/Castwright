@@ -1028,4 +1028,68 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     /* With no designed voice yet, the card reads the "not designed" copy. */
     expect(screen.getByText(/No voice designed yet/)).toBeTruthy();
   });
+
+  /* Regression: "Play 12s sample" used to send the project modelKey + a
+     subject with no qwen override, so the server resolved engine=qwen with an
+     empty voice name and the sidecar 400'd ("`voice` is required."). The
+     sample must route to the Qwen model key and carry the designed voiceId. */
+  it('Play sample for a Qwen character routes to the Qwen model key + injects the designed voiceId', async () => {
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockResolvedValueOnce({ analyzerEvicted: false });
+    renderWithBook({
+      ...baseChar,
+      ttsEngine: 'qwen',
+      voiceStyle: 'a steady adult voice',
+      overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+    });
+    const playBtn = screen.getByRole('button', { name: /Play 12s sample/i }) as HTMLButtonElement;
+    expect(playBtn.disabled).toBe(false);
+    fireEvent.click(playBtn);
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+    expect(args.modelKey).toBe('qwen3-tts-0.6b');
+    expect(args.voice.overrideTtsVoices?.qwen?.name).toBe('qwen-halloran');
+  });
+
+  it('disables Play sample for a Qwen character with no designed voice (no API call)', async () => {
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    renderWithBook({ ...baseChar, ttsEngine: 'qwen', voiceStyle: 'a steady adult voice' });
+    const playBtn = screen.getByRole('button', { name: /Play 12s sample/i }) as HTMLButtonElement;
+    expect(playBtn.disabled).toBe(true);
+    expect(screen.getByText(/Design a Qwen voice below before sampling\./)).toBeTruthy();
+    fireEvent.click(playBtn);
+    expect(playSampleWithAutoLoad).not.toHaveBeenCalled();
+  });
+
+  it('enables Play sample after designing a voice this session, with the staged voiceId', async () => {
+    designQwenVoice.mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockResolvedValueOnce({ analyzerEvicted: false });
+    /* No persisted override yet → Play starts disabled. */
+    renderWithBook({ ...baseChar, ttsEngine: 'qwen', voiceStyle: 'a steady adult voice' });
+    expect(
+      (screen.getByRole('button', { name: /Play 12s sample/i }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    /* Design stages the voiceId returned by the mocked sidecar (qwen-halloran). */
+    fireEvent.click(screen.getByTestId('qwen-design-voice'));
+    await waitFor(() => expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy());
+    const playBtn = screen.getByRole('button', { name: /Play 12s sample/i }) as HTMLButtonElement;
+    expect(playBtn.disabled).toBe(false);
+    fireEvent.click(playBtn);
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+    expect(args.modelKey).toBe('qwen3-tts-0.6b');
+    expect(args.voice.overrideTtsVoices?.qwen?.name).toBe('qwen-halloran');
+  });
+
+  it('Play sample for a non-Qwen character keeps the project model key + injects no qwen override', async () => {
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockResolvedValueOnce({ analyzerEvicted: false });
+    const { store } = renderDrawer({ ...baseChar, evidence: evidenceLongFirst });
+    fireEvent.click(screen.getByRole('button', { name: /Play 12s sample/i }));
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+    expect(args.modelKey).toBe(store.getState().ui.ttsModelKey);
+    expect(args.voice.overrideTtsVoices?.qwen).toBeUndefined();
+  });
 });
