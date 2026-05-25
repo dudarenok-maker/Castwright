@@ -10,6 +10,8 @@ import {
   inferProfile,
   resolveProfileForCharacter,
   resolveTtsVoiceForCharacter,
+  sampleModelKeyForEngine,
+  QWEN_MODEL_KEY,
   COQUI_PROFILE_VOICES,
 } from './tts-voice-mapping';
 import type { Character } from './types';
@@ -90,5 +92,18 @@ describe('resolveProfileForCharacter', () => {
     const profile = resolveProfileForCharacter(sampleCharacter);
     const voice = resolveTtsVoiceForCharacter(sampleCharacter, 'coqui');
     expect(COQUI_PROFILE_VOICES[profile]).toContain(voice.name);
+  });
+});
+
+describe('sampleModelKeyForEngine', () => {
+  it('routes Qwen to the bespoke Qwen model key regardless of the project key', () => {
+    expect(sampleModelKeyForEngine('qwen', 'kokoro-v1')).toBe(QWEN_MODEL_KEY);
+    expect(sampleModelKeyForEngine('qwen', 'coqui-xtts-v2')).toBe('qwen3-tts-0.6b');
+  });
+
+  it('keeps the project model key for every non-Qwen engine', () => {
+    expect(sampleModelKeyForEngine('kokoro', 'kokoro-v1')).toBe('kokoro-v1');
+    expect(sampleModelKeyForEngine('coqui', 'coqui-xtts-v2')).toBe('coqui-xtts-v2');
+    expect(sampleModelKeyForEngine('gemini', 'gemini-2.5-flash')).toBe('gemini-2.5-flash');
   });
 });
