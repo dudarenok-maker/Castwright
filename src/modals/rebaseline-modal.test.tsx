@@ -418,6 +418,67 @@ describe('RebaselineModal — serial design queue', () => {
   });
 });
 
+describe('RebaselineModal — reuse already-approved voices', () => {
+  it('keeps a character already on Qwen, reuses one on the wrong engine, designs the rest', async () => {
+    const cast = [
+      char('narrator', 'Narrator', 500),
+      // Already on its bespoke Qwen voice HERE → unchanged: no design, no write.
+      {
+        ...char('biana', 'Biana', 90),
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-biana-approved' } },
+      } as Character,
+      // Has an approved Qwen voice (from another book) but the WRONG engine in
+      // this book → reuse it, no re-design, but written on approve to fix it.
+      {
+        ...char('dex', 'Dex', 80),
+        overrideTtsVoices: { qwen: { name: 'qwen-dex-approved' } },
+      } as Character,
+      // No Qwen voice → designed fresh.
+      char('keefe', 'Keefe', 70),
+    ];
+    const voices = [
+      voice('voice-biana', 'biana'),
+      voice('voice-dex', 'dex'),
+      voice('voice-keefe', 'keefe'),
+    ];
+    const store = makeStore(cast, voices);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(store.getState().rebaseline.status).toBe('proposed'));
+
+    const props = store.getState().rebaseline.proposals;
+    expect(props.biana.status).toBe('unchanged');
+    expect(props.biana.proposedVoiceId).toBe('qwen-biana-approved');
+    expect(props.dex).toMatchObject({ status: 'ready', proposedVoiceId: 'qwen-dex-approved' });
+    expect(props.keefe).toMatchObject({ status: 'ready', proposedVoiceId: 'qwen-keefe' });
+    // ONLY the character without a Qwen voice was designed — the approved
+    // voices are reused, never rebuilt.
+    expect(designQwenVoice).toHaveBeenCalledTimes(1);
+    expect(designQwenVoice).toHaveBeenCalledWith('book-1', 'keefe', expect.any(String));
+    // The unchanged row offers no include checkbox (nothing to do).
+    expect(screen.queryByTestId('rebaseline-include-biana')).toBeNull();
+
+    // Approve writes Dex (reused) + Keefe (designed), NOT Biana (unchanged).
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(setVoiceOverride).toHaveBeenCalledTimes(2));
+    const names = (setVoiceOverride.mock.calls as unknown as Array<[string, { name: string }]>).map(
+      (c) => c[1].name,
+    );
+    expect(names).toContain('qwen-dex-approved');
+    expect(names).toContain('qwen-keefe');
+    expect(names).not.toContain('qwen-biana-approved');
+  });
+});
+
 describe('RebaselineModal — approve', () => {
   it('writes a series-scoped Qwen override for each included character', async () => {
     const store = makeStore(CHARACTERS, VOICES);

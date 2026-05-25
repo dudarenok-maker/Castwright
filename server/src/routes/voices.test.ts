@@ -291,6 +291,25 @@ describe('PUT /api/voices/:voiceId/override', () => {
     expect(two.characters[0].overrideTtsVoice).toBeUndefined();
   });
 
+  it('pins ttsEngine to the override engine across the series (plan 108 — fixes wrong model in other books)', async () => {
+    const res = await request(app)
+      .put('/api/voices/v_fitz/override')
+      .send({ override: { engine: 'qwen', name: 'qwen-v_fitz' } });
+    expect(res.status).toBe(204);
+
+    /* Setting a Qwen voice override switches the character TO Qwen everywhere
+       the voiceId appears — otherwise the voice slot propagates but the active
+       engine stays wrong in books the approve's redux mirror never touched. */
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const two = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
+    expect(one.characters[0].ttsEngine).toBe('qwen');
+    expect(two.characters[0].ttsEngine).toBe('qwen');
+
+    /* Cleanup — this describe accumulates state across tests; drop the slot we
+       added so the following slot-merge test starts from a known shape. */
+    await request(app).put('/api/voices/v_fitz/override').send({ override: null });
+  });
+
   it('preserves other engine slots when updating one engine', async () => {
     /* The per-engine map's whole point: setting the Coqui slot must not
        wipe a previously-set Kokoro slot. */
