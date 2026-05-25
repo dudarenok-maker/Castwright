@@ -1,35 +1,41 @@
-/* Plan 102 + plan 111 — queue dispatcher middleware (worker pool).
+/* Plan 102 + plan 111 — queue dispatcher middleware (sole concurrency
+ * authority).
  *
  * Drains the workspace queue (queue-slice mirror of <workspace>/.queue.json)
  * with up to N concurrent workers (N = the `generationWorkers` user setting,
  * default 2). The dispatcher is the SOLE stream-opener — the old
  * generation-stream-middleware `hasWork` "generating override" is gone, so
- * every run flows through the persisted queue.
+ * every run flows through the persisted queue. One queue worker = one
+ * chapter: the within-book server pool was removed, so N workers map to N
+ * concurrent chapters uniformly across ALL books, including sibling chapters
+ * of the SAME book.
  *
  * Each tick:
- *   1. RECONCILE COMPLETIONS — for every entry we claimed whose book no longer
- *      has an open stream, the run finished: DELETE it from the server queue.
+ *   1. RECONCILE COMPLETIONS — for every entry we claimed whose CHAPTER no
+ *      longer has an open stream, that chapter finished: DELETE it from the
+ *      server queue. Chapter-level, so an entry leaves the queue the instant
+ *      its own chapter completes, independent of siblings.
  *   2. FILL TO N — claim up to (N − inFlight) queued entries from the flat
- *      queue across books, grouping same-book claims into ONE stream (the
- *      server's bounded pool fans those chapters out; two streams for one book
- *      would abort each other). Skip books already streaming. For the VIEWED
+ *      queue across books, opening ONE stream per claimed entry (one chapter
+ *      each, force:true). Skip chapters already streaming. For the VIEWED
  *      book, flip its rows (regenerateChapterIds / regenerateCharacter) so the
  *      Generate view reflects the run; cross-book opens are direct.
  *
  * Correctness:
  *   - No double-claim: middleware + queueMicrotask run single-threaded; we add
- *     to `inFlight` synchronously before any await, and the runner's per-book
- *     singleton is the second guard.
- *   - No regen loop: an entry is DELETEd only AFTER its book's stream closes
- *     (the chapter is `done` by then); a done row is never re-claimed (entry
- *     gone) nor re-enqueued (the enqueue-on-work observer only enqueues
+ *     to `inFlight` synchronously before any await, and the runner's
+ *     per-chapter singleton is the second guard.
+ *   - No regen loop: an entry is DELETEd only AFTER its chapter's stream
+ *     closes (the chapter is `done` by then); a done row is never re-claimed
+ *     (entry gone) nor re-enqueued (the enqueue-on-work observer only enqueues
  *     queued/in_progress rows).
- *   - Same-book no-abort: same-book claims coalesce into one stream, so we
- *     never fire a second forced request that aborts the first. */
+ *   - Same-book no-abort: each chapter rides its own forced request keyed
+ *     `${bookId}::${chapterId}` server-side, so two same-book chapters never
+ *     abort each other. */
 
 import type { Middleware, MiddlewareAPI } from '@reduxjs/toolkit';
 import { chaptersActions, type ChaptersState } from './chapters-slice';
-import { queueActions, type QueueState, type QueueEntry } from './queue-slice';
+import { queueActions, type QueueState } from './queue-slice';
 import { cancelQueueEntry } from './queue-thunks';
 import type { UiState } from './ui-slice';
 import type { AppDispatch } from './index';
@@ -48,11 +54,11 @@ const DEFAULT_WORKERS = 2;
 
 export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middleware {
   return (storeApi: MiddlewareAPI) => {
-    /* Entries the dispatcher has opened a stream for, mapped to their book.
-       An entry is removed when its book's stream closes (the run finished).
-       The book mapping survives the entry leaving the queue snapshot, so we
-       can still DELETE it. */
-    const inFlight = new Map<string, string>();
+    /* Entries the dispatcher has opened a stream for, mapped to their
+       (bookId, chapterId). An entry is removed when its CHAPTER's stream
+       closes (that chapter finished). The mapping survives the entry leaving
+       the queue snapshot, so we can still DELETE it + reconcile per chapter. */
+    const inFlight = new Map<string, { bookId: string; chapterId: number }>();
 
     /* Entries we've fired a DELETE for but haven't yet seen leave the queue
        snapshot (the server round-trip is async). They must NOT be re-claimed
@@ -78,11 +84,13 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
         for (const id of [...completed]) if (!live.has(id)) completed.delete(id);
       }
 
-      /* STEP 1 — reconcile completions. An entry whose book has no open stream
-         finished (or was torn down). DELETE it and remember it as pending so
-         STEP 2 can't re-claim it before the snapshot catches up. */
-      for (const [entryId, bookId] of [...inFlight.entries()]) {
-        if (!runner.hasOpenStreamForBook(bookId)) {
+      /* STEP 1 — reconcile completions. An entry whose CHAPTER has no open
+         stream finished (or was torn down). DELETE it and remember it as
+         pending so STEP 2 can't re-claim it before the snapshot catches up.
+         Chapter-level: completing ch3's stream DELETEs ch3's entry without
+         waiting on a sibling ch4 of the same book. */
+      for (const [entryId, { bookId, chapterId }] of [...inFlight.entries()]) {
+        if (!runner.hasOpenStreamForChapter(bookId, chapterId)) {
           inFlight.delete(entryId);
           completed.add(entryId);
           void dispatch(cancelQueueEntry(entryId)).catch(() => {
@@ -96,63 +104,50 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
          streams finish via their own idle teardown). */
       if (queue.paused) return;
 
-      /* STEP 2 — fill up to N workers. */
+      /* STEP 2 — fill up to N workers (chapters). Flat per-entry claim: one
+         stream per claimed entry, one chapter each. Skip chapters already
+         streaming and entries already in flight / pending-delete. */
       const workers = state.account?.generationWorkers ?? DEFAULT_WORKERS;
       let slots = workers - inFlight.size;
       if (slots <= 0) return;
 
-      /* Claim queued entries in order, grouped by book. Skip books already
-         streaming (one stream per book) and entries already in flight. */
-      const claimedByBook = new Map<string, QueueEntry[]>();
       for (const e of queue.entries) {
         if (slots <= 0) break;
         if (e.status !== 'queued') continue;
         if (inFlight.has(e.id)) continue;
         if (completed.has(e.id)) continue;
-        if (runner.hasOpenStreamForBook(e.bookId)) continue;
-        const group = claimedByBook.get(e.bookId);
-        if (group) {
-          group.push(e);
-        } else {
-          claimedByBook.set(e.bookId, [e]);
-        }
-        slots--;
-      }
+        if (runner.hasOpenStreamForChapter(e.bookId, e.chapterId)) continue;
 
-      for (const [bookId, entries] of claimedByBook) {
-        for (const e of entries) inFlight.set(e.id, bookId);
-        const chapterIds = [...new Set(entries.map((e) => e.chapterId))];
+        /* Claim synchronously before any await so a back-to-back snapshot
+           tick can't double-claim. */
+        inFlight.set(e.id, { bookId: e.bookId, chapterId: e.chapterId });
+        slots--;
 
         /* VIEWED book — flip rows so the Generate view shows the run. These
            dispatches no longer trigger an open (the override is gone); they
            only update slice rows + (for character scope) enqueue the
            pending-revision stub via the generation-stream-middleware. */
-        if (chapters.currentBookId === bookId) {
-          const thisChapters = entries
-            .filter((e) => e.scope !== 'character')
-            .map((e) => e.chapterId);
-          if (thisChapters.length > 0) {
-            dispatch(chaptersActions.regenerateChapterIds({ chapterIds: thisChapters }));
-          }
-          for (const e of entries) {
-            if (e.scope === 'character' && e.characterId) {
-              dispatch(
-                chaptersActions.regenerateCharacter({
-                  characterId: e.characterId,
-                  chapterIds: [e.chapterId],
-                }),
-              );
-            }
+        if (chapters.currentBookId === e.bookId) {
+          if (e.scope === 'character' && e.characterId) {
+            dispatch(
+              chaptersActions.regenerateCharacter({
+                characterId: e.characterId,
+                chapterIds: [e.chapterId],
+              }),
+            );
+          } else {
+            dispatch(chaptersActions.regenerateChapterIds({ chapterIds: [e.chapterId] }));
           }
         }
 
-        /* Open ONE stream per book covering the claimed chapters (the server
-           pool fans them out). queueEntryId correlates the first entry. */
+        /* Open ONE stream for this chapter, keyed `${bookId}::${chapterId}`
+           server-side (force:true). queueEntryId + chapterId correlate ticks
+           and key the runner handle. */
         runner.open(
-          bookId,
+          e.bookId,
           ui.ttsModelKey,
-          { chapterIds, force: true },
-          { queueEntryId: entries[0].id },
+          { chapterIds: [e.chapterId], force: true },
+          { queueEntryId: e.id, chapterId: e.chapterId },
         );
       }
     };
