@@ -6,6 +6,8 @@ owner: dudarenok-maker
 
 # Parallel chapter synthesis with bounded worker pool
 
+> **REMOVED (2026-05-25, plan-111 follow-up):** the within-book chapter worker pool this plan introduced has been **removed**. Concurrency is now **one chapter per queue worker** via the plan-111 queue dispatcher — N (`generationWorkers`) chapters run concurrently across all books (including sibling chapters of the same book), each as its own `${bookId}::${chapterId}` server job. The server renders exactly its target chapter; there is no longer a within-book `Promise.all` pool fanning a book's chapters out (a trivial sequential `${bookId}::*` loop remains only for the back-compat no-/multi-id caller path). The per-chapter SSE track shape, the per-chapter stall watchdog, and plan-107 within-*chapter* sentence parallelism all survive — only the chapter-level pool described below is gone. See `docs/features/archive/111-queue-worker-pool.md` § "Update — 2026-05-25" for the full delta. Everything below is historical.
+>
 > **Plan 111 update (2026-05-25):** the pool's width env `GEN_CHAPTER_CONCURRENCY` was renamed to `GEN_WORKERS` and is now driven by the `generationWorkers` user setting (default 2). The pool itself (this plan) is unchanged — it's the within-book fan-out engine the plan-111 queue dispatcher opens streams against. References to `GEN_CHAPTER_CONCURRENCY` below are historical; read them as `GEN_WORKERS`.
 >
 > Status: stable
