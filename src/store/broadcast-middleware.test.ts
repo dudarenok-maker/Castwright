@@ -185,7 +185,7 @@ describe('broadcastMiddleware — outbound (mode: full)', () => {
 
   it('plan 63 narrow-scope guard: per-chapter row mutations stay off the wire', () => {
     /* applyGenerationTick mutates `chapters[]` but is NOT in the broadcast
-       rules table (intentionally narrow to avoid the Won't #3 race case).
+       rules table (intentionally narrow to avoid the backlog `fe-11` race case).
        Plan 89 C2 must NOT widen this — the diff scope is strictly inside
        activeStream. */
     const store = makeStore(mock.channel);

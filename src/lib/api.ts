@@ -2964,7 +2964,7 @@ async function realGetBaseVoiceSample({
    the queue keeps draining. Bounded by RECONNECT_MAX_ATTEMPTS and gated on
    "we never saw an idle tick" — a clean idle is the only signal that the
    run drained naturally, in which case there's nothing to reconnect to.
-   Absorbs former BACKLOG Should #1. */
+   Absorbs the former SSE-survival backlog item (plan 102). */
 const RECONNECT_MAX_ATTEMPTS = 5;
 const RECONNECT_BACKOFF_MS = [500, 1000, 2000, 4000, 8000];
 

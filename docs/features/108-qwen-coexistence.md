@@ -89,7 +89,7 @@ Run against the real backend + sidecar (this feature is sidecar-bound). Canonica
 
 ## Out of scope
 
-- **Multi-language / Russian** — the language half of BACKLOG Must #2 (BCP-47 `language` field, Cyrillic detection, voice-library language filtering, Cyrillic token estimator). This plan delivers only the Qwen _engine_ + coexistence. Must #2 stays on the backlog for the language work.
+- **Multi-language / Russian** — the language half of backlog `fs-2` (BCP-47 `language` field, Cyrillic detection, voice-library language filtering, Cyrillic token estimator). This plan delivers only the Qwen _engine_ + coexistence. `fs-2` stays on the backlog for the language work.
 - **Per-quote emotion / intonation control (DEFERRED).** Qwen ignores per-utterance `instruct` on cloned/designed voices today (confirmed in the Qwen team's own discussion — only the built-in CustomVoice speakers or a fine-tune honor emotion instruct; their unreleased VoiceEditing model is the intended fix). We bake the character's dominant emotional register into the designed persona and keep the analyzer's per-sentence emotion tags detected + wired but UNUSED at synth, ready to switch on when VoiceEditing ships. File the switch-on as a follow-up when that model lands.
 - **Per-segment / cross-series voice linking** — tracked separately on the backlog.
 

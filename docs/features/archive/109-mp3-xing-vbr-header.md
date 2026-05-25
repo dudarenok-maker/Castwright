@@ -56,7 +56,7 @@ This affected **every MP3 the tool had ever produced** (verified across multiple
 ## Out of scope
 
 - AAC/M4A and Opus output (carry reliable duration without a seek-back; unchanged).
-- MediaSource/range-request streaming playback (BACKLOG Must #2).
+- MediaSource/range-request streaming playback (backlog `fs-3`).
 
 ## Ship notes
 

@@ -15,7 +15,7 @@ owner: dudarenok
 
 - **User:** the repo owner can hand a downloadable artefact (`audiobook-generator-vX.Y.Z.zip`) to a deployer ("here, run this") instead of walking them through a git clone + dev-from-source flow. Cutting a release becomes one command (`node scripts/bump-version.mjs --level minor --notes-file …` + two `git push`es) instead of four manual file edits + a tag. Deployer is on Windows / macOS / Linux — the artefact works on all three from the same zip.
 - **Technical:** introduces the first CI workflow that *writes* to GitHub state (Releases). Codifies a reproducible-from-tag build manifest so every release is rebuildable from its git ref alone. Adds a production-mode server path (`express.static(dist)` + `npm run start:prod`) that survives outside the dev orchestrator.
-- **Architectural:** establishes the release seam that the deferred [Could #21 — Windows installer](../BACKLOG.md) and [Could #22 — Docker image](../BACKLOG.md) hang off. Both extend `release.yml` with additional asset-upload steps; neither needs a separate pipeline. Also unblocks [Could #37 — In-app multi-model management UX](../BACKLOG.md), which closes the "deployer can't install Ollama without leaving the app" gap that plan 49's Kokoro-only install bundle leaves.
+- **Architectural:** establishes the release seam that the deferred [`ops-1` — Windows installer](../BACKLOG.md) and [`ops-2` — Docker image](../BACKLOG.md) hang off. Both extend `release.yml` with additional asset-upload steps; neither needs a separate pipeline. Also unblocks [Could #37 — In-app multi-model management UX](../BACKLOG.md), which closes the "deployer can't install Ollama without leaving the app" gap that plan 49's Kokoro-only install bundle leaves.
 
 ## Architectural impact
 
@@ -67,9 +67,9 @@ owner: dudarenok
 ## Out of scope
 
 - **In-app multi-model management UX** — tracked as BACKLOG Could #37 (Account-tab "Install Ollama" + "Pull model" + "Refresh available models" affordances, and optional Coqui XTTS pre-install script). Plan 49 closes the Gemini-key gap; the rest stays manual until #37 ships.
-- **Windows installer (Inno Setup / NSIS)** — BACKLOG Could #21. Extends `release.yml` with a second asset.
-- **Docker image + compose file** — BACKLOG Could #22. Extends `release.yml` with a `docker/build-push-action` job.
-- **Code-signing / SmartScreen reputation / macOS Gatekeeper notarization** — tracked alongside Could #21 (installer).
+- **Windows installer (Inno Setup / NSIS)** — backlog `ops-1`. Extends `release.yml` with a second asset.
+- **Docker image + compose file** — backlog `ops-2`. Extends `release.yml` with a `docker/build-push-action` job.
+- **Code-signing / SmartScreen reputation / macOS Gatekeeper notarization** — tracked alongside `ops-1` (installer).
 - **In-app auto-update** — not a v1 concern; deployer manually re-extracts on upgrade per `INSTALL.md`'s "Updating" section.
 - **Bundling Kokoro weights into the release artefact** — decided 2026-05-18: weights stay separately fetched via `install-kokoro.{ps1,sh}` to keep the release zip small (~5-10 MB) and within GitHub's 2 GB per-asset limit.
 - **Architecture-specific zips** (`-darwin-arm64.zip` vs `-darwin-x64.zip`). The current artefact is platform-independent — only relevant if we ever pre-bundle native binaries.
