@@ -70,7 +70,21 @@ function buildPair(): DuplicateReviewPair {
   };
 }
 
-function renderModal(pair: DuplicateReviewPair | null = buildPair(), onClose = vi.fn()) {
+/* Same pair, but with both Characters unresolved — the shape the modal
+   sees while a foreign book's cast is still hydrating. */
+function buildUnresolvedPair(): DuplicateReviewPair {
+  const p = buildPair();
+  return {
+    a: { voice: p.a.voice, character: null },
+    b: { voice: p.b.voice, character: null },
+  };
+}
+
+function renderModal(
+  pair: DuplicateReviewPair | null = buildPair(),
+  onClose = vi.fn(),
+  extra: { loading?: boolean; hydrationError?: string | null } = {},
+) {
   const store = configureStore({
     reducer: {
       cast: castSlice.reducer,
@@ -85,7 +99,7 @@ function renderModal(pair: DuplicateReviewPair | null = buildPair(), onClose = v
     onClose,
     ...render(
       <Provider store={store}>
-        <DuplicateReviewModal open pair={pair} onClose={onClose} />
+        <DuplicateReviewModal open pair={pair} onClose={onClose} {...extra} />
       </Provider>,
     ),
   };
@@ -124,6 +138,51 @@ describe('DuplicateReviewModal — mount', () => {
 
   it('picks the longer-named side as default survivor', () => {
     renderModal();
+    expect(screen.getByText(/Survivor:/)).toHaveTextContent('Eliza Gray');
+  });
+});
+
+describe('DuplicateReviewModal — hydration states', () => {
+  it('disables both actions and shows a loading hint while casts hydrate', () => {
+    renderModal(buildUnresolvedPair(), vi.fn(), { loading: true });
+    expect(screen.getByText(/Loading both books/i)).toBeInTheDocument();
+    /* The misleading "open both books" copy is gone. */
+    expect(screen.queryByText(/Open both books/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Loading casts/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Different on purpose/i })).toBeDisabled();
+  });
+
+  it('surfaces a hydration failure and keeps actions disabled', () => {
+    renderModal(buildUnresolvedPair(), vi.fn(), {
+      hydrationError: 'Couldn’t load one book’s cast — try again later, or use Cancel.',
+    });
+    expect(screen.getByText(/load one book/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Same character — link them/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Different on purpose/i })).toBeDisabled();
+  });
+
+  it('enables both actions once both characters resolve', () => {
+    renderModal(buildPair());
+    expect(screen.getByRole('button', { name: /Same character — link them/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Different on purpose/i })).toBeEnabled();
+  });
+
+  it('flips from loading to enabled and recomputes the survivor when casts land', () => {
+    const store = configureStore({
+      reducer: { cast: castSlice.reducer, notifications: notificationsSlice.reducer },
+    });
+    const { rerender } = render(
+      <Provider store={store}>
+        <DuplicateReviewModal open pair={buildUnresolvedPair()} onClose={vi.fn()} loading />
+      </Provider>,
+    );
+    expect(screen.getByRole('button', { name: /Loading casts/i })).toBeDisabled();
+    rerender(
+      <Provider store={store}>
+        <DuplicateReviewModal open pair={buildPair()} onClose={vi.fn()} loading={false} />
+      </Provider>,
+    );
+    expect(screen.getByRole('button', { name: /Same character — link them/i })).toBeEnabled();
     expect(screen.getByText(/Survivor:/)).toHaveTextContent('Eliza Gray');
   });
 });
