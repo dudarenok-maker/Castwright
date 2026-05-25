@@ -524,10 +524,24 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
             )}
             {(status === 'proposing' || status === 'proposed') && (
               <>
-                <span className="text-xs text-ink/55">
-                  {proposeBusy
-                    ? 'Designing voices…'
-                    : `${includedCount} of ${proposalList.length} included`}
+                <span
+                  data-testid="rebaseline-progress"
+                  className="text-xs text-ink/55 inline-flex items-center gap-1.5"
+                >
+                  {proposeBusy ? (
+                    <>
+                      <IconSpinner className="w-3.5 h-3.5" />
+                      Designing voices… (
+                      {
+                        proposalList.filter(
+                          (p) => p.status !== 'pending' && p.status !== 'designing',
+                        ).length
+                      }{' '}
+                      of {proposalList.length})
+                    </>
+                  ) : (
+                    `${includedCount} of ${proposalList.length} included`
+                  )}
                 </span>
                 <button
                   onClick={close}
@@ -732,6 +746,11 @@ function ProposeStep({
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap mb-2">
                   <h4 className="text-sm font-bold text-ink">{character.name}</h4>
+                  {p.status === 'pending' && (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-ink/45">
+                      <IconSpinner className="w-3 h-3" /> Queued…
+                    </span>
+                  )}
                   {p.status === 'designing' && (
                     <span className="inline-flex items-center gap-1 text-[11px] text-magenta">
                       <IconSpinner className="w-3 h-3" /> Designing…
@@ -776,9 +795,19 @@ function ProposeStep({
                     <p className="text-[10px] uppercase tracking-wider font-semibold text-magenta/70 mb-1">
                       Proposed (Qwen)
                     </p>
-                    <p className="text-xs text-ink/70 truncate" title={p.proposedVoiceId ?? ''}>
-                      {p.proposedVoiceId ?? '—'}
-                    </p>
+                    {p.status === 'designing' ? (
+                      <p className="text-xs text-magenta inline-flex items-center gap-1.5">
+                        <IconSpinner className="w-3 h-3" /> Designing voice…
+                      </p>
+                    ) : p.status === 'pending' ? (
+                      <p className="text-xs text-ink/45 inline-flex items-center gap-1.5">
+                        <IconSpinner className="w-3 h-3" /> Queued…
+                      </p>
+                    ) : (
+                      <p className="text-xs text-ink/70 truncate" title={p.proposedVoiceId ?? ''}>
+                        {p.proposedVoiceId ?? '—'}
+                      </p>
+                    )}
                     <button
                       type="button"
                       onClick={() => p.previewUrl && onPlayProposed(p.previewUrl)}
