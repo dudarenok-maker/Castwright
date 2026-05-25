@@ -19,7 +19,7 @@ import { useMemo, useEffect, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
   selectActiveGenerationView,
-  selectInFlightEntry,
+  selectInFlightEntryIds,
   selectQueueByBook,
   selectQueueCount,
   selectQueueLoaded,
@@ -28,12 +28,7 @@ import {
   type QueueEntry,
   type TtsEngine,
 } from '../store/queue-slice';
-import {
-  cancelQueueEntry,
-  loadQueue,
-  reorderQueue,
-  setQueuePaused,
-} from '../store/queue-thunks';
+import { cancelQueueEntry, loadQueue, reorderQueue, setQueuePaused } from '../store/queue-thunks';
 import { uiActions } from '../store/ui-slice';
 import { IconClose, IconDrag, IconPause, IconPlay, IconTrash } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
@@ -62,7 +57,10 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
   const paused = useAppSelector(selectQueuePaused);
   const loaded = useAppSelector(selectQueueLoaded);
   const count = useAppSelector(selectQueueCount);
-  const inFlight = useAppSelector(selectInFlightEntry);
+  /* ALL in-flight entry ids — under queue-sole concurrency multiple chapters
+     run at once, so every in_progress row renders "In flight" and is
+     non-draggable / non-cancellable (a running entry 409s on DELETE). */
+  const inFlightIds = useAppSelector(selectInFlightEntryIds);
   /* Read-side honesty — when the workspace queue is empty but a generation
      stream is live (the reconcile-driven first-run / resume path writes no
      queue entry), show that run instead of a misleading "Empty". `null` when
@@ -177,18 +175,17 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                     key={bookId}
                     title={lookupBookTitle(bookId)}
                     entries={entries}
-                    inFlightId={inFlight?.id ?? null}
+                    inFlightIds={inFlightIds}
                     dualModelEnabled={dualModelEnabled}
                     onReorder={(newOrderForGroup) => {
                       /* Reorder within the GROUP requires building the full
-                         workspace-level order: keep the in-flight entry first
-                         (pinned), then this group's new order, then any other
-                         book's entries in their existing order. */
+                         workspace-level order: this group's new order, then any
+                         other book's entries in their existing order, MINUS
+                         every in-flight entry (the server's reorder() excludes
+                         all in_progress rows from the reorderable list). */
                       const orderable = groupedByBook
-                        .flatMap((g) =>
-                          g.bookId === bookId ? newOrderForGroup : g.entries,
-                        )
-                        .filter((e) => e.id !== inFlight?.id)
+                        .flatMap((g) => (g.bookId === bookId ? newOrderForGroup : g.entries))
+                        .filter((e) => !inFlightIds.has(e.id))
                         .map((e) => e.id);
                       dispatch(reorderQueue(orderable)).catch((e: unknown) => {
                         console.warn('[queue-modal] reorder failed', e);
@@ -216,18 +213,10 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
    NO reorder / cancel / drag controls — there's nothing on the server to
    mutate. Same-book streams list the in-flight + queued chapters; a cross-book
    stream (slice holds a different book) shows only the done/total summary. */
-function ActiveGenerationSection({
-  view,
-  title,
-}: {
-  view: ActiveGenerationView;
-  title: string;
-}) {
+function ActiveGenerationSection({ view, title }: { view: ActiveGenerationView; title: string }) {
   return (
     <section data-testid="queue-modal-active-generation">
-      <h4 className="text-xs uppercase tracking-widest text-ink/50 font-semibold mb-2">
-        {title}
-      </h4>
+      <h4 className="text-xs uppercase tracking-widest text-ink/50 font-semibold mb-2">{title}</h4>
       <p className="text-xs text-ink/50 mb-2">
         Generating · {view.done}/{view.total} chapters
         <span className="text-ink/35"> · not in the queue</span>
@@ -265,7 +254,7 @@ function ActiveGenerationSection({
 interface BookGroupProps {
   title: string;
   entries: QueueEntry[];
-  inFlightId: string | null;
+  inFlightIds: Set<string>;
   dualModelEnabled: boolean;
   onReorder: (entries: QueueEntry[]) => void;
   onCancel: (entryId: string) => void;
@@ -274,7 +263,7 @@ interface BookGroupProps {
 function BookGroup({
   title,
   entries,
-  inFlightId,
+  inFlightIds,
   dualModelEnabled,
   onReorder,
   onCancel,
@@ -310,10 +299,12 @@ function BookGroup({
       const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
       const rowEl = el?.closest?.('[data-entry-id]') as HTMLElement | null;
       const id = rowEl?.dataset.entryId ?? null;
-      /* Skip self-hover and the in-flight pinned row — neither is a
+      /* Skip self-hover and any in-flight (pinned) row — none is a
          valid drop target. */
-      const valid = id != null && id !== drag.fromId && id !== inFlightId;
-      setDrag((d) => (d && d.overId !== (valid ? id : null) ? { ...d, overId: valid ? id : null } : d));
+      const valid = id != null && id !== drag.fromId && !inFlightIds.has(id);
+      setDrag((d) =>
+        d && d.overId !== (valid ? id : null) ? { ...d, overId: valid ? id : null } : d,
+      );
     };
     const onUp = (): void => {
       setDrag((d) => {
@@ -339,31 +330,31 @@ function BookGroup({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-    /* `entries` + `inFlightId` are captured at drag-start time intentionally —
+    /* `entries` + `inFlightIds` are captured at drag-start time intentionally —
        reordering during an in-flight drag is rare and would require resync;
        eslint exhaustive-deps would force a re-subscribe on every queue mutation. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drag?.fromId]);
 
-  const onDragStart = (fromId: string) => (e: React.PointerEvent<HTMLButtonElement>): void => {
-    e.preventDefault();
-    setDrag({ fromId, overId: null });
-    document.body.classList.add('dragging-queue-entry');
-    try {
-      (e.target as Element).setPointerCapture?.(e.pointerId);
-    } catch {
-      /* Older browsers may throw on capture — fall through. */
-    }
-  };
+  const onDragStart =
+    (fromId: string) =>
+    (e: React.PointerEvent<HTMLButtonElement>): void => {
+      e.preventDefault();
+      setDrag({ fromId, overId: null });
+      document.body.classList.add('dragging-queue-entry');
+      try {
+        (e.target as Element).setPointerCapture?.(e.pointerId);
+      } catch {
+        /* Older browsers may throw on capture — fall through. */
+      }
+    };
 
   return (
     <section>
-      <h4 className="text-xs uppercase tracking-widest text-ink/50 font-semibold mb-2">
-        {title}
-      </h4>
+      <h4 className="text-xs uppercase tracking-widest text-ink/50 font-semibold mb-2">{title}</h4>
       <ul className="space-y-1.5" data-testid={`queue-modal-group-${title}`}>
         {entries.map((entry, idx) => {
-          const isInFlight = entry.id === inFlightId;
+          const isInFlight = inFlightIds.has(entry.id);
           return (
             <li
               key={entry.id}
@@ -415,9 +406,7 @@ function BookGroup({
                   <div className="mt-1 flex flex-wrap items-center gap-1">
                     <span
                       className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                        entry.multiTts
-                          ? 'bg-magenta/10 text-magenta'
-                          : 'bg-ink/5 text-ink/60'
+                        entry.multiTts ? 'bg-magenta/10 text-magenta' : 'bg-ink/5 text-ink/60'
                       }`}
                       data-testid={`queue-entry-${entry.id}-engines`}
                     >
@@ -433,8 +422,8 @@ function BookGroup({
                     className="mt-1 text-[10px] leading-tight text-ink/45"
                     data-testid={`queue-entry-${entry.id}-dual-model-warning`}
                   >
-                    Mixes TTS engines. Turn on "Keep both TTS engines loaded" in
-                    Account settings to avoid engine-swap latency.
+                    Mixes TTS engines. Turn on "Keep both TTS engines loaded" in Account settings to
+                    avoid engine-swap latency.
                   </p>
                 )}
               </div>

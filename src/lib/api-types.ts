@@ -737,6 +737,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/queue/{entryId}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark a queue entry in_progress (no reorder)
+         * @description Flips the entry's status to `in_progress` WITHOUT reordering. Under the
+         *     queue-sole-concurrency model (one queue worker = one chapter) the
+         *     dispatcher fires this the instant it claims an entry and opens that
+         *     chapter's stream, so MULTIPLE entries can be `in_progress` at once —
+         *     unlike the legacy single-in-flight `startEntry` mutator, this does not
+         *     pin the entry to order 0 nor enforce a single-in-flight invariant. The
+         *     queue modal renders every `in_progress` entry as "In flight".
+         *     Idempotent (already-in_progress / missing id both 200). Persists to
+         *     `<workspace>/.queue.json`.
+         */
+        post: operations["startQueueEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/queue/{entryId}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drop a finished queue entry (done-prune)
+         * @description Removes the entry from the queue regardless of status (the entry is
+         *     `in_progress` when its chapter completes). The dispatcher's chapter-level
+         *     reconcile fires this once a chapter's stream closes. Distinct from the
+         *     user-facing DELETE, which 409s an `in_progress` entry so the modal's
+         *     cancel button keeps its "pause first" guard. Idempotent for a missing id.
+         *     Persists to `<workspace>/.queue.json`.
+         */
+        post: operations["completeQueueEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/generation": {
         parameters: {
             query?: never;
@@ -3769,6 +3822,50 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    startQueueEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resulting queue snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+        };
+    };
+    completeQueueEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resulting queue snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueListResponse"];
+                };
             };
         };
     };
