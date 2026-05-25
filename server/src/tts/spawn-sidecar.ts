@@ -23,6 +23,7 @@ import { dirname, join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 
 import type { UserSettings } from '../workspace/user-settings.js';
+import { WORKSPACE_ROOT } from '../workspace/paths.js';
 import { formatTimestamp } from '../logger.js';
 
 export type TtsModelKey = UserSettings['defaultTtsModelKey'];
@@ -156,6 +157,11 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     ...process.env,
     PRELOAD_COQUI: modelKey === 'coqui-xtts-v2' ? '1' : '0',
     PRELOAD_KOKORO: eagerLoadKokoro ? '1' : '0',
+    /* Park the Qwen designed-voice embedding cache in the per-workspace
+       tree (sibling to voices.json), not the sidecar's __file__-relative
+       dir. A sidecar restart / cwd change / workspace move can't orphan a
+       designed voice (a latent ENOENT on torch.load at synth time). */
+    QWEN_VOICES_DIR: join(WORKSPACE_ROOT, 'voices', 'qwen'),
   };
 
   let child: ChildProcess;

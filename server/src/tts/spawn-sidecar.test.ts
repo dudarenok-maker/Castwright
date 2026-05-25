@@ -101,6 +101,10 @@ describe('spawnSidecar', () => {
     );
     expect(options.env.PRELOAD_COQUI).toBe('0');
     expect(options.env.PRELOAD_KOKORO).toBe('1');
+    /* The Qwen designed-voice cache is parked in the per-workspace tree
+       (sibling to voices.json), not the sidecar's __file__-relative dir,
+       so a restart / cwd change can't orphan a designed voice. */
+    expect(options.env.QWEN_VOICES_DIR).toMatch(/voices[\\/]qwen$/);
     expect(options.windowsHide).toBe(true);
   });
 
