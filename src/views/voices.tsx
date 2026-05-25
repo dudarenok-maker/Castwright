@@ -139,6 +139,9 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const currentBookId = useAppSelector((s) =>
     s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null,
   );
+  /* The rebaseline modal's target book (open book for the book-scoped tab,
+     the series' representative book for the per-series global-view buttons). */
+  const rebaselineBookId = useAppSelector((s) => s.ui.rebaselineBookId);
   const characters = useAppSelector((s) => s.cast.characters);
   /* Plan 101 — series metadata per bookId for cross-book duplicate
      detection. The library slice carries the (author, series,
@@ -329,6 +332,56 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     }
     return map;
   }, [duplicateCandidates]);
+
+  /* Per-series representative book for the per-series Rebaseline button.
+     Rebaseline is inherently a SERIES operation, so the global Voices view
+     surfaces it on each series-group header. The modal needs a single
+     anchor bookId per series; we pick the "representative" book:
+       1. the book with the most known confirmed cast members
+          (globalCastCache size, or redux `characters` for the open book),
+       2. tie-break by the latest seriesPosition (from the library slice),
+       3. else any book in the series.
+     Every series that appears in the voice families has ≥1 book with a
+     confirmed cast (a Voice only exists once its book's cast was confirmed),
+     so the button shows for every non-standalone series. The series key is
+     the (non-null) `bookSeries` carried on each library Voice. */
+  const representativeBookIdBySeries = useMemo(() => {
+    const seriesPositionByBookId = new Map<string, number | null>();
+    for (const b of libraryBooks) seriesPositionByBookId.set(b.bookId, b.seriesPosition);
+    /* series → bookId → seen (one entry per distinct book in the series). */
+    const bookIdsBySeries = new Map<string, Set<string>>();
+    for (const v of library) {
+      if (!v.bookSeries) continue;
+      const set = bookIdsBySeries.get(v.bookSeries) ?? new Set<string>();
+      set.add(v.bookId);
+      bookIdsBySeries.set(v.bookSeries, set);
+    }
+    const castSize = (bookId: string): number => {
+      if (bookId === currentBookId) return characters.length;
+      return globalCastCache.get(bookId)?.length ?? 0;
+    };
+    const out = new Map<string, string>();
+    for (const [series, bookIds] of bookIdsBySeries) {
+      let best: string | null = null;
+      for (const bookId of bookIds) {
+        if (best === null) {
+          best = bookId;
+          continue;
+        }
+        const a = castSize(bookId);
+        const b = castSize(best);
+        if (a !== b) {
+          if (a > b) best = bookId;
+          continue;
+        }
+        const ap = seriesPositionByBookId.get(bookId) ?? -Infinity;
+        const bp = seriesPositionByBookId.get(best) ?? -Infinity;
+        if (ap > bp) best = bookId;
+      }
+      if (best) out.set(series, best);
+    }
+    return out;
+  }, [library, libraryBooks, currentBookId, characters, globalCastCache]);
 
   /* When the selection-pill shows a cross-book same-base-voice pair, is
      there a duplicate candidate matching that exact pair? If yes, the
@@ -588,7 +641,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
           {currentBookId && characters.length > 0 && (
             <button
               type="button"
-              onClick={() => dispatch(uiActions.openRebaselineModal())}
+              onClick={() => dispatch(uiActions.openRebaselineModal({ bookId: currentBookId }))}
               data-testid="open-rebaseline"
               title="Move the principal cast onto bespoke Qwen voices across the whole series"
               className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-magenta text-white text-sm font-semibold hover:bg-magenta/90 transition-colors min-h-[44px] sm:min-h-0"
@@ -655,6 +708,10 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               onToggleSelect={toggleSelect}
               duplicateCandidates={candidatesByFamily.get(f.key) ?? []}
               onReviewDuplicate={openDuplicateReview}
+              representativeBookIdBySeries={representativeBookIdBySeries}
+              onRebaselineSeries={(bookId) =>
+                dispatch(uiActions.openRebaselineModal({ bookId }))
+              }
             />
           ))}
         </div>
@@ -871,10 +928,12 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         onResolved={() => setSelectedVoiceIds([])}
       />
 
-      {/* Plan 108 Wave 5 — "Rebaseline the series" modal. Mounted here;
-          renders nothing when closed or when no book is loaded (the
-          series-scoped write needs a book anchor). */}
-      <RebaselineModalContainer bookId={currentBookId} />
+      {/* Plan 108 Wave 5 + follow-up — "Rebaseline the series" modal. The
+          target book comes from the ui-slice (`rebaselineBookId`): the open
+          book for the book-scoped tab, the series' representative book for
+          the per-series buttons on the global view. Renders nothing when
+          closed or when no book anchor is set. */}
+      <RebaselineModalContainer bookId={rebaselineBookId} />
     </div>
   );
 }
@@ -988,6 +1047,12 @@ interface FamilyProps {
      clicking it opens the DuplicateReviewModal for the first candidate. */
   duplicateCandidates: DuplicateCandidate[];
   onReviewDuplicate: (candidate: DuplicateCandidate) => void;
+  /* Plan 108 follow-up — per-series Rebaseline. Each series-group header
+     (only the named, non-standalone groups) renders a "✦ Rebaseline the
+     series" button that opens the modal against the series' representative
+     book. The map is keyed by the series name. */
+  representativeBookIdBySeries: Map<string, string>;
+  onRebaselineSeries: (bookId: string) => void;
 }
 function VoiceFamilySection({
   family,
@@ -1001,6 +1066,8 @@ function VoiceFamilySection({
   onToggleSelect,
   duplicateCandidates,
   onReviewDuplicate,
+  representativeBookIdBySeries,
+  onRebaselineSeries,
 }: FamilyProps) {
   const seriesGroups = family.seriesGroups;
   const isBusy = status?.key === family.key;
@@ -1072,14 +1139,33 @@ function VoiceFamilySection({
         </div>
       </header>
       <div className="space-y-4">
-        {seriesGroups.map((sg) => (
-          <div key={sg.series ?? '~standalone'} className="pl-2 border-l-2 border-ink/[0.06]">
-            {sg.series && (
-              <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/40 mb-2 pl-2">
-                {sg.series}
-              </p>
-            )}
-            <div className="space-y-3">
+        {seriesGroups.map((sg) => {
+          /* Per-series Rebaseline trigger — shown only for named series
+             (standalones are excluded) that resolve to a representative
+             book. Clicking opens the modal against that book; the modal's
+             series-scoped write propagates to the whole series. */
+          const repBookId = sg.series ? representativeBookIdBySeries.get(sg.series) : undefined;
+          return (
+            <div key={sg.series ?? '~standalone'} className="pl-2 border-l-2 border-ink/[0.06]">
+              {sg.series && (
+                <div className="flex items-center justify-between gap-3 mb-2 pl-2 flex-wrap">
+                  <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/40">
+                    {sg.series}
+                  </p>
+                  {repBookId && (
+                    <button
+                      type="button"
+                      onClick={() => onRebaselineSeries(repBookId)}
+                      data-testid={`rebaseline-series-${sg.series}`}
+                      title="Move the principal cast onto bespoke Qwen voices across this series"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta text-white text-[11px] font-semibold hover:bg-magenta/90 transition-colors min-h-[44px] sm:min-h-0"
+                    >
+                      <IconSparkle className="w-3.5 h-3.5" /> Rebaseline the series
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="space-y-3">
               {sg.books.map((b) => (
                 <div key={b.bookId}>
                   <p className="text-xs font-semibold text-ink/70 mb-1.5 pl-2">{b.bookTitle}</p>
@@ -1102,9 +1188,10 @@ function VoiceFamilySection({
                   </div>
                 </div>
               ))}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );
