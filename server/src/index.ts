@@ -35,6 +35,7 @@ import { voiceStyleRouter } from './routes/voice-style.js';
 import { qwenVoiceRouter } from './routes/qwen-voice.js';
 import { libraryCastOverrideRouter } from './routes/library-cast-override.js';
 import { seriesRosterRouter } from './routes/series-roster.js';
+import { seriesCastRouter } from './routes/series-cast.js';
 import { voiceSampleRouter } from './routes/voice-sample.js';
 import { voicesRouter } from './routes/voices.js';
 import { libraryRouter } from './routes/library.js';
@@ -151,6 +152,7 @@ app.use('/api/books', castAddFromRosterRouter); // mounts /:bookId/cast/add-from
 app.use('/api/books', voiceStyleRouter); // mounts /:bookId/cast/{:characterId/voice-style/generate,voice-style/generate-all} (plan 108 — Gemini voice-design personas)
 app.use('/api/books', qwenVoiceRouter); // mounts /:bookId/cast/:characterId/design-voice (plan 108 Wave 4 — Qwen bespoke-voice design + audition proxy)
 app.use('/api/books', seriesRosterRouter); // mounts /:bookId/series-roster (prior-book characters in the same series)
+app.use('/api/books', seriesCastRouter); // mounts /:bookId/series-cast (full-fidelity cast of every OTHER series book — rebaseline aggregation)
 app.use('/api', libraryCastOverrideRouter); // mounts /library-cast/override (cross-book; not under /:bookId)
 app.use('/api/books', generationRouter); // mounts /:bookId/generation (SSE)
 app.use('/api/queue', queueRouter); // plan 102 — workspace-level cross-book chapter-generation queue

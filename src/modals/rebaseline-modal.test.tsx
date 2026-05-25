@@ -35,6 +35,10 @@ const generateVoiceStyle = vi.fn(async (_bookId: string, characterId: string) =>
 const generateAllVoiceStyles = vi.fn(async () => ({ voiceStyles: {}, failures: {} }));
 const setVoiceOverride = vi.fn(async () => undefined);
 const getBookState = vi.fn(async (_bookId: string) => null as unknown);
+/* The whole-series aggregation fetch. Default: no series-mates (single-book
+   workspace), so the modal works from the anchor cast alone — the pre-
+   aggregation baseline. Individual tests override it to inject siblings. */
+const getSeriesCast = vi.fn(async (_bookId: string) => ({ characters: [] as Character[] }));
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -43,6 +47,7 @@ vi.mock('../lib/api', () => ({
     generateAllVoiceStyles: () => generateAllVoiceStyles(),
     setVoiceOverride: (...args: unknown[]) => setVoiceOverride(...(args as [])),
     getBookState: (...args: unknown[]) => getBookState(...(args as [string])),
+    getSeriesCast: (...args: unknown[]) => getSeriesCast(...(args as [string])),
   },
 }));
 
@@ -147,24 +152,37 @@ beforeEach(() => {
   setVoiceOverride.mockClear();
   getBookState.mockClear();
   getBookState.mockResolvedValue(null);
+  getSeriesCast.mockClear();
+  /* Restore the default (no series-mates) so a prior test's injected
+     siblings can't leak across the file. */
+  getSeriesCast.mockResolvedValue({ characters: [] });
 });
+
+/* Seeding the default selection now waits on the async series-cast
+   aggregation, so the Propose button stays disabled until the principal
+   cast resolves. Await this before clicking Propose. */
+async function waitForReady(): Promise<void> {
+  await waitFor(() => expect(screen.getByTestId('rebaseline-propose')).not.toBeDisabled());
+}
 
 afterEach(() => {
   vi.clearAllMocks();
 });
 
 describe('RebaselineModal — default selection', () => {
-  it('pre-selects the principal cast and excludes the narrator', () => {
+  it('pre-selects the principal cast and excludes the narrator', async () => {
     const store = makeStore(CHARACTERS, VOICES);
     render(
       <Provider store={store}>
         <RebaselineModalContainer bookId="book-1" />
       </Provider>,
     );
-    const sel = store.getState().rebaseline.selectedCharacterIds;
-    expect(sel).toContain('biana');
-    expect(sel).toContain('keefe');
-    expect(sel).not.toContain('narrator');
+    await waitFor(() => {
+      const sel = store.getState().rebaseline.selectedCharacterIds;
+      expect(sel).toContain('biana');
+      expect(sel).toContain('keefe');
+      expect(sel).not.toContain('narrator');
+    });
     // The narrator row renders (toggleable on) but is unchecked by default.
     const narratorRow = screen.getByLabelText('Rebaseline Narrator') as HTMLInputElement;
     expect(narratorRow.checked).toBe(false);
@@ -184,19 +202,20 @@ describe('RebaselineModal — default selection', () => {
 });
 
 describe('RebaselineModal — cast sourcing', () => {
-  it('uses redux characters without fetching when the target IS the open book', async () => {
+  it('uses redux characters for the anchor (no getBookState) when the target IS the open book', async () => {
     const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
     render(
       <Provider store={store}>
         <RebaselineModalContainer bookId="book-1" />
       </Provider>,
     );
-    /* Open-book path: the principal cast seeds from redux and getBookState
-       is never called. */
+    /* Open-book path: the anchor cast comes from redux (getBookState is never
+       called). The series aggregation still fetches its series-mates. */
     await waitFor(() => {
       expect(store.getState().rebaseline.selectedCharacterIds).toContain('biana');
     });
     expect(getBookState).not.toHaveBeenCalled();
+    expect(getSeriesCast).toHaveBeenCalledWith('book-1');
   });
 
   it('fetches the target series cast via api.getBookState when it is NOT the open book', async () => {
@@ -234,6 +253,56 @@ describe('RebaselineModal — cast sourcing', () => {
   });
 });
 
+describe('RebaselineModal — whole-series aggregation', () => {
+  it('lists characters from other series books and pre-selects by SERIES-total lines', async () => {
+    /* Open book (book-1) has Biana(80) + Keefe(60). The series-cast fetch adds
+       a recurring Biana entry from a later volume (same voiceId → merges +
+       sums lines to 380) and Tam(250), who never appears in book-1. With the
+       aggregation, the principal cast is Biana + Tam (covering ≥80% of the
+       691 non-narrator series lines), and Keefe drops below the threshold —
+       proving the default selection is series-wide, not one book's. */
+    getSeriesCast.mockResolvedValue({
+      characters: [
+        { ...char('biana-b2', 'Biana', 300), voiceId: 'voice-biana' } as Character,
+        { ...char('tam', 'Tam', 250), voiceId: 'voice-tam' } as Character,
+      ],
+    });
+    const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitFor(() => expect(getSeriesCast).toHaveBeenCalledWith('book-1'));
+    /* Tam — who is in no book-1 cast — is now a selectable row. */
+    await waitFor(() => expect(screen.getByLabelText('Rebaseline Tam')).toBeInTheDocument());
+    await waitFor(() => {
+      const sel = store.getState().rebaseline.selectedCharacterIds;
+      expect(sel).toContain('biana'); // anchor identity kept (not biana-b2)
+      expect(sel).toContain('tam');
+      expect(sel).not.toContain('keefe'); // dropped below 80% once Tam's lines count
+      expect(sel).not.toContain('narrator');
+    });
+  });
+
+  it('falls back to the anchor cast when the series-cast fetch fails', async () => {
+    getSeriesCast.mockRejectedValue(new Error('scan blew up'));
+    const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    /* Degrades gracefully: the modal still seeds from the open book's cast. */
+    await waitFor(() => {
+      const sel = store.getState().rebaseline.selectedCharacterIds;
+      expect(sel).toContain('biana');
+      expect(sel).toContain('keefe');
+    });
+    expect(screen.getByTestId('rebaseline-propose')).not.toBeDisabled();
+  });
+});
+
 describe('RebaselineModal — propose', () => {
   it('renders a current-vs-proposed row per selected character', async () => {
     const store = makeStore(CHARACTERS, VOICES);
@@ -242,6 +311,7 @@ describe('RebaselineModal — propose', () => {
         <RebaselineModalContainer bookId="book-1" />
       </Provider>,
     );
+    await waitForReady();
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
@@ -276,6 +346,7 @@ describe('RebaselineModal — propose', () => {
         <RebaselineModalContainer bookId="book-1" />
       </Provider>,
     );
+    await waitForReady();
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
@@ -311,6 +382,7 @@ describe('RebaselineModal — design progress indicators', () => {
         <RebaselineModalContainer bookId="book-1" />
       </Provider>,
     );
+    await waitForReady();
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
@@ -356,6 +428,7 @@ describe('RebaselineModal — design order', () => {
         <RebaselineModalContainer bookId="book-1" />
       </Provider>,
     );
+    await waitForReady();
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
@@ -381,6 +454,7 @@ describe('RebaselineModal — serial design queue', () => {
       </Provider>,
     );
     // Let the initial propose settle so both rows are ready (2 design calls).
+    await waitForReady();
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
@@ -448,6 +522,7 @@ describe('RebaselineModal — reuse already-approved voices', () => {
         <RebaselineModalContainer bookId="book-1" />
       </Provider>,
     );
+    await waitForReady();
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
@@ -487,6 +562,7 @@ describe('RebaselineModal — approve', () => {
         <RebaselineModalContainer bookId="book-1" />
       </Provider>,
     );
+    await waitForReady();
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
@@ -523,6 +599,7 @@ describe('RebaselineModal — approve', () => {
         <RebaselineModalContainer bookId="book-1" />
       </Provider>,
     );
+    await waitForReady();
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
@@ -551,6 +628,7 @@ describe('RebaselineModal — per-character failure', () => {
         <RebaselineModalContainer bookId="book-1" />
       </Provider>,
     );
+    await waitForReady();
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
