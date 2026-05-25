@@ -25,6 +25,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import threading
 from typing import Any, Optional
 
@@ -672,7 +673,15 @@ class QwenEngine(Engine):
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
         self._device = os.environ.get("QWEN_DEVICE", "cuda:0")
-        self._voices_dir = os.path.join(os.path.dirname(__file__), "voices", "qwen")
+        # Designed-voice embeddings cache. Default lives next to this file
+        # under voices/qwen/ (exact back-compat when QWEN_VOICES_DIR unset).
+        # The Node server points QWEN_VOICES_DIR at the per-workspace tree
+        # (<workspaceDir>/voices/qwen) so a sidecar restart / cwd change /
+        # workspace move can't orphan designed voices (a latent ENOENT on
+        # torch.load at synth time).
+        legacy_voices_dir = os.path.join(os.path.dirname(__file__), "voices", "qwen")
+        self._voices_dir = os.environ.get("QWEN_VOICES_DIR") or legacy_voices_dir
+        self._migrate_legacy_voices(legacy_voices_dir)
 
     # --- qwen_tts integration shims (the only model-API-coupled surface) ---
 
@@ -715,6 +724,47 @@ class QwenEngine(Engine):
             os.path.join(self._voices_dir, f"{safe}.pt"),
             os.path.join(self._voices_dir, f"{safe}.json"),
         )
+
+    def _migrate_legacy_voices(self, legacy_dir: str) -> None:
+        """One-time move of designed voices from the legacy __file__-relative
+        dir into the configured QWEN_VOICES_DIR (the per-workspace tree).
+
+        Runs only when QWEN_VOICES_DIR relocates the cache AND the legacy dir
+        actually holds embeddings AND the target is empty/missing — so it's a
+        no-op on the back-compat default and after the first migration.
+        Fully defensive: any failure is logged and swallowed (never crashes
+        startup), because losing the move just falls back to designing the
+        voice again, not to a hard error."""
+        try:
+            if os.path.abspath(self._voices_dir) == os.path.abspath(legacy_dir):
+                return  # unset / default — nothing to relocate.
+            legacy_pts = (
+                [fn for fn in os.listdir(legacy_dir) if fn.endswith(".pt")]
+                if os.path.isdir(legacy_dir)
+                else []
+            )
+            if not legacy_pts:
+                return  # legacy dir has no designed voices — nothing to move.
+            target_has_voices = os.path.isdir(self._voices_dir) and any(
+                fn.endswith(".pt") for fn in os.listdir(self._voices_dir)
+            )
+            if target_has_voices:
+                return  # already migrated (or workspace already populated).
+            os.makedirs(self._voices_dir, exist_ok=True)
+            moved = 0
+            for fn in os.listdir(legacy_dir):
+                if fn.endswith(".pt") or fn.endswith(".json"):
+                    src = os.path.join(legacy_dir, fn)
+                    dst = os.path.join(self._voices_dir, fn)
+                    if not os.path.exists(dst):
+                        shutil.move(src, dst)
+                        moved += 1
+            log.info(
+                "Migrated %d Qwen voice file(s) from legacy %s to %s.",
+                moved, legacy_dir, self._voices_dir,
+            )
+        except Exception as e:  # pragma: no cover - defensive guard
+            log.warning("Qwen voice migration skipped (non-fatal): %s", e)
 
     def unload(self) -> None:
         """Drop both Qwen models and free VRAM. Idempotent."""

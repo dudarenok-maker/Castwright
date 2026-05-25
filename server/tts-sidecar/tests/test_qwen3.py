@@ -20,6 +20,7 @@ Load-bearing invariants pinned here:
 """
 from __future__ import annotations
 
+import os
 import sys
 import types
 from pathlib import Path
@@ -182,6 +183,129 @@ def test_synthesize_fails_fast_on_undesigned_voice(fake_qwen_runtime) -> None:
     with pytest.raises(RuntimeError) as excinfo:
         engine.synthesize("qwen3-tts-0.6b", "never-designed", "Hello.")
     assert "design" in str(excinfo.value).lower()
+
+
+# ── QWEN_VOICES_DIR relocation + legacy migration (sidecar-qwen-voice-dir) ──
+
+def test_voices_dir_resolves_from_env(monkeypatch, tmp_path) -> None:
+    """QWEN_VOICES_DIR overrides the __file__-relative default. Pins that a
+    fresh QwenEngine reads the env (the Node server points it at the
+    per-workspace tree so restarts can't orphan designed voices)."""
+    target = tmp_path / "ws" / "voices" / "qwen"
+    monkeypatch.setenv("QWEN_VOICES_DIR", str(target))
+    engine = main.QwenEngine()
+    assert engine._voices_dir == str(target)
+
+
+def test_voices_dir_defaults_to_file_relative_when_env_unset(monkeypatch) -> None:
+    """Back-compat: unset QWEN_VOICES_DIR keeps the legacy __file__-relative
+    voices/qwen dir exactly as before."""
+    monkeypatch.delenv("QWEN_VOICES_DIR", raising=False)
+    engine = main.QwenEngine()
+    expected = os.path.join(os.path.dirname(main.__file__), "voices", "qwen")
+    assert engine._voices_dir == expected
+
+
+def test_designed_voice_survives_restart_at_env_dir(monkeypatch, tmp_path) -> None:
+    """Design a voice with QWEN_VOICES_DIR set, then simulate a sidecar
+    restart (a brand-new engine instance with _base reset) and synthesize:
+    the cached .pt is found at the env-pointed dir, no ENOENT."""
+    # Stub qwen_tts + torch exactly like the fake_qwen_runtime fixture, but
+    # construct the engine ourselves so __init__ reads QWEN_VOICES_DIR.
+    fake_qwen = types.ModuleType("qwen_tts")
+    fake_qwen.Qwen3TTSModel = _FakeQwenModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "qwen_tts", fake_qwen)
+
+    fake_torch = types.ModuleType("torch")
+    _store: dict[str, Any] = {}
+
+    def _save(obj: Any, path: str) -> None:
+        _store[str(path)] = obj
+        with open(path, "wb") as fh:
+            fh.write(b"\x00")
+
+    def _load(path: str, **kwargs: Any) -> Any:
+        return _store.get(str(path), {"_prompt": True})
+
+    fake_torch.save = _save  # type: ignore[attr-defined]
+    fake_torch.load = _load  # type: ignore[attr-defined]
+    fake_torch.bfloat16 = "bfloat16"  # type: ignore[attr-defined]
+    fake_torch.cuda = types.SimpleNamespace(  # type: ignore[attr-defined]
+        is_available=lambda: False, empty_cache=lambda: None
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    voices_dir = tmp_path / "ws" / "voices" / "qwen"
+    monkeypatch.setenv("QWEN_VOICES_DIR", str(voices_dir))
+
+    # First boot: design + cache a voice.
+    engine = main.QwenEngine()
+    assert engine._voices_dir == str(voices_dir)
+    engine.design_voice("Marlow", "a charming, mischievous teenage boy", "English", None)
+    assert (voices_dir / "Marlow.pt").is_file()
+
+    # Simulate a restart: a fresh engine (resident model gone) reading the
+    # same env-pointed dir. Synthesis must find the cached embedding.
+    restarted = main.QwenEngine()
+    assert restarted._base is None
+    res = restarted.synthesize("qwen3-tts-0.6b", "Marlow", "Hi there.")
+    assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
+    assert restarted._base is not None  # loaded on demand, found the .pt
+
+
+def test_legacy_voices_migrated_to_env_dir(monkeypatch, tmp_path) -> None:
+    """On init, if QWEN_VOICES_DIR relocates the cache and the legacy
+    __file__-relative dir holds *.pt embeddings while the target is empty,
+    the legacy files are moved (shutil.move) into the new dir."""
+    # Seed a fake legacy voices/qwen dir next to main.py with one voice.
+    legacy_dir = os.path.join(os.path.dirname(main.__file__), "voices", "qwen")
+    os.makedirs(legacy_dir, exist_ok=True)
+    legacy_pt = os.path.join(legacy_dir, "_migtest.pt")
+    legacy_json = os.path.join(legacy_dir, "_migtest.json")
+    try:
+        with open(legacy_pt, "wb") as fh:
+            fh.write(b"\x00")
+        with open(legacy_json, "w", encoding="utf-8") as fh:
+            fh.write('{"voiceId": "_migtest"}')
+
+        target = tmp_path / "ws" / "voices" / "qwen"
+        monkeypatch.setenv("QWEN_VOICES_DIR", str(target))
+        main.QwenEngine()  # __init__ runs the migration
+
+        # Moved into the new dir, removed from the legacy dir.
+        assert (target / "_migtest.pt").is_file()
+        assert (target / "_migtest.json").is_file()
+        assert not os.path.exists(legacy_pt)
+        assert not os.path.exists(legacy_json)
+    finally:
+        for p in (legacy_pt, legacy_json):
+            if os.path.exists(p):
+                os.remove(p)
+
+
+def test_legacy_migration_skipped_when_target_already_populated(monkeypatch, tmp_path) -> None:
+    """Migration is a no-op when the target dir already holds a designed
+    voice — never clobbers an existing workspace cache."""
+    legacy_dir = os.path.join(os.path.dirname(main.__file__), "voices", "qwen")
+    os.makedirs(legacy_dir, exist_ok=True)
+    legacy_pt = os.path.join(legacy_dir, "_migtest2.pt")
+    try:
+        with open(legacy_pt, "wb") as fh:
+            fh.write(b"\x00")
+
+        target = tmp_path / "ws" / "voices" / "qwen"
+        target.mkdir(parents=True)
+        (target / "existing.pt").write_bytes(b"\x00")
+        monkeypatch.setenv("QWEN_VOICES_DIR", str(target))
+        main.QwenEngine()
+
+        # Target untouched; legacy file left in place (no merge).
+        assert (target / "existing.pt").is_file()
+        assert not (target / "_migtest2.pt").exists()
+        assert os.path.exists(legacy_pt)
+    finally:
+        if os.path.exists(legacy_pt):
+            os.remove(legacy_pt)
 
 
 def test_import_missing_qwen_tts_raises_with_pip_hint(monkeypatch) -> None:
