@@ -20,9 +20,11 @@ import { rebaselineSlice } from '../store/rebaseline-slice';
 import type { Character, Voice } from '../lib/types';
 
 /* Mock the api surface the modal calls. designQwenVoice returns a derived
-   voiceId per character; generateAllVoiceStyles returns an empty batch (the
-   modal falls back to per-character generate); setVoiceOverride is the spy
-   the approve test asserts on. */
+   voiceId per character; generateVoiceStyle is the per-character persona
+   generator (the modal generates a persona only for a character missing one);
+   generateAllVoiceStyles is kept as a spy purely to assert the modal no longer
+   batch-regenerates personas; setVoiceOverride is the spy the approve test
+   asserts on. */
 const designQwenVoice = vi.fn(async (_bookId: string, characterId: string) => ({
   voiceId: `qwen-${characterId}`,
   previewUrl: `blob:${characterId}`,
@@ -253,6 +255,39 @@ describe('RebaselineModal — propose', () => {
     // The design call fired once per selected character.
     expect(designQwenVoice).toHaveBeenCalledTimes(2);
     expect(store.getState().rebaseline.proposals.Maerin.proposedVoiceId).toBe('qwen-Maerin');
+    // Personas are generated per-character (these two lack one) — never via
+    // the batch endpoint, which would rebuild every persona on the server.
+    expect(generateAllVoiceStyles).not.toHaveBeenCalled();
+  });
+
+  it('reuses an existing persona and only generates the missing one', async () => {
+    /* Maerin already carries a persona (e.g. from a prior session); Marlow does
+       not. Re-proposing must NOT regenerate Maerin's — it reuses the string and
+       only fills Marlow's gap. */
+    const withPersona = [
+      char('narrator', 'Narrator', 500),
+      { ...char('Maerin', 'Maerin', 80), voiceStyle: 'an existing, hand-tuned persona' } as Character,
+      char('Marlow', 'Marlow', 60),
+      char('bystander', 'Bystander', 1),
+    ];
+    const store = makeStore(withPersona, VOICES);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(store.getState().rebaseline.proposals.Marlow.status).toBe('ready'));
+    // No batch regenerate; the per-character generator ran ONLY for Marlow.
+    expect(generateAllVoiceStyles).not.toHaveBeenCalled();
+    expect(generateVoiceStyle).toHaveBeenCalledTimes(1);
+    expect(generateVoiceStyle).toHaveBeenCalledWith('book-1', 'Marlow');
+    // Maerin's reused persona is carried through verbatim onto the proposal.
+    expect(store.getState().rebaseline.proposals.Maerin.persona).toBe(
+      'an existing, hand-tuned persona',
+    );
   });
 });
 
