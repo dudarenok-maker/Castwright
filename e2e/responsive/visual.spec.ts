@@ -23,7 +23,7 @@
  * config so CSS transitions / animated SVGs settle to their final
  * frame before capture.
  *
- * BACKLOG Could #34 — relocated from `e2e/visual.spec.ts` to
+ * Plan 37 (visual baselines) — relocated from `e2e/visual.spec.ts` to
  * `e2e/responsive/visual.spec.ts` 2026-05-22 so all three Playwright
  * projects (chromium / mobile-chrome / tablet-chrome) pick it up via
  * the existing responsive/* testMatch glob. The `mode: 'serial'`
@@ -31,7 +31,7 @@
  * 14 baselines don't race the other 80+ specs locally.
  *
  * Visuals run ONLY in the new `verify:visual` step (see package.json),
- * not in the parallel `test:e2e` battery — see Could #34 in BACKLOG.
+ * not in the parallel `test:e2e` battery — see archive/37-e2e-playwright.md.
  *
  * To regenerate after an intentional visual change:
  *   npm run verify:visual -- --update-snapshots
@@ -52,8 +52,8 @@ import { goToAnalysing, goToConfirm, waitForConfirmViewReady, waitForListenViewR
    writing actual". Skip the whole describe when no baseline directory
    exists for the running platform — auto-enables the moment someone
    commits baselines for that platform (e.g.
-   `e2e/linux/responsive/visual.spec.ts/`). Linux baselines are tracked
-   as Should #1 in docs/BACKLOG.md. */
+   `e2e/linux/responsive/visual.spec.ts/`). Linux baselines are produced
+   by the `regen-visual-baselines.yml` workflow (below). */
 const BASELINE_DIR = resolve(process.cwd(), 'e2e', process.platform, 'responsive', 'visual.spec.ts');
 /* The regen workflow at `.github/workflows/regen-visual-baselines.yml`
    pre-creates this directory before invoking playwright, so the skip
@@ -67,7 +67,7 @@ const SKIP_REASON =
   `No visual baselines committed for ${process.platform}. ` +
   `Run \`npm run verify:visual -- --update-snapshots\` to bless on this platform.`;
 
-/* BACKLOG Could #34 — pin all visual specs to one worker. The 14
+/* Plan 37 (visual baselines) — pin all visual specs to one worker. The 14
    captures share a Vite dev server with the other 80+ specs locally;
    parallel-worker contention caused sub-pixel font drift past the
    1% maxDiffPixelRatio threshold. Serial mode eliminates the race.
@@ -75,7 +75,7 @@ const SKIP_REASON =
    so this directive is belt-and-suspenders for direct invocations. */
 test.describe.configure({ mode: 'serial' });
 
-/* BACKLOG Could #34 (additional layer) — chromium font hinting on
+/* Plan 37 (visual baselines, additional layer) — chromium font hinting on
    Windows is non-deterministic at the sub-pixel level even with
    animations disabled and serial workers; consecutive captures of
    the SAME page can drift by ~1-2% of pixels (typically along font

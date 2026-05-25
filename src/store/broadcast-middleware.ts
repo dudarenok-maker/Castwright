@@ -61,7 +61,7 @@
    elsewhere". Per-chapter rows / per-book cast / per-book manuscript
    are NEVER broadcast.
 
-   Tension with Won't #3 (multi-tab catch-up race resilience): this
+   Tension with backlog `fe-11` (multi-tab catch-up race resilience): this
    covers the cooperative cross-tab case (single user driving two tabs).
    Two simultaneous writers on the same bookId would still race — that
    stays parked. Single-user-per-workspace remains the v1 contract.
@@ -163,7 +163,7 @@ const ANALYSIS_BROADCAST_ACTIONS: ReadonlySet<string> = new Set([
     `setChapters`, `hydrateFromBookState`, the regenerate* family,
     `mergeSubsetAnalysis`, `setChapterExcluded`) are NOT broadcast:
     those are per-tab UI state and broadcasting them would fan out
-    side-effects that this plan explicitly does not solve (see Won't #3). */
+    side-effects that this plan explicitly does not solve (see backlog `fe-11`). */
 const CHAPTERS_BROADCAST_ACTIONS: ReadonlySet<string> = new Set([
   'chapters/setActiveStream',
   'chapters/clearActiveStream',

@@ -618,7 +618,7 @@ export const chaptersSlice = createSlice({
        NOT `chapters[]` rows. Those are per-tab UI state — duplicating them
        across tabs would fire chapter-level regen side-effects in every tab
        simultaneously, which is the racing-writes case explicitly parked as
-       Won't #3.
+       backlog `fe-11`.
 
        Cross-bookId isolation: the snapshot carries its own bookId in the
        payload; we replace `activeStream` verbatim. The reducer never

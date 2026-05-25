@@ -28,7 +28,7 @@ test.describe('listen view + mini-player', () => {
     await page.goto('/#/books/sb/listen');
     await expect(page).toHaveURL(/#\/books\/sb\/listen/);
 
-    /* Both signals (title + Play button enabled) — BACKLOG Should #12
+    /* Both signals (title + Play button enabled) — the
        per-view hydration helper. */
     await waitForListenViewReady(page, /Solway Bay/i);
 

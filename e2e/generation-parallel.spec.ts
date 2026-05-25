@@ -1,5 +1,5 @@
 /* Browser-level proof of the parallel-chapter SSE contract — plan 87
- * follow-up (BACKLOG Could #26, archive: docs/features/archive/87-parallel-chapter-synth.md).
+ * follow-up (archive: docs/features/archive/87-parallel-chapter-synth.md).
  *
  * Plan 87 added a bounded worker pool on the server (default
  * `GEN_CHAPTER_CONCURRENCY=2`) so progress / chapter_complete events

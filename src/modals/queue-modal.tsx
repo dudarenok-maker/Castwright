@@ -292,7 +292,7 @@ function BookGroup({
     onReorder(next);
   };
 
-  /* Plan 102 polish (BACKLOG Could #40) — desktop drag-to-reorder.
+  /* Plan 102 polish — desktop drag-to-reorder.
      Pointer-events based for browser breadth; the handle is hidden via
      `hidden sm:flex` on coarse-pointer devices so touch users continue to
      rely on the Move up / Move down pills.

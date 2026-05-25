@@ -291,7 +291,7 @@ export interface DroppedQuotesResponse {
     the top-bar AnalysisPill so the pill appears immediately on a
     refresh — without the user having to navigate to a specific book's
     analysing route first. The full list is available so a follow-up
-    (Backlog Should #2) can render per-card "Paused — resume?" badges.
+    can render per-card "Paused — resume?" badges.
 
     Disk `running` is coerced to wire `paused` server-side (no live
     in-flight job means the analyzer didn't survive the restart), so the
