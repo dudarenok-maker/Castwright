@@ -9,7 +9,7 @@
    user hears. The Voice-library response (GET /api/voices) is authoritative;
    prefer reading `voice.ttsVoice` when it's available. */
 
-import type { Character } from './types';
+import type { Character, TtsModelKey } from './types';
 
 /* qwen is a BESPOKE per-character engine (plan 108) — no preset catalog;
    its "voice" is a designed voiceId living in overrideTtsVoices.qwen.name.
@@ -342,6 +342,23 @@ export function resolveTtsVoiceForCharacter(
     name,
     description: describeVoice(engine, name),
   };
+}
+
+/* The single model key the Qwen bespoke engine routes through. Mirror of
+   the server's engineForModelKey: any 'qwen…' key maps to engine 'qwen'. */
+export const QWEN_MODEL_KEY: TtsModelKey = 'qwen3-tts-0.6b';
+
+/* Resolve the modelKey a sample/audition should use for a character whose
+   effective engine may diverge from the project default. Qwen is the only
+   per-character override that diverges (the picker offers kokoro|qwen), and
+   it needs its own model key so the server routes to the bespoke engine
+   instead of the project's Kokoro/Coqui key. Every non-qwen engine keeps the
+   project key — that key already routes to the engine the character uses. */
+export function sampleModelKeyForEngine(
+  effectiveEngine: TtsEngine,
+  projectModelKey: TtsModelKey,
+): TtsModelKey {
+  return effectiveEngine === 'qwen' ? QWEN_MODEL_KEY : projectModelKey;
 }
 
 /* Profile-only resolver — same mapping as resolveTtsVoiceForCharacter,
