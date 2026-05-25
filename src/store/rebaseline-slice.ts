@@ -26,9 +26,11 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
    - pending:    queued, not yet designed
    - designing:  the persona/design calls are in flight
    - ready:      a persona + designed voiceId are in hand
+   - unchanged:  the character is already on its bespoke Qwen voice in THIS book
+                 (engine + designed voice) — nothing to design OR write
    - failed:     the persona or design call threw; carries the error
    - applied:    the series-scoped override write landed on approve */
-export type ProposalStatus = 'pending' | 'designing' | 'ready' | 'failed' | 'applied';
+export type ProposalStatus = 'pending' | 'designing' | 'ready' | 'unchanged' | 'failed' | 'applied';
 
 export interface Proposal {
   characterId: string;
@@ -148,6 +150,16 @@ export const rebaselineSlice = createSlice({
       p.proposedVoiceId = a.payload.proposedVoiceId;
       p.previewUrl = a.payload.previewUrl;
       p.status = 'ready';
+      p.error = undefined;
+    },
+    /* The character already has its bespoke Qwen voice in this book — nothing
+       to design or write. Carries the existing voiceId so the row can show it.
+       Excluded from the approve write (status !== 'ready'). */
+    proposalUnchanged: (s, a: PayloadAction<{ characterId: string; proposedVoiceId: string }>) => {
+      const p = s.proposals[a.payload.characterId];
+      if (!p) return;
+      p.proposedVoiceId = a.payload.proposedVoiceId;
+      p.status = 'unchanged';
       p.error = undefined;
     },
     /* A proposal's design failed — keep the row, mark it failed, untick it

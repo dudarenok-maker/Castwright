@@ -450,6 +450,14 @@ async function applyOverrideToCastFiles(
             const map = { ...(normalised.overrideTtsVoices ?? {}) };
             map[override.engine] = { name: override.name };
             replacement.overrideTtsVoices = map;
+            /* Setting a per-engine voice override is a deliberate "use this
+               engine for this character" action (the only callers — the cast
+               picker + the series rebaseline — only write when switching the
+               character TO that engine). Pin `ttsEngine` so the switch
+               propagates across the series: otherwise other books get the
+               voice slot but keep the wrong active engine (plan 108 — "wrong
+               model in this book"). */
+            replacement.ttsEngine = override.engine;
           }
           /* Always remove the legacy singular field — normaliseCastCharacter
              already folded it into the map. */
